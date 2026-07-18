@@ -4,6 +4,7 @@ import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/widgets/animations.dart';
 
 // CHANGE #498: Dashboard "Notifications" box — per-action WhatsApp toggles.
+// CHANGE #499: collapsible (default collapsed) + fully dynamic row rendering.
 // Thin client: reads/writes via get_notification_settings / set_notification_setting
 // RPCs only. All gating logic lives server-side (RLS + notif_is_enabled).
 
@@ -41,16 +42,31 @@ class _NotificationsCardState extends State<NotificationsCard> {
   bool _loading = true;
   String _audience = 'customer';
   final Set<String> _busyKeys = {};
+  bool _expanded = false;
 
   @override
   void initState() {
     super.initState();
+    RenderLog.write('c499_notif_collapsed_default', 'true');
     if (_cachedRows != null) {
       _rows = _cachedRows;
       _loading = false;
       RenderLog.write('c498_notif_box_rendered', 'cached:${_rows!.length}');
     } else {
       _load();
+    }
+  }
+
+  void _toggleExpanded() {
+    setState(() => _expanded = !_expanded);
+    if (_expanded) {
+      RenderLog.write('c499_notif_expanded_ontap', 'true');
+      final rows = _rows ?? const <_NotifRow>[];
+      final total = rows.length;
+      final cust = rows.where((r) => r.audience == 'customer').length;
+      final sup = rows.where((r) => r.audience == 'supplier').length;
+      RenderLog.write('c499_notif_rows_count', '$total');
+      RenderLog.write('c499_notif_rows_by_audience', 'customer=$cust;supplier=$sup');
     }
   }
 
@@ -77,6 +93,12 @@ class _NotificationsCardState extends State<NotificationsCard> {
           _loading = false;
         });
         RenderLog.write('c498_notif_box_rendered', 'loaded:${list.length}');
+        if (_expanded) {
+          final cust = list.where((r) => r.audience == 'customer').length;
+          final sup = list.where((r) => r.audience == 'supplier').length;
+          RenderLog.write('c499_notif_rows_count', '${list.length}');
+          RenderLog.write('c499_notif_rows_by_audience', 'customer=$cust;supplier=$sup');
+        }
       }
     } catch (_) {
       if (mounted) setState(() => _loading = false);
@@ -188,11 +210,51 @@ class _NotificationsCardState extends State<NotificationsCard> {
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
+  Widget _expandedBody() {
     final rows = _rows ?? const <_NotifRow>[];
     final visible = rows.where((r) => r.audience == _audience).toList();
 
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Padding(
+          padding: EdgeInsets.symmetric(vertical: 10),
+          child: Divider(height: 1, color: Color(0xFFE5E7EB)),
+        ),
+        Container(
+          padding: const EdgeInsets.all(3),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF3F4F6),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            children: [
+              _segButton('Customer', 'customer'),
+              const SizedBox(width: 3),
+              _segButton('Supplier', 'supplier'),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
+        if (_loading)
+          _skeleton()
+        else if (visible.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 10),
+            child: Text(
+              'No notification settings found.',
+              style: TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+            ),
+          )
+        else
+          Column(children: visible.map(_row).toList()),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return Container(
       margin: const EdgeInsets.only(bottom: 20),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -203,53 +265,33 @@ class _NotificationsCardState extends State<NotificationsCard> {
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Row(
-            children: [
-              const Icon(Icons.notifications_none, size: 16, color: Color(0xFF374151)),
-              const SizedBox(width: 7),
-              const Text(
-                'NOTIFICATIONS',
-                style: TextStyle(
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.6,
-                  color: Color(0xFF374151),
-                ),
-              ),
-            ],
-          ),
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 10),
-            child: Divider(height: 1, color: Color(0xFFE5E7EB)),
-          ),
-          Container(
-            padding: const EdgeInsets.all(3),
-            decoration: BoxDecoration(
-              color: const Color(0xFFF3F4F6),
-              borderRadius: BorderRadius.circular(10),
-            ),
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _toggleExpanded,
             child: Row(
               children: [
-                _segButton('Customer', 'customer'),
-                const SizedBox(width: 3),
-                _segButton('Supplier', 'supplier'),
+                const Icon(Icons.notifications_none, size: 16, color: Color(0xFF374151)),
+                const SizedBox(width: 7),
+                const Text(
+                  'NOTIFICATIONS',
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.6,
+                    color: Color(0xFF374151),
+                  ),
+                ),
               ],
             ),
           ),
-          const SizedBox(height: 8),
-          if (_loading)
-            _skeleton()
-          else if (visible.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 10),
-              child: Text(
-                'No notification settings found.',
-                style: TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
-              ),
-            )
-          else
-            Column(children: visible.map(_row).toList()),
+          AnimatedSize(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeInOut,
+            alignment: Alignment.topCenter,
+            child: _expanded ? _expandedBody() : const SizedBox(width: double.infinity),
+          ),
         ],
       ),
     );

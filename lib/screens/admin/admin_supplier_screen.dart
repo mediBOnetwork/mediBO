@@ -1263,14 +1263,17 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                 visualDensity: VisualDensity.compact,
               ),
             ],
-            IconButton(
-              onPressed: _filter == _SupFilter.inquiry
-                  ? () { _fetchInquiryOverview(); _fetchUnassignedItems(); }
-                  : _load,
-              icon: const Icon(Icons.refresh_outlined, color: Color(0xFF6B7280), size: 20),
-              tooltip: 'Refresh',
-              visualDensity: VisualDensity.compact,
-            ),
+            // CHANGE #503 B: no manual refresh on the Inquiry tab — it stays
+            // in sync via the realtime broadcast subscription. This header
+            // button is shared by every other tab, so it's hidden here rather
+            // than deleted outright.
+            if (_filter != _SupFilter.inquiry)
+              IconButton(
+                onPressed: _load,
+                icon: const Icon(Icons.refresh_outlined, color: Color(0xFF6B7280), size: 20),
+                tooltip: 'Refresh',
+                visualDensity: VisualDensity.compact,
+              ),
           ],
         ]);
       }),

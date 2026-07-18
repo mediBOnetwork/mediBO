@@ -2818,6 +2818,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       if (!_inquiryOverviewLoading) {
         try { RenderLog.write('c500_inqday_loaded', 'today'); } catch (_) {}
         try { RenderLog.write('c500_inqday_rows', '${_inquiryOverview.length}'); } catch (_) {}
+        try { RenderLog.write('c501_inqday_loaded', 'today'); } catch (_) {}
+        try { RenderLog.write('c501_inqday_rows', '${_inquiryOverview.length}'); } catch (_) {}
       }
     } else {
       final archiveSuppliers = (_inquiryDayArchive?['suppliers'] as List?) ?? const [];
@@ -2829,6 +2831,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       if (!_inquiryDayLoading && _inquiryDayArchive != null) {
         try { RenderLog.write('c500_inqday_loaded', 'past'); } catch (_) {}
         try { RenderLog.write('c500_inqday_rows', '${archiveSuppliers.length}'); } catch (_) {}
+        try { RenderLog.write('c501_inqday_loaded', 'past'); } catch (_) {}
+        try { RenderLog.write('c501_inqday_rows', '${archiveSuppliers.length}'); } catch (_) {}
       }
     }
 
@@ -3031,44 +3035,69 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         child: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2)),
       );
     }
-    final dateLabel = day['date_label'] as String?;
-    final summary = day['summary'] as String?;
-    final noResponseLabel = day['no_response_label'] as String?;
-    final suppliers = (day['suppliers'] as List?)
-            ?.whereType<Map>()
-            .map((s) => Map<String, dynamic>.from(s))
-            .toList() ??
-        const <Map<String, dynamic>>[];
+    // CHANGE #501: build-time parse/render errors are caught here so any shape
+    // this parser hasn't seen yet degrades to the existing Retry state instead
+    // of ever propagating past this widget (the c500 boot-crash incident).
+    try {
+      final dateLabel = day['date_label'] as String?;
+      final summary = day['summary'] as String?;
+      final noResponseLabel = day['no_response_label'] as String?;
+      final suppliers = (day['suppliers'] as List?)
+              ?.whereType<Map>()
+              .map((s) => Map<String, dynamic>.from(s))
+              .toList() ??
+          const <Map<String, dynamic>>[];
 
-    return Padding(
-      padding: EdgeInsets.fromLTRB(pad, 12, pad, 24),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        if (dateLabel != null)
-          Text(dateLabel,
-              style: const TextStyle(
-                  fontSize: 18, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-        if (summary != null) ...[
-          const SizedBox(height: 4),
-          Text(summary, style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
-        ],
-        if (noResponseLabel != null) ...[
-          const SizedBox(height: 6),
-          Text(noResponseLabel,
-              style: const TextStyle(
-                  fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFFDC2626))),
-        ],
-        const SizedBox(height: 16),
-        if (suppliers.isEmpty)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 24),
-            child: Center(
-                child: Text('No inquiry recorded for this day.',
-                    style: TextStyle(color: Color(0xFF9CA3AF)))),
-          )
-        else
-          ...suppliers.map(_buildArchiveSupplierCard),
-      ]),
-    );
+      return Padding(
+        padding: EdgeInsets.fromLTRB(pad, 12, pad, 24),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          if (dateLabel != null)
+            Text(dateLabel,
+                style: const TextStyle(
+                    fontSize: 18, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+          if (summary != null) ...[
+            const SizedBox(height: 4),
+            Text(summary, style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+          ],
+          if (noResponseLabel != null) ...[
+            const SizedBox(height: 6),
+            Text(noResponseLabel,
+                style: const TextStyle(
+                    fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFFDC2626))),
+          ],
+          const SizedBox(height: 16),
+          if (suppliers.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 24),
+              child: Center(
+                  child: Text('No inquiry recorded for this day.',
+                      style: TextStyle(color: Color(0xFF9CA3AF)))),
+            )
+          else
+            ...suppliers.map(_buildArchiveSupplierCard),
+        ]),
+      );
+    } catch (e, st) {
+      final selectedDate = _inquiryDatesSelected?['date'] as String?;
+      try {
+        RenderLog.write('c500_inqday_parse_error', 'build:${selectedDate ?? '?'}:${e.runtimeType}:$e');
+      } catch (_) {}
+      // ignore: avoid_print
+      print('CHANGE #501 archive view build failed for $selectedDate: $e\n$st');
+      return Padding(
+        padding: const EdgeInsets.all(40),
+        child: Center(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Text('Could not load this day.', style: TextStyle(color: Color(0xFF6B7280))),
+            const SizedBox(height: 12),
+            OutlinedButton(
+              onPressed: selectedDate == null ? null : () => _fetchInquiryDayArchive(selectedDate),
+              child: const Text('Retry'),
+            ),
+          ]),
+        ),
+      );
+    }
   }
 
   Widget _buildArchiveSupplierCard(Map<String, dynamic> sup) {

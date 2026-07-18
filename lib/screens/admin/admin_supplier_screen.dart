@@ -2775,6 +2775,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     // reflects what's really on screen (not mid-spinner 0).
     if (!_inquiryOverviewLoading) {
       try { RenderLog.write('c502_inq_today_rows', '${_inquiryOverview.length}'); } catch (_) {}
+      // CHANGE #505 Part 3: supplier groups actually rendered in the list —
+      // confirms get_supplier_inquiry_overview() rows reach the screen.
+      try { RenderLog.write('c505_inq_suppliers', '${_inquiryOverview.length}'); } catch (_) {}
       if (_inquiryOverview.isEmpty) {
         try { RenderLog.write('c502_inq_today_empty', 'true'); } catch (_) {}
       }

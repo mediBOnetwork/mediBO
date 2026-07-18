@@ -245,13 +245,13 @@ class _ReadinessCheckRow extends StatelessWidget {
 
 class _InquiryLockSwitch extends StatelessWidget {
   final String label; // == readiness['slider_label']
-  final bool enabled; // == readiness['can_send']
+  final bool enabled; // == readiness['slider_enabled']
   final bool locked; // == readiness['locked']
   final bool toggling;
-  final String? blockedLabel; // == readiness['blocked_label']
+  final String? blockedLabel; // == readiness['blocked_label'] — a real gate failed (red)
+  final String? nothingToAskLabel; // == readiness['nothing_to_ask_label'] — neutral (grey)
   final String? backlogLabel; // == readiness['backlog_label']
   final String? lockLabel; // == readiness['lock_label']
-  final bool neutralBlock; // CHANGE #503 D: == readiness['nothing_to_ask']
   final Future<void> Function(bool turnOn) onToggle;
 
   const _InquiryLockSwitch({
@@ -261,9 +261,9 @@ class _InquiryLockSwitch extends StatelessWidget {
     required this.toggling,
     required this.onToggle,
     this.blockedLabel,
+    this.nothingToAskLabel,
     this.backlogLabel,
     this.lockLabel,
-    this.neutralBlock = false,
   });
 
   @override
@@ -291,17 +291,22 @@ class _InquiryLockSwitch extends StatelessWidget {
             onChanged: canInteract ? (v) => onToggle(v) : null,
           ),
       ]),
-      if (!enabled && blockedLabel != null)
+      // CHANGE #505: blocked_label (a real gate failed, red) and
+      // nothing_to_ask_label (all gates pass but nothing to ask, neutral grey)
+      // are mutually exclusive per the backend — show whichever is set.
+      if (blockedLabel != null)
         Padding(
           padding: const EdgeInsets.only(top: 4),
           child: Text(blockedLabel!,
-              style: TextStyle(
-                  fontSize: 12,
-                  // CHANGE #503 D: "nothing to ask" is a neutral state, not a
-                  // blocking error — don't paint it the same red as a genuine
-                  // blocker (order hours closed, leads pending, etc).
-                  color: neutralBlock ? const Color(0xFF6B7280) : const Color(0xFFDC2626),
-                  fontWeight: FontWeight.w600)),
+              style: const TextStyle(
+                  fontSize: 12, color: Color(0xFFDC2626), fontWeight: FontWeight.w600)),
+        )
+      else if (nothingToAskLabel != null)
+        Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Text(nothingToAskLabel!,
+              style: const TextStyle(
+                  fontSize: 12, color: Color(0xFF6B7280), fontWeight: FontWeight.w600)),
         ),
       if (backlogLabel != null)
         Padding(
@@ -414,8 +419,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   bool _adminSubmitting = false;
   int _adminSubmitCount = 0;
 
-  // ── Unassigned inquiry items (no current supplier) ───────────────────────
-  List<Map<String, dynamic>> _unassignedItems = [];
+  // ── CHANGE #505: today-scoped buckets via inquiry_buckets_today() ────────
+  List<Map<String, dynamic>> _noSupplierItems = [];
+  List<Map<String, dynamic>> _allOosItems = [];
   bool _unassignedLoading = false;
   // Accordion state: which unassigned dropdown is open ('no_supplier' | 'all_oos' | null)
   String? _openUnassignedDropdown;
@@ -2184,14 +2190,28 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   Future<void> _fetchUnassignedItems({bool silent = false}) async {
     if (!silent && mounted) setState(() => _unassignedLoading = true);
     try {
-      final rows = await Supabase.instance.client
-          .rpc('get_unassigned_inquiry_items') as List;
+      // CHANGE #505: inquiry_buckets_today() replaces get_unassigned_inquiry_items()
+      // — the old RPC had no date filter, so the two bucket cards were showing
+      // stale past-day items. The new RPC is already scoped to today.
+      final res = await Supabase.instance.client.rpc('inquiry_buckets_today');
+      final map = res is Map ? Map<String, dynamic>.from(res) : const <String, dynamic>{};
+      final noSupplier = (map['no_supplier_available'] as List?)
+              ?.whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList() ??
+          const <Map<String, dynamic>>[];
+      final allOos = (map['all_out_of_stock'] as List?)
+              ?.whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList() ??
+          const <Map<String, dynamic>>[];
       if (mounted) {
         setState(() {
-          _unassignedItems = rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
+          _noSupplierItems = noSupplier;
+          _allOosItems = allOos;
           _unassignedLoading = false;
         });
-        RenderLog.write('inquiry_unassigned', _unassignedItems.length);
+        RenderLog.write('inquiry_unassigned', _noSupplierItems.length + _allOosItems.length);
       }
     } catch (e) {
       if (mounted) setState(() => _unassignedLoading = false);
@@ -2542,7 +2562,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             ?.map((c) => Map<String, dynamic>.from(c as Map))
             .toList() ??
         const <Map<String, dynamic>>[];
-    final sendAllowed = readiness?['can_send'] as bool? ?? false;
     final locked = readiness?['locked'] as bool? ?? false;
     final lockLabel = readiness?['lock_label'] as String?;
     final title = readiness?['title'] as String? ?? 'SEND-ALL READINESS';
@@ -2553,17 +2572,20 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     final progress = (readiness?['progress'] as num?)?.toDouble();
     final progressTotal = (readiness?['progress_total'] as num?)?.toDouble();
     final sliderLabel = readiness?['slider_label'] as String? ?? '';
+    // CHANGE #505: the toggle's enabled state is driven by slider_enabled
+    // (false when nothing_to_ask, locked, or a gate fails) — NOT can_send,
+    // which folds in nothing_to_ask too but isn't what gates the switch itself.
+    final sliderEnabled = readiness?['slider_enabled'] as bool? ?? false;
+    // blocked_label is non-null only for a real gate failure (red); nothing_to_ask_label
+    // is non-null only when all gates pass but there's nothing to ask (neutral grey).
+    // The backend guarantees these are mutually exclusive.
     final blockedLabel = readiness?['blocked_label'] as String?;
+    final nothingToAskLabel = readiness?['nothing_to_ask_label'] as String?;
     final backlogLabel = readiness?['backlog_label'] as String?;
     final breakdown = (readiness?['breakdown'] as List?)
             ?.map((b) => Map<String, dynamic>.from(b as Map))
             .toList() ??
         const <Map<String, dynamic>>[];
-    // CHANGE #503 D: backend-driven — true once inquiry_send_readiness stops
-    // counting the Items check as blocking and there's nothing to ask. Absent
-    // on an RPC that hasn't shipped this yet, so this defaults safely to false
-    // (existing 'blocked' tone behavior is unchanged until the backend adds it).
-    final nothingToAsk = readiness?['nothing_to_ask'] as bool? ?? false;
 
     final detailCount = checks.where((c) {
       final d = c['detail'];
@@ -2571,6 +2593,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     }).length;
 
     if (readiness != null) {
+      final sendAllowed = readiness['can_send'] as bool? ?? false;
       RenderLog.write('c459_status', statusLabel ?? '');
       RenderLog.write('c459_tone', statusTone ?? '');
       RenderLog.write('c459_progress', progressLabel ?? '');
@@ -2578,6 +2601,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       RenderLog.write('c459_details', detailCount.toString());
       RenderLog.write('c459_can_send', sendAllowed.toString());
       RenderLog.write('c459_summary_rows', '0');
+      // CHANGE #505: confirm the checklist is exactly the 5 gating checks
+      // (order_hours, leads, payments, orders, allocation) — no Items row.
+      try { RenderLog.write('c505_checks_count', '${checks.length}'); } catch (_) {}
     }
     try { RenderLog.write('c503_readiness_collapsed_default', 'true'); } catch (_) {}
 
@@ -2714,13 +2740,13 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                           const SizedBox(height: 10),
                           _InquiryLockSwitch(
                             label: sliderLabel,
-                            enabled: sendAllowed,
+                            enabled: sliderEnabled,
                             locked: locked,
                             toggling: _lockToggling,
                             blockedLabel: blockedLabel,
+                            nothingToAskLabel: nothingToAskLabel,
                             backlogLabel: backlogLabel,
                             lockLabel: lockLabel,
-                            neutralBlock: nothingToAsk,
                             onToggle: _handleLockToggle,
                           ),
                         ],
@@ -2769,7 +2795,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           padding: EdgeInsets.all(40),
           child: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2)),
         )
-      else if (_inquiryOverview.isEmpty && _unassignedItems.isEmpty)
+      else if (_inquiryOverview.isEmpty && _noSupplierItems.isEmpty && _allOosItems.isEmpty)
         Padding(
           padding: EdgeInsets.fromLTRB(pad, 40, pad, 40),
           child: const Center(child: Column(children: [
@@ -2790,27 +2816,21 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
               children: _inquiryOverview.map(_buildInquirySupplierRow).toList(),
             ),
           ),
-        if (_inquiryOverview.isNotEmpty || _unassignedItems.isNotEmpty)
+        if (_inquiryOverview.isNotEmpty || _noSupplierItems.isNotEmpty || _allOosItems.isNotEmpty)
           _buildUnassignedSection(pad),
       ],
     ];
   }
 
   Widget _buildUnassignedSection(double pad) {
-    final listNoSupplier = _unassignedItems
-        .where((i) => i['reason'] == 'no_supplier_mapped')
-        .toList();
-    final listAllOOS = _unassignedItems
-        .where((i) => i['reason'] == 'all_out_of_stock')
-        .toList();
+    final listNoSupplier = _noSupplierItems;
+    final listAllOOS = _allOosItems;
 
     RenderLog.write('inquiry_two_dropdowns_rendered', 'true');
     RenderLog.write('dd_no_supplier_count_${listNoSupplier.length}', 'true');
     RenderLog.write('dd_all_oos_count_${listAllOOS.length}', 'true');
-    // CHANGE #503 A: get_unassigned_inquiry_items() has no date filter and the
-    // inquiry table carries no usable "today" column, so these counts are NOT
-    // yet today-scoped — blocked on a backend inquiry_buckets_today() RPC.
-    try { RenderLog.write('c503_buckets_today', '${listNoSupplier.length}_${listAllOOS.length}'); } catch (_) {}
+    // CHANGE #505: inquiry_buckets_today() is already scoped to today.
+    try { RenderLog.write('c505_buckets', '${listNoSupplier.length}_${listAllOOS.length}'); } catch (_) {}
 
     return Padding(
       padding: EdgeInsets.fromLTRB(pad, 4, pad, 24),
@@ -2922,8 +2942,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
               padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
               child: Column(
                 children: items.map((item) {
-                  final name      = item['product_name'] as String? ?? '';
-                  final qty       = item['quantity'];
+                  // CHANGE #505: inquiry_buckets_today() field names — product/qty,
+                  // not the old get_unassigned_inquiry_items() product_name/quantity.
+                  final name      = item['product'] as String? ?? '';
+                  final qty       = item['qty'];
+                  final customers = item['customers'] as String?;
                   return Container(
                     margin: const EdgeInsets.only(bottom: 6),
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -2945,6 +2968,15 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                             'Qty: ${qty ?? "—"}',
                             style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
                           ),
+                          if (customers != null && customers.isNotEmpty) ...[
+                            const SizedBox(height: 2),
+                            Text(
+                              customers,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
+                            ),
+                          ],
                         ]),
                       ),
                       const SizedBox(width: 8),

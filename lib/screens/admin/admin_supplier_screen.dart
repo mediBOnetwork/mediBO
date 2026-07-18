@@ -790,15 +790,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       }).toList();
 
       // Build inquiry overview list (same sort as _fetchInquiryOverview)
-      final inquiryOverview = inquiryRaw
-          .map((r) => Map<String, dynamic>.from(r as Map))
-          .toList()
-        ..sort((a, b) {
-          final aC = (a['current_count'] as num?)?.toInt() ?? 0;
-          final bC = (b['current_count'] as num?)?.toInt() ?? 0;
-          if (aC != bC) return bC.compareTo(aC);
-          return (a['supplier_name'] as String? ?? '').compareTo(b['supplier_name'] as String? ?? '');
-        });
+      final inquiryOverview = _sortInquiryOverview(
+        inquiryRaw.map((r) => Map<String, dynamic>.from(r as Map)).toList(),
+      );
 
       // CHANGE #277: build live-holder Set from order_items
       final liveKeys = <String>{};
@@ -2167,22 +2161,30 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     _autoLoad(key: f.name);
   }
 
+  // CHANGE #466: rnk comes from get_supplier_inquiry_overview()'s ordering
+  // engine (nulls when the engine has no opinion) — sort ascending, nulls last.
+  List<Map<String, dynamic>> _sortInquiryOverview(List<Map<String, dynamic>> rows) {
+    final overview = List<Map<String, dynamic>>.from(rows);
+    overview.sort((a, b) {
+      final aR = (a['rnk'] as num?)?.toInt();
+      final bR = (b['rnk'] as num?)?.toInt();
+      if (aR == null && bR == null) return 0;
+      if (aR == null) return 1;
+      if (bR == null) return -1;
+      return aR.compareTo(bR);
+    });
+    return overview;
+  }
+
   Future<void> _fetchInquiryOverview({bool silent = false}) async {
     if (!silent && mounted) setState(() => _inquiryOverviewLoading = true);
     try {
       final rows = await Supabase.instance.client
           .rpc('get_supplier_inquiry_overview') as List;
       if (mounted) {
-        final overview = rows
-            .map((r) => Map<String, dynamic>.from(r as Map))
-            .toList();
-        // Sort: current suppliers first, then by name
-        overview.sort((a, b) {
-          final aC = (a['current_count'] as num?)?.toInt() ?? 0;
-          final bC = (b['current_count'] as num?)?.toInt() ?? 0;
-          if (aC != bC) return bC.compareTo(aC);
-          return (a['supplier_name'] as String? ?? '').compareTo(b['supplier_name'] as String? ?? '');
-        });
+        final overview = _sortInquiryOverview(
+          rows.map((r) => Map<String, dynamic>.from(r as Map)).toList(),
+        );
         // CHANGE #509: skip the rebuild entirely when a refetch (poll/realtime)
         // returns byte-identical data — avoids visible flicker on every silent
         // background refresh when nothing actually changed.
@@ -2209,6 +2211,13 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         try { RenderLog.write('c309_inquiry_load', 'rows=${_inquiryOverview.length};draft=$draftCount;sent=$sentCount'); } catch (_) {}
         try { RenderLog.write('c309_no_load_writes', 'true'); } catch (_) {}
         try { RenderLog.write('c309_orders_writes', '0'); } catch (_) {}
+        // CHANGE #466: confirm rnk-sorted ordering + can_send gating reach the screen.
+        final rnkPresent = _inquiryOverview.where((r) => r['rnk'] != null).length;
+        final canSendTrueCount = _inquiryOverview.where((r) => r['can_send'] == true).length;
+        try {
+          RenderLog.write('c466_engine_ordering',
+              'rows=${_inquiryOverview.length};rnk_present=$rnkPresent;can_send_true=$canSendTrueCount');
+        } catch (_) {}
       }
     } catch (e) {
       if (mounted) {
@@ -2880,8 +2889,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   Widget _buildInquiryView(bool isDesktop) {
     final pad = isDesktop ? 28.0 : 16.0;
 
+    // CHANGE #466: Copy link + Send only render when can_send == true.
+    final sendableSupplierCount =
+        _inquiryOverview.where((ov) => ov['can_send'] as bool? ?? true).length;
     final writes = (_inquiryReadiness != null ? 1 : 0) +
-        (_inquiryOverview.length * 2) + // Copy link + Send per supplier row
+        (sendableSupplierCount * 2) + // Copy link + Send per sendable supplier row
         (_expandedInquirySupplier != null ? _inquiryItems.length * 3 : 0); // 3 answer buttons per item
     try { RenderLog.write('c460_suppliers', _inquiryOverview.length); } catch (_) {}
     try { RenderLog.write('c460_writes', writes); } catch (_) {}
@@ -3127,6 +3139,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     final formStatus = ov['form_status'] as String?;
     final expiresAt  = ov['expires_at'] != null ? DateTime.tryParse(ov['expires_at'] as String) : null;
     final inquiryCode = (ov['inquiry_code'] as String? ?? '').trim();
+    final canSend = ov['can_send'] as bool? ?? true; // CHANGE #466
     final isExpanded = _expandedInquirySupplier == supName;
     final linkData   = _inquiryLinks[supName];
 
@@ -3238,16 +3251,20 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                 if (narrow) {
                   return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     badges,
-                    const SizedBox(height: 6),
-                    Row(children: [copyBtn, const SizedBox(width: 6), sendBtn]),
+                    if (canSend) ...[
+                      const SizedBox(height: 6),
+                      Row(children: [copyBtn, const SizedBox(width: 6), sendBtn]),
+                    ],
                   ]);
                 }
                 return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
                   Expanded(child: badges),
-                  const SizedBox(width: 8),
-                  copyBtn,
-                  const SizedBox(width: 6),
-                  sendBtn,
+                  if (canSend) ...[
+                    const SizedBox(width: 8),
+                    copyBtn,
+                    const SizedBox(width: 6),
+                    sendBtn,
+                  ],
                 ]);
               }),
             ]),

@@ -36,6 +36,8 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
   List<Map<String, dynamic>> _pending  = [];
   List<Map<String, dynamic>> _inquired = [];
   List<Map<String, dynamic>> _expired  = [];
+  // CHANGE #465: read-only receipt of items already answered today.
+  List<Map<String, dynamic>> _receipt  = [];
   bool _loading = true;
   bool _firstLoad = true;
 
@@ -141,6 +143,22 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
           .rpc('supplier_inquiry_buckets', params: params);
       if (!mounted) return;
 
+      // CHANGE #465: receipt of items already answered today. supplier_my_inquiry_receipt()
+      // resolves identity from the caller's own JWT, so it only works for a real logged-in
+      // supplier — View-As mode (admin browsing on behalf of a named supplier) has no
+      // supplier JWT to resolve, so it uses the named-lookup RPC instead.
+      List<Map<String, dynamic>> receipt = [];
+      try {
+        final receiptRows = sid != null
+            ? await Supabase.instance.client.rpc('get_supplier_inquiry_receipt',
+                params: {'p_supplier_name': widget.viewAsSupplierName ?? sid})
+            : await Supabase.instance.client.rpc('supplier_my_inquiry_receipt');
+        receipt = (receiptRows as List<dynamic>? ?? [])
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+      } catch (_) {}
+      if (!mounted) return;
+
       final list = (rows as List<dynamic>? ?? [])
           .map((e) => Map<String, dynamic>.from(e as Map))
           .toList();
@@ -165,6 +183,7 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
         _pending  = pending;
         _inquired = inquired;
         _expired  = expired;
+        _receipt  = receipt;
         if (_firstLoad && autoOpen != null) _openGroup = autoOpen;
         _firstLoad = false;
         _loading = false;
@@ -400,7 +419,9 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
 
     final total = _pending.length + _inquired.length + _expired.length;
 
-    if (total == 0) {
+    // CHANGE #465: a receipt-only state (everything answered, nothing else
+    // pending) is valid — show the receipt instead of the empty state.
+    if (total == 0 && _receipt.isEmpty) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -425,6 +446,10 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
     return ListView(
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 80),
       children: [
+        if (_receipt.isNotEmpty) ...[
+          _buildReceiptSection(),
+          const SizedBox(height: 8),
+        ],
         if (_pending.isNotEmpty)
           _InquiryGroup(
             label: 'Pending',
@@ -473,6 +498,151 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
           ),
         ],
       ],
+    );
+  }
+
+  // CHANGE #465: read-only receipt — success banner + one card per item
+  // already answered today. No buttons, not tappable. Matches CHANGE #464's
+  // public-link receipt for visual consistency across surfaces.
+  Widget _buildReceiptSection() {
+    try { RenderLog.write('c465_inquiry_receipt_tabs', 'supplier_tab'); } catch (_) {}
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: const Color(0xFFD1FAE5),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(Icons.check_circle,
+                  color: Color(0xFF065F46), size: 22),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Response submitted ✓',
+                      style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF065F46)),
+                    ),
+                    const SizedBox(height: 2),
+                    const Text(
+                      "You've already answered. Here's what you submitted.",
+                      style: TextStyle(
+                          fontSize: 12, color: Color(0xFF065F46)),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        ..._receipt.map(_buildReceiptCard),
+      ],
+    );
+  }
+
+  Widget _buildReceiptCard(Map<String, dynamic> item) {
+    final name = item['product_name'] as String? ?? '';
+    final company = item['company'] as String?;
+    final imageUrl = item['image_url'] as String?;
+    final answer = item['answer'] as String? ?? '';
+
+    Color badgeBg;
+    Color badgeFg;
+    String badgeLabel;
+    switch (answer) {
+      case 'Available':
+        badgeBg = const Color(0xFFD1FAE5);
+        badgeFg = const Color(0xFF065F46);
+        badgeLabel = 'Available';
+      case 'Out of Stock':
+        badgeBg = const Color(0xFFFEE2E2);
+        badgeFg = const Color(0xFF991B1B);
+        badgeLabel = 'Out of Stock';
+      default:
+        badgeBg = const Color(0xFFF3F4F6);
+        badgeFg = const Color(0xFF6B7280);
+        badgeLabel = "Don't stock";
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: const Color(0xFFF3F4F6),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFFE5E7EB), width: 0.5),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: imageUrl != null && imageUrl.isNotEmpty
+                ? Image.network(imageUrl,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => const Icon(
+                        Icons.medication_outlined,
+                        size: 20,
+                        color: Color(0xFFD1D5DB)))
+                : const Icon(Icons.medication_outlined,
+                    size: 20, color: Color(0xFFD1D5DB)),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  name,
+                  style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF111827)),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (company != null && company.trim().isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    company,
+                    style: const TextStyle(
+                        fontSize: 12, color: Color(0xFF6B7280)),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+                color: badgeBg, borderRadius: BorderRadius.circular(20)),
+            child: Text(
+              badgeLabel,
+              style: TextStyle(
+                  fontSize: 12, fontWeight: FontWeight.w500, color: badgeFg),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

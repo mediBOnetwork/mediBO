@@ -395,6 +395,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   String? _expandedInquirySupplier;
   List<Map<String, dynamic>> _inquiryItems = [];
   bool _inquiryItemsLoading = false;
+  // CHANGE #465: read-only receipt of items already answered today.
+  List<Map<String, dynamic>> _inquiryReceipt = [];
   RealtimeChannel? _inquiryRtChannel; // CHANGE #458: broadcast-only realtime
   Timer? _c458Debounce;
   int _c458Events = 0;
@@ -2315,6 +2317,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                 _fetchUnassignedItems(silent: true);
                 if (_expandedInquirySupplier != null) {
                   _fetchInquiryItems(_expandedInquirySupplier!, silent: true);
+                  _fetchInquiryReceipt(_expandedInquirySupplier!); // CHANGE #465
                 }
               });
             },
@@ -2366,6 +2369,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       _fetchUnassignedItems(silent: true);
       if (_expandedInquirySupplier != null) {
         _fetchInquiryItems(_expandedInquirySupplier!, silent: true);
+        _fetchInquiryReceipt(_expandedInquirySupplier!); // CHANGE #465
       }
     });
   }
@@ -2402,6 +2406,22 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     }
   }
 
+  // CHANGE #465: read-only receipt — items this supplier already answered
+  // today. Purely additive alongside _fetchInquiryItems (pending); never
+  // touches submit logic.
+  Future<void> _fetchInquiryReceipt(String supplierName) async {
+    try {
+      final rows = await Supabase.instance.client
+          .rpc('get_supplier_inquiry_receipt',
+              params: {'p_supplier_name': supplierName}) as List;
+      if (mounted) {
+        setState(() {
+          _inquiryReceipt = rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
+        });
+      }
+    } catch (_) {}
+  }
+
   // ── Admin set answer via RPC ─────────────────────────────────────────────
   // admin_set_inquiry_answer validates the caller is admin/super_admin (SECURITY
   // DEFINER), writes the AS slot, and calls rebuild_all_supplier_orders() so
@@ -2436,7 +2456,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         };
         if (mounted) showToast(context, msg, isError: true);
         // Re-fetch to show true state
-        if (mounted) await Future.wait([_fetchInquiryItems(supplierName), _fetchInquiryOverview(silent: true)]);
+        if (mounted) await Future.wait([_fetchInquiryItems(supplierName), _fetchInquiryReceipt(supplierName), _fetchInquiryOverview(silent: true)]);
         return;
       }
       RenderLog.write('admin_answer_set', '${supplierName}_${inquiryId}_$answer:ok');
@@ -2444,6 +2464,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         showToast(context, 'Response saved');
         await Future.wait([
           _fetchInquiryItems(supplierName),
+          _fetchInquiryReceipt(supplierName), // CHANGE #465
           _fetchInquiryOverview(silent: true),
           _fetchUnassignedItems(silent: true),
           _refetchOrders(),
@@ -2482,6 +2503,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     if (mounted) {
       await Future.wait([
         _fetchInquiryItems(supplierName),
+        _fetchInquiryReceipt(supplierName), // CHANGE #465
         _fetchInquiryOverview(silent: true),
         _fetchUnassignedItems(silent: true),
         _refetchOrders(),
@@ -2625,6 +2647,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         setState(() => _adminSelections.clear());
         await Future.wait([
           _fetchInquiryItems(supplierName),
+          _fetchInquiryReceipt(supplierName), // CHANGE #465
           _fetchInquiryOverview(silent: true),
           _fetchUnassignedItems(silent: true),
           _refetchOrders(),
@@ -3145,8 +3168,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             if (_expandedInquirySupplier == supName) {
               setState(() { _expandedInquirySupplier = null; _adminSelections.clear(); });
             } else {
-              setState(() { _expandedInquirySupplier = supName; _inquiryItems = []; _adminSelections.clear(); });
+              setState(() { _expandedInquirySupplier = supName; _inquiryItems = []; _inquiryReceipt = []; _adminSelections.clear(); });
               _fetchInquiryItems(supName);
+              _fetchInquiryReceipt(supName); // CHANGE #465
             }
             RenderLog.write('inquiry_row_expanded', isExpanded ? 'collapse:$supName' : 'expand:$supName');
           },
@@ -3319,16 +3343,23 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
-      child: _inquiryItemsLoading
-          ? const Center(
-              child: Padding(
-                padding: EdgeInsets.all(16),
-                child: CircularProgressIndicator(
-                    color: Color(0xFF1B7A43), strokeWidth: 2)))
-          : _inquiryItems.isEmpty
-              ? const Text('No pending items for this supplier.',
-                  style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)))
-              : Builder(builder: (_) {
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (_inquiryReceipt.isNotEmpty) ...[
+            _buildInquiryReceiptSection(),
+            const SizedBox(height: 12),
+          ],
+          _inquiryItemsLoading
+              ? const Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(16),
+                    child: CircularProgressIndicator(
+                        color: Color(0xFF1B7A43), strokeWidth: 2)))
+              : _inquiryItems.isEmpty
+                  ? const Text('No pending items for this supplier.',
+                      style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)))
+                  : Builder(builder: (_) {
                   RenderLog.write('inquiry_v12_admin_dropdown', supName);
                   RenderLog.write('inq_admin_submit_mode', 1);
                   final isFewest = _allocationMode == 'fewest_baskets';
@@ -3399,6 +3430,153 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                     ],
                   );
                 }),
+        ],
+      ),
+    );
+  }
+
+  // CHANGE #465: read-only receipt — success banner + one card per item
+  // already answered today. No buttons, not tappable. Matches CHANGE #464
+  // and the supplier-tab receipt for visual consistency across surfaces.
+  Widget _buildInquiryReceiptSection() {
+    try { RenderLog.write('c465_inquiry_receipt_tabs', 'admin_tab'); } catch (_) {}
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: const Color(0xFFD1FAE5),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(Icons.check_circle,
+                  color: Color(0xFF065F46), size: 22),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Response submitted ✓',
+                      style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF065F46)),
+                    ),
+                    const SizedBox(height: 2),
+                    const Text(
+                      "You've already answered. Here's what you submitted.",
+                      style: TextStyle(
+                          fontSize: 12, color: Color(0xFF065F46)),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        ..._inquiryReceipt.map(_buildInquiryReceiptCard),
+      ],
+    );
+  }
+
+  Widget _buildInquiryReceiptCard(Map<String, dynamic> item) {
+    final name = item['product_name'] as String? ?? '';
+    final company = item['company'] as String?;
+    final imageUrl = item['image_url'] as String?;
+    final answer = item['answer'] as String? ?? '';
+
+    Color badgeBg;
+    Color badgeFg;
+    String badgeLabel;
+    switch (answer) {
+      case 'Available':
+        badgeBg = const Color(0xFFD1FAE5);
+        badgeFg = const Color(0xFF065F46);
+        badgeLabel = 'Available';
+      case 'Out of Stock':
+        badgeBg = const Color(0xFFFEE2E2);
+        badgeFg = const Color(0xFF991B1B);
+        badgeLabel = 'Out of Stock';
+      default:
+        badgeBg = const Color(0xFFF3F4F6);
+        badgeFg = const Color(0xFF6B7280);
+        badgeLabel = "Don't stock";
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: const Color(0xFFF3F4F6),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFFE5E7EB), width: 0.5),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: imageUrl != null && imageUrl.isNotEmpty
+                ? Image.network(imageUrl,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => const Icon(
+                        Icons.medication_outlined,
+                        size: 20,
+                        color: Color(0xFFD1D5DB)))
+                : const Icon(Icons.medication_outlined,
+                    size: 20, color: Color(0xFFD1D5DB)),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  name,
+                  style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF111827)),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (company != null && company.trim().isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    company,
+                    style: const TextStyle(
+                        fontSize: 12, color: Color(0xFF6B7280)),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+                color: badgeBg, borderRadius: BorderRadius.circular(20)),
+            child: Text(
+              badgeLabel,
+              style: TextStyle(
+                  fontSize: 12, fontWeight: FontWeight.w500, color: badgeFg),
+            ),
+          ),
+        ],
+      ),
     );
   }
 

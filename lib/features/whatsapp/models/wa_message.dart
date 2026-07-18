@@ -17,6 +17,11 @@ class WaMessage {
   final String? locationAddress;
   final String? contactName;
   final String? contactPhone;
+  // CHANGE #508 B4: real Meta delivery status — never inferred from routedTo.
+  // null/'accepted' = single grey tick (Meta took it, not proof of delivery),
+  // 'delivered' = double grey, 'read' = double blue, 'failed' = red + reason.
+  final String? waStatus;
+  final String? waFailReason;
 
   const WaMessage({
     required this.id,
@@ -36,6 +41,8 @@ class WaMessage {
     this.locationAddress,
     this.contactName,
     this.contactPhone,
+    this.waStatus,
+    this.waFailReason,
   });
 
   factory WaMessage.fromJson(Map<String, dynamic> j) {
@@ -57,6 +64,8 @@ class WaMessage {
       locationAddress: j['location_address']?.toString(),
       contactName: j['contact_name']?.toString(),
       contactPhone: j['contact_phone']?.toString(),
+      waStatus: j['wa_status']?.toString(),
+      waFailReason: j['wa_fail_reason']?.toString(),
     );
   }
 

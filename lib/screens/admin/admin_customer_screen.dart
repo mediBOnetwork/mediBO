@@ -1022,6 +1022,10 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           'notify-registration',
           body: {
             'action': isApproved ? 'approve' : 'reject',
+            // CHANGE #508 D: this screen only ever deals with pharmacy/customer
+            // registrations — explicit for clarity alongside the same call in
+            // admin_alert_overlay.dart, which also handles suppliers.
+            'ptype': 'customer',
             'pharmacyName': row.businessName,
             'email': row.email,
             'whatsappNo': row.whatsappNumber,

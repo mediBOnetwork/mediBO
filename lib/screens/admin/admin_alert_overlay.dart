@@ -418,8 +418,13 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
         'approved_by': 'admin',
       }).eq('id', id);
       // Fire-and-forget notification (existing logic)
+      // CHANGE #508 D: this path handles BOTH customer (pharmacy_profiles) and
+      // supplier (supplier_profiles) approvals via _tableForCurrentAlert() —
+      // pass ptype so the backend gate checks the right audience's toggle
+      // (customer_approved vs supplier_approved), not always 'customer'.
       Supabase.instance.client.functions.invoke('notify-registration', body: {
         'action': 'approve',
+        'ptype': table == 'supplier_profiles' ? 'supplier' : 'customer',
         'pharmacyName': rec['pharmacy_name'],
         'email': rec['email'],
         'whatsappNo': rec['whatsapp_no'],
@@ -443,6 +448,7 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
           .update({'approved': false, 'status': 'rejected'}).eq('id', id);
       Supabase.instance.client.functions.invoke('notify-registration', body: {
         'action': 'reject',
+        'ptype': table == 'supplier_profiles' ? 'supplier' : 'customer',
         'pharmacyName': rec['pharmacy_name'],
         'email': rec['email'],
         'whatsappNo': rec['whatsapp_no'],

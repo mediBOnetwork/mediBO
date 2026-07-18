@@ -156,6 +156,13 @@ class _NotificationsCardState extends State<NotificationsCard> {
       }) as bool? ?? false;
       if (!ok) throw Exception('rpc returned false');
       RenderLog.write('c498_notif_toggle_saved', '${row.audience}:${row.actionKey}:$value');
+      // CHANGE #508: toggling a row OFF is the user-visible action that puts
+      // notif_should_send into "gate blocked unless allow-listed" mode for
+      // this audience+key — log it so the gate's real-world effect is
+      // provable from the render log, not just the DB row.
+      if (!value) {
+        try { RenderLog.write('c508_gate_blocked', '${row.audience}:${row.actionKey}'); } catch (_) {}
+      }
     } catch (e) {
       if (mounted) {
         setState(() => row.enabled = prev);

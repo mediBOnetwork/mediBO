@@ -1824,14 +1824,56 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     }
   }
 
+  // CHANGE #506: this supplier's registered WhatsApp number, for the
+  // notif_should_send allow-list check. Same lookup _sendAllMeta already
+  // uses to build its per-supplier send list.
+  String? _supplierPrimaryPhone(String supName) {
+    final sup = _suppliers.cast<_SupRow?>().firstWhere(
+      (s) => s!.supplierName.toLowerCase() == supName.toLowerCase(),
+      orElse: () => null,
+    );
+    final waNumbers = _parsePhoneList(sup?.rawData['whatsapp_no'] as String? ?? '');
+    return waNumbers.isNotEmpty ? _normalizePhone(waNumbers.first) : null;
+  }
+
+  // CHANGE #506: notif_should_send() ORs the toggle with the allow-list, so a
+  // number added to Notifications → Allowed test numbers still gets sent to
+  // even while the toggle is off. Fails open (send) on RPC error, same as
+  // the #498 fail-open behavior this replaces. viaAllowlist is true only when
+  // the toggle itself is off but the allow-list is what let the send through
+  // — that's the specific case c506_supplier_send_allowlisted reports.
+  Future<({bool shouldSend, bool viaAllowlist})> _supplierShouldSend(
+      String actionKey, String? phone) async {
+    try {
+      final client = Supabase.instance.client;
+      final results = await Future.wait([
+        client.rpc('notif_should_send', params: {
+          'p_audience': 'supplier',
+          'p_action_key': actionKey,
+          'p_phone': phone,
+        }),
+        client.rpc('notif_is_enabled',
+            params: {'p_audience': 'supplier', 'p_action_key': actionKey}),
+      ]);
+      final shouldSend = results[0] != false;
+      final toggleOn = results[1] != false;
+      return (shouldSend: shouldSend, viaAllowlist: shouldSend && !toggleOn);
+    } catch (_) {
+      return (shouldSend: true, viaAllowlist: false);
+    }
+  }
+
   // Per-supplier Send: ALWAYS stamps fresh timer, then opens WhatsApp directly.
   Future<void> _sendPerSupplierDirect(String supName, BuildContext btnCtx) async {
-    final on = await Supabase.instance.client.rpc('notif_is_enabled',
-        params: {'p_audience': 'supplier', 'p_action_key': 'supplier_inquiry_sent'});
-    if (on == false) {
+    final phone = _supplierPrimaryPhone(supName);
+    final gate = await _supplierShouldSend('supplier_inquiry_sent', phone);
+    if (!gate.shouldSend) {
       RenderLog.write('c498_supplier_send_blocked', 'supplier_inquiry_sent:$supName');
       if (mounted) showToast(context, 'Supplier inquiry notifications are turned off', isError: true);
       return;
+    }
+    if (gate.viaAllowlist) {
+      try { RenderLog.write('c506_supplier_send_allowlisted', 'supplier_inquiry_sent:$supName'); } catch (_) {}
     }
     if (mounted) setState(() => _inquiryLoading = true);
     try {
@@ -4311,12 +4353,15 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   Future<void> _sendOrderWhatsApp(_OrderRow row, BuildContext btnCtx) async {
     final supName = row.supplierName;
     if (supName == null) return;
-    final on = await Supabase.instance.client.rpc('notif_is_enabled',
-        params: {'p_audience': 'supplier', 'p_action_key': 'supplier_order_sent'});
-    if (on == false) {
+    final phone = _supplierPrimaryPhone(supName);
+    final gate = await _supplierShouldSend('supplier_order_sent', phone);
+    if (!gate.shouldSend) {
       RenderLog.write('c498_supplier_send_blocked', 'supplier_order_sent:$supName');
       if (mounted) showToast(context, 'Supplier order notifications are turned off', isError: true);
       return;
+    }
+    if (gate.viaAllowlist) {
+      try { RenderLog.write('c506_supplier_send_allowlisted', 'supplier_order_sent:$supName'); } catch (_) {}
     }
     try {
       final rows = await Supabase.instance.client

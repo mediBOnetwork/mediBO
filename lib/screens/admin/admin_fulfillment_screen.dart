@@ -16868,15 +16868,37 @@ class _DisputeContactPopoverBodyState extends State<_DisputeContactPopoverBody>
           const SnackBar(content: Text('No valid phone number for this contact')));
       return;
     }
-    final on = await Supabase.instance.client.rpc('notif_is_enabled',
-        params: {'p_audience': 'supplier', 'p_action_key': 'supplier_dispute'});
-    if (on == false) {
+    // CHANGE #506: notif_should_send() ORs the toggle with the allow-list —
+    // `intl` here is the exact number the message is about to be sent to.
+    // Fails open (send) on RPC error, same as the #498 behavior this replaces.
+    bool shouldSend = true;
+    bool viaAllowlist = false;
+    try {
+      final results = await Future.wait([
+        Supabase.instance.client.rpc('notif_should_send', params: {
+          'p_audience': 'supplier',
+          'p_action_key': 'supplier_dispute',
+          'p_phone': intl,
+        }),
+        Supabase.instance.client.rpc('notif_is_enabled',
+            params: {'p_audience': 'supplier', 'p_action_key': 'supplier_dispute'}),
+      ]);
+      shouldSend = results[0] != false;
+      final toggleOn = results[1] != false;
+      viaAllowlist = shouldSend && !toggleOn;
+    } catch (_) {
+      shouldSend = true;
+    }
+    if (!shouldSend) {
       RenderLog.write('c498_supplier_send_blocked', 'supplier_dispute:${widget.supplierName}');
       widget.onClose();
       final messenger = ScaffoldMessenger.maybeOf(context);
       messenger?.showSnackBar(
           const SnackBar(content: Text('Supplier dispute notifications are turned off')));
       return;
+    }
+    if (viaAllowlist) {
+      try { RenderLog.write('c506_supplier_send_allowlisted', 'supplier_dispute:${widget.supplierName}'); } catch (_) {}
     }
     final msg = Uri.encodeComponent(
         'Hi, please review and respond to the dispute form: ${widget.link}');

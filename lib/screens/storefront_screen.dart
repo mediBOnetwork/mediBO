@@ -125,15 +125,22 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   }
 
   Future<void> _loadAllCounts() async {
-    try {
-      final counts = await widget.repo.fetchAllCategoryCounts();
-      if (!mounted) return;
-      setState(() => _categoryCounts = counts);
-      RenderLog.write('c441_counts', 'cached=${_categoryCounts.length}');
-    } catch (_) {
-      // Leave the cache empty — _countFor() falls back to a live per-category
-      // fetch below rather than ever showing a wrong or blank count.
+    // CHANGE #497: cache-first + retry, same treatment as categories (B5) —
+    // render cached counts immediately, refresh in the background.
+    final cached =
+        widget.repo.cachedCategoryCounts ?? await widget.repo.loadCachedCategoryCounts();
+    if (cached != null && mounted) {
+      setState(() => _categoryCounts = cached);
     }
+    final fresh = await retryWithBackoff<Map<String, int>>(
+      () => widget.repo.fetchAllCategoryCounts(),
+    );
+    if (fresh != null && mounted) {
+      setState(() => _categoryCounts = fresh);
+      RenderLog.write('c441_counts', 'cached=${_categoryCounts.length}');
+    }
+    // On total failure, keep whatever's already showing (cache or empty) —
+    // _countFor() also falls back to a live per-category fetch below.
   }
 
   /// Instant count for [cat] from the bulk cache. Falls back to a one-off
@@ -250,23 +257,40 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   }
 
   Future<void> _loadMeta() async {
-    try {
-      final meta = await widget.repo.fetchCatalogMeta();
-      if (!mounted) return;
-      RenderLog.write('c73_real_total', meta.total.toString());
+    // CHANGE #497: cache-first + retry — render cached categories instantly
+    // (shares MedicineRepository's cache with HomeShell's own bootstrap, so
+    // this is usually already warm by the time StorefrontScreen mounts),
+    // then refresh in the background and never wipe to blank on failure.
+    final cached = widget.repo.cachedCatalogMeta ?? await widget.repo.loadCachedCatalogMeta();
+    if (cached != null && mounted) {
       setState(() {
-        _meta = meta;
+        _meta = cached;
         _metaError = null;
         _metaNetworkError = false;
       });
-      widget.onMetaLoaded?.call(meta);
-    } catch (e) {
-      if (!mounted) return;
+      widget.onMetaLoaded?.call(cached);
+    }
+
+    final fresh = await retryWithBackoff<CatalogMeta>(() => widget.repo.fetchCatalogMeta());
+    if (!mounted) return;
+    if (fresh != null) {
+      RenderLog.write('c73_real_total', fresh.total.toString());
       setState(() {
-        _metaError = e;
-        _metaNetworkError = _isNetworkErr(e);
+        _meta = fresh;
+        _metaError = null;
+        _metaNetworkError = false;
+      });
+      widget.onMetaLoaded?.call(fresh);
+    } else if (_meta == null) {
+      // No cache and every retry failed — surface the error state (drives
+      // the category-tile grid's retry UI when showCategoryTiles is true).
+      setState(() {
+        _metaError = 'fetch failed';
+        _metaNetworkError = true;
       });
     }
+    // If fresh == null but _meta != null (cache), keep showing cached data —
+    // never wipe to blank on a failed refresh.
   }
 
   /// True for ANY browse (home/All + category) with no search query.

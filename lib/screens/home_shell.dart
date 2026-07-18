@@ -90,6 +90,11 @@ class _HomeShellState extends State<HomeShell> {
     BulkUploadScreen.navToBulkUpload = () { if (mounted) setState(() => _index = 2); };
     _initFromUrl();
     listenPopState(_applyPath);
+    // CHANGE #497: categories are public data — fetch them immediately, in
+    // parallel with auth/session resolution below, never behind it. Renders
+    // instantly from cache when one exists; refreshes in the background with
+    // retry, and never wipes a good cache on a failed refresh.
+    _bootstrapHomeCategories();
     // CHANGE #440: type-anywhere-to-search, desktop web only.
     if (kIsWeb) HardwareKeyboard.instance.addHandler(_globalKeyHandler);
     RenderLog.write('c440_typeanywhere', 'web=$kIsWeb min3=on');
@@ -281,6 +286,37 @@ class _HomeShellState extends State<HomeShell> {
 
   void _onMetaLoaded(CatalogMeta meta) {
     if (mounted) setState(() => _desktopMeta = meta);
+  }
+
+  /// CHANGE #497: cache-first, parallel, retrying category fetch for the
+  /// homepage chip row (`_MobileCategoryChips`, fed by `_desktopMeta`). This
+  /// fires from `initState()` — i.e. immediately on home load, racing
+  /// auth/session resolution rather than waiting for it — because the old
+  /// path only fetched categories once `StorefrontScreen` mounted, which the
+  /// CHANGE #308 auth-loading gate above delays until profile resolution
+  /// finishes. See CHANGE #497 for the full root-cause writeup.
+  Future<void> _bootstrapHomeCategories() async {
+    final cached = _repo.cachedCatalogMeta ?? await _repo.loadCachedCatalogMeta();
+    if (cached != null) {
+      if (mounted) setState(() => _desktopMeta = cached);
+      RenderLog.write('c497_home_cat_cache_hit', 'true');
+    } else {
+      RenderLog.write('c497_home_cat_cache_miss', 'true');
+    }
+
+    final fresh = await retryWithBackoff<CatalogMeta>(
+      () => _repo.fetchCatalogMeta(),
+      onRetry: (attempt) =>
+          RenderLog.write('c497_home_cat_fetch_retry', 'attempt=$attempt'),
+    );
+    if (fresh != null) {
+      if (mounted) setState(() => _desktopMeta = fresh);
+      RenderLog.write('c497_home_cat_fetch_ok', 'true');
+    } else {
+      // All retries failed — keep whatever's already showing (cache or
+      // null); never wipe the chip row to blank on a failed refresh.
+      RenderLog.write('c497_home_cat_fallback', 'true');
+    }
   }
 
   // Admin section indices in the pages list: 3=Dashboard, 4=AddMedicine,
@@ -1380,16 +1416,30 @@ class _MobileCategoryChips extends StatelessWidget {
   Widget build(BuildContext context) {
     final m = meta;
     if (m == null) {
-      // Slim placeholder while meta is loading
+      // CHANGE #497: lightweight skeleton chips (not a spinner/blank area)
+      // while categories are loading for the first time on this device —
+      // repeat opens render instantly from cache and never hit this path.
       return Container(
         color: Colors.white,
-        height: 48,
-        child: const Center(
-          child: SizedBox(
-            width: 16,
-            height: 16,
-            child: CircularProgressIndicator(strokeWidth: 2, color: Brand.green),
-          ),
+        height: 50,
+        child: ListView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.fromLTRB(12, 7, 12, 7),
+          physics: const NeverScrollableScrollPhysics(),
+          children: List.generate(6, (i) {
+            final width = 56.0 + (i % 3) * 18;
+            return Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: Container(
+                width: width,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE5E7EB),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+              ),
+            );
+          }),
         ),
       );
     }

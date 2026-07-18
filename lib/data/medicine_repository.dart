@@ -1,3 +1,7 @@
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/product.dart';
@@ -35,6 +39,41 @@ void _cacheSet<V>(Map<String, V> cache, String key, V value) {
   cache[key] = value;
 }
 
+// ─── CHANGE #497: local cache for homepage category metadata & counts ────────
+// Categories/counts used to be re-fetched from Supabase on every
+// StorefrontScreen mount with no persistence, so a cold/slow network left the
+// homepage chip row blank until the RPC returned. Caching the last-good
+// response in shared_preferences (mirrored in-memory for the current session)
+// lets callers render instantly from cache while a fresh fetch runs in the
+// background. shared_preferences only — never dart:html/localStorage.
+const String _kMetaCacheKey = 'c497_catalog_meta_cache_v1';
+const String _kCountsCacheKey = 'c497_storefront_counts_cache_v1';
+
+/// Retries [task] up to [maxAttempts] times with [backoff] gaps between
+/// attempts. Never throws — returns null if every attempt fails. [onRetry]
+/// fires before each retry (not the first attempt), useful for diagnostics.
+Future<T?> retryWithBackoff<T>(
+  Future<T> Function() task, {
+  int maxAttempts = 3,
+  List<Duration> backoff = const [
+    Duration(milliseconds: 300),
+    Duration(milliseconds: 600),
+  ],
+  void Function(int attempt)? onRetry,
+}) async {
+  for (var attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      return await task();
+    } catch (_) {
+      if (attempt < maxAttempts - 1) {
+        onRetry?.call(attempt + 1);
+        await Future.delayed(backoff[attempt.clamp(0, backoff.length - 1)]);
+      }
+    }
+  }
+  return null;
+}
+
 /// Columns fetched for list/search cards — excludes heavy text blobs
 /// (uses, benefits, side_effects, how_it_works, PS1-PS30, etc.).
 /// This cuts payload ~10× vs SELECT * on the 60-column MEDICINE table.
@@ -62,6 +101,92 @@ class MedicineRepository {
   /// Set to the error string when browse_medicines RPC fails (for diagnostics).
   static String? browseRpcError;
   static set _browseRpcError(String? v) => browseRpcError = v;
+
+  // CHANGE #497: in-memory mirror of the shared_preferences category cache.
+  // Populated by [loadCachedCatalogMeta]/[loadCachedCategoryCounts] (read) and
+  // by a successful [fetchCatalogMeta]/[fetchAllCategoryCounts] (write).
+  CatalogMeta? _cachedMeta;
+  Map<String, int>? _cachedCounts;
+
+  /// Synchronous cache hit for this session only (null until a fetch or a
+  /// [loadCachedCatalogMeta] call has populated it once).
+  CatalogMeta? get cachedCatalogMeta => _cachedMeta;
+  Map<String, int>? get cachedCategoryCounts => _cachedCounts;
+
+  /// Reads the last-persisted catalog meta from shared_preferences — fast,
+  /// no network. Returns null if this device has never cached it before.
+  Future<CatalogMeta?> loadCachedCatalogMeta() async {
+    if (_cachedMeta != null) return _cachedMeta;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_kMetaCacheKey);
+      if (raw == null) return null;
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
+      final categories = (decoded['categories'] as List)
+          .map((c) => CategoryCount(
+                c['name'] as String,
+                (c['count'] as num).toInt(),
+              ))
+          .toList(growable: false);
+      final meta = CatalogMeta(categories, (decoded['total'] as num?)?.toInt() ?? 0);
+      _cachedMeta = meta;
+      return meta;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _persistCatalogMeta(CatalogMeta meta) async {
+    _cachedMeta = meta;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        _kMetaCacheKey,
+        jsonEncode({
+          'categories': meta.categories
+              .map((c) => {'name': c.name, 'count': c.count})
+              .toList(),
+          'total': meta.total,
+          'ts': DateTime.now().millisecondsSinceEpoch,
+        }),
+      );
+    } catch (_) {
+      // Cache write failure is non-fatal — the fetched data is still returned.
+    }
+  }
+
+  /// Reads the last-persisted per-category counts from shared_preferences.
+  Future<Map<String, int>?> loadCachedCategoryCounts() async {
+    if (_cachedCounts != null) return _cachedCounts;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_kCountsCacheKey);
+      if (raw == null) return null;
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
+      final counts = (decoded['counts'] as Map<String, dynamic>)
+          .map((k, v) => MapEntry(k, (v as num).toInt()));
+      _cachedCounts = counts;
+      return counts;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _persistCategoryCounts(Map<String, int> counts) async {
+    _cachedCounts = counts;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        _kCountsCacheKey,
+        jsonEncode({
+          'counts': counts,
+          'ts': DateTime.now().millisecondsSinceEpoch,
+        }),
+      );
+    } catch (_) {
+      // Cache write failure is non-fatal — the fetched data is still returned.
+    }
+  }
 
   /// #401: cart_items stores a point-in-time price/name snapshot with no
   /// `buyable` column, so cart lines must re-fetch current buyability by id
@@ -118,7 +243,9 @@ class MedicineRepository {
     // Use the planner estimate as grand total; fall back to sum of categories.
     final sumTotal = categories.fold<int>(0, (sum, c) => sum + c.count);
     final total = estimate > sumTotal ? estimate : sumTotal;
-    return CatalogMeta(categories, total);
+    final meta = CatalogMeta(categories, total);
+    unawaited(_persistCatalogMeta(meta)); // CHANGE #497: cache for instant next-open render
+    return meta;
   }
 
   /// CHANGE #441: every category's buyable count in one call, via
@@ -128,9 +255,11 @@ class MedicineRepository {
   Future<Map<String, int>> fetchAllCategoryCounts() async {
     final res = await _client.rpc('get_all_storefront_counts');
     if (res == null) return {};
-    return (res as Map).map(
+    final counts = (res as Map).map(
       (k, v) => MapEntry(k.toString().toUpperCase(), (v as num).toInt()),
     );
+    unawaited(_persistCategoryCounts(counts)); // CHANGE #497: cache for instant next-open render
+    return counts;
   }
 
   /// Single-category buyable count, via `get_storefront_count`. Used only

@@ -340,8 +340,11 @@ class _WaMessageBubbleState extends State<WaMessageBubble> {
             ),
             if (isOut) ...[
               const SizedBox(width: 4),
-              // Double tick = delivered (no read receipts from backend).
-              const Icon(Icons.done_all, size: 14, color: Color(0xFF53BDEB)),
+              // CHANGE #508 B4: real Meta delivery status — this used to be a
+              // hardcoded blue double-tick on every outbound message, which
+              // read as "delivered and read" even for messages Meta never
+              // confirmed delivery of (or that failed outright).
+              _WaStatusTick(status: msg.waStatus, failReason: msg.waFailReason),
             ],
           ],
         ),
@@ -609,6 +612,46 @@ class _MiniButton extends StatelessWidget {
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
       ),
     );
+  }
+}
+
+// CHANGE #508 B4: renders Meta's REAL per-message delivery status, sourced
+// from whatsapp_messages.wa_status via the webhook's status-callback handler.
+// A message must never look sent/delivered unless Meta actually confirmed it.
+class _WaStatusTick extends StatelessWidget {
+  final String? status;
+  final String? failReason;
+  const _WaStatusTick({this.status, this.failReason});
+
+  @override
+  Widget build(BuildContext context) {
+    final s = (status ?? '').toLowerCase();
+    if (s == 'failed') {
+      try { RenderLog.write('c508_status_failed', failReason ?? 'unknown'); } catch (_) {}
+      return Tooltip(
+        message: (failReason != null && failReason!.isNotEmpty)
+            ? failReason!
+            : 'Message was not delivered',
+        child: const Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.error_outline, size: 13, color: Color(0xFFDC2626)),
+          SizedBox(width: 2),
+          Text('Not delivered',
+              style: TextStyle(
+                  fontSize: 10, color: Color(0xFFDC2626), fontWeight: FontWeight.w600)),
+        ]),
+      );
+    }
+    if (s == 'read') {
+      try { RenderLog.write('c508_status_delivered', 'read'); } catch (_) {}
+      return const Icon(Icons.done_all, size: 14, color: Color(0xFF53BDEB));
+    }
+    if (s == 'delivered') {
+      try { RenderLog.write('c508_status_delivered', 'delivered'); } catch (_) {}
+      return const Icon(Icons.done_all, size: 14, color: Color(0xFF667781));
+    }
+    // 'accepted' / 'sent' / unknown — Meta took the message, but that is NOT
+    // proof of delivery. Single grey tick only.
+    return const Icon(Icons.done, size: 14, color: Color(0xFF667781));
   }
 }
 

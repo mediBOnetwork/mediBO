@@ -477,6 +477,7 @@ class _AppRootState extends State<_AppRoot> {
           WidgetsBinding.instance.addPostFrameCallback((_) async {
             try { RenderLog.write('boot_status', 'painted'); } catch (_) {}
             try { RenderLog.write('c501_boot_ok', 'true'); } catch (_) {}
+            try { RenderLog.write('c502_boot_ok', 'true'); } catch (_) {}
             try { RenderLog.write('c237_cache_bust',
                 'change:237,no_cache_headers:true,sw_kill_script:true,sw_reload_guard:true'); } catch (_) {}
             try { RenderLog.write('c238_sw_disabled',

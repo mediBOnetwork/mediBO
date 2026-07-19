@@ -4304,13 +4304,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       }
     });
 
-    // CHANGE #444 — shared date-scope pill, same shape on both Shop and Warehouse.
-    final olderPill = OlderOpenPill(
-      olderOpen: _olderOpen,
-      includeOlder: FulfillDateScope.instance.includeOlder,
-      onTap: () => FulfillDateScope.instance.toggleIncludeOlder(),
-    );
-
     if (_suppliers.isEmpty) {
       return Center(
         child: Padding(
@@ -4319,10 +4312,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             Text('No orders placed on ${dmy(FulfillDateScope.instance.date)}.',
                 style: const TextStyle(color: _kSub, fontSize: 15),
                 textAlign: TextAlign.center),
-            if (_olderOpen > 0) ...[
-              const SizedBox(height: 10),
-              olderPill,
-            ],
           ]),
         ),
       );
@@ -4344,19 +4333,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           child: ListView.builder(
             controller: _listScrollCtrl,
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-            itemCount: displayList.length + (_olderOpen > 0 ? 1 : 0),
-            itemBuilder: (_, i) {
-              if (_olderOpen > 0) {
-                if (i == 0) {
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: olderPill,
-                  );
-                }
-                return _buildSupplierAccordionRow(displayList[i - 1], isAdmin);
-              }
-              return _buildSupplierAccordionRow(displayList[i], isAdmin);
-            },
+            itemCount: displayList.length,
+            itemBuilder: (_, i) => _buildSupplierAccordionRow(displayList[i], isAdmin),
           ),
         ),
       );
@@ -12692,13 +12670,6 @@ class _PackTabState extends State<_PackTab>
         ),
       ]));
     }
-    // CHANGE #444 — shared date-scope pill.
-    final olderPill = OlderOpenPill(
-      olderOpen: _olderOpen,
-      includeOlder: FulfillDateScope.instance.includeOlder,
-      onTap: () => FulfillDateScope.instance.toggleIncludeOlder(),
-    );
-
     if (_customers.isEmpty) {
       return Center(
         child: Padding(
@@ -12707,7 +12678,6 @@ class _PackTabState extends State<_PackTab>
             Text('No orders placed on ${dmy(FulfillDateScope.instance.date)}.',
                 style: const TextStyle(color: _kSub, fontSize: 15),
                 textAlign: TextAlign.center),
-            if (_olderOpen > 0) ...[const SizedBox(height: 10), olderPill],
           ]),
         ),
       );
@@ -12721,16 +12691,8 @@ class _PackTabState extends State<_PackTab>
           child: ListView.builder(
             controller: _scroll,
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-            itemCount: _customers.length + (_olderOpen > 0 ? 1 : 0),
-            itemBuilder: (_, i) {
-              if (_olderOpen > 0) {
-                if (i == 0) {
-                  return Padding(padding: const EdgeInsets.only(bottom: 10), child: olderPill);
-                }
-                return _buildCustomerRow(_customers[i - 1]);
-              }
-              return _buildCustomerRow(_customers[i]);
-            },
+            itemCount: _customers.length,
+            itemBuilder: (_, i) => _buildCustomerRow(_customers[i]),
           ),
         ),
       );
@@ -16100,13 +16062,6 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     // C359: disputes raised at confirm land here (Disputes tab) after the realtime refresh.
     if (_disputes.isNotEmpty) RenderLog.write('c359_moved_disp', '${_disputes.length}');
 
-    // CHANGE #444 — shared date-scope pill.
-    final olderPill = OlderOpenPill(
-      olderOpen: _olderOpen,
-      includeOlder: FulfillDateScope.instance.includeOlder,
-      onTap: () => FulfillDateScope.instance.toggleIncludeOlder(),
-    );
-
     if (_disputes.isEmpty) {
       return Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -16114,7 +16069,6 @@ class _DisputesScreenState extends State<_DisputesScreen> {
           const SizedBox(height: 12),
           Text('No orders placed on ${dmy(FulfillDateScope.instance.date)}.',
               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _kSub)),
-          if (_olderOpen > 0) ...[const SizedBox(height: 10), olderPill],
         ]),
       );
     }
@@ -16131,8 +16085,6 @@ class _DisputesScreenState extends State<_DisputesScreen> {
             child: ListView(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
               children: [
-                if (_olderOpen > 0)
-                  Padding(padding: const EdgeInsets.only(bottom: 10), child: olderPill),
                 if (_unfillable.isNotEmpty) _buildUnfillableBanner(),
                 // C362 point-7: NO Active/Closed sections — one card per supplier (name
                 // header + dispute link), item-wise rows underneath (each row an

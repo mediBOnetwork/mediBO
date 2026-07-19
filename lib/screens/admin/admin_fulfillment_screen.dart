@@ -9280,6 +9280,10 @@ class _SupplierAccordionShell extends StatelessWidget {
   // #339: arrivals chip colour from server truth (null = not available, use legacy)
   final bool? arrivalsConfirmed;
   final int? arrivalsReceived;
+  // fix(pack): Pack tab's 3 status dots [allPacked, allCounted, readyDone] —
+  // true=green, false=yellow. Null (every other caller) keeps the single
+  // `dot` behavior below completely unchanged.
+  final List<bool>? dots;
 
   const _SupplierAccordionShell({
     required this.name,
@@ -9293,6 +9297,7 @@ class _SupplierAccordionShell extends StatelessWidget {
     this.showPending = false,
     this.arrivalsConfirmed,
     this.arrivalsReceived,
+    this.dots,
   });
 
   static const _kDotGreen       = Color(0xFF1B7A43);
@@ -9368,14 +9373,31 @@ class _SupplierAccordionShell extends StatelessWidget {
                   showPending: showPending,
                 ),
                 const SizedBox(width: 8),
-                Container(
-                  width: 12, height: 12,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: dotFill,
-                    border: Border.all(color: dotBorder, width: 1.5),
+                if (dots != null)
+                  Row(mainAxisSize: MainAxisSize.min, children: [
+                    for (int i = 0; i < dots!.length; i++) ...[
+                      if (i > 0) const SizedBox(width: 4),
+                      Container(
+                        width: 12, height: 12,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: dots![i] ? _kDotGreen : _kDotYellow,
+                          border: Border.all(
+                              color: dots![i] ? _kDotGreen : _kDotBorderLight,
+                              width: 1.5),
+                        ),
+                      ),
+                    ],
+                  ])
+                else
+                  Container(
+                    width: 12, height: 12,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: dotFill,
+                      border: Border.all(color: dotBorder, width: 1.5),
+                    ),
                   ),
-                ),
               ]),
             ),
           ),
@@ -11977,17 +11999,20 @@ class _PackTabState extends State<_PackTab>
       final Map<String, dynamic> m = raw is String
           ? (jsonDecode(raw) as Map).cast<String, dynamic>()
           : Map<String, dynamic>.from(raw as Map);
-      final rollup = m['rollup'] is Map ? Map<String, dynamic>.from(m['rollup'] as Map) : <String, dynamic>{};
-      final total  = (rollup['ordered'] as num?)?.toInt() ?? 0;
-      final packed = (rollup['packed']  as num?)?.toInt() ?? 0;
+      final rollup  = m['rollup'] is Map ? Map<String, dynamic>.from(m['rollup'] as Map) : <String, dynamic>{};
+      final total   = (rollup['ordered'] as num?)?.toInt() ?? 0;
+      final packed  = (rollup['packed']  as num?)?.toInt() ?? 0;
+      // fix(pack): counted already comes back on this same rollup — surfaced
+      // for the customer-row 3-status-dots (allPacked/allCounted/readyDone).
+      final counted = (rollup['counted'] as num?)?.toInt() ?? 0;
       try {
         RenderLog.write('c291_pack_counts',
             'order=${orderId.substring(0, orderId.length.clamp(0, 8))};total=$total;packed=$packed');
         RenderLog.write('c335_pack', 'order=${orderId.substring(0, orderId.length.clamp(0, 8))};total=$total;packed=$packed');
       } catch (_) {}
-      if (mounted) setState(() => _packStatus[orderId] = {'packed': packed, 'total': total});
+      if (mounted) setState(() => _packStatus[orderId] = {'packed': packed, 'total': total, 'counted': counted});
     } catch (e) {
-      if (mounted) setState(() => _packStatus[orderId] = {'packed': 0, 'total': -1});
+      if (mounted) setState(() => _packStatus[orderId] = {'packed': 0, 'total': -1, 'counted': 0});
     }
   }
 
@@ -12037,7 +12062,9 @@ class _PackTabState extends State<_PackTab>
       if (!mounted) return;
       setState(() {
         _packQueueData[orderId] = m;
-        _packStatus[orderId] = {'packed': packed, 'total': total};
+        // fix(pack): keep 'counted' alongside packed/total — _fetchPackStatus
+        // stores the same three keys; this write must not clobber it.
+        _packStatus[orderId] = {'packed': packed, 'total': total, 'counted': counted};
         _loadingItems[orderId] = false;
       });
       RenderLog.write('c354_live', 'tab=pack,src=queue');
@@ -12050,7 +12077,7 @@ class _PackTabState extends State<_PackTab>
       setState(() {
         _loadingItems[orderId] = false;
         if (!_packQueueData.containsKey(orderId)) {
-          _packStatus[orderId] = {'packed': 0, 'total': -1};
+          _packStatus[orderId] = {'packed': 0, 'total': -1, 'counted': 0};
         }
       });
     }
@@ -12616,6 +12643,22 @@ class _PackTabState extends State<_PackTab>
     );
   }
 
+  // fix(pack): 3 customer-row status dots — [allPacked, allCounted, readyDone].
+  // packed/counted/total come from _packStatus (already fetched via
+  // pack_get_queue by _fetchPackStatus/_loadFromPackQueue — no new RPC call);
+  // dispatch_ready is already on `c` from fw_pack_orders.
+  List<bool> _packDots(Map<String, dynamic> c) {
+    final orderId = c['order_id']?.toString() ?? '';
+    final status = _packStatus[orderId];
+    final total = status?['total'] ?? 0;
+    final packed = status?['packed'] ?? 0;
+    final counted = status?['counted'] ?? 0;
+    final allPacked = total > 0 && packed >= total;
+    final allCounted = total > 0 && counted >= total;
+    final readyDone = c['dispatch_ready'] == true;
+    return [allPacked, allCounted, readyDone];
+  }
+
   String _dot(Map<String, dynamic> c) {
     final s = c['fulfillment_status']?.toString() ?? '';
     if (s == 'ready') return 'green';
@@ -12703,6 +12746,7 @@ class _PackTabState extends State<_PackTab>
     return _SupplierAccordionShell(
       name: name,
       dot: _dot(c),
+      dots: _packDots(c),
       isExpanded: isExpanded,
       anyExpanded: _expandedOrderId != null,
       rowKey: rowKey,

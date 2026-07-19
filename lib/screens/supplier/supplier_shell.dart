@@ -73,9 +73,15 @@ class _SupplierShellState extends State<SupplierShell> {
   // tab switches), so it never gets a fresh initState when the admin drafts,
   // sends, or an expiry lapses while the user is on another tab. Force a
   // refetch every time the tab is switched TO, so it's never stale on show.
+  // CHANGE #472: pause its 8s poll timer when navigating away from it.
   void _onTabTap(int i) {
+    final wasInquiry = _index == 2;
     setState(() => _index = i);
-    if (i == 2) _inquiryKey.currentState?.refresh(source: 'tab_switch');
+    if (i == 2) {
+      _inquiryKey.currentState?.refresh(source: 'tab_switch');
+    } else if (wasInquiry) {
+      _inquiryKey.currentState?.pause();
+    }
   }
 
   @override

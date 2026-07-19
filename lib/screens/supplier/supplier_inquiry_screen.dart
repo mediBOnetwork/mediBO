@@ -184,9 +184,18 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
     if (!silent) setState(() => _loading = true);
     try {
       final sid = widget.viewAsSupplierId;
-      final params = sid != null
-          ? <String, dynamic>{'p_supplier_id': sid}
-          : <String, dynamic>{};
+      // CHANGE #472: supplier_inquiry_buckets has two overloads in the DB —
+      // (p_supplier_id) and (p_supplier_id, p_preview) — both fully defaulted.
+      // A bare zero-arg call (the real, non-View-As login path) is genuinely
+      // ambiguous to Postgres ("could not choose the best candidate
+      // function"), so every real supplier session was silently erroring out
+      // of _fetch() and rendering as an empty "No inquiries" tab regardless
+      // of actual data. Always pass both params explicitly to disambiguate —
+      // no backend change needed.
+      final params = <String, dynamic>{
+        'p_supplier_id': sid,
+        'p_preview': false,
+      };
       final rows = await Supabase.instance.client
           .rpc('supplier_inquiry_buckets', params: params);
       if (!mounted) return;

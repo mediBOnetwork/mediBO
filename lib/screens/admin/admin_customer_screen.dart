@@ -3411,12 +3411,12 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     return (s == 'null') ? '' : s;
   }
 
-  // Format a DB timestamp value as DD/MM/YYYY HH:MM; returns '' on failure.
+  // Format a DB timestamp value as DD/MM/YYYY HH:MM (IST); returns '' on failure.
   static String _fmtTs(dynamic v) {
     final s = _str(v);
     if (s.isEmpty) return '';
     try {
-      final dt = DateTime.parse(s).toLocal();
+      final dt = istFromDb(s);
       return '${dt.day.toString().padLeft(2, '0')}/'
              '${dt.month.toString().padLeft(2, '0')}/'
              '${dt.year}  '
@@ -6630,7 +6630,7 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
 
   String _fmtDate(String raw) {
     try {
-      final dt = DateTime.parse(raw).toLocal();
+      final dt = istFromDb(raw);
       final dd = dt.day.toString().padLeft(2, '0');
       final mm = dt.month.toString().padLeft(2, '0');
       final yy = (dt.year % 100).toString().padLeft(2, '0');
@@ -9126,7 +9126,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
 
   String _todayHoursLine(List<String> hours) {
     if (hours.isEmpty) return '';
-    final todayName = _sLeadWeekdayNames[DateTime.now().weekday - 1];
+    final todayName = _sLeadWeekdayNames[nowIst().weekday - 1];
     final match = hours.firstWhere((h) => h.startsWith(todayName), orElse: () => '');
     if (match.isEmpty) return '';
     final idx = match.indexOf(':');
@@ -9665,7 +9665,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
   String _fmtRunDate(String? iso) {
     if (iso == null || iso.length < 10) return '';
     try {
-      final d = DateTime.parse(iso).toLocal();
+      final d = istFromDb(iso);
       return '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
     } catch (_) {
       return iso.substring(0, 10);
@@ -12423,7 +12423,7 @@ class _AssignRouteDialog extends StatefulWidget {
 class _AssignRouteDialogState extends State<_AssignRouteDialog> {
   late List<Map<String, dynamic>> _workers;
   String? _workerId;
-  DateTime _forDate = DateTime.now();
+  DateTime _forDate = todayIst();
   bool _submitting = false;
   String? _error;
 
@@ -12487,8 +12487,8 @@ class _AssignRouteDialogState extends State<_AssignRouteDialog> {
     final picked = await showDatePicker(
       context: context,
       initialDate: _forDate,
-      firstDate: DateTime.now().subtract(const Duration(days: 1)),
-      lastDate: DateTime.now().add(const Duration(days: 60)),
+      firstDate: todayIst().subtract(const Duration(days: 1)),
+      lastDate: todayIst().add(const Duration(days: 60)),
       builder: (context, child) => Theme(
         data: Theme.of(context).copyWith(
           colorScheme: const ColorScheme.light(primary: Color(0xFF1B7A43)),

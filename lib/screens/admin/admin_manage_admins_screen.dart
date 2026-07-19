@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:pharma_b2b/utils/ist_date.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 
 // Emails that can never be removed or demoted — matches DB-side lock list.
@@ -411,7 +412,7 @@ class _AdminManageAdminsScreenState extends State<AdminManageAdminsScreen> {
   String _fmtDate(dynamic raw) {
     if (raw == null) return '—';
     try {
-      final dt = DateTime.parse(raw.toString()).toLocal();
+      final dt = istFromDb(raw.toString());
       return '${dt.day} ${_months[dt.month - 1]} ${dt.year}';
     } catch (_) {
       return raw.toString();

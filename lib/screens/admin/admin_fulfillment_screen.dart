@@ -12230,10 +12230,7 @@ class _PackTabState extends State<_PackTab>
       // If upload throws, log and continue — do NOT retry or abort counting.
       try {
         // CHANGE #304b: path MUST use YYYY-MM-DD (dashes) — matches next_pack_recording_seq lookup.
-        final istNow = DateTime.now().toUtc().add(const Duration(hours: 5, minutes: 30));
-        final dateStr = '${istNow.year.toString().padLeft(4, '0')}'
-            '-${istNow.month.toString().padLeft(2, '0')}'
-            '-${istNow.day.toString().padLeft(2, '0')}';
+        final dateStr = ymd(nowIst());
         clipPath = '$dateStr/pack-$orderId/$seq.${result.ext}';
         final mimeUpload = result.ext == 'webm' ? 'audio/webm' : 'audio/mp4';
         await Supabase.instance.client.storage.from('voice-clips').uploadBinary(

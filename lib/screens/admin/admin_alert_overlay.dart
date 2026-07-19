@@ -6,6 +6,7 @@ import 'dart:js_interop';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:pharma_b2b/utils/ist_date.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 
 // ── External JS function declarations (web only) ─────────────────────────────
@@ -89,7 +90,7 @@ String _fmtVal(String col, dynamic v) {
   if (s.isEmpty || s == 'null') return '—';
   if (col.endsWith('_at') && s.length >= 10) {
     try {
-      final dt = DateTime.parse(s).toLocal();
+      final dt = istFromDb(s);
       return '${dt.day.toString().padLeft(2,'0')}/${dt.month.toString().padLeft(2,'0')}/${dt.year}  '
              '${dt.hour.toString().padLeft(2,'0')}:${dt.minute.toString().padLeft(2,'0')}';
     } catch (_) {}
@@ -812,7 +813,7 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
     final dateStr   = createdAt.length >= 10
         ? () {
             try {
-              final dt = DateTime.parse(createdAt).toLocal();
+              final dt = istFromDb(createdAt);
               return '${dt.day.toString().padLeft(2,'0')}/${dt.month.toString().padLeft(2,'0')}/${dt.year}';
             } catch (_) { return ''; }
           }()

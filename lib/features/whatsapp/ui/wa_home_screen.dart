@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:pharma_b2b/utils/ist_date.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 import '../data/wa_repository.dart';
 import '../models/wa_conversation.dart';
@@ -222,11 +223,7 @@ class _ConversationListViewState extends State<_ConversationListView>
 
   static DateTime? _parseAt(dynamic v) {
     if (v == null) return null;
-    try {
-      return DateTime.parse(v.toString()).toLocal();
-    } catch (_) {
-      return null;
-    }
+    return tryIstFromDb(v.toString());
   }
 
   // CHANGE #209: silent re-sync on reconnect/resume — refetch list, no spinner.

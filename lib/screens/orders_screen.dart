@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../util.dart';
 import '../utils/download_bytes.dart';
+import '../utils/ist_date.dart';
 import '../utils/order_code.dart';
 import '../utils/render_log.dart';
 import '../widgets/animations.dart';
@@ -43,7 +44,7 @@ class _DbOrder {
     return _DbOrder(
       id: id,
       number: orderDisplayId(row),
-      placedAt: DateTime.parse(row['created_at'] as String).toLocal(),
+      placedAt: istFromDb(row['created_at'] as String),
       lines: items
           .map((item) => _DbLine.fromJson(item as Map<String, dynamic>))
           .toList(),

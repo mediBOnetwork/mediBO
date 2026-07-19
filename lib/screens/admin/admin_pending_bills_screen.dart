@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
+import 'package:pharma_b2b/utils/ist_date.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'admin_add_medicine_screen.dart';
@@ -635,7 +636,7 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
   bool _loading = true;
   String? _error;
   bool _fakeExpanded = false;
-  DateTime _selectedDate = DateTime.now();
+  DateTime _selectedDate = todayIst();
   final Map<String, bool> _downloading = {};
   final Map<String, bool> _dismissing = {};
   final Map<String, bool> _approving = {};
@@ -658,8 +659,7 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
   // ── Date picker ───────────────────────────────────────────────────────────────
 
   String _fmtDateLabel(DateTime d) {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
+    final today = todayIst();
     final sel = DateTime(d.year, d.month, d.day);
     if (sel == today) return 'Today';
     if (sel == today.subtract(const Duration(days: 1))) return 'Yesterday';
@@ -672,7 +672,7 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
       context: context,
       initialDate: _selectedDate,
       firstDate: DateTime(2024),
-      lastDate: DateTime.now(),
+      lastDate: todayIst(),
       builder: (context, child) => Theme(
         data: Theme.of(context).copyWith(
           colorScheme: const ColorScheme.light(primary: Color(0xFF1B7A43)),
@@ -694,7 +694,7 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
       _error = null;
     });
     try {
-      final dayStart = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day).toUtc();
+      final dayStart = istDayStartUtc(_selectedDate);
       final dayEnd = dayStart.add(const Duration(days: 1));
       final rows = await Supabase.instance.client
           .from('pending_bills')
@@ -940,7 +940,7 @@ class _PendingBillsScreenState extends State<PendingBillsScreen> {
   String _fmtDate(dynamic val) {
     if (val == null) return '—';
     try {
-      final dt = DateTime.parse(val.toString()).toLocal();
+      final dt = istFromDb(val.toString());
       final months = [
         'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
         'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'

@@ -2,6 +2,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../utils/ist_date.dart';
 import '../../utils/render_log.dart';
 import '../../utils/toast.dart';
 import '../../widgets/order_item_card.dart';
@@ -284,7 +285,7 @@ class _OrderCardState extends State<_OrderCard> {
     final totalAmount = (widget.order['total_amount'] as num?)?.toDouble();
     final itemCount = (widget.order['item_count'] as num?)?.toInt() ?? 0;
     final createdAt = widget.order['created_at'] != null
-        ? DateTime.tryParse(widget.order['created_at'] as String)?.toLocal()
+        ? tryIstFromDb(widget.order['created_at'] as String)
         : null;
     final items = (widget.order['items'] as List<dynamic>? ?? [])
         .map((e) => Map<String, dynamic>.from(e as Map))

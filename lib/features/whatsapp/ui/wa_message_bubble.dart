@@ -58,9 +58,9 @@ class _WaMessageBubbleState extends State<WaMessageBubble> {
 
   String _formatTime(DateTime? dt) {
     if (dt == null) return '';
-    // CHANGE #248: 12h IST display (toLocal() gives IST in the Indian user's browser).
-    final ist = dt.toUtc().add(const Duration(hours: 5, minutes: 30));
-    final t = DateFormat('h:mm a').format(ist).toLowerCase();
+    // CHANGE #374: dt is already IST wall-clock (WaMessage.receivedAt is
+    // converted at parse time) — do not re-offset here.
+    final t = DateFormat('h:mm a').format(dt).toLowerCase();
     RenderLog.write('c248_bubble_time_12h', t);
     return t;
   }

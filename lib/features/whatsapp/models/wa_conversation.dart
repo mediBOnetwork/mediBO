@@ -1,3 +1,5 @@
+import '../../../utils/ist_date.dart';
+
 class WaConversation {
   final String senderPhone;
   final String senderType;
@@ -59,11 +61,7 @@ class WaConversation {
 
   static DateTime? _asDate(dynamic v) {
     if (v == null) return null;
-    try {
-      return DateTime.parse(v.toString()).toLocal();
-    } catch (_) {
-      return null;
-    }
+    return tryIstFromDb(v.toString());
   }
 
   /// Resolved display name. Priority: resolved business/customer name >

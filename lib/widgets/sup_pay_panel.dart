@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../utils/ist_date.dart';
 import '../utils/render_log.dart';
 import '../utils/safe_parse.dart';
 import '../utils/toast.dart';
@@ -382,7 +383,7 @@ class _SupPayPanelState extends State<SupPayPanel> {
     final mode   = p['mode'] as String? ?? '';
     final note   = p['note'] as String?;
     final at     = p['at'] != null
-        ? DateTime.tryParse(p['at'] as String)?.toLocal()
+        ? tryIstFromDb(p['at'] as String)
         : null;
     final atStr  = at != null ? _fmtDt(at) : '—';
 
@@ -961,7 +962,7 @@ class _C330PayCardState extends State<C330PayCard> {
     final app     = p['app']        as String?;
     final paidAt  = p['paid_at']    as String?;
     final atRaw   = p['at']         as String?;
-    final at      = atRaw != null ? DateTime.tryParse(atRaw)?.toLocal() : null;
+    final at      = atRaw != null ? tryIstFromDb(atRaw) : null;
     final hasSnap = (p['screenshot_path'] as String? ?? '').isNotEmpty;
 
     Color kindBg, kindFg;

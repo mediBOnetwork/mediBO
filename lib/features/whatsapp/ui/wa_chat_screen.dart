@@ -3,6 +3,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
+import 'package:pharma_b2b/utils/ist_date.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../data/wa_repository.dart';
@@ -257,7 +258,7 @@ class _WaChatScreenState extends State<WaChatScreen>
         direction: 'out',
         msgType: 'text',
         text: text,
-        receivedAt: DateTime.now(),
+        receivedAt: nowIst(),
       );
       if (mounted) {
         setState(() {
@@ -473,7 +474,7 @@ class _WaChatScreenState extends State<WaChatScreen>
         mediaBucket: res['media_bucket']?.toString() ?? 'whatsapp-media',
         mimeType: mime,
         fileName: fileName,
-        receivedAt: DateTime.now(),
+        receivedAt: nowIst(),
       ));
     } catch (e) {
       _handleSendError(e);
@@ -591,7 +592,7 @@ class _WaChatScreenState extends State<WaChatScreen>
         locationName: nameC.text.trim().isNotEmpty ? nameC.text.trim() : null,
         locationAddress:
             addrC.text.trim().isNotEmpty ? addrC.text.trim() : null,
-        receivedAt: DateTime.now(),
+        receivedAt: nowIst(),
       ));
     } catch (e) {
       _handleSendError(e);
@@ -656,7 +657,7 @@ class _WaChatScreenState extends State<WaChatScreen>
         msgType: 'contacts',
         contactName: name,
         contactPhone: digits,
-        receivedAt: DateTime.now(),
+        receivedAt: nowIst(),
       ));
     } catch (e) {
       _handleSendError(e);
@@ -758,7 +759,7 @@ class _WaChatScreenState extends State<WaChatScreen>
 
   String _dayLabel(DateTime? dt) {
     if (dt == null) return '';
-    final now = DateTime.now();
+    final now = nowIst();
     final today = DateTime(now.year, now.month, now.day);
     final day = DateTime(dt.year, dt.month, dt.day);
     final diff = today.difference(day).inDays;

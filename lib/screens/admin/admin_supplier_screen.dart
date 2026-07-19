@@ -20,6 +20,7 @@ import '../../models/order_hours_model.dart';
 import '../../order_hours_state.dart';
 import '../../services/match_status_service.dart';
 import '../../services/spn_options.dart';
+import '../../utils/ist_date.dart';
 import '../../utils/render_log.dart';
 import '../../utils/safe_parse.dart';
 import '../../utils/ist_date.dart'; // CHANGE #444
@@ -5507,7 +5508,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     final s = _str(v);
     if (s.isEmpty) return '';
     try {
-      final dt = DateTime.parse(s).toLocal();
+      final dt = istFromDb(s);
       return '${dt.day.toString().padLeft(2,'0')}/${dt.month.toString().padLeft(2,'0')}/${dt.year}  '
              '${dt.hour.toString().padLeft(2,'0')}:${dt.minute.toString().padLeft(2,'0')}';
     } catch (_) { return s; }
@@ -12436,7 +12437,7 @@ class _BillTabState extends State<_BillTab> {
     final ext         = fileName.toLowerCase().split('.').last;
     final isPdf       = ext == 'pdf';
     final receivedRaw = widget.bill['received_at'] as String?;
-    final receivedAt  = receivedRaw != null ? DateTime.tryParse(receivedRaw)?.toLocal() : null;
+    final receivedAt  = receivedRaw != null ? tryIstFromDb(receivedRaw) : null;
     final receivedStr = receivedAt != null ? _fmtD(receivedAt) : '—';
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -12728,7 +12729,7 @@ class _C328PayRow extends StatelessWidget {
     final mode   = payment['mode'] as String? ?? '';
     final note   = payment['note'] as String?;
     final atRaw  = payment['at'] as String?;
-    final at     = atRaw != null ? DateTime.tryParse(atRaw)?.toLocal() : null;
+    final at     = atRaw != null ? tryIstFromDb(atRaw) : null;
     final atStr  = at != null ? _fmtP(at) : '—';
 
     return Padding(

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:pharma_b2b/utils/ist_date.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 import '../models/wa_conversation.dart';
 
@@ -15,7 +16,7 @@ class WaConversationTile extends StatelessWidget {
 
   String _formatTime(DateTime? dt) {
     if (dt == null) return '';
-    final now = DateTime.now();
+    final now = nowIst();
     final today = DateTime(now.year, now.month, now.day);
     final msgDay = DateTime(dt.year, dt.month, dt.day);
     if (msgDay == today) return DateFormat('HH:mm').format(dt);

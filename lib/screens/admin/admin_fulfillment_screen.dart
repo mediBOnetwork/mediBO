@@ -14794,6 +14794,13 @@ class _PackingScreenState extends State<_PackingScreen>
       Expanded(
         child: PageView.builder(
           controller: ctrl,
+          // fix(pack): reverse the page layout so a left swipe (finger
+          // dragging leftward — the same gesture that advances a default
+          // PageView) goes to the PREVIOUS product instead of the next one.
+          // Purely a gesture/visual-direction flip — logical page index and
+          // programmatic animateToPage(...) calls (e.g. auto-advance after
+          // packing) are unaffected.
+          reverse: true,
           physics: const AlwaysScrollableScrollPhysics(),
           itemCount: _items.length,
           onPageChanged: (i) {

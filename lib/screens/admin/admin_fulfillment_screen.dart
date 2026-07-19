@@ -2605,30 +2605,39 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       final receivedQty = (rawQty as num).toInt();
       if (receivedQty <= 0) { skipped++; continue; }
 
-      // Look up product_id by matched_name in current box
+      // fix(voice): resolve against the FULL, unmodified _items list every time —
+      // case-insensitive, trimmed exact match. Stateless per item: never remove
+      // or shrink the candidate list, so a repeat mention of the same product in
+      // a LATER clip still resolves. Try this even if the model tagged the
+      // mention 'not_on_order' — that's just its own guess, not authoritative;
+      // an exact/fuzzy order match here always wins.
       int? productId;
-      if (matchedName != null && matchedName != 'not_on_order') {
+      final matchedNameTrimmed = matchedName?.trim();
+      if (matchedNameTrimmed != null && matchedNameTrimmed.isNotEmpty) {
+        final matchedNameLower = matchedNameTrimmed.toLowerCase();
         for (final row in _items) {
-          if (row['product_name']?.toString() == matchedName) {
+          final rowName = row['product_name']?.toString().trim().toLowerCase();
+          if (rowName == matchedNameLower) {
             productId = (row['product_id'] as num?)?.toInt();
             break;
           }
         }
       }
-      // #334 B1: backend phonetic/fuzzy fallback when local exact match fails
-      if (productId == null && matchedName != null && matchedName.isNotEmpty) {
+      // #334 B1: backend phonetic/fuzzy fallback when the exact match fails
+      if (productId == null && matchedNameTrimmed != null &&
+          matchedNameTrimmed.isNotEmpty && matchedNameTrimmed != 'not_on_order') {
         try {
           final matchRaw = await Supabase.instance.client.rpc('voice_match_product', params: {
             'p_supplier': supplier,
-            'p_text': matchedName,
+            'p_text': matchedNameTrimmed,
           }) as Map;
           final matchRes = Map<String, dynamic>.from(matchRaw);
           if (matchRes['match'] == true) {
             productId = (matchRes['product_id'] as num?)?.toInt();
             final resolvedName = matchRes['product_name']?.toString();
             if (productId != null && resolvedName != null) {
-              RenderLog.write('c334_voice_fallback', 'heard=$matchedName;resolved=$resolvedName;pid=$productId');
-              RenderLog.write('c335_voice_match', 'heard=$matchedName;resolved=$resolvedName');
+              RenderLog.write('c334_voice_fallback', 'heard=$matchedNameTrimmed;resolved=$resolvedName;pid=$productId');
+              RenderLog.write('c335_voice_match', 'heard=$matchedNameTrimmed;resolved=$resolvedName');
               // override matchedName so byProduct uses the canonical name
               item['matched_name'] = resolvedName;
             }
@@ -2663,7 +2672,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           heard: heardName,
         );
       } else {
-        byProduct[productId] = (name: matchedName ?? heardName, qty: receivedQty, heard: heardName);
+        byProduct[productId] = (name: matchedNameTrimmed ?? heardName, qty: receivedQty, heard: heardName);
       }
     }
 

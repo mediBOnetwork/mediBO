@@ -107,20 +107,40 @@ class VoiceReceiveService {
   }) async {
     if (mentions.isEmpty) return;
 
-    // Build product_name → product_id lookup from current order
+    // fix(voice): resolve EVERY mention independently against the FULL,
+    // unmodified order-item list — stateless per mention, never shrunk or
+    // consumed after a match, so the same product can be matched again by a
+    // later clip's repeat mention. Case-insensitive, trimmed exact match first.
     final nameToId = <String, int>{};
     for (final item in orderItems) {
-      final name = item['product_name']?.toString();
+      final name = item['product_name']?.toString().trim();
       final id = item['product_id'] ?? item['id'];
-      if (name != null && id != null) {
-        nameToId[name.toLowerCase()] = (id as num).toInt();
+      if (name != null && name.isNotEmpty && id is num) {
+        nameToId[name.toLowerCase()] = id.toInt();
       }
     }
 
-    final rows = mentions.map((m) {
-      final name = m['matched_name']?.toString() ?? '';
-      final id = nameToId[name.toLowerCase()];
-      return {
+    final rows = <Map<String, dynamic>>[];
+    for (final m in mentions) {
+      final rawName = m['matched_name']?.toString() ?? '';
+      final name = rawName.trim();
+      // Resolve on the raw heard name regardless of any not_on_order tag from
+      // the model — that's just its own guess, not authoritative; an exact or
+      // fuzzy order match here always wins.
+      int? id = name.isNotEmpty ? nameToId[name.toLowerCase()] : null;
+      if (id == null && name.isNotEmpty && name != 'not_on_order') {
+        try {
+          final matchRaw = await Supabase.instance.client.rpc('voice_match_product', params: {
+            'p_supplier': supplierName,
+            'p_text': name,
+          });
+          final matchRes = matchRaw is Map ? Map<String, dynamic>.from(matchRaw) : const {};
+          if (matchRes['match'] == true) {
+            id = (matchRes['product_id'] as num?)?.toInt();
+          }
+        } catch (_) {}
+      }
+      rows.add({
         'supplier_name': supplierName,
         'recording_seq': recordingSeq,
         'clip_path': clipPath,
@@ -131,8 +151,8 @@ class VoiceReceiveService {
         't_end_sec': (m['t_end'] as num?)?.toDouble(),
         if (id != null) 'product_id': id,
         if (sessionKey != null) 'session_key': sessionKey,
-      };
-    }).toList();
+      });
+    }
 
     await Supabase.instance.client.from('voice_clip_mentions').insert(rows);
     final hasTStart = rows.any((r) => r['t_start_sec'] != null);

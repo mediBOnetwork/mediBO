@@ -12784,7 +12784,7 @@ class _PackTabState extends State<_PackTab>
       const Divider(height: 1, color: _kBorder),
       _buildPackingButton(c),
       _buildPackVoiceBar(orderId, spokenCount),
-      if (totalItems > 0) _buildPackProgressRow(countedCount, totalItems, orderId),
+      if (totalItems > 0) _buildPackProgressRow(countedCount, totalItems, orderId, spokenCount),
 
       if (isLoading)
         const Center(
@@ -12984,7 +12984,10 @@ class _PackTabState extends State<_PackTab>
   }
 
   // CHANGE #304: takes orderId so the spoken chip can open the review sheet.
-  Widget _buildPackProgressRow(int counted, int total, String orderId) {
+  // fix(pack): `counted` is a QTY sum (rollup['counted'], used for the progress
+  // bar/fraction below — unchanged) — the "N spoken" label needs the distinct-
+  // product count instead, passed in separately as spokenCount.
+  Widget _buildPackProgressRow(int counted, int total, String orderId, int spokenCount) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
       child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
@@ -12998,7 +13001,7 @@ class _PackTabState extends State<_PackTab>
                 color: _kGreen,
                 borderRadius: BorderRadius.circular(6),
               ),
-              child: Text('$counted spoken',
+              child: Text('$spokenCount spoken',
                   style: const TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w600,
@@ -13179,7 +13182,9 @@ class _PackTabState extends State<_PackTab>
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis),
                   ),
-                  if (bags.isNotEmpty) ...[
+                  // fix(pack): once packed, the item is unmapped from its bag(s) —
+                  // don't show a badge for a bag it's no longer in.
+                  if (bags.isNotEmpty && item['packed'] != true) ...[
                     const SizedBox(width: 6),
                     // §2: stacked bag tags — one per bag, top-aligned Column
                     Column(

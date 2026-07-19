@@ -1,3 +1,4 @@
+import 'ist_date.dart';
 import 'render_log.dart';
 
 bool _loggedOnce = false;
@@ -31,8 +32,8 @@ String orderDisplayId(dynamic order) {
     final last4 =
         hex.length >= 4 ? hex.substring(hex.length - 4).toUpperCase() : hex.toUpperCase();
     final ca = (order is Map ? order['created_at'] : _tryCreatedAt(order));
-    final dt = (ca != null ? DateTime.tryParse(ca.toString()) : null) ?? DateTime.now();
-    final ist = dt.toUtc().add(const Duration(hours: 5, minutes: 30));
+    final parsed = ca != null ? DateTime.tryParse(ca.toString()) : null;
+    final ist = parsed != null ? toIst(parsed) : nowIst();
     final dd = ist.day.toString().padLeft(2, '0');
     final mm = ist.month.toString().padLeft(2, '0');
     final yy = (ist.year % 100).toString().padLeft(2, '0');

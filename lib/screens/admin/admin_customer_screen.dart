@@ -7814,7 +7814,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
 
   String _fmtUpdatedAt(DateTime? utc) {
     if (utc == null) return '—';
-    final ist = utc.toUtc().add(const Duration(hours: 5, minutes: 30));
+    final ist = toIst(utc);
     String p2(int v) => v.toString().padLeft(2, '0');
     return '${p2(ist.day)}/${p2(ist.month)}/${ist.year} ${p2(ist.hour)}:${p2(ist.minute)}';
   }
@@ -9839,7 +9839,7 @@ class _RoutesTabState extends State<_RoutesTab> {
   }
 
   String _planWhenLabel(DateTime createdAt) {
-    final ist = createdAt.toUtc().add(const Duration(hours: 5, minutes: 30));
+    final ist = toIst(createdAt);
     String p2(int n) => n.toString().padLeft(2, '0');
     return '${p2(ist.day)}/${p2(ist.month)}/${p2(ist.year % 100)} ${p2(ist.hour)}:${p2(ist.minute)}';
   }

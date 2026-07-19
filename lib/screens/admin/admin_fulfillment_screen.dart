@@ -1542,6 +1542,30 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   Future<void> _loadSettings() async {} // bag/barcode settings removed in #82
 
+  // CHANGE #372 — strict per-date supplier allowlist. fw_shop_suppliers(p_date)
+  // is the DB's own source of truth for "which suppliers have a supplier_order
+  // on this IST date" (distinct from fw_list_arrivals' own supplier list, which
+  // is what #372 found showing every pending/sent supplier regardless of date).
+  // Returns null on RPC failure so callers fail OPEN (keep the unfiltered list)
+  // instead of blanking the whole tab over a transient network error.
+  Future<Set<String>?> _fetchShopSupplierAllowlist(FulfillDateScope scope) async {
+    try {
+      final rows = await Supabase.instance.client
+          .rpc('fw_shop_suppliers', params: {'p_date': ymd(scope.date)}) as List;
+      final allowed = rows
+          .map((r) => (r as Map)['supplier_name']?.toString().trim().toLowerCase())
+          .whereType<String>()
+          .where((s) => s.isNotEmpty)
+          .toSet();
+      RenderLog.write('c372_allowlist', 'date=${ymd(scope.date)};count=${allowed.length}');
+      return allowed;
+    } catch (e) {
+      RenderLog.write('c372_allowlist_error',
+          e.toString().substring(0, e.toString().length.clamp(0, 80)));
+      return null;
+    }
+  }
+
   Future<void> _loadSuppliers() async {
     if (widget.arrivals) {
       // #155: Arrivals mode — load from fw_list_arrivals instead of supplier_orders.
@@ -1551,6 +1575,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (!_loadingSuppliers && _suppliers.isEmpty) setState(() => _loadingSuppliers = true);
       try {
         final scope = FulfillDateScope.instance;
+        final allowed = await _fetchShopSupplierAllowlist(scope);
         final res = await Supabase.instance.client.rpc('fw_list_arrivals', params: {
           'p_date': ymd(scope.date),
           'p_include_older': scope.includeOlder,
@@ -1577,6 +1602,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           final m = r as Map;
           final name = (m['supplier'] ?? m['supplier_name'])?.toString() ?? '';
           if (name.isEmpty) continue;
+          // CHANGE #372: only suppliers with a supplier_order on the selected
+          // IST date pass. Case-insensitive/trimmed so casing/whitespace never
+          // drops a valid supplier over a cosmetic mismatch.
+          if (allowed != null && !allowed.contains(name.trim().toLowerCase())) continue;
           if (!names.contains(name)) names.add(name);
           dotMap[name] = m['dot']?.toString() ?? 'yellow';
           final mv = m['mode']?.toString();
@@ -1594,6 +1623,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               'state=${arrivalsConfirmedMap[name]==true?"confirmed":(arrivalsReceivedMap[name]??0)>0?"partial":"pending"}');
         }
         names.sort();
+        RenderLog.write('c372_warehouse_filtered',
+            'date=${ymd(scope.date)};raw=${rawList.length};shown=${names.length};allowlist_ok=${allowed != null}');
         // #117 badge counts render-log
         final cCount = modeMap.values.where((v) => v == 'shop').length;
         final crCount = modeMap.values.where((v) => v != 'shop').length;
@@ -1662,6 +1693,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       // query. This is what makes Shop show 0 suppliers on a date with no open
       // work instead of every pending/sent supplier regardless of when placed.
       final scope = FulfillDateScope.instance;
+      final allowed = await _fetchShopSupplierAllowlist(scope);
       final res = await Supabase.instance.client.rpc('fw_list_arrivals', params: {
         'p_date': ymd(scope.date),
         'p_include_older': scope.includeOlder,
@@ -1670,8 +1702,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       _olderOpen = (res['older_open'] as num?)?.toInt() ?? 0;
       RenderLog.write('c444_older_open', '$_olderOpen');
       RenderLog.write('c444_include_older', '${scope.includeOlder}');
-      // CHANGE #473: Supplier Shop stays unfiltered — every supplier with
-      // items today, regardless of forwarded status.
+      // CHANGE #473: Supplier Shop stays unfiltered by forwarded status — every
+      // supplier with items today, regardless of forwarded status (that's a
+      // separate axis from the #372 date allowlist filter applied below).
       final c473Shop = (res['count'] as num?)?.toInt() ?? 0;
       final c473Warehouse = (res['warehouse_count'] as num?)?.toInt() ?? 0;
       RenderLog.write('c473_fw_sync',
@@ -1681,11 +1714,17 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       final names = <String>[];
       for (final r in rawList) {
         final s = ((r as Map)['supplier'] ?? r['supplier_name'])?.toString();
-        if (s != null && s.isNotEmpty && seen.add(s)) names.add(s);
+        if (s == null || s.isEmpty || !seen.add(s)) continue;
+        // CHANGE #372: strict per-date filter — only suppliers with a
+        // supplier_order on the selected IST date pass (case-insensitive/trimmed).
+        if (allowed != null && !allowed.contains(s.trim().toLowerCase())) continue;
+        names.add(s);
       }
       names.sort();
       RenderLog.write('78_collect_suppliers_count', '${names.length}');
       RenderLog.write('c444_shop_suppliers', '${names.length}');
+      RenderLog.write('c372_shop_filtered',
+          'date=${ymd(scope.date)};raw=${rawList.length};shown=${names.length};allowlist_ok=${allowed != null}');
       setState(() { _suppliers = names; _loadingSuppliers = false; });
       widget.onSupplierCountChanged?.call(names.length);
       _loadSupplierDots(); // #142: populate status dots

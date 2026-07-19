@@ -66,6 +66,16 @@ class _SupplierShellState extends State<SupplierShell> {
 
   void _goToInquiry() {
     setState(() { _index = 2; _bannerDismissed = false; });
+    _inquiryKey.currentState?.refresh(source: 'banner_tap');
+  }
+
+  // CHANGE #470: the Inquiry tab lives in an IndexedStack (kept alive across
+  // tab switches), so it never gets a fresh initState when the admin drafts,
+  // sends, or an expiry lapses while the user is on another tab. Force a
+  // refetch every time the tab is switched TO, so it's never stale on show.
+  void _onTabTap(int i) {
+    setState(() => _index = i);
+    if (i == 2) _inquiryKey.currentState?.refresh(source: 'tab_switch');
   }
 
   @override
@@ -118,7 +128,7 @@ class _SupplierShellState extends State<SupplierShell> {
             items: _navItems,
             pendingInquiry: _pendingInquiryCount,
             activeDisputes: _activeDisputeCount,
-            onTap: (i) => setState(() => _index = i),
+            onTap: _onTabTap,
           ),
         Expanded(
           child: IndexedStack(index: _index, children: pages),
@@ -129,7 +139,7 @@ class _SupplierShellState extends State<SupplierShell> {
         items: _navItems,
         pendingInquiry: _pendingInquiryCount,
         activeDisputes: _activeDisputeCount,
-        onTap: (i) => setState(() => _index = i),
+        onTap: _onTabTap,
       ),
     );
   }

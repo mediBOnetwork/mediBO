@@ -61,9 +61,18 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
     WidgetsBinding.instance.addObserver(this);
     try { RenderLog.write('c458_timers', 0); } catch (_) {}
     _fetch(source: 'init');
-    // Realtime only for real (non-View-As) suppliers
-    if (widget.viewAsSupplierId == null) _subscribeRealtime();
+    // CHANGE #470: realtime also covers View-As — the admin caller's topic
+    // (inquiry:admin) is pinged on every inquiry change for any supplier,
+    // so a refetch while impersonating still lands on the right data because
+    // the backend filters by p_supplier_id regardless of what triggered it.
+    _subscribeRealtime();
   }
+
+  // CHANGE #470: public so the tab host (SupplierShell) can force a fresh
+  // fetch when the Inquiry tab is switched to — the tab lives inside an
+  // IndexedStack, so initState only fires once and never again on tab focus.
+  Future<void> refresh({String source = 'tab_focus'}) =>
+      _fetch(source: source, silent: true);
 
   @override
   void dispose() {
@@ -81,7 +90,7 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
     if (state == AppLifecycleState.resumed) {
       _fetch(source: 'lifecycle_resume', silent: true);
       // CHANGE #458: a backgrounded socket dies silently — re-subscribe.
-      if (widget.viewAsSupplierId == null) _subscribeRealtime();
+      _subscribeRealtime();
     }
   }
 
@@ -190,6 +199,8 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
       });
 
       final mode = sid != null ? 'viewas' : 'supplier';
+      final supplierLabel = sid != null ? (widget.viewAsSupplierName ?? sid) : 'self';
+      RenderLog.write('c470_supplier_tab_refetch', '$supplierLabel:items=${list.length}');
       RenderLog.write('inq.src.mode', mode);
       RenderLog.write('inq.counts',
           'p=${pending.length};i=${inquired.length};e=${expired.length}');

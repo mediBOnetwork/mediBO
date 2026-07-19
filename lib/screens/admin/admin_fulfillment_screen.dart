@@ -11005,10 +11005,15 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
     }
   }
 
+  // fix(bag): only the very FIRST load for a bag shows the spinner — once
+  // _itemsByBag has an entry for it, every later call (re-expand, realtime
+  // refresh) is silent: the old rows stay on screen until the new list swaps
+  // in via the same setState below. Never blank to a spinner on a refresh.
   Future<void> _loadItems(int bagNo) async {
     if (_loadingItems[bagNo] == true) return;
     if (!mounted) return;
-    setState(() => _loadingItems[bagNo] = true);
+    final hasCached = _itemsByBag.containsKey(bagNo);
+    if (!hasCached) setState(() => _loadingItems[bagNo] = true);
     try {
       final rows = await Supabase.instance.client
           .rpc('fw_get_bag_items', params: {'p_bag_no': bagNo}) as List;
@@ -11022,7 +11027,7 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
       RenderLog.write('c281_bag_items_reloaded', 'bag=$bagNo;count=${items.length}');
     } catch (e) {
       if (!mounted) return;
-      setState(() => _loadingItems[bagNo] = false);
+      if (!hasCached) setState(() => _loadingItems[bagNo] = false);
     }
   }
 

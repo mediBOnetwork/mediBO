@@ -16173,9 +16173,9 @@ class _DisputesScreenState extends State<_DisputesScreen> {
   // #349: relative time helper
   String _relTime(String? isoStr) {
     if (isoStr == null || isoStr.isEmpty) return '';
-    final dt = DateTime.tryParse(isoStr)?.toLocal();
+    final dt = tryIstFromDb(isoStr);
     if (dt == null) return '';
-    final now = DateTime.now();
+    final now = nowIst();
     final diff = now.difference(dt);
     if (diff.inMinutes < 1) return 'just now';
     if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';

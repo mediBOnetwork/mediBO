@@ -5,6 +5,7 @@ import 'package:pharma_b2b/utils/toast.dart';
 import '../app_state.dart';
 import '../order_hours_state.dart';
 import '../inquiry_lock_state.dart';
+import '../utils/ist_date.dart';
 import '../utils/order_code.dart';
 import 'bulk_upload_screen.dart';
 import '../utils/render_log.dart';
@@ -414,7 +415,7 @@ class _CartScreenState extends State<CartScreen> {
   }
 
   static String _generateOrderNumber() {
-    final now = DateTime.now();
+    final now = nowIst();
     final d = '${(now.year % 100).toString().padLeft(2, '0')}'
               '${now.month.toString().padLeft(2, '0')}'
               '${now.day.toString().padLeft(2, '0')}';

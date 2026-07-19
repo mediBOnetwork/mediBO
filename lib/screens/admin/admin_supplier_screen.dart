@@ -3793,7 +3793,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   // ── Timer helper: converts UTC DateTime to IST and formats as 12-hour AM/PM ─
   String _formatExpIST(DateTime utc) {
-    final ist = utc.toUtc().add(const Duration(hours: 5, minutes: 30));
+    final ist = toIst(utc);
     final h = ist.hour % 12 == 0 ? 12 : ist.hour % 12;
     final m = ist.minute.toString().padLeft(2, '0');
     final ampm = ist.hour >= 12 ? 'PM' : 'AM';
@@ -4778,7 +4778,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   Widget _desktopOrderRow(_OrderRow row) {
     final dateStr = row.createdAt != null
-        ? '${row.createdAt!.day.toString().padLeft(2,'0')}/${row.createdAt!.month.toString().padLeft(2,'0')}/${row.createdAt!.year}'
+        ? dmy(toIst(row.createdAt!))
         : '—';
     final isExpanded = _expandedOrderId == row.id;
     final currentItems = _currentItemsFor(row); // CHANGE #277
@@ -4851,7 +4851,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   Widget _mobileOrderCard(_OrderRow row) {
     final dateStr = row.createdAt != null
-        ? '${row.createdAt!.day.toString().padLeft(2,'0')}/${row.createdAt!.month.toString().padLeft(2,'0')}/${row.createdAt!.year}'
+        ? dmy(toIst(row.createdAt!))
         : '';
     final isExpanded = _expandedOrderId == row.id;
     final currentItems = _currentItemsFor(row); // CHANGE #277

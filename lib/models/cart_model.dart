@@ -308,6 +308,12 @@ class CartModel extends ChangeNotifier {
       if (_viewAsUserId != null) {
         final rows = await Supabase.instance.client
             .rpc('admin_preview_customer_cart', params: {'p_user_id': _viewAsUserId!}) as List;
+        // CHANGE #375: admin_preview_customer_cart orders by updated_at
+        // server-side, which moved a line to the bottom on every qty edit.
+        // Re-sort by cart_items id (stable add-order, frontend-only fix —
+        // no DB/RPC change) so a qty edit never changes position.
+        rows.sort((a, b) =>
+            ((a as Map)['id'] as num).compareTo((b as Map)['id'] as num));
         // #401: cart_items has no buyable column — re-fetch current buyability
         // by id so a snapshot line reflects the product's real availability.
         final buyableIds = rows.map((r) => r['product_id'] as String).toList();
@@ -367,6 +373,13 @@ class CartModel extends ChangeNotifier {
       final List rows;
       if (overrideUid == null) {
         rows = await Supabase.instance.client.rpc('get_my_cart') as List;
+        // CHANGE #375: get_my_cart() orders by updated_at, id server-side —
+        // that recency ordering moved a line to the bottom every time its
+        // qty changed. Re-sort by cart_items id (stable add-order,
+        // frontend-only fix — no DB/RPC change) so a qty edit never changes
+        // the item's position.
+        rows.sort((a, b) =>
+            ((a as Map)['id'] as num).compareTo((b as Map)['id'] as num));
       } else {
         rows = await Supabase.instance.client
             .from('cart_items')
@@ -731,10 +744,13 @@ class CartModel extends ChangeNotifier {
   // sort of ALL cart lines by cart_items id ascending.
   static const kC413CartInsertionOrder = 'c413_cart_insertion_order';
 
-  // CHANGE #422: cart reads are now backend-sorted — get_my_cart() and
-  // admin_preview_customer_cart() both ORDER BY updated_at, id server-side —
-  // so no client-side re-sort. _lines (a LinkedHashMap) preserves the order
-  // rows arrived in from the server, which IS the correct display order.
+  // CHANGE #422: cart reads are backend-sorted — get_my_cart() and
+  // admin_preview_customer_cart() both ORDER BY updated_at, id server-side.
+  // _lines (a LinkedHashMap) preserves the order rows arrived in.
+  // CHANGE #375: the updated_at component of that server order moved a line
+  // on every qty edit, so _loadFromSupabase now re-sorts the fetched rows by
+  // id (stable add-order) before building _lines — see the `rows.sort(...)`
+  // calls above. This getter itself still does no further re-sort.
   static const kC422CartBackendOrder = 'c422_cart_backend_order';
 
   List<CartLine> get lines {

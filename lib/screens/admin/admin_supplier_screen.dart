@@ -2155,10 +2155,15 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       _subscribeInquiryDbChanges(); // CHANGE #509: direct table realtime, no poll
       // CHANGE #456 C5 — leads/claims/orders change under the admin while this
       // tab is open; poll readiness faster than the general overview refresh.
+      // CHANGE #376: also re-poll the overview itself here — form_status
+      // transitions (e.g. Auto Meta moving a supplier draft -> pending and
+      // sending the WA) happen server-side with no client action to hook a
+      // refresh onto, so the status chip can't rely on realtime alone.
       _readinessPollTimer?.cancel();
       _readinessPollTimer = Timer.periodic(const Duration(seconds: 10), (_) {
         if (mounted && _filter == _SupFilter.inquiry) {
           _fetchInquiryReadiness(silent: true);
+          _fetchInquiryOverview(silent: true);
         }
       });
     } else if (f == _SupFilter.orders) {
@@ -3235,7 +3240,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                   if (nxtCount > 0)
                     _iqBadge('Next: $nxtCount', const Color(0xFFFFF8E1), const Color(0xFF8A6D00)),
                   // CHANGE #309: show Draft chip for items not yet sent to supplier
-                  if (formStatus == null || formStatus == 'draft')
+                  if (formStatus == null || formStatus.isEmpty || formStatus == 'draft')
                     _iqBadge('Draft', const Color(0xFFF3F4F6), const Color(0xFF6B7280))
                   else
                     _iqStatusBadge(formStatus),

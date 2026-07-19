@@ -7286,28 +7286,39 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
 
   Future<void> _fetchMentions() async {
     try {
-      // #332: get current session key (idempotent — returns the open session)
+      // #332: get the supplier's current active-stage session (idempotent — returns
+      // the open session). fw_count_session always reports the ACTIVE stage, not
+      // necessarily the tab this popup was opened from — a "shop" session_key exists
+      // only while the supplier is still in shop stage, so once forwarded it no
+      // longer applies to the (now frozen) Supplier Shop tab. Only meaningful to
+      // filter by when it actually matches widget.stage (see below).
       String? sessionKey;
+      String? sessionStage;
       try {
         final sessionRaw = await Supabase.instance.client
             .rpc('fw_count_session', params: {'p_supplier': widget.supplierName}) as Map;
         final sessionRes = Map<String, dynamic>.from(sessionRaw);
         if (sessionRes['status'] == 'ok') {
           sessionKey = sessionRes['session_key']?.toString();
+          sessionStage = sessionRes['stage']?.toString();
           RenderLog.write('c332_review_scoped', 'key=${sessionKey ?? ''};supplier=${widget.supplierName}');
         }
       } catch (_) {}
 
-      // #345: no p_stage — review popup must show clips from ALL stages
-      // (shop + warehouse) for this supplier, not just the tab it was opened from.
+      // fix(fulfill): scope to the tab this popup was opened from (widget.stage) —
+      // get_voice_clip_mentions already filters to TODAY + this stage, including
+      // deleted rows (their re-add control still renders).
       final rows = await Supabase.instance.client
           .rpc('get_voice_clip_mentions', params: {
             'p_supplier_name': widget.supplierName,
+            'p_stage': widget.stage,
           }) as List;
       if (!mounted) return;
       var mentions = rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
       // #332: filter to current session only (prevents last order's clips mixing in)
-      if (sessionKey != null && sessionKey.isNotEmpty) {
+      // — only applies when the active session IS this tab's stage; the other,
+      // already-frozen tab has no "current session" to narrow to.
+      if (sessionStage == widget.stage && sessionKey != null && sessionKey.isNotEmpty) {
         mentions = mentions.where((r) => r['session_key']?.toString() == sessionKey).toList();
       }
       final distinctClips = mentions.map((r) => r['clip_path']?.toString() ?? '').toSet().length;

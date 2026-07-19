@@ -55,6 +55,14 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
   int _c458Events = 0;
   int _c458Reloads = 0;
 
+  // CHANGE #472: belt-and-suspenders poll — realtime/lifecycle refetches
+  // cover the common cases, but this guarantees draft⇄pending sync within
+  // 8s even if a broadcast is missed. Only ticks while this tab is the one
+  // actually on screen (_isActiveTab), never in the background.
+  static const _kPollInterval = Duration(seconds: 8);
+  Timer? _pollTimer;
+  bool _isActiveTab = false;
+
   @override
   void initState() {
     super.initState();
@@ -71,8 +79,32 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
   // CHANGE #470: public so the tab host (SupplierShell) can force a fresh
   // fetch when the Inquiry tab is switched to — the tab lives inside an
   // IndexedStack, so initState only fires once and never again on tab focus.
-  Future<void> refresh({String source = 'tab_focus'}) =>
-      _fetch(source: source, silent: true);
+  // CHANGE #472: also marks the tab active and (re)starts the poll timer.
+  Future<void> refresh({String source = 'tab_focus'}) {
+    _isActiveTab = true;
+    _startPolling();
+    return _fetch(source: source, silent: true);
+  }
+
+  // CHANGE #472: called by SupplierShell when navigating away from this tab,
+  // so the 8s poll doesn't keep firing for a tab that isn't visible.
+  void pause() {
+    _isActiveTab = false;
+    _stopPolling();
+  }
+
+  void _startPolling() {
+    _pollTimer?.cancel();
+    _pollTimer = Timer.periodic(_kPollInterval, (_) {
+      if (!mounted || !_isActiveTab) return;
+      _fetch(source: 'poll', silent: true);
+    });
+  }
+
+  void _stopPolling() {
+    _pollTimer?.cancel();
+    _pollTimer = null;
+  }
 
   @override
   void dispose() {
@@ -82,15 +114,22 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
       _rt = null;
     }
     _c458Debounce?.cancel();
+    _stopPolling();
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      _fetch(source: 'lifecycle_resume', silent: true);
+      if (_isActiveTab) {
+        _fetch(source: 'lifecycle_resume', silent: true);
+        _startPolling();
+      }
       // CHANGE #458: a backgrounded socket dies silently — re-subscribe.
       _subscribeRealtime();
+    } else {
+      // CHANGE #472: app backgrounded — stop polling, resumed above restarts it.
+      _stopPolling();
     }
   }
 
@@ -201,6 +240,11 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
       final mode = sid != null ? 'viewas' : 'supplier';
       final supplierLabel = sid != null ? (widget.viewAsSupplierName ?? sid) : 'self';
       RenderLog.write('c470_supplier_tab_refetch', '$supplierLabel:items=${list.length}');
+      // CHANGE #472: draft/pending status is inferred client-side — the
+      // backend only returns rows for a pending, non-expired form (see
+      // supplier_inquiry_buckets), so a non-empty result means 'pending'.
+      final status = list.isEmpty ? 'draft' : 'pending';
+      RenderLog.write('c472_supplier_tab_sync', '$supplierLabel:$status:items=${list.length}');
       RenderLog.write('inq.src.mode', mode);
       RenderLog.write('inq.counts',
           'p=${pending.length};i=${inquired.length};e=${expired.length}');

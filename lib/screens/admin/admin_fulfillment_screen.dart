@@ -11212,6 +11212,7 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
     final rowKey     = _rowKeys.putIfAbsent(bagNo, () => GlobalKey());
 
     return _BagAccordionShell(
+      key: ValueKey(bagNo),
       bagNo: bagNo,
       totalProducts: total,
       isExpanded: isExpanded,
@@ -11269,6 +11270,7 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
               for (int i = 0; i < items.length; i++) ...[
                 Padding(
+                  key: ValueKey(items[i]['order_item_id'] ?? i),
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
                   child: _buildBagItemTile(items[i]),
                 ),
@@ -11467,6 +11469,7 @@ class _BagAccordionShell extends StatelessWidget {
   final Widget expandedContent;
 
   const _BagAccordionShell({
+    super.key,
     required this.bagNo,
     required this.totalProducts,
     required this.isExpanded,

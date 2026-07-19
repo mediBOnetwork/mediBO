@@ -947,7 +947,10 @@ enum AgentPhase { idle, listening, thinking, speaking, confirming }
 class _PickToLightScreen extends StatefulWidget {
   // #155: arrivals=true → load suppliers from fw_list_arrivals; no confirm footer.
   final bool arrivals;
-  const _PickToLightScreen({super.key, this.arrivals = false});
+  // CHANGE #473: reports the post-filter supplier count after each fetch, so
+  // the parent can drive the Supplier Shop / Warehouse tab badges.
+  final void Function(int)? onSupplierCountChanged;
+  const _PickToLightScreen({super.key, this.arrivals = false, this.onSupplierCountChanged});
 
   @override
   State<_PickToLightScreen> createState() => _PickToLightScreenState();
@@ -1556,7 +1559,15 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         _olderOpen = (res['older_open'] as num?)?.toInt() ?? 0;
         RenderLog.write('c444_older_open', '$_olderOpen');
         RenderLog.write('c444_include_older', '${scope.includeOlder}');
-        final rawList = (res['suppliers'] as List? ?? []);
+        // CHANGE #473: Warehouse only shows suppliers whose Shop counting has
+        // already been confirmed (forwarded==true) — use the backend's
+        // pre-filtered list instead of the full Supplier-Shop suppliers array,
+        // so an unconfirmed/undone supplier never appears here.
+        final c473Shop = (res['count'] as num?)?.toInt() ?? 0;
+        final c473Warehouse = (res['warehouse_count'] as num?)?.toInt() ?? 0;
+        RenderLog.write('c473_fw_sync',
+            'date=${ymd(scope.date)} shop=$c473Shop warehouse=$c473Warehouse');
+        final rawList = (res['warehouse_suppliers'] as List? ?? []);
         final dotMap = <String, String>{};
         final modeMap = <String, String?>{};
         final arrivalsConfirmedMap = <String, bool>{};
@@ -1636,6 +1647,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           // after _loadBox(). Resetting it here clobbers the locked state immediately
           // after fw_confirm_all_received sets it to true. (bug fix #337-A)
         });
+        widget.onSupplierCountChanged?.call(names.length);
       } catch (e) {
         if (!mounted) return;
         setState(() { _loadingSuppliers = false; _error = e.toString(); });
@@ -1658,6 +1670,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       _olderOpen = (res['older_open'] as num?)?.toInt() ?? 0;
       RenderLog.write('c444_older_open', '$_olderOpen');
       RenderLog.write('c444_include_older', '${scope.includeOlder}');
+      // CHANGE #473: Supplier Shop stays unfiltered — every supplier with
+      // items today, regardless of forwarded status.
+      final c473Shop = (res['count'] as num?)?.toInt() ?? 0;
+      final c473Warehouse = (res['warehouse_count'] as num?)?.toInt() ?? 0;
+      RenderLog.write('c473_fw_sync',
+          'date=${ymd(scope.date)} shop=$c473Shop warehouse=$c473Warehouse');
       final rawList = (res['suppliers'] as List? ?? []);
       final seen = <String>{};
       final names = <String>[];
@@ -1669,6 +1687,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       RenderLog.write('78_collect_suppliers_count', '${names.length}');
       RenderLog.write('c444_shop_suppliers', '${names.length}');
       setState(() { _suppliers = names; _loadingSuppliers = false; });
+      widget.onSupplierCountChanged?.call(names.length);
       _loadSupplierDots(); // #142: populate status dots
       _loadCollectModes(); // #120: populate C/CR badge map
       _loadDisputes();     // #132A: populate dispute badge map
@@ -3554,24 +3573,30 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   }
 
   // #121: Undo Collect submission — clears mode, badge returns to P, supplier leaves Arrivals.
+  // CHANGE #473: fw_undo_collect_submit's real contract returns one of:
+  //   SUCCESS: {status:'ok', ...}            NO-OP: {status:'ok', note:'not_submitted', ...}
+  //   BLOCKED: {error:'warehouse_confirmed'   | 'warehouse_in_progress', message:'...'}
+  // Never assume success — any truthy 'error' blocks the undo and leaves the row untouched;
+  // the guidance text always comes from the backend's 'message', not a hardcoded string here.
   Future<void> _fw_undoCollectSubmit() async {
     final supplier = _selectedSupplier;
     if (supplier == null) return;
     try {
       final res = await Supabase.instance.client.rpc('fw_undo_collect_submit',
           params: {'p_supplier_name': supplier});
-      // R3: if already confirmed in Arrivals, show specific toast and bail
-      final errVal = (res is Map) ? res['error']?.toString() : null;
-      if (errVal == 'already_confirmed_in_arrivals') {
-        RenderLog.write('c337_undo_shop_blocked', 'reason=already_confirmed_in_arrivals;supplier=$supplier');
+      final m = (res is Map) ? res : const {};
+      if (m['error'] != null) {
+        RenderLog.write('c473_fw_sync', 'undo $supplier => ${m['error']}');
+        RenderLog.write('c337_undo_shop_blocked', 'reason=${m['error']};supplier=$supplier');
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Undo from Warehouse first')),
+            SnackBar(content: Text(m['message']?.toString() ?? 'Cannot undo yet.')),
           );
         }
         return;
       }
       if (!mounted) return;
+      RenderLog.write('c473_fw_sync', 'undo $supplier => ${m['status'] ?? 'ok'}');
       RenderLog.write('c125_undo_hold_fired', 'true');
       RenderLog.write('c337_undo_shop', 'supplier=$supplier');
       // C362 point-5: undo the response (full reset + cancels fresh disputes) so the admin
@@ -3584,16 +3609,17 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._refreshArrivals(); // R3: supplier leaves Arrivals
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Submission undone')),
+          SnackBar(content: Text(m['note'] == 'not_submitted'
+              ? 'Nothing to undo.'
+              : 'Shop submission undone.')),
         );
       }
     } catch (e) {
       if (mounted) {
         final msg = e.toString();
-        final text = msg.contains('already_confirmed_in_arrivals')
-            ? 'Undo from Warehouse first'
-            : 'Undo error: ${msg.substring(0, msg.length.clamp(0, 80))}';
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Undo error: ${msg.substring(0, msg.length.clamp(0, 80))}')),
+        );
       }
     }
   }
@@ -10446,7 +10472,9 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
 class _ArrivalsScreen extends StatefulWidget {
   // onVoiceCount kept for API compat; no longer used (voice is inline now).
   final void Function(String supplierName)? onVoiceCount;
-  const _ArrivalsScreen({super.key, this.onVoiceCount});
+  // CHANGE #473: forwarded straight through to the inner _PickToLightScreen.
+  final void Function(int)? onSupplierCountChanged;
+  const _ArrivalsScreen({super.key, this.onVoiceCount, this.onSupplierCountChanged});
 
   @override
   State<_ArrivalsScreen> createState() => _ArrivalsScreenState();
@@ -10495,7 +10523,11 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen>
   @override
   Widget build(BuildContext context) {
     // #155: literal reuse of Collect widget — same voice/spoken/Ask mediBO/item sheet.
-    return _PickToLightScreen(key: _ptlKey, arrivals: true);
+    return _PickToLightScreen(
+      key: _ptlKey,
+      arrivals: true,
+      onSupplierCountChanged: widget.onSupplierCountChanged,
+    );
   }
 }
 
@@ -10514,6 +10546,8 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
     with WidgetsBindingObserver {
   int _tab = 0;
   int _disputeCount = 0; // #132C: open dispute count for tab badge
+  int _shopCount = 0;      // CHANGE #473: Supplier Shop tab badge
+  int _warehouseCount = 0; // CHANGE #473: Warehouse tab badge
   final _collectKey   = GlobalKey<_PickToLightScreenState>();
   final _disputesKey  = GlobalKey<_DisputesScreenState>();
   final _packTabKey   = GlobalKey<_PackTabState>();
@@ -10613,6 +10647,13 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
   // #132A: called by _PickToLightScreenState after loading disputes.
   void _setDisputeCount(int n) {
     if (mounted && n != _disputeCount) setState(() => _disputeCount = n);
+  }
+  // CHANGE #473: tab badge counts for Supplier Shop / Warehouse.
+  void _setShopCount(int n) {
+    if (mounted && n != _shopCount) setState(() => _shopCount = n);
+  }
+  void _setWarehouseCount(int n) {
+    if (mounted && n != _warehouseCount) setState(() => _warehouseCount = n);
   }
   // #132B: open Disputes tab from item popup "View dispute". (#280: Disputes is now index 4)
   void _openDisputesTab() {
@@ -10738,17 +10779,51 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(children: [
-              _TabBtn('Supplier Shop', _tab == 0, () {
-                setState(() => _tab = 0);
-                _scheduleCollectReload();
-              }),
+              // CHANGE #473: count badges — 'count' (shop) / 'warehouse_count'
+              // (warehouse) from fw_list_arrivals, muted/neutral (not an alert).
+              Stack(clipBehavior: Clip.none, children: [
+                _TabBtn('Supplier Shop', _tab == 0, () {
+                  setState(() => _tab = 0);
+                  _scheduleCollectReload();
+                }),
+                if (_shopCount > 0)
+                  Positioned(
+                    top: -4, right: -4,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF6B7280),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text('$_shopCount',
+                          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
+                              color: Colors.white, height: 1.2)),
+                    ),
+                  ),
+              ]),
               const SizedBox(width: 6),
-              _TabBtn('Warehouse', _tab == 1, () {
-                setState(() => _tab = 1);
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  _arrivalsKey.currentState?.refresh();
-                });
-              }),
+              Stack(clipBehavior: Clip.none, children: [
+                _TabBtn('Warehouse', _tab == 1, () {
+                  setState(() => _tab = 1);
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    _arrivalsKey.currentState?.refresh();
+                  });
+                }),
+                if (_warehouseCount > 0)
+                  Positioned(
+                    top: -4, right: -4,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF6B7280),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text('$_warehouseCount',
+                          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
+                              color: Colors.white, height: 1.2)),
+                    ),
+                  ),
+              ]),
               const SizedBox(width: 6),
               // CHANGE #280: Bag tab (bag-wise) — index 2
               _TabBtn('Bag', _tab == 2, () {
@@ -10803,8 +10878,12 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
           return IndexedStack(
             index: _tab,
             children: [
-              _PickToLightScreen(key: _collectKey),
-              _ArrivalsScreen(key: _arrivalsKey, onVoiceCount: _openVoiceInCollect),
+              _PickToLightScreen(key: _collectKey, onSupplierCountChanged: _setShopCount),
+              _ArrivalsScreen(
+                key: _arrivalsKey,
+                onVoiceCount: _openVoiceInCollect,
+                onSupplierCountChanged: _setWarehouseCount,
+              ),
               _BagTab(key: _bagTabKey),
               _PackTab(key: _packTabKey),
               _DisputesScreen(key: _disputesKey, onCountChanged: _setDisputeCount,

@@ -11818,7 +11818,7 @@ class _PackTab extends StatefulWidget {
 }
 
 class _PackTabState extends State<_PackTab>
-    with AutomaticKeepAliveClientMixin, SingleTickerProviderStateMixin {
+    with AutomaticKeepAliveClientMixin {
   List<Map<String, dynamic>> _customers = [];
   bool _loading = true;
   String? _error;
@@ -11864,9 +11864,7 @@ class _PackTabState extends State<_PackTab>
   bool _askProcessing = false;
   String _askInterim = '';
 
-  // CHANGE #304: footer dispatch hold (5 s hold-to-undo on "Ready to Dispatch")
-  late final AnimationController _dispatchHoldCtrl;
-  Timer? _dispatchHoldTimer;
+  // Dispatch button in-flight guard (tap-to-toggle, backend RPC is the source of truth)
   bool _dispatchLoading = false;
 
   @override
@@ -11879,10 +11877,6 @@ class _PackTabState extends State<_PackTab>
   @override
   void initState() {
     super.initState();
-    _dispatchHoldCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 5000),
-    );
     RenderLog.write('c278_pack_tab_mounted', 1);
     RenderLog.write('c354_ready', 'tab=pack');
     FulfillDateScope.instance.addListener(_onDateScopeChanged);
@@ -11914,8 +11908,6 @@ class _PackTabState extends State<_PackTab>
   void dispose() {
     FulfillDateScope.instance.removeListener(_onDateScopeChanged);
     _scroll.dispose();
-    _dispatchHoldTimer?.cancel();
-    _dispatchHoldCtrl.dispose();
     super.dispose();
   }
 
@@ -12842,7 +12834,7 @@ class _PackTabState extends State<_PackTab>
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
           // #346: footer reads rollup + dispatch_ready from qData
-          child: _buildPackFooter(orderId, qData, rollup),
+          child: _buildPackFooter(orderId, qData, rollup, items),
         ),
       ] else
         const SizedBox(height: 8),
@@ -13279,17 +13271,15 @@ class _PackTabState extends State<_PackTab>
   }
 
   // #346: footer = master rollup list + dispatch button.
-  // dispatch_ready=true → GREEN 5s-hold "Ready to Dispatch"
-  // packed==ordered>0   → YELLOW tap "Fully packed — mark Ready"
-  // otherwise           → muted "Packing in progress"
-  Widget _buildPackFooter(String orderId, Map<String, dynamic>? qData, Map<String, dynamic> rollup) {
-    final int packedCount    = (rollup['packed']  as num?)?.toInt() ?? 0;
-    final int totalItems     = (rollup['ordered'] as num?)?.toInt() ?? 0;
+  // dispatch_ready=true  → GREEN tap "Ready to dispatch" (undo, always enabled)
+  // canMarkPacked=true   → YELLOW tap "Mark fully packed"
+  // otherwise            → muted, disabled "Mark fully packed"
+  Widget _buildPackFooter(String orderId, Map<String, dynamic>? qData, Map<String, dynamic> rollup, List<Map<String, dynamic>> items) {
     final bool dispatchReady = qData?['dispatch_ready'] == true;
 
     final String state = dispatchReady
         ? 'readytodispatch'
-        : (totalItems > 0 && packedCount >= totalItems ? 'fullypacked' : 'progress');
+        : (_packCanMarkReady(items) ? 'fullypacked' : 'progress');
     try { RenderLog.write('c304_footer', 'state=$state'); } catch (_) {}
 
     return Column(
@@ -13297,9 +13287,24 @@ class _PackTabState extends State<_PackTab>
       children: [
         _buildPackMasterRollup(rollup),
         const SizedBox(height: 12),
-        _buildPackDispatchButton(orderId, dispatchReady, packedCount, totalItems),
+        _buildPackDispatchButton(orderId, dispatchReady, items),
       ],
     );
+  }
+
+  // Mirrors pack_set_dispatch_ready's backend eligibility check exactly — every
+  // received/short item must be packed to (and counted to) its packable_qty.
+  bool _packCanMarkReady(List<Map<String, dynamic>> items) {
+    num n(v) => (v == null) ? 0 : (v as num);
+    bool packedOk(Map<String, dynamic> i) =>
+        n(i['packed_qty']) >= n(i['packable_qty']) && n(i['packed_qty']) > 0;
+    bool countedOk(Map<String, dynamic> i) =>
+        i['counted_qty'] != null &&
+        n(i['counted_qty']) >= n(i['packable_qty']) &&
+        n(i['counted_qty']) > 0;
+    final arrived = items.where((i) =>
+        i['fulfillment_state'] == 'received' || i['fulfillment_state'] == 'short').toList();
+    return arrived.isNotEmpty && arrived.every((i) => packedOk(i) && countedOk(i));
   }
 
   // #346: 5-row master rollup list — reads ONLY from rollup map (never sums items).
@@ -13347,13 +13352,15 @@ class _PackTabState extends State<_PackTab>
     );
   }
 
-  // #346: dispatch button extracted from old _buildPackFooter state machine.
-  Widget _buildPackDispatchButton(String orderId, bool dispatchReady, int packedCount, int totalItems) {
+  // Dispatch button. Label is driven only by dispatch_ready (never by eligibility):
+  //   dispatch_ready==false → "Mark fully packed" (disabled + helper text until eligible)
+  //   dispatch_ready==true  → "Ready to dispatch" (undo — always enabled, unconditional RPC)
+  Widget _buildPackDispatchButton(String orderId, bool dispatchReady, List<Map<String, dynamic>> items) {
     if (dispatchReady) {
-      // ── GREEN: hold 5 s to un-mark ────────────────────────────────────────
-      return Stack(children: [
-        // Base bar
-        Container(
+      // ── GREEN: tap to undo (unconditional — never gated on eligibility) ───
+      return GestureDetector(
+        onTap: _dispatchLoading ? null : () => _doSetDispatchReady(orderId, false),
+        child: Container(
           height: 48,
           decoration: BoxDecoration(
             color: _kReceivedBg,
@@ -13365,115 +13372,53 @@ class _PackTabState extends State<_PackTab>
               ? const SizedBox(
                   width: 20, height: 20,
                   child: CircularProgressIndicator(color: _kReceivedFg, strokeWidth: 2))
-              : const Text('Ready to Dispatch  ·  hold 5 s to undo',
+              : const Text('Ready to dispatch',
                   style: TextStyle(
                       fontSize: 13, fontWeight: FontWeight.w700, color: _kReceivedFg)),
-        ),
-        // Progress fill
-        if (!_dispatchLoading)
-          AnimatedBuilder(
-            animation: _dispatchHoldCtrl,
-            builder: (_, __) {
-              final v = _dispatchHoldCtrl.value;
-              if (v <= 0) return const SizedBox.shrink();
-              return Positioned.fill(
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(10),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: FractionallySizedBox(
-                      widthFactor: v,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: _kReceivedFg.withValues(alpha: 0.15),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              );
-            },
-          ),
-        // Listener layer
-        if (!_dispatchLoading)
-          Positioned.fill(
-            child: Listener(
-              behavior: HitTestBehavior.opaque,
-              onPointerDown: (_) {
-                _dispatchHoldCtrl.forward(from: 0.0);
-                _dispatchHoldTimer?.cancel();
-                _dispatchHoldTimer = Timer(const Duration(milliseconds: 5000), () {
-                  HapticFeedback.mediumImpact();
-                  _doSetDispatchReady(orderId, false);
-                });
-              },
-              onPointerUp: (_) {
-                _dispatchHoldTimer?.cancel();
-                _dispatchHoldCtrl.reverse();
-              },
-              onPointerCancel: (_) {
-                _dispatchHoldTimer?.cancel();
-                _dispatchHoldCtrl.reverse();
-              },
-            ),
-          ),
-      ]);
-    }
-
-    if (totalItems > 0 && packedCount >= totalItems) {
-      // ── YELLOW: tap to mark dispatch_ready=true ───────────────────────────
-      return GestureDetector(
-        onTap: _dispatchLoading ? null : () => _doSetDispatchReady(orderId, true),
-        child: Container(
-          height: 48,
-          decoration: BoxDecoration(
-            color: const Color(0xFFFEF3C7),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(
-                color: const Color(0xFFD97706).withValues(alpha: 0.4)),
-          ),
-          alignment: Alignment.center,
-          child: _dispatchLoading
-              ? const SizedBox(
-                  width: 20, height: 20,
-                  child: CircularProgressIndicator(
-                      color: Color(0xFF92400E), strokeWidth: 2))
-              : const Text('Fully packed — tap to mark Ready to Dispatch',
-                  style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      color: Color(0xFF92400E))),
         ),
       );
     }
 
-    // ── MUTED: packing in progress ────────────────────────────────────────────
-    return Container(
-      height: 44,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF9FAFB),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: _kBorder),
-      ),
-      child: Row(children: [
-        const Icon(Icons.hourglass_top_rounded, size: 15, color: _kSub),
-        const SizedBox(width: 8),
-        Expanded(
-            child: Text(
-          'Packing in progress ($packedCount/$totalItems items)',
-          style: const TextStyle(
-              fontSize: 13, fontWeight: FontWeight.w600, color: _kSub),
-        )),
-      ]),
+    final bool canMarkPacked = _packCanMarkReady(items);
+    final Color bg     = canMarkPacked ? const Color(0xFFFEF3C7) : const Color(0xFFF9FAFB);
+    final Color fg     = canMarkPacked ? const Color(0xFF92400E) : _kSub;
+    final Color border = canMarkPacked ? const Color(0xFFD97706).withValues(alpha: 0.4) : _kBorder;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        GestureDetector(
+          onTap: (canMarkPacked && !_dispatchLoading)
+              ? () => _doSetDispatchReady(orderId, true)
+              : null,
+          child: Container(
+            height: 48,
+            decoration: BoxDecoration(
+              color: bg,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: border),
+            ),
+            alignment: Alignment.center,
+            child: _dispatchLoading
+                ? SizedBox(
+                    width: 20, height: 20,
+                    child: CircularProgressIndicator(color: fg, strokeWidth: 2))
+                : Text('Mark fully packed',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: fg)),
+          ),
+        ),
+        if (!canMarkPacked) ...[
+          const SizedBox(height: 6),
+          const Text('Count & pack all items first',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: _kSub)),
+        ],
+      ],
     );
   }
 
   Future<void> _doSetDispatchReady(String orderId, bool ready) async {
     if (_dispatchLoading) return;
     if (mounted) setState(() => _dispatchLoading = true);
-    _dispatchHoldTimer?.cancel();
-    _dispatchHoldCtrl.reset();
     try {
       final dynamic res = await Supabase.instance.client.rpc(
         'pack_set_dispatch_ready',
@@ -13491,23 +13436,28 @@ class _PackTabState extends State<_PackTab>
       if (!mounted) return;
       if (resMap['error'] != null) {
         final err = resMap['error'].toString();
-        if (err == 'not_fully_packed') {
-          // #368(C): surface the backend packed/total threshold so the packer knows
-          // exactly how many bagged lines still need packing before dispatch.
-          try {
-            RenderLog.write('c368_dispatch', 'packed=${resMap['packed']};total=${resMap['total']}');
-          } catch (_) {}
-          _showPackSnack('Not fully packed (${resMap['packed']}/${resMap['total']})');
+        try {
+          RenderLog.write('c368_dispatch',
+              'err=$err;packed=${resMap['packed']};counted=${resMap['counted']};total=${resMap['total']}');
+        } catch (_) {}
+        if (!ready) {
+          _showPackSnack('Could not undo. Try again.');
+        } else if (err == 'not_fully_packed') {
+          _showPackSnack('Pack all items before dispatch.');
+        } else if (err == 'not_fully_counted') {
+          _showPackSnack('Count all packed items before dispatch.');
         } else {
-          _showPackSnack('Could not update dispatch ($err)');
+          _showPackSnack('Could not mark ready. Try again.');
         }
       }
     } catch (e) {
-      if (mounted) _showPackSnack('Error: $e');
+      if (mounted) {
+        _showPackSnack(ready ? 'Could not mark ready. Try again.' : 'Could not undo. Try again.');
+      }
     } finally {
       if (mounted) setState(() => _dispatchLoading = false);
     }
-    // Always refetch to sync footer + rows
+    // Always refetch — never optimistically flip dispatch_ready locally.
     if (mounted) await _loadFromPackQueue(orderId);
   }
 

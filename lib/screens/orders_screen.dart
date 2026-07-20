@@ -286,30 +286,46 @@ class _OrderCardState extends State<_OrderCard> {
   // buttons. B3: tapping one opens ONLY that section (closes any other);
   // tapping the open one again closes it; tapping the card body elsewhere
   // does nothing — there is no gesture handler on the body at all.
+  // CHANGE #459: header reflow — no left icon; left column is Date & Time over
+  // Order ID; right column is Status chip over "Placed by admin" (admin-placed
+  // only, otherwise nothing — no chip, no reserved gap); the ₹ total sits next
+  // to the status chip on that same top row so it's visible without ever
+  // overlapping it. No MRP anywhere (PTR isn't available yet, so no per-unit
+  // price shows on this card at all).
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final order = widget.order;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            CircleAvatar(
-              backgroundColor: theme.colorScheme.primaryContainer,
-              child: Icon(Icons.receipt_long,
-                  color: theme.colorScheme.onPrimaryContainer),
-            ),
-            const SizedBox(width: 12),
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                // Order ID (canonical CPO-format display id)
-                Text(order.number, style: const TextStyle(fontWeight: FontWeight.bold)),
-                const SizedBox(height: 2),
                 // Date & Time
                 Text(_date(order.placedAt), style: const TextStyle(color: Color(0xFF6B7280))),
+                const SizedBox(height: 2),
+                // Order ID (canonical CPO-format display id) — ellipsize, never overflow.
+                Text(order.number,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.bold)),
+              ]),
+            ),
+            const SizedBox(width: 8),
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Row(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.center, children: [
+                  // Total amount (₹) — kept next to status, never under/over it.
+                  Text(rupees(order.total), style: const TextStyle(fontWeight: FontWeight.bold)),
+                  const SizedBox(width: 8),
+                  // Status
+                  _StatusChip(status: order.status),
+                ]),
                 if (order.placedByAdmin) ...[
-                  const SizedBox(height: 3),
+                  const SizedBox(height: 4),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                     decoration: BoxDecoration(
@@ -323,18 +339,6 @@ class _OrderCardState extends State<_OrderCard> {
                             fontWeight: FontWeight.w600)),
                   ),
                 ],
-              ]),
-            ),
-            const SizedBox(width: 8),
-            Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                // Total amount (₹)
-                Text(rupees(order.total), style: const TextStyle(fontWeight: FontWeight.bold)),
-                const SizedBox(height: 4),
-                // Status
-                _StatusChip(status: order.status),
               ],
             ),
           ]),

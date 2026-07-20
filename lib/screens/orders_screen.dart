@@ -290,15 +290,20 @@ class _OrderCardState extends State<_OrderCard> {
   // otherwise nothing — no chip, no reserved gap). No total amount and no MRP
   // anywhere on this card (PTR isn't available yet, so no price shows here at
   // all — per Om, remove total from the header).
-  // CHANGE #460: left circle restored, showing the order's day-of-month
-  // instead of the old receipt icon — zero-padded to 2 digits to match the
-  // day component already shown in the date/time text (same order.placedAt
-  // field, no separate date source, no timezone shift).
+  // CHANGE #460: left circle restored (same size/style/position as the
+  // original receipt-icon avatar).
+  // CHANGE #461: circle content is now the count of unique line items
+  // (distinct products) in the order — order.lines.length, from the SAME
+  // items list already fetched for the orders list (each _DbLine is one
+  // distinct product; quantity per line is separate). NOT order.itemCount
+  // (that sums quantities — the old "N packs" metric this card dropped in
+  // #458). No new query — FittedBox shrinks the text so 1/2/3-digit counts
+  // all fit without overflow.
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final order = widget.order;
-    final dayNum = order.placedAt.day.toString().padLeft(2, '0');
+    final uniqueItemCount = order.lines.length.toString();
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -306,11 +311,17 @@ class _OrderCardState extends State<_OrderCard> {
           Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
             CircleAvatar(
               backgroundColor: theme.colorScheme.primaryContainer,
-              child: Text(dayNum,
-                  style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                      color: theme.colorScheme.onPrimaryContainer)),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Padding(
+                  padding: const EdgeInsets.all(4),
+                  child: Text(uniqueItemCount,
+                      style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: theme.colorScheme.onPrimaryContainer)),
+                ),
+              ),
             ),
             const SizedBox(width: 12),
             Expanded(

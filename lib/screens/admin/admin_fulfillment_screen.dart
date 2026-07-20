@@ -6934,6 +6934,22 @@ Future<List<Map<String, dynamic>>> fetchScopedVoiceMentions({
   return mentions.where((r) => r['session_key']?.toString() == sessionKey).toList();
 }
 
+// CHANGE #454: same single-source-of-truth pattern as fetchScopedVoiceMentions
+// (#453), for Pack's own table/RPC (pack_clip_mentions / get_pack_clip_mentions).
+// sessionKey is the PackVoiceSession's own generated key for this order's
+// current/most-recent recording; null means no recording has happened yet this
+// card-open, so all of the order's mentions show unfiltered.
+Future<List<Map<String, dynamic>>> fetchScopedPackMentions({
+  required String orderId,
+  required String? sessionKey,
+}) async {
+  final rows = await Supabase.instance.client
+      .rpc('get_pack_clip_mentions', params: {'p_order_id': orderId}) as List;
+  final mentions = rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
+  if (sessionKey == null || sessionKey.isEmpty) return mentions;
+  return mentions.where((r) => r['session_key']?.toString() == sessionKey).toList();
+}
+
 // ── #115: Counted items popup — mentions table with tap-to-play ───────────────
 
 // #117: _CountedMentionsPopup — whole-clip playback only.
@@ -11622,6 +11638,16 @@ class _PackTabState extends State<_PackTab>
   String _activeVoiceOrderId = '';
   List<Map<String, dynamic>> _packMentions = [];
   int? _lastVoiceSeq;
+  // CHANGE #454: continuous chunked recording (same engine as Warehouse, minus
+  // bags) — replaces the old single-shot _voiceService.start/stop → pack_process_clip
+  // flow, which hit Gemini's 30s cap on longer counts.
+  PackVoiceSession? _packVoiceSession;
+  // The PackVoiceSession's own generated key for this order's current/most-recent
+  // recording — badge (_refreshPackMentions) and the "Counted items" popup both
+  // scope to exactly this value (see fetchScopedPackMentions), so they can never
+  // disagree. Set on recording start; kept (not nulled) through Stop/finalize;
+  // reset to null only when the order card is freshly (re)loaded.
+  String? _activePackSessionKey;
 
   // CHANGE #299: Ask mediBO (rewired #304: audio → voice-agent, same as Warehouse)
   bool _askListening = false;
@@ -11671,6 +11697,8 @@ class _PackTabState extends State<_PackTab>
   @override
   void dispose() {
     FulfillDateScope.instance.removeListener(_onDateScopeChanged);
+    // CHANGE #454: don't leave a session dangling if the tab is torn down mid-count.
+    _packVoiceSession?.cancel().ignore();
     _scroll.dispose();
     super.dispose();
   }
@@ -11880,12 +11908,16 @@ class _PackTabState extends State<_PackTab>
     }
   }
 
+  // CHANGE #454: scoped by _activePackSessionKey via the SAME shared helper the
+  // "Counted items" popup uses (fetchScopedPackMentions), so the two can never
+  // disagree — mirrors #453's fetchScopedVoiceMentions pattern for Shop/Warehouse.
   Future<void> _refreshPackMentions(String orderId) async {
     try {
-      final rows = await Supabase.instance.client
-          .rpc('get_pack_clip_mentions', params: {'p_order_id': orderId}) as List;
+      final mentions = await fetchScopedPackMentions(
+        orderId: orderId,
+        sessionKey: _activePackSessionKey,
+      );
       if (!mounted) return;
-      final mentions = rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
       final distinct = mentions.map((m) => m['product_id']).where((id) => id != null).toSet().length;
       RenderLog.write('c299_spoken', 'distinct=$distinct;total=${mentions.length}');
       RenderLog.write('c301_mentions', 'rows=${mentions.length};distinct=$distinct');
@@ -11906,11 +11938,43 @@ class _PackTabState extends State<_PackTab>
     }
   }
 
+  // ── CHANGE #454: pack items/expected list, read fresh per window ──────────
+  List<Map<String, dynamic>> _packItemsFor(String orderId) {
+    final qData = _packQueueData[orderId];
+    return qData != null
+        ? ((qData['items'] as List?) ?? const [])
+            .map((i) => Map<String, dynamic>.from(i as Map))
+            .toList()
+        : <Map<String, dynamic>>[];
+  }
+
+  List<Map<String, dynamic>> _packExpectedFor(String orderId) {
+    final Map<int, Map<String, dynamic>> byPid = {};
+    for (final qi in _packItemsFor(orderId)) {
+      final pid = (qi['product_id'] as num?)?.toInt();
+      if (pid != null && !byPid.containsKey(pid)) byPid[pid] = qi;
+    }
+    return byPid.values.map((qi) => {
+      'name': qi['product_name']?.toString() ?? '',
+      'ordered_qty': (qi['qty'] as num?)?.toInt() ?? 1,
+      'unit': qi['pack_type']?.toString() ?? '',
+    }).toList();
+  }
+
+  // CHANGE #454: continuous chunked recording — one PackVoiceSession spans the
+  // whole mic-on → Stop lifecycle, recording back-to-back ~24s windows so a
+  // 10-20 min count never hits Gemini's single-clip 30s cap. Replaces the old
+  // single-shot _voiceService.start()/stop() → pack_process_clip flow.
   Future<void> _startCountVoice() async {
     if (_voiceListening || _voiceProcessing) return;
     // #331 VoiceCaps: check daily cap before starting (Pack surface)
     final capsAllowed = await _VoiceCaps.onSessionStart(context, Supabase.instance.client);
     if (!mounted || !capsAllowed) return;
+    final orderId = _activeVoiceOrderId;
+    if (orderId.isEmpty) {
+      _showPackSnack('No order selected');
+      return;
+    }
     try { RenderLog.write('c303_mic_on_tap', 'pack_count_voice'); } catch (_) {}
     _continuousSecs = 0;
     _recStartTime = DateTime.now();
@@ -11928,8 +11992,30 @@ class _PackTabState extends State<_PackTab>
         _stopCountVoice(_activeVoiceOrderId);
       }
     });
+    final session = PackVoiceSession(
+      orderId: orderId,
+      orderItemsProvider: () => _packItemsFor(orderId),
+      expectedProvider: () => _packExpectedFor(orderId),
+      resolveProductId: _resolveProductId,
+      resolveProductName: _resolveProductName,
+      onWindowError: (e, st) {
+        RenderLog.write('c454_pack_window_err',
+            e.toString().substring(0, e.toString().length.clamp(0, 100)));
+        if (mounted) _showPackSnack('A recording window failed to save — counting continues');
+      },
+      // #331: restore the daily 3-hour usage-cap ledger for continuous sessions,
+      // same as Warehouse/Shop — without this, a long session never registers
+      // against the server-side usage cap.
+      onClipUploaded: (path, seconds, seq) {
+        _VoiceCaps.onClipSaved(Supabase.instance.client,
+            ctxStr: 'pack', supplier: orderId, path: path, seconds: seconds,
+            onLocked: () { if (mounted) _showPackSnack('Daily 3-hour voice limit reached'); }).ignore();
+      },
+    );
     try {
-      await _voiceService.start();
+      await session.start();
+      _packVoiceSession = session;
+      _activePackSessionKey = session.sessionKey; // #454: badge/popup scope key
       _recStarted = true;
       try { RenderLog.write('c303_mic_result', 'granted'); } catch (_) {}
       if (mounted) setState(() => _voiceListening = true);
@@ -11944,6 +12030,12 @@ class _PackTabState extends State<_PackTab>
     }
   }
 
+  // CHANGE #454: stop the session, wait for every in-flight window to finish
+  // (write via pack_write_session_mentions), finalize (overlap-seam dedup on
+  // absolute t_start + pack_set_counted per product), then surface the summary.
+  // Replaces the old single-shot stop→transcribe→upload→pack_process_clip
+  // sequence entirely (that per-window pipeline now runs automatically inside
+  // PackVoiceSession every ~24s while recording).
   Future<void> _stopCountVoice(String orderId) async {
     if (!_voiceListening) return;
     _capsTimer?.cancel(); // #331: stop continuous timer
@@ -11959,182 +12051,56 @@ class _PackTabState extends State<_PackTab>
       return;
     }
     _recStarted = false;
+    final session = _packVoiceSession;
+    if (session == null) {
+      _packCounting = false;
+      if (mounted) setState(() => _voiceProcessing = false);
+      return;
+    }
     try {
-      final result = await _voiceService.stop();
+      final result = await session.stopAndFinalize();
+      _packVoiceSession = null;
       if (!mounted) return;
-      if (result == null || result.bytes.length < 1500) {
-        if (mounted) setState(() => _voiceProcessing = false);
-        _showPackSnack('No audio — try again');
-        return;
-      }
-
-      // CHANGE #301: seq is fetched fresh per recording, before upload.
-      int seq = 0;
-      String clipPath = '';
-      try {
-        final seqRaw = await Supabase.instance.client
-            .rpc('next_pack_recording_seq', params: {'p_order_id': orderId});
-        seq = (seqRaw as num?)?.toInt() ?? 0;
-        if (seq <= 0) seq = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-        RenderLog.write('c301_seq', 'order=${orderId.substring(0, 8)};seq=$seq');
-      } catch (e) {
-        seq = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-        RenderLog.write('c301_seq', 'fallback;seq=$seq;err=${e.toString().substring(0, e.toString().length.clamp(0, 40))}');
-      }
-
-      // CHANGE #301: upload is best-effort and independent of counting.
-      // If upload throws, log and continue — do NOT retry or abort counting.
-      try {
-        // CHANGE #304b: path MUST use YYYY-MM-DD (dashes) — matches next_pack_recording_seq lookup.
-        final dateStr = ymd(nowIst());
-        clipPath = '$dateStr/pack-$orderId/$seq.${result.ext}';
-        final mimeUpload = result.ext == 'webm' ? 'audio/webm' : 'audio/mp4';
-        await Supabase.instance.client.storage.from('voice-clips').uploadBinary(
-          clipPath, result.bytes,
-          fileOptions: FileOptions(contentType: mimeUpload, upsert: true),
-        );
-        RenderLog.write('c301_upload', 'ok;path_tail=${clipPath.length >= 8 ? clipPath.substring(clipPath.length - 8) : clipPath}');
-        // #331: register clip with caps backend (fire-and-forget; supplier unknown for pack)
-        final packDurSecs = _recStartTime != null
-            ? DateTime.now().difference(_recStartTime!).inSeconds.clamp(1, 3600)
-            : _continuousSecs.clamp(1, 3600);
-        _VoiceCaps.onClipSaved(Supabase.instance.client,
-            ctxStr: 'pack', supplier: orderId, path: clipPath, seconds: packDurSecs,
-            onLocked: () { if (mounted) _showPackSnack('Daily 3-hour voice limit reached'); }).ignore();
-      } catch (e) {
-        RenderLog.write('c301_upload', 'err=${e.toString().substring(0, e.toString().length.clamp(0, 60))}');
-        // clip path stays non-empty so pack_process_clip records it anyway
-      }
-
-      // Build expected list (deduplicated by product_id)
-      final qData = _packQueueData[orderId];
-      final qItems = qData != null
-          ? ((qData['items'] as List?) ?? const [])
-              .map((i) => Map<String, dynamic>.from(i as Map))
-              .toList()
-          : <Map<String, dynamic>>[];
-      final Map<int, Map<String, dynamic>> byPid = {};
-      for (final qi in qItems) {
-        final pid = (qi['product_id'] as num?)?.toInt();
-        if (pid != null && !byPid.containsKey(pid)) byPid[pid] = qi;
-      }
-      final expected = byPid.values.map((qi) => {
-        'name': qi['product_name']?.toString() ?? '',
-        'ordered_qty': (qi['qty'] as num?)?.toInt() ?? 1,
-        'unit': qi['pack_type']?.toString() ?? '',
-      }).toList();
-
-      // Transcribe via voice-receive edge function — CHANGE #304: min_confidence 0.85
-      final (:items, :transcript, :droppedNoQty, :droppedLowConf, :mentions) =
-          await _voiceService.transcribe(result.bytes, result.mime,
-              expected: expected.isEmpty ? null : expected,
-              minConfidence: 0.85);
-      if (!mounted) return;
-
-      // CHANGE #304: SILENCE GUARD — if nothing was spoken, skip pack_process_clip entirely.
-      final bool silenced = transcript.trim().isEmpty || items.isEmpty;
-      if (silenced) {
-        try { RenderLog.write('c304_silence', 'blocked'); } catch (_) {}
-        setState(() { _voiceProcessing = false; _lastVoiceSeq = null; });
-        _showPackSnack("Didn't catch anything — try again");
-        return;
-      }
-      try { RenderLog.write('c304_silence', 'counted:${items.length}'); } catch (_) {}
-
-      // CHANGE #306: fuzzy resolution — replaces exact name map with _resolveProductId.
-      // Strips dosage-form words before comparing so mis-heard brand names still resolve.
-      final itemsPayload = <Map<String, dynamic>>[];
-      int _resolvedCount = 0;
-      for (final item in items) {
-        final matchedName = item['matched_name']?.toString();
-        final rawQty = item['received_qty'];
-        if (rawQty == null || matchedName == null || matchedName == 'not_on_order') continue;
-        final qty = (rawQty as num).toDouble();
-        if (qty <= 0) continue;
-        final pid = _resolveProductId(matchedName, qItems);
-        if (pid == null) continue;
-        _resolvedCount++;
-        itemsPayload.add({'product_id': pid, 'qty': qty});
-      }
-      try { RenderLog.write('c306_resolved', 'items=$_resolvedCount/${items.length}'); } catch (_) {}
-
-      // ord = mention's 0-based index in the clip (from voice-receive), NOT per-product.
-      // When pid resolves, use the canonical product_name so the review shows the real product.
-      final mentionsPayload = <Map<String, dynamic>>[];
-      for (int i = 0; i < mentions.length; i++) {
-        final mention = mentions[i];
-        final matchedName = mention['matched_name']?.toString();
-        final pid = (matchedName != null && matchedName != 'not_on_order')
-            ? _resolveProductId(matchedName, qItems)
-            : null;
-        final resolvedName = pid != null
-            ? (_resolveProductName(pid, qItems) ?? matchedName!)
-            : (matchedName ?? '');
-        mentionsPayload.add({
-          'product_id': pid,
-          'matched_name': resolvedName,
-          'qty': (mention['qty'] as num?)?.toDouble() ?? 0.0,
-          't_start': mention['t_start'],
-          't_end': mention['t_end'],
-          'ord': i,
-        });
-      }
-
-      // CHANGE #304b: second guard — if all items resolved to unknown products, skip.
-      if (itemsPayload.isEmpty && mentionsPayload.isEmpty) {
-        try { RenderLog.write('c304_silence', 'blocked'); } catch (_) {}
-        setState(() { _voiceProcessing = false; _lastVoiceSeq = null; });
-        _showPackSnack("Didn't catch anything — try again");
-        return;
-      }
-
-      // CHANGE #301: single atomic RPC — replaces old per-item + per-mention loops.
-      int countsSet = 0;
-      try {
-        final dynamic res = await Supabase.instance.client.rpc(
-          'pack_process_clip',
-          params: {
-            'p_order_id': orderId,
-            'p_recording_seq': seq,
-            'p_clip_path': clipPath,
-            'p_items': itemsPayload,
-            'p_mentions': mentionsPayload,
-          },
-        );
-        final resMap = res is String
-            ? (jsonDecode(res) as Map).cast<String, dynamic>()
-            : Map<String, dynamic>.from(res as Map);
-        countsSet = (resMap['counts_set'] as num?)?.toInt() ?? itemsPayload.length;
-        RenderLog.write('c301_process',
-            'counts_set=${resMap["counts_set"]};mentions=${resMap["mentions"]};seq=$seq');
-        try { RenderLog.write('c306_counted', 'counts_set=${resMap["counts_set"]};mentions=${resMap["mentions"]}'); } catch (_) {}
-        try { RenderLog.write('c346_pack_voice_set', 'counts_set=${resMap["counts_set"]};seq=$seq'); } catch (_) {}
-      } catch (e) {
-        RenderLog.write('c301_process', 'err=${e.toString().substring(0, e.toString().length.clamp(0, 60))}');
-      }
-
-      RenderLog.write('c301_lock', 'processed;countsSet=$countsSet');
-
-      if (!mounted) return;
-      setState(() {
-        _voiceProcessing = false;
-        _lastVoiceSeq = seq > 0 ? seq : null;
-      });
-      _showPackSnack(countsSet > 0
-          ? '$countsSet item${countsSet == 1 ? '' : 's'} counted'
-          : 'No items matched — try again');
-
-      // Reload pack_get_queue to update Counted badges and progress row.
       await _loadFromPackQueue(orderId);
-    } catch (e) {
       if (!mounted) return;
-      setState(() => _voiceProcessing = false);
+      _refreshPackMentions(orderId);
+      _showPackFinalizeSummary(result);
+      RenderLog.write('c301_lock', 'processed');
+    } catch (e) {
+      _packVoiceSession = null;
+      if (!mounted) return;
       _showPackSnack('Voice error — try again');
+      RenderLog.write('c454_pack_finalize_err',
+          e.toString().substring(0, e.toString().length.clamp(0, 60)));
     } finally {
       // CHANGE #301: always release the in-flight lock.
       _packCounting = false;
+      if (mounted) setState(() => _voiceProcessing = false);
       RenderLog.write('c301_lock', 'released');
     }
+  }
+
+  // CHANGE #454: summarizes pack_finalize_session's jsonb result after Stop —
+  // Pack's counterpart to Shop/Warehouse's _showFinalizeSummary (no bag layer).
+  void _showPackFinalizeSummary(Map<String, dynamic> result) {
+    if (!mounted) return;
+    final persisted = (result['persisted'] as List?) ?? const [];
+    final unmatched = (result['unmatched_mentions'] as List?) ?? const [];
+    final productCount = persisted
+        .map((p) => p is Map ? p['product_id'] : null)
+        .where((id) => id != null)
+        .toSet()
+        .length;
+    RenderLog.write('c454_pack_finalize_summary',
+        'persisted=$productCount;unmatched=${unmatched.length}');
+    if (productCount == 0 && unmatched.isEmpty) {
+      _showPackSnack("Didn't catch anything — try again");
+      return;
+    }
+    final base = 'Counted $productCount product${productCount == 1 ? '' : 's'}.';
+    _showPackSnack(unmatched.isEmpty
+        ? base
+        : '$base ${unmatched.length} unmatched.');
   }
 
   // CHANGE #304: Ask mediBO — rewired to audio-bytes → voice-agent (same as Warehouse).
@@ -12468,6 +12434,11 @@ class _PackTabState extends State<_PackTab>
       onTap: () {
         if (isExpanded) {
           _packCounting = false;
+          // CHANGE #454: don't leave a session dangling if the card collapses
+          // mid-count — cancel, never finalize (an unfinished count must not
+          // persist), mirroring Shop/Warehouse's dispose-time cleanup.
+          _packVoiceSession?.cancel().ignore();
+          _packVoiceSession = null;
           setState(() {
             _expandedOrderId = null;
             _voiceListening = false;
@@ -12475,6 +12446,7 @@ class _PackTabState extends State<_PackTab>
             _askListening = false;
             _askInterim = '';
             _packMentions = [];
+            _activePackSessionKey = null; // #454: fresh open next time — no known session yet
           });
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (!mounted || !_scroll.hasClients) return;
@@ -12489,6 +12461,7 @@ class _PackTabState extends State<_PackTab>
           setState(() {
             _expandedOrderId = orderId;
             _packMentions = [];
+            _activePackSessionKey = null; // #454: fresh card load — no known session yet
             _packAuditMap = {}; // #338: audit is per-order — clear on open
           });
           _loadFromPackQueue(orderId);
@@ -13250,6 +13223,9 @@ class _PackTabState extends State<_PackTab>
         mentions: mentions,
         packItems: packItems,
         orderId: orderId,
+        // #454: same session key the badge is scoped to (fetchScopedPackMentions) —
+        // the sheet's own post-toggle refetches use it too, so they can never diverge.
+        sessionKey: _activePackSessionKey,
         // #338: after any delete/re-add — reload queue (counted state), mentions and audit
         onChanged: () {
           _refreshPackMentions(orderId);
@@ -13270,11 +13246,15 @@ class _PackMentionsSheet extends StatefulWidget {
   final List<Map<String, dynamic>> packItems; // pack_get_queue items for ordered-qty lookup
   // #338: hold-to-delete needs the order id (refetch) + change notification
   final String orderId;
+  // #454: scopes this sheet's own post-toggle refetches to the same session as
+  // the badge (see fetchScopedPackMentions) — null = no known session, show all.
+  final String? sessionKey;
   final VoidCallback? onChanged;
   const _PackMentionsSheet({
     required this.mentions,
     required this.packItems,
     required this.orderId,
+    this.sessionKey,
     this.onChanged,
   });
   @override
@@ -13325,13 +13305,9 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
         RenderLog.write(action == 'readd' ? 'c342_readd_pack' : 'c342_del_pack',
             'id=${id.substring(0, id.length.clamp(0, 8))};new_status=$newStatus;new_total=${res['new_total'] ?? 'null'}');
         try {
-          final rows = await Supabase.instance.client.rpc(
-              'get_pack_clip_mentions',
-              params: {'p_order_id': widget.orderId}) as List;
-          if (mounted) {
-            setState(() => _mentions =
-                rows.map((r) => Map<String, dynamic>.from(r as Map)).toList());
-          }
+          final rows = await fetchScopedPackMentions(
+              orderId: widget.orderId, sessionKey: widget.sessionKey);
+          if (mounted) setState(() => _mentions = rows);
         } catch (_) {
           if (mounted) {
             setState(() {
@@ -13364,10 +13340,9 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
           } else if (err.contains('already_deleted') || err.contains('not_deleted')) {
             // silent reconcile — state drift
             try {
-              final rows = await Supabase.instance.client.rpc(
-                  'get_pack_clip_mentions',
-                  params: {'p_order_id': widget.orderId}) as List;
-              if (mounted) setState(() => _mentions = rows.map((r) => Map<String, dynamic>.from(r as Map)).toList());
+              final rows = await fetchScopedPackMentions(
+                  orderId: widget.orderId, sessionKey: widget.sessionKey);
+              if (mounted) setState(() => _mentions = rows);
             } catch (_) {}
           } else {
             ScaffoldMessenger.of(context)

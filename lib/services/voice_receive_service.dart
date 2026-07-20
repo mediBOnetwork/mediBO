@@ -247,6 +247,13 @@ class VoiceReceiveService {
   Future<void> dispose() => _rec.dispose();
 }
 
+/// CHANGE #454: single key-format helper — one unique session_key per recording,
+/// shared by every window's insert/write, the finalize call, and the badge/popup
+/// scoping (#453). [entity] is the supplier name for Shop/Warehouse, the order id
+/// for Pack. Never hardcode or reuse a key across recordings/suppliers/orders.
+String newVoiceSessionKey(String entity, String stage) =>
+    '$entity|$stage|${DateTime.now().millisecondsSinceEpoch}';
+
 /// §3 of the continuous-voice-counting build spec: call right after a successful
 /// bag_attach to mark the session-clock moment that bag became the owning bag. Never call
 /// on detach — only a successful map defines ownership.
@@ -430,6 +437,178 @@ class ContinuousVoiceSession {
 
   /// Aborts the session without finalizing (e.g. the admin backs out mid-count). Any windows
   /// already dispatched remain in voice_clip_mentions, unattributed, for manual cleanup.
+  Future<void> cancel() async {
+    _stopping = true;
+    _timer?.cancel();
+    await _svc.cancel();
+    _clock.stop();
+  }
+}
+
+/// CHANGE #454: run once on Pack Stop (safe to re-run) — Pack's counterpart to
+/// finalizeVoiceSession. order_id is derived server-side from the session's own
+/// pack_clip_mentions rows, so only the session key is needed here.
+Future<Map<String, dynamic>> finalizePackSession(String sessionKey) async {
+  final res = await Supabase.instance.client.rpc('pack_finalize_session', params: {
+    'p_session_key': sessionKey,
+  });
+  final data = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+  if (data['error'] != null) {
+    throw VoiceReceiveException(data['error'].toString());
+  }
+  RenderLog.write('c454_pack_session_finalized',
+      'session=$sessionKey;persisted=${(data['persisted'] as List?)?.length ?? 0};'
+      'unmatched=${(data['unmatched_mentions'] as List?)?.length ?? 0}');
+  return data;
+}
+
+/// CHANGE #454: Pack's continuous counting session — the SAME windowed-chunk
+/// recording engine as ContinuousVoiceSession (record ~[windowSec]s, rotate,
+/// dispatch the closed clip in the background, never stop the mic from the
+/// worker's perspective), minus the bag-boundary layer (Pack has no bags) and
+/// wired to Pack's own per-window write RPC (pack_write_session_mentions) +
+/// finalizer (pack_finalize_session) instead of voice_clip_mentions /
+/// voice_finalize_session. Does not touch ContinuousVoiceSession or any
+/// Shop/Warehouse code path — a separate class so Warehouse/Shop behavior is
+/// provably unchanged.
+class PackVoiceSession {
+  final String orderId;
+  final List<Map<String, dynamic>> Function() orderItemsProvider;
+  final List<Map<String, dynamic>> Function()? expectedProvider;
+  // Pack's own fuzzy product-name resolver (order-scoped Levenshtein/Jaccard
+  // match against orderItemsProvider()) — unchanged from the pre-#454 single-shot
+  // flow; voice_match_product (Shop/Warehouse's supplier-catalog RPC fallback) is
+  // deliberately not used here, matching prior Pack behavior exactly.
+  final int? Function(String spoken, List<Map<String, dynamic>> items) resolveProductId;
+  final String? Function(int productId, List<Map<String, dynamic>> items) resolveProductName;
+  final void Function(Object error, StackTrace st)? onWindowError;
+  final void Function(String path, int seconds, int recordingSeq)? onClipUploaded;
+  static const int windowSec = 24;
+
+  final String sessionKey;
+  final VoiceReceiveService _svc = VoiceReceiveService();
+  final Stopwatch _clock = Stopwatch();
+  Timer? _timer;
+  int _nextSeq = 0;
+  bool _stopping = false;
+  Future<void>? _activeRotation;
+  final List<Future<void>> _inFlight = [];
+  double _windowStartSec = 0.0;
+
+  PackVoiceSession({
+    required this.orderId,
+    required this.orderItemsProvider,
+    required this.resolveProductId,
+    required this.resolveProductName,
+    this.expectedProvider,
+    this.onWindowError,
+    this.onClipUploaded,
+  }) : sessionKey = newVoiceSessionKey(orderId, 'pack');
+
+  double get elapsedSec => _clock.elapsedMilliseconds / 1000.0;
+
+  Future<void> start() async {
+    await _svc.start();
+    _clock.start();
+    _windowStartSec = 0.0;
+    _timer = Timer.periodic(const Duration(seconds: windowSec), (_) => _rotate());
+  }
+
+  Future<void> _rotate() {
+    if (_stopping) return Future.value();
+    final done = Completer<void>();
+    _activeRotation = done.future;
+    () async {
+      final seq = _nextSeq++;
+      final offset = _windowStartSec;
+      final clip = await _svc.stop();
+      final windowEndSec = elapsedSec;
+      // Same race guard as ContinuousVoiceSession._rotate: if stopAndFinalize raced us
+      // mid-stop, don't restart the recorder, but still dispatch the clip we captured.
+      if (!_stopping) {
+        await _svc.start();
+        _windowStartSec = elapsedSec;
+      }
+      if (clip == null) return;
+      final durationSec = (windowEndSec - offset).round().clamp(1, 3600);
+      final fut = _dispatch(clip.bytes, clip.mime, clip.ext, seq, offset, durationSec)
+          .catchError((Object e, StackTrace st) => onWindowError?.call(e, st));
+      _inFlight.add(fut);
+      unawaited(fut.whenComplete(() => _inFlight.remove(fut)));
+    }()
+        .whenComplete(() {
+      _activeRotation = null;
+      done.complete();
+    });
+    return done.future;
+  }
+
+  Future<void> _dispatch(Uint8List bytes, String mime, String ext, int seq, double offsetSec, int durationSec) async {
+    final clipPath = await _svc.uploadClip(bytes, orderId, seq, ext);
+    onClipUploaded?.call(clipPath, durationSec, seq);
+    final result = await _svc.transcribe(
+      bytes, mime,
+      expected: expectedProvider?.call(),
+      minConfidence: 0.85, // CHANGE #304: Pack's higher confidence bar, preserved
+      sessionKey: sessionKey,
+      recordingSeq: seq,
+      windowOffsetSec: offsetSec,
+      stage: 'pack',
+    );
+    if (result.mentions.isEmpty) return;
+    final items = orderItemsProvider();
+    final mentionsPayload = <Map<String, dynamic>>[];
+    for (final m in result.mentions) {
+      final rawName = m['matched_name']?.toString() ?? '';
+      final name = rawName.trim();
+      final pid = (name.isNotEmpty && name != 'not_on_order')
+          ? resolveProductId(name, items)
+          : null;
+      final resolvedName = pid != null ? (resolveProductName(pid, items) ?? name) : name;
+      mentionsPayload.add({
+        'product_id': pid,
+        'matched_name': resolvedName,
+        'qty': (m['qty'] as num?)?.toDouble() ?? 0.0,
+        't_start': m['t_start'],
+        't_end': m['t_end'],
+        'ord': (m['ord'] as num?)?.toInt() ?? 0,
+      });
+    }
+    if (mentionsPayload.isEmpty) return;
+    await Supabase.instance.client.rpc('pack_write_session_mentions', params: {
+      'p_order_id': orderId,
+      'p_session_key': sessionKey,
+      'p_recording_seq': seq,
+      'p_clip_path': clipPath,
+      'p_mentions': mentionsPayload,
+    });
+  }
+
+  /// Stops recording, waits for every in-flight window to finish uploading/writing, then
+  /// runs pack_finalize_session and returns its summary. Safe to call once per session.
+  Future<Map<String, dynamic>> stopAndFinalize() async {
+    _stopping = true;
+    _timer?.cancel();
+    if (_activeRotation != null) {
+      await _activeRotation;
+    } else if (_svc.wasStarted) {
+      final seq = _nextSeq++;
+      final offset = _windowStartSec;
+      final windowEndSec = elapsedSec;
+      final clip = await _svc.stop();
+      if (clip != null) {
+        final durationSec = (windowEndSec - offset).round().clamp(1, 3600);
+        _inFlight.add(_dispatch(clip.bytes, clip.mime, clip.ext, seq, offset, durationSec)
+            .catchError((Object e, StackTrace st) => onWindowError?.call(e, st)));
+      }
+    }
+    _clock.stop();
+    await Future.wait(List<Future<void>>.of(_inFlight));
+    return finalizePackSession(sessionKey);
+  }
+
+  /// Aborts the session without finalizing. Any windows already dispatched remain in
+  /// pack_clip_mentions, unattributed to a completed session, for manual cleanup.
   Future<void> cancel() async {
     _stopping = true;
     _timer?.cancel();

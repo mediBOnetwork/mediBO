@@ -1020,6 +1020,15 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // lifecycle across multiple bag attaches; replaces the old single-shot
   // start/stop/transcribe/insertMentions sequence for the main counting mic.
   ContinuousVoiceSession? _voiceSession;
+  // CHANGE #453: the ContinuousVoiceSession's own unique key (supplier|stage|ms)
+  // for the tab's current/most-recently-finished recording. This is the ONLY
+  // key that ever appears in voice_clip_mentions.session_key for rows written
+  // by this tab — the "N spoken" badge and the "Counted items" popup both scope
+  // to exactly this value (null = no recording yet this card-open → show all of
+  // today's mentions for the supplier+stage). Set on recording start; cleared
+  // only when the card is freshly (re)loaded, never nulled on stop/finalize, so
+  // the badge/popup still agree right after Stop.
+  String? _activeVoiceSessionKey;
 
   // ── Voice state ──
   bool _voiceSupported = true;
@@ -1033,7 +1042,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // #331 VoiceCaps: continuous-session timer
   int _continuousSecs = 0;
   Timer? _capsTimer;
-  // #332: background session key from fw_count_session (SS1/SS2… WH1…)
+  // #332: background session key from fw_count_session — a low-cardinality
+  // per-stage backend code (e.g. "SS1", "SS2"), reused across recordings; never
+  // used to scope voice_clip_mentions display (see #453 / fetchScopedVoiceMentions).
   String? _sessionKey;
   String? _sessionStage;
   final Map<int, num> _tally = {};
@@ -1359,6 +1370,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     _loadSettings();
     _loadSuppliers();
     _initVoice();
+    // CHANGE #453: keep the "N spoken" badge live — refetch (scoped, via
+    // fetchScopedVoiceMentions) whenever a window's mentions land, same trigger
+    // the "Counted items" popup already uses.
+    FulfillRealtime.instance.addListener(_onVoiceMentionsRealtime);
     RenderLog.write('fulfillment_pick_to_light', 'screen_mounted');
     RenderLog.write('c162_old_popups_removed', 'true');
     RenderLog.write('c167_helpers_loaded', 'true');
@@ -1373,8 +1388,16 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c354_ready', 'tab=${widget.arrivals ? 'warehouse' : 'shop'}');
   }
 
+  // CHANGE #453: realtime trigger for the badge — mirrors _CountedMentionsPopup's
+  // own listener so both refetch on the same event.
+  void _onVoiceMentionsRealtime(Set<String> changedTables) {
+    if (!mounted) return;
+    if (changedTables.contains('voice_clip_mentions')) _refreshVoiceMentions();
+  }
+
   @override
   void dispose() {
+    FulfillRealtime.instance.removeListener(_onVoiceMentionsRealtime);
     FulfillDateScope.instance.removeListener(_onDateScopeChanged);
     _listScrollCtrl.dispose();
     _agentBubbleEntry?.remove();
@@ -1871,6 +1894,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           _supplierMode = parsedMode;
           _activeBag = activeBag;
           _voiceMentions = []; // clear stale mentions; fresh fetch below
+          _activeVoiceSessionKey = null; // #453: fresh card load — no known session yet
           // Sync change-bag intent from backend — makes detached state survive refresh/reopen
           if (bagFlow == 'awaiting_new') {
             _changeBagPendingOldBag[supplier] = awaitingBagNo?.toString();
@@ -1938,6 +1962,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         _supplierMode = freshMode;
         if (freshMode != null) _collectModeMap[supplier] = freshMode;
         _voiceMentions = []; // clear stale; fresh fetch below
+        _activeVoiceSessionKey = null; // #453: fresh card load — no known session yet
       });
       _refreshVoiceMentions(); // #263: load today's mentions for distinct-product spoken count
       _fetchCountAudit(supplier); // #338: voice-vs-actual mismatch chips (expand only)
@@ -2391,6 +2416,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     try {
       await session.start();
       _voiceSession = session;
+      _activeVoiceSessionKey = session.sessionKey; // #453: badge/popup scope key
       _recStarted = true;
       try { RenderLog.write('c303_mic_result', 'granted'); } catch (_) {}
       RenderLog.write('79_rec_start_ok', 'true');
@@ -2562,18 +2588,20 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     );
   }
 
-  // #263: load voice clip mentions from DB → derive distinct-product count for "N spoken" badge.
+  // #263/#453: load voice clip mentions from DB → derive distinct-product count
+  // for "N spoken" badge. Scoped by _activeVoiceSessionKey via the SAME shared
+  // helper the "Counted items" popup uses (see fetchScopedVoiceMentions), so the
+  // two can never disagree.
   Future<void> _refreshVoiceMentions() async {
     final supplier = _selectedSupplier;
     if (supplier == null) return;
     try {
-      final rows = await Supabase.instance.client
-          .rpc('get_voice_clip_mentions', params: {
-            'p_supplier_name': supplier,
-            'p_stage': widget.arrivals ? 'warehouse' : 'shop',
-          }) as List;
+      final mentions = await fetchScopedVoiceMentions(
+        supplierName: supplier,
+        stage: widget.arrivals ? 'warehouse' : 'shop',
+        sessionKey: _activeVoiceSessionKey,
+      );
       if (!mounted) return;
-      final mentions = rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
       final distinct = mentions.map((m) => m['product_id']).where((id) => id != null).toSet().length;
       RenderLog.write('c263_spoken_count', 'distinct_products=$distinct;total_mentions=${mentions.length}');
       setState(() => _voiceMentions = mentions);
@@ -6506,10 +6534,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               supplierName: supplierForPopup,
               stage: widget.arrivals ? 'warehouse' : 'shop',
               orderItems: orderSnapshot,
-              // #9: live-scope mentions to the ContinuousVoiceSession's own generated
-              // session_key while a session is active — the old fw_count_session-based
-              // key (SS1/WH2-style) no longer matches what insertMentions writes.
-              activeSessionKey: _voiceSession?.sessionKey,
+              // #9/#453: scope mentions to the ContinuousVoiceSession's own generated
+              // session_key (supplier|stage|ms) — the only key insertMentions ever
+              // writes. Sourced from _activeVoiceSessionKey (not _voiceSession?.sessionKey
+              // directly) so the scope survives Stop/finalize, when _voiceSession is
+              // already null but the just-recorded mentions should still show.
+              activeSessionKey: _activeVoiceSessionKey,
               onDismiss: dismiss,
               // #338: frozen — shop: box locked or forwarded; warehouse: arrivals confirmed
               frozen: widget.arrivals
@@ -6882,6 +6912,28 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   }
 }
 
+// CHANGE #453: single source of truth for the Supplier Shop / Warehouse "N spoken"
+// badge and the "Counted items" popup — same RPC, same session-key filter, so the
+// two displays can never disagree. sessionKey must be the ContinuousVoiceSession's
+// own generated key (supplier|stage|ms) — the only value ever written to
+// voice_clip_mentions.session_key by this tab. null means no recording has
+// happened yet this card-open, so all of today's mentions for the supplier+stage
+// are returned unfiltered.
+Future<List<Map<String, dynamic>>> fetchScopedVoiceMentions({
+  required String supplierName,
+  required String stage,
+  required String? sessionKey,
+}) async {
+  final rows = await Supabase.instance.client
+      .rpc('get_voice_clip_mentions', params: {
+        'p_supplier_name': supplierName,
+        'p_stage': stage,
+      }) as List;
+  final mentions = rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
+  if (sessionKey == null || sessionKey.isEmpty) return mentions;
+  return mentions.where((r) => r['session_key']?.toString() == sessionKey).toList();
+}
+
 // ── #115: Counted items popup — mentions table with tap-to-play ───────────────
 
 // #117: _CountedMentionsPopup — whole-clip playback only.
@@ -7014,51 +7066,21 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
     super.dispose();
   }
 
+  // CHANGE #453: scope to widget.activeSessionKey via the SAME shared helper the
+  // "N spoken" badge uses (fetchScopedVoiceMentions) — same RPC, same key, so the
+  // two can never disagree. The old fw_count_session-based fallback (SS1/WH2-style
+  // key) is gone: that key was never what insertMentions writes to
+  // voice_clip_mentions.session_key, so filtering by it only ever matched zero
+  // rows once a live ContinuousVoiceSession wasn't active — the root cause of the
+  // badge/popup mismatch this change fixes.
   Future<void> _fetchMentions() async {
     try {
-      // #332: get the supplier's current active-stage session (idempotent — returns
-      // the open session). fw_count_session always reports the ACTIVE stage, not
-      // necessarily the tab this popup was opened from — a "shop" session_key exists
-      // only while the supplier is still in shop stage, so once forwarded it no
-      // longer applies to the (now frozen) Supplier Shop tab. Only meaningful to
-      // filter by when it actually matches widget.stage (see below).
-      String? sessionKey;
-      String? sessionStage;
-      try {
-        final sessionRaw = await Supabase.instance.client
-            .rpc('fw_count_session', params: {'p_supplier': widget.supplierName}) as Map;
-        final sessionRes = Map<String, dynamic>.from(sessionRaw);
-        if (sessionRes['status'] == 'ok') {
-          sessionKey = sessionRes['session_key']?.toString();
-          sessionStage = sessionRes['stage']?.toString();
-          RenderLog.write('c332_review_scoped', 'key=${sessionKey ?? ''};supplier=${widget.supplierName}');
-        }
-      } catch (_) {}
-
-      // fix(fulfill): scope to the tab this popup was opened from (widget.stage) —
-      // get_voice_clip_mentions already filters to TODAY + this stage, including
-      // deleted rows (their re-add control still renders).
-      final rows = await Supabase.instance.client
-          .rpc('get_voice_clip_mentions', params: {
-            'p_supplier_name': widget.supplierName,
-            'p_stage': widget.stage,
-          }) as List;
+      final mentions = await fetchScopedVoiceMentions(
+        supplierName: widget.supplierName,
+        stage: widget.stage,
+        sessionKey: widget.activeSessionKey,
+      );
       if (!mounted) return;
-      var mentions = rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
-      // #9: while a ContinuousVoiceSession is active, its own generated session_key
-      // (not fw_count_session's SS1/WH2-style key) is what insertMentions actually
-      // wrote onto these rows — scope to that so the live view shows just this
-      // recording session, not the whole day's mentions for this stage.
-      final liveKey = widget.activeSessionKey;
-      if (liveKey != null && liveKey.isNotEmpty) {
-        mentions = mentions.where((r) => r['session_key']?.toString() == liveKey).toList();
-      } else if (sessionStage == widget.stage && sessionKey != null && sessionKey.isNotEmpty) {
-        // #332: no live session — fall back to scoping by the supplier's open
-        // fw_count_session (prevents last order's clips mixing in) when it matches
-        // the tab this popup was opened from; the other, already-frozen tab has no
-        // "current session" to narrow to.
-        mentions = mentions.where((r) => r['session_key']?.toString() == sessionKey).toList();
-      }
       final distinctClips = mentions.map((r) => r['clip_path']?.toString() ?? '').toSet().length;
       RenderLog.write('c119_popup_built',
           'clips=$distinctClips;products=${_uniqueNames(mentions)};total_mentions=${mentions.length};retains_seq=y');

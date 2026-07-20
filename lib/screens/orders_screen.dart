@@ -5,7 +5,6 @@ import 'package:http/http.dart' as http;
 import 'package:pharma_b2b/utils/toast.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../util.dart';
 import '../utils/download_bytes.dart';
 import '../utils/ist_date.dart';
 import '../utils/order_code.dart';
@@ -288,10 +287,9 @@ class _OrderCardState extends State<_OrderCard> {
   // does nothing — there is no gesture handler on the body at all.
   // CHANGE #459: header reflow — no left icon; left column is Date & Time over
   // Order ID; right column is Status chip over "Placed by admin" (admin-placed
-  // only, otherwise nothing — no chip, no reserved gap); the ₹ total sits next
-  // to the status chip on that same top row so it's visible without ever
-  // overlapping it. No MRP anywhere (PTR isn't available yet, so no per-unit
-  // price shows on this card at all).
+  // only, otherwise nothing — no chip, no reserved gap). No total amount and
+  // no MRP anywhere on this card (PTR isn't available yet, so no price shows
+  // here at all — per Om, remove total from the header).
   @override
   Widget build(BuildContext context) {
     final order = widget.order;
@@ -317,13 +315,8 @@ class _OrderCardState extends State<_OrderCard> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                Row(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.center, children: [
-                  // Total amount (₹) — kept next to status, never under/over it.
-                  Text(rupees(order.total), style: const TextStyle(fontWeight: FontWeight.bold)),
-                  const SizedBox(width: 8),
-                  // Status
-                  _StatusChip(status: order.status),
-                ]),
+                // Status
+                _StatusChip(status: order.status),
                 if (order.placedByAdmin) ...[
                   const SizedBox(height: 4),
                   Container(

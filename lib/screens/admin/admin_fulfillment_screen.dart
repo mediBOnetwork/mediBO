@@ -3,8 +3,6 @@ import 'dart:async';
 import 'dart:html' as html;
 import 'dart:math' as math;
 import 'dart:typed_data';
-import 'dart:js_interop';
-import 'dart:js_interop_unsafe';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -36,10 +34,6 @@ import '../../widgets/mention_hold_row.dart'; // #342: MentionActionIcon + menti
 import 'package:file_picker/file_picker.dart';
 import 'package:image/image.dart' as img;
 import 'package:zxing2/qrcode.dart';
-
-// #93: JS interop — mediboCheckLoudness is defined in web/index.html
-@JS('mediboCheckLoudness')
-external JSPromise _jsCheckLoudness(JSUint8Array data);
 
 // ── C174/B10: single canonical dispute domain (no www per Cloudflare redirects) ──
 const _kDisputeDomain = 'https://medibo.in';
@@ -1022,6 +1016,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // ── Voice service (Vertex Gemini edge function) ──
   final _voiceService = VoiceReceiveService();
   bool _recStarted = false;
+  // Continuous voice counting (#8): one session spans the whole mic-on → Stop
+  // lifecycle across multiple bag attaches; replaces the old single-shot
+  // start/stop/transcribe/insertMentions sequence for the main counting mic.
+  ContinuousVoiceSession? _voiceSession;
 
   // ── Voice state ──
   bool _voiceSupported = true;
@@ -1029,15 +1027,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   bool _voiceProcessing = false;
   String _voiceInterim = '';
   String _voiceError = '';
-  String _lastTranscript = '';
   // ── Voice results ──
   Timer? _idleTimer;
   DateTime? _recStartTime;
   // #331 VoiceCaps: continuous-session timer
   int _continuousSecs = 0;
   Timer? _capsTimer;
-  int _voiceCallsDuringRecord = 0; // must stay 0; guard for B1
-  int _voiceCallsAfterStop = 0;
   // #332: background session key from fw_count_session (SS1/SS2… WH1…)
   String? _sessionKey;
   String? _sessionStage;
@@ -1337,8 +1332,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     );
   }
 
-  // B8: session-only voice clip counter — reset on box open, increment per clip
-  int _sessionVoiceCount = 0;
   // #263: spoken badge = distinct products (product_id) in voice clip mentions, not clip count
   List<Map<String, dynamic>> _voiceMentions = [];
   int get _spokenCount {
@@ -1392,6 +1385,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     _ttsAudio = null;
     _voiceService.dispose();
     _idleTimer?.cancel();
+    // Continuous voice counting (#8): don't leave a session dangling if the worker
+    // navigates away / this screen is torn down mid-count — cancel, never finalize,
+    // since an unfinished count must not be persisted.
+    _voiceSession?.cancel().ignore();
     super.dispose();
   }
 
@@ -1817,7 +1814,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       _voiceListening = false; _voiceInterim = '';
       _supplierOrderItems = [];
       _tally.clear();
-      _voiceCallsDuringRecord = 0; _voiceCallsAfterStop = 0;
       _latestClipPath = null; // #115: reset clip state per supplier (#125: no local seq — comes from RPC)
       _arrivalsLocked = false; // #156: reset per-supplier lock when opening a new supplier
       _activeBag = null; // #253: reset active bag per supplier
@@ -1874,7 +1870,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           _arrivalsLocked = confirmed;
           _supplierMode = parsedMode;
           _activeBag = activeBag;
-          _sessionVoiceCount = 0;
           _voiceMentions = []; // clear stale mentions; fresh fetch below
           // Sync change-bag intent from backend — makes detached state survive refresh/reopen
           if (bagFlow == 'awaiting_new') {
@@ -1942,7 +1937,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         _showListView = false;
         _supplierMode = freshMode;
         if (freshMode != null) _collectModeMap[supplier] = freshMode;
-        _sessionVoiceCount = 0;
         _voiceMentions = []; // clear stale; fresh fetch below
       });
       _refreshVoiceMentions(); // #263: load today's mentions for distinct-product spoken count
@@ -2271,24 +2265,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   }
 
   // ── VOICE (Vertex Gemini via voice-receive edge function) ──────────────────
-
-  // #93: Decode WebM/Opus bytes via Web Audio and compute RMS + peak loudness.
-  // Returns null on decode failure (caller should fall open — never block real speech).
-  // #93: Call mediboCheckLoudness JS function (defined in web/index.html).
-  // Returns null on decode failure so the caller always falls open.
-  Future<({double rms, double peak})?> _measureLoudness(Uint8List bytes) async {
-    try {
-      final jsResult = await _jsCheckLoudness(bytes.toJS).toDart;
-      if (jsResult == null) return null;
-      final obj = jsResult as JSObject;
-      final rms = (obj.getProperty('rms'.toJS) as JSNumber).toDartDouble;
-      final peak = (obj.getProperty('peak'.toJS) as JSNumber).toDartDouble;
-      if (rms < 0) return null; // JS reported decode failure — fall open
-      return (rms: rms, peak: peak);
-    } catch (_) {
-      return null;
-    }
-  }
+  // #8: the client-side RMS/peak loudness pre-filter (_measureLoudness, formerly
+  // called here before upload) has no equivalent hook inside ContinuousVoiceSession
+  // — every ~24s window is uploaded+transcribed unconditionally now. Noise/silence
+  // is instead handled by the edge function's own confidence/no-qty dropping and by
+  // voice_finalize_session's unmatched_mentions/needs_bag_review reporting.
 
   // Tap-to-toggle: one tap = start, next tap = stop+send.
   Future<void> _toggleRecording() async {
@@ -2322,17 +2303,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       await _startRecording();
       if (_voiceListening) {
         _recStartTime = DateTime.now();
+        // #8: no 90s idle-auto-stop here — that cap belonged to the old single-shot
+        // per-bag recording (one short clip, then must stop before the next bag).
+        // A continuous session is meant to keep running across bag switches, which
+        // can easily exceed 90s; the 1-hour hard cap / daily-remaining cap below
+        // (via _capsTimer in _startRecording) remain as the real safety net.
         _idleTimer?.cancel();
-        _idleTimer = Timer(const Duration(seconds: 90), _autoStopIdle);
       }
     }
-  }
-
-  Future<void> _autoStopIdle() async {
-    if (!_voiceListening) return;
-    RenderLog.write('80_auto_stop_idle', 'true');
-    if (mounted) _showSnack('Mic stopped automatically.');
-    await _stopAndTranscribe();
   }
 
   Future<void> _startRecording() async {
@@ -2363,7 +2341,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (mounted) _showSnack('Voice session error — retry');
       return;
     }
-    _voiceCallsDuringRecord = 0;
     _continuousSecs = 0;
     _capsTimer?.cancel();
     _capsTimer = Timer.periodic(const Duration(seconds: 1), (t) {
@@ -2384,8 +2361,36 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     });
     RenderLog.write('77_rec_start', 'attempt');
     try { RenderLog.write('c303_mic_on_tap', 'warehouse_voice'); } catch (_) {}
+    // #8: continuous voice counting — one session spans the whole mic-on → Stop
+    // lifecycle, recording back-to-back windows across bag switches. Stamped with
+    // the backend's own stage determination (fw_count_session, authoritative —
+    // matches _supplier_shop_stage()); widget.arrivals is only the UI-tab fallback.
+    final stage = _sessionStage ?? (widget.arrivals ? 'warehouse' : 'shop');
+    final session = ContinuousVoiceSession(
+      supplierName: supplier332,
+      stage: stage,
+      orderItemsProvider: () => _items,
+      expectedProvider: _buildExpectedList,
+      onWindowError: (e, st) {
+        RenderLog.write('c8_voice_window_err',
+            e.toString().substring(0, e.toString().length.clamp(0, 100)));
+        if (mounted) _showSnack('A recording window failed to save — counting continues');
+      },
+      // #331/#8: restore the daily 3-hour usage-cap ledger for continuous sessions — without
+      // this, voice_clip_register never runs during a long session, so the server-side cap
+      // never sees its usage and effectively stops enforcing.
+      onClipUploaded: (path, seconds, seq) {
+        final capCtx = widget.arrivals ? 'warehouse' : 'collect';
+        _VoiceCaps.onClipSaved(Supabase.instance.client,
+            ctxStr: capCtx, supplier: supplier332, path: path, seconds: seconds,
+            sessionKey: _sessionKey,
+            stage: stage,
+            onLocked: () { if (mounted) _showSnack('Daily 3-hour voice limit reached'); }).ignore();
+      },
+    );
     try {
-      await _voiceService.start();
+      await session.start();
+      _voiceSession = session;
       _recStarted = true;
       try { RenderLog.write('c303_mic_result', 'granted'); } catch (_) {}
       RenderLog.write('79_rec_start_ok', 'true');
@@ -2406,146 +2411,34 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     }
   }
 
-  // Single-shot: stop recording → ONE voice-receive call → idempotent set per product.
+  // #8: continuous voice counting — stop the session, wait for every in-flight
+  // window to finish, finalize (bag-boundary segmentation + dedup + persist), then
+  // surface the summary. Replaces the old single-shot stop→transcribe→upload→
+  // insertMentions→commit sequence entirely (that per-clip pipeline now runs
+  // automatically inside ContinuousVoiceSession every ~24s while recording).
   Future<void> _stopAndTranscribe() async {
     if (!_voiceListening) return;
     _capsTimer?.cancel(); // #331: stop continuous timer
     setState(() { _voiceListening = false; _voiceInterim = ''; });
     if (!_recStarted) return;
     _recStarted = false;
+    final session = _voiceSession;
+    if (session == null) return;
     setState(() => _voiceProcessing = true);
-    RenderLog.write('84_voicecalls_during_record', '$_voiceCallsDuringRecord');
     try {
-      final result = await _voiceService.stop();
-      if (!mounted) { setState(() => _voiceProcessing = false); return; }
-      if (result == null || result.bytes.length < 2000) {
-        setState(() { _voiceProcessing = false; _voiceError = 'No audio — try again'; });
-        Future.delayed(const Duration(seconds: 3), () {
-          if (mounted) setState(() => _voiceError = '');
-        });
-        return;
-      }
-      RenderLog.write('77_rec_stop_bytes', '${result.bytes.length}');
-
-      // #93 Part C: Loudness gate — drop faint/background clips before upload
-      final loudness = await _measureLoudness(result.bytes);
-      if (!mounted) { setState(() => _voiceProcessing = false); return; }
-      if (loudness == null) {
-        RenderLog.write('change_93_rms_skip', '1'); // decode failed — fall open
-      } else if (loudness.rms < _kVoiceRmsMin && loudness.peak < _kVoicePeakMin) {
-        setState(() => _voiceProcessing = false);
-        RenderLog.write('change_93_quiet_dropped', '1');
-        _showSnack('Bahut dheere — phone ke paas boliye');
-        return;
-      }
-
-      // #115: upload clip (fire-and-forget — failure must not block counting)
-      final supplier = _selectedSupplier;
-      // #125: get authoritative seq from server so every clip gets a unique filename
-      int seq = 0;
-      String clipPath = '';
-      bool clipSaved = false;
-      if (supplier != null) {
-        try {
-          // #125: RPC returns next unique seq for this supplier today (max+1)
-          final seqRaw = await Supabase.instance.client
-              .rpc('next_voice_recording_seq', params: {'p_supplier_name': supplier});
-          seq = (seqRaw as num?)?.toInt() ?? 0;
-          if (seq <= 0) {
-            // fallback: timestamp-based suffix — never collides
-            seq = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-          }
-          RenderLog.write('c125_seq_fetched', 'supplier=$supplier;seq=$seq');
-          RenderLog.write('c129_seq_value', 'supplier=$supplier;seq=$seq');
-          clipPath = await _voiceService.uploadClip(
-            result.bytes, supplier, seq, result.ext,
-          );
-          clipSaved = true;
-          setState(() => _latestClipPath = clipPath);
-          // #331: register clip with caps backend (fire-and-forget)
-          final clipDurSecs = _recStartTime != null
-              ? DateTime.now().difference(_recStartTime!).inSeconds.clamp(1, 3600)
-              : _continuousSecs.clamp(1, 3600);
-          final capCtx = widget.arrivals ? 'warehouse' : 'collect';
-          _VoiceCaps.onClipSaved(Supabase.instance.client,
-              ctxStr: capCtx, supplier: supplier, path: clipPath, seconds: clipDurSecs,
-              sessionKey: _sessionKey,
-              stage: _sessionStage ?? (widget.arrivals ? 'warehouse' : 'shop'),
-              onLocked: () { if (mounted) _showSnack('Daily 3-hour voice limit reached'); }).ignore();
-        } catch (e) {
-          RenderLog.write('c125_clip_upload_err', 'seq=$seq;err=${e.toString().substring(0, e.toString().length.clamp(0, 80))}');
-          if (clipPath.isEmpty) {
-            // Upload failed — warn user but don't block counting
-            _showSnack('Clip save failed — retry recording for this item');
-          }
-        }
-      }
-
-      final expected = _buildExpectedList();
-      _voiceCallsAfterStop++;
-      final (:items, :transcript, :droppedNoQty, :droppedLowConf, :mentions) =
-          await _voiceService.transcribe(
-        result.bytes, result.mime, expected: expected.isEmpty ? null : expected,
-      );
-      if (!mounted) { setState(() => _voiceProcessing = false); return; }
-      RenderLog.write('84_voicecalls_after_stop', '$_voiceCallsAfterStop');
-
-      // #115: persist mentions only if clip was saved (no clip_path → no mention row)
-      if (mentions.isNotEmpty && supplier != null && clipSaved && clipPath.isNotEmpty) {
-        _voiceService.insertMentions(
-          mentions: mentions,
-          supplierName: supplier,
-          clipPath: clipPath,
-          recordingSeq: seq,
-          orderItems: _items,
-          sessionKey: _sessionKey,
-        ).ignore();
-        RenderLog.write('c125_mentions_inserted', 'seq=$seq;rows=${mentions.length}');
-      }
-      // #126/#130: after recording saves, refresh popup data + mark new seq for playback-complete reset
-      final capturedSeq = seq;
+      final result = await session.stopAndFinalize();
+      _voiceSession = null;
+      if (!mounted) return;
+      await _reloadItemsFromDB();
+      if (!mounted) return;
+      _showFinalizeSummary(result);
+      _advanceIfReceived(); // B4: auto-advance after voice commit
+      _refreshVoiceMentions(); // #263: update distinct-product spoken count
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        _popupKey.currentState?._refreshForNewClip(capturedSeq);
+        _popupKey.currentState?._fetchMentions();
       });
-
-      // #93 Part D: name-without-number hint (non-blocking — shows alongside any kept items)
-      if (droppedNoQty > 0) {
-        RenderLog.write('change_93_no_qty_hint', '1');
-        _showSnack('Naam suna par quantity nahi — kuch mark nahi kiya');
-      }
-
-      // C362 PHANTOM-COUNT GUARD: never write a count from silence/noise. Require BOTH a
-      // recognized number (items) AND a non-empty transcript (mirrors the Pack #304 guard).
-      // Om: tap mic, say nothing, stop -> must write NOTHING (was: hallucinated qty slipped
-      // through the items-only guard when the recognizer emitted a number from noise).
-      final bool noRealCount = items.isEmpty || transcript.trim().isEmpty;
-      if (noRealCount) {
-        RenderLog.write('c362_voice_guard',
-            'wrote=false;tab=${widget.arrivals ? 'warehouse' : 'shop'}');
-        setState(() {
-          _voiceProcessing = false;
-          _lastTranscript = transcript;
-          // Only overwrite voiceError if no snack was already shown for droppedNoQty
-          if (droppedNoQty == 0) {
-            _voiceError = droppedLowConf > 0
-                ? 'Saaf nahi suna — dobara boliye'
-                : "Didn't catch that — try again";
-          }
-        });
-        Future.delayed(const Duration(seconds: 3), () {
-          if (mounted) setState(() => _voiceError = '');
-        });
-        return;
-      }
-      RenderLog.write('c362_voice_guard',
-          'wrote=true;tab=${widget.arrivals ? 'warehouse' : 'shop'}');
-      await _commitVoiceItems(items);
-      if (mounted) {
-        setState(() => _sessionVoiceCount++); // kept for legacy logs; badge now uses _voiceMentions
-        _advanceIfReceived(); // B4: auto-advance after voice commit
-        _refreshVoiceMentions(); // #263: update distinct-product spoken count
-      }
     } catch (e) {
+      _voiceSession = null;
       if (!mounted) return;
       setState(() { _voiceError = e.toString(); });
       Future.delayed(const Duration(seconds: 4), () {
@@ -2554,6 +2447,66 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     } finally {
       if (mounted) setState(() => _voiceProcessing = false);
     }
+  }
+
+  // #8: summarizes voice_finalize_session's jsonb result after Stop. needs_bag_review
+  // (spoken before any bag was mapped — an SOP-violation safety net) and
+  // unmatched_mentions (no product match) are surfaced via a blocking dialog, never
+  // just a snack, so they can't be missed; a clean finalize gets a plain SnackBar.
+  void _showFinalizeSummary(Map<String, dynamic> result) {
+    if (!mounted) return;
+    final persisted = (result['persisted'] as List?) ?? const [];
+    final bagBreakdown = (result['bag_breakdown'] as Map?) ?? const {};
+    final needsReview = (result['needs_bag_review'] as List?) ?? const [];
+    final unmatched = (result['unmatched_mentions'] as List?) ?? const [];
+    final productCount = persisted
+        .map((p) => p is Map ? p['product_id'] : null)
+        .where((id) => id != null)
+        .toSet()
+        .length;
+    final bagCount = bagBreakdown.keys.length;
+    final base = widget.arrivals
+        ? 'Counted $productCount product${productCount == 1 ? '' : 's'} across $bagCount bag${bagCount == 1 ? '' : 's'}.'
+        : 'Counted $productCount product${productCount == 1 ? '' : 's'}.';
+    RenderLog.write('c8_finalize_summary',
+        'persisted=$productCount;bags=$bagCount;review=${needsReview.length};unmatched=${unmatched.length}');
+    if (needsReview.isEmpty && unmatched.isEmpty) {
+      _showSnack(base);
+      return;
+    }
+    final extra = <String>[
+      if (needsReview.isNotEmpty) '${needsReview.length} need bag review',
+      if (unmatched.isNotEmpty) '${unmatched.length} unmatched',
+    ].join(', ');
+    _showSnack('$base $extra.');
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Count needs a look'),
+        content: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(base),
+            if (needsReview.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Text('${needsReview.length} item${needsReview.length == 1 ? '' : 's'} spoken before any bag was scanned:',
+                  style: const TextStyle(fontWeight: FontWeight.w700)),
+              for (final m in needsReview)
+                Text('• ${(m is Map ? m['matched_name'] : null) ?? '?'} — qty ${(m is Map ? m['qty'] : null) ?? '?'}'),
+            ],
+            if (unmatched.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Text('${unmatched.length} item${unmatched.length == 1 ? '' : 's'} not matched to a product:',
+                  style: const TextStyle(fontWeight: FontWeight.w700)),
+              for (final m in unmatched)
+                Text('• ${(m is Map ? m['matched_name'] : null) ?? '?'} — qty ${(m is Map ? m['qty'] : null) ?? '?'}'),
+            ],
+          ]),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
+        ],
+      ),
+    );
   }
 
   List<Map<String, dynamic>> _buildExpectedList() {
@@ -2580,241 +2533,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       }
     }
     return expected;
-  }
-
-  // #93: ADDITIVE — partial mixed counts accumulate across clips.
-  // Each clip ADDs spoken qty to existing received_qty (not SET/replace).
-  Future<void> _commitVoiceItems(List<Map<dynamic, dynamic>> items) async {
-    final supplier = _selectedSupplier;
-    if (supplier == null) return;
-
-    // Aggregate by product_id: sum received_qty for duplicates in one clip.
-    final Map<int, ({String name, int qty, String heard})> byProduct = {};
-    int skipped = 0;
-
-    for (final item in items) {
-      final matchedName = item['matched_name']?.toString();
-      final heardName = (item['heard'] ?? '').toString().trim();
-      final rawQty = item['received_qty'];
-
-      // No qty spoken → skip (server already drops these via dropped_no_qty, belt-and-suspenders)
-      if (rawQty == null) { skipped++; continue; }
-      // Guard: empty heard = Gemini guess without actual speech
-      if (heardName.isEmpty || heardName.length < 2) { skipped++; continue; }
-
-      final receivedQty = (rawQty as num).toInt();
-      if (receivedQty <= 0) { skipped++; continue; }
-
-      // fix(voice): resolve against the FULL, unmodified _items list every time —
-      // case-insensitive, trimmed exact match. Stateless per item: never remove
-      // or shrink the candidate list, so a repeat mention of the same product in
-      // a LATER clip still resolves. Try this even if the model tagged the
-      // mention 'not_on_order' — that's just its own guess, not authoritative;
-      // an exact/fuzzy order match here always wins.
-      int? productId;
-      final matchedNameTrimmed = matchedName?.trim();
-      if (matchedNameTrimmed != null && matchedNameTrimmed.isNotEmpty) {
-        final matchedNameLower = matchedNameTrimmed.toLowerCase();
-        for (final row in _items) {
-          final rowName = row['product_name']?.toString().trim().toLowerCase();
-          if (rowName == matchedNameLower) {
-            productId = (row['product_id'] as num?)?.toInt();
-            break;
-          }
-        }
-      }
-      // #334 B1: backend phonetic/fuzzy fallback when the exact match fails
-      if (productId == null && matchedNameTrimmed != null &&
-          matchedNameTrimmed.isNotEmpty && matchedNameTrimmed != 'not_on_order') {
-        try {
-          final matchRaw = await Supabase.instance.client.rpc('voice_match_product', params: {
-            'p_supplier': supplier,
-            'p_text': matchedNameTrimmed,
-          }) as Map;
-          final matchRes = Map<String, dynamic>.from(matchRaw);
-          if (matchRes['match'] == true) {
-            productId = (matchRes['product_id'] as num?)?.toInt();
-            final resolvedName = matchRes['product_name']?.toString();
-            if (productId != null && resolvedName != null) {
-              RenderLog.write('c334_voice_fallback', 'heard=$matchedNameTrimmed;resolved=$resolvedName;pid=$productId');
-              RenderLog.write('c335_voice_match', 'heard=$matchedNameTrimmed;resolved=$resolvedName');
-              // override matchedName so byProduct uses the canonical name
-              item['matched_name'] = resolvedName;
-            }
-          }
-        } catch (_) {}
-      }
-
-      // #334 B2: qty sanity — if spoken qty > ordered*3, skip as unmatched
-      if (productId != null) {
-        final ordQtyForItem = () {
-          for (final row in _items) {
-            if ((row['product_id'] as num?)?.toInt() == productId) {
-              return (row['ordered_qty'] as num?)?.toInt() ?? 0;
-            }
-          }
-          return 0;
-        }();
-        if (ordQtyForItem > 0 && receivedQty > ordQtyForItem * 3) {
-          RenderLog.write('c334_qty_sanity', 'pid=$productId;spoken=$receivedQty;ord=$ordQtyForItem');
-          skipped++;
-          continue;
-        }
-      }
-
-      if (productId == null) { skipped++; continue; }
-
-      if (byProduct.containsKey(productId)) {
-        // Multiple mentions of same product in one clip → sum them
-        byProduct[productId] = (
-          name: byProduct[productId]!.name,
-          qty: byProduct[productId]!.qty + receivedQty,
-          heard: heardName,
-        );
-      } else {
-        byProduct[productId] = (name: matchedNameTrimmed ?? heardName, qty: receivedQty, heard: heardName);
-      }
-    }
-
-    if (skipped > 0) RenderLog.write('84_skipped_no_qty', '$skipped');
-
-    if (widget.arrivals) {
-      // #262: Arrivals voice clips ADD per-clip qty (bag_count_add), not SET absolute.
-      // Clip 1: 5 -> bag holds 5; clip 2: 1 -> bag holds 6. bag_count_set overwrote.
-      for (final entry in byProduct.entries) {
-        final ok = await _addVoiceBagQty(
-          productId: entry.key,
-          productName: entry.value.name,
-          qty: entry.value.qty,
-          rawSegment: entry.value.heard,
-        );
-        if (!mounted) return;
-        if (!ok) break; // bag error (no_bag, locked) — stop this clip
-      }
-    } else {
-      // #331: Shop stage: absolute-set via set_voice_received (writes shop_qty, no bag needed).
-      // New total = current shop_qty across all lines for this product + clip qty.
-      for (final entry in byProduct.entries) {
-        // Sum existing shop_qty across all lines for this product
-        int existingShopQty = 0;
-        for (final row in _items) {
-          if ((row['product_id'] as num?)?.toInt() == entry.key) {
-            existingShopQty += (row['shop_qty'] as num?)?.toInt() ?? 0;
-          }
-        }
-        final newTotal = existingShopQty + entry.value.qty;
-        final ok = await _setShopVoiceQty(
-          productId: entry.key,
-          productName: entry.value.name,
-          newTotal: newTotal.toDouble(),
-          rawSegment: entry.value.heard,
-        );
-        if (!mounted) return;
-        if (!ok) break;
-      }
-    }
-
-    // Reload DB once after all additions (not per item)
-    if (byProduct.isNotEmpty && mounted) await _reloadItemsFromDB();
-
-    final done = _items.length - _pendingCount;
-    RenderLog.write('84_progress', '$done/${_items.length}');
-  }
-  // #331: Shop-stage absolute-set via set_voice_received; writes shop_qty (no bag gate).
-  // Returns true on success, false on error.
-  Future<bool> _setShopVoiceQty({
-    required int productId,
-    required String productName,
-    required double newTotal,
-    required String rawSegment,
-  }) async {
-    final supplier = _selectedSupplier;
-    if (supplier == null) return false;
-    try {
-      final rawRes = await Supabase.instance.client.rpc('set_voice_received', params: {
-        'p_supplier_name': supplier,
-        'p_product_id': productId,
-        'p_qty': newTotal,
-        'p_note': 'voice: $rawSegment',
-      });
-      final res = rawRes is Map ? Map<String, dynamic>.from(rawRes) : <String, dynamic>{};
-      if (!mounted) return false;
-      if (res['error'] != null) {
-        if (res['error'] == 'received_locked') {
-          _showSnack('Already received — locked');
-        } else {
-          _showSnack('Error: ${res['error']}');
-        }
-        return false;
-      }
-      // Update shop_qty in local items from response rows
-      final rows = res['rows'] as List? ?? [];
-      if (rows.isNotEmpty) {
-        setState(() {
-          for (final row in rows) {
-            final oiid = row['order_item_id']?.toString();
-            if (oiid == null) continue;
-            final idx = _items.indexWhere((i) => i['order_item_id']?.toString() == oiid);
-            if (idx >= 0) {
-              final setTotal = row['shop_set'];
-              if (setTotal != null) _items[idx]['shop_qty'] = setTotal;
-            }
-          }
-        });
-      }
-      RenderLog.write('84_committed', '$productName:shopSet${newTotal.toInt()}');
-      return true;
-    } catch (e) {
-      if (mounted) _showSnack('Commit error: $e');
-      return false;
-    }
-  }
-
-  // #262: Arrivals voice ADD — each clip adds its qty to the current active bag via bag_count_add.
-  // Returns true on success, false on error (no bag, locked, exceeds_ordered).
-  Future<bool> _addVoiceBagQty({
-    required int productId,
-    required String productName,
-    required int qty,
-    required String rawSegment,
-  }) async {
-    final supplier = _selectedSupplier;
-    if (supplier == null) return false;
-    if (_activeBag == null) {
-      _showSnack('Scan a bag first before counting');
-      return false;
-    }
-    try {
-      final rawCount = await Supabase.instance.client.rpc('bag_count_add', params: {
-        'p_supplier_name': supplier,
-        'p_product_id': productId,
-        'p_delta': qty,
-        'p_note': 'voice: $rawSegment',
-      });
-      final res = _normRpc(rawCount);
-      if (!mounted) return false;
-      if (res['error'] != null) {
-        _showSnack(_bagCountError(res));
-        RenderLog.write('c262_voice_add_err', 'product=$productId;error=${res['error']}');
-        return false;
-      }
-      final grandTotal = res['grand_total'];
-      RenderLog.write('c262_voice_add',
-          'product=$productId;delta=$qty;grand_total=$grandTotal');
-      setState(() { _tally[productId] = (grandTotal as num?)?.toInt() ?? qty; });
-      return true;
-    } catch (e) {
-      // #331 D2: catch bag-gate check_violation and show friendly sheet
-      final msg = e.toString();
-      if (mounted) {
-        if (msg.contains('no bag, no count') || msg.contains('check_violation')) {
-          _showBagRequiredSheet(productName);
-        } else {
-          _showSnack('Commit error: $e');
-        }
-      }
-      return false;
-    }
   }
 
   // #331 D2: friendly bag-required sheet when warehouse counting violates bag gate.
@@ -3117,6 +2835,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         _changeProgressBySupplier.remove(supplier);
         _changeBagPendingOldBag.remove(supplier);
       });
+      // #8: mark the session-clock moment this bag became current — never on detach.
+      final session = _voiceSession;
+      final newBagNo = (result['bag_no'] as num?)?.toInt();
+      if (session != null && newBagNo != null) await session.recordBagMap(newBagNo);
     }
     // null: X before scanning old bag — reload restores "Bag in Use" from backend.
     await _reloadItemsFromDB();
@@ -3164,6 +2886,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         RenderLog.write('c268_reuse_ok', 'bag=${_activeBag?['bag_no']};supplier=$supplier');
       }
       RenderLog.write('c253_bag_attached', 'bag=${_activeBag?['bag_no']};supplier=$supplier');
+      // #8: mark the session-clock moment this bag became current — never on detach.
+      final session = _voiceSession;
+      final newBagNo = (_activeBag?['bag_no'] as num?)?.toInt();
+      if (session != null && newBagNo != null) await session.recordBagMap(newBagNo);
       await _reloadItemsFromDB();
     } catch (e) {
       if (mounted) _showSnack('Could not attach bag: $e');
@@ -5780,9 +5506,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // Button constants — fixed size applied at call site via SizedBox
   static const double _kVoiceBtnW = 150;
   static const double _kVoiceBtnH = 44;
-  // #94: relaxed thresholds — only drop near-silent clips; when unsure SEND
-  static const double _kVoiceRmsMin  = 0.006; // RMS on -1..1 scale
-  static const double _kVoicePeakMin = 0.030; // peak amplitude
 
   Widget _buildWideSingleBar(bool isAdmin) {
     RenderLog.write('change_88_fixed_btn_size', '150x44');
@@ -6783,6 +6506,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               supplierName: supplierForPopup,
               stage: widget.arrivals ? 'warehouse' : 'shop',
               orderItems: orderSnapshot,
+              // #9: live-scope mentions to the ContinuousVoiceSession's own generated
+              // session_key while a session is active — the old fw_count_session-based
+              // key (SS1/WH2-style) no longer matches what insertMentions writes.
+              activeSessionKey: _voiceSession?.sessionKey,
               onDismiss: dismiss,
               // #338: frozen — shop: box locked or forwarded; warehouse: arrivals confirmed
               frozen: widget.arrivals
@@ -7172,6 +6899,10 @@ class _CountedMentionsPopup extends StatefulWidget {
   final bool frozen;
   // #338: fired after any successful delete/re-add toggle (audit cache refresh)
   final VoidCallback? onToggled;
+  // #9: the live ContinuousVoiceSession's own session_key, when a session is
+  // currently active — scopes the mention list to just this recording session
+  // instead of falling back to the fw_count_session-based scoping below.
+  final String? activeSessionKey;
   const _CountedMentionsPopup({
     super.key,
     required this.supplierName,
@@ -7181,6 +6912,7 @@ class _CountedMentionsPopup extends StatefulWidget {
     this.onApplyUpdate,
     this.frozen = false,
     this.onToggled,
+    this.activeSessionKey,
   });
 
   @override
@@ -7244,6 +6976,16 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
     _fetchMentions();
     // #110: compute initial overflow state after first layout
     WidgetsBinding.instance.addPostFrameCallback((_) => _updateChipOverflow());
+    // #9: live updates — voice_clip_mentions is on the shared FulfillRealtime channel;
+    // refetch (still via the existing get_voice_clip_mentions RPC) whenever a window's
+    // mentions land, on top of the initial fetch above. Debounce/reconnect live in the
+    // service; this popup just adds itself as one more listener.
+    FulfillRealtime.instance.addListener(_onRealtimeChange);
+  }
+
+  void _onRealtimeChange(Set<String> changedTables) {
+    if (!mounted) return;
+    if (changedTables.contains('voice_clip_mentions')) _fetchMentions();
   }
 
   void _onChipScroll() => _updateChipOverflow();
@@ -7263,6 +7005,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
 
   @override
   void dispose() {
+    FulfillRealtime.instance.removeListener(_onRealtimeChange);
     _clipAudio?.pause();
     _clipAudio?.src = '';
     _clipAudio = null;
@@ -7302,10 +7045,18 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
           }) as List;
       if (!mounted) return;
       var mentions = rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
-      // #332: filter to current session only (prevents last order's clips mixing in)
-      // — only applies when the active session IS this tab's stage; the other,
-      // already-frozen tab has no "current session" to narrow to.
-      if (sessionStage == widget.stage && sessionKey != null && sessionKey.isNotEmpty) {
+      // #9: while a ContinuousVoiceSession is active, its own generated session_key
+      // (not fw_count_session's SS1/WH2-style key) is what insertMentions actually
+      // wrote onto these rows — scope to that so the live view shows just this
+      // recording session, not the whole day's mentions for this stage.
+      final liveKey = widget.activeSessionKey;
+      if (liveKey != null && liveKey.isNotEmpty) {
+        mentions = mentions.where((r) => r['session_key']?.toString() == liveKey).toList();
+      } else if (sessionStage == widget.stage && sessionKey != null && sessionKey.isNotEmpty) {
+        // #332: no live session — fall back to scoping by the supplier's open
+        // fw_count_session (prevents last order's clips mixing in) when it matches
+        // the tab this popup was opened from; the other, already-frozen tab has no
+        // "current session" to narrow to.
         mentions = mentions.where((r) => r['session_key']?.toString() == sessionKey).toList();
       }
       final distinctClips = mentions.map((r) => r['clip_path']?.toString() ?? '').toSet().length;
@@ -7319,15 +7070,6 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
 
   int _uniqueNames(List<Map<String, dynamic>> rows) =>
       rows.map((r) => r['matched_name']?.toString() ?? '').toSet().length;
-
-  // #126/#127/#128/#130: called after every recording save — refresh data + mark this clip as "just recorded".
-  // Does NOT reset to All here (#130: the reset fires when THIS clip's playback FINISHES, not on save).
-  Future<void> _refreshForNewClip(int newSeq) async {
-    if (!mounted) return;
-    _newClipSeq = newSeq; // mark for playback-complete reset; consumed in _playWholeClip onEnded
-    RenderLog.write('c126_reset_to_all', 'after_recording=y');
-    await _fetchMentions(); // refresh so new clip chip appears; view stays on whatever user had
-  }
 
   // #130/#131: fires inside _playWholeClip's onEnded for ANY tapped clip.
   // Resets popup to All combined view + scrolls chip row to start.

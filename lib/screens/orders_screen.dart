@@ -285,19 +285,34 @@ class _OrderCardState extends State<_OrderCard> {
   // buttons. B3: tapping one opens ONLY that section (closes any other);
   // tapping the open one again closes it; tapping the card body elsewhere
   // does nothing — there is no gesture handler on the body at all.
-  // CHANGE #459: header reflow — no left icon; left column is Date & Time over
-  // Order ID; right column is Status chip over "Placed by admin" (admin-placed
-  // only, otherwise nothing — no chip, no reserved gap). No total amount and
-  // no MRP anywhere on this card (PTR isn't available yet, so no price shows
-  // here at all — per Om, remove total from the header).
+  // CHANGE #459: header reflow — left column is Date & Time over Order ID;
+  // right column is Status chip over "Placed by admin" (admin-placed only,
+  // otherwise nothing — no chip, no reserved gap). No total amount and no MRP
+  // anywhere on this card (PTR isn't available yet, so no price shows here at
+  // all — per Om, remove total from the header).
+  // CHANGE #460: left circle restored, showing the order's day-of-month
+  // instead of the old receipt icon — zero-padded to 2 digits to match the
+  // day component already shown in the date/time text (same order.placedAt
+  // field, no separate date source, no timezone shift).
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final order = widget.order;
+    final dayNum = order.placedAt.day.toString().padLeft(2, '0');
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            CircleAvatar(
+              backgroundColor: theme.colorScheme.primaryContainer,
+              child: Text(dayNum,
+                  style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: theme.colorScheme.onPrimaryContainer)),
+            ),
+            const SizedBox(width: 12),
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 // Date & Time

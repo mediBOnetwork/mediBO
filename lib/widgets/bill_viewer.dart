@@ -77,9 +77,18 @@ class _BillViewerScreen extends StatelessWidget {
                           // painted nothing while the signed URL was fetching or if it
                           // failed — on the black Scaffold backdrop that reads as a
                           // "dark/blank screen", not an obvious bug. Both are required.
+                          // CHANGE #467: cacheWidth caps the DECODED bitmap size. Bills
+                          // uploaded straight from a phone camera can be 4000-6000px wide
+                          // (16MP+) — wider than the GL_MAX_TEXTURE_SIZE ceiling on many
+                          // mid-range/older mobile GPUs (often 4096), which makes
+                          // CanvasKit/Skia silently fail to create the texture without
+                          // raising a Dart-level error (no errorBuilder call either — it
+                          // just paints nothing). Decoding at a capped resolution avoids
+                          // the failure entirely and is still sharp at this viewer's zoom.
                           child: Image.network(
                             url,
                             fit: BoxFit.contain,
+                            cacheWidth: 1600,
                             loadingBuilder: (_, child, prog) => prog == null
                                 ? child
                                 : const SizedBox(
@@ -222,6 +231,9 @@ class _BillFilePreviewState extends State<BillFilePreview> {
             ? Image.network(
                 url,
                 fit: BoxFit.contain,
+                // #467: see the full-screen viewer's comment — same texture-size fix,
+                // smaller target since this is just a compact inline thumbnail.
+                cacheWidth: 480,
                 loadingBuilder: (_, child, prog) => prog == null
                     ? child
                     : const Center(

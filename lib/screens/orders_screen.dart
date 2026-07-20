@@ -219,7 +219,18 @@ class _OrderCardState extends State<_OrderCard> {
   Map<String, dynamic>? _panel;
   bool _loading = false;
   String? _error;
-  int _tab = 0; // 0=Items 1=Bill 2=Payment
+  // CHANGE #458: null = nothing open (static card, no auto-expand). 0=Items 1=Payment 2=Bill.
+  // A single int? enforces "only one section open at once" by construction — never
+  // independent per-section booleans that could disagree.
+  int? _tab;
+
+  // CHANGE #458 B3: tapping the open button again closes it; tapping a different
+  // button switches to it (closing whatever was open) — never two sections at once.
+  void _toggleTab(int tab) {
+    final opening = _tab != tab;
+    setState(() => _tab = opening ? tab : null);
+    if (opening && _panel == null && !_loading) _loadPanel();
+  }
 
   String _date(DateTime d) =>
       '${d.day.toString().padLeft(2, '0')}/'
@@ -268,60 +279,89 @@ class _OrderCardState extends State<_OrderCard> {
     }
   }
 
+  // CHANGE #458: static card — no ExpansionTile, no whole-card tap target.
+  // B1: header trimmed to Order ID, Date & Time, Status, Total (₹), and
+  // "Placed by admin" only when true — no pack count, no MRP.
+  // B2: Items | Payment | Bill render as three always-visible equal-width
+  // buttons. B3: tapping one opens ONLY that section (closes any other);
+  // tapping the open one again closes it; tapping the card body elsewhere
+  // does nothing — there is no gesture handler on the body at all.
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final order = widget.order;
     return Card(
-      child: ExpansionTile(
-        onExpansionChanged: (expanded) {
-          if (expanded && _panel == null && !_loading) _loadPanel();
-        },
-        leading: CircleAvatar(
-          backgroundColor: theme.colorScheme.primaryContainer,
-          child: Icon(Icons.receipt_long,
-              color: theme.colorScheme.onPrimaryContainer),
-        ),
-        // Primary label: human-readable PO number (payment_id)
-        title: Text(order.number,
-            style: const TextStyle(fontWeight: FontWeight.bold)),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text('${_date(order.placedAt)} · ${order.itemCount} packs'),
-            if (order.placedByAdmin) ...[
-              const SizedBox(height: 3),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFEF3C7),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: const Text('Placed by admin',
-                    style: TextStyle(
-                        fontSize: 10,
-                        color: Color(0xFF92400E),
-                        fontWeight: FontWeight.w600)),
-              ),
-            ],
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            CircleAvatar(
+              backgroundColor: theme.colorScheme.primaryContainer,
+              child: Icon(Icons.receipt_long,
+                  color: theme.colorScheme.onPrimaryContainer),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                // Order ID (canonical CPO-format display id)
+                Text(order.number, style: const TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 2),
+                // Date & Time
+                Text(_date(order.placedAt), style: const TextStyle(color: Color(0xFF6B7280))),
+                if (order.placedByAdmin) ...[
+                  const SizedBox(height: 3),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFEF3C7),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: const Text('Placed by admin',
+                        style: TextStyle(
+                            fontSize: 10,
+                            color: Color(0xFF92400E),
+                            fontWeight: FontWeight.w600)),
+                  ),
+                ],
+              ]),
+            ),
+            const SizedBox(width: 8),
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                // Total amount (₹)
+                Text(rupees(order.total), style: const TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 4),
+                // Status
+                _StatusChip(status: order.status),
+              ],
+            ),
+          ]),
+          const SizedBox(height: 14),
+          Row(children: [
+            Expanded(
+              child: _TabButton(label: 'Items', selected: _tab == 0, onTap: () => _toggleTab(0)),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _TabButton(label: 'Payment', selected: _tab == 1, onTap: () => _toggleTab(1)),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _TabButton(label: 'Bill', selected: _tab == 2, onTap: () => _toggleTab(2)),
+            ),
+          ]),
+          if (_tab != null) ...[
+            const SizedBox(height: 12),
+            _buildSectionContent(),
           ],
-        ),
-        trailing: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            Text(rupees(order.total),
-                style: const TextStyle(fontWeight: FontWeight.bold)),
-            _StatusChip(status: order.status),
-          ],
-        ),
-        children: [_buildExpandedBody()],
+        ]),
       ),
     );
   }
 
-  Widget _buildExpandedBody() {
+  Widget _buildSectionContent() {
     if (_loading) {
       return const Padding(
         padding: EdgeInsets.symmetric(vertical: 24),
@@ -341,51 +381,29 @@ class _OrderCardState extends State<_OrderCard> {
         .map((e) => Map<String, dynamic>.from(e as Map))
         .toList();
     final bill = Map<String, dynamic>.from(panel['bill'] as Map? ?? {});
+    final orderId = (header['order_id'] ?? widget.order.id).toString();
 
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // B2 — header.* printed fresh from the response, not reused locals.
-        Wrap(spacing: 12, runSpacing: 4, children: [
-          if (header['date_label'] != null) Text(header['date_label'].toString()),
-          if (header['packs_label'] != null) Text(header['packs_label'].toString()),
-          if (header['amount_label'] != null)
-            Text(header['amount_label'].toString(),
-                style: const TextStyle(fontWeight: FontWeight.bold)),
-          if (header['status_label'] != null) _StatusChip(status: header['status_label'].toString()),
-        ]),
-        const SizedBox(height: 10),
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(children: [
-            _SegmentChip(label: 'Items', selected: _tab == 0, onTap: () => setState(() => _tab = 0)),
-            const SizedBox(width: 6),
-            _SegmentChip(label: 'Bill', selected: _tab == 1, onTap: () => setState(() => _tab = 1)),
-            const SizedBox(width: 6),
-            _SegmentChip(label: 'Payment', selected: _tab == 2, onTap: () => setState(() => _tab = 2)),
-          ]),
-        ),
-        const SizedBox(height: 12),
-        if (_tab == 0) _ItemsTab(items: items),
-        if (_tab == 1)
-          _BillTab(bill: bill, orderId: (header['order_id'] ?? widget.order.id).toString()),
-        if (_tab == 2)
-          CustPayPanel(
-            key: ValueKey((header['order_id'] ?? widget.order.id).toString()),
-            orderId: (header['order_id'] ?? widget.order.id).toString(),
-          ),
-      ]),
-    );
+    switch (_tab) {
+      case 0:
+        return _ItemsTab(items: items);
+      case 1:
+        return CustPayPanel(key: ValueKey(orderId), orderId: orderId);
+      case 2:
+        return _BillTab(bill: bill, orderId: orderId);
+      default:
+        return const SizedBox.shrink();
+    }
   }
 }
 
-// ─── Segment chip (Items/Bill/Payment, and Payment's All/Advance/Balance) ──────
-
-class _SegmentChip extends StatelessWidget {
+// CHANGE #458 — Items/Payment/Bill accordion button. Meant to be wrapped in
+// Expanded so three of these fill the card width equally; content is centered
+// since the box now stretches instead of shrinking to the label.
+class _TabButton extends StatelessWidget {
   final String label;
   final bool selected;
   final VoidCallback onTap;
-  const _SegmentChip({required this.label, required this.selected, required this.onTap});
+  const _TabButton({required this.label, required this.selected, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -393,10 +411,11 @@ class _SegmentChip extends StatelessWidget {
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 150),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+        padding: const EdgeInsets.symmetric(vertical: 9),
+        alignment: Alignment.center,
         decoration: BoxDecoration(
           color: selected ? const Color(0xFF1B7A43) : const Color(0xFFF3F4F6),
-          borderRadius: BorderRadius.circular(20),
+          borderRadius: BorderRadius.circular(8),
         ),
         child: Text(label,
             style: TextStyle(

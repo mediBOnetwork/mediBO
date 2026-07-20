@@ -11,32 +11,9 @@ import '../utils/ist_date.dart';
 import '../utils/order_code.dart';
 import '../utils/render_log.dart';
 import '../widgets/animations.dart';
+import '../widgets/bill_actions_row.dart';
+import '../widgets/bill_viewer.dart';
 import '../widgets/cust_pay_panel.dart';
-
-// CHANGE #463: shared by the admin upload flow and the download/share actions
-// on both the customer Bill tab and the admin bill view, so the same file
-// extension always maps to the same content type everywhere.
-String mimeFromFileName(String name) {
-  final ext = name.contains('.') ? name.split('.').last.toLowerCase() : '';
-  switch (ext) {
-    case 'pdf':
-      return 'application/pdf';
-    case 'png':
-      return 'image/png';
-    case 'jpg':
-    case 'jpeg':
-      return 'image/jpeg';
-    case 'webp':
-      return 'image/webp';
-    default:
-      return 'application/octet-stream';
-  }
-}
-
-bool isImageFileName(String name) {
-  final ext = name.contains('.') ? name.split('.').last.toLowerCase() : '';
-  return ext == 'png' || ext == 'jpg' || ext == 'jpeg' || ext == 'webp' || ext == 'gif';
-}
 
 // ─── Data models ─────────────────────────────────────────────────────────────
 
@@ -666,7 +643,19 @@ class _BillTabState extends State<_BillTab> {
       // #463 Part B: has_file==false — do NOT collapse; show the message and
       // the same three actions, all disabled.
       return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const _UploadedBillActionsRow(ready: false, orderId: '', bucket: null, path: null, fileName: null),
+        Row(children: [
+          Expanded(
+              child: BillActionButton(
+                  icon: Icons.download_outlined, label: 'Download', enabled: false, onTap: () {})),
+          const SizedBox(width: 8),
+          Expanded(
+              child: BillActionButton(
+                  icon: Icons.chat_bubble_outline, label: 'WhatsApp', enabled: false, onTap: () {})),
+          const SizedBox(width: 8),
+          Expanded(
+              child:
+                  BillActionButton(icon: Icons.share_outlined, label: 'Share', enabled: false, onTap: () {})),
+        ]),
         const Padding(
           padding: EdgeInsets.symmetric(vertical: 24),
           child: Column(children: [
@@ -682,243 +671,13 @@ class _BillTabState extends State<_BillTab> {
     final bucket = info['bucket']?.toString() ?? 'customer-bills';
     final path = info['path']?.toString() ?? '';
     final name = info['name']?.toString() ?? 'Bill';
-    final uploadedAt = info['uploaded_at']?.toString();
 
+    // #465: real inline preview (image/PDF, not a placeholder box) that opens
+    // the shared full-screen zoomable viewer on tap.
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      _UploadedBillActionsRow(ready: true, orderId: widget.orderId, bucket: bucket, path: path, fileName: name),
+      UploadedBillActionsRow(orderId: widget.orderId, bucket: bucket, path: path, fileName: name),
       const SizedBox(height: 14),
-      _UploadedBillPreview(bucket: bucket, path: path, name: name, uploadedAt: uploadedAt),
-    ]);
-  }
-}
-
-// #463 Part B: renders the uploaded bill inline — the image itself for an
-// image upload, or a compact file tile (name + uploaded-at) for a PDF, since
-// browsers can't inline-render a PDF the same way.
-class _UploadedBillPreview extends StatefulWidget {
-  final String bucket;
-  final String path;
-  final String name;
-  final String? uploadedAt;
-  const _UploadedBillPreview({
-    required this.bucket,
-    required this.path,
-    required this.name,
-    required this.uploadedAt,
-  });
-
-  @override
-  State<_UploadedBillPreview> createState() => _UploadedBillPreviewState();
-}
-
-class _UploadedBillPreviewState extends State<_UploadedBillPreview> {
-  String? _signedUrl;
-
-  @override
-  void initState() {
-    super.initState();
-    if (isImageFileName(widget.name)) _loadSignedUrl();
-  }
-
-  Future<void> _loadSignedUrl() async {
-    try {
-      final url = await Supabase.instance.client.storage
-          .from(widget.bucket)
-          .createSignedUrl(widget.path, 3600);
-      if (mounted) setState(() => _signedUrl = url);
-    } catch (_) {}
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (isImageFileName(widget.name)) {
-      return Container(
-        decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(10), border: Border.all(color: const Color(0xFFE5E7EB))),
-        clipBehavior: Clip.antiAlias,
-        child: _signedUrl == null
-            ? const SizedBox(
-                height: 160, child: Center(child: CircularProgressIndicator(strokeWidth: 2)))
-            : Image.network(_signedUrl!, fit: BoxFit.contain),
-      );
-    }
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF9FAFB),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-      ),
-      child: Row(children: [
-        const Icon(Icons.picture_as_pdf_outlined, size: 32, color: Color(0xFFB91C1C)),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(widget.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
-            if (widget.uploadedAt != null)
-              Text('Uploaded ${widget.uploadedAt}',
-                  style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
-          ]),
-        ),
-      ]),
-    );
-  }
-}
-
-// #463 Part B: Download / Send to WhatsApp / Share, operating on the
-// admin-UPLOADED file (storage bucket+path) — a separate widget from #462's
-// _BillActionsRow (which re-renders a PDF from the computed invoice via
-// bill-pdf), left untouched below for _ComputedInvoiceTab. Reuses
-// _BillActionButton (styling) and _WaNumberPicker (the same popup mechanics
-// and RPCs) since neither depends on which bill flow is active.
-class _UploadedBillActionsRow extends StatefulWidget {
-  final bool ready;
-  final String orderId;
-  final String? bucket;
-  final String? path;
-  final String? fileName;
-  const _UploadedBillActionsRow({
-    required this.ready,
-    required this.orderId,
-    required this.bucket,
-    required this.path,
-    required this.fileName,
-  });
-
-  @override
-  State<_UploadedBillActionsRow> createState() => _UploadedBillActionsRowState();
-}
-
-class _UploadedBillActionsRowState extends State<_UploadedBillActionsRow> {
-  bool _downloading = false;
-  bool _sharing = false;
-  OverlayEntry? _waPopupEntry;
-
-  @override
-  void dispose() {
-    _waPopupEntry?.remove();
-    _waPopupEntry = null;
-    super.dispose();
-  }
-
-  Future<({List<int> bytes, String filename})?> _fetchBillFile() async {
-    final bucket = widget.bucket;
-    final path = widget.path;
-    if (bucket == null || path == null) return null;
-    try {
-      final bytes = await Supabase.instance.client.storage.from(bucket).download(path);
-      return (bytes: bytes, filename: widget.fileName ?? 'Bill');
-    } catch (_) {
-      if (mounted) showToast(context, 'Could not load the bill.', isError: true);
-      return null;
-    }
-  }
-
-  // ① Download — straight from storage, no re-render, no account picker.
-  Future<void> _download() async {
-    if (_downloading || !widget.ready) return;
-    setState(() => _downloading = true);
-    final file = await _fetchBillFile();
-    if (mounted) setState(() => _downloading = false);
-    if (file == null) return;
-    downloadBytes(file.bytes, file.filename, mimeFromFileName(file.filename));
-  }
-
-  // ③ Share — native OS share sheet with the SAME uploaded file as Download.
-  Future<void> _share() async {
-    if (_sharing || !widget.ready) return;
-    setState(() => _sharing = true);
-    final file = await _fetchBillFile();
-    if (file == null) {
-      if (mounted) setState(() => _sharing = false);
-      return;
-    }
-    final mime = mimeFromFileName(file.filename);
-    final result = await shareBytes(file.bytes, file.filename, mime);
-    if (mounted) setState(() => _sharing = false);
-    if (result == null) downloadBytes(file.bytes, file.filename, mime);
-  }
-
-  // ② Send Bill to WhatsApp — same mini floating popup as #462, anchored near
-  // this button, dismissed on outside tap.
-  void _showWaPopup(BuildContext buttonContext) {
-    if (!widget.ready) return;
-    _waPopupEntry?.remove();
-    _waPopupEntry = null;
-    final box = buttonContext.findRenderObject() as RenderBox?;
-    if (box == null || !box.attached) return;
-    final topLeft = box.localToGlobal(Offset.zero);
-    final screenW = MediaQuery.of(buttonContext).size.width;
-    const popupW = 260.0;
-    final left = (topLeft.dx + box.size.width / 2 - popupW / 2)
-        .clamp(12.0, math.max(12.0, screenW - popupW - 12.0))
-        .toDouble();
-    final top = topLeft.dy + box.size.height + 6;
-
-    void dismiss() {
-      _waPopupEntry?.remove();
-      _waPopupEntry = null;
-    }
-
-    _waPopupEntry = OverlayEntry(builder: (_) => Stack(children: [
-      Positioned.fill(
-        child: GestureDetector(behavior: HitTestBehavior.translucent, onTap: dismiss),
-      ),
-      Positioned(
-        top: top,
-        left: left,
-        width: popupW,
-        child: Material(
-          borderRadius: BorderRadius.circular(12),
-          elevation: 8,
-          color: Colors.white,
-          child: _WaNumberPicker(
-            orderId: widget.orderId,
-            onDismiss: dismiss,
-            onResult: (message, isError) {
-              if (mounted) showToast(context, message, isError: isError);
-            },
-          ),
-        ),
-      ),
-    ]));
-    Overlay.of(buttonContext).insert(_waPopupEntry!);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(children: [
-      Expanded(
-        child: _BillActionButton(
-          icon: Icons.download_outlined,
-          label: _downloading ? 'Downloading…' : 'Download',
-          enabled: widget.ready && !_downloading,
-          loading: _downloading,
-          onTap: _download,
-        ),
-      ),
-      const SizedBox(width: 8),
-      Expanded(
-        child: Builder(builder: (btnContext) => _BillActionButton(
-              icon: Icons.chat_bubble_outline,
-              label: 'WhatsApp',
-              enabled: widget.ready,
-              onTap: () => _showWaPopup(btnContext),
-            )),
-      ),
-      const SizedBox(width: 8),
-      Expanded(
-        child: _BillActionButton(
-          icon: Icons.share_outlined,
-          label: _sharing ? 'Sharing…' : 'Share',
-          enabled: widget.ready && !_sharing,
-          loading: _sharing,
-          onTap: _share,
-        ),
-      ),
+      BillFilePreview(key: ValueKey('$bucket/$path'), bucket: bucket, path: path, name: name),
     ]);
   }
 }

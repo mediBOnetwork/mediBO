@@ -26,8 +26,11 @@ import '../../widgets/route_google_map_panel.dart'; // CHANGE #463
 import '../bulk_upload_screen.dart';
 import '../../services/payment_claims_service.dart';
 import '../../view_as_state.dart';
+import '../../widgets/bill_actions_row.dart'; // CHANGE #465
+import '../../widgets/bill_viewer.dart'; // CHANGE #465
 import '../../widgets/cash_payment_sheet.dart';
 import '../../widgets/fullscreen_image.dart';
+import '../../utils/bill_mime.dart'; // CHANGE #465
 
 // ── CHANGE #242: Web Share API interop (dart:js_interop top-level declarations)
 // Extension types for Blob, File, ShareData. Used only in sharePaymentImage().
@@ -1383,105 +1386,34 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     }
   }
 
-  // CHANGE #464: "Upload Bill" moved here from the customer/acting-as-customer
-  // order card (#463) — admin-only surface, same upload_customer_bill RPC and
-  // customer-bills/<order_id>/... storage key, just relocated. _uploadingBillFor
-  // (a Set, per orderId) guards each row's own double-tap independently.
-  // _billUploadEpoch bumps on every successful upload and keys _AdminBillView
-  // below so an expanded row's bill tile fully remounts and refetches (a plain
-  // setState wouldn't reset that widget's own already-fetched state).
-  final Set<String> _uploadingBillFor = {};
+  // CHANGE #465: row-level bill actions (upload/view/delete/download/
+  // WhatsApp/share) now live in the self-contained _AdminBillRowActions
+  // widget below — it fetches its own customer_bill_file() state, so this
+  // superseded #464's _uploadCustomerBillFor/_buildUploadBillAndPayRow.
+  // _billUploadEpoch is kept only to key the separate _AdminBillView tile in
+  // the expanded-items panel so IT remounts and refetches too after an
+  // upload/delete from the row above (it has its own independent fetch).
   int _billUploadEpoch = 0;
 
-  Future<void> _uploadCustomerBillFor(String orderId) async {
-    if (_uploadingBillFor.contains(orderId)) return;
-    setState(() => _uploadingBillFor.add(orderId));
-    try {
-      final result = await FilePicker.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: const ['jpg', 'jpeg', 'png', 'webp', 'pdf'],
-        allowMultiple: false,
-        withData: true,
-      );
-      final picked = result?.files.singleOrNull;
-      final bytes = picked?.bytes;
-      if (picked == null || bytes == null) return; // user cancelled the picker
-      if (bytes.length > 15 * 1024 * 1024) {
-        if (mounted) showToast(context, 'File too large (max 15MB)', isError: true);
-        return;
-      }
-      // Namespaced by order_id so files can't collide across orders.
-      final path = '$orderId/${DateTime.now().millisecondsSinceEpoch}_${picked.name}';
-      await Supabase.instance.client.storage.from('customer-bills').uploadBinary(
-            path,
-            bytes,
-            fileOptions: FileOptions(contentType: _mimeFromBillName(picked.name)),
-          );
-      final raw = await Supabase.instance.client.rpc('upload_customer_bill', params: {
-        'p_order_id': orderId,
-        'p_file_path': path,
-        'p_file_name': picked.name,
-        'p_bucket': 'customer-bills',
-      });
-      final res = raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
-      if (!mounted) return;
-      if (res['status'] == 'ok') {
-        showToast(context, 'Bill uploaded');
-        setState(() => _billUploadEpoch++); // remount _AdminBillView so it refetches
-      } else {
-        showToast(context, res['error']?.toString() ?? 'Could not upload the bill', isError: true);
-      }
-    } catch (_) {
-      if (mounted) showToast(context, 'Could not upload the bill', isError: true);
-    } finally {
-      if (mounted) setState(() => _uploadingBillFor.remove(orderId));
-    }
-  }
-
-  // CHANGE #464: "Upload Bill" (left) / "View Payment" (right) — the same
-  // two-button row style built for #463's (now-removed) customer-card row.
   Widget _buildUploadBillAndPayRow(_CustRow row, {required VoidCallback onViewPayTap}) {
     final orderId = row.orderId;
     if (orderId == null) return const SizedBox();
-    final uploading = _uploadingBillFor.contains(orderId);
-    return Row(mainAxisSize: MainAxisSize.min, children: [
-      GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: uploading ? null : () => _uploadCustomerBillFor(orderId),
-        child: Container(
-          height: 32,
-          padding: const EdgeInsets.symmetric(horizontal: 8),
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: const Color(0xFFF5F6F8),
-            border: Border.all(color: const Color(0xFFD1D5DB)),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: uploading
-              ? const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2))
-              : const Row(mainAxisSize: MainAxisSize.min, children: [
-                  Icon(Icons.upload_outlined, size: 13, color: Color(0xFF374151)),
-                  SizedBox(width: 4),
-                  Text('Upload Bill',
-                      style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
-                ]),
+    return _AdminBillRowActions(
+      key: ValueKey(orderId),
+      orderId: orderId,
+      payOpen: _payOpen[orderId] == true,
+      onViewPayTap: onViewPayTap,
+      onViewPayLongPress: () => showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (_) => CashPaymentSheet(
+          orderId: orderId,
+          onSuccess: () => setState(() {}),
         ),
       ),
-      const SizedBox(width: 6),
-      _ViewPayBtn(
-        isOpen: _payOpen[orderId] == true,
-        onTap: onViewPayTap,
-        onLongPress: () => showModalBottomSheet(
-          context: context,
-          isScrollControlled: true,
-          backgroundColor: Colors.transparent,
-          builder: (_) => CashPaymentSheet(
-            orderId: orderId,
-            onSuccess: () => setState(() {}),
-          ),
-        ),
-      ),
-    ]);
+      onBillChanged: () => setState(() => _billUploadEpoch++),
+    );
   }
 
   // ── Build ──────────────────────────────────────────────────────────────────
@@ -5459,7 +5391,9 @@ class _ViewPayBtn extends StatelessWidget {
       onTap: onTap,
       onLongPress: onLongPress,
       child: Container(
+        height: 44, // CHANGE #465: matches _CompactActionButton's height for the 50:50 row
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        alignment: Alignment.center,
         decoration: BoxDecoration(
           color: isOpen ? const Color(0xFFEFF6FF) : const Color(0xFFF5F6F8),
           borderRadius: BorderRadius.circular(8),
@@ -5489,6 +5423,266 @@ class _ViewPayBtn extends StatelessWidget {
             ),
           ),
         ]),
+      ),
+    );
+  }
+}
+
+// ── CHANGE #465: admin bill row actions ───────────────────────────────────────
+// Self-contained: fetches customer_bill_file() itself, so the row knows
+// whether to show "Upload Bill" or "View Bill" without the parent state
+// tracking it. Row 1 is the exact 50:50 [Upload Bill / View Bill] | [View
+// Payment] split; row 2 (Delete + the shared Download/WhatsApp/Share) only
+// appears once a bill exists. Reuses the SAME upload_customer_bill RPC and
+// customer-bills/<order_id>/... storage key #463/#464 established.
+
+class _AdminBillRowActions extends StatefulWidget {
+  final String orderId;
+  final bool payOpen;
+  final VoidCallback onViewPayTap;
+  final VoidCallback? onViewPayLongPress;
+  final VoidCallback? onBillChanged;
+  const _AdminBillRowActions({
+    super.key,
+    required this.orderId,
+    required this.payOpen,
+    required this.onViewPayTap,
+    this.onViewPayLongPress,
+    this.onBillChanged,
+  });
+
+  @override
+  State<_AdminBillRowActions> createState() => _AdminBillRowActionsState();
+}
+
+class _AdminBillRowActionsState extends State<_AdminBillRowActions> {
+  Map<String, dynamic>? _info; // null while loading
+  bool _uploading = false;
+  bool _deleting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final raw = await Supabase.instance.client
+          .rpc('customer_bill_file', params: {'p_order_id': widget.orderId});
+      final data = raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
+      if (mounted) setState(() => _info = data);
+    } catch (_) {
+      if (mounted) setState(() => _info = {'has_file': false});
+    }
+  }
+
+  bool get _hasFile => _info?['has_file'] == true;
+
+  Future<void> _upload() async {
+    if (_uploading) return;
+    setState(() => _uploading = true);
+    try {
+      final result = await FilePicker.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: const ['jpg', 'jpeg', 'png', 'webp', 'pdf'],
+        allowMultiple: false,
+        withData: true,
+      );
+      final picked = result?.files.singleOrNull;
+      final bytes = picked?.bytes;
+      if (picked == null || bytes == null) return; // user cancelled the picker
+      if (bytes.length > 15 * 1024 * 1024) {
+        if (mounted) showToast(context, 'File too large (max 15MB)', isError: true);
+        return;
+      }
+      // Namespaced by order_id so files can't collide across orders.
+      final path = '${widget.orderId}/${DateTime.now().millisecondsSinceEpoch}_${picked.name}';
+      await Supabase.instance.client.storage.from('customer-bills').uploadBinary(
+            path,
+            bytes,
+            fileOptions: FileOptions(contentType: mimeFromBillName(picked.name)),
+          );
+      final raw = await Supabase.instance.client.rpc('upload_customer_bill', params: {
+        'p_order_id': widget.orderId,
+        'p_file_path': path,
+        'p_file_name': picked.name,
+        'p_bucket': 'customer-bills',
+      });
+      final res = raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
+      if (!mounted) return;
+      if (res['status'] == 'ok') {
+        showToast(context, 'Bill uploaded');
+        await _load();
+        widget.onBillChanged?.call();
+      } else {
+        showToast(context, res['error']?.toString() ?? 'Could not upload the bill', isError: true);
+      }
+    } catch (_) {
+      if (mounted) showToast(context, 'Could not upload the bill', isError: true);
+    } finally {
+      if (mounted) setState(() => _uploading = false);
+    }
+  }
+
+  Future<void> _delete() async {
+    if (_deleting || !_hasFile) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dCtx) => AlertDialog(
+        title: const Text('Delete bill?'),
+        content: const Text(
+            'This removes the uploaded bill for this order. The customer will no longer see it.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dCtx, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(dCtx, true),
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _deleting = true);
+    try {
+      final raw = await Supabase.instance.client
+          .rpc('delete_customer_bill', params: {'p_order_id': widget.orderId});
+      final res = raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
+      if (!mounted) return;
+      if (res['status'] == 'ok') {
+        showToast(context, 'Bill deleted');
+        await _load();
+        widget.onBillChanged?.call();
+      } else {
+        showToast(context, res['error']?.toString() ?? 'Could not delete the bill', isError: true);
+      }
+    } catch (_) {
+      if (mounted) showToast(context, 'Could not delete the bill', isError: true);
+    } finally {
+      if (mounted) setState(() => _deleting = false);
+    }
+  }
+
+  Future<void> _viewBill() async {
+    final info = _info;
+    if (info == null || info['has_file'] != true) return;
+    try {
+      final bucket = info['bucket']?.toString() ?? 'customer-bills';
+      final path = info['path']?.toString() ?? '';
+      final name = info['name']?.toString() ?? 'Bill';
+      final url = await Supabase.instance.client.storage.from(bucket).createSignedUrl(path, 3600);
+      if (mounted) showBillViewer(context, url: url, isImage: isImageBillName(name));
+    } catch (_) {
+      if (mounted) showToast(context, 'Could not open the bill', isError: true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final loading = _info == null;
+    final info = _info;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Row(children: [
+        Expanded(
+          child: _hasFile
+              ? _CompactActionButton(
+                  icon: Icons.receipt_long_outlined,
+                  label: 'View Bill',
+                  onTap: _viewBill,
+                )
+              : _CompactActionButton(
+                  icon: Icons.upload_outlined,
+                  label: 'Upload Bill',
+                  loading: _uploading,
+                  onTap: loading ? null : _upload,
+                ),
+        ),
+        const SizedBox(width: 6),
+        Expanded(
+          child: _ViewPayBtn(
+            isOpen: widget.payOpen,
+            onTap: widget.onViewPayTap,
+            onLongPress: widget.onViewPayLongPress,
+          ),
+        ),
+      ]),
+      if (_hasFile && info != null) ...[
+        const SizedBox(height: 6),
+        Row(children: [
+          GestureDetector(
+            onTap: _deleting ? null : _delete,
+            child: Container(
+              height: 44,
+              width: 44,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: const Color(0xFFFEE2E2),
+                border: Border.all(color: const Color(0xFFFCA5A5)),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: _deleting
+                  ? const SizedBox(
+                      width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF991B1B)))
+                  : const Icon(Icons.delete_outline, size: 18, color: Color(0xFF991B1B)),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: UploadedBillActionsRow(
+              key: ValueKey('${widget.orderId}/${info['path']}'),
+              orderId: widget.orderId,
+              bucket: info['bucket']?.toString() ?? 'customer-bills',
+              path: info['path']?.toString() ?? '',
+              fileName: info['name']?.toString() ?? 'Bill',
+            ),
+          ),
+        ]),
+      ],
+    ]);
+  }
+}
+
+// Fixed-width/fixed-height action button (sits inside an Expanded 50% slot)
+// with the spinner rendered INSIDE the same box while loading — the button
+// never resizes, unlike #464's shrink-to-a-tiny-circle bug.
+class _CompactActionButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool loading;
+  final VoidCallback? onTap;
+  const _CompactActionButton({
+    required this.icon,
+    required this.label,
+    this.loading = false,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onTap != null && !loading;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: enabled ? onTap : null,
+      child: Container(
+        height: 44,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: const Color(0xFFF5F6F8),
+          border: Border.all(color: const Color(0xFFD1D5DB)),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: loading
+            ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+            : Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(icon, size: 15, color: const Color(0xFF374151)),
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text(label,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+                ),
+              ]),
       ),
     );
   }
@@ -5661,23 +5855,6 @@ class _BucketCard extends StatelessWidget {
 // tab shows. Self-fetching; renders nothing while loading or when no bill has
 // been uploaded, so orders without one see no extra UI.
 
-String _mimeFromBillName(String name) {
-  final ext = name.contains('.') ? name.split('.').last.toLowerCase() : '';
-  switch (ext) {
-    case 'pdf':
-      return 'application/pdf';
-    case 'png':
-      return 'image/png';
-    case 'jpg':
-    case 'jpeg':
-      return 'image/jpeg';
-    case 'webp':
-      return 'image/webp';
-    default:
-      return 'application/octet-stream';
-  }
-}
-
 class _AdminBillView extends StatefulWidget {
   final String orderId;
   const _AdminBillView({super.key, required this.orderId});
@@ -5729,7 +5906,7 @@ class _AdminBillViewState extends State<_AdminBillView> {
       final path = info['path']?.toString() ?? '';
       final name = info['name']?.toString() ?? 'Bill';
       final bytes = await Supabase.instance.client.storage.from(bucket).download(path);
-      downloadBytes(bytes, name, _mimeFromBillName(name));
+      downloadBytes(bytes, name, mimeFromBillName(name));
     } catch (_) {
       if (mounted) showToast(context, 'Could not download the bill', isError: true);
     } finally {

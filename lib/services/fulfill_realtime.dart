@@ -49,6 +49,11 @@ class FulfillRealtime {
     'bags',
     'bag_sessions',
     'bag_supplier_usage',
+    // #8/#9: continuous voice counting — live mention list (_CountedMentionsPopup)
+    // refetches via get_voice_clip_mentions whenever a window's mentions land, instead
+    // of only on explicit refresh calls. Verified published via pg_publication_tables
+    // before adding (same care as the others in this list).
+    'voice_clip_mentions',
   ];
 
   final Set<void Function(Set<String> changedTables)> _listeners = {};

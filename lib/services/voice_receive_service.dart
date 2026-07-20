@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -97,12 +98,16 @@ class VoiceReceiveService {
   }
 
   // ── #115: Insert one mention row per returned mention ─────────────────────
+  // stage is required (not defaulted) — voice_clip_mentions.stage drives bag attribution
+  // in voice_finalize_session, so callers must pass the actual counting stage ('shop' or
+  // 'warehouse') rather than relying on the table's historical 'shop' default.
   Future<void> insertMentions({
     required List<Map<dynamic, dynamic>> mentions,
     required String supplierName,
     required String clipPath,
     required int recordingSeq,
     required List<Map<String, dynamic>> orderItems,
+    required String stage,
     String? sessionKey,
   }) async {
     if (mentions.isEmpty) return;
@@ -142,6 +147,7 @@ class VoiceReceiveService {
       }
       rows.add({
         'supplier_name': supplierName,
+        'stage': stage,
         'recording_seq': recordingSeq,
         'clip_path': clipPath,
         'ord': (m['ord'] as num?)?.toInt() ?? 0,
@@ -154,7 +160,18 @@ class VoiceReceiveService {
       });
     }
 
-    await Supabase.instance.client.from('voice_clip_mentions').insert(rows);
+    try {
+      await Supabase.instance.client.from('voice_clip_mentions').insert(rows);
+    } on PostgrestException catch (e) {
+      // 23505 = unique_violation on (supplier_name, the_date, session_key, recording_seq,
+      // ord): this exact window was already inserted by an earlier attempt (retry after a
+      // network blip). The whole batch is a single statement, so a conflict here means the
+      // whole window already landed — safe to treat as a no-op rather than fail the session.
+      if (e.code != '23505') rethrow;
+      RenderLog.write('c141_mention_retry_dup',
+          'supplier=$supplierName;seq=$recordingSeq;rows=${rows.length}');
+      return;
+    }
     final hasTStart = rows.any((r) => r['t_start_sec'] != null);
     final hasTEnd = rows.any((r) => r['t_end_sec'] != null);
     RenderLog.write('c116_mention_inserted',
@@ -174,6 +191,14 @@ class VoiceReceiveService {
     String mime, {
     List<Map<String, dynamic>>? expected,
     double minConfidence = 0.55,
+    // Windowed-session passthrough (voice-receive v25+): when windowOffsetSec is set, the
+    // edge function shifts mention t_start/t_end onto the session clock before returning
+    // them, so callers never duplicate that arithmetic. Omitting these reproduces the
+    // legacy single-shot behavior exactly (clip-relative timestamps).
+    String? sessionKey,
+    int? recordingSeq,
+    double? windowOffsetSec,
+    String? stage,
   }) async {
     final b64 = base64Encode(bytes);
     if (b64.length > 6 * 1024 * 1024) {
@@ -186,6 +211,10 @@ class VoiceReceiveService {
         'mime_type': mime,
         if (expected != null && expected.isNotEmpty) 'expected': expected,
         'min_confidence': minConfidence,
+        if (sessionKey != null) 'session_key': sessionKey,
+        if (recordingSeq != null) 'recording_seq': recordingSeq,
+        if (windowOffsetSec != null) 'window_offset_sec': windowOffsetSec,
+        if (stage != null) 'stage': stage,
       },
     );
     final data = res.data;
@@ -216,4 +245,195 @@ class VoiceReceiveService {
   }
 
   Future<void> dispose() => _rec.dispose();
+}
+
+/// §3 of the continuous-voice-counting build spec: call right after a successful
+/// bag_attach to mark the session-clock moment that bag became the owning bag. Never call
+/// on detach — only a successful map defines ownership.
+Future<void> recordVoiceBagBoundary({
+  required String sessionKey,
+  required String supplierName,
+  required int bagNo,
+  required double mappedAtSec,
+}) async {
+  await Supabase.instance.client.from('voice_bag_boundaries').insert({
+    'session_key': sessionKey,
+    'supplier_name': supplierName,
+    'bag_no': bagNo,
+    'mapped_at_sec': mappedAtSec,
+  });
+  RenderLog.write('c142_bag_boundary_mapped',
+      'supplier=$supplierName;bag=$bagNo;t=${mappedAtSec.toStringAsFixed(1)}');
+}
+
+/// §6 of the continuous-voice-counting build spec: run once on stop (safe to re-run).
+/// Returns the finalize summary jsonb (persisted totals, bag_breakdown, unmatched_mentions,
+/// needs_bag_review) for the caller to surface to the admin.
+Future<Map<String, dynamic>> finalizeVoiceSession(String sessionKey) async {
+  final res = await Supabase.instance.client.rpc('voice_finalize_session', params: {
+    'p_session_key': sessionKey,
+  });
+  final data = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+  if (data['error'] != null) {
+    throw VoiceReceiveException(data['error'].toString());
+  }
+  RenderLog.write('c143_session_finalized',
+      'session=$sessionKey;persisted=${(data['persisted'] as List?)?.length ?? 0};'
+      'needs_review=${(data['needs_bag_review'] as List?)?.length ?? 0};'
+      'unmatched=${(data['unmatched_mentions'] as List?)?.length ?? 0}');
+  return data;
+}
+
+/// One continuous counting session for one supplier at one stage (§1-§2 of the build spec).
+///
+/// The `record` plugin has no API to read a partial in-progress recording, so this does NOT
+/// implement true overlapping capture (spec's WINDOW=30s/OVERLAP=6s two-stream design).
+/// Instead it records back-to-back NON-overlapping ~[windowSec]-second clips: stop the
+/// current clip and immediately start the next one, dispatching the closed clip in the
+/// background. The restart happens in-process in well under a second, so from the worker's
+/// perspective recording never stops — no stop-and-wait per bag, and every clip Gemini sees
+/// is short. What's lost versus the spec's design is the overlap-based tolerance for an
+/// utterance spoken across a window boundary; the backend's overlap-seam dedup logic is
+/// still applied (harmlessly a no-op here since windows don't actually overlap).
+class ContinuousVoiceSession {
+  final String supplierName;
+  final String stage; // 'warehouse' | 'shop'
+  final List<Map<String, dynamic>> Function() orderItemsProvider;
+  final List<Map<String, dynamic>> Function()? expectedProvider;
+  final void Function(Object error, StackTrace st)? onWindowError;
+  // Fired after each window's clip is uploaded (path, actual recorded seconds for that
+  // window, 0-based recording_seq) — wire this to the caller's usage-ledger/daily-cap
+  // registration (e.g. _VoiceCaps.onClipSaved), since without a per-window hook a long
+  // continuous session would never register against a server-side usage cap.
+  final void Function(String path, int seconds, int recordingSeq)? onClipUploaded;
+  static const int windowSec = 24;
+
+  final String sessionKey;
+  final VoiceReceiveService _svc = VoiceReceiveService();
+  final Stopwatch _clock = Stopwatch();
+  Timer? _timer;
+  int _nextSeq = 0;
+  bool _stopping = false;
+  Future<void>? _activeRotation;
+  final List<Future<void>> _inFlight = [];
+  // True elapsed-sec at which the CURRENT recording window began — captured from the same
+  // Stopwatch that recordBagMap() reads, not derived as seq*windowSec. Each stop+restart
+  // cycle costs real wall-clock time (network/plugin overhead), so an idealized seq*windowSec
+  // offset would drift further from the boundaries' real timestamps as the session goes on,
+  // corrupting bag attribution on long sessions. Measuring both off one clock keeps them exact.
+  double _windowStartSec = 0.0;
+
+  ContinuousVoiceSession({
+    required this.supplierName,
+    required this.stage,
+    required this.orderItemsProvider,
+    this.expectedProvider,
+    this.onWindowError,
+    this.onClipUploaded,
+  }) : sessionKey = '$supplierName|$stage|${DateTime.now().millisecondsSinceEpoch}';
+
+  double get elapsedSec => _clock.elapsedMilliseconds / 1000.0;
+
+  Future<void> start() async {
+    await _svc.start();
+    _clock.start();
+    _windowStartSec = 0.0;
+    _timer = Timer.periodic(const Duration(seconds: windowSec), (_) => _rotate());
+  }
+
+  Future<void> _rotate() {
+    if (_stopping) return Future.value();
+    final done = Completer<void>();
+    _activeRotation = done.future;
+    () async {
+      final seq = _nextSeq++;
+      final offset = _windowStartSec;
+      final clip = await _svc.stop();
+      final windowEndSec = elapsedSec;
+      // If stopAndFinalize raced us and set _stopping while we were mid-stop, don't restart
+      // the recorder — but the clip we already captured is real audio and must still be
+      // dispatched; stopAndFinalize awaits _activeRotation instead of stopping again.
+      if (!_stopping) {
+        await _svc.start();
+        _windowStartSec = elapsedSec; // true start of the NEXT window
+      }
+      if (clip == null) return;
+      final durationSec = (windowEndSec - offset).round().clamp(1, 3600);
+      final fut = _dispatch(clip.bytes, clip.mime, clip.ext, seq, offset, durationSec)
+          .catchError((Object e, StackTrace st) => onWindowError?.call(e, st));
+      _inFlight.add(fut);
+      unawaited(fut.whenComplete(() => _inFlight.remove(fut)));
+    }()
+        .whenComplete(() {
+      _activeRotation = null;
+      done.complete();
+    });
+    return done.future;
+  }
+
+  Future<void> _dispatch(Uint8List bytes, String mime, String ext, int seq, double offsetSec, int durationSec) async {
+    final clipPath = await _svc.uploadClip(bytes, supplierName, seq, ext);
+    onClipUploaded?.call(clipPath, durationSec, seq);
+    final result = await _svc.transcribe(
+      bytes, mime,
+      expected: expectedProvider?.call(),
+      sessionKey: sessionKey,
+      recordingSeq: seq,
+      windowOffsetSec: offsetSec,
+      stage: stage,
+    );
+    await _svc.insertMentions(
+      mentions: result.mentions,
+      supplierName: supplierName,
+      clipPath: clipPath,
+      recordingSeq: seq,
+      orderItems: orderItemsProvider(),
+      sessionKey: sessionKey,
+      stage: stage,
+    );
+  }
+
+  /// Marks the moment [bagNo] became the owning bag on this session's clock. Call only
+  /// after a successful bag_attach — never on detach (§3 of the build spec).
+  Future<void> recordBagMap(int bagNo) => recordVoiceBagBoundary(
+        sessionKey: sessionKey,
+        supplierName: supplierName,
+        bagNo: bagNo,
+        mappedAtSec: elapsedSec,
+      );
+
+  /// Stops recording, waits for every in-flight window to finish uploading/inserting, then
+  /// runs voice_finalize_session and returns its summary. Safe to call once per session.
+  Future<Map<String, dynamic>> stopAndFinalize() async {
+    _stopping = true;
+    _timer?.cancel();
+    if (_activeRotation != null) {
+      // A rotation was already mid-stop when we hit Stop; it will capture + dispatch the
+      // final clip itself (and skip its restart, since _stopping is now true) — wait for it
+      // rather than racing a second stop() call on the same recorder.
+      await _activeRotation;
+    } else if (_svc.wasStarted) {
+      final seq = _nextSeq++;
+      final offset = _windowStartSec;
+      final windowEndSec = elapsedSec;
+      final clip = await _svc.stop();
+      if (clip != null) {
+        final durationSec = (windowEndSec - offset).round().clamp(1, 3600);
+        _inFlight.add(_dispatch(clip.bytes, clip.mime, clip.ext, seq, offset, durationSec)
+            .catchError((Object e, StackTrace st) => onWindowError?.call(e, st)));
+      }
+    }
+    _clock.stop();
+    await Future.wait(List<Future<void>>.of(_inFlight));
+    return finalizeVoiceSession(sessionKey);
+  }
+
+  /// Aborts the session without finalizing (e.g. the admin backs out mid-count). Any windows
+  /// already dispatched remain in voice_clip_mentions, unattributed, for manual cleanup.
+  Future<void> cancel() async {
+    _stopping = true;
+    _timer?.cancel();
+    await _svc.cancel();
+    _clock.stop();
+  }
 }

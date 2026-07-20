@@ -1,13 +1,11 @@
 import 'dart:convert';
 import 'dart:math' as math;
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:pharma_b2b/utils/toast.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../user_state.dart';
 import '../utils/download_bytes.dart';
 import '../utils/ist_date.dart';
 import '../utils/order_code.dart';
@@ -261,119 +259,6 @@ class _OrderCardState extends State<_OrderCard> {
     if (opening && tab != 2 && _panel == null && !_loading) _loadPanel();
   }
 
-  // CHANGE #463 Part A: admin-only "Upload Bill" — bumped on every successful
-  // upload and used as _BillTab's Key so it fully remounts (a plain setState
-  // wouldn't reset _BillTab's own already-fetched customer_bill_file state).
-  bool _uploadingBill = false;
-  int _billRefreshEpoch = 0;
-
-  Future<void> _uploadCustomerBill() async {
-    if (_uploadingBill) return;
-    setState(() => _uploadingBill = true);
-    try {
-      final result = await FilePicker.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: const ['jpg', 'jpeg', 'png', 'webp', 'pdf'],
-        allowMultiple: false,
-        withData: true,
-      );
-      final picked = result?.files.singleOrNull;
-      final bytes = picked?.bytes;
-      if (picked == null || bytes == null) return; // user cancelled the picker
-      if (bytes.length > 15 * 1024 * 1024) {
-        if (mounted) showToast(context, 'File too large (max 15MB)', isError: true);
-        return;
-      }
-      // #463 anti-bug: MUST be namespaced by order_id so files can't collide
-      // across orders — mirrors the supplier-bill upload's own
-      // <supplier>_<millis>.<ext> convention, but keyed on order_id per spec.
-      final path = '${widget.order.id}/${DateTime.now().millisecondsSinceEpoch}_${picked.name}';
-      await Supabase.instance.client.storage.from('customer-bills').uploadBinary(
-            path,
-            bytes,
-            fileOptions: FileOptions(contentType: mimeFromFileName(picked.name)),
-          );
-      final raw = await Supabase.instance.client.rpc('upload_customer_bill', params: {
-        'p_order_id': widget.order.id,
-        'p_file_path': path,
-        'p_file_name': picked.name,
-        'p_bucket': 'customer-bills',
-      });
-      final res = raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
-      if (!mounted) return;
-      if (res['status'] == 'ok') {
-        showToast(context, 'Bill uploaded');
-        setState(() => _billRefreshEpoch++); // remount _BillTab so it refetches
-      } else {
-        showToast(context, res['error']?.toString() ?? 'Could not upload the bill', isError: true);
-      }
-    } catch (_) {
-      if (mounted) showToast(context, 'Could not upload the bill', isError: true);
-    } finally {
-      if (mounted) setState(() => _uploadingBill = false);
-    }
-  }
-
-  // CHANGE #463 Part A: "Upload Bill" (left) / "View Payment" (right) — same
-  // layout as the supplier order card's button row. Admin-only (including
-  // View-As-Customer, since UserState reflects the real logged-in user's role
-  // regardless of viewAsUserId) — never shown to a real customer.
-  Widget _buildAdminBillRow() {
-    if (!UserState.of(context).isAdmin) return const SizedBox.shrink();
-    final payOpen = _tab == 1;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Row(children: [
-        Expanded(
-          child: OutlinedButton.icon(
-            onPressed: _uploadingBill ? null : _uploadCustomerBill,
-            icon: _uploadingBill
-                ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
-                : const Icon(Icons.upload_outlined, size: 14),
-            label: Text(_uploadingBill ? 'Uploading…' : 'Upload Bill',
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-            style: OutlinedButton.styleFrom(
-              side: const BorderSide(color: Color(0xFFD1D5DB)),
-              foregroundColor: const Color(0xFF374151),
-              minimumSize: const Size(0, 36),
-              padding: const EdgeInsets.symmetric(vertical: 6),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-            ),
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: GestureDetector(
-            onTap: () => _toggleTab(1),
-            child: Container(
-              height: 36,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: payOpen ? const Color(0xFFEFF6FF) : const Color(0xFFF5F6F8),
-                border: Border.all(color: payOpen ? const Color(0xFF1E40AF) : const Color(0xFFE5E7EB)),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                Text('View Payment',
-                    style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: payOpen ? const Color(0xFF1E40AF) : const Color(0xFF374151))),
-                const SizedBox(width: 4),
-                AnimatedRotation(
-                  turns: payOpen ? 0.5 : 0,
-                  duration: const Duration(milliseconds: 150),
-                  child: Icon(Icons.expand_more,
-                      size: 16, color: payOpen ? const Color(0xFF1E40AF) : const Color(0xFF374151)),
-                ),
-              ]),
-            ),
-          ),
-        ),
-      ]),
-    );
-  }
-
   String _date(DateTime d) =>
       '${d.day.toString().padLeft(2, '0')}/'
       '${d.month.toString().padLeft(2, '0')}/'
@@ -505,7 +390,6 @@ class _OrderCardState extends State<_OrderCard> {
             ),
           ]),
           const SizedBox(height: 14),
-          _buildAdminBillRow(),
           Row(children: [
             Expanded(
               child: _TabButton(label: 'Items', selected: _tab == 0, onTap: () => _toggleTab(0)),
@@ -532,10 +416,12 @@ class _OrderCardState extends State<_OrderCard> {
     // CHANGE #463: Bill (tab 2) is independent of cust_order_panel now — it
     // fetches customer_bill_file() itself — so it must not sit behind the
     // _loading/_panel gate below (that's Items/Payment's own loading state,
-    // untouched). Keyed by _billRefreshEpoch so a successful upload forces a
-    // full remount (a plain setState wouldn't reset _BillTab's own state).
+    // untouched).
+    // CHANGE #464: "Upload Bill" moved off this card entirely (now
+    // admin-Customer-Orders-tab only) — no upload-triggered refresh needed
+    // here anymore, so a plain per-order key is enough.
     if (_tab == 2) {
-      return _BillTab(key: ValueKey(_billRefreshEpoch), orderId: widget.order.id);
+      return _BillTab(key: ValueKey(widget.order.id), orderId: widget.order.id);
     }
     if (_loading) {
       return const Padding(

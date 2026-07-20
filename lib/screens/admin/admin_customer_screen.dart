@@ -7,6 +7,7 @@ import 'dart:math';
 import 'dart:typed_data';
 import 'dart:ui_web' as ui_web;
 
+import 'package:file_picker/file_picker.dart'; // CHANGE #464
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
@@ -1382,6 +1383,107 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     }
   }
 
+  // CHANGE #464: "Upload Bill" moved here from the customer/acting-as-customer
+  // order card (#463) — admin-only surface, same upload_customer_bill RPC and
+  // customer-bills/<order_id>/... storage key, just relocated. _uploadingBillFor
+  // (a Set, per orderId) guards each row's own double-tap independently.
+  // _billUploadEpoch bumps on every successful upload and keys _AdminBillView
+  // below so an expanded row's bill tile fully remounts and refetches (a plain
+  // setState wouldn't reset that widget's own already-fetched state).
+  final Set<String> _uploadingBillFor = {};
+  int _billUploadEpoch = 0;
+
+  Future<void> _uploadCustomerBillFor(String orderId) async {
+    if (_uploadingBillFor.contains(orderId)) return;
+    setState(() => _uploadingBillFor.add(orderId));
+    try {
+      final result = await FilePicker.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: const ['jpg', 'jpeg', 'png', 'webp', 'pdf'],
+        allowMultiple: false,
+        withData: true,
+      );
+      final picked = result?.files.singleOrNull;
+      final bytes = picked?.bytes;
+      if (picked == null || bytes == null) return; // user cancelled the picker
+      if (bytes.length > 15 * 1024 * 1024) {
+        if (mounted) showToast(context, 'File too large (max 15MB)', isError: true);
+        return;
+      }
+      // Namespaced by order_id so files can't collide across orders.
+      final path = '$orderId/${DateTime.now().millisecondsSinceEpoch}_${picked.name}';
+      await Supabase.instance.client.storage.from('customer-bills').uploadBinary(
+            path,
+            bytes,
+            fileOptions: FileOptions(contentType: _mimeFromBillName(picked.name)),
+          );
+      final raw = await Supabase.instance.client.rpc('upload_customer_bill', params: {
+        'p_order_id': orderId,
+        'p_file_path': path,
+        'p_file_name': picked.name,
+        'p_bucket': 'customer-bills',
+      });
+      final res = raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
+      if (!mounted) return;
+      if (res['status'] == 'ok') {
+        showToast(context, 'Bill uploaded');
+        setState(() => _billUploadEpoch++); // remount _AdminBillView so it refetches
+      } else {
+        showToast(context, res['error']?.toString() ?? 'Could not upload the bill', isError: true);
+      }
+    } catch (_) {
+      if (mounted) showToast(context, 'Could not upload the bill', isError: true);
+    } finally {
+      if (mounted) setState(() => _uploadingBillFor.remove(orderId));
+    }
+  }
+
+  // CHANGE #464: "Upload Bill" (left) / "View Payment" (right) — the same
+  // two-button row style built for #463's (now-removed) customer-card row.
+  Widget _buildUploadBillAndPayRow(_CustRow row, {required VoidCallback onViewPayTap}) {
+    final orderId = row.orderId;
+    if (orderId == null) return const SizedBox();
+    final uploading = _uploadingBillFor.contains(orderId);
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: uploading ? null : () => _uploadCustomerBillFor(orderId),
+        child: Container(
+          height: 32,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: const Color(0xFFF5F6F8),
+            border: Border.all(color: const Color(0xFFD1D5DB)),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: uploading
+              ? const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2))
+              : const Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.upload_outlined, size: 13, color: Color(0xFF374151)),
+                  SizedBox(width: 4),
+                  Text('Upload Bill',
+                      style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+                ]),
+        ),
+      ),
+      const SizedBox(width: 6),
+      _ViewPayBtn(
+        isOpen: _payOpen[orderId] == true,
+        onTap: onViewPayTap,
+        onLongPress: () => showModalBottomSheet(
+          context: context,
+          isScrollControlled: true,
+          backgroundColor: Colors.transparent,
+          builder: (_) => CashPaymentSheet(
+            orderId: orderId,
+            onSuccess: () => setState(() {}),
+          ),
+        ),
+      ),
+    ]);
+  }
+
   // ── Build ──────────────────────────────────────────────────────────────────
 
   @override
@@ -1930,7 +2032,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         ] else ...[
           _th('ORDER ID', flex: 2),
           _th('CONFIRMATION', flex: 3),
-          _th('PAYMENT', flex: 2),  // CHANGE #213 — was ACTION
+          // CHANGE #464: widened 2→4 to fit "Upload Bill" alongside "View Payment".
+          _th('PAYMENT', flex: 4),  // CHANGE #213 — was ACTION
           const SizedBox(width: 32),
         ],
       ]),
@@ -2039,25 +2142,15 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                     child: _ConfirmActions(row: row, onUpdate: _updateStatus),
                   )),
               // CHANGE #213 — View Payment replaces ACTION column
+              // CHANGE #464 — "Upload Bill" added to the left of View Payment.
               Expanded(
-                  flex: 2,
+                  flex: 4,
                   child: row.orderId != null
                       ? GestureDetector(
                           behavior: HitTestBehavior.opaque,
                           onTap: () {},
-                          child: _ViewPayBtn(
-                            isOpen: _payOpen[row.orderId] == true,
-                            onTap: () => _togglePayOpen(row.orderId!),
-                            onLongPress: () => showModalBottomSheet(
-                              context: context,
-                              isScrollControlled: true,
-                              backgroundColor: Colors.transparent,
-                              builder: (_) => CashPaymentSheet(
-                                orderId: row.orderId!,
-                                onSuccess: () => setState(() {}),
-                              ),
-                            ),
-                          ),
+                          child: _buildUploadBillAndPayRow(row,
+                              onViewPayTap: () => _togglePayOpen(row.orderId!)),
                         )
                       : const SizedBox()),
             ],
@@ -2225,26 +2318,16 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                   child: _ConfirmActions(row: row, onUpdate: _updateStatus),
                 ),
                 // CHANGE #213 — View Payment (mobile)
+                // CHANGE #464 — "Upload Bill" added to the left of View Payment.
                 if (row.orderId != null) ...[
                   const SizedBox(height: 6),
                   GestureDetector(
                     behavior: HitTestBehavior.opaque,
                     onTap: () {},
-                    child: _ViewPayBtn(
-                      isOpen: _payOpen[row.orderId] == true,
-                      onTap: () => setState(() =>
-                          _payOpen[row.orderId!] =
-                              !(_payOpen[row.orderId!] ?? false)),
-                      onLongPress: () => showModalBottomSheet(
-                        context: context,
-                        isScrollControlled: true,
-                        backgroundColor: Colors.transparent,
-                        builder: (_) => CashPaymentSheet(
-                          orderId: row.orderId!,
-                          onSuccess: () => setState(() {}),
-                        ),
-                      ),
-                    ),
+                    child: _buildUploadBillAndPayRow(row,
+                        onViewPayTap: () => setState(() =>
+                            _payOpen[row.orderId!] =
+                                !(_payOpen[row.orderId!] ?? false))),
                   ),
                 ],
               ],
@@ -2436,7 +2519,10 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         // customer Bill tab shows, view + download. Renders nothing while
         // loading or when no bill has been uploaded yet, so it never disturbs
         // this card's existing layout for orders without one.
-        if (row.orderId != null) _AdminBillView(orderId: row.orderId!),
+        // CHANGE #464: keyed by _billUploadEpoch so a successful upload from
+        // the new Upload Bill button forces this tile to remount and refetch.
+        if (row.orderId != null)
+          _AdminBillView(key: ValueKey('${row.orderId}_$_billUploadEpoch'), orderId: row.orderId!),
         const SizedBox(height: 8),
         Text(label,
             style: const TextStyle(
@@ -5594,7 +5680,7 @@ String _mimeFromBillName(String name) {
 
 class _AdminBillView extends StatefulWidget {
   final String orderId;
-  const _AdminBillView({required this.orderId});
+  const _AdminBillView({super.key, required this.orderId});
 
   @override
   State<_AdminBillView> createState() => _AdminBillViewState();

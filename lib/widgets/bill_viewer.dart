@@ -157,7 +157,17 @@ class BillFilePreview extends StatefulWidget {
 }
 
 class _BillFilePreviewState extends State<BillFilePreview> {
+  // #468: two URLs, not one. Bills uploaded straight from a phone camera can
+  // be several MB at full resolution — downloading that just to paint a
+  // ~220px-tall thumbnail is most of what made the preview feel slow.
+  // _url is a small server-side-resized transform (fast to fetch/decode) for
+  // the inline thumbnail; _fullUrl is a larger transform kicked off in
+  // parallel and precached via precacheImage() as soon as it's known, so by
+  // the time the user taps to open the full-screen viewer the image is
+  // already sitting in Flutter's ImageCache — the viewer opens with zero
+  // network wait instead of starting a fresh download on tap.
   String? _url;
+  String? _fullUrl;
   bool _error = false;
 
   @override
@@ -172,6 +182,7 @@ class _BillFilePreviewState extends State<BillFilePreview> {
     if (old.bucket != widget.bucket || old.path != widget.path) {
       setState(() {
         _url = null;
+        _fullUrl = null;
         _error = false;
       });
       _load();
@@ -180,10 +191,25 @@ class _BillFilePreviewState extends State<BillFilePreview> {
 
   Future<void> _load() async {
     try {
-      final url = await Supabase.instance.client.storage
-          .from(widget.bucket)
-          .createSignedUrl(widget.path, 3600);
-      if (mounted) setState(() => _url = url);
+      final storage = Supabase.instance.client.storage.from(widget.bucket);
+      if (_isImage) {
+        final urls = await Future.wait([
+          storage.createSignedUrl(widget.path, 3600,
+              transform: const TransformOptions(width: 480, quality: 70)),
+          storage.createSignedUrl(widget.path, 3600,
+              transform: const TransformOptions(width: 1600, quality: 80)),
+        ]);
+        if (!mounted) return;
+        setState(() {
+          _url = urls[0];
+          _fullUrl = urls[1];
+        });
+        precacheImage(NetworkImage(urls[1]), context);
+      } else {
+        // PDFs render via the iframe, not Image.network — no transform applies.
+        final url = await storage.createSignedUrl(widget.path, 3600);
+        if (mounted) setState(() => _url = url);
+      }
     } catch (_) {
       if (mounted) setState(() => _error = true);
     }
@@ -221,7 +247,11 @@ class _BillFilePreviewState extends State<BillFilePreview> {
       );
     }
     return GestureDetector(
-      onTap: () => showBillViewer(context, url: url, isImage: _isImage),
+      // #468: opens with _fullUrl (already precached above) whenever it's
+      // ready, so the viewer paints instantly instead of starting a fresh
+      // download — falls back to the thumbnail url only in the unlikely case
+      // the full-size prefetch hasn't resolved yet.
+      onTap: () => showBillViewer(context, url: _fullUrl ?? url, isImage: _isImage),
       child: Container(
         height: widget.height,
         width: double.infinity,
@@ -231,8 +261,8 @@ class _BillFilePreviewState extends State<BillFilePreview> {
             ? Image.network(
                 url,
                 fit: BoxFit.contain,
-                // #467: see the full-screen viewer's comment — same texture-size fix,
-                // smaller target since this is just a compact inline thumbnail.
+                // #467/#468: url is already a server-side-resized (480px) transform,
+                // so this cap is now just a defensive ceiling, not doing the heavy lifting.
                 cacheWidth: 480,
                 loadingBuilder: (_, child, prog) => prog == null
                     ? child

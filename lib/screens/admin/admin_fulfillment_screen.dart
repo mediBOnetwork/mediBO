@@ -6980,6 +6980,71 @@ Future<List<Map<String, dynamic>>> fetchScopedPackMentions({
   return mentions.where((r) => r['session_key']?.toString() == sessionKey).toList();
 }
 
+// CHANGE #456: one chip per RECORDING (session_key), not per chunk window
+// (recording_seq) — a continuous recording is internally sliced into several
+// ~30s windows/clip_paths (each its own recording_seq + clip_path), but the
+// user only ever intends ONE clip per mic-on → Stop. Shared by the
+// Shop/Warehouse popup (voice_clip_mentions) and the Pack sheet
+// (pack_clip_mentions) so both group identically.
+//
+// Rows with no session_key (legacy, pre-#454) collapse into ONE group per
+// the_date instead of one group per row, so old data doesn't render as one
+// "clip" per historical mention. windows within a group are ordered by
+// recording_seq so sequential playback reproduces the recording in order.
+typedef ClipWindow = ({int seq, String clipPath});
+typedef ClipGroup = ({String groupKey, List<ClipWindow> windows});
+
+// CHANGE #456: the grouping rule, exposed standalone so callers can find which
+// group a SINGLE row belongs to (e.g. filtering the flat clip view) without
+// recomputing every group and without duplicating the fallback rule. Rows
+// with no session_key (legacy, pre-#454) group by the_date instead — NEVER by
+// recording_seq alone, since that's a per-session counter that restarts at 0
+// for every recording and can collide across two unrelated sessions.
+String clipGroupKeyOf(Map<String, dynamic> r) {
+  final sessionKey = r['session_key']?.toString();
+  return (sessionKey != null && sessionKey.isNotEmpty)
+      ? sessionKey
+      : 'legacy:${r['the_date']?.toString() ?? ''}';
+}
+
+List<ClipGroup> groupMentionsIntoClips(List<Map<String, dynamic>> rows) {
+  final groups = <String, List<Map<String, dynamic>>>{};
+  for (final r in rows) {
+    final path = r['clip_path']?.toString() ?? '';
+    if (path.isEmpty) continue;
+    (groups[clipGroupKeyOf(r)] ??= []).add(r);
+  }
+  final result = <ClipGroup>[];
+  groups.forEach((groupKey, groupRows) {
+    final sorted = List<Map<String, dynamic>>.from(groupRows)
+      ..sort((a, b) => ((a['recording_seq'] as num?)?.toInt() ?? 0)
+          .compareTo((b['recording_seq'] as num?)?.toInt() ?? 0));
+    final seen = <String>{};
+    final windows = <ClipWindow>[];
+    for (final r in sorted) {
+      final p = r['clip_path']?.toString() ?? '';
+      if (p.isEmpty || !seen.add(p)) continue;
+      windows.add((seq: (r['recording_seq'] as num?)?.toInt() ?? 0, clipPath: p));
+    }
+    if (windows.isEmpty) return;
+    result.add((groupKey: groupKey, windows: windows));
+  });
+  // Chronological order across sessions: recording_seq is a per-session counter
+  // (each new session restarts at 0), so it can't order sessions against each
+  // other. newVoiceSessionKey's own format (entity|stage|ms) embeds the actual
+  // start-time millis — parse that back out as the real sort key. Legacy
+  // (date-keyed) groups have no such value and sort first, tied-broken by key.
+  int sortMs(String groupKey) {
+    if (!groupKey.contains('|')) return 0;
+    return int.tryParse(groupKey.split('|').last) ?? 0;
+  }
+  result.sort((a, b) {
+    final c = sortMs(a.groupKey).compareTo(sortMs(b.groupKey));
+    return c != 0 ? c : a.groupKey.compareTo(b.groupKey);
+  });
+  return result;
+}
+
 // ── #115: Counted items popup — mentions table with tap-to-play ───────────────
 
 // #117: _CountedMentionsPopup — whole-clip playback only.
@@ -7057,7 +7122,14 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   final Map<String, String> _signedUrlCache = {}; // clip_path -> signed URL (cached per tap)
   String? _playingClip;   // clip_path of currently-playing recording
   int? _playingSeq;       // #119: recording_seq of playing clip (drives green state)
-  int? _selectedClipSeq;  // #119: clip last tapped (drives reorder; null = default order)
+  // CHANGE #456: group key (session_key, or "legacy:<date>") of the clip chip
+  // last tapped — null = default "All" order. Was recording_seq (per chunk
+  // window); a chip is now one whole recording, which may span several windows.
+  String? _selectedGroupKey;
+  // CHANGE #456: remaining clip_paths for the group currently playing, so
+  // multi-window recordings play back-to-back as one continuous clip instead
+  // of stopping after the first window.
+  List<String> _playQueue = [];
   // #128: controller for the horizontal chip row so we can scroll back to start on reset
   final _chipScrollCtrl = ScrollController();
   // #130: seq of the clip JUST recorded — only ITS playback completion triggers reset to All
@@ -7127,9 +7199,12 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
         sessionKey: widget.activeSessionKey,
       );
       if (!mounted) return;
-      final distinctClips = mentions.map((r) => r['clip_path']?.toString() ?? '').toSet().length;
+      // CHANGE #456: clip count = distinct RECORDINGS (session groups), not distinct
+      // chunk-window clip_paths — verifiable via curl/render-log for this change.
+      final distinctClips = groupMentionsIntoClips(mentions).length;
+      final distinctWindows = mentions.map((r) => r['clip_path']?.toString() ?? '').toSet().length;
       RenderLog.write('c119_popup_built',
-          'clips=$distinctClips;products=${_uniqueNames(mentions)};total_mentions=${mentions.length};retains_seq=y');
+          'clips=$distinctClips;windows=$distinctWindows;products=${_uniqueNames(mentions)};total_mentions=${mentions.length};retains_seq=y');
       setState(() => _mentions = mentions);
     } catch (e) {
       if (mounted) setState(() => _error = e.toString());
@@ -7139,12 +7214,12 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   int _uniqueNames(List<Map<String, dynamic>> rows) =>
       rows.map((r) => r['matched_name']?.toString() ?? '').toSet().length;
 
-  // #130/#131: fires inside _playWholeClip's onEnded for ANY tapped clip.
+  // #130/#131: fires after the LAST window of a tapped clip finishes playing.
   // Resets popup to All combined view + scrolls chip row to start.
   Future<void> _resetToAllAfterPlayback({int? playedSeq}) async {
     if (!mounted) return;
     setState(() {
-      _selectedClipSeq = null; // All view
+      _selectedGroupKey = null; // All view
       _mentions = null;        // clear so grouped body shows fresh data, not stale flat list
     });
     if (_chipScrollCtrl.hasClients) {
@@ -7154,14 +7229,18 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
     }
     await _fetchMentions();
     if (!mounted) return;
-    // c131_return_fired: runtime proof inside completion handler, AFTER selectedClipSeq=null
-    final modeAfter = _selectedClipSeq == null ? 'grouped' : 'flat';
+    // c131_return_fired: runtime proof inside completion handler, AFTER selectedGroupKey=null
+    final modeAfter = _selectedGroupKey == null ? 'grouped' : 'flat';
     RenderLog.write('c131_return_fired',
-        'trigger=playback_complete;played_seq=${playedSeq?.toString() ?? 'null'};mode_after=$modeAfter;seq_after=${_selectedClipSeq?.toString() ?? 'null'}');
+        'trigger=playback_complete;played_seq=${playedSeq?.toString() ?? 'null'};mode_after=$modeAfter;seq_after=${_selectedGroupKey ?? 'null'}');
   }
 
-  // Whole-clip play — no seeking, no timestamps.
-  Future<void> _playWholeClip(String clipPath, int recordingSeq) async {
+  // Whole-clip play — no seeking, no timestamps. [onWindowEnded] fires when THIS
+  // window's audio ends naturally — CHANGE #456's queue orchestration (_tapGroup)
+  // uses it to advance to the next window in a multi-window recording, or to
+  // reset to All once the group's last window finishes.
+  Future<void> _playWholeClip(String clipPath, int recordingSeq,
+      {required void Function(int? playedSeq) onWindowEnded}) async {
     if (clipPath.isEmpty) {
       _showSnackMsg('Audio unavailable for this clip');
       return;
@@ -7194,7 +7273,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
       // actually emit sound (audioplayers_web silently muted them).
       final el = html.AudioElement(url);
       _clipAudio = el;
-      // Natural end → clear state + return to All view (matches old onPlayerComplete).
+      // Natural end → notify the caller (queue advance or reset-to-All).
       // pause()/src='' interruptions do NOT fire onEnded, so they are excluded.
       el.onEnded.listen((_) {
         if (!mounted || !identical(_clipAudio, el)) return;
@@ -7202,7 +7281,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
         setState(() { _playingClip = null; _playingSeq = null; });
         RenderLog.write('c119_play_state', 'playing_seq=none;is_playing=false');
         _newClipSeq = null;
-        _resetToAllAfterPlayback(playedSeq: playedSeq);
+        onWindowEnded(playedSeq);
       });
       el.onError.listen((_) {
         if (!mounted || !identical(_clipAudio, el)) return;
@@ -7227,23 +7306,42 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
     }
   }
 
-  // #119/#120: tap a clip chip — switch to flat spoken-order view + play.
-  // Tapping the currently-playing clip stops audio but keeps the flat view.
-  void _tapClip(String clipPath, int recordingSeq) {
-    if (_playingClip == clipPath) {
-      // Already playing — stop; stay in flat view for this clip
+  // CHANGE #456: tap a clip chip (one RECORDING, possibly several chunk-window
+  // audio files) — switch to flat spoken-order view + play its windows
+  // back-to-back in order. Tapping the currently-playing group's chip stops
+  // audio and clears the queue but keeps the flat view.
+  void _tapGroup(ClipGroup group) {
+    if (_playingClip != null && group.windows.any((w) => w.clipPath == _playingClip)) {
       _stopAudio();
-    } else {
-      setState(() => _selectedClipSeq = recordingSeq);
-      _playWholeClip(clipPath, recordingSeq);
-      RenderLog.write('c119_clip_tapped', 'seq=$recordingSeq;flat_view=y;playing=y');
+      _playQueue = [];
+      return;
     }
+    setState(() => _selectedGroupKey = group.groupKey);
+    _playQueue = group.windows.skip(1).map((w) => w.clipPath).toList();
+    final seqByPath = {for (final w in group.windows) w.clipPath: w.seq};
+    RenderLog.write('c119_clip_tapped',
+        'group=${group.groupKey};windows=${group.windows.length};flat_view=y;playing=y');
+    _playWholeClip(group.windows.first.clipPath, group.windows.first.seq,
+        onWindowEnded: (_) => _playNextInQueue(seqByPath));
+  }
+
+  // CHANGE #456: advances through a multi-window recording's remaining clips;
+  // once exhausted, resets to the All view exactly like the old single-file end.
+  void _playNextInQueue(Map<String, int> seqByPath) {
+    if (_playQueue.isEmpty) {
+      _resetToAllAfterPlayback();
+      return;
+    }
+    final next = _playQueue.removeAt(0);
+    _playWholeClip(next, seqByPath[next] ?? 0,
+        onWindowEnded: (_) => _playNextInQueue(seqByPath));
   }
 
   void _stopAudio() {
     _clipAudio?.pause();
     _clipAudio?.src = '';
     _clipAudio = null;
+    _playQueue = [];
     if (mounted) setState(() { _playingClip = null; _playingSeq = null; });
   }
 
@@ -7252,20 +7350,6 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(msg), duration: const Duration(seconds: 2)),
     );
-  }
-
-  // Returns distinct clips ordered by recording_seq: [{seq, clipPath}]
-  List<({int seq, String clipPath})> _distinctClips(List<Map<String, dynamic>> rows) {
-    final seen = <String>{};
-    final result = <({int seq, String clipPath})>[];
-    for (final r in rows) {
-      final path = r['clip_path']?.toString() ?? '';
-      if (path.isEmpty || !seen.add(path)) continue;
-      final seq = (r['recording_seq'] as num?)?.toInt() ?? 0;
-      result.add((seq: seq, clipPath: path));
-    }
-    result.sort((a, b) => a.seq.compareTo(b.seq));
-    return result;
   }
 
   // #334 B1: tap-to-fix for unmatched mention rows — shows supplier item picker.
@@ -7395,13 +7479,13 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
     RenderLog.write('c120_no_timestamps', 'true'); // static: #120 no timestamps
 
     final mentions = _mentions;
-    final clips = mentions != null ? _distinctClips(mentions) : <({int seq, String clipPath})>[];
-    final selSeq = _selectedClipSeq;
+    final clips = mentions != null ? groupMentionsIntoClips(mentions) : <ClipGroup>[];
+    final selGroupKey = _selectedGroupKey;
 
     // #120: log view mode on every build
     if (mentions != null && mentions.isNotEmpty) {
       RenderLog.write('c120_view_mode',
-          selSeq == null ? 'mode=grouped' : 'mode=flat;clip_seq=$selSeq');
+          selGroupKey == null ? 'mode=grouped' : 'mode=flat;clip_seq=$selGroupKey');
     }
 
     // #118/#110: log popup width vs screen
@@ -7512,39 +7596,37 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
                         // "All" chip — returns to grouped overview
                         GestureDetector(
                           onTap: () {
-                            setState(() => _selectedClipSeq = null);
+                            setState(() => _selectedGroupKey = null);
                             RenderLog.write('c120_back_to_all', 'true');
                           },
                           child: Container(
                             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                             decoration: BoxDecoration(
-                              color: selSeq == null ? _kGreen : const Color(0xFFE8F5E9),
+                              color: selGroupKey == null ? _kGreen : const Color(0xFFE8F5E9),
                               borderRadius: BorderRadius.circular(20),
                               border: Border.all(color: _kGreen),
                             ),
                             child: Text('All',
                                 style: TextStyle(
                                   fontSize: 12, fontWeight: FontWeight.w600,
-                                  color: selSeq == null ? Colors.white : _kGreen,
+                                  color: selGroupKey == null ? Colors.white : _kGreen,
                                 )),
                           ),
                         ),
-                        // Clip chips
+                        // CHANGE #456: one chip per RECORDING (session), not per chunk window.
                         ...clips.asMap().entries.map((e) {
                           final idx = e.key;
-                          final clip = e.value;
+                          final group = e.value;
                           return Padding(
                             padding: const EdgeInsets.only(left: 8),
                             child: _ClipPlayButton(
-                              // CHANGE #455: these chips are chunk windows (recording_seq)
-                              // within ONE continuous recording, not separate recordings —
-                              // "Clip N" read as multiple takes. Warehouse only per scope;
-                              // Shop (widget.stage=='shop') keeps the existing "Clip" label.
+                              // #455: "Clip N" for Shop, "Part N" for Warehouse (see #455).
                               label: widget.stage == 'warehouse' ? 'Part ${idx + 1}' : 'Clip ${idx + 1}',
-                              clipPath: clip.clipPath,
-                              recordingSeq: clip.seq,
-                              playing: _playingClip == clip.clipPath,
-                              onPlay: () => _tapClip(clip.clipPath, clip.seq),
+                              clipPath: group.windows.first.clipPath,
+                              recordingSeq: group.windows.first.seq,
+                              playing: _playingClip != null &&
+                                  group.windows.any((w) => w.clipPath == _playingClip),
+                              onPlay: () => _tapGroup(group),
                               onStop: _stopAudio,
                             ),
                           );
@@ -7629,7 +7711,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
                   style: TextStyle(fontSize: 13, color: _kSub)),
             );
           })
-        else if (selSeq != null)
+        else if (selGroupKey != null)
           // #120: flat spoken-order view for selected clip
           Builder(builder: (_) {
             RenderLog.write('c112_popup_branch', 'branch=list;mode=flat'); // branch proof
@@ -7637,7 +7719,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
               child: SingleChildScrollView(
                 child: Padding(
                   padding: const EdgeInsets.symmetric(vertical: 4),
-                  child: _buildFlatList(clips, selSeq),
+                  child: _buildFlatList(selGroupKey),
                 ),
               ),
             );
@@ -7782,20 +7864,28 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   }
 
   // #120: flat spoken-order list for the selected clip.
-  // One row per mention (no grouping), ordered by ord asc for that recording_seq.
-  // No timestamps used — green is whole-clip (#119 rule).
+  // CHANGE #456: one row per mention, merged across every chunk window that
+  // belongs to this RECORDING (group) — filtered by the row's own group key
+  // (clipGroupKeyOf), not by a single recording_seq. Ordered by (recording_seq,
+  // ord) so windows play out in the same order the recording happened, not just
+  // ord within one window. No timestamps used — green is whole-clip (#119 rule).
   // #331: long-press on each row → delete/re-add via voice_mention_set_status.
   // #344: delegates to shared _MentionClipTable (3-column Product|Qty spoken|Total)
-  Widget _buildFlatList(List<({int seq, String clipPath})> clips, int clipSeq) {
+  Widget _buildFlatList(String groupKey) {
     final rows = (_mentions ?? [])
-        .where((r) => (r['recording_seq'] as num?)?.toInt() == clipSeq)
+        .where((r) => clipGroupKeyOf(r) == groupKey)
         .toList()
-      ..sort((a, b) => ((a['ord'] as num?)?.toInt() ?? 0)
-          .compareTo((b['ord'] as num?)?.toInt() ?? 0));
+      ..sort((a, b) {
+        final seqCmp = ((a['recording_seq'] as num?)?.toInt() ?? 0)
+            .compareTo((b['recording_seq'] as num?)?.toInt() ?? 0);
+        return seqCmp != 0
+            ? seqCmp
+            : ((a['ord'] as num?)?.toInt() ?? 0).compareTo((b['ord'] as num?)?.toInt() ?? 0);
+      });
 
-    RenderLog.write('c120_flat_built', 'clip_seq=$clipSeq;rows=${rows.length};ord_sorted=y');
+    RenderLog.write('c120_flat_built', 'group=$groupKey;rows=${rows.length};ord_sorted=y');
     RenderLog.write('c342_row_icon', 'stage=${widget.stage};rows=${rows.length}');
-    RenderLog.write('c343_clip_actions', 'stage=${widget.stage};clip=$clipSeq;rows=${rows.length}');
+    RenderLog.write('c343_clip_actions', 'stage=${widget.stage};group=$groupKey;rows=${rows.length}');
 
     final orderedMap = <String, int>{};
     for (final item in widget.orderItems) {
@@ -13296,7 +13386,9 @@ class _PackMentionsSheet extends StatefulWidget {
 }
 
 class _PackMentionsSheetState extends State<_PackMentionsSheet> {
-  int? _selectedSeq; // null = All
+  // CHANGE #456: group key (session_key, or "legacy:<date>") of the clip chip
+  // last tapped — null = default "All" order.
+  String? _selectedGroupKey;
   final _chipScrollCtrl = ScrollController();
 
   // #338: local mention list so hold toggles update in place (seeded from parent)
@@ -13401,6 +13493,9 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
   final Map<String, String> _signedUrlCache = {};
   String? _playingClip;
   int? _playingSeq;
+  // CHANGE #456: remaining clip_paths for the group currently playing, so a
+  // multi-window recording plays back-to-back as one continuous clip.
+  List<String> _playQueue = [];
 
   static const double _kTotalColW = 52.0;
   // #342: widened from 108 → 148 to accommodate icon(34) + gap(4) + pill(~40) per entry
@@ -13414,20 +13509,6 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
     _clipAudio?.src = '';
     _chipScrollCtrl.dispose();
     super.dispose();
-  }
-
-  // Distinct clips ordered by seq ascending.
-  List<({int seq, String clipPath})> _distinctClips(List<Map<String, dynamic>> rows) {
-    final seen = <String>{};
-    final result = <({int seq, String clipPath})>[];
-    for (final r in rows) {
-      final path = r['clip_path']?.toString() ?? '';
-      if (path.isEmpty || !seen.add(path)) continue;
-      final seq = (r['recording_seq'] as num?)?.toInt() ?? 0;
-      result.add((seq: seq, clipPath: path));
-    }
-    result.sort((a, b) => a.seq.compareTo(b.seq));
-    return result;
   }
 
   // Group by product_id (known) or '(unnamed)' (null pid — unresolved by voice_match_product).
@@ -13472,7 +13553,10 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
     }).toList();
   }
 
-  Future<void> _playClip(String clipPath, int seq) async {
+  // [onWindowEnded] fires when THIS window's audio ends naturally — CHANGE
+  // #456's queue orchestration (_tapGroup/_playNextInQueue) uses it to advance
+  // to the next window in a multi-window recording.
+  Future<void> _playClip(String clipPath, int seq, {required VoidCallback onWindowEnded}) async {
     if (_playingClip == clipPath) { _stopAudio(); return; }
     _stopAudio();
     if (clipPath.isEmpty) return;
@@ -13489,6 +13573,7 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
       el.onEnded.listen((_) {
         if (!mounted || !identical(_clipAudio, el)) return;
         setState(() { _playingClip = null; _playingSeq = null; });
+        onWindowEnded();
       });
       el.onError.listen((_) {
         if (!mounted || !identical(_clipAudio, el)) return;
@@ -13503,24 +13588,47 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
     }
   }
 
+  // CHANGE #456: tap a clip chip (one RECORDING, possibly several chunk-window
+  // audio files) — play its windows back-to-back in order. Tapping the
+  // currently-playing group's chip stops audio.
+  void _tapGroup(ClipGroup group) {
+    if (_playingClip != null && group.windows.any((w) => w.clipPath == _playingClip)) {
+      _stopAudio();
+      return;
+    }
+    setState(() => _selectedGroupKey = group.groupKey);
+    _playQueue = group.windows.skip(1).map((w) => w.clipPath).toList();
+    final seqByPath = {for (final w in group.windows) w.clipPath: w.seq};
+    _playClip(group.windows.first.clipPath, group.windows.first.seq,
+        onWindowEnded: () => _playNextInQueue(seqByPath));
+  }
+
+  void _playNextInQueue(Map<String, int> seqByPath) {
+    if (_playQueue.isEmpty) return;
+    final next = _playQueue.removeAt(0);
+    _playClip(next, seqByPath[next] ?? 0, onWindowEnded: () => _playNextInQueue(seqByPath));
+  }
+
   void _stopAudio() {
     _clipAudio?.pause();
     _clipAudio?.src = '';
     _clipAudio = null;
+    _playQueue = [];
     if (mounted) setState(() { _playingClip = null; _playingSeq = null; });
   }
 
   @override
   Widget build(BuildContext context) {
     final allMentions = _mentions; // #338: local list — updates on hold toggles
-    final clips = _distinctClips(allMentions);
-    final filtered = _selectedSeq == null
+    // CHANGE #456: one chip per RECORDING (session), not per chunk window.
+    final clips = groupMentionsIntoClips(allMentions);
+    final filtered = _selectedGroupKey == null
         ? allMentions
-        : allMentions.where((m) => (m['recording_seq'] as num?)?.toInt() == _selectedSeq).toList();
+        : allMentions.where((m) => clipGroupKeyOf(m) == _selectedGroupKey).toList();
     final groups = _groupMentions(filtered);
     final playSeq = _playingSeq;
     // #343: icons only in per-clip view; All view is a read-only aggregate
-    final showActions = _selectedSeq != null;
+    final showActions = _selectedGroupKey != null;
     // CHANGE #389 — showActions gates the standalone header (only) vs.
     // _MentionClipTable's own header (only) below; exactly one ever mounts.
     RenderLog.write('c389_header_once', showActions ? 'mode=clip' : 'mode=all');
@@ -13574,34 +13682,32 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
                   GestureDetector(
                     onTap: () {
                       _stopAudio();
-                      setState(() => _selectedSeq = null);
+                      setState(() => _selectedGroupKey = null);
                     },
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                       decoration: BoxDecoration(
-                        color: _selectedSeq == null ? _kGreen : const Color(0xFFE8F5E9),
+                        color: _selectedGroupKey == null ? _kGreen : const Color(0xFFE8F5E9),
                         borderRadius: BorderRadius.circular(20),
                         border: Border.all(color: _kGreen),
                       ),
                       child: Text('All',
                           style: TextStyle(
                               fontSize: 12, fontWeight: FontWeight.w600,
-                              color: _selectedSeq == null ? Colors.white : _kGreen)),
+                              color: _selectedGroupKey == null ? Colors.white : _kGreen)),
                     ),
                   ),
-                  // Per-clip chips
+                  // CHANGE #456: one chip per RECORDING (session), not per chunk window.
                   ...clips.asMap().entries.map((e) {
                     final idx = e.key;
-                    final clip = e.value;
-                    final isSelected = _selectedSeq == clip.seq;
-                    final isPlaying = _playingClip == clip.clipPath;
+                    final group = e.value;
+                    final isSelected = _selectedGroupKey == group.groupKey;
+                    final isPlaying = _playingClip != null &&
+                        group.windows.any((w) => w.clipPath == _playingClip);
                     return Padding(
                       padding: const EdgeInsets.only(left: 8),
                       child: GestureDetector(
-                        onTap: () {
-                          setState(() => _selectedSeq = clip.seq);
-                          _playClip(clip.clipPath, clip.seq);
-                        },
+                        onTap: () => _tapGroup(group),
                         child: Container(
                           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                           decoration: BoxDecoration(
@@ -13660,7 +13766,7 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
             // Per-clip view: one row per mention, whole-row tint, shared widget
             Builder(builder: (_) {
               RenderLog.write('c342_row_icon', 'stage=pack;rows=${filtered.length}');
-              RenderLog.write('c343_clip_actions', 'stage=pack;seq=${_selectedSeq ?? 0};rows=${filtered.length}');
+              RenderLog.write('c343_clip_actions', 'stage=pack;group=${_selectedGroupKey ?? ''};rows=${filtered.length}');
               RenderLog.write('c344_clip_table', 'stage=pack;rows=${filtered.length}');
               final orderedMap = <String, int>{};
               for (final it in widget.packItems) {

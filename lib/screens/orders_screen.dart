@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
@@ -581,6 +582,9 @@ class _BillTab extends StatelessWidget {
   final String orderId;
   const _BillTab({required this.bill, required this.orderId});
 
+  // CHANGE #462: ready==true renders the invoice preview from customer_bill()
+  // verbatim — unchanged below. ready==false no longer collapses the area: it
+  // shows the returned message AND the same three actions, disabled.
   @override
   Widget build(BuildContext context) {
     final ready = bill['ready'] == true;
@@ -588,16 +592,19 @@ class _BillTab extends StatelessWidget {
 
     if (!ready) {
       final message = bill['message']?.toString() ?? '';
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 24),
-        child: Column(children: [
-          const Icon(Icons.receipt_long_outlined, size: 48, color: Color(0xFFD1D5DB)),
-          const SizedBox(height: 12),
-          Text(message,
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
-        ]),
-      );
+      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        _BillActionsRow(ready: false, orderId: orderId, invoiceNumber: null),
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 24),
+          child: Column(children: [
+            const Icon(Icons.receipt_long_outlined, size: 48, color: Color(0xFFD1D5DB)),
+            const SizedBox(height: 12),
+            Text(message,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+          ]),
+        ),
+      ]);
     }
 
     final invoice = Map<String, dynamic>.from(bill['invoice'] as Map? ?? {});
@@ -622,6 +629,8 @@ class _BillTab extends StatelessWidget {
     RenderLog.write('c451_seller_warning', (sellerWarning != null && sellerWarning.isNotEmpty) ? 1 : 0);
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      _BillActionsRow(ready: true, orderId: orderId, invoiceNumber: invoice['number']?.toString()),
+      const SizedBox(height: 14),
       _invoiceHeader(invoice, seller, buyer, sellerWarning),
       const SizedBox(height: 14),
       _invoiceTable(columns, lines),
@@ -631,8 +640,6 @@ class _BillTab extends StatelessWidget {
         const SizedBox(height: 16),
         _gstSummaryTable(gstSummary),
       ],
-      const SizedBox(height: 16),
-      _DownloadBillButton(orderId: orderId, invoiceNumber: invoice['number']?.toString()),
     ]);
   }
 
@@ -827,24 +834,41 @@ class _BillTab extends StatelessWidget {
   }
 }
 
-// ── B6: Download Bill (PDF) ──────────────────────────────────────────────────
+// ── B6: Bill actions — Download / Send to WhatsApp / Share ───────────────────
+// CHANGE #462: three equal-width buttons above the preview (was a single
+// "Download Bill" button below it). Enabled only when the bill is ready;
+// _BillTab passes ready==false with orderItems/invoiceNumber absent so all
+// three render disabled instead of the section collapsing entirely.
 
-class _DownloadBillButton extends StatefulWidget {
+class _BillActionsRow extends StatefulWidget {
+  final bool ready;
   final String orderId;
   final String? invoiceNumber;
-  const _DownloadBillButton({required this.orderId, required this.invoiceNumber});
+  const _BillActionsRow({required this.ready, required this.orderId, required this.invoiceNumber});
 
   @override
-  State<_DownloadBillButton> createState() => _DownloadBillButtonState();
+  State<_BillActionsRow> createState() => _BillActionsRowState();
 }
 
-class _DownloadBillButtonState extends State<_DownloadBillButton> {
+class _BillActionsRowState extends State<_BillActionsRow> {
   bool _downloading = false;
+  bool _sharing = false;
+  // #462: only ONE floating popup at a time — remove any existing entry
+  // before creating a new one, and clean up on dispose (an OverlayEntry isn't
+  // auto-removed when its host widget is torn down).
+  OverlayEntry? _waPopupEntry;
 
   @override
   void initState() {
     super.initState();
     RenderLog.write('c451_pdf_wired', 1);
+  }
+
+  @override
+  void dispose() {
+    _waPopupEntry?.remove();
+    _waPopupEntry = null;
+    super.dispose();
   }
 
   String _filenameFrom(http.Response resp) {
@@ -856,9 +880,10 @@ class _DownloadBillButtonState extends State<_DownloadBillButton> {
     return 'Invoice-${widget.invoiceNumber ?? widget.orderId}.pdf';
   }
 
-  Future<void> _download() async {
-    if (_downloading) return;
-    setState(() => _downloading = true);
+  // Shared PDF fetch for ① Download and ③ Share — same bill-pdf endpoint the
+  // preview data comes from; the backend renders exactly what customer_bill()
+  // returns, no client-side layout/math.
+  Future<({List<int> bytes, String filename})?> _fetchBillPdf() async {
     try {
       final token = Supabase.instance.client.auth.currentSession?.accessToken ?? '';
       final resp = await http.post(
@@ -869,36 +894,320 @@ class _DownloadBillButtonState extends State<_DownloadBillButton> {
         },
         body: jsonEncode({'order_id': widget.orderId}),
       );
-      if (!mounted) return;
-      if (resp.statusCode == 200) {
-        downloadBytes(resp.bodyBytes, _filenameFrom(resp), 'application/pdf');
-      } else {
-        String message = 'Could not download the bill.';
+      if (resp.statusCode != 200) {
+        String message = 'Could not load the bill.';
         try {
           final decoded = jsonDecode(resp.body);
           if (decoded is Map) {
             message = decoded['message']?.toString() ?? decoded['error']?.toString() ?? message;
           }
         } catch (_) {}
-        showToast(context, message, isError: true);
+        if (mounted) showToast(context, message, isError: true);
+        return null;
       }
+      return (bytes: resp.bodyBytes, filename: _filenameFrom(resp));
     } catch (_) {
-      if (mounted) showToast(context, 'Could not download the bill.', isError: true);
-    } finally {
-      if (mounted) setState(() => _downloading = false);
+      if (mounted) showToast(context, 'Could not load the bill.', isError: true);
+      return null;
     }
+  }
+
+  // ① Download — direct save, no account picker: downloadBytes() is a plain
+  // <a download> anchor click, never an OAuth/account-chooser flow.
+  Future<void> _download() async {
+    if (_downloading || !widget.ready) return;
+    setState(() => _downloading = true);
+    final file = await _fetchBillPdf();
+    if (mounted) setState(() => _downloading = false);
+    if (file == null) return;
+    downloadBytes(file.bytes, file.filename, 'application/pdf');
+  }
+
+  // ③ Share — native OS share sheet (Web Share API) with the SAME PDF file as
+  // Download. shareBytes() returns null only when this browser has no
+  // file-share support at all (then fall back to a direct download); it
+  // returns false on user-cancel, which must stay silent — no fallback, no
+  // error toast, matching normal native share-sheet UX.
+  Future<void> _share() async {
+    if (_sharing || !widget.ready) return;
+    setState(() => _sharing = true);
+    final file = await _fetchBillPdf();
+    if (file == null) {
+      if (mounted) setState(() => _sharing = false);
+      return;
+    }
+    final result = await shareBytes(file.bytes, file.filename, 'application/pdf');
+    if (mounted) setState(() => _sharing = false);
+    if (result == null) downloadBytes(file.bytes, file.filename, 'application/pdf');
+  }
+
+  // ② Send Bill to WhatsApp — mini floating popup anchored near this button
+  // (never a center/full-screen dialog), dismissed on outside tap.
+  void _showWaPopup(BuildContext buttonContext) {
+    if (!widget.ready) return;
+    _waPopupEntry?.remove();
+    _waPopupEntry = null;
+    final box = buttonContext.findRenderObject() as RenderBox?;
+    if (box == null || !box.attached) return;
+    final topLeft = box.localToGlobal(Offset.zero);
+    final screenW = MediaQuery.of(buttonContext).size.width;
+    const popupW = 260.0;
+    final left = (topLeft.dx + box.size.width / 2 - popupW / 2)
+        .clamp(12.0, math.max(12.0, screenW - popupW - 12.0))
+        .toDouble();
+    final top = topLeft.dy + box.size.height + 6;
+
+    void dismiss() {
+      _waPopupEntry?.remove();
+      _waPopupEntry = null;
+    }
+
+    _waPopupEntry = OverlayEntry(builder: (_) => Stack(children: [
+      Positioned.fill(
+        child: GestureDetector(behavior: HitTestBehavior.translucent, onTap: dismiss),
+      ),
+      Positioned(
+        top: top,
+        left: left,
+        width: popupW,
+        child: Material(
+          borderRadius: BorderRadius.circular(12),
+          elevation: 8,
+          color: Colors.white,
+          child: _WaNumberPicker(
+            orderId: widget.orderId,
+            onDismiss: dismiss,
+            onResult: (message, isError) {
+              if (mounted) showToast(context, message, isError: isError);
+            },
+          ),
+        ),
+      ),
+    ]));
+    Overlay.of(buttonContext).insert(_waPopupEntry!);
   }
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: double.infinity,
-      child: OutlinedButton.icon(
-        onPressed: _downloading ? null : _download,
-        icon: _downloading
-            ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
-            : const Icon(Icons.download_outlined, size: 16),
-        label: Text(_downloading ? 'Downloading…' : 'Download Bill (PDF)'),
+    return Row(children: [
+      Expanded(
+        child: _BillActionButton(
+          icon: Icons.download_outlined,
+          label: _downloading ? 'Downloading…' : 'Download',
+          enabled: widget.ready && !_downloading,
+          loading: _downloading,
+          onTap: _download,
+        ),
+      ),
+      const SizedBox(width: 8),
+      Expanded(
+        child: Builder(builder: (btnContext) => _BillActionButton(
+              icon: Icons.chat_bubble_outline,
+              label: 'WhatsApp',
+              enabled: widget.ready,
+              onTap: () => _showWaPopup(btnContext),
+            )),
+      ),
+      const SizedBox(width: 8),
+      Expanded(
+        child: _BillActionButton(
+          icon: Icons.share_outlined,
+          label: _sharing ? 'Sharing…' : 'Share',
+          enabled: widget.ready && !_sharing,
+          loading: _sharing,
+          onTap: _share,
+        ),
+      ),
+    ]);
+  }
+}
+
+class _BillActionButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool enabled;
+  final bool loading;
+  final VoidCallback onTap;
+  const _BillActionButton({
+    required this.icon,
+    required this.label,
+    required this.enabled,
+    this.loading = false,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = enabled ? const Color(0xFF1B7A43) : const Color(0xFF9CA3AF);
+    return GestureDetector(
+      onTap: enabled ? onTap : null,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 4),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: enabled ? const Color(0xFFE8F5E9) : const Color(0xFFF3F4F6),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: enabled ? const Color(0xFF1B7A43) : const Color(0xFFE5E7EB)),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          if (loading)
+            SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: color))
+          else
+            Icon(icon, size: 15, color: color),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(label,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: color)),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
+// CHANGE #462 — ② popup content: numbers from customer_bill_numbers (already
+// last-used-first), tap one to send via send_customer_bill_wa. Only ONE send
+// in flight at a time (_sendingPhone non-null disables every row, not just
+// the tapped one). Results are reported back to the parent's onResult AFTER
+// onDismiss, using the parent's own (longer-lived) context — this widget's
+// own context becomes invalid the instant the popup's OverlayEntry is removed.
+class _WaNumberPicker extends StatefulWidget {
+  final String orderId;
+  final VoidCallback onDismiss;
+  final void Function(String message, bool isError) onResult;
+  const _WaNumberPicker({required this.orderId, required this.onDismiss, required this.onResult});
+
+  @override
+  State<_WaNumberPicker> createState() => _WaNumberPickerState();
+}
+
+class _WaNumberPickerState extends State<_WaNumberPicker> {
+  List<Map<String, dynamic>>? _numbers;
+  String? _error;
+  String? _sendingPhone;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final raw = await Supabase.instance.client
+          .rpc('customer_bill_numbers', params: {'p_order_id': widget.orderId});
+      final list = (raw is List ? raw : const [])
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+      if (mounted) setState(() => _numbers = list);
+    } catch (_) {
+      if (mounted) setState(() => _error = 'Could not load numbers.');
+    }
+  }
+
+  Future<void> _send(String phone) async {
+    if (_sendingPhone != null) return;
+    setState(() => _sendingPhone = phone);
+    String message;
+    bool isError;
+    try {
+      final raw = await Supabase.instance.client.rpc('send_customer_bill_wa',
+          params: {'p_order_id': widget.orderId, 'p_phone': phone});
+      final res = raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
+      if (res['status'] == 'queued') {
+        message = 'Bill sent to $phone on WhatsApp';
+        isError = false;
+      } else if (res['error'] == 'bill_not_ready') {
+        message = 'Bill not ready yet';
+        isError = true;
+      } else if (res['error'] == 'bad_phone') {
+        message = 'Invalid number';
+        isError = true;
+      } else {
+        message = 'Could not send the bill';
+        isError = true;
+      }
+    } catch (_) {
+      message = 'Could not send the bill';
+      isError = true;
+    }
+    widget.onDismiss();
+    widget.onResult(message, isError);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxHeight: 280),
+      child: Padding(
+        padding: const EdgeInsets.all(10),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+            child: Text('Send bill to',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+          ),
+          const SizedBox(height: 4),
+          if (_error != null)
+            Padding(
+              padding: const EdgeInsets.all(8),
+              child: Text(_error!, style: const TextStyle(fontSize: 12, color: Colors.red)),
+            )
+          else if (_numbers == null)
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: Center(
+                  child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))),
+            )
+          else if (_numbers!.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(8),
+              child: Text('No saved number for this customer',
+                  style: TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
+            )
+          else
+            Flexible(
+              child: SingleChildScrollView(
+                child: Column(
+                  children: _numbers!.asMap().entries.map((e) {
+                    final idx = e.key;
+                    final phone = e.value['phone']?.toString() ?? '';
+                    final busy = _sendingPhone == phone;
+                    return InkWell(
+                      onTap: _sendingPhone == null ? () => _send(phone) : null,
+                      borderRadius: BorderRadius.circular(8),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
+                        child: Row(children: [
+                          const Icon(Icons.chat_bubble, size: 16, color: Color(0xFF1B7A43)),
+                          const SizedBox(width: 8),
+                          Expanded(
+                              child: Text(phone,
+                                  style: const TextStyle(fontSize: 13.5, color: Color(0xFF111827)))),
+                          if (idx == 0)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                  color: const Color(0xFFE8F5E9), borderRadius: BorderRadius.circular(4)),
+                              child: const Text('last used',
+                                  style: TextStyle(
+                                      fontSize: 9.5, color: Color(0xFF1B7A43), fontWeight: FontWeight.w600)),
+                            ),
+                          if (busy) ...[
+                            const SizedBox(width: 8),
+                            const SizedBox(
+                                width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+                          ],
+                        ]),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
+            ),
+        ]),
       ),
     );
   }

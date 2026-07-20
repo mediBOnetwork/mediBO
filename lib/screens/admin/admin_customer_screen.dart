@@ -16,6 +16,7 @@ import 'package:pharma_b2b/utils/toast.dart';
 
 import '../../config/api_keys.dart';
 import '../../util.dart';
+import '../../utils/download_bytes.dart'; // CHANGE #463
 import '../../utils/order_code.dart';
 import '../../utils/render_log.dart';
 import '../../utils/ist_date.dart'; // CHANGE #444
@@ -2431,6 +2432,11 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
             ),
           ),
         ]),
+        // CHANGE #463 Part C: admin bill view — same uploaded file the
+        // customer Bill tab shows, view + download. Renders nothing while
+        // loading or when no bill has been uploaded yet, so it never disturbs
+        // this card's existing layout for orders without one.
+        if (row.orderId != null) _AdminBillView(orderId: row.orderId!),
         const SizedBox(height: 8),
         Text(label,
             style: const TextStyle(
@@ -5559,6 +5565,127 @@ class _BucketCard extends StatelessWidget {
             ],
           ),
         ]),
+      ),
+    );
+  }
+}
+
+// ── CHANGE #463 Part C: admin bill view (view + download) ─────────────────────
+// Shows the same admin-uploaded file (customer_bill_file) the customer Bill
+// tab shows. Self-fetching; renders nothing while loading or when no bill has
+// been uploaded, so orders without one see no extra UI.
+
+String _mimeFromBillName(String name) {
+  final ext = name.contains('.') ? name.split('.').last.toLowerCase() : '';
+  switch (ext) {
+    case 'pdf':
+      return 'application/pdf';
+    case 'png':
+      return 'image/png';
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg';
+    case 'webp':
+      return 'image/webp';
+    default:
+      return 'application/octet-stream';
+  }
+}
+
+class _AdminBillView extends StatefulWidget {
+  final String orderId;
+  const _AdminBillView({required this.orderId});
+
+  @override
+  State<_AdminBillView> createState() => _AdminBillViewState();
+}
+
+class _AdminBillViewState extends State<_AdminBillView> {
+  Map<String, dynamic>? _info;
+  bool _downloading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final raw = await Supabase.instance.client
+          .rpc('customer_bill_file', params: {'p_order_id': widget.orderId});
+      final data = raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
+      if (mounted) setState(() => _info = data);
+    } catch (_) {
+      if (mounted) setState(() => _info = {'has_file': false});
+    }
+  }
+
+  Future<void> _view() async {
+    final info = _info;
+    if (info == null || info['has_file'] != true) return;
+    try {
+      final bucket = info['bucket']?.toString() ?? 'customer-bills';
+      final path = info['path']?.toString() ?? '';
+      final url = await Supabase.instance.client.storage.from(bucket).createSignedUrl(path, 3600);
+      await launchUrl(Uri.parse(url), webOnlyWindowName: '_blank');
+    } catch (_) {
+      if (mounted) showToast(context, 'Could not open the bill', isError: true);
+    }
+  }
+
+  Future<void> _download() async {
+    final info = _info;
+    if (info == null || info['has_file'] != true || _downloading) return;
+    setState(() => _downloading = true);
+    try {
+      final bucket = info['bucket']?.toString() ?? 'customer-bills';
+      final path = info['path']?.toString() ?? '';
+      final name = info['name']?.toString() ?? 'Bill';
+      final bytes = await Supabase.instance.client.storage.from(bucket).download(path);
+      downloadBytes(bytes, name, _mimeFromBillName(name));
+    } catch (_) {
+      if (mounted) showToast(context, 'Could not download the bill', isError: true);
+    } finally {
+      if (mounted) setState(() => _downloading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final info = _info;
+    if (info == null || info['has_file'] != true) return const SizedBox.shrink();
+    final name = info['name']?.toString() ?? 'Bill';
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: _view,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0xFFE5E7EB)),
+          ),
+          child: Row(children: [
+            const Icon(Icons.receipt_long_outlined, size: 16, color: Color(0xFF1B7A43)),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 12, color: Color(0xFF374151))),
+            ),
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: _downloading ? null : _download,
+              child: _downloading
+                  ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.download_outlined, size: 16, color: Color(0xFF1B7A43)),
+            ),
+          ]),
+        ),
       ),
     );
   }

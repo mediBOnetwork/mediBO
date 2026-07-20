@@ -14355,6 +14355,25 @@ class _PackingScreenState extends State<_PackingScreen>
     );
   }
 
+  // ── CHANGE #451: swipe-LEFT off the All-Packed screen → last item card ─────
+  // The All-Packed screen is a separate widget that fully replaces the item
+  // PageView (see build()), so its PageController is detached while shown.
+  // Same recreate pattern _loadQueue() already uses: dispose + rebuild the
+  // controller with the target initialPage, then flip back to the item view.
+  void _goBackFromAllPackedScreen() {
+    if (_items.isEmpty) return;
+    final lastIndex = _items.length - 1;
+    _itemPageController?.dispose();
+    _itemPageController = PageController(initialPage: lastIndex);
+    setState(() {
+      _currentIndex = lastIndex;
+      _allPacked    = false;
+    });
+    try {
+      RenderLog.write('c451_allpacked_left_back', 'idx=$lastIndex/${_items.length}');
+    } catch (_) {}
+  }
+
   // ── CHANGE #298: undo (hold-2s) — un-pack current item, stay in place ───────
   Future<void> _performUndo(int index) async {
     if (_marking || index < 0 || index >= _items.length) return;
@@ -14745,7 +14764,18 @@ class _PackingScreenState extends State<_PackingScreen>
           : _error != null
               ? _buildErrorView()
               : _allPacked
-                  ? _buildAllPackedScreen(customer, _bagCount)
+                  // CHANGE #451: enable swipe-LEFT back to the last item card
+                  // from the All-Packed screen (right-swipe intentionally
+                  // ignored — All-Packed must stay the terminal position).
+                  ? GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onHorizontalDragEnd: (details) {
+                        if ((details.primaryVelocity ?? 0) < 0) {
+                          _goBackFromAllPackedScreen();
+                        }
+                      },
+                      child: _buildAllPackedScreen(customer, _bagCount),
+                    )
                   : _buildItemView(),
     );
   }

@@ -73,7 +73,25 @@ class _BillViewerScreen extends StatelessWidget {
                       child: Center(
                         child: GestureDetector(
                           onTap: close,
-                          child: Image.network(url, fit: BoxFit.contain),
+                          // CHANGE #466: Image.network with no loadingBuilder/errorBuilder
+                          // painted nothing while the signed URL was fetching or if it
+                          // failed — on the black Scaffold backdrop that reads as a
+                          // "dark/blank screen", not an obvious bug. Both are required.
+                          child: Image.network(
+                            url,
+                            fit: BoxFit.contain,
+                            loadingBuilder: (_, child, prog) => prog == null
+                                ? child
+                                : const SizedBox(
+                                    width: 32,
+                                    height: 32,
+                                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                  ),
+                            errorBuilder: (_, __, ___) => const Text(
+                              "Couldn't load bill",
+                              style: TextStyle(color: Colors.white, fontSize: 14),
+                            ),
+                          ),
                         ),
                       ),
                     )
@@ -176,8 +194,12 @@ class _BillFilePreviewState extends State<BillFilePreview> {
         height: widget.height,
         decoration: box,
         alignment: Alignment.center,
-        child: const Text('Could not load the bill preview.',
-            style: TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Icon(Icons.error_outline, size: 28, color: Color(0xFF9CA3AF)),
+          const SizedBox(height: 8),
+          const Text("Couldn't load bill",
+              style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFF6B7280))),
+        ]),
       );
     }
     final url = _url;
@@ -205,7 +227,7 @@ class _BillFilePreviewState extends State<BillFilePreview> {
                     : const Center(
                         child: SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2))),
                 errorBuilder: (_, __, ___) => const Center(
-                    child: Text('Could not load the image.',
+                    child: Text("Couldn't load bill",
                         style: TextStyle(fontSize: 12.5, color: Color(0xFF6B7280)))),
               )
             : PdfFrame(url: url, interactive: false),

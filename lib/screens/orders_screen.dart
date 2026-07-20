@@ -641,8 +641,19 @@ class _BillTabState extends State<_BillTab> {
 
     if (!hasFile) {
       // #463 Part B: has_file==false — do NOT collapse; show the message and
-      // the same three actions, all disabled.
+      // the same three actions, all disabled. #466: message (the "preview"
+      // slot when there's nothing to preview yet) above the disabled actions,
+      // matching the has_file layout's preview-then-buttons order.
       return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Padding(
+          padding: EdgeInsets.symmetric(vertical: 24),
+          child: Column(children: [
+            Icon(Icons.receipt_long_outlined, size: 48, color: Color(0xFFD1D5DB)),
+            SizedBox(height: 12),
+            Text("We're processing your order — the bill will appear shortly.",
+                textAlign: TextAlign.center, style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+          ]),
+        ),
         Row(children: [
           Expanded(
               child: BillActionButton(
@@ -656,15 +667,6 @@ class _BillTabState extends State<_BillTab> {
               child:
                   BillActionButton(icon: Icons.share_outlined, label: 'Share', enabled: false, onTap: () {})),
         ]),
-        const Padding(
-          padding: EdgeInsets.symmetric(vertical: 24),
-          child: Column(children: [
-            Icon(Icons.receipt_long_outlined, size: 48, color: Color(0xFFD1D5DB)),
-            SizedBox(height: 12),
-            Text("We're processing your order — the bill will appear shortly.",
-                textAlign: TextAlign.center, style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
-          ]),
-        ),
       ]);
     }
 
@@ -672,12 +674,12 @@ class _BillTabState extends State<_BillTab> {
     final path = info['path']?.toString() ?? '';
     final name = info['name']?.toString() ?? 'Bill';
 
-    // #465: real inline preview (image/PDF, not a placeholder box) that opens
-    // the shared full-screen zoomable viewer on tap.
+    // #466: preview ABOVE, actions BELOW (was reversed in #465 — the actions
+    // rendered first with the (blank-on-load-failure) preview underneath).
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      UploadedBillActionsRow(orderId: widget.orderId, bucket: bucket, path: path, fileName: name),
-      const SizedBox(height: 14),
       BillFilePreview(key: ValueKey('$bucket/$path'), bucket: bucket, path: path, name: name),
+      const SizedBox(height: 14),
+      UploadedBillActionsRow(orderId: widget.orderId, bucket: bucket, path: path, fileName: name),
     ]);
   }
 }

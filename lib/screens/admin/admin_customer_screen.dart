@@ -5459,6 +5459,10 @@ class _AdminBillRowActionsState extends State<_AdminBillRowActions> {
   Map<String, dynamic>? _info; // null while loading
   bool _uploading = false;
   bool _deleting = false;
+  // #466: "View Bill" now toggles an inline preview+actions block (matching
+  // the customer Bill tab's layout) instead of jumping straight to the
+  // full-screen viewer — the preview/buttons must stay hidden until tapped.
+  bool _viewBillOpen = false;
 
   @override
   void initState() {
@@ -5551,6 +5555,7 @@ class _AdminBillRowActionsState extends State<_AdminBillRowActions> {
       if (!mounted) return;
       if (res['status'] == 'ok') {
         showToast(context, 'Bill deleted');
+        setState(() => _viewBillOpen = false);
         await _load();
         widget.onBillChanged?.call();
       } else {
@@ -5560,20 +5565,6 @@ class _AdminBillRowActionsState extends State<_AdminBillRowActions> {
       if (mounted) showToast(context, 'Could not delete the bill', isError: true);
     } finally {
       if (mounted) setState(() => _deleting = false);
-    }
-  }
-
-  Future<void> _viewBill() async {
-    final info = _info;
-    if (info == null || info['has_file'] != true) return;
-    try {
-      final bucket = info['bucket']?.toString() ?? 'customer-bills';
-      final path = info['path']?.toString() ?? '';
-      final name = info['name']?.toString() ?? 'Bill';
-      final url = await Supabase.instance.client.storage.from(bucket).createSignedUrl(path, 3600);
-      if (mounted) showBillViewer(context, url: url, isImage: isImageBillName(name));
-    } catch (_) {
-      if (mounted) showToast(context, 'Could not open the bill', isError: true);
     }
   }
 
@@ -5588,7 +5579,7 @@ class _AdminBillRowActionsState extends State<_AdminBillRowActions> {
               ? _CompactActionButton(
                   icon: Icons.receipt_long_outlined,
                   label: 'View Bill',
-                  onTap: _viewBill,
+                  onTap: () => setState(() => _viewBillOpen = !_viewBillOpen),
                 )
               : _CompactActionButton(
                   icon: Icons.upload_outlined,
@@ -5606,8 +5597,18 @@ class _AdminBillRowActionsState extends State<_AdminBillRowActions> {
           ),
         ),
       ]),
-      if (_hasFile && info != null) ...[
-        const SizedBox(height: 6),
+      // #466: preview + actions stay hidden until "View Bill" is tapped, and
+      // when shown, preview comes FIRST with the action row BELOW it — same
+      // order as the customer Bill tab.
+      if (_hasFile && _viewBillOpen && info != null) ...[
+        const SizedBox(height: 12),
+        BillFilePreview(
+          key: ValueKey('${widget.orderId}/${info['path']}'),
+          bucket: info['bucket']?.toString() ?? 'customer-bills',
+          path: info['path']?.toString() ?? '',
+          name: info['name']?.toString() ?? 'Bill',
+        ),
+        const SizedBox(height: 12),
         Row(children: [
           GestureDetector(
             onTap: _deleting ? null : _delete,

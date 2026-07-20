@@ -2483,11 +2483,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     setState(() => _voiceProcessing = true);
     try {
       final result = await session.stopAndFinalize();
+      final sessionKey = session.sessionKey; // #457: needed for the needs_bag_review re-finalize
       _voiceSession = null;
       if (!mounted) return;
       await _reloadItemsFromDB();
       if (!mounted) return;
-      _showFinalizeSummary(result);
+      _showFinalizeSummary(result, sessionKey);
       _advanceIfReceived(); // B4: auto-advance after voice commit
       _refreshVoiceMentions(); // #263: update distinct-product spoken count
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -2506,15 +2507,18 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   }
 
   // #8: summarizes voice_finalize_session's jsonb result after Stop. needs_bag_review
-  // (spoken before any bag was mapped — an SOP-violation safety net) and
-  // unmatched_mentions (no product match) are surfaced via a blocking dialog, never
-  // just a snack, so they can't be missed; a clean finalize gets a plain SnackBar.
-  void _showFinalizeSummary(Map<String, dynamic> result) {
+  // (spoken before any bag was mapped — an SOP-violation safety net), over-count
+  // warnings (#457 Bug 3), and unmatched_mentions (no product match) are surfaced
+  // via a blocking dialog, never just a snack, so they can't be missed; a clean
+  // finalize gets a plain SnackBar. sessionKey (#457 Bug 2) is needed to re-run
+  // voice_finalize_session after the worker assigns a review item to a bag.
+  void _showFinalizeSummary(Map<String, dynamic> result, String sessionKey) {
     if (!mounted) return;
     final persisted = (result['persisted'] as List?) ?? const [];
     final bagBreakdown = (result['bag_breakdown'] as Map?) ?? const {};
     final needsReview = (result['needs_bag_review'] as List?) ?? const [];
     final unmatched = (result['unmatched_mentions'] as List?) ?? const [];
+    final overCounts = overCountWarnings(persisted, _items);
     final productCount = persisted
         .map((p) => p is Map ? p['product_id'] : null)
         .where((id) => id != null)
@@ -2526,41 +2530,34 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         : 'Counted $productCount product${productCount == 1 ? '' : 's'}.';
     RenderLog.write('c8_finalize_summary',
         'persisted=$productCount;bags=$bagCount;review=${needsReview.length};unmatched=${unmatched.length}');
-    if (needsReview.isEmpty && unmatched.isEmpty) {
+    RenderLog.write('c457_over_count', 'count=${overCounts.length}');
+    if (needsReview.isEmpty && unmatched.isEmpty && overCounts.isEmpty) {
       _showSnack(base);
       return;
     }
     final extra = <String>[
       if (needsReview.isNotEmpty) '${needsReview.length} need bag review',
+      if (overCounts.isNotEmpty) '${overCounts.length} over-counted',
       if (unmatched.isNotEmpty) '${unmatched.length} unmatched',
     ].join(', ');
     _showSnack('$base $extra.');
+    final supplier = _selectedSupplier ?? '';
     showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Count needs a look'),
-        content: SingleChildScrollView(
-          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(base),
-            if (needsReview.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              Text('${needsReview.length} item${needsReview.length == 1 ? '' : 's'} spoken before any bag was scanned:',
-                  style: const TextStyle(fontWeight: FontWeight.w700)),
-              for (final m in needsReview)
-                Text('• ${(m is Map ? m['matched_name'] : null) ?? '?'} — qty ${(m is Map ? m['qty'] : null) ?? '?'}'),
-            ],
-            if (unmatched.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              Text('${unmatched.length} item${unmatched.length == 1 ? '' : 's'} not matched to a product:',
-                  style: const TextStyle(fontWeight: FontWeight.w700)),
-              for (final m in unmatched)
-                Text('• ${(m is Map ? m['matched_name'] : null) ?? '?'} — qty ${(m is Map ? m['qty'] : null) ?? '?'}'),
-            ],
-          ]),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
-        ],
+      builder: (ctx) => _FinalizeReviewDialog(
+        base: base,
+        supplierName: supplier,
+        sessionKey: sessionKey,
+        // #457 Bug 2: WAREHOUSE only — Shop's finalize never returns needs_bag_review
+        // (voice_finalize_session hardcodes needs_review=false when stage != 'warehouse'),
+        // so this is empty for Shop regardless; widget.arrivals is checked explicitly too.
+        initialNeedsReview: widget.arrivals ? needsReview : const [],
+        overCountWarnings: overCounts,
+        unmatched: unmatched,
+        onResolved: () {
+          _refreshVoiceMentions();
+          _popupKey.currentState?._fetchMentions();
+        },
       ),
     );
   }
@@ -6980,6 +6977,54 @@ Future<List<Map<String, dynamic>>> fetchScopedPackMentions({
   return mentions.where((r) => r['session_key']?.toString() == sessionKey).toList();
 }
 
+String _fmtQty(num n) => n == n.roundToDouble() ? n.toInt().toString() : n.toString();
+
+// CHANGE #457 (Bug 3): scan a finalize result's persisted[] for entries whose
+// per-product write didn't fully persist the spoken qty. None of the three
+// finalize-side RPCs (bag_count_set, set_voice_received, pack_set_counted)
+// raise for an over-count — bag_count_set alone returns a literal 'error' key
+// ('exceeds_ordered' etc.); set_voice_received and pack_set_counted always
+// return status:'ok' and instead cap the write silently, reporting the
+// shortfall in their own fields ('leftover' / 'requested' vs 'set'). This
+// reads those existing fields only — no backend change, nothing re-summed on
+// the client. Shared by Shop/Warehouse (_showFinalizeSummary) and Pack
+// (_showPackFinalizeSummary) so all three surface it instead of a silently
+// lower count.
+List<String> overCountWarnings(List persisted, List<Map<String, dynamic>> items) {
+  final warnings = <String>[];
+  for (final p in persisted) {
+    if (p is! Map) continue;
+    final pid = (p['product_id'] as num?)?.toInt();
+    final name = items.firstWhere(
+      (i) => (i['product_id'] as num?)?.toInt() == pid,
+      orElse: () => const {},
+    )['product_name']?.toString() ?? (pid != null ? 'Product $pid' : 'Unknown product');
+    final res = p['result'];
+    if (res is! Map) continue;
+    final error = res['error']?.toString();
+    if (error == 'exceeds_ordered') {
+      final attempted = (res['attempted'] as num?);
+      final maxForBag = (res['max_for_this_bag'] as num?);
+      final detail = attempted != null && maxForBag != null
+          ? ' (spoke ${_fmtQty(attempted)}, max ${_fmtQty(maxForBag)} for this bag)'
+          : '';
+      warnings.add('$name — counted more than ordered$detail, capped/not saved.');
+    } else if (error != null) {
+      warnings.add('$name — not saved ($error).');
+    } else {
+      final leftover = (res['leftover'] as num?);
+      final requested = (res['requested'] as num?);
+      final setQty = (res['set'] as num?);
+      if (leftover != null && leftover > 0) {
+        warnings.add('$name — counted more than ordered, ${_fmtQty(leftover)} left over/not saved.');
+      } else if (requested != null && setQty != null && requested > setQty) {
+        warnings.add('$name — counted more than received, capped at ${_fmtQty(setQty)} (spoke ${_fmtQty(requested)}).');
+      }
+    }
+  }
+  return warnings;
+}
+
 // CHANGE #456: one chip per RECORDING (session_key), not per chunk window
 // (recording_seq) — a continuous recording is internally sliced into several
 // ~30s windows/clip_paths (each its own recording_seq + clip_path), but the
@@ -7043,6 +7088,210 @@ List<ClipGroup> groupMentionsIntoClips(List<Map<String, dynamic>> rows) {
     return c != 0 ? c : a.groupKey.compareTo(b.groupKey);
   });
   return result;
+}
+
+// CHANGE #457 — the "Count needs a look" dialog after Stop, extended with:
+//   Bug 2: per-item bag-assign for needs_bag_review rows (Warehouse only —
+//     initialNeedsReview is passed empty for Shop by the caller).
+//   Bug 3: a static list of over-count warnings (no action, just visibility).
+// unmatched stays a static list too — nothing client-side can fix an
+// unmatched-to-any-product mention.
+//
+// Bug 2 mechanics: voice_finalize_session recomputes EVERY mention's
+// applied_bag_no from voice_bag_boundaries on every call — it does not trust
+// or preserve a manually-written applied_bag_no/status, so writing those
+// directly on the mention row would just get overwritten back to
+// needs_bag_review on the very next finalize. The only way to durably resolve
+// a review item without touching finalize is to insert a voice_bag_boundaries
+// row for the picked bag AT THAT MENTION'S OWN t_start_sec (reusing the exact
+// same recordVoiceBagBoundary() helper #455 already uses for the bag-change
+// path), then re-run voice_finalize_session — its boundary lookup (closest
+// mapped_at_sec <= t_start_sec) then resolves that mention (and only mentions
+// from that timestamp up to the next real boundary) to the chosen bag. This
+// gives genuine per-item control: assigning one item's own timestamp never
+// affects a different item that already has its own boundary between them.
+class _FinalizeReviewDialog extends StatefulWidget {
+  final String base;
+  final String supplierName;
+  final String sessionKey;
+  final List initialNeedsReview; // [{mention_id, product_id, matched_name, qty}]
+  final List<String> overCountWarnings;
+  final List unmatched;
+  final VoidCallback onResolved;
+  const _FinalizeReviewDialog({
+    required this.base,
+    required this.supplierName,
+    required this.sessionKey,
+    required this.initialNeedsReview,
+    required this.overCountWarnings,
+    required this.unmatched,
+    required this.onResolved,
+  });
+
+  @override
+  State<_FinalizeReviewDialog> createState() => _FinalizeReviewDialogState();
+}
+
+class _FinalizeReviewDialogState extends State<_FinalizeReviewDialog> {
+  late List _needsReview = List.of(widget.initialNeedsReview);
+  List<int> _bagOptions = [];
+  bool _loadingBags = true;
+  final Map<String, int?> _pickedBag = {};
+  final Set<String> _assigning = {};
+
+  @override
+  void initState() {
+    super.initState();
+    if (_needsReview.isNotEmpty) _loadBagOptions();
+  }
+
+  // Bags actually used this session, from voice_bag_boundaries — the worker can
+  // only assign a review item to a bag that genuinely was in use, never a
+  // fabricated one.
+  Future<void> _loadBagOptions() async {
+    try {
+      final rows = await Supabase.instance.client
+          .from('voice_bag_boundaries')
+          .select('bag_no')
+          .eq('session_key', widget.sessionKey);
+      final bags = (rows as List)
+          .map((r) => (r as Map)['bag_no'])
+          .whereType<num>()
+          .map((n) => n.toInt())
+          .toSet()
+          .toList()
+        ..sort();
+      if (mounted) setState(() { _bagOptions = bags; _loadingBags = false; });
+    } catch (_) {
+      if (mounted) setState(() => _loadingBags = false);
+    }
+  }
+
+  Future<void> _assign(dynamic item) async {
+    final mentionId = (item is Map ? item['mention_id'] : null)?.toString() ?? '';
+    final bagNo = _pickedBag[mentionId];
+    if (mentionId.isEmpty || bagNo == null || _assigning.contains(mentionId)) return;
+    setState(() => _assigning.add(mentionId));
+    try {
+      // needs_bag_review[] doesn't carry t_start_sec — fetch it from the mention row.
+      final row = await Supabase.instance.client
+          .from('voice_clip_mentions')
+          .select('t_start_sec')
+          .eq('id', mentionId)
+          .maybeSingle();
+      final tStart = (row?['t_start_sec'] as num?)?.toDouble();
+      if (tStart == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text("Can't assign — this item has no timestamp")));
+        }
+        return;
+      }
+      await recordVoiceBagBoundary(
+        sessionKey: widget.sessionKey,
+        supplierName: widget.supplierName,
+        bagNo: bagNo,
+        mappedAtSec: tStart,
+      );
+      final refreshed = await finalizeVoiceSession(widget.sessionKey);
+      final newReview = (refreshed['needs_bag_review'] as List?) ?? const [];
+      RenderLog.write('c457_assign_bag', 'mention=$mentionId;bag=$bagNo;remaining=${newReview.length}');
+      if (!mounted) return;
+      setState(() => _needsReview = newReview);
+      widget.onResolved();
+      if (_needsReview.isEmpty &&
+          widget.overCountWarnings.isEmpty &&
+          widget.unmatched.isEmpty &&
+          mounted) {
+        Navigator.pop(context);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('Assign failed — try again')));
+      }
+      RenderLog.write('c457_assign_err',
+          e.toString().substring(0, e.toString().length.clamp(0, 80)));
+    } finally {
+      if (mounted) setState(() => _assigning.remove(mentionId));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Count needs a look'),
+      content: SingleChildScrollView(
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(widget.base),
+          if (_needsReview.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Text('${_needsReview.length} item${_needsReview.length == 1 ? '' : 's'} spoken before any bag was scanned:',
+                style: const TextStyle(fontWeight: FontWeight.w700)),
+            if (_loadingBags)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8),
+                child: SizedBox(height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+              )
+            else if (_bagOptions.isEmpty)
+              const Padding(
+                padding: EdgeInsets.only(top: 4),
+                child: Text('No bags were scanned this session — nothing to assign to.',
+                    style: TextStyle(fontSize: 12, color: Colors.grey)),
+              )
+            else
+              for (final item in _needsReview)
+                Builder(builder: (_) {
+                  final mentionId = (item is Map ? item['mention_id'] : null)?.toString() ?? '';
+                  final name = (item is Map ? item['matched_name'] : null)?.toString() ?? '?';
+                  final qty = (item is Map ? item['qty'] : null)?.toString() ?? '?';
+                  final busy = _assigning.contains(mentionId);
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Row(children: [
+                      Expanded(child: Text('$name — qty $qty')),
+                      const SizedBox(width: 8),
+                      DropdownButton<int>(
+                        hint: const Text('Bag'),
+                        value: _pickedBag[mentionId],
+                        items: _bagOptions
+                            .map((b) => DropdownMenuItem(value: b, child: Text('Bag $b')))
+                            .toList(),
+                        onChanged: busy ? null : (v) => setState(() => _pickedBag[mentionId] = v),
+                      ),
+                      const SizedBox(width: 8),
+                      busy
+                          ? const SizedBox(
+                              height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                          : TextButton(
+                              onPressed: _pickedBag[mentionId] != null ? () => _assign(item) : null,
+                              child: const Text('Assign'),
+                            ),
+                    ]),
+                  );
+                }),
+          ],
+          if (widget.overCountWarnings.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Text('${widget.overCountWarnings.length} product${widget.overCountWarnings.length == 1 ? '' : 's'} counted more than could be saved:',
+                style: const TextStyle(fontWeight: FontWeight.w700, color: Color(0xFFB45309))),
+            for (final w in widget.overCountWarnings)
+              Text('• $w', style: const TextStyle(color: Color(0xFFB45309))),
+          ],
+          if (widget.unmatched.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Text('${widget.unmatched.length} item${widget.unmatched.length == 1 ? '' : 's'} not matched to a product:',
+                style: const TextStyle(fontWeight: FontWeight.w700)),
+            for (final m in widget.unmatched)
+              Text('• ${(m is Map ? m['matched_name'] : null) ?? '?'} — qty ${(m is Map ? m['qty'] : null) ?? '?'}'),
+          ],
+        ]),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK')),
+      ],
+    );
+  }
 }
 
 // ── #115: Counted items popup — mentions table with tap-to-play ───────────────
@@ -12188,7 +12437,7 @@ class _PackTabState extends State<_PackTab>
       await _loadFromPackQueue(orderId);
       if (!mounted) return;
       _refreshPackMentions(orderId);
-      _showPackFinalizeSummary(result);
+      _showPackFinalizeSummary(result, orderId);
       RenderLog.write('c301_lock', 'processed');
     } catch (e) {
       _packVoiceSession = null;
@@ -12206,10 +12455,14 @@ class _PackTabState extends State<_PackTab>
 
   // CHANGE #454: summarizes pack_finalize_session's jsonb result after Stop —
   // Pack's counterpart to Shop/Warehouse's _showFinalizeSummary (no bag layer).
-  void _showPackFinalizeSummary(Map<String, dynamic> result) {
+  // CHANGE #457 Bug 3: also scans persisted[] for over-counts (pack_set_counted
+  // caps silently at received_qty — requested > set — rather than erroring) and
+  // surfaces them via a dialog instead of just a lower number.
+  void _showPackFinalizeSummary(Map<String, dynamic> result, String orderId) {
     if (!mounted) return;
     final persisted = (result['persisted'] as List?) ?? const [];
     final unmatched = (result['unmatched_mentions'] as List?) ?? const [];
+    final overCounts = overCountWarnings(persisted, _packItemsFor(orderId));
     final productCount = persisted
         .map((p) => p is Map ? p['product_id'] : null)
         .where((id) => id != null)
@@ -12217,14 +12470,40 @@ class _PackTabState extends State<_PackTab>
         .length;
     RenderLog.write('c454_pack_finalize_summary',
         'persisted=$productCount;unmatched=${unmatched.length}');
-    if (productCount == 0 && unmatched.isEmpty) {
+    RenderLog.write('c457_over_count', 'count=${overCounts.length}');
+    if (productCount == 0 && unmatched.isEmpty && overCounts.isEmpty) {
       _showPackSnack("Didn't catch anything — try again");
       return;
     }
     final base = 'Counted $productCount product${productCount == 1 ? '' : 's'}.';
-    _showPackSnack(unmatched.isEmpty
-        ? base
-        : '$base ${unmatched.length} unmatched.');
+    if (overCounts.isEmpty) {
+      _showPackSnack(unmatched.isEmpty ? base : '$base ${unmatched.length} unmatched.');
+      return;
+    }
+    _showPackSnack('$base ${overCounts.length} over-counted.');
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Count needs a look'),
+        content: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(base),
+            const SizedBox(height: 12),
+            Text('${overCounts.length} product${overCounts.length == 1 ? '' : 's'} counted more than could be saved:',
+                style: const TextStyle(fontWeight: FontWeight.w700, color: Color(0xFFB45309))),
+            for (final w in overCounts) Text('• $w', style: const TextStyle(color: Color(0xFFB45309))),
+            if (unmatched.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Text('${unmatched.length} item${unmatched.length == 1 ? '' : 's'} not matched to a product:',
+                  style: const TextStyle(fontWeight: FontWeight.w700)),
+              for (final m in unmatched)
+                Text('• ${(m is Map ? m['matched_name'] : null) ?? '?'} — qty ${(m is Map ? m['qty'] : null) ?? '?'}'),
+            ],
+          ]),
+        ),
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK'))],
+      ),
+    );
   }
 
   // CHANGE #304: Ask mediBO — rewired to audio-bytes → voice-agent (same as Warehouse).

@@ -2435,6 +2435,36 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         });
       }
     }
+    // CHANGE #455: write the INITIAL bag's boundary at record start (mapped_at_sec=0) —
+    // without this, items spoken before the FIRST bag-change had no boundary to place them
+    // against, so voice_finalize_session correctly (but wrongly, in intent) flagged them
+    // needs_bag_review even though a bag was already scanned before the mic was tapped.
+    // Warehouse only — bags don't exist in Shop; _activeBag is always null there, but
+    // widget.arrivals is checked explicitly too so this can never fire outside Warehouse.
+    // Reuses the SAME recordVoiceBagBoundary() helper the bag-CHANGE path already calls
+    // (session.recordBagMap) — only mapped_at_sec (fixed 0, not session-clock elapsed) and
+    // the trigger (record start, not a bag scan) differ; no new write path or table.
+    // Best-effort and non-fatal: a failure here must never roll back an otherwise-successful
+    // recording start, and the unique (session_key, bag_no, mapped_at_sec) constraint makes a
+    // duplicate call a harmless no-op if this somehow ran twice for the same session.
+    if (_recStarted && widget.arrivals) {
+      final initialBagNo = (_activeBag?['bag_no'] as num?)?.toInt();
+      if (initialBagNo != null) {
+        try {
+          await recordVoiceBagBoundary(
+            sessionKey: session.sessionKey,
+            supplierName: supplier332,
+            bagNo: initialBagNo,
+            mappedAtSec: 0.0,
+          );
+          RenderLog.write('c455_initial_boundary',
+              'session=${session.sessionKey};bag=$initialBagNo;t=0');
+        } catch (e) {
+          RenderLog.write('c455_initial_boundary_err',
+              e.toString().substring(0, e.toString().length.clamp(0, 80)));
+        }
+      }
+    }
   }
 
   // #8: continuous voice counting — stop the session, wait for every in-flight
@@ -7506,7 +7536,11 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
                           return Padding(
                             padding: const EdgeInsets.only(left: 8),
                             child: _ClipPlayButton(
-                              label: 'Clip ${idx + 1}',
+                              // CHANGE #455: these chips are chunk windows (recording_seq)
+                              // within ONE continuous recording, not separate recordings —
+                              // "Clip N" read as multiple takes. Warehouse only per scope;
+                              // Shop (widget.stage=='shop') keeps the existing "Clip" label.
+                              label: widget.stage == 'warehouse' ? 'Part ${idx + 1}' : 'Clip ${idx + 1}',
                               clipPath: clip.clipPath,
                               recordingSeq: clip.seq,
                               playing: _playingClip == clip.clipPath,

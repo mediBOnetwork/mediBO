@@ -424,7 +424,7 @@ class _OrderCardState extends State<_OrderCard> {
       case 0:
         return _ItemsTab(items: items);
       case 1:
-        return CustPayPanel(key: ValueKey(orderId), orderId: orderId);
+        return CustPayPanel(key: ValueKey(orderId), orderId: orderId, orderCode: widget.order.number);
       default:
         return const SizedBox.shrink();
     }

@@ -217,7 +217,7 @@ class _CustPayPanelState extends State<CustPayPanel> {
           label: advance['badge_label']?.toString() ?? '',
           tone: advance['badge_tone']?.toString() ?? 'yellow',
           clickable: advance['badge_clickable'] == true,
-          onTap: () => _openPaySheet(upi, advDue, advPayLabel),
+          onTap: () => _openPaySheet(upi, advDue, advPayLabel, 'advance'),
         ),
       ),
       const SizedBox(height: 16),
@@ -231,7 +231,7 @@ class _CustPayPanelState extends State<CustPayPanel> {
           label: remaining['badge_label']?.toString() ?? '',
           tone: remaining['badge_tone']?.toString() ?? 'grey',
           clickable: remaining['badge_clickable'] == true,
-          onTap: () => _openPaySheet(upi, remaining['due'], remPayLabel),
+          onTap: () => _openPaySheet(upi, remaining['due'], remPayLabel, 'remaining'),
         ),
       ),
       const SizedBox(height: 16),
@@ -316,14 +316,18 @@ class _CustPayPanelState extends State<CustPayPanel> {
   }
 
   // ── Pay Advance / Pay Remaining — QR built fresh with the live amount ────
-  Future<void> _openPaySheet(Map<String, dynamic> upi, dynamic amountRaw, String payLabel) async {
+  // kind = 'advance' | 'remaining' — carried into the sheet so the WhatsApp
+  // "send QR" action can tell the backend which QR (advance vs remaining) to send.
+  Future<void> _openPaySheet(
+      Map<String, dynamic> upi, dynamic amountRaw, String payLabel, String kind) async {
     final vpa = upi['vpa']?.toString() ?? '';
     final name = upi['name']?.toString() ?? '';
     if (vpa.isEmpty) return;
+    final amount = safeParseDouble(amountRaw);
     final uri = buildUpiUri(
       vpa: vpa,
       payeeName: name,
-      amount: safeParseDouble(amountRaw),
+      amount: amount,
       note: widget.orderCode,
     );
     await showModalBottomSheet<void>(
@@ -332,7 +336,15 @@ class _CustPayPanelState extends State<CustPayPanel> {
       useSafeArea: true,
       backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (_) => _CustPaySheet(qrData: uri.toString(), vpa: vpa, bankingName: name, payLabel: payLabel),
+      builder: (_) => _CustPaySheet(
+        qrData: uri.toString(),
+        vpa: vpa,
+        bankingName: name,
+        payLabel: payLabel,
+        orderId: widget.orderId,
+        amount: amount,
+        kind: kind,
+      ),
     );
   }
 
@@ -554,17 +566,30 @@ class _CustStatCard extends StatelessWidget {
 
 // ── Pay sheet — QR + UPI ID + Banking Name only, no amount line, no hint ────
 
-class _CustPaySheet extends StatelessWidget {
+class _CustPaySheet extends StatefulWidget {
   final String qrData;
   final String vpa;
   final String bankingName;
   final String payLabel;
+  final String orderId;
+  final double amount;
+  final String kind; // 'advance' | 'remaining'
   const _CustPaySheet({
     required this.qrData,
     required this.vpa,
     required this.bankingName,
     required this.payLabel,
+    required this.orderId,
+    required this.amount,
+    required this.kind,
   });
+
+  @override
+  State<_CustPaySheet> createState() => _CustPaySheetState();
+}
+
+class _CustPaySheetState extends State<_CustPaySheet> {
+  bool _waOpen = false;
 
   @override
   Widget build(BuildContext context) {
@@ -582,7 +607,7 @@ class _CustPaySheet extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 20),
           child: Row(children: [
             Expanded(
-              child: Text('$payLabel — mediBO',
+              child: Text('${widget.payLabel} — mediBO',
                   style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
                   maxLines: 2, overflow: TextOverflow.ellipsis),
             ),
@@ -606,7 +631,7 @@ class _CustPaySheet extends StatelessWidget {
                     border: Border.all(color: const Color(0xFFE5E7EB)),
                   ),
                   child: QrImageView(
-                    data: qrData,
+                    data: widget.qrData,
                     version: QrVersions.auto,
                     size: 220,
                     errorCorrectionLevel: QrErrorCorrectLevel.M,
@@ -615,12 +640,211 @@ class _CustPaySheet extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 20),
-              C330CopyRow(label: 'UPI ID', value: vpa),
-              C330CopyRow(label: 'Banking Name', value: bankingName),
+              C330CopyRow(label: 'UPI ID', value: widget.vpa),
+              C330CopyRow(label: 'Banking Name', value: widget.bankingName),
+              const SizedBox(height: 4),
+              // ── Send the QR to a saved WhatsApp number ──────────────────────
+              OutlinedButton(
+                onPressed: () => setState(() => _waOpen = !_waOpen),
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: Color(0xFF1B7A43)),
+                  foregroundColor: const Color(0xFF1B7A43),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  minimumSize: const Size(double.infinity, 44),
+                ),
+                child: Row(mainAxisAlignment: MainAxisAlignment.center, mainAxisSize: MainAxisSize.min, children: [
+                  const Icon(Icons.chat_bubble_outline, size: 16),
+                  const SizedBox(width: 6),
+                  const Flexible(
+                    child: Text('Send QR on WhatsApp',
+                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                        overflow: TextOverflow.ellipsis),
+                  ),
+                  const SizedBox(width: 4),
+                  Icon(_waOpen ? Icons.expand_less : Icons.expand_more, size: 18),
+                ]),
+              ),
+              if (_waOpen) ...[
+                const SizedBox(height: 8),
+                _PayQrWaPicker(
+                  orderId: widget.orderId,
+                  amount: widget.amount,
+                  kind: widget.kind,
+                ),
+              ],
             ]),
           ),
         ),
       ]),
+    );
+  }
+}
+
+// ── WhatsApp mini-popup: pick a saved number → backend renders & sends the QR ──
+// Sends via send_payment_qr_wa(p_order_id, p_phone, p_amount, p_kind). The backend
+// does the entire send (renders the amount's QR image + WhatsApps it + records
+// last-used) — there is NO wa.me/share fallback. On success we re-fetch the number
+// list so the "last used" badge moves to the number just used.
+class _PayQrWaPicker extends StatefulWidget {
+  final String orderId;
+  final double amount;
+  final String kind; // 'advance' | 'remaining'
+  const _PayQrWaPicker({required this.orderId, required this.amount, required this.kind});
+
+  @override
+  State<_PayQrWaPicker> createState() => _PayQrWaPickerState();
+}
+
+class _PayQrWaPickerState extends State<_PayQrWaPicker> {
+  List<Map<String, dynamic>>? _numbers;
+  String? _error;
+  String? _sendingPhone; // row currently in-flight
+  String? _sentPhone;    // row that just succeeded → "Sent to WhatsApp ✓"
+  String? _errorPhone;   // row that just failed → "Couldn't send — try again"
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final raw = await Supabase.instance.client
+          .rpc('customer_order_wa_numbers', params: {'p_order_id': widget.orderId});
+      final list = (raw is List ? raw : const [])
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+      if (mounted) setState(() { _numbers = list; _error = null; });
+    } catch (_) {
+      if (mounted) setState(() => _error = 'Could not load numbers.');
+    }
+  }
+
+  Future<void> _send(String phone) async {
+    if (_sendingPhone != null) return;
+    // Render-log the wired tap-to-send (was a no-op before CHANGE #481).
+    RenderLog.write('c481_payqr_send_wired',
+        'kind=${widget.kind};amt=${widget.amount};phone=$phone');
+    setState(() { _sendingPhone = phone; _sentPhone = null; _errorPhone = null; });
+    try {
+      final raw = await Supabase.instance.client.rpc('send_payment_qr_wa', params: {
+        'p_order_id': widget.orderId,
+        'p_phone': phone,
+        'p_amount': widget.amount,
+        'p_kind': widget.kind,
+      });
+      final res = raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
+      if (!mounted) return;
+      if (res['status'] == 'queued') {
+        setState(() { _sendingPhone = null; _sentPhone = phone; });
+        await _load(); // refresh so the "last used" badge moves to this number
+      } else {
+        setState(() { _sendingPhone = null; _errorPhone = phone; });
+      }
+    } catch (_) {
+      if (mounted) setState(() { _sendingPhone = null; _errorPhone = phone; });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFFF9FAFB),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxHeight: 300),
+        child: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+              child: Text('Send QR to',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+            ),
+            const SizedBox(height: 4),
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.all(8),
+                child: Text(_error!, style: const TextStyle(fontSize: 12, color: Colors.red)),
+              )
+            else if (_numbers == null)
+              const Padding(
+                padding: EdgeInsets.all(16),
+                child: Center(
+                    child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))),
+              )
+            else if (_numbers!.isEmpty)
+              const Padding(
+                padding: EdgeInsets.all(8),
+                child: Text('No saved number', style: TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
+              )
+            else
+              Flexible(
+                child: SingleChildScrollView(
+                  child: Column(
+                    children: _numbers!.asMap().entries.map((e) {
+                      final idx = e.key;
+                      final phone = e.value['phone']?.toString() ?? '';
+                      final lastUsed = e.value['last_used'];
+                      final isLastUsed = idx == 0 && lastUsed != null;
+                      final busy = _sendingPhone == phone;
+                      final sent = _sentPhone == phone;
+                      final failed = _errorPhone == phone;
+                      return InkWell(
+                        onTap: _sendingPhone == null ? () => _send(phone) : null,
+                        borderRadius: BorderRadius.circular(8),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
+                          child: Row(children: [
+                            const Icon(Icons.chat_bubble, size: 16, color: Color(0xFF1B7A43)),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                Text(phone,
+                                    style: const TextStyle(fontSize: 13.5, color: Color(0xFF111827))),
+                                if (sent)
+                                  const Padding(
+                                    padding: EdgeInsets.only(top: 2),
+                                    child: Text('Sent to WhatsApp ✓',
+                                        style: TextStyle(fontSize: 11, color: Color(0xFF1B7A43), fontWeight: FontWeight.w600)),
+                                  )
+                                else if (failed)
+                                  const Padding(
+                                    padding: EdgeInsets.only(top: 2),
+                                    child: Text("Couldn't send — try again",
+                                        style: TextStyle(fontSize: 11, color: Color(0xFFDC2626), fontWeight: FontWeight.w600)),
+                                  ),
+                              ]),
+                            ),
+                            if (isLastUsed && !busy)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                    color: const Color(0xFFE8F5E9), borderRadius: BorderRadius.circular(4)),
+                                child: const Text('last used',
+                                    style: TextStyle(
+                                        fontSize: 9.5, color: Color(0xFF1B7A43), fontWeight: FontWeight.w600)),
+                              ),
+                            if (busy) ...[
+                              const SizedBox(width: 8),
+                              const SizedBox(
+                                  width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+                            ],
+                          ]),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ),
+              ),
+          ]),
+        ),
+      ),
     );
   }
 }

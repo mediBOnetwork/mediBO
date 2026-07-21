@@ -747,6 +747,7 @@ class _OrderCardState extends State<_OrderCard> {
     final path = info['path']?.toString() ?? '';
     final name = info['name']?.toString() ?? 'Bill';
     final canDelete = info['can_delete'] == true;
+    if (path.isNotEmpty) RenderLog.write('c479_bill_bucket_resolved', bucket);
 
     return Container(
       decoration: const BoxDecoration(

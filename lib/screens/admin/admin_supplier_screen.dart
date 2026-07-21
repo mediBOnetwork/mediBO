@@ -12387,6 +12387,7 @@ class _BillTabState extends State<_BillTab> {
     final bucket   = widget.bill['bucket'] as String? ?? 'supplier-bills';
     final filePath = widget.bill['file_path'] as String? ?? '';
     RenderLog.write('c329_bucket_ok', bucket);
+    RenderLog.write('c479_bill_bucket_resolved', bucket);
     try {
       final url = await Supabase.instance.client.storage
           .from(bucket).createSignedUrl(filePath, 3600);

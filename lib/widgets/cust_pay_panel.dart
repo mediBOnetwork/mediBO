@@ -19,6 +19,7 @@ import '../utils/payment_proof.dart';
 import '../utils/render_log.dart';
 import '../utils/safe_parse.dart';
 import '../utils/toast.dart';
+import 'native_signed_image.dart';
 import 'sup_pay_panel.dart' show C330CopyRow;
 import 'upi_pay_sheet.dart' show buildUpiUri;
 
@@ -677,6 +678,7 @@ class _PaymentProofImage extends StatefulWidget {
 class _PaymentProofImageState extends State<_PaymentProofImage> {
   String? _url;
   bool _error = false;
+  int _attempt = 0;
 
   @override
   void initState() {
@@ -691,7 +693,7 @@ class _PaymentProofImageState extends State<_PaymentProofImage> {
           .from(widget.bucket)
           .createSignedUrl(widget.path, 3600)
           .timeout(const Duration(seconds: 8));
-      if (mounted) setState(() { _url = url; _error = false; });
+      if (mounted) setState(() { _url = url; _error = false; _attempt++; });
     } catch (e) {
       RenderLog.write('c474_cust_sign_err_msg', 'bucket=${widget.bucket};path=${widget.path};err=$e');
       if (mounted) setState(() => _error = true);
@@ -737,19 +739,17 @@ class _PaymentProofImageState extends State<_PaymentProofImage> {
     }
     return ClipRRect(
       borderRadius: BorderRadius.circular(8),
-      child: Image.network(
-        url,
-        width: double.infinity, height: 140, fit: BoxFit.cover,
-        errorBuilder: (_, _, _) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
+      child: SizedBox(
+        width: double.infinity,
+        height: 140,
+        child: NativeSignedImage(
+          key: ValueKey('${widget.bucket}/${widget.path}/$_attempt'),
+          url: url,
+          cacheKey: '${widget.bucket}-${widget.path.hashCode}-$_attempt',
+          onError: () {
             if (mounted && !_error) setState(() => _error = true);
-          });
-          return Container(
-            width: double.infinity, height: 120,
-            decoration: box,
-            child: const Center(child: Icon(Icons.broken_image_outlined, color: Color(0xFF9CA3AF))),
-          );
-        },
+          },
+        ),
       ),
     );
   }

@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../utils/bill_mime.dart';
 import '../utils/download_bytes.dart';
@@ -55,13 +56,16 @@ class _CustPayPanelState extends State<CustPayPanel> {
       );
       final panel = Map<String, dynamic>.from(res as Map);
       if (!mounted) return;
+      final display = Map<String, dynamic>.from(panel['display'] as Map? ?? {});
       final totals = Map<String, dynamic>.from(panel['totals'] as Map? ?? {});
       final remaining = Map<String, dynamic>.from(panel['remaining'] as Map? ?? {});
       final ready = remaining['ready'] == true;
       final payments = (panel['payments'] as List?) ?? [];
-      RenderLog.write('c468_total', ready ? _currency(remaining['bill_total']) : 'Updating soon');
-      RenderLog.write('c468_due', ready ? _currency(remaining['due']) : 'Updating soon');
-      RenderLog.write('c468_paid', totals['paid_label']?.toString() ?? '');
+      // CHANGE #480 — totals now come verbatim from backend display.* (which
+      // already carry the "Awaiting bill" pending text); no client-side literal.
+      RenderLog.write('c468_total', display['total']?.toString() ?? '');
+      RenderLog.write('c468_due', display['due']?.toString() ?? '');
+      RenderLog.write('c468_paid', display['paid']?.toString() ?? totals['paid_label']?.toString() ?? '');
       RenderLog.write('c468_chip_count', 1 + payments.length);
       RenderLog.write('c468_remaining_ready', ready);
       RenderLog.write('c468_remaining_can_pay', remaining['can_pay'] == true);
@@ -95,6 +99,7 @@ class _CustPayPanelState extends State<CustPayPanel> {
     final panel = _panel;
     if (panel == null) return const SizedBox.shrink();
 
+    final display = Map<String, dynamic>.from(panel['display'] as Map? ?? {});
     final totals = Map<String, dynamic>.from(panel['totals'] as Map? ?? {});
     final advance = Map<String, dynamic>.from(panel['advance'] as Map? ?? {});
     final remaining = Map<String, dynamic>.from(panel['remaining'] as Map? ?? {});
@@ -102,11 +107,20 @@ class _CustPayPanelState extends State<CustPayPanel> {
     final payments = ((panel['payments'] as List?) ?? [])
         .map((e) => Map<String, dynamic>.from(e as Map))
         .toList();
-    final ready = remaining['ready'] == true;
 
-    final totalText = ready ? _currency(remaining['bill_total']) : 'Updating soon';
-    final dueText = ready ? _currency(remaining['due']) : 'Updating soon';
-    final paidText = totals['paid_label']?.toString() ?? '';
+    // CHANGE #480 — print backend strings verbatim. display.* already contain
+    // the "Awaiting bill" pending text when the bill is unconfirmed; we never
+    // compute or hardcode that literal here. Fallback: pending_label else '—'.
+    String disp(String key) {
+      final v = display[key]?.toString();
+      if (v != null && v.isNotEmpty) return v;
+      final pending = display['pending_label']?.toString();
+      return (pending != null && pending.isNotEmpty) ? pending : '—';
+    }
+
+    final totalText = disp('total');
+    final dueText = disp('due');
+    final paidText = disp('paid');
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       // ── Top boxes: Total | Paid | Due — equal thirds, no gap ─────────────
@@ -138,7 +152,7 @@ class _CustPayPanelState extends State<CustPayPanel> {
       ),
       const SizedBox(height: 12),
       if (_chip == 0)
-        _buildInfoTab(advance, remaining, totals, upi)
+        _buildInfoTab(advance, remaining, totals, upi, display)
       else if (_chip - 1 < payments.length)
         _CustPaymentDetailCard(
           key: ValueKey(payments[_chip - 1]['id']?.toString() ?? _chip),
@@ -162,36 +176,35 @@ class _CustPayPanelState extends State<CustPayPanel> {
     Map<String, dynamic> remaining,
     Map<String, dynamic> totals,
     Map<String, dynamic> upi,
+    Map<String, dynamic> display,
   ) {
     final advPaid = safeParseDouble(advance['paid']);
     final advRequired = safeParseDouble(advance['required']);
     final advDue = (advRequired - advPaid) < 0 ? 0.0 : (advRequired - advPaid);
     final advPayLabel = advance['pay_label']?.toString() ?? 'Pay Advance';
-    final advDone = advance['done'] == true;
 
     final ready = remaining['ready'] == true;
-    final canPay = remaining['can_pay'] == true;
     final remPayLabel = remaining['pay_label']?.toString() ?? 'Pay Remaining';
 
-    String remHeadline;
-    String remSub;
+    // CHANGE #480 — Remaining headline reads backend display.remaining verbatim
+    // (carries "Awaiting bill" until the bill is imported). No client literal.
+    final remHeadline = display['remaining']?.toString().isNotEmpty == true
+        ? display['remaining'].toString()
+        : (display['pending_label']?.toString() ?? '—');
+    final remSub = remaining['sub']?.toString() ?? '';
     double remFill;
     if (ready) {
-      remHeadline = remaining['value']?.toString() ?? '';
-      remSub = remaining['sub']?.toString() ?? '';
       remFill = (safeParseInt(remaining['pct'])).clamp(0, 100) / 100;
     } else {
-      remHeadline = 'Updating soon';
-      remSub = '';
       final paidNum = _stripCurrencyLabel(totals['paid_label']?.toString() ?? '');
       final mrpNum = _stripCurrencyLabel(totals['total_label']?.toString() ?? '');
       remFill = mrpNum > 0 ? ((paidNum * 100 / (0.75 * mrpNum)).clamp(0, 100)) / 100 : 0.0;
     }
 
-    // CHANGE #474 — pay-badge lives inside its own box now; no more separate
-    // full-width "Pay advance/remaining" button below the card.
-    RenderLog.write('c474_cust_adv_badge', 1);
-    RenderLog.write('c474_cust_rem_badge', 1);
+    // CHANGE #480 — advance/remaining badges are fully backend-owned now:
+    // label/tone/clickable come verbatim from advance.badge_* / remaining.badge_*.
+    // No client-side computation of these labels or colours.
+    RenderLog.write('c480_pay_badges_bound', 1);
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _CustStatCard(
@@ -200,9 +213,12 @@ class _CustPayPanelState extends State<CustPayPanel> {
         sub: '',
         fill: (safeParseInt(advance['pct'])).clamp(0, 100) / 100,
         barColor: const Color(0xFF1B7A43),
-        badge: advDone
-            ? _staticChip('Advance paid ✓', ok: true)
-            : _payBadge(label: advPayLabel, onPressed: () => _openPaySheet(upi, advDue, advPayLabel)),
+        badge: _backendBadge(
+          label: advance['badge_label']?.toString() ?? '',
+          tone: advance['badge_tone']?.toString() ?? 'yellow',
+          clickable: advance['badge_clickable'] == true,
+          onTap: () => _openPaySheet(upi, advDue, advPayLabel),
+        ),
       ),
       const SizedBox(height: 16),
       _CustStatCard(
@@ -211,9 +227,12 @@ class _CustPayPanelState extends State<CustPayPanel> {
         sub: remSub,
         fill: remFill,
         barColor: const Color(0xFF1B7A43),
-        badge: (ready && canPay)
-            ? _payBadge(label: remPayLabel, onPressed: () => _openPaySheet(upi, remaining['due'], remPayLabel))
-            : _staticChip('Balance not confirmed yet', ok: false),
+        badge: _backendBadge(
+          label: remaining['badge_label']?.toString() ?? '',
+          tone: remaining['badge_tone']?.toString() ?? 'grey',
+          clickable: remaining['badge_clickable'] == true,
+          onTap: () => _openPaySheet(upi, remaining['due'], remPayLabel),
+        ),
       ),
       const SizedBox(height: 16),
       Row(children: [
@@ -224,31 +243,29 @@ class _CustPayPanelState extends State<CustPayPanel> {
     ]);
   }
 
-  Widget _payBadge({required String label, required VoidCallback onPressed}) {
-    return GestureDetector(
-      onTap: onPressed,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-        decoration: BoxDecoration(color: const Color(0xFF1B7A43), borderRadius: BorderRadius.circular(14)),
-        child: Text(label,
-            style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: Colors.white)),
-      ),
-    );
-  }
-
-  Widget _staticChip(String label, {required bool ok}) {
-    return Container(
+  // CHANGE #480 — single backend-driven badge. Text, colour and tap-ability
+  // all come verbatim from the RPC's badge_label / badge_tone / badge_clickable.
+  // tone: 'green' = paid/done, 'yellow' = action pending, 'grey' = disabled.
+  // A non-clickable badge renders as a static chip (no GestureDetector).
+  Widget _backendBadge({
+    required String label,
+    required String tone,
+    required bool clickable,
+    required VoidCallback onTap,
+  }) {
+    final (Color bg, Color fg) = switch (tone) {
+      'green' => (const Color(0xFFD1FAE5), const Color(0xFF065F46)),
+      'yellow' => (const Color(0xFFFEF3C7), const Color(0xFF92400E)),
+      _ => (const Color(0xFFF3F4F6), const Color(0xFF9CA3AF)), // grey / disabled
+    };
+    final chip = Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: ok ? const Color(0xFFD1FAE5) : const Color(0xFFF3F4F6),
-        borderRadius: BorderRadius.circular(14),
-      ),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(14)),
       child: Text(label,
-          style: TextStyle(
-              fontSize: 11.5,
-              fontWeight: FontWeight.w600,
-              color: ok ? const Color(0xFF065F46) : const Color(0xFF9CA3AF))),
+          style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: fg)),
     );
+    if (!clickable) return chip;
+    return GestureDetector(onTap: onTap, child: chip);
   }
 
   Widget _uploadButton() {
@@ -372,11 +389,6 @@ class _CustPayPanelState extends State<CustPayPanel> {
 }
 
 // ── Currency / parsing helpers ──────────────────────────────────────────────
-
-String _currency(dynamic v) {
-  final d = safeParseDouble(v);
-  return d == d.truncateToDouble() ? '₹${d.toInt()}' : '₹${d.toStringAsFixed(2)}';
-}
 
 double _stripCurrencyLabel(String s) {
   final cleaned = s.replaceAll(RegExp(r'[^0-9.]'), '');
@@ -623,7 +635,14 @@ class _CustPaymentDetailCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final statusLabel = payment['status_label']?.toString() ?? '';
     final statusTone = payment['status_tone']?.toString() ?? 'pending';
-    final methodLabel = payment['method_label']?.toString() ?? '';
+    // CHANGE #480 — mirror the admin View-Payment card exactly: status pill on
+    // the left, Cash/Online mode badge on the right, then method-specific rows.
+    final isCash = (payment['method']?.toString() ?? 'online') == 'cash';
+    final modeLabel = payment['method_label']?.toString().isNotEmpty == true
+        ? payment['method_label'].toString()
+        : (isCash ? 'Cash' : 'Online');
+
+    final path = payment['screenshot']?.toString() ?? '';
 
     return Container(
       padding: const EdgeInsets.all(12),
@@ -641,29 +660,73 @@ class _CustPaymentDetailCard extends StatelessWidget {
                 style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _toneColor(statusTone))),
           ),
           const Spacer(),
-          if (methodLabel.isNotEmpty)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(color: const Color(0xFFF3F4F6), borderRadius: BorderRadius.circular(12)),
-              child: Text(methodLabel,
-                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF374151))),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: isCash ? const Color(0xFFF3F4F6) : const Color(0xFFE8F5E9),
+              borderRadius: BorderRadius.circular(20),
             ),
+            child: Text(modeLabel,
+                style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: isCash ? const Color(0xFF374151) : const Color(0xFF1B5E20))),
+          ),
         ]),
         const SizedBox(height: 10),
-        C330CopyRow(label: 'Amount', value: payment['amount_label']?.toString()),
-        C330CopyRow(label: 'When', value: payment['when_label']?.toString()),
-        C330CopyRow(label: 'UTR', value: payment['utr']?.toString()),
-        C330CopyRow(label: 'App', value: payment['app']?.toString()),
-        Builder(builder: (_) {
-          final path = payment['screenshot']?.toString() ?? '';
-          if (path.isEmpty) return const SizedBox.shrink();
-          final bucket = resolvePaymentProofBucket(payment['bucket']?.toString(), path);
-          return Padding(
+        // ── Detail rows — same fields & order as admin's _OrderPaymentPanel ──
+        if (isCash) ...[
+          C330CopyRow(label: 'Amount', value: payment['amount_label']?.toString()),
+          C330CopyRow(label: 'Received by', value: payment['collected_by']?.toString()),
+          C330CopyRow(label: 'Location', value: payment['location']?.toString()),
+          _viewInMapsRow(context, payment['location']?.toString()),
+          C330CopyRow(label: 'Received at', value: payment['paid_label']?.toString()),
+        ] else ...[
+          C330CopyRow(label: 'Amount', value: payment['amount_label']?.toString()),
+          C330CopyRow(label: 'Payee', value: payment['payee_name']?.toString()),
+          C330CopyRow(label: 'App', value: payment['app']?.toString()),
+          C330CopyRow(label: 'UTR', value: payment['utr']?.toString()),
+          C330CopyRow(label: 'Txn', value: payment['txn_id']?.toString()),
+          C330CopyRow(label: 'Paid', value: payment['paid_label']?.toString()),
+        ],
+        if (path.isNotEmpty)
+          Padding(
             padding: const EdgeInsets.only(top: 8),
-            child: _PaymentProofImage(bucket: bucket, path: path),
-          );
-        }),
+            child: _PaymentProofImage(
+              bucket: resolvePaymentProofBucket(payment['bucket']?.toString(), path),
+              path: path,
+            ),
+          ),
       ]),
+    );
+  }
+
+  // ── "View in Maps" — opens Google Maps search for the collected location ──
+  Widget _viewInMapsRow(BuildContext context, String? location) {
+    final loc = (location ?? '').trim();
+    if (loc.isEmpty) return const SizedBox.shrink();
+    final mapsUrl =
+        'https://www.google.com/maps/search/?api=1&query=${Uri.encodeComponent(loc)}';
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: InkWell(
+        onTap: () {
+          try {
+            launchUrl(Uri.parse(mapsUrl), webOnlyWindowName: '_blank');
+          } catch (_) {}
+        },
+        borderRadius: BorderRadius.circular(8),
+        child: const Padding(
+          padding: EdgeInsets.symmetric(vertical: 6),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(Icons.location_on, size: 18, color: Color(0xFF1A73E8)),
+            SizedBox(width: 6),
+            Text('View in Maps',
+                style: TextStyle(
+                    color: Color(0xFF1A73E8), fontWeight: FontWeight.w600, fontSize: 14)),
+          ]),
+        ),
+      ),
     );
   }
 }
@@ -741,21 +804,30 @@ class _PaymentProofImageState extends State<_PaymentProofImage> {
         child: const Center(child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))),
       );
     }
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(8),
-      child: SizedBox(
-        width: double.infinity,
-        height: 140,
-        child: NativeSignedImage(
-          key: ValueKey('${widget.bucket}/${widget.path}/$_attempt'),
-          url: url,
-          cacheKey: '${widget.bucket}-${widget.path.hashCode}-$_attempt',
-          onTap: () => openFullscreenImage(context, url),
-          onError: () {
-            if (mounted && !_error) setState(() => _error = true);
-          },
+    // CHANGE #480 — proof preview enlarged to match the admin card: a portrait
+    // 4:3 estimate off the available width, clamped to 60% of screen height so
+    // the selfie/screenshot is clearly readable (was a fixed 140 px).
+    RenderLog.write('c480_pay_card_photo', 1);
+    return LayoutBuilder(builder: (lCtx, constraints) {
+      final w = constraints.maxWidth;
+      final maxH = MediaQuery.of(lCtx).size.height * 0.6;
+      final h = (w * 1.33).clamp(240.0, maxH);
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: SizedBox(
+          width: double.infinity,
+          height: h,
+          child: NativeSignedImage(
+            key: ValueKey('${widget.bucket}/${widget.path}/$_attempt'),
+            url: url,
+            cacheKey: '${widget.bucket}-${widget.path.hashCode}-$_attempt',
+            onTap: () => openFullscreenImage(context, url),
+            onError: () {
+              if (mounted && !_error) setState(() => _error = true);
+            },
+          ),
         ),
-      ),
-    );
+      );
+    });
   }
 }

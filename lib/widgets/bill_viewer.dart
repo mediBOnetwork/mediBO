@@ -193,11 +193,17 @@ class _BillFilePreviewState extends State<BillFilePreview> {
     try {
       final storage = Supabase.instance.client.storage.from(widget.bucket);
       if (_isImage) {
+        // CHANGE #469: resize must be explicit. Without it, Supabase's image
+        // transform scales only the given dimension (width here) and leaves
+        // the other at its original size — e.g. a 3456x4608 phone photo came
+        // back 480x4608, an aspect-ratio-broken sliver that renders as an
+        // effectively blank thumbnail inside a normal-height box. `contain`
+        // preserves aspect ratio, so 480/1600 apply to width as intended.
         final urls = await Future.wait([
           storage.createSignedUrl(widget.path, 3600,
-              transform: const TransformOptions(width: 480, quality: 70)),
+              transform: const TransformOptions(width: 480, quality: 70, resize: ResizeMode.contain)),
           storage.createSignedUrl(widget.path, 3600,
-              transform: const TransformOptions(width: 1600, quality: 80)),
+              transform: const TransformOptions(width: 1600, quality: 80, resize: ResizeMode.contain)),
         ]);
         if (!mounted) return;
         setState(() {

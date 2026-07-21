@@ -15,6 +15,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../utils/bill_mime.dart';
 import '../utils/download_bytes.dart';
+import '../utils/payment_proof.dart';
 import '../utils/render_log.dart';
 import '../utils/safe_parse.dart';
 import '../utils/toast.dart';
@@ -63,6 +64,7 @@ class _CustPayPanelState extends State<CustPayPanel> {
       RenderLog.write('c468_remaining_ready', ready);
       RenderLog.write('c468_remaining_can_pay', remaining['can_pay'] == true);
       RenderLog.write('c468_can_respond', panel['can_respond'] == true);
+      RenderLog.write('c474_build', 1);
       setState(() {
         _panel = panel;
         _loading = false;
@@ -160,6 +162,7 @@ class _CustPayPanelState extends State<CustPayPanel> {
     final advRequired = safeParseDouble(advance['required']);
     final advDue = (advRequired - advPaid) < 0 ? 0.0 : (advRequired - advPaid);
     final advPayLabel = advance['pay_label']?.toString() ?? 'Pay Advance';
+    final advDone = advance['done'] == true;
 
     final ready = remaining['ready'] == true;
     final canPay = remaining['can_pay'] == true;
@@ -180,6 +183,11 @@ class _CustPayPanelState extends State<CustPayPanel> {
       remFill = mrpNum > 0 ? ((paidNum * 100 / (0.75 * mrpNum)).clamp(0, 100)) / 100 : 0.0;
     }
 
+    // CHANGE #474 — pay-badge lives inside its own box now; no more separate
+    // full-width "Pay advance/remaining" button below the card.
+    RenderLog.write('c474_cust_adv_badge', 1);
+    RenderLog.write('c474_cust_rem_badge', 1);
+
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _CustStatCard(
         label: 'Advance',
@@ -187,8 +195,10 @@ class _CustPayPanelState extends State<CustPayPanel> {
         sub: '',
         fill: (safeParseInt(advance['pct'])).clamp(0, 100) / 100,
         barColor: const Color(0xFF1B7A43),
+        badge: advDone
+            ? _staticChip('Advance paid ✓', ok: true)
+            : _payBadge(label: advPayLabel, onPressed: () => _openPaySheet(upi, advDue, advPayLabel)),
       ),
-      _payButton(label: advPayLabel, onPressed: () => _openPaySheet(upi, advDue, advPayLabel)),
       const SizedBox(height: 16),
       _CustStatCard(
         label: 'Remaining Balance',
@@ -196,11 +206,9 @@ class _CustPayPanelState extends State<CustPayPanel> {
         sub: remSub,
         fill: remFill,
         barColor: const Color(0xFF1B7A43),
-      ),
-      _payButton(
-        label: remPayLabel,
-        onPressed: (ready && canPay) ? () => _openPaySheet(upi, remaining['due'], remPayLabel) : null,
-        tooltip: remPayLabel,
+        badge: (ready && canPay)
+            ? _payBadge(label: remPayLabel, onPressed: () => _openPaySheet(upi, remaining['due'], remPayLabel))
+            : _staticChip('Balance not confirmed yet', ok: false),
       ),
       const SizedBox(height: 16),
       Row(children: [
@@ -211,24 +219,31 @@ class _CustPayPanelState extends State<CustPayPanel> {
     ]);
   }
 
-  Widget _payButton({required String label, required VoidCallback? onPressed, String? tooltip}) {
-    final button = SizedBox(
-      width: double.infinity,
-      child: FilledButton(
-        onPressed: onPressed,
-        style: FilledButton.styleFrom(
-          backgroundColor: const Color(0xFF1B7A43),
-          disabledBackgroundColor: const Color(0xFFE5E7EB),
-          foregroundColor: Colors.white,
-          disabledForegroundColor: const Color(0xFF9CA3AF),
-          minimumSize: const Size(double.infinity, 44),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-        ),
-        child: Text(label),
+  Widget _payBadge({required String label, required VoidCallback onPressed}) {
+    return GestureDetector(
+      onTap: onPressed,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(color: const Color(0xFF1B7A43), borderRadius: BorderRadius.circular(14)),
+        child: Text(label,
+            style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: Colors.white)),
       ),
     );
-    if (onPressed != null || tooltip == null || tooltip.isEmpty) return button;
-    return Tooltip(message: tooltip, child: button);
+  }
+
+  Widget _staticChip(String label, {required bool ok}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: ok ? const Color(0xFFD1FAE5) : const Color(0xFFF3F4F6),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Text(label,
+          style: TextStyle(
+              fontSize: 11.5,
+              fontWeight: FontWeight.w600,
+              color: ok ? const Color(0xFF065F46) : const Color(0xFF9CA3AF))),
+    );
   }
 
   Widget _uploadButton() {
@@ -471,12 +486,14 @@ class _CustStatCard extends StatelessWidget {
   final String sub;
   final double fill;
   final Color barColor;
+  final Widget? badge;
   const _CustStatCard({
     required this.label,
     required this.headline,
     required this.sub,
     required this.fill,
     required this.barColor,
+    this.badge,
   });
 
   @override
@@ -490,7 +507,13 @@ class _CustStatCard extends StatelessWidget {
         border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Color(0xFF9CA3AF))),
+        Row(children: [
+          Expanded(
+            child: Text(label,
+                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Color(0xFF9CA3AF))),
+          ),
+          ?badge,
+        ]),
         const SizedBox(height: 4),
         Text(headline, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
         if (sub.isNotEmpty) ...[
@@ -626,7 +649,107 @@ class _CustPaymentDetailCard extends StatelessWidget {
         C330CopyRow(label: 'When', value: payment['when_label']?.toString()),
         C330CopyRow(label: 'UTR', value: payment['utr']?.toString()),
         C330CopyRow(label: 'App', value: payment['app']?.toString()),
+        Builder(builder: (_) {
+          final path = payment['screenshot']?.toString() ?? '';
+          if (path.isEmpty) return const SizedBox.shrink();
+          final bucket = resolvePaymentProofBucket(payment['bucket']?.toString(), path);
+          return Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: _PaymentProofImage(bucket: bucket, path: path),
+          );
+        }),
       ]),
+    );
+  }
+}
+
+// ── Proof image — signed URL, bounded (never an unbounded spinner) ─────────
+
+class _PaymentProofImage extends StatefulWidget {
+  final String bucket;
+  final String path;
+  const _PaymentProofImage({required this.bucket, required this.path});
+
+  @override
+  State<_PaymentProofImage> createState() => _PaymentProofImageState();
+}
+
+class _PaymentProofImageState extends State<_PaymentProofImage> {
+  String? _url;
+  bool _error = false;
+
+  @override
+  void initState() {
+    super.initState();
+    RenderLog.write('c474_pay_img_widget', 1);
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final url = await Supabase.instance.client.storage
+          .from(widget.bucket)
+          .createSignedUrl(widget.path, 3600)
+          .timeout(const Duration(seconds: 8));
+      if (mounted) setState(() { _url = url; _error = false; });
+    } catch (_) {
+      if (mounted) setState(() => _error = true);
+    }
+  }
+
+  void _retry() {
+    setState(() { _error = false; _url = null; });
+    _load();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final box = BoxDecoration(
+      color: const Color(0xFFF3F4F6),
+      borderRadius: BorderRadius.circular(8),
+      border: Border.all(color: const Color(0xFFE5E7EB)),
+    );
+    if (_error) {
+      return GestureDetector(
+        onTap: _retry,
+        child: Container(
+          width: double.infinity, height: 120,
+          decoration: box,
+          child: const Center(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.refresh, size: 20, color: Color(0xFF9CA3AF)),
+              SizedBox(height: 4),
+              Text("Couldn't load proof — tap to retry",
+                  style: TextStyle(fontSize: 11.5, color: Color(0xFF6B7280)), textAlign: TextAlign.center),
+            ]),
+          ),
+        ),
+      );
+    }
+    final url = _url;
+    if (url == null) {
+      return Container(
+        width: double.infinity, height: 120,
+        decoration: box,
+        child: const Center(child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))),
+      );
+    }
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: Image.network(
+        url,
+        width: double.infinity, height: 140, fit: BoxFit.cover,
+        errorBuilder: (_, _, _) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && !_error) setState(() => _error = true);
+          });
+          return Container(
+            width: double.infinity, height: 120,
+            decoration: box,
+            child: const Center(child: Icon(Icons.broken_image_outlined, color: Color(0xFF9CA3AF))),
+          );
+        },
+      ),
     );
   }
 }

@@ -5982,6 +5982,8 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
   final Set<String> _acting = {};
   final Map<String, String> _signedUrls = {};     // claimId → signed URL
   final Map<String, String> _imgViewTypes = {};   // claimId → HtmlElementView viewType
+  final Set<String> _signedUrlErrors = {};        // claimId → sign or image-load failed (CHANGE #474)
+  final Map<String, int> _imgAttempt = {};        // claimId → retry attempt counter (CHANGE #474)
   RealtimeChannel? _paymentChannel;
 
   @override
@@ -6040,31 +6042,7 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
     for (final claim in claims) {
       if (claim.filePath == null || claim.filePath!.isEmpty) continue;
       if (_signedUrls.containsKey(claim.claimId)) continue;
-      try {
-        final url = await PaymentClaimsService.signedScreenshotUrl(claim.filePath!);
-        if (url != null && mounted) {
-          final vt = 'claim-img-${claim.claimId}';
-          if (!_imgViewTypes.containsKey(claim.claimId)) {
-            final capturedContext = context;
-            ui_web.platformViewRegistry.registerViewFactory(vt, (int viewId) {
-              final img = html.ImageElement()
-                ..src = url
-                ..style.width = '100%'
-                ..style.height = '100%'
-                ..style.objectFit = 'contain'
-                ..style.background = '#F3F4F6'
-                ..style.cursor = 'pointer';
-              // Platform views absorb Flutter pointer events — use native onClick instead.
-              img.onClick.listen((_) => openFullscreenImage(capturedContext, url));
-              return img;
-            });
-          }
-          setState(() {
-            _signedUrls[claim.claimId] = url;
-            _imgViewTypes[claim.claimId] = vt;
-          });
-        }
-      } catch (_) {}
+      await _signOneClaimProof(claim.claimId, claim.filePath!);
     }
     if (mounted) {
       RenderLog.write('c225_signed_urls_fix', 1);
@@ -6077,6 +6055,65 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
       RenderLog.write('c232_copy_right',
           'change:232,copy_right_aligned:true,covers:cash+online');
     }
+  }
+
+  // CHANGE #474 — sign + register one claim's proof image. Bounded: sign
+  // failure/timeout OR a browser-level <img> load error both land in
+  // _signedUrlErrors (never leaves the caller on an unbounded spinner).
+  // A fresh viewType per attempt lets a retry re-register the platform view
+  // (Flutter web throws if the same viewType is registered twice).
+  Future<void> _signOneClaimProof(String claimId, String filePath) async {
+    RenderLog.write('c474_pay_img_widget', 1);
+    try {
+      final url = await PaymentClaimsService.signedScreenshotUrl(filePath);
+      if (url == null) {
+        if (mounted) setState(() => _signedUrlErrors.add(claimId));
+        return;
+      }
+      if (!mounted) return;
+      final attempt = (_imgAttempt[claimId] ?? 0) + 1;
+      _imgAttempt[claimId] = attempt;
+      final vt = 'claim-img-$claimId-$attempt';
+      final capturedContext = context;
+      ui_web.platformViewRegistry.registerViewFactory(vt, (int viewId) {
+        final img = html.ImageElement()
+          ..src = url
+          ..style.width = '100%'
+          ..style.height = '100%'
+          ..style.objectFit = 'contain'
+          ..style.background = '#F3F4F6'
+          ..style.cursor = 'pointer';
+        // Platform views absorb Flutter pointer events — use native onClick instead.
+        img.onClick.listen((_) => openFullscreenImage(capturedContext, url));
+        img.onError.listen((_) {
+          if (!mounted) return;
+          setState(() {
+            _signedUrls.remove(claimId);
+            _imgViewTypes.remove(claimId);
+            _signedUrlErrors.add(claimId);
+          });
+        });
+        return img;
+      });
+      setState(() {
+        _signedUrlErrors.remove(claimId);
+        _signedUrls[claimId] = url;
+        _imgViewTypes[claimId] = vt;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _signedUrlErrors.add(claimId));
+    }
+  }
+
+  void _retryClaimProof(PaymentClaim claim) {
+    final path = claim.filePath;
+    if (path == null || path.isEmpty) return;
+    setState(() {
+      _signedUrlErrors.remove(claim.claimId);
+      _signedUrls.remove(claim.claimId);
+      _imgViewTypes.remove(claim.claimId);
+    });
+    _signOneClaimProof(claim.claimId, path);
   }
 
   List<PaymentClaim> _parseClaims(Map<String, dynamic> d) {
@@ -6802,14 +6839,30 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
               final vt = _imgViewTypes[claim.claimId];
               final url = _signedUrls[claim.claimId];
               if (vt == null) {
-                return Container(
-                  width: double.infinity, height: 120,
-                  decoration: BoxDecoration(
-                      color: const Color(0xFFF3F4F6),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: const Color(0xFFE5E7EB))),
-                  child: const Center(child: SizedBox(width: 16, height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2))),
+                // CHANGE #474 — bounded: a sign/load failure lands here as a
+                // tappable retry, never an unbounded spinner.
+                final errored = _signedUrlErrors.contains(claim.claimId);
+                return GestureDetector(
+                  onTap: errored ? () => _retryClaimProof(claim) : null,
+                  child: Container(
+                    width: double.infinity, height: 120,
+                    decoration: BoxDecoration(
+                        color: const Color(0xFFF3F4F6),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0xFFE5E7EB))),
+                    child: Center(
+                      child: errored
+                          ? Column(mainAxisSize: MainAxisSize.min, children: const [
+                              Icon(Icons.refresh, size: 20, color: Color(0xFF9CA3AF)),
+                              SizedBox(height: 4),
+                              Text("Couldn't load proof — tap to retry",
+                                  style: TextStyle(fontSize: 11.5, color: Color(0xFF6B7280)),
+                                  textAlign: TextAlign.center),
+                            ])
+                          : const SizedBox(width: 16, height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2)),
+                    ),
+                  ),
                 );
               }
               RenderLog.write('c225_img_ok', 1);

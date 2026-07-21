@@ -692,7 +692,8 @@ class _PaymentProofImageState extends State<_PaymentProofImage> {
           .createSignedUrl(widget.path, 3600)
           .timeout(const Duration(seconds: 8));
       if (mounted) setState(() { _url = url; _error = false; });
-    } catch (_) {
+    } catch (e) {
+      RenderLog.write('c474_cust_sign_err_msg', 'bucket=${widget.bucket};path=${widget.path};err=$e');
       if (mounted) setState(() => _error = true);
     }
   }

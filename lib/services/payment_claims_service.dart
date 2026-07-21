@@ -105,8 +105,9 @@ class PaymentClaimsService {
           .timeout(const Duration(seconds: 8));
       RenderLog.write('c211_screenshot_signed_ok', 1);
       return url;
-    } catch (_) {
+    } catch (e) {
       RenderLog.write('c211_screenshot_signed_err', 1);
+      RenderLog.write('c474_sign_err_msg', 'bucket=${bucket ?? "(derived)"};path=$filePath;err=$e');
       return null;
     }
   }

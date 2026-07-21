@@ -10,6 +10,7 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -571,12 +572,12 @@ class _CustStatCard extends StatelessWidget {
   }
 }
 
-// ── Pay sheet — QR + UPI ID + Banking Name only, no amount line, no hint ────
+// ── Pay sheet — QR + UPI ID + Banking Name only ─────────────────────────────
 
-// Public (not `_`-prefixed) so test/pay_popup_test.dart can pump it directly
-// with fake fetchWaNumbers/sendQr/fetchQrImage/downloadSink — the real
-// Supabase RPCs/edge function and dart:html download stay the defaults in
-// production.
+// Public (not `_`-prefixed) so test/pay_popup_test.dart and
+// test/download_qr_test.dart can pump it directly with fake
+// fetchWaNumbers/sendQr/downloadBytesSink — the real Supabase RPCs and
+// dart:html download stay the defaults in production.
 class CustPaySheet extends StatefulWidget {
   final String qrData;
   final String vpa;
@@ -587,12 +588,10 @@ class CustPaySheet extends StatefulWidget {
   final String kind; // 'advance' | 'remaining'
   final Future<dynamic> Function(String orderId)? fetchWaNumbers;
   final Future<Map<String, dynamic>> Function(String orderId, String phone, double amount, String kind)? sendQr;
-  // CHANGE #486: max backend — the QR image is rendered server-side by the
-  // payment-qr-image edge function; the app only requests it and downloads
-  // the returned url. Replaces the old client-side RepaintBoundary/toImage
-  // composition (which duplicated the amount already burned into the image).
-  final Future<Map<String, dynamic>> Function(String orderId, double amount, String kind)? fetchQrImage;
-  final void Function(String url, String filename)? downloadSink;
+  // CHANGE #490: Download QR captures the QR card already on screen via
+  // RepaintBoundary.toImage — instant, no network. Replaces CHANGE #486's
+  // payment-qr-image server render (cold-start + resvg latency).
+  final void Function(Uint8List bytes, String filename)? downloadBytesSink;
   const CustPaySheet({
     super.key,
     required this.qrData,
@@ -604,8 +603,7 @@ class CustPaySheet extends StatefulWidget {
     required this.kind,
     this.fetchWaNumbers,
     this.sendQr,
-    this.fetchQrImage,
-    this.downloadSink,
+    this.downloadBytesSink,
   });
 
   @override
@@ -614,6 +612,11 @@ class CustPaySheet extends StatefulWidget {
 
 class _CustPaySheetState extends State<CustPaySheet> {
   final LayerLink _waButtonLink = LayerLink();
+  // GlobalObjectKey (not a plain GlobalKey) so test/download_qr_test.dart can
+  // locate this exact boundary by value — the framework inserts its own
+  // RepaintBoundaries elsewhere in the tree (route/Overlay level), so a
+  // type-only lookup is ambiguous.
+  static const GlobalObjectKey _qrCardKey = GlobalObjectKey('c490_qr_download_card');
   OverlayEntry? _waPopupEntry;
   bool _downloadingQr = false;
 
@@ -624,32 +627,30 @@ class _CustPaySheetState extends State<CustPaySheet> {
     super.dispose();
   }
 
-  Future<Map<String, dynamic>> _invokeQrImage() async {
-    final res = await Supabase.instance.client.functions.invoke('payment-qr-image', body: {
-      'order_id': widget.orderId,
-      'amount': widget.amount,
-      'kind': widget.kind,
-    });
-    final data = res.data;
-    return data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{};
-  }
+  String get _amountLabel => widget.amount == widget.amount.truncateToDouble()
+      ? '₹${widget.amount.toInt()}'
+      : '₹${widget.amount.toStringAsFixed(2)}';
 
-  // Download — the backend renders this sheet's live amount (advance/
-  // remaining) into the QR image and returns a signed url; the app just
-  // requests it and downloads it, it never composes the image itself.
+  // Download — capture the QR card already rendered on screen (header + QR +
+  // UPI ID + Banking Name) via RepaintBoundary.toImage. Instant and offline:
+  // no payment-qr-image call, no duplicated amount (the amount appears once,
+  // in the captured header, and nowhere else in the composed image).
   Future<void> _downloadSheetQr() async {
     if (_downloadingQr) return;
     setState(() => _downloadingQr = true);
     try {
-      final res = widget.fetchQrImage != null
-          ? await widget.fetchQrImage!(widget.orderId, widget.amount, widget.kind)
-          : await _invokeQrImage();
-      final url = res['url']?.toString();
-      if (url == null || url.isEmpty) throw Exception('payment-qr-image returned no url');
-      final filename = res['filename']?.toString() ?? 'mediBO-pay-${widget.amount}.jpg';
-      final sink = widget.downloadSink ?? downloadUrl;
-      sink(url, filename);
-      RenderLog.write('c486_paypopup_qr_backend', 1);
+      final renderObject = _qrCardKey.currentContext?.findRenderObject();
+      if (renderObject is! RenderRepaintBoundary) {
+        throw Exception('QR card not ready');
+      }
+      final image = await renderObject.toImage(pixelRatio: 3);
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      if (byteData == null) throw Exception('Could not encode QR image');
+      final bytes = byteData.buffer.asUint8List();
+      final filename = 'mediBO-pay-${widget.amount}.png';
+      final sink = widget.downloadBytesSink ?? (b, f) => downloadBytes(b, f, 'image/png');
+      sink(bytes, filename);
+      RenderLog.write('c490_paypopup_qr_capture', 1);
     } catch (_) {
       if (mounted) showToast(context, 'Could not download the QR image.', isError: true);
     } finally {
@@ -784,26 +785,41 @@ class _CustPaySheetState extends State<CustPaySheet> {
           child: SingleChildScrollView(
             padding: EdgeInsets.fromLTRB(20, 8, 20, 32 + bottom),
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              Center(
+              // ── Captured for "Download QR" — header + QR + UPI ID + Banking
+              // Name, exactly as shown here (see _downloadSheetQr) ──────────
+              RepaintBoundary(
+                key: _qrCardKey,
                 child: Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0xFFE5E7EB)),
-                  ),
-                  child: QrImageView(
-                    data: widget.qrData,
-                    version: QrVersions.auto,
-                    size: 220,
-                    errorCorrectionLevel: QrErrorCorrectLevel.M,
-                    backgroundColor: Colors.white,
-                  ),
+                  color: Colors.white,
+                  padding: const EdgeInsets.all(4),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                    Text('mediBO — ${widget.payLabel} $_amountLabel',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+                    const SizedBox(height: 14),
+                    Center(
+                      child: Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFFE5E7EB)),
+                        ),
+                        child: QrImageView(
+                          data: widget.qrData,
+                          version: QrVersions.auto,
+                          size: 220,
+                          errorCorrectionLevel: QrErrorCorrectLevel.M,
+                          backgroundColor: Colors.white,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    C330CopyRow(label: 'UPI ID', value: widget.vpa),
+                    C330CopyRow(label: 'Banking Name', value: widget.bankingName),
+                  ]),
                 ),
               ),
-              const SizedBox(height: 20),
-              C330CopyRow(label: 'UPI ID', value: widget.vpa),
-              C330CopyRow(label: 'Banking Name', value: widget.bankingName),
               const SizedBox(height: 4),
               // ── Download QR (this sheet's live amount) · WhatsApp (mini
               // floating popup anchored to this button, listing saved numbers) ──

@@ -57584,17 +57584,17 @@ case 1:return A.q(q,r)}})
 return A.r($async$b0L,r)},
 b0O(a){var s=null
 return A.cXF(a)},
-cXF(a){var s=0,r=A.t(t.T),q,p=2,o=[],n,m,l,k,j,i
+cXF(a){var s=0,r=A.t(t.T),q,p=2,o=[],n,m,l,k,j,i,h
 var $async$b0O=A.o(function(b,c){if(b===1){o.push(c)
-s=p}for(;;)switch(s){case 0:j=null
+s=p}for(;;)switch(s){case 0:i=null
 p=4
-n=A.cM1(j,a)
-l=$.X().b
-l===$&&A.a()
-l=l.at
-l===$&&A.a()
+n=A.cM1(i,a)
+k=$.X().b
+k===$&&A.a()
+k=k.at
+k===$&&A.a()
 s=7
-return A.f(l.aN(n).tU(a,3600).hr(0,B.ke),$async$b0O)
+return A.f(k.aN(n).tU(a,3600).hr(0,B.ke),$async$b0O)
 case 7:m=c
 A.d("c211_screenshot_signed_ok",1)
 q=m
@@ -57604,8 +57604,11 @@ p=2
 s=6
 break
 case 4:p=3
-i=o.pop()
+h=o.pop()
+l=A.a3(h)
 A.d("c211_screenshot_signed_err",1)
+k=i
+A.d("c474_sign_err_msg","bucket="+A.k(k==null?"(derived)":k)+";path="+a+";err="+A.k(l))
 q=null
 s=1
 break
@@ -208654,22 +208657,25 @@ A.a5N.prototype={
 a4(){this.af()
 A.d("c474_pay_img_widget",1)
 this.qN()},
-qN(){var s=0,r=A.t(t.H),q=1,p=[],o=this,n,m,l,k
+qN(){var s=0,r=A.t(t.H),q=1,p=[],o=this,n,m,l,k,j
 var $async$qN=A.o(function(a,b){if(a===1){p.push(b)
 s=q}for(;;)switch(s){case 0:q=3
-m=$.X().b
-m===$&&A.a()
-m=m.at
-m===$&&A.a()
+l=$.X().b
+l===$&&A.a()
+l=l.at
+l===$&&A.a()
 s=6
-return A.f(m.aN(o.a.c).tU(o.a.d,3600).hr(0,B.ke),$async$qN)
+return A.f(l.aN(o.a.c).tU(o.a.d,3600).hr(0,B.ke),$async$qN)
 case 6:n=b
 if(o.c!=null)o.l(new A.c0l(o,n))
 q=1
 s=5
 break
 case 3:q=2
-k=p.pop()
+j=p.pop()
+m=A.a3(j)
+l=o.a
+A.d("c474_cust_sign_err_msg","bucket="+l.c+";path="+l.d+";err="+A.k(m))
 if(o.c!=null)o.l(new A.c0m(o))
 s=5
 break

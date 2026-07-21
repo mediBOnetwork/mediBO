@@ -22,7 +22,6 @@ import 'admin/admin_company_screen.dart';
 import 'admin/admin_dashboard_screen.dart';
 import 'admin/admin_delivery_partner_screen.dart';
 import 'admin/admin_mr_screen.dart';
-import 'admin/admin_pending_bills_screen.dart';
 import 'admin/admin_alert_overlay.dart';
 import 'admin/admin_shell.dart';
 import '../features/whatsapp/ui/wa_home_screen.dart';
@@ -320,7 +319,7 @@ class _HomeShellState extends State<HomeShell> {
   }
 
   // Admin section indices in the pages list: 3=Dashboard, 4=AddMedicine,
-  // 5=Suppliers, 6=Customers, 7=Bills
+  // 5=Suppliers, 6=Customers
   void _handleAdminNav(String route) {
     if (!mounted) return;
     switch (route) {
@@ -337,16 +336,15 @@ class _HomeShellState extends State<HomeShell> {
         setState(() { _index = 6; _cartOpen = false; });
         WidgetsBinding.instance.addPostFrameCallback((_) => AdminCustomerScreen.triggerFocus());
         break;
-      case 'bills': setState(() { _index = 7; _cartOpen = false; }); break;
       case 'bags':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const BagsScreen()));
         break;
-      case 'mr': setState(() { _index = 8; _cartOpen = false; }); break;
-      case 'companies': setState(() { _index = 9; _cartOpen = false; }); break;
-      case 'delivery_partners': setState(() { _index = 10; _cartOpen = false; }); break;
+      case 'mr': setState(() { _index = 7; _cartOpen = false; }); break;
+      case 'companies': setState(() { _index = 8; _cartOpen = false; }); break;
+      case 'delivery_partners': setState(() { _index = 9; _cartOpen = false; }); break;
       case 'fulfillment':
-        setState(() { _index = 11; _cartOpen = false; });
+        setState(() { _index = 10; _cartOpen = false; });
         WidgetsBinding.instance.addPostFrameCallback((_) => AdminFulfillmentScreen.triggerFocus());
         break;
       case 'whatsapp':
@@ -574,7 +572,7 @@ class _HomeShellState extends State<HomeShell> {
             refreshSignal: _ordersRefreshSignal,
           ),
           BulkUploadScreen(key: _bulkUploadKey),
-          // Admin-only pages: indices 3–7 (desktop only; built for admin users)
+          // Admin-only pages: indices 3–10 (desktop only; built for admin users)
           // Kept alive in IndexedStack so no state loss on tab switch.
           QuickLinkNavigator(
             navigate: _handleAdminNav,
@@ -583,7 +581,6 @@ class _HomeShellState extends State<HomeShell> {
           const AdminAddMedicineScreen(),
           AdminSupplierScreen(),
           AdminCustomerScreen(),
-          const PendingBillsScreen(),
           const AdminMrScreen(),
           const AdminCompanyScreen(),
           const AdminDeliveryPartnerScreen(),
@@ -1050,6 +1047,7 @@ class _MobileProfileAvatar extends StatelessWidget {
             }),
             const SizedBox(height: 16),
             const Divider(),
+            Builder(builder: (_) { RenderLog.write('c473_profile_menu_built', 1); return const SizedBox.shrink(); }),
             _SheetTile(icon: Icons.person_outline, label: 'View Profile', onTap: () {
               Navigator.pop(context);
               Navigator.push(context, MaterialPageRoute(builder: (_) => const ProfileScreen()));
@@ -1086,12 +1084,6 @@ class _MobileProfileAvatar extends StatelessWidget {
               icon: Icons.medication_outlined,
               label: 'Add Medicine',
               onTap: () { Navigator.pop(context); nav('add_medicine'); },
-            ),
-            Builder(builder: (_) { RenderLog.write('c206_dropdown_bills', 1); return const SizedBox.shrink(); }),
-            _SheetTile(
-              icon: Icons.inbox_outlined,
-              label: 'Bills',
-              onTap: () { Navigator.pop(context); nav('bills'); },
             ),
             _SheetTile(
               icon: Icons.badge_outlined,
@@ -3697,14 +3689,6 @@ class _DesktopProfileButton extends StatelessWidget {
               Icon(Icons.qr_code_2, size: 16, color: Color(0xFF374151)),
               SizedBox(width: 10),
               Text('Bags', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
-            ]),
-          ),
-          const PopupMenuItem(
-            value: 'bills',
-            child: Row(children: [
-              Icon(Icons.inbox_outlined, size: 16, color: Color(0xFF374151)),
-              SizedBox(width: 10),
-              Text('Bills', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
             ]),
           ),
           const PopupMenuItem(

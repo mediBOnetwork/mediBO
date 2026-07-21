@@ -13,7 +13,6 @@ import 'admin_customer_screen.dart';
 import 'admin_supplier_screen.dart';
 import 'admin_dashboard_screen.dart';
 import 'admin_manage_admins_screen.dart';
-import 'admin_pending_bills_screen.dart';
 import 'admin_upi_screen.dart';
 
 // ── View state ────────────────────────────────────────────────────────────────
@@ -197,7 +196,6 @@ class _AdminShellState extends State<AdminShell> {
     if (_index == 1) return const AdminAddMedicineScreen();
     if (_index == 2) return AdminSupplierScreen();
     if (_index == 3) return AdminCustomerScreen();
-    if (_index == 4) return PendingBillsScreen(onCountChanged: _loadPendingCount);
     if (isSuperAdmin && _index == 5) return const AdminManageAdminsScreen();
     if (_index < nav.length) {
       return _PageBody(title: nav[_index].pageTitle, icon: nav[_index].icon);

@@ -23,33 +23,21 @@ typedef WaMediaInfoResolver = Future<WaMediaInfo?> Function(String messageId);
 
 const _kErrorColor = Color(0xFF9CA3AF);
 const _kSpinnerColor = Color(0xFF1B7A43);
+const _kPlaceholderBg = Color(0xFFE8ECEF);
 
-Widget _errorContent(VoidCallback onRetry) => GestureDetector(
-      onTap: onRetry,
-      child: const SizedBox(
-        height: 80,
-        child: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.broken_image_outlined, size: 28, color: _kErrorColor),
-              SizedBox(height: 4),
-              Text("Couldn't load — tap to retry",
-                  style: TextStyle(fontSize: 12, color: _kErrorColor)),
-            ],
-          ),
-        ),
-      ),
-    );
+// CHANGE #489: a FIXED constant, never derived from the async aspect ratio —
+// #487's AspectRatio-from-resolver sizing still resized the box (1:1 -> real
+// ratio) the moment the resolver settled, which is the same chat-jump this
+// was meant to fix. The box height must be identical on the very first frame
+// and forever after, regardless of resolver/image state.
+const double _kThumbHeight = 260;
 
 /// Inline media thumbnail shown inside a chat bubble.
 ///
-/// CHANGE #487: reserves its final box size — via [AspectRatio] at the
-/// backend-reported aspect ratio, inside the bubble's fixed max width —
-/// from the moment the resolver returns, so the chat doesn't jump when the
-/// real image finishes loading into that same box. Falls back to a 1:1 box
-/// (still reserved) if aspect_ratio is missing, and while the resolver
-/// itself is still pending (aspect ratio isn't known yet at that point).
+/// CHANGE #489: fixed-size box (width = bubble content width, height =
+/// [_kThumbHeight]) — same before, during, and after loading, so the chat
+/// never jumps. A grey placeholder with a spinner fills the box while
+/// loading; the loaded image fills it with BoxFit.cover.
 class WaMediaThumbnail extends StatefulWidget {
   final String messageId;
   final WaMediaInfoResolver resolver;
@@ -88,46 +76,63 @@ class _WaMediaThumbnailState extends State<WaMediaThumbnail> {
     setState(() => _future = widget.resolver(widget.messageId));
   }
 
+  Widget _placeholder() => Container(
+        color: _kPlaceholderBg,
+        alignment: Alignment.center,
+        child: const CircularProgressIndicator(color: _kSpinnerColor),
+      );
+
+  Widget _errorBox() => GestureDetector(
+        onTap: _retry,
+        child: Container(
+          color: _kPlaceholderBg,
+          alignment: Alignment.center,
+          child: const Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.broken_image_outlined, size: 28, color: _kErrorColor),
+              SizedBox(height: 4),
+              Text("Couldn't load — tap to retry",
+                  style: TextStyle(fontSize: 12, color: _kErrorColor)),
+            ],
+          ),
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<WaMediaInfo?>(
-      future: _future,
-      builder: (ctx, snap) {
-        if (snap.connectionState == ConnectionState.waiting) {
-          return AspectRatio(
-            aspectRatio: 1.0,
-            child: const Center(
-              child: CircularProgressIndicator(color: _kSpinnerColor),
-            ),
-          );
-        }
-        final info = snap.data;
-        if (info == null) {
-          return AspectRatio(aspectRatio: 1.0, child: _errorContent(_retry));
-        }
-        final ratio = info.aspectRatio ?? 1.0;
-        return GestureDetector(
-          onTap: widget.onTap,
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: AspectRatio(
-              aspectRatio: ratio,
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: SizedBox(
+        width: double.infinity,
+        height: _kThumbHeight,
+        child: FutureBuilder<WaMediaInfo?>(
+          future: _future,
+          builder: (ctx, snap) {
+            if (snap.connectionState == ConnectionState.waiting) {
+              return _placeholder();
+            }
+            final info = snap.data;
+            if (info == null) {
+              return _errorBox();
+            }
+            return GestureDetector(
+              onTap: widget.onTap,
               child: Image.network(
                 info.url,
                 width: double.infinity,
+                height: _kThumbHeight,
                 fit: BoxFit.cover,
                 loadingBuilder: (ctx2, child, progress) {
                   if (progress == null) return child;
-                  return const Center(
-                    child: CircularProgressIndicator(color: _kSpinnerColor),
-                  );
+                  return _placeholder();
                 },
-                errorBuilder: (ctx2, err, st) => _errorContent(_retry),
+                errorBuilder: (ctx2, err, st) => _errorBox(),
               ),
-            ),
-          ),
-        );
-      },
+            );
+          },
+        ),
+      ),
     );
   }
 }

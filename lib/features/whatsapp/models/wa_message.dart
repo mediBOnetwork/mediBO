@@ -7,7 +7,6 @@ class WaMessage {
   final String? text;
   final String? caption;
   final String? filePath;
-  final String? mediaBucket;
   final String? mimeType;
   final String? routedTo;
   final DateTime? receivedAt;
@@ -32,7 +31,6 @@ class WaMessage {
     this.text,
     this.caption,
     this.filePath,
-    this.mediaBucket,
     this.mimeType,
     this.routedTo,
     this.receivedAt,
@@ -55,7 +53,6 @@ class WaMessage {
       text: j['text']?.toString(),
       caption: j['caption']?.toString(),
       filePath: j['file_path']?.toString(),
-      mediaBucket: j['media_bucket']?.toString(),
       mimeType: j['mime_type']?.toString(),
       routedTo: j['routed_to']?.toString(),
       receivedAt: _asDate(j['received_at']),
@@ -106,11 +103,6 @@ class WaMessage {
 
   bool get hasMedia =>
       filePath != null && filePath!.trim().isNotEmpty;
-
-  String get effectiveBucket =>
-      (mediaBucket != null && mediaBucket!.trim().isNotEmpty)
-          ? mediaBucket!
-          : 'whatsapp-media';
 
   String get mediaKind {
     final mime = (mimeType ?? '').toLowerCase();

@@ -6,6 +6,7 @@ import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/utils/wa_markdown.dart';
 import '../data/wa_repository.dart';
 import '../models/wa_message.dart';
+import 'wa_media_view.dart';
 
 class WaMessageBubble extends StatefulWidget {
   final WaMessage message;
@@ -22,46 +23,13 @@ class WaMessageBubble extends StatefulWidget {
 }
 
 class _WaMessageBubbleState extends State<WaMessageBubble> {
-  Future<String>? _signedUrlFuture;
-
   @override
   void initState() {
     super.initState();
-    _initSignedUrl();
     // CHANGE #208: log first render of a non-text INCOMING bubble.
     if (!widget.message.isOut && widget.message.isNonText) {
       RenderLog.write('c208_incoming_media_render', 1);
     }
-  }
-
-  @override
-  void didUpdateWidget(WaMessageBubble old) {
-    super.didUpdateWidget(old);
-    // Re-fetch signed URL when the message's media path changes (e.g. realtime
-    // delivers a new message into the same list position before the key fix
-    // takes effect, or the path is updated).
-    if (widget.message.filePath != old.message.filePath) {
-      _initSignedUrl();
-    }
-  }
-
-  void _initSignedUrl() {
-    if (widget.message.hasMedia) {
-      _signedUrlFuture = widget.repo.signedUrl(
-        widget.message.effectiveBucket,
-        widget.message.filePath!,
-      );
-    } else {
-      _signedUrlFuture = null;
-    }
-  }
-
-  // CHANGE #483: retry loading media (re-request a signed URL) — used by both
-  // the "couldn't fetch signed URL" and "image failed to decode" error states,
-  // for messages in EITHER direction.
-  void _retryMedia() {
-    if (!mounted) return;
-    setState(_initSignedUrl);
   }
 
   String _formatTime(DateTime? dt) {
@@ -73,40 +41,14 @@ class _WaMessageBubbleState extends State<WaMessageBubble> {
     return t;
   }
 
-  void _showFullscreen(BuildContext ctx, String url) {
+  // CHANGE #485: full-screen viewer resolves its own URL from the backend by
+  // message id — no signed URL is threaded through from the caller anymore.
+  void _showFullscreen(BuildContext ctx, String messageId) {
     showDialog<void>(
       context: ctx,
-      builder: (_) => Dialog(
-        backgroundColor: Colors.black,
-        insetPadding: EdgeInsets.zero,
-        child: Stack(children: [
-          SizedBox.expand(
-            child: InteractiveViewer(
-              child: Image.network(
-                url,
-                fit: BoxFit.contain,
-                loadingBuilder: (ctx2, child, progress) {
-                  if (progress == null) return child;
-                  return const Center(
-                    child: CircularProgressIndicator(color: Colors.white),
-                  );
-                },
-                errorBuilder: (ctx2, err, st) => const Center(
-                  child: Icon(Icons.broken_image_outlined,
-                      color: Colors.white, size: 48),
-                ),
-              ),
-            ),
-          ),
-          Positioned(
-            top: 8,
-            right: 8,
-            child: IconButton(
-              icon: const Icon(Icons.close, color: Colors.white),
-              onPressed: () => Navigator.of(ctx).pop(),
-            ),
-          ),
-        ]),
+      builder: (_) => WaFullscreenMediaViewer(
+        messageId: messageId,
+        resolver: widget.repo.waMediaUrl,
       ),
     );
   }
@@ -117,60 +59,11 @@ class _WaMessageBubbleState extends State<WaMessageBubble> {
     } catch (_) {}
   }
 
+  // CHANGE #485: `signedUrl` here is resolved by the backend (wa-media-url)
+  // by message id, not signed client-side — 'image' is handled separately by
+  // WaMediaThumbnail (see build()) since it needs its own resolver lifecycle.
   Widget _buildMediaContent(String kind, String signedUrl) {
     switch (kind) {
-      case 'image':
-        // CHANGE #483: render media for either direction — never gated on
-        // in/out. Capped to a max height (some outbound bill/QR photos are
-        // multi-MB, full-resolution) with BoxFit.contain so a large image
-        // scales down instead of blowing up the bubble or failing to lay
-        // out; cacheWidth bounds decode cost for the same reason.
-        RenderLog.write('c483_wa_media_rendered', widget.message.direction);
-        final maxImgHeight = MediaQuery.of(context).size.height * 0.55;
-        return GestureDetector(
-          onTap: () => _showFullscreen(context, signedUrl),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: ConstrainedBox(
-              constraints: BoxConstraints(maxHeight: maxImgHeight),
-              child: Image.network(
-                signedUrl,
-                width: double.infinity,
-                fit: BoxFit.contain,
-                cacheWidth: 1024,
-                loadingBuilder: (ctx, child, progress) {
-                  if (progress == null) return child;
-                  return SizedBox(
-                    height: maxImgHeight.clamp(120, 220),
-                    child: const Center(
-                      child:
-                          CircularProgressIndicator(color: Color(0xFF1B7A43)),
-                    ),
-                  );
-                },
-                errorBuilder: (ctx2, err, st) => GestureDetector(
-                  onTap: _retryMedia,
-                  child: const SizedBox(
-                    height: 80,
-                    child: Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.broken_image_outlined,
-                              size: 28, color: Color(0xFF9CA3AF)),
-                          SizedBox(height: 4),
-                          Text("Couldn't load — tap to retry",
-                              style: TextStyle(
-                                  fontSize: 12, color: Color(0xFF9CA3AF))),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
       case 'pdf':
         return _DocumentCard(
           fileName: widget.message.displayFileName,
@@ -247,42 +140,55 @@ class _WaMessageBubbleState extends State<WaMessageBubble> {
             }
           },
         );
-      } else if (msg.hasMedia && _signedUrlFuture != null) {
-        body = FutureBuilder<String>(
-          future: _signedUrlFuture,
-          builder: (ctx, snap) {
-            if (snap.connectionState == ConnectionState.waiting) {
-              return const Padding(
-                padding: EdgeInsets.symmetric(vertical: 12),
-                child: Center(
-                  child: SizedBox(
-                    width: 24,
-                    height: 24,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Color(0xFF1B7A43)),
+      } else if (msg.hasMedia) {
+        // CHANGE #485: the backend resolves the signed URL by message id —
+        // the client picks no bucket/path. Images use the dedicated
+        // WaMediaThumbnail (own resolver lifecycle, tap opens the matching
+        // full-screen viewer); other kinds resolve inline for _openUrl.
+        if (msg.mediaKind == 'image') {
+          body = WaMediaThumbnail(
+            messageId: msg.id,
+            resolver: widget.repo.waMediaUrl,
+            onTap: () => _showFullscreen(context, msg.id),
+          );
+        } else {
+          body = FutureBuilder<String?>(
+            future: widget.repo.waMediaUrl(msg.id),
+            builder: (ctx, snap) {
+              if (snap.connectionState == ConnectionState.waiting) {
+                return const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 12),
+                  child: Center(
+                    child: SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Color(0xFF1B7A43)),
+                    ),
                   ),
-                ),
-              );
-            }
-            if (snap.hasError || snap.data == null) {
-              return GestureDetector(
-                onTap: _retryMedia,
-                child: const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 8),
-                  child: Row(children: [
-                    Icon(Icons.error_outline,
-                        size: 16, color: Color(0xFF9CA3AF)),
-                    SizedBox(width: 4),
-                    Text("Couldn't load — tap to retry",
-                        style:
-                            TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
-                  ]),
-                ),
-              );
-            }
-            return _buildMediaContent(msg.mediaKind, snap.data!);
-          },
-        );
+                );
+              }
+              final url = snap.data;
+              if (url == null || url.isEmpty) {
+                return GestureDetector(
+                  onTap: () => setState(() {}),
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 8),
+                    child: Row(children: [
+                      Icon(Icons.error_outline,
+                          size: 16, color: Color(0xFF9CA3AF)),
+                      SizedBox(width: 4),
+                      Text("Couldn't load — tap to retry",
+                          style: TextStyle(
+                              fontSize: 13, color: Color(0xFF9CA3AF))),
+                    ]),
+                  ),
+                );
+              }
+              return _buildMediaContent(msg.mediaKind, url);
+            },
+          );
+        }
       } else if ((msg.text == null || msg.text!.isEmpty) &&
           type != 'text' &&
           !msg.hasMedia) {

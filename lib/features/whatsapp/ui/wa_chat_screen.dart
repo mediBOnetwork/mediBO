@@ -471,7 +471,6 @@ class _WaChatScreenState extends State<WaChatScreen>
         msgType: 'media',
         caption: caption.isNotEmpty ? caption : null,
         filePath: res['media_path']?.toString(),
-        mediaBucket: res['media_bucket']?.toString() ?? 'whatsapp-media',
         mimeType: mime,
         fileName: fileName,
         receivedAt: nowIst(),

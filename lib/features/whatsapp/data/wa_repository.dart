@@ -60,6 +60,40 @@ const int _kDocumentMaxBytes = 100 * 1024 * 1024;
 class WaRepository {
   SupabaseClient get _client => Supabase.instance.client;
 
+  // CHANGE #485: the client no longer signs storage URLs itself — it asks
+  // the backend for one by message id. Cached per message id so the inline
+  // thumbnail and the full-screen viewer (which both resolve the same
+  // message independently) don't double-invoke the edge function.
+  final Map<String, Future<String?>> _mediaUrlCache = {};
+
+  Future<String?> waMediaUrl(String messageId) {
+    final cached = _mediaUrlCache[messageId];
+    if (cached != null) return cached;
+    final future = _fetchMediaUrl(messageId);
+    _mediaUrlCache[messageId] = future;
+    return future;
+  }
+
+  Future<String?> _fetchMediaUrl(String messageId) async {
+    try {
+      final res = await _client.functions.invoke(
+        'wa-media-url',
+        body: {'message_id': messageId},
+      );
+      final data = res.data;
+      final url = (data is Map) ? data['url']?.toString() : null;
+      if (url == null || url.isEmpty) {
+        _mediaUrlCache.remove(messageId);
+        return null;
+      }
+      return url;
+    } catch (e) {
+      debugPrint('[WaRepository] waMediaUrl error: $e');
+      _mediaUrlCache.remove(messageId);
+      return null;
+    }
+  }
+
   Future<List<WaConversation>> listConversations(String? type) async {
     try {
       final res = await _client.rpc(
@@ -129,15 +163,6 @@ class WaRepository {
       await _client.rpc('wa_mark_read', params: {'p_phone': phone});
     } catch (e) {
       debugPrint('[WaRepository] markRead error: $e');
-    }
-  }
-
-  Future<String> signedUrl(String bucket, String path) async {
-    try {
-      return await _client.storage.from(bucket).createSignedUrl(path, 3600);
-    } catch (e) {
-      debugPrint('[WaRepository] signedUrl error: $e');
-      throw Exception('Could not load media');
     }
   }
 

@@ -4,15 +4,13 @@
 //  t2: Download QR must request the backend's payment-qr-image render
 //      (order_id/amount/kind) and download the returned url — no
 //      client-side QR/image composition anymore.
-//  t3: the "Send QR to" popup must anchor next to the WhatsApp button
-//      (via an Offset derived from the button's RenderBox), not sit at
-//      the screen centre like a dialog.
+// (The anchor-position test for the "Send QR to" popup moved to
+// test/send_qr_popup_test.dart in CHANGE #488, once the anchor mechanism
+// switched from a manually-computed Offset to CompositedTransformFollower.)
 //
 // RPCs/edge-function calls and the platform-only download path are
 // injected via CustPaySheet's fetchWaNumbers/sendQr/fetchQrImage/
 // downloadSink params — no network, no dart:html download actually fires.
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -98,55 +96,6 @@ void main() {
     expect(invokedKind, 'advance');
     expect(downloadedUrl, 'https://signed.example/mediBO-pay-264.5.jpg');
     expect(downloadedFilename, 'mediBO-pay-264.5.jpg');
-
-    await tester.pump(const Duration(milliseconds: 900));
-  });
-
-  testWidgets('t3: the WhatsApp popup anchors to the button (derived Offset), not a fixed screen-centre dialog',
-      (tester) async {
-    await tester.pumpWidget(MaterialApp(
-      home: Scaffold(
-        body: _sheet(fetchWaNumbers: (orderId) async => {'numbers': []}),
-      ),
-    ));
-    await tester.pumpAndSettle();
-
-    // The button OutlinedButton itself, not just its Text — this is what
-    // _showWaPopup's `buttonContext.findRenderObject()` actually captures.
-    final buttonBox = tester.renderObject(
-      find.ancestor(of: find.text('WhatsApp'), matching: find.byType(OutlinedButton)),
-    ) as RenderBox;
-    final buttonTopLeft = buttonBox.localToGlobal(Offset.zero);
-    final buttonSize = buttonBox.size;
-    final screenSize = tester.getSize(find.byType(MaterialApp));
-
-    await tester.tap(find.text('WhatsApp'));
-    await tester.pumpAndSettle();
-
-    final popupFinder = find.byKey(const Key('payQrWaPopupAnchor'));
-    expect(popupFinder, findsOneWidget);
-    final popupTopLeft = tester.getTopLeft(popupFinder);
-    final screenCenter = Offset(screenSize.width / 2, screenSize.height / 2);
-
-    // Mirror _showWaPopup's own anchor formula (an Offset derived from the
-    // button's RenderBox, clamped to the viewport) — proves the popup tracks
-    // wherever the button actually is, rather than sitting at a fixed
-    // dialog-style position regardless of layout.
-    const popupW = 260.0;
-    const popupMaxH = 260.0;
-    final expectedLeft = (buttonTopLeft.dx + buttonSize.width / 2 - popupW / 2)
-        .clamp(12.0, math.max(12.0, screenSize.width - popupW - 12.0));
-    final spaceBelow = screenSize.height - (buttonTopLeft.dy + buttonSize.height + 6);
-    final openAbove = spaceBelow < popupMaxH && buttonTopLeft.dy > popupMaxH;
-    final expectedTop = (openAbove
-            ? buttonTopLeft.dy - popupMaxH - 6
-            : buttonTopLeft.dy + buttonSize.height + 6)
-        .clamp(12.0, math.max(12.0, screenSize.height - 12.0));
-
-    expect(popupTopLeft.dx, closeTo(expectedLeft, 2.0));
-    expect(popupTopLeft.dy, closeTo(expectedTop, 2.0));
-    // And, concretely, nowhere near a fixed screen-centre dialog position.
-    expect((popupTopLeft - screenCenter).distance, greaterThan(60));
 
     await tester.pump(const Duration(milliseconds: 900));
   });

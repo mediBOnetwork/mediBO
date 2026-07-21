@@ -613,6 +613,7 @@ class CustPaySheet extends StatefulWidget {
 }
 
 class _CustPaySheetState extends State<CustPaySheet> {
+  final LayerLink _waButtonLink = LayerLink();
   OverlayEntry? _waPopupEntry;
   bool _downloadingQr = false;
 
@@ -656,54 +657,64 @@ class _CustPaySheetState extends State<CustPaySheet> {
     }
   }
 
-  // WhatsApp — mini floating popup anchored near the button (same pattern as
-  // UploadedBillActionsRow._showWaPopup), never centered on screen, clamped
-  // to stay fully within the viewport on every edge.
+  // WhatsApp — mini popup anchored DIRECTLY ABOVE the button via
+  // CompositedTransformTarget/Follower + LayerLink (CHANGE #488). The
+  // earlier plain localToGlobal/Positioned-in-Overlay math (#482) assumed
+  // the Overlay's own coordinate origin was the screen's global (0,0),
+  // which broke to a screen-centred-looking popup wherever that assumption
+  // didn't hold — LayerLink tracks the button's actual transform layer
+  // directly, so it can't drift off like that regardless of nesting.
+  // Horizontal screen-edge clamping (Follower has no notion of screen
+  // bounds itself) is done via the offset, computed in the OVERLAY's own
+  // coordinate space so it lines up with where Positioned.fill paints.
   void _showWaPopup(BuildContext buttonContext) {
     _waPopupEntry?.remove();
     _waPopupEntry = null;
     final box = buttonContext.findRenderObject() as RenderBox?;
     if (box == null || !box.attached) return;
-    final topLeft = box.localToGlobal(Offset.zero);
-    final screenSize = MediaQuery.of(buttonContext).size;
+
+    final overlayState = Overlay.of(buttonContext);
+    final overlayBox = overlayState.context.findRenderObject() as RenderBox?;
     const popupW = 260.0;
-    const popupMaxH = 260.0;
-    final left = (topLeft.dx + box.size.width / 2 - popupW / 2)
-        .clamp(12.0, math.max(12.0, screenSize.width - popupW - 12.0))
-        .toDouble();
-    final spaceBelow = screenSize.height - (topLeft.dy + box.size.height + 6);
-    final openAbove = spaceBelow < popupMaxH && topLeft.dy > popupMaxH;
-    final top = (openAbove
-            ? topLeft.dy - popupMaxH - 6
-            : topLeft.dy + box.size.height + 6)
-        .clamp(12.0, math.max(12.0, screenSize.height - 12.0))
-        .toDouble();
+    var dx = 0.0;
+    if (overlayBox != null) {
+      final buttonLeftInOverlay = box.localToGlobal(Offset.zero, ancestor: overlayBox).dx;
+      final desiredLeft = buttonLeftInOverlay + box.size.width / 2 - popupW / 2;
+      final clampedLeft =
+          desiredLeft.clamp(12.0, math.max(12.0, overlayBox.size.width - popupW - 12.0));
+      dx = clampedLeft - buttonLeftInOverlay;
+    }
 
     void dismiss() {
       _waPopupEntry?.remove();
       _waPopupEntry = null;
     }
 
-    RenderLog.write('c486_paypopup_wa_anchor', 1);
+    RenderLog.write('c488_paypopup_wa_layerlink', 1);
     _waPopupEntry = OverlayEntry(builder: (_) => Stack(children: [
       Positioned.fill(
         child: GestureDetector(behavior: HitTestBehavior.translucent, onTap: dismiss),
       ),
-      Positioned(
+      CompositedTransformFollower(
         key: const Key('payQrWaPopupAnchor'),
-        top: top,
-        left: left,
-        width: popupW,
+        link: _waButtonLink,
+        showWhenUnlinked: false,
+        targetAnchor: Alignment.topLeft,
+        followerAnchor: Alignment.bottomLeft,
+        offset: Offset(dx, -6),
         child: Material(
           borderRadius: BorderRadius.circular(12),
           elevation: 8,
           color: Colors.white,
-          child: PayQrWaPicker(
-            orderId: widget.orderId,
-            amount: widget.amount,
-            kind: widget.kind,
-            fetchWaNumbers: widget.fetchWaNumbers,
-            sendQr: widget.sendQr,
+          child: SizedBox(
+            width: popupW,
+            child: PayQrWaPicker(
+              orderId: widget.orderId,
+              amount: widget.amount,
+              kind: widget.kind,
+              fetchWaNumbers: widget.fetchWaNumbers,
+              sendQr: widget.sendQr,
+            ),
           ),
         ),
       ),
@@ -807,11 +818,14 @@ class _CustPaySheetState extends State<CustPaySheet> {
                 ),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: Builder(
-                    builder: (btnContext) => _sheetActionButton(
-                      icon: Icons.chat_bubble_outline,
-                      label: 'WhatsApp',
-                      onTap: () => _showWaPopup(btnContext),
+                  child: CompositedTransformTarget(
+                    link: _waButtonLink,
+                    child: Builder(
+                      builder: (btnContext) => _sheetActionButton(
+                        icon: Icons.chat_bubble_outline,
+                        label: 'WhatsApp',
+                        onTap: () => _showWaPopup(btnContext),
+                      ),
                     ),
                   ),
                 ),

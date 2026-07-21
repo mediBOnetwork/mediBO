@@ -2,9 +2,13 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../utils/bill_mime.dart';
+import '../../utils/download_bytes.dart';
 import '../../utils/ist_date.dart';
 import '../../utils/render_log.dart';
 import '../../utils/toast.dart';
+import '../../widgets/bill_actions_row.dart' show BillActionButton;
+import '../../widgets/bill_viewer.dart';
 import '../../widgets/order_item_card.dart';
 import '../../widgets/sup_pay_panel.dart';
 
@@ -179,7 +183,133 @@ class _OrderCardState extends State<_OrderCard> {
   bool _panelLoading = false;
   String? _panelError;
 
+  // CHANGE #471: supplier's own bill view/delete state — separate from the
+  // payment panel above. Loaded eagerly (not lazily on tap) since has_file
+  // gates whether the "View Bill" button even shows.
+  Map<String, dynamic>? _billInfo;
+  bool _billLoading = false;
+  bool _billViewOpen = false;
+  bool _deletingBill = false;
+  bool _downloadingBill = false;
+  bool _sharingBill = false;
+
   String get _orderId => widget.order['order_id'] as String? ?? '';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadBillInfo();
+  }
+
+  Future<void> _loadBillInfo({bool refresh = false}) async {
+    if (_billLoading) return;
+    if (_billInfo != null && !refresh) return;
+    if (!mounted) return;
+    setState(() => _billLoading = true);
+    try {
+      final result = await Supabase.instance.client
+          .rpc('sup_bill_file', params: {'p_supplier_order_id': _orderId});
+      if (!mounted) return;
+      setState(() {
+        _billInfo = result is Map ? Map<String, dynamic>.from(result) : <String, dynamic>{};
+        _billLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _billInfo = null;
+        _billLoading = false;
+      });
+    }
+  }
+
+  Future<void> _confirmDeleteBill() async {
+    if (_deletingBill) return;
+    final pendingBillId = _billInfo?['pending_bill_id']?.toString();
+    if (pendingBillId == null || pendingBillId.isEmpty) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete bill?'),
+        content: const Text('This will remove the uploaded bill. This cannot be undone.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete', style: TextStyle(color: Color(0xFF991B1B))),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await _deleteBill(pendingBillId);
+  }
+
+  Future<void> _deleteBill(String pendingBillId) async {
+    if (_deletingBill) return;
+    setState(() => _deletingBill = true);
+    try {
+      final raw = await Supabase.instance.client
+          .rpc('sup_delete_bill', params: {'p_pending_bill_id': pendingBillId});
+      final res = raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
+      if (res['ok'] == true) {
+        if (mounted) {
+          showToast(context, 'Bill deleted');
+          setState(() => _billViewOpen = false);
+        }
+        await _loadBillInfo(refresh: true);
+      } else if (res['error'] == 'already_imported') {
+        if (mounted) {
+          showToast(
+            context,
+            res['message']?.toString() ??
+                'This bill has been imported and can no longer be deleted.',
+            isError: true,
+          );
+        }
+        await _loadBillInfo(refresh: true);
+      } else {
+        if (mounted) showToast(context, 'Could not delete the bill', isError: true);
+      }
+    } catch (_) {
+      if (mounted) showToast(context, 'Could not delete the bill', isError: true);
+    } finally {
+      if (mounted) setState(() => _deletingBill = false);
+    }
+  }
+
+  Future<({List<int> bytes, String filename})?> _fetchBillFile(String bucket, String path, String name) async {
+    try {
+      final bytes = await Supabase.instance.client.storage.from(bucket).download(path);
+      return (bytes: bytes, filename: name);
+    } catch (_) {
+      if (mounted) showToast(context, 'Could not load the bill.', isError: true);
+      return null;
+    }
+  }
+
+  Future<void> _downloadBill(String bucket, String path, String name) async {
+    if (_downloadingBill) return;
+    setState(() => _downloadingBill = true);
+    final file = await _fetchBillFile(bucket, path, name);
+    if (mounted) setState(() => _downloadingBill = false);
+    if (file == null) return;
+    downloadBytes(file.bytes, file.filename, mimeFromBillName(file.filename));
+  }
+
+  Future<void> _shareBill(String bucket, String path, String name) async {
+    if (_sharingBill) return;
+    setState(() => _sharingBill = true);
+    final file = await _fetchBillFile(bucket, path, name);
+    if (file == null) {
+      if (mounted) setState(() => _sharingBill = false);
+      return;
+    }
+    final mime = mimeFromBillName(file.filename);
+    final result = await shareBytes(file.bytes, file.filename, mime);
+    if (mounted) setState(() => _sharingBill = false);
+    if (result == null) downloadBytes(file.bytes, file.filename, mime);
+  }
 
   Future<void> _loadPanel({bool refresh = false}) async {
     if (_panelLoading) return;
@@ -268,6 +398,9 @@ class _OrderCardState extends State<_OrderCard> {
         }
         return;
       }
+
+      // step 6: refresh bill state so "View Bill" appears
+      if (mounted) await _loadBillInfo(refresh: true);
 
       // step 7: refresh panel if open
       if (_payOpen && mounted) {
@@ -467,6 +600,75 @@ class _OrderCardState extends State<_OrderCard> {
           // ── View Payment panel ───────────────────────────────────────────────
           if (_payOpen) _buildPayPanel(),
 
+          // ── View Bill row (#471) — only once sup_bill_file confirms a file exists ──
+          if (_billInfo != null && _billInfo!['has_file'] == true) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+              child: Row(children: [
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => setState(() => _billViewOpen = !_billViewOpen),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: _billViewOpen ? const Color(0xFFEFF6FF) : const Color(0xFFF5F6F8),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: _billViewOpen
+                              ? const Color(0xFF1E40AF).withValues(alpha: 0.4)
+                              : const Color(0xFFE5E7EB),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.receipt_long_outlined,
+                              size: 14,
+                              color: _billViewOpen ? const Color(0xFF1E40AF) : const Color(0xFF374151)),
+                          const SizedBox(width: 6),
+                          Flexible(
+                            child: Text(
+                              'View Bill',
+                              style: TextStyle(
+                                fontSize: 12, fontWeight: FontWeight.w600,
+                                color: _billViewOpen ? const Color(0xFF1E40AF) : const Color(0xFF374151),
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          AnimatedRotation(
+                            turns: _billViewOpen ? 0.5 : 0.0,
+                            duration: const Duration(milliseconds: 150),
+                            child: Icon(
+                              Icons.expand_more,
+                              size: 14,
+                              color: _billViewOpen ? const Color(0xFF1E40AF) : const Color(0xFF6B7280),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                if (_billInfo!['imported'] == true) ...[
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                        color: const Color(0xFFD1FAE5), borderRadius: BorderRadius.circular(20)),
+                    child: const Text('Imported',
+                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF065F46))),
+                  ),
+                ],
+              ]),
+            ),
+          ],
+
+          // ── View Bill panel ──────────────────────────────────────────────────
+          if (_billViewOpen) _buildBillPanel(),
+
           // ── Expanded order items body ────────────────────────────────────────
           if (widget.isOpen) ...[
             const Divider(height: 1, color: Color(0xFFF3F4F6)),
@@ -530,6 +732,78 @@ class _OrderCardState extends State<_OrderCard> {
                 onReload: () => _loadPanel(refresh: true),
                 isReadOnly: true,
               ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // CHANGE #471: supplier's own uploaded bill — preview + Download/Share +
+  // Delete (while pending). Reuses the #469 bill viewer (BillFilePreview /
+  // showBillViewer) pointed at the supplier-bills bucket.
+  Widget _buildBillPanel() {
+    final info = _billInfo ?? const <String, dynamic>{};
+    final bucket = info['bucket']?.toString() ?? 'supplier-bills';
+    final path = info['path']?.toString() ?? '';
+    final name = info['name']?.toString() ?? 'Bill';
+    final canDelete = info['can_delete'] == true;
+
+    return Container(
+      decoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: Color(0xFFF3F4F6))),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (path.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 12),
+                child: Text('Bill unavailable.', style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+              )
+            else ...[
+              BillFilePreview(key: ValueKey('$bucket/$path'), bucket: bucket, path: path, name: name),
+              const SizedBox(height: 12),
+              Row(children: [
+                Expanded(
+                  child: BillActionButton(
+                    icon: Icons.download_outlined,
+                    label: _downloadingBill ? 'Downloading…' : 'Download',
+                    enabled: !_downloadingBill,
+                    loading: _downloadingBill,
+                    onTap: () => _downloadBill(bucket, path, name),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: BillActionButton(
+                    icon: Icons.share_outlined,
+                    label: _sharingBill ? 'Sharing…' : 'Share',
+                    enabled: !_sharingBill,
+                    loading: _sharingBill,
+                    onTap: () => _shareBill(bucket, path, name),
+                  ),
+                ),
+              ]),
+              if (canDelete) ...[
+                const SizedBox(height: 10),
+                GestureDetector(
+                  onTap: _deletingBill ? null : _confirmDeleteBill,
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    if (_deletingBill)
+                      const SizedBox(
+                          width: 14, height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF991B1B)))
+                    else
+                      const Icon(Icons.delete_outline, size: 15, color: Color(0xFF991B1B)),
+                    const SizedBox(width: 6),
+                    Text(_deletingBill ? 'Deleting…' : 'Delete Bill',
+                        style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFF991B1B))),
+                  ]),
+                ),
+              ],
+            ],
           ],
         ),
       ),

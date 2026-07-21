@@ -1,8 +1,17 @@
+# CHANGE #472: disabled the push trigger. This workflow used to fire on every
+# push to main (i.e. every ~deploy.sh run, since deploy.sh pushes as its last
+# step) and run its OWN independent flutter build + wrangler upload a few
+# minutes later — no fingerprinting, no boot-gate, no cache purge. It silently
+# became the new Cloudflare Pages "production" deployment and measurably broke
+# the live site (25-45% of requests serving wrong content) for 10-15+ minutes
+# after every deploy. ~/deploy.sh already covers every deploy correctly on its
+# own; this workflow is now manual-only (Actions tab -> Run workflow) so it
+# can still be used deliberately without racing deploy.sh. See the
+# concurrent-deploy-race memory for the full investigation.
 name: Deploy to Cloudflare Pages
 
 on:
-  push:
-    branches: [main]
+  workflow_dispatch: {}
 
 jobs:
   deploy:

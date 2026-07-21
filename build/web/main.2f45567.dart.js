@@ -193430,6 +193430,7 @@ i=j==null?"supplier-bills":j
 h=A.I(J.e(o.a.c,"file_path"))
 g=h==null?"":h
 A.d("c329_bucket_ok",i)
+A.d("c479_bill_bucket_resolved",i)
 q=3
 l=$.X().b
 l===$&&A.a()
@@ -205447,22 +205448,24 @@ s=h.i(0,"name")
 p=s==null?i:J.v(s)
 if(p==null)p="Bill"
 o=J.n(h.i(0,"can_delete"),!0)
-s=t.p
-n=A.b([],s)
-if(q.length===0)n.push(B.c91)
-else{m=j.as
-l=m?"Downloading\u2026":"Download"
-m=A.P(new A.or(B.rJ,l,!m,m,new A.bW7(j,r,q,p),i),1)
+s=q.length===0
+if(!s)A.d("c479_bill_bucket_resolved",r)
+n=t.p
+m=A.b([],n)
+if(s)m.push(B.c91)
+else{s=j.as
+l=s?"Downloading\u2026":"Download"
+s=A.P(new A.or(B.rJ,l,!s,s,new A.bW7(j,r,q,p),i),1)
 l=j.at
 k=l?"Sharing\u2026":"Share"
-l=A.b([new A.De(r,q,p,new A.cH(r+"/"+q,t.kK)),B.a8,A.M(A.b([m,B.a_,A.P(new A.or(B.FR,k,!l,l,new A.bW8(j,r,q,p),i),1)],s),B.t,B.k,B.m,0,i)],s)
-if(o){m=j.Q?i:j.gb4L()
-k=A.b([],s)
+l=A.b([new A.De(r,q,p,new A.cH(r+"/"+q,t.kK)),B.a8,A.M(A.b([s,B.a_,A.P(new A.or(B.FR,k,!l,l,new A.bW8(j,r,q,p),i),1)],n),B.t,B.k,B.m,0,i)],n)
+if(o){s=j.Q?i:j.gb4L()
+k=A.b([],n)
 if(j.Q)k.push(B.afg)
 else k.push(B.aIQ)
 k.push(B.ah)
 k.push(A.i(j.Q?"Deleting\u2026":"Delete Bill",i,i,i,i,i,B.cp5,i,i,i))
-B.e.q(l,A.b([B.an,A.aK(i,A.M(k,B.t,B.k,B.J,0,i),B.D,!1,i,i,i,i,i,i,i,i,i,i,i,i,i,i,i,i,i,i,i,m,i,i,i,i,i,i,!1,B.Z)],s))}B.e.q(n,l)}return A.z(i,new A.J(B.wA,A.K(n,B.y,B.k,B.m,0,B.u),i),B.r,i,i,B.vx,i,i,i,i,i,i,i,i)}}
+B.e.q(l,A.b([B.an,A.aK(i,A.M(k,B.t,B.k,B.J,0,i),B.D,!1,i,i,i,i,i,i,i,i,i,i,i,i,i,i,i,i,i,i,i,s,i,i,i,i,i,i,!1,B.Z)],n))}B.e.q(m,l)}return A.z(i,new A.J(B.wA,A.K(m,B.y,B.k,B.m,0,B.u),i),B.r,i,i,B.vx,i,i,i,i,i,i,i,i)}}
 A.bWl.prototype={
 $0(){return this.a.y=!0},
 $S:0}

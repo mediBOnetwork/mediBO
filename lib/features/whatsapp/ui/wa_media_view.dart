@@ -9,6 +9,18 @@ import 'package:flutter/material.dart';
 /// target — see `bag_print_grid.dart` for the same convention).
 typedef WaMediaUrlResolver = Future<String?> Function(String messageId);
 
+/// CHANGE #487: `wa-media-url` now also returns the image's aspect ratio, so
+/// the inline thumbnail can reserve its final box size before the image
+/// loads (see [WaMediaThumbnail]) instead of jumping the chat when the real
+/// pixels arrive.
+class WaMediaInfo {
+  final String url;
+  final double? aspectRatio;
+  const WaMediaInfo({required this.url, this.aspectRatio});
+}
+
+typedef WaMediaInfoResolver = Future<WaMediaInfo?> Function(String messageId);
+
 const _kErrorColor = Color(0xFF9CA3AF);
 const _kSpinnerColor = Color(0xFF1B7A43);
 
@@ -31,9 +43,16 @@ Widget _errorContent(VoidCallback onRetry) => GestureDetector(
     );
 
 /// Inline media thumbnail shown inside a chat bubble.
+///
+/// CHANGE #487: reserves its final box size — via [AspectRatio] at the
+/// backend-reported aspect ratio, inside the bubble's fixed max width —
+/// from the moment the resolver returns, so the chat doesn't jump when the
+/// real image finishes loading into that same box. Falls back to a 1:1 box
+/// (still reserved) if aspect_ratio is missing, and while the resolver
+/// itself is still pending (aspect ratio isn't known yet at that point).
 class WaMediaThumbnail extends StatefulWidget {
   final String messageId;
-  final WaMediaUrlResolver resolver;
+  final WaMediaInfoResolver resolver;
   final VoidCallback? onTap;
 
   const WaMediaThumbnail({
@@ -48,7 +67,7 @@ class WaMediaThumbnail extends StatefulWidget {
 }
 
 class _WaMediaThumbnailState extends State<WaMediaThumbnail> {
-  late Future<String?> _future;
+  late Future<WaMediaInfo?> _future;
 
   @override
   void initState() {
@@ -71,39 +90,36 @@ class _WaMediaThumbnailState extends State<WaMediaThumbnail> {
 
   @override
   Widget build(BuildContext context) {
-    final maxHeight = MediaQuery.of(context).size.height * 0.55;
-    return FutureBuilder<String?>(
+    return FutureBuilder<WaMediaInfo?>(
       future: _future,
       builder: (ctx, snap) {
         if (snap.connectionState == ConnectionState.waiting) {
-          return SizedBox(
-            height: maxHeight.clamp(120, 220),
+          return AspectRatio(
+            aspectRatio: 1.0,
             child: const Center(
               child: CircularProgressIndicator(color: _kSpinnerColor),
             ),
           );
         }
-        final url = snap.data;
-        if (url == null || url.isEmpty) {
-          return _errorContent(_retry);
+        final info = snap.data;
+        if (info == null) {
+          return AspectRatio(aspectRatio: 1.0, child: _errorContent(_retry));
         }
+        final ratio = info.aspectRatio ?? 1.0;
         return GestureDetector(
           onTap: widget.onTap,
           child: ClipRRect(
             borderRadius: BorderRadius.circular(8),
-            child: ConstrainedBox(
-              constraints: BoxConstraints(maxHeight: maxHeight),
+            child: AspectRatio(
+              aspectRatio: ratio,
               child: Image.network(
-                url,
+                info.url,
                 width: double.infinity,
                 fit: BoxFit.cover,
                 loadingBuilder: (ctx2, child, progress) {
                   if (progress == null) return child;
-                  return SizedBox(
-                    height: maxHeight.clamp(120, 220),
-                    child: const Center(
-                      child: CircularProgressIndicator(color: _kSpinnerColor),
-                    ),
+                  return const Center(
+                    child: CircularProgressIndicator(color: _kSpinnerColor),
                   );
                 },
                 errorBuilder: (ctx2, err, st) => _errorContent(_retry),

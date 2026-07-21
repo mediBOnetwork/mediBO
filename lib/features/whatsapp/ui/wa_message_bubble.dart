@@ -148,7 +148,7 @@ class _WaMessageBubbleState extends State<WaMessageBubble> {
         if (msg.mediaKind == 'image') {
           body = WaMediaThumbnail(
             messageId: msg.id,
-            resolver: widget.repo.waMediaUrl,
+            resolver: widget.repo.waMediaInfo,
             onTap: () => _showFullscreen(context, msg.id),
           );
         } else {

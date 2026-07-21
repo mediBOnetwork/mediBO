@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 import '../models/wa_conversation.dart';
 import '../models/wa_message.dart';
+import '../ui/wa_media_view.dart' show WaMediaInfo;
 
 /// CHANGE #207: result of loading a thread — messages plus resolved identity.
 class WaThreadResult {
@@ -61,20 +62,21 @@ class WaRepository {
   SupabaseClient get _client => Supabase.instance.client;
 
   // CHANGE #485: the client no longer signs storage URLs itself — it asks
-  // the backend for one by message id. Cached per message id so the inline
-  // thumbnail and the full-screen viewer (which both resolve the same
-  // message independently) don't double-invoke the edge function.
-  final Map<String, Future<String?>> _mediaUrlCache = {};
+  // the backend for one by message id. Cached per message id (as the raw
+  // response, CHANGE #487: now also carrying width/height/aspect_ratio) so
+  // the inline thumbnail and the full-screen viewer (which both resolve the
+  // same message independently) don't double-invoke the edge function.
+  final Map<String, Future<Map<String, dynamic>?>> _mediaCache = {};
 
-  Future<String?> waMediaUrl(String messageId) {
-    final cached = _mediaUrlCache[messageId];
+  Future<Map<String, dynamic>?> _mediaResponse(String messageId) {
+    final cached = _mediaCache[messageId];
     if (cached != null) return cached;
-    final future = _fetchMediaUrl(messageId);
-    _mediaUrlCache[messageId] = future;
+    final future = _fetchMediaResponse(messageId);
+    _mediaCache[messageId] = future;
     return future;
   }
 
-  Future<String?> _fetchMediaUrl(String messageId) async {
+  Future<Map<String, dynamic>?> _fetchMediaResponse(String messageId) async {
     try {
       final res = await _client.functions.invoke(
         'wa-media-url',
@@ -83,15 +85,41 @@ class WaRepository {
       final data = res.data;
       final url = (data is Map) ? data['url']?.toString() : null;
       if (url == null || url.isEmpty) {
-        _mediaUrlCache.remove(messageId);
+        _mediaCache.remove(messageId);
         return null;
       }
-      return url;
+      return Map<String, dynamic>.from(data as Map);
     } catch (e) {
       debugPrint('[WaRepository] waMediaUrl error: $e');
-      _mediaUrlCache.remove(messageId);
+      _mediaCache.remove(messageId);
       return null;
     }
+  }
+
+  Future<String?> waMediaUrl(String messageId) async {
+    final data = await _mediaResponse(messageId);
+    return data?['url']?.toString();
+  }
+
+  // CHANGE #487: aspect ratio (for the inline thumbnail's reserved box) —
+  // prefers the backend's own aspect_ratio, falls back to width/height.
+  Future<WaMediaInfo?> waMediaInfo(String messageId) async {
+    final data = await _mediaResponse(messageId);
+    final url = data?['url']?.toString();
+    if (url == null || url.isEmpty) return null;
+    double? ratio = _asDouble(data?['aspect_ratio']);
+    if (ratio == null) {
+      final w = _asDouble(data?['width']);
+      final h = _asDouble(data?['height']);
+      if (w != null && h != null && h > 0) ratio = w / h;
+    }
+    return WaMediaInfo(url: url, aspectRatio: ratio);
+  }
+
+  static double? _asDouble(dynamic v) {
+    if (v == null) return null;
+    if (v is num) return v.toDouble();
+    return double.tryParse(v.toString());
   }
 
   Future<List<WaConversation>> listConversations(String? type) async {

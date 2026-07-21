@@ -19,6 +19,7 @@ import '../utils/payment_proof.dart';
 import '../utils/render_log.dart';
 import '../utils/safe_parse.dart';
 import '../utils/toast.dart';
+import 'fullscreen_image.dart';
 import 'native_signed_image.dart';
 import 'sup_pay_panel.dart' show C330CopyRow;
 import 'upi_pay_sheet.dart' show buildUpiUri;
@@ -139,7 +140,10 @@ class _CustPayPanelState extends State<CustPayPanel> {
       if (_chip == 0)
         _buildInfoTab(advance, remaining, totals, upi)
       else if (_chip - 1 < payments.length)
-        _CustPaymentDetailCard(payment: payments[_chip - 1]),
+        _CustPaymentDetailCard(
+          key: ValueKey(payments[_chip - 1]['id']?.toString() ?? _chip),
+          payment: payments[_chip - 1],
+        ),
     ]);
   }
 
@@ -613,7 +617,7 @@ class _CustPaySheet extends StatelessWidget {
 
 class _CustPaymentDetailCard extends StatelessWidget {
   final Map<String, dynamic> payment;
-  const _CustPaymentDetailCard({required this.payment});
+  const _CustPaymentDetailCard({super.key, required this.payment});
 
   @override
   Widget build(BuildContext context) {
@@ -746,6 +750,7 @@ class _PaymentProofImageState extends State<_PaymentProofImage> {
           key: ValueKey('${widget.bucket}/${widget.path}/$_attempt'),
           url: url,
           cacheKey: '${widget.bucket}-${widget.path.hashCode}-$_attempt',
+          onTap: () => openFullscreenImage(context, url),
           onError: () {
             if (mounted && !_error) setState(() => _error = true);
           },

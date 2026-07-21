@@ -408,26 +408,6 @@ double _stripCurrencyLabel(String s) {
   return double.tryParse(cleaned) ?? 0.0;
 }
 
-String _formatRupees(double v) {
-  final fixed = v.toStringAsFixed(2);
-  final parts = fixed.split('.');
-  final digits = parts[0].replaceFirst('-', '');
-  final neg = parts[0].startsWith('-');
-  String grouped = digits;
-  if (digits.length > 3) {
-    final last3 = digits.substring(digits.length - 3);
-    var rest = digits.substring(0, digits.length - 3);
-    final groups = <String>[];
-    while (rest.length > 2) {
-      groups.insert(0, rest.substring(rest.length - 2));
-      rest = rest.substring(0, rest.length - 2);
-    }
-    if (rest.isNotEmpty) groups.insert(0, rest);
-    grouped = '${groups.join(',')},$last3';
-  }
-  return '${neg ? '-' : ''}$grouped.${parts[1]}';
-}
-
 Color _toneColor(String tone) => switch (tone) {
       'ok' => const Color(0xFF16A34A),
       'bad' => const Color(0xFFDC2626),
@@ -443,11 +423,16 @@ Color _toneBg(String? tone) => switch (tone) {
 
 // ── QR + text composite for "Download QR" (dart:ui canvas, no widget tree) ──
 
+// Still used by the top-level static "Download QR" button (main Payment tab,
+// generic no-amount QR) — the pay-popup's own Download QR no longer composes
+// an image client-side at all (CHANGE #486): it downloads the backend's
+// rendered image via payment-qr-image, avoiding the duplicated-amount bug
+// that came from combining the backend's own amount text with a locally
+// composed label.
 Future<Uint8List> _buildQrDownloadImage({
   required String qrPayload,
   required String vpa,
   required String bankingName,
-  String? payLabel,
 }) async {
   const width = 480.0;
   const padding = 32.0;
@@ -471,26 +456,11 @@ Future<Uint8List> _buildQrDownloadImage({
     return painter;
   }
 
-  // payLabel (e.g. "Pay advance ₹264.50") is only passed by the pay-popup's
-  // own Download QR button — it makes the CUSTOM amount visible at a glance,
-  // since the QR itself already encoded the amount but looked identical to
-  // the generic account QR to the eye. The static top-level download (no
-  // payLabel) keeps its original single-line title untouched.
-  final title = layout(payLabel == null ? 'mediBO payment QR' : 'mediBO', size: 18, weight: FontWeight.w700);
-  final subtitle = payLabel != null ? layout(payLabel, size: 15, weight: FontWeight.w600) : null;
+  final title = layout('mediBO payment QR', size: 18, weight: FontWeight.w700);
   final upiLine = layout('UPI ID: $vpa');
   final nameLine = layout('Banking Name: $bankingName');
 
-  final height = padding +
-      title.height +
-      (subtitle != null ? subtitle.height + 6 : 0) +
-      16 +
-      qrSize +
-      20 +
-      upiLine.height +
-      10 +
-      nameLine.height +
-      padding;
+  final height = padding + title.height + 16 + qrSize + 20 + upiLine.height + 10 + nameLine.height + padding;
 
   final recorder = ui.PictureRecorder();
   final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, width, height));
@@ -498,13 +468,7 @@ Future<Uint8List> _buildQrDownloadImage({
 
   double y = padding;
   title.paint(canvas, Offset((width - title.width) / 2, y));
-  y += title.height;
-  if (subtitle != null) {
-    y += 6;
-    subtitle.paint(canvas, Offset((width - subtitle.width) / 2, y));
-    y += subtitle.height;
-  }
-  y += 16;
+  y += title.height + 16;
 
   canvas.drawImageRect(
     qrImage,
@@ -610,8 +574,9 @@ class _CustStatCard extends StatelessWidget {
 // ── Pay sheet — QR + UPI ID + Banking Name only, no amount line, no hint ────
 
 // Public (not `_`-prefixed) so test/pay_popup_test.dart can pump it directly
-// with fake fetchWaNumbers/sendQr/qrImageBuilder/downloadSink — the real
-// Supabase RPCs and dart:html download stay the defaults in production.
+// with fake fetchWaNumbers/sendQr/fetchQrImage/downloadSink — the real
+// Supabase RPCs/edge function and dart:html download stay the defaults in
+// production.
 class CustPaySheet extends StatefulWidget {
   final String qrData;
   final String vpa;
@@ -622,13 +587,12 @@ class CustPaySheet extends StatefulWidget {
   final String kind; // 'advance' | 'remaining'
   final Future<dynamic> Function(String orderId)? fetchWaNumbers;
   final Future<Map<String, dynamic>> Function(String orderId, String phone, double amount, String kind)? sendQr;
-  final Future<Uint8List> Function({
-    required String qrPayload,
-    required String vpa,
-    required String bankingName,
-    String? payLabel,
-  })? qrImageBuilder;
-  final void Function(List<int> bytes, String filename, String mimeType)? downloadSink;
+  // CHANGE #486: max backend — the QR image is rendered server-side by the
+  // payment-qr-image edge function; the app only requests it and downloads
+  // the returned url. Replaces the old client-side RepaintBoundary/toImage
+  // composition (which duplicated the amount already burned into the image).
+  final Future<Map<String, dynamic>> Function(String orderId, double amount, String kind)? fetchQrImage;
+  final void Function(String url, String filename)? downloadSink;
   const CustPaySheet({
     super.key,
     required this.qrData,
@@ -640,7 +604,7 @@ class CustPaySheet extends StatefulWidget {
     required this.kind,
     this.fetchWaNumbers,
     this.sendQr,
-    this.qrImageBuilder,
+    this.fetchQrImage,
     this.downloadSink,
   });
 
@@ -659,27 +623,34 @@ class _CustPaySheetState extends State<CustPaySheet> {
     super.dispose();
   }
 
-  // Download — builds the QR for THIS sheet's live amount (advance/remaining),
-  // not the static no-amount QR the top-level Payment tab downloads. The
-  // visible "Pay advance/remaining ₹<amount>" line proves it at a glance —
-  // the QR data alone already carried the amount, but looked identical to
-  // the generic account QR to the eye.
+  Future<Map<String, dynamic>> _invokeQrImage() async {
+    final res = await Supabase.instance.client.functions.invoke('payment-qr-image', body: {
+      'order_id': widget.orderId,
+      'amount': widget.amount,
+      'kind': widget.kind,
+    });
+    final data = res.data;
+    return data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{};
+  }
+
+  // Download — the backend renders this sheet's live amount (advance/
+  // remaining) into the QR image and returns a signed url; the app just
+  // requests it and downloads it, it never composes the image itself.
   Future<void> _downloadSheetQr() async {
     if (_downloadingQr) return;
     setState(() => _downloadingQr = true);
     try {
-      final builder = widget.qrImageBuilder ?? _buildQrDownloadImage;
-      final bytes = await builder(
-        qrPayload: widget.qrData,
-        vpa: widget.vpa,
-        bankingName: widget.bankingName,
-        payLabel: '${widget.payLabel} ₹${_formatRupees(widget.amount)}',
-      );
-      final sink = widget.downloadSink ?? downloadBytes;
-      sink(bytes, 'mediBO_${widget.kind}_QR.png', 'image/png');
-      RenderLog.write('c484_paypopup_qr_amount', 1);
+      final res = widget.fetchQrImage != null
+          ? await widget.fetchQrImage!(widget.orderId, widget.amount, widget.kind)
+          : await _invokeQrImage();
+      final url = res['url']?.toString();
+      if (url == null || url.isEmpty) throw Exception('payment-qr-image returned no url');
+      final filename = res['filename']?.toString() ?? 'mediBO-pay-${widget.amount}.jpg';
+      final sink = widget.downloadSink ?? downloadUrl;
+      sink(url, filename);
+      RenderLog.write('c486_paypopup_qr_backend', 1);
     } catch (_) {
-      if (mounted) showToast(context, 'Could not generate the QR image.', isError: true);
+      if (mounted) showToast(context, 'Could not download the QR image.', isError: true);
     } finally {
       if (mounted) setState(() => _downloadingQr = false);
     }
@@ -713,12 +684,13 @@ class _CustPaySheetState extends State<CustPaySheet> {
       _waPopupEntry = null;
     }
 
-    RenderLog.write('c482_paypopup_buttons', 1);
+    RenderLog.write('c486_paypopup_wa_anchor', 1);
     _waPopupEntry = OverlayEntry(builder: (_) => Stack(children: [
       Positioned.fill(
         child: GestureDetector(behavior: HitTestBehavior.translucent, onTap: dismiss),
       ),
       Positioned(
+        key: const Key('payQrWaPopupAnchor'),
         top: top,
         left: left,
         width: popupW,
@@ -988,7 +960,11 @@ class _PayQrWaPickerState extends State<PayQrWaPicker> {
                   child: Column(
                     children: _numbers!.map((e) {
                       final phone = e['phone']?.toString() ?? '';
-                      final label = e['label']?.toString() ?? '';
+                      // CHANGE #486: the backend now composes the row text
+                      // (plain "8357881873" for the WhatsApp number, "<num> ·
+                      // Phone" for extras) — show it verbatim, don't rebuild
+                      // it from phone+label in the app.
+                      final display = e['display']?.toString() ?? phone;
                       // last_used is a per-row boolean from this RPC (unlike
                       // the sibling customer_bill_numbers/last-timestamp
                       // shape) — compare with `== true`, not `!= null`.
@@ -1006,7 +982,7 @@ class _PayQrWaPickerState extends State<PayQrWaPicker> {
                             const SizedBox(width: 8),
                             Expanded(
                               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                Text(label.isNotEmpty ? '$phone · $label' : phone,
+                                Text(display,
                                     style: const TextStyle(fontSize: 13.5, color: Color(0xFF111827))),
                                 if (sent)
                                   const Padding(

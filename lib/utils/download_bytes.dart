@@ -20,6 +20,17 @@ void downloadBytes(List<int> bytes, String filename, String mimeType) {
   html.Url.revokeObjectUrl(url);
 }
 
+/// One-tap download of a remote URL (e.g. a signed backend-rendered image),
+/// as opposed to [downloadBytes] for bytes already in memory. Relies on the
+/// URL's own Content-Disposition: attachment header to force a save rather
+/// than a navigation — the `download` attribute is a same-origin-only hint
+/// browsers ignore for cross-origin URLs.
+void downloadUrl(String url, String filename) {
+  html.AnchorElement(href: url)
+    ..setAttribute('download', filename)
+    ..click();
+}
+
 /// CHANGE #462: native OS share sheet via the Web Share API (Level 2 — file
 /// sharing), the web equivalent of a mobile share sheet since this app has no
 /// native share_plus-style package. Returns:

@@ -337,7 +337,7 @@ class _CustPayPanelState extends State<CustPayPanel> {
       useSafeArea: true,
       backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (_) => _CustPaySheet(
+      builder: (_) => CustPaySheet(
         qrData: uri.toString(),
         vpa: vpa,
         bankingName: name,
@@ -408,6 +408,26 @@ double _stripCurrencyLabel(String s) {
   return double.tryParse(cleaned) ?? 0.0;
 }
 
+String _formatRupees(double v) {
+  final fixed = v.toStringAsFixed(2);
+  final parts = fixed.split('.');
+  final digits = parts[0].replaceFirst('-', '');
+  final neg = parts[0].startsWith('-');
+  String grouped = digits;
+  if (digits.length > 3) {
+    final last3 = digits.substring(digits.length - 3);
+    var rest = digits.substring(0, digits.length - 3);
+    final groups = <String>[];
+    while (rest.length > 2) {
+      groups.insert(0, rest.substring(rest.length - 2));
+      rest = rest.substring(0, rest.length - 2);
+    }
+    if (rest.isNotEmpty) groups.insert(0, rest);
+    grouped = '${groups.join(',')},$last3';
+  }
+  return '${neg ? '-' : ''}$grouped.${parts[1]}';
+}
+
 Color _toneColor(String tone) => switch (tone) {
       'ok' => const Color(0xFF16A34A),
       'bad' => const Color(0xFFDC2626),
@@ -427,6 +447,7 @@ Future<Uint8List> _buildQrDownloadImage({
   required String qrPayload,
   required String vpa,
   required String bankingName,
+  String? payLabel,
 }) async {
   const width = 480.0;
   const padding = 32.0;
@@ -450,11 +471,26 @@ Future<Uint8List> _buildQrDownloadImage({
     return painter;
   }
 
-  final title = layout('mediBO payment QR', size: 18, weight: FontWeight.w700);
+  // payLabel (e.g. "Pay advance ₹264.50") is only passed by the pay-popup's
+  // own Download QR button — it makes the CUSTOM amount visible at a glance,
+  // since the QR itself already encoded the amount but looked identical to
+  // the generic account QR to the eye. The static top-level download (no
+  // payLabel) keeps its original single-line title untouched.
+  final title = layout(payLabel == null ? 'mediBO payment QR' : 'mediBO', size: 18, weight: FontWeight.w700);
+  final subtitle = payLabel != null ? layout(payLabel, size: 15, weight: FontWeight.w600) : null;
   final upiLine = layout('UPI ID: $vpa');
   final nameLine = layout('Banking Name: $bankingName');
 
-  final height = padding + title.height + 16 + qrSize + 20 + upiLine.height + 10 + nameLine.height + padding;
+  final height = padding +
+      title.height +
+      (subtitle != null ? subtitle.height + 6 : 0) +
+      16 +
+      qrSize +
+      20 +
+      upiLine.height +
+      10 +
+      nameLine.height +
+      padding;
 
   final recorder = ui.PictureRecorder();
   final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, width, height));
@@ -462,7 +498,13 @@ Future<Uint8List> _buildQrDownloadImage({
 
   double y = padding;
   title.paint(canvas, Offset((width - title.width) / 2, y));
-  y += title.height + 16;
+  y += title.height;
+  if (subtitle != null) {
+    y += 6;
+    subtitle.paint(canvas, Offset((width - subtitle.width) / 2, y));
+    y += subtitle.height;
+  }
+  y += 16;
 
   canvas.drawImageRect(
     qrImage,
@@ -567,7 +609,10 @@ class _CustStatCard extends StatelessWidget {
 
 // ── Pay sheet — QR + UPI ID + Banking Name only, no amount line, no hint ────
 
-class _CustPaySheet extends StatefulWidget {
+// Public (not `_`-prefixed) so test/pay_popup_test.dart can pump it directly
+// with fake fetchWaNumbers/sendQr/qrImageBuilder/downloadSink — the real
+// Supabase RPCs and dart:html download stay the defaults in production.
+class CustPaySheet extends StatefulWidget {
   final String qrData;
   final String vpa;
   final String bankingName;
@@ -575,7 +620,17 @@ class _CustPaySheet extends StatefulWidget {
   final String orderId;
   final double amount;
   final String kind; // 'advance' | 'remaining'
-  const _CustPaySheet({
+  final Future<dynamic> Function(String orderId)? fetchWaNumbers;
+  final Future<Map<String, dynamic>> Function(String orderId, String phone, double amount, String kind)? sendQr;
+  final Future<Uint8List> Function({
+    required String qrPayload,
+    required String vpa,
+    required String bankingName,
+    String? payLabel,
+  })? qrImageBuilder;
+  final void Function(List<int> bytes, String filename, String mimeType)? downloadSink;
+  const CustPaySheet({
+    super.key,
     required this.qrData,
     required this.vpa,
     required this.bankingName,
@@ -583,13 +638,17 @@ class _CustPaySheet extends StatefulWidget {
     required this.orderId,
     required this.amount,
     required this.kind,
+    this.fetchWaNumbers,
+    this.sendQr,
+    this.qrImageBuilder,
+    this.downloadSink,
   });
 
   @override
-  State<_CustPaySheet> createState() => _CustPaySheetState();
+  State<CustPaySheet> createState() => _CustPaySheetState();
 }
 
-class _CustPaySheetState extends State<_CustPaySheet> {
+class _CustPaySheetState extends State<CustPaySheet> {
   OverlayEntry? _waPopupEntry;
   bool _downloadingQr = false;
 
@@ -601,18 +660,24 @@ class _CustPaySheetState extends State<_CustPaySheet> {
   }
 
   // Download — builds the QR for THIS sheet's live amount (advance/remaining),
-  // not the static no-amount QR the top-level Payment tab downloads.
+  // not the static no-amount QR the top-level Payment tab downloads. The
+  // visible "Pay advance/remaining ₹<amount>" line proves it at a glance —
+  // the QR data alone already carried the amount, but looked identical to
+  // the generic account QR to the eye.
   Future<void> _downloadSheetQr() async {
     if (_downloadingQr) return;
     setState(() => _downloadingQr = true);
     try {
-      final bytes = await _buildQrDownloadImage(
+      final builder = widget.qrImageBuilder ?? _buildQrDownloadImage;
+      final bytes = await builder(
         qrPayload: widget.qrData,
         vpa: widget.vpa,
         bankingName: widget.bankingName,
+        payLabel: '${widget.payLabel} ₹${_formatRupees(widget.amount)}',
       );
-      downloadBytes(bytes, 'mediBO_${widget.kind}_QR.png', 'image/png');
-      RenderLog.write('c482_paypopup_buttons', 1);
+      final sink = widget.downloadSink ?? downloadBytes;
+      sink(bytes, 'mediBO_${widget.kind}_QR.png', 'image/png');
+      RenderLog.write('c484_paypopup_qr_amount', 1);
     } catch (_) {
       if (mounted) showToast(context, 'Could not generate the QR image.', isError: true);
     } finally {
@@ -661,10 +726,12 @@ class _CustPaySheetState extends State<_CustPaySheet> {
           borderRadius: BorderRadius.circular(12),
           elevation: 8,
           color: Colors.white,
-          child: _PayQrWaPicker(
+          child: PayQrWaPicker(
             orderId: widget.orderId,
             amount: widget.amount,
             kind: widget.kind,
+            fetchWaNumbers: widget.fetchWaNumbers,
+            sendQr: widget.sendQr,
           ),
         ),
       ),
@@ -790,17 +857,27 @@ class _CustPaySheetState extends State<_CustPaySheet> {
 // does the entire send (renders the amount's QR image + WhatsApps it + records
 // last-used) — there is NO wa.me/share fallback. On success we re-fetch the number
 // list so the "last used" badge moves to the number just used.
-class _PayQrWaPicker extends StatefulWidget {
+// Public so test/pay_popup_test.dart can pump it with fake fetchWaNumbers/sendQr.
+class PayQrWaPicker extends StatefulWidget {
   final String orderId;
   final double amount;
   final String kind; // 'advance' | 'remaining'
-  const _PayQrWaPicker({required this.orderId, required this.amount, required this.kind});
+  final Future<dynamic> Function(String orderId)? fetchWaNumbers;
+  final Future<Map<String, dynamic>> Function(String orderId, String phone, double amount, String kind)? sendQr;
+  const PayQrWaPicker({
+    super.key,
+    required this.orderId,
+    required this.amount,
+    required this.kind,
+    this.fetchWaNumbers,
+    this.sendQr,
+  });
 
   @override
-  State<_PayQrWaPicker> createState() => _PayQrWaPickerState();
+  State<PayQrWaPicker> createState() => _PayQrWaPickerState();
 }
 
-class _PayQrWaPickerState extends State<_PayQrWaPicker> {
+class _PayQrWaPickerState extends State<PayQrWaPicker> {
   List<Map<String, dynamic>>? _numbers;
   String? _error;
   String? _sendingPhone; // row currently in-flight
@@ -813,14 +890,25 @@ class _PayQrWaPickerState extends State<_PayQrWaPicker> {
     _load();
   }
 
+  // CHANGE #484 fix: the RPC returns {"numbers": [...]} (a Map), not a bare
+  // List — the old `raw is List` check was always false against the real
+  // shape, so the list stayed empty and showed "No saved number" even when
+  // the backend had a number. Handle both shapes defensively.
+  static List<Map<String, dynamic>> _parseNumbers(dynamic raw) {
+    final dynamic list = raw is Map ? raw['numbers'] : raw;
+    return (list is List ? list : const [])
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+  }
+
   Future<void> _load() async {
     try {
-      final raw = await Supabase.instance.client
-          .rpc('customer_order_wa_numbers', params: {'p_order_id': widget.orderId});
-      final list = (raw is List ? raw : const [])
-          .whereType<Map>()
-          .map((e) => Map<String, dynamic>.from(e))
-          .toList();
+      final dynamic raw = widget.fetchWaNumbers != null
+          ? await widget.fetchWaNumbers!(widget.orderId)
+          : await Supabase.instance.client
+              .rpc('customer_order_wa_numbers', params: {'p_order_id': widget.orderId});
+      final list = _parseNumbers(raw);
       if (mounted) setState(() { _numbers = list; _error = null; });
     } catch (_) {
       if (mounted) setState(() => _error = 'Could not load numbers.');
@@ -834,13 +922,9 @@ class _PayQrWaPickerState extends State<_PayQrWaPicker> {
         'kind=${widget.kind};amt=${widget.amount};phone=$phone');
     setState(() { _sendingPhone = phone; _sentPhone = null; _errorPhone = null; });
     try {
-      final raw = await Supabase.instance.client.rpc('send_payment_qr_wa', params: {
-        'p_order_id': widget.orderId,
-        'p_phone': phone,
-        'p_amount': widget.amount,
-        'p_kind': widget.kind,
-      });
-      final res = raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
+      final Map<String, dynamic> res = widget.sendQr != null
+          ? await widget.sendQr!(widget.orderId, phone, widget.amount, widget.kind)
+          : await _rpcSendQr(phone);
       if (!mounted) return;
       if (res['status'] == 'queued') {
         setState(() { _sendingPhone = null; _sentPhone = phone; });
@@ -851,6 +935,16 @@ class _PayQrWaPickerState extends State<_PayQrWaPicker> {
     } catch (_) {
       if (mounted) setState(() { _sendingPhone = null; _errorPhone = phone; });
     }
+  }
+
+  Future<Map<String, dynamic>> _rpcSendQr(String phone) async {
+    final raw = await Supabase.instance.client.rpc('send_payment_qr_wa', params: {
+      'p_order_id': widget.orderId,
+      'p_phone': phone,
+      'p_amount': widget.amount,
+      'p_kind': widget.kind,
+    });
+    return raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
   }
 
   @override
@@ -892,11 +986,13 @@ class _PayQrWaPickerState extends State<_PayQrWaPicker> {
               Flexible(
                 child: SingleChildScrollView(
                   child: Column(
-                    children: _numbers!.asMap().entries.map((e) {
-                      final idx = e.key;
-                      final phone = e.value['phone']?.toString() ?? '';
-                      final lastUsed = e.value['last_used'];
-                      final isLastUsed = idx == 0 && lastUsed != null;
+                    children: _numbers!.map((e) {
+                      final phone = e['phone']?.toString() ?? '';
+                      final label = e['label']?.toString() ?? '';
+                      // last_used is a per-row boolean from this RPC (unlike
+                      // the sibling customer_bill_numbers/last-timestamp
+                      // shape) — compare with `== true`, not `!= null`.
+                      final isLastUsed = e['last_used'] == true;
                       final busy = _sendingPhone == phone;
                       final sent = _sentPhone == phone;
                       final failed = _errorPhone == phone;
@@ -910,7 +1006,7 @@ class _PayQrWaPickerState extends State<_PayQrWaPicker> {
                             const SizedBox(width: 8),
                             Expanded(
                               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                Text(phone,
+                                Text(label.isNotEmpty ? '$phone · $label' : phone,
                                     style: const TextStyle(fontSize: 13.5, color: Color(0xFF111827))),
                                 if (sent)
                                   const Padding(

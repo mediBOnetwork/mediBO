@@ -56,6 +56,14 @@ class _WaMessageBubbleState extends State<WaMessageBubble> {
     }
   }
 
+  // CHANGE #483: retry loading media (re-request a signed URL) — used by both
+  // the "couldn't fetch signed URL" and "image failed to decode" error states,
+  // for messages in EITHER direction.
+  void _retryMedia() {
+    if (!mounted) return;
+    setState(_initSignedUrl);
+  }
+
   String _formatTime(DateTime? dt) {
     if (dt == null) return '';
     // CHANGE #374: dt is already IST wall-clock (WaMessage.receivedAt is
@@ -77,6 +85,12 @@ class _WaMessageBubbleState extends State<WaMessageBubble> {
               child: Image.network(
                 url,
                 fit: BoxFit.contain,
+                loadingBuilder: (ctx2, child, progress) {
+                  if (progress == null) return child;
+                  return const Center(
+                    child: CircularProgressIndicator(color: Colors.white),
+                  );
+                },
                 errorBuilder: (ctx2, err, st) => const Center(
                   child: Icon(Icons.broken_image_outlined,
                       color: Colors.white, size: 48),
@@ -106,29 +120,52 @@ class _WaMessageBubbleState extends State<WaMessageBubble> {
   Widget _buildMediaContent(String kind, String signedUrl) {
     switch (kind) {
       case 'image':
+        // CHANGE #483: render media for either direction — never gated on
+        // in/out. Capped to a max height (some outbound bill/QR photos are
+        // multi-MB, full-resolution) with BoxFit.contain so a large image
+        // scales down instead of blowing up the bubble or failing to lay
+        // out; cacheWidth bounds decode cost for the same reason.
+        RenderLog.write('c483_wa_media_rendered', widget.message.direction);
+        final maxImgHeight = MediaQuery.of(context).size.height * 0.55;
         return GestureDetector(
           onTap: () => _showFullscreen(context, signedUrl),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(8),
-            child: Image.network(
-              signedUrl,
-              width: double.infinity,
-              height: 220,
-              fit: BoxFit.cover,
-              loadingBuilder: (ctx, child, progress) {
-                if (progress == null) return child;
-                return const SizedBox(
-                  height: 220,
-                  child: Center(
-                    child: CircularProgressIndicator(color: Color(0xFF1B7A43)),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: maxImgHeight),
+              child: Image.network(
+                signedUrl,
+                width: double.infinity,
+                fit: BoxFit.contain,
+                cacheWidth: 1024,
+                loadingBuilder: (ctx, child, progress) {
+                  if (progress == null) return child;
+                  return SizedBox(
+                    height: maxImgHeight.clamp(120, 220),
+                    child: const Center(
+                      child:
+                          CircularProgressIndicator(color: Color(0xFF1B7A43)),
+                    ),
+                  );
+                },
+                errorBuilder: (ctx2, err, st) => GestureDetector(
+                  onTap: _retryMedia,
+                  child: const SizedBox(
+                    height: 80,
+                    child: Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.broken_image_outlined,
+                              size: 28, color: Color(0xFF9CA3AF)),
+                          SizedBox(height: 4),
+                          Text("Couldn't load — tap to retry",
+                              style: TextStyle(
+                                  fontSize: 12, color: Color(0xFF9CA3AF))),
+                        ],
+                      ),
+                    ),
                   ),
-                );
-              },
-              errorBuilder: (ctx2, err, st) => const SizedBox(
-                height: 80,
-                child: Center(
-                  child: Icon(Icons.broken_image_outlined,
-                      size: 36, color: Color(0xFF9CA3AF)),
                 ),
               ),
             ),
@@ -228,15 +265,19 @@ class _WaMessageBubbleState extends State<WaMessageBubble> {
               );
             }
             if (snap.hasError || snap.data == null) {
-              return const Padding(
-                padding: EdgeInsets.symmetric(vertical: 8),
-                child: Row(children: [
-                  Icon(Icons.error_outline, size: 16, color: Color(0xFF9CA3AF)),
-                  SizedBox(width: 4),
-                  Text('Media unavailable',
-                      style:
-                          TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
-                ]),
+              return GestureDetector(
+                onTap: _retryMedia,
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8),
+                  child: Row(children: [
+                    Icon(Icons.error_outline,
+                        size: 16, color: Color(0xFF9CA3AF)),
+                    SizedBox(width: 4),
+                    Text("Couldn't load — tap to retry",
+                        style:
+                            TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+                  ]),
+                ),
               );
             }
             return _buildMediaContent(msg.mediaKind, snap.data!);

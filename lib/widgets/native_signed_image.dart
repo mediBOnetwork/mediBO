@@ -48,12 +48,11 @@ class _NativeSignedImageState extends State<NativeSignedImage> {
         ..style.width = '100%'
         ..style.height = '100%'
         ..style.objectFit = 'cover'
-        ..style.background = '#F3F4F6';
-      final onTap = widget.onTap;
-      if (onTap != null) {
-        img.style.cursor = 'pointer';
-        img.onClick.listen((_) => onTap());
-      }
+        ..style.background = '#F3F4F6'
+        // Platform views otherwise absorb the tap before it reaches Flutter's
+        // own gesture arena — same technique as fullscreen_image.dart: let it
+        // fall through to the GestureDetector wrapping this in build() below.
+        ..style.pointerEvents = 'none';
       final onError = widget.onError;
       if (onError != null) {
         img.onError.listen((_) => onError());
@@ -63,5 +62,10 @@ class _NativeSignedImageState extends State<NativeSignedImage> {
   }
 
   @override
-  Widget build(BuildContext context) => HtmlElementView(viewType: _viewType);
+  Widget build(BuildContext context) {
+    final view = IgnorePointer(child: HtmlElementView(viewType: _viewType));
+    final onTap = widget.onTap;
+    if (onTap == null) return view;
+    return GestureDetector(behavior: HitTestBehavior.opaque, onTap: onTap, child: view);
+  }
 }

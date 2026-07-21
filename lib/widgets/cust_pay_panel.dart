@@ -5,6 +5,7 @@
 // progress-bar fill (a 0.75×MRP estimate, never displayed as text).
 // ignore_for_file: use_build_context_synchronously
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -589,7 +590,118 @@ class _CustPaySheet extends StatefulWidget {
 }
 
 class _CustPaySheetState extends State<_CustPaySheet> {
-  bool _waOpen = false;
+  OverlayEntry? _waPopupEntry;
+  bool _downloadingQr = false;
+
+  @override
+  void dispose() {
+    _waPopupEntry?.remove();
+    _waPopupEntry = null;
+    super.dispose();
+  }
+
+  // Download — builds the QR for THIS sheet's live amount (advance/remaining),
+  // not the static no-amount QR the top-level Payment tab downloads.
+  Future<void> _downloadSheetQr() async {
+    if (_downloadingQr) return;
+    setState(() => _downloadingQr = true);
+    try {
+      final bytes = await _buildQrDownloadImage(
+        qrPayload: widget.qrData,
+        vpa: widget.vpa,
+        bankingName: widget.bankingName,
+      );
+      downloadBytes(bytes, 'mediBO_${widget.kind}_QR.png', 'image/png');
+      RenderLog.write('c482_paypopup_buttons', 1);
+    } catch (_) {
+      if (mounted) showToast(context, 'Could not generate the QR image.', isError: true);
+    } finally {
+      if (mounted) setState(() => _downloadingQr = false);
+    }
+  }
+
+  // WhatsApp — mini floating popup anchored near the button (same pattern as
+  // UploadedBillActionsRow._showWaPopup), never centered on screen, clamped
+  // to stay fully within the viewport on every edge.
+  void _showWaPopup(BuildContext buttonContext) {
+    _waPopupEntry?.remove();
+    _waPopupEntry = null;
+    final box = buttonContext.findRenderObject() as RenderBox?;
+    if (box == null || !box.attached) return;
+    final topLeft = box.localToGlobal(Offset.zero);
+    final screenSize = MediaQuery.of(buttonContext).size;
+    const popupW = 260.0;
+    const popupMaxH = 260.0;
+    final left = (topLeft.dx + box.size.width / 2 - popupW / 2)
+        .clamp(12.0, math.max(12.0, screenSize.width - popupW - 12.0))
+        .toDouble();
+    final spaceBelow = screenSize.height - (topLeft.dy + box.size.height + 6);
+    final openAbove = spaceBelow < popupMaxH && topLeft.dy > popupMaxH;
+    final top = (openAbove
+            ? topLeft.dy - popupMaxH - 6
+            : topLeft.dy + box.size.height + 6)
+        .clamp(12.0, math.max(12.0, screenSize.height - 12.0))
+        .toDouble();
+
+    void dismiss() {
+      _waPopupEntry?.remove();
+      _waPopupEntry = null;
+    }
+
+    RenderLog.write('c482_paypopup_buttons', 1);
+    _waPopupEntry = OverlayEntry(builder: (_) => Stack(children: [
+      Positioned.fill(
+        child: GestureDetector(behavior: HitTestBehavior.translucent, onTap: dismiss),
+      ),
+      Positioned(
+        top: top,
+        left: left,
+        width: popupW,
+        child: Material(
+          borderRadius: BorderRadius.circular(12),
+          elevation: 8,
+          color: Colors.white,
+          child: _PayQrWaPicker(
+            orderId: widget.orderId,
+            amount: widget.amount,
+            kind: widget.kind,
+          ),
+        ),
+      ),
+    ]));
+    Overlay.of(buttonContext).insert(_waPopupEntry!);
+  }
+
+  Widget _sheetActionButton({
+    required IconData icon,
+    required String label,
+    required VoidCallback? onTap,
+    bool loading = false,
+  }) {
+    return OutlinedButton(
+      onPressed: onTap,
+      style: OutlinedButton.styleFrom(
+        side: const BorderSide(color: Color(0xFF1B7A43)),
+        foregroundColor: const Color(0xFF1B7A43),
+        disabledForegroundColor: const Color(0xFF9CA3AF),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        minimumSize: const Size(double.infinity, 44),
+      ),
+      child: loading
+          ? const Row(mainAxisAlignment: MainAxisAlignment.center, mainAxisSize: MainAxisSize.min, children: [
+              SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF1B7A43))),
+            ])
+          : Row(mainAxisAlignment: MainAxisAlignment.center, mainAxisSize: MainAxisSize.min, children: [
+              Icon(icon, size: 16),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(label,
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                    overflow: TextOverflow.ellipsis),
+              ),
+            ]),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -643,35 +755,28 @@ class _CustPaySheetState extends State<_CustPaySheet> {
               C330CopyRow(label: 'UPI ID', value: widget.vpa),
               C330CopyRow(label: 'Banking Name', value: widget.bankingName),
               const SizedBox(height: 4),
-              // ── Send the QR to a saved WhatsApp number ──────────────────────
-              OutlinedButton(
-                onPressed: () => setState(() => _waOpen = !_waOpen),
-                style: OutlinedButton.styleFrom(
-                  side: const BorderSide(color: Color(0xFF1B7A43)),
-                  foregroundColor: const Color(0xFF1B7A43),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  minimumSize: const Size(double.infinity, 44),
-                ),
-                child: Row(mainAxisAlignment: MainAxisAlignment.center, mainAxisSize: MainAxisSize.min, children: [
-                  const Icon(Icons.chat_bubble_outline, size: 16),
-                  const SizedBox(width: 6),
-                  const Flexible(
-                    child: Text('Send QR on WhatsApp',
-                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-                        overflow: TextOverflow.ellipsis),
+              // ── Download QR (this sheet's live amount) · WhatsApp (mini
+              // floating popup anchored to this button, listing saved numbers) ──
+              Row(children: [
+                Expanded(
+                  child: _sheetActionButton(
+                    icon: Icons.qr_code_2_outlined,
+                    label: 'Download QR',
+                    loading: _downloadingQr,
+                    onTap: _downloadingQr ? null : _downloadSheetQr,
                   ),
-                  const SizedBox(width: 4),
-                  Icon(_waOpen ? Icons.expand_less : Icons.expand_more, size: 18),
-                ]),
-              ),
-              if (_waOpen) ...[
-                const SizedBox(height: 8),
-                _PayQrWaPicker(
-                  orderId: widget.orderId,
-                  amount: widget.amount,
-                  kind: widget.kind,
                 ),
-              ],
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Builder(
+                    builder: (btnContext) => _sheetActionButton(
+                      icon: Icons.chat_bubble_outline,
+                      label: 'WhatsApp',
+                      onTap: () => _showWaPopup(btnContext),
+                    ),
+                  ),
+                ),
+              ]),
             ]),
           ),
         ),

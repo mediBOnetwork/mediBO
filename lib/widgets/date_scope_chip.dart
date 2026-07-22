@@ -3,6 +3,7 @@
 // Warehouse, Bag, Pack, Disputes). One widget, no per-screen copies.
 import 'package:flutter/material.dart';
 
+import '../fulfill/fulfill_view_logic.dart' show BoxOlder;
 import '../utils/ist_date.dart';
 
 /// Tappable "Today · DD/MM/YYYY" (or "DD/MM/YYYY" for a past date) chip that
@@ -97,6 +98,61 @@ class OlderOpenPill extends StatelessWidget {
         child: Text(label,
             style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: fg)),
       ),
+    );
+  }
+}
+
+/// CHANGE #471 — per-box date heading + include-older control for a single
+/// open fw_get_state box (Supplier Shop / Warehouse). Unlike [OlderOpenPill],
+/// both strings are printed VERBATIM from the backend's date_label / older
+/// object — never formatted or constructed here. Renders nothing when
+/// [dateLabel] is null/empty; the older pill renders only when [older.show].
+class BoxDateOlderRow extends StatelessWidget {
+  final String? dateLabel;
+  final BoxOlder older;
+  final bool includeOlder;
+  final VoidCallback onToggleOlder;
+  final EdgeInsets padding;
+
+  const BoxDateOlderRow({
+    super.key,
+    required this.dateLabel,
+    required this.older,
+    required this.includeOlder,
+    required this.onToggleOlder,
+    this.padding = const EdgeInsets.fromLTRB(16, 8, 16, 0),
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final label = dateLabel;
+    if (label == null || label.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: padding,
+      child: Row(children: [
+        Expanded(
+          child: Text(label,
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6B7280))),
+        ),
+        if (older.show) ...[
+          const SizedBox(width: 8),
+          InkWell(
+            onTap: onToggleOlder,
+            borderRadius: BorderRadius.circular(20),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: includeOlder ? const Color(0xFFD1FAE5) : const Color(0xFFFEF3C7),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text(older.label,
+                  style: TextStyle(
+                      fontSize: 12, fontWeight: FontWeight.w600,
+                      color: includeOlder ? const Color(0xFF065F46) : const Color(0xFF92400E))),
+            ),
+          ),
+        ],
+      ]),
     );
   }
 }

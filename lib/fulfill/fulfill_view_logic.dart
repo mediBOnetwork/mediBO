@@ -12,7 +12,68 @@
 // PURE logic only — no widgets. Emits c355_shared so we can prove a layout used it.
 
 import '../screens/admin/dispute/dispute_models.dart';
+import '../utils/ist_date.dart';
 import '../utils/render_log.dart';
+
+// ════════════════════════════════════════════════════════════════════════════
+// CHANGE #471 — fw_get_state date scoping + backend-owned display strings.
+// PURE logic only, so the RPC param shape and the render decisions (does the
+// older-pill show, does the date chip show) are unit-testable without pumping
+// the (huge, Supabase-backed) admin_fulfillment_screen widget tree.
+// ════════════════════════════════════════════════════════════════════════════
+
+/// The exact params map every fw_get_state call must send. p_date/p_include_older
+/// are NEVER omitted — relying on the server default was the #471 bug (it made
+/// the box ignore the selected Fulfill date and show the wrong day's items).
+Map<String, dynamic> fwGetStateParams({
+  required String supplierName,
+  required String stage,
+  required DateTime date,
+  required bool includeOlder,
+}) =>
+    {
+      'p_supplier_name': supplierName,
+      'p_stage': stage,
+      'p_date': ymd(date),
+      'p_include_older': includeOlder,
+    };
+
+/// Backend-owned progress fields for the box header. Renders progress.label
+/// verbatim; the counted/total fallback only applies before the first
+/// fw_get_state response has landed (e.g. mid-load).
+class BoxProgress {
+  final int counted;
+  final int total;
+  final String label;
+  const BoxProgress({required this.counted, required this.total, required this.label});
+}
+
+BoxProgress boxProgressFrom(Map<String, dynamic>? progress, {required int fallbackTotal}) {
+  final counted = (progress?['counted'] as num?)?.toInt() ?? 0;
+  final total = (progress?['total'] as num?)?.toInt() ?? fallbackTotal;
+  final label = progress?['label']?.toString() ?? '$counted/$total';
+  return BoxProgress(counted: counted, total: total, label: label);
+}
+
+/// Backend-owned "N from earlier dates" control. show/label come straight
+/// from the backend's `older` object — never constructed client-side.
+class BoxOlder {
+  final bool show;
+  final String label;
+  const BoxOlder({required this.show, required this.label});
+}
+
+BoxOlder boxOlderFrom(Map<String, dynamic>? older) => BoxOlder(
+      show: older != null && older['show'] == true,
+      label: older?['label']?.toString() ?? '',
+    );
+
+/// Backend-owned per-item date chip. Returns null when the line's own date
+/// matches the selected Fulfill date (nothing to render).
+String? itemDateChip(Map<String, dynamic> item) =>
+    (item['show_date_chip'] == true && (item['date_chip']?.toString() ?? '').isNotEmpty)
+        ? item['date_chip'].toString()
+        : null;
 
 /// Canonical derived view for one fulfill row (shop or warehouse stage).
 class FulfillRowView {

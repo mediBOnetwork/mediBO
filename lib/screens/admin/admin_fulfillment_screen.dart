@@ -259,6 +259,11 @@ class _MergedProduct {
   // C364: summed issue_qty across all flagged lines — the disputed units shown in the
   // "In dispute — <n> unit(s)" row chip. 0 when no line carries a disputed qty.
   final int mergedIssueQty;
+  // CHANGE #471: backend-owned date chip — true/text if ANY underlying line's
+  // order_date differs from the selected Fulfill date (older-item indicator).
+  // Printed verbatim, never formatted client-side.
+  final bool showDateChip;
+  final String? dateChip;
 
   const _MergedProduct({
     required this.productId,
@@ -277,6 +282,8 @@ class _MergedProduct {
     this.firstLineData,
     this.mergedCountIssue,
     this.mergedIssueQty = 0,
+    this.showDateChip = false,
+    this.dateChip,
   });
 }
 
@@ -961,6 +968,25 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   bool _loadingBox = false;
   String? _error;
 
+  // CHANGE #471 — backend-owned display fields from the last fw_get_state
+  // response for the open supplier's box: progress {counted,total,label},
+  // date_label, older {count,show,label}. Rendered verbatim, never recomputed.
+  Map<String, dynamic>? _boxProgress;
+  String? _boxDateLabel;
+  Map<String, dynamic>? _boxOlder;
+  // Local per-box toggle (NOT the shared FulfillDateScope.includeOlder — this
+  // control refetches only the open supplier's box). Reset OFF on every
+  // supplier-open and every date change (see _onDateScopeChanged).
+  bool _boxIncludeOlder = false;
+
+  // CHANGE #471: header progress reads the backend's counted/total/label —
+  // no client-side counting. Falls back to raw counts only before the first
+  // fw_get_state response lands (e.g. mid-load).
+  BoxProgress get _boxProgressView => boxProgressFrom(_boxProgress, fallbackTotal: _items.length);
+  int get _boxProgressCounted => _boxProgressView.counted;
+  int get _boxProgressTotal => _boxProgressView.total;
+  String get _boxProgressLabel => _boxProgressView.label;
+
   // ── PTL navigation ──
   int _focusIdx = 0;
   bool _recording = false;
@@ -1157,6 +1183,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       // #254: collect bag_breakdown from first line (Arrivals only; one line per product)
       final rawBd = first['bag_breakdown'];
       final bagBreakdown = rawBd is List ? rawBd.cast<Map>().toList() : null;
+      // CHANGE #471: date chip — backend-owned; text from the first underlying
+      // line flagged show_date_chip (older item mixed into today's list).
+      String? mergedDateChip;
+      for (final r in lines) {
+        mergedDateChip = itemDateChip(r);
+        if (mergedDateChip != null) break;
+      }
       merged.add(_MergedProduct(
         productId: entry.key,
         productName: first['product_name']?.toString() ?? '—',
@@ -1174,6 +1207,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         firstLineData: Map<String, dynamic>.from(first),
         mergedCountIssue: mergedCountIssue,
         mergedIssueQty: mergedIssueQty,
+        showDateChip: mergedDateChip != null,
+        dateChip: mergedDateChip,
       ));
     }
     // CHANGE #269 — strict A-Z, no status grouping
@@ -1361,7 +1396,16 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // instances, each calling the RPC with the same shared date scope).
   int _olderOpen = 0;
 
-  void _onDateScopeChanged() => _loadSuppliers();
+  // CHANGE #471 — a date-scope change must refetch the OPEN box too (not just
+  // the supplier list), else a card survives a date switch showing stale-date
+  // items. Also drops the per-box older toggle back to OFF (spec 3.3).
+  void _onDateScopeChanged() {
+    _loadSuppliers();
+    if (_selectedSupplier != null) {
+      _boxIncludeOlder = false;
+      _reloadItemsFromDB();
+    }
+  }
 
   @override
   void initState() {
@@ -1841,6 +1885,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       _arrivalsLocked = false; // #156: reset per-supplier lock when opening a new supplier
       _activeBag = null; // #253: reset active bag per supplier
       _auditMismatchMap = {}; // #338: audit is per-supplier — clear on open
+      // CHANGE #471: per-box older toggle + backend display fields reset on open
+      _boxIncludeOlder = false;
+      _boxProgress = null; _boxDateLabel = null; _boxOlder = null;
     });
 
     // #127 BUG1 FIX: Arrivals uses fw_get_state(supplier,'arrivals') items directly.
@@ -1850,8 +1897,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       try {
         // #160: shape-tolerant parse — fw_get_state returns jsonb object; guard against
         // PostgREST wrapping it in [{fw_get_state: value}] on older versions.
-        final dynamic _rawState = await Supabase.instance.client
-            .rpc('fw_get_state', params: {'p_supplier_name': supplier, 'p_stage': 'arrivals'});
+        // CHANGE #471: p_date/p_include_older ALWAYS sent — the shared
+        // FulfillDateScope.date for p_date, this box's own toggle for older.
+        final dynamic _rawState = await Supabase.instance.client.rpc('fw_get_state',
+            params: fwGetStateParams(
+              supplierName: supplier, stage: 'arrivals',
+              date: FulfillDateScope.instance.date, includeOlder: _boxIncludeOlder,
+            ));
         if (!mounted) return;
         Map<String, dynamic> stateRes;
         if (_rawState is Map) {
@@ -1893,6 +1945,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           _arrivalsLocked = confirmed;
           _supplierMode = parsedMode;
           _activeBag = activeBag;
+          // CHANGE #471: backend-owned display fields — rendered verbatim
+          _boxProgress = stateRes['progress'] is Map ? Map<String, dynamic>.from(stateRes['progress'] as Map) : null;
+          _boxDateLabel = stateRes['date_label']?.toString();
+          _boxOlder = stateRes['older'] is Map ? Map<String, dynamic>.from(stateRes['older'] as Map) : null;
           _voiceMentions = []; // clear stale mentions; fresh fetch below
           _activeVoiceSessionKey = null; // #453: fresh card load — no known session yet
           // Sync change-bag intent from backend — makes detached state survive refresh/reopen
@@ -1929,8 +1985,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
     try {
       // #333: fw_get_state('collect') returns items WITH shop_qty and top-level stage
-      final dynamic _rawCollect = await Supabase.instance.client
-          .rpc('fw_get_state', params: {'p_supplier_name': supplier, 'p_stage': 'collect'});
+      // CHANGE #471: p_date/p_include_older ALWAYS sent
+      final dynamic _rawCollect = await Supabase.instance.client.rpc('fw_get_state',
+          params: fwGetStateParams(
+            supplierName: supplier, stage: 'collect',
+            date: FulfillDateScope.instance.date, includeOlder: _boxIncludeOlder,
+          ));
       if (!mounted) return;
       Map<String, dynamic> collectState;
       if (_rawCollect is Map) {
@@ -1961,6 +2021,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         _showListView = false;
         _supplierMode = freshMode;
         if (freshMode != null) _collectModeMap[supplier] = freshMode;
+        // CHANGE #471: backend-owned display fields — rendered verbatim
+        _boxProgress = collectState['progress'] is Map ? Map<String, dynamic>.from(collectState['progress'] as Map) : null;
+        _boxDateLabel = collectState['date_label']?.toString();
+        _boxOlder = collectState['older'] is Map ? Map<String, dynamic>.from(collectState['older'] as Map) : null;
         _voiceMentions = []; // clear stale; fresh fetch below
         _activeVoiceSessionKey = null; // #453: fresh card load — no known session yet
       });
@@ -1986,8 +2050,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // #156: Check if this supplier's arrivals are confirmed/locked via fw_get_state.
   Future<void> _checkArrivalsLocked(String supplier) async {
     try {
-      final dynamic _rawLock = await Supabase.instance.client
-          .rpc('fw_get_state', params: {'p_supplier_name': supplier, 'p_stage': 'arrivals'});
+      // CHANGE #471: p_date/p_include_older ALWAYS sent
+      final dynamic _rawLock = await Supabase.instance.client.rpc('fw_get_state',
+          params: fwGetStateParams(
+            supplierName: supplier, stage: 'arrivals',
+            date: FulfillDateScope.instance.date,
+            includeOlder: supplier == _selectedSupplier ? _boxIncludeOlder : false,
+          ));
       if (!mounted) return;
       Map<String, dynamic> res;
       if (_rawLock is Map) {
@@ -2647,8 +2716,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     // #127 BUG1 FIX: Arrivals reload uses fw_get_state directly (no get_receiving_box).
     if (widget.arrivals) {
       try {
-        final dynamic _rawReload = await Supabase.instance.client
-            .rpc('fw_get_state', params: {'p_supplier_name': supplier, 'p_stage': 'arrivals'});
+        // CHANGE #471: p_date/p_include_older ALWAYS sent
+        final dynamic _rawReload = await Supabase.instance.client.rpc('fw_get_state',
+            params: fwGetStateParams(
+              supplierName: supplier, stage: 'arrivals',
+              date: FulfillDateScope.instance.date, includeOlder: _boxIncludeOlder,
+            ));
         if (!mounted) return;
         Map<String, dynamic> stateRes;
         if (_rawReload is Map) {
@@ -2684,6 +2757,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           if (confirmed != _arrivalsLocked) _arrivalsLocked = confirmed;
           if (reloadedMode != _supplierMode) _supplierMode = reloadedMode;
           _activeBag = reloadActiveBag;
+          // CHANGE #471: backend-owned display fields — rendered verbatim
+          _boxProgress = stateRes['progress'] is Map ? Map<String, dynamic>.from(stateRes['progress'] as Map) : null;
+          _boxDateLabel = stateRes['date_label']?.toString();
+          _boxOlder = stateRes['older'] is Map ? Map<String, dynamic>.from(stateRes['older'] as Map) : null;
           if (reloadActiveBag == null) _changeProgressBySupplier.remove(supplier);
           // Sync change-bag intent from backend on every reload
           if (reloadBagFlow == 'awaiting_new') {
@@ -2705,8 +2782,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     }
     try {
       // #333: fw_get_state('collect') returns items WITH shop_qty and top-level stage
-      final dynamic _rawReloadCollect = await Supabase.instance.client
-          .rpc('fw_get_state', params: {'p_supplier_name': supplier, 'p_stage': 'collect'});
+      // CHANGE #471: p_date/p_include_older ALWAYS sent
+      final dynamic _rawReloadCollect = await Supabase.instance.client.rpc('fw_get_state',
+          params: fwGetStateParams(
+            supplierName: supplier, stage: 'collect',
+            date: FulfillDateScope.instance.date, includeOlder: _boxIncludeOlder,
+          ));
       if (!mounted) return;
       Map<String, dynamic> reloadState;
       if (_rawReloadCollect is Map) {
@@ -2730,6 +2811,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         // B5: always assign (even null) so mode clears correctly after undo
         _supplierMode = reloadedMode ?? _supplierMode;
         if (reloadedMode != null) _collectModeMap[supplier] = reloadedMode;
+        // CHANGE #471: backend-owned display fields — rendered verbatim
+        _boxProgress = reloadState['progress'] is Map ? Map<String, dynamic>.from(reloadState['progress'] as Map) : null;
+        _boxDateLabel = reloadState['date_label']?.toString();
+        _boxOlder = reloadState['older'] is Map ? Map<String, dynamic>.from(reloadState['older'] as Map) : null;
         // B9: clamp focus after reload to prevent _currentItem returning null
         if (_items.isNotEmpty && _focusIdx >= _items.length) {
           _focusIdx = _items.length - 1;
@@ -4756,37 +4841,59 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   }
 
   // ── #90: Progress row — BELOW voice row, includes tally badge ───────────────
+  // CHANGE #471 — date heading + include-older control, shared by both the
+  // narrow (mobile) and wide (desktop) box headers. Both strings are printed
+  // verbatim from the backend (date_label / older.label) — never formatted
+  // or constructed client-side.
+  Widget? _buildBoxDateOlderRow({EdgeInsets padding = const EdgeInsets.fromLTRB(16, 8, 16, 0)}) {
+    if ((_boxDateLabel ?? '').isEmpty) return null;
+    return BoxDateOlderRow(
+      dateLabel: _boxDateLabel,
+      older: boxOlderFrom(_boxOlder),
+      includeOlder: _boxIncludeOlder,
+      padding: padding,
+      onToggleOlder: () {
+        setState(() => _boxIncludeOlder = !_boxIncludeOlder);
+        _reloadItemsFromDB();
+      },
+    );
+  }
+
   Widget _buildNarrowProgressRow() {
     RenderLog.write('change_90_progress_below', '1');
     RenderLog.write('change_97_spoken_mobile', '1');
-    // #335 BUG-2: shop stage uses shop_qty-based count; warehouse/arrivals uses stateOf-based count
-    final doneCount = widget.arrivals ? _items.length - _pendingCount : _shopCountedCount;
-    final total = _items.length;
+    // CHANGE #471: progress comes from the backend response — no client count.
+    final doneCount = _boxProgressCounted;
+    final total = _boxProgressTotal;
+    final dateOlderRow = _buildBoxDateOlderRow();
     // #97: pill ALWAYS visible on mobile — constant 100px slot, always green
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-        SizedBox(
-          width: 100, // constant slot — no layout shift when count changes
-          child: Builder(builder: (ctx) => _buildSpokenPill(ctx)),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: LinearProgressIndicator(
-            value: total == 0 ? 0 : doneCount / total,
-            backgroundColor: _kBorder,
-            color: _kGreen,
-            minHeight: 6,
-            borderRadius: BorderRadius.circular(4),
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      if (dateOlderRow != null) dateOlderRow,
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+          SizedBox(
+            width: 100, // constant slot — no layout shift when count changes
+            child: Builder(builder: (ctx) => _buildSpokenPill(ctx)),
           ),
-        ),
-        const SizedBox(width: 8),
-        Text(
-          '$doneCount/$total',
-          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
-        ),
-      ]),
-    );
+          const SizedBox(width: 8),
+          Expanded(
+            child: LinearProgressIndicator(
+              value: total == 0 ? 0 : doneCount / total,
+              backgroundColor: _kBorder,
+              color: _kGreen,
+              minHeight: 6,
+              borderRadius: BorderRadius.circular(4),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            _boxProgressLabel,
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
+          ),
+        ]),
+      ),
+    ]);
   }
 
   // ── #89: Dense narrow item list — compact rows, render-log key ───────────────
@@ -4794,7 +4901,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Widget _buildNarrowItemList({bool showFooter = true, bool shrinkWrap = false}) {
     RenderLog.write('change_89_dense_items', '1');
     RenderLog.write('81_item_list_rendered', '${_items.length}');
-    RenderLog.write('81_progress', '${widget.arrivals ? _items.length - _pendingCount : _shopCountedCount}/${_items.length}');
+    RenderLog.write('81_progress', _boxProgressLabel);
     final locked = _boxLocked;
     if (locked) RenderLog.write('change_91_locked', '1');
     else RenderLog.write('change_91_confirm_present', '1');
@@ -4938,6 +5045,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   _StatePill(rv.pillState),
                 ]);
               }),
+              // CHANGE #471: backend date chip (older item mixed into today's list) — muted, verbatim.
+              if (itemDateChip(item) != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 3),
+                  child: Text(itemDateChip(item)!,
+                      style: const TextStyle(fontSize: 10, color: _kSub)),
+                ),
               // #338: voice-vs-actual mismatch chip (audit fetched on expand)
               Builder(builder: (_) {
                 final chip = _mismatchChip((item['product_id'] as num?)?.toInt());
@@ -5163,6 +5277,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   _StatePill(rv.pillState),
                 ]);
               }),
+              // CHANGE #471: backend date chip (older item mixed into today's list) — muted, verbatim.
+              if (merged.showDateChip && (merged.dateChip ?? '').isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 3),
+                  child: Text(merged.dateChip!,
+                      style: const TextStyle(fontSize: 10, color: _kSub)),
+                ),
               // #338: voice-vs-actual mismatch chip (audit fetched on expand)
               Builder(builder: (_) {
                 final chip = _mismatchChip(merged.productId);
@@ -5571,11 +5692,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c114_fulfillment_header_built', 'desktop');
     RenderLog.write('c114_spoken_chip_left', 'desktop');
     RenderLog.write('c114_progress_expanded', 'desktop');
-    // #331: shop tab progress = items with a shop count; warehouse = items not pending
-    final doneCount = widget.arrivals
-        ? _items.length - _pendingCount
-        : _items.where((i) => i['shop_qty'] != null).length;
-    final total = _items.length;
+    // CHANGE #471: progress comes from the backend response — no client count.
+    final doneCount = _boxProgressCounted;
+    final total = _boxProgressTotal;
     // CHANGE #277: bag-missing is a silent noop, not a disabled state
     final countingDisabled = _agentPhase != AgentPhase.idle;
     final agentDisabled = _voiceListening || _voiceProcessing;
@@ -5593,7 +5712,15 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         border: Border.all(color: _kBorder),
         boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 6, offset: const Offset(0, 2))],
       ),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      // CHANGE #471: date heading + include-older control (backend strings, verbatim)
+      if (_selectedSupplier != null) ...[
+        Builder(builder: (_) {
+          final row = _buildBoxDateOlderRow(padding: EdgeInsets.zero);
+          return row == null ? const SizedBox.shrink() : Padding(padding: const EdgeInsets.only(bottom: 8), child: row);
+        }),
+      ],
+      Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
 
         // 1. Supplier dropdown — #114: constrained width (no Expanded) so no gap before chip
         ConstrainedBox(
@@ -5648,7 +5775,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           ),
           const SizedBox(width: 8),
           Text(
-            '$doneCount/$total',
+            _boxProgressLabel,
             style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
           ),
         ] else
@@ -5742,6 +5869,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           ),
         ],
 
+      ]),
       ]),
     );
   }
@@ -6799,7 +6927,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   Widget _buildItemList() {
     RenderLog.write('81_item_list_rendered', '${_items.length}');
-    RenderLog.write('81_progress', '${widget.arrivals ? _items.length - _pendingCount : _shopCountedCount}/${_items.length}');
+    RenderLog.write('81_progress', _boxProgressLabel);
 
     return Column(children: [
       if (widget.arrivals) _buildBagControl(),

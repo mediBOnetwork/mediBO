@@ -74,14 +74,6 @@ Future<T?> retryWithBackoff<T>(
   return null;
 }
 
-/// Columns fetched for list/search cards — excludes heavy text blobs
-/// (uses, benefits, side_effects, how_it_works, PS1-PS30, etc.).
-/// This cuts payload ~10× vs SELECT * on the 60-column MEDICINE table.
-const String _kListCols =
-    'id,product_name,salt_composition,marketer,therapeutic_class,'
-    'image_url_1,pack_qty,pack_size,pack_type,mrp,gst_percent,'
-    'status,rx_required,sales_count,has_scheme,has_image,buyable';
-
 /// Fetches medicines from the Supabase `MEDICINE` table.
 ///
 /// Reads are paginated: the storefront pulls [pageSize] rows at a time and
@@ -89,8 +81,18 @@ const String _kListCols =
 class MedicineRepository {
   final SupabaseClient _client;
 
-  MedicineRepository([SupabaseClient? client])
-      : _client = client ?? Supabase.instance.client;
+  /// Hook every [fetchPage] RPC call goes through. Production code always
+  /// forwards to the real client's `.rpc()`; tests substitute a fake so
+  /// paging logic (cursor threading, end-of-list) can be verified with no
+  /// network at all.
+  late final Future<dynamic> Function(String fn, {Map<String, dynamic>? params}) _rpc;
+
+  MedicineRepository([
+    SupabaseClient? client,
+    Future<dynamic> Function(String fn, {Map<String, dynamic>? params})? rpc,
+  ]) : _client = client ?? Supabase.instance.client {
+    _rpc = rpc ?? (fn, {params}) => _client.rpc(fn, params: params);
+  }
 
   /// Rows fetched per page (infinite-scroll increment).
   static const int pageSize = 20;
@@ -270,6 +272,31 @@ class MedicineRepository {
     return (res as num?)?.toInt();
   }
 
+  /// CHANGE #491: keyset fallback via the `medicine_page` RPC — replaces the
+  /// old raw `MEDICINE.range(offset, offset+limit-1)` fallback, which went
+  /// from 11ms to 8271ms on deep pages because OFFSET forces Postgres to
+  /// walk and discard every prior row. `p_after_id` (the id of the last row
+  /// of the previous page; null for the first page) gives constant-time
+  /// paging at any depth via an indexed `id > p_after_id` scan.
+  Future<List<Product>> _fetchKeysetFallback({
+    required String category,
+    required String? afterId,
+    required int limit,
+    String? search,
+    bool? buyable,
+  }) async {
+    final rows = await _rpc('medicine_page', params: {
+      'p_after_id': afterId == null ? null : int.tryParse(afterId),
+      'p_limit': limit,
+      'p_category': category == 'All' ? null : category,
+      'p_search': (search == null || search.isEmpty) ? null : search,
+      'p_buyable': buyable,
+    });
+    return (rows as List)
+        .map((r) => Product.fromMap(r as Map<String, dynamic>))
+        .toList(growable: false);
+  }
+
   /// Loads one page of medicines, optionally filtered by [category] and [query].
   ///
   /// Search path (query non-empty): `search_medicines_priority` RPC applies
@@ -278,7 +305,8 @@ class MedicineRepository {
   /// Browse path (no query): `fetch_medicines_by_category_priority` RPC uses
   /// idx_medicine_sales_count index → ~0.12 ms.
   ///
-  /// Both RPCs have an ILIKE+sales fallback in case they are unavailable.
+  /// Both RPCs fall back to the `medicine_page` keyset RPC (via [afterId])
+  /// if they're unavailable — never a raw MEDICINE offset scan.
   ///
   /// Throws if the request fails so callers can show an error/retry state.
   ///
@@ -288,10 +316,15 @@ class MedicineRepository {
   ///
   /// When [onlyBuyable] is true (home/All + category browse, NOT search),
   /// filters to buyable=true and includes an exact count. Search passes false.
+  ///
+  /// [afterId] is the `id` of the last row from the previous page (null for
+  /// the first page) — only consulted by the keyset fallback above; the
+  /// primary RPCs keep paging via [offset].
   Future<FetchPageResult> fetchPage({
     String category = 'All',
     String query = '',
     required int offset,
+    String? afterId,
     int limit = pageSize,
     bool onlyBuyable = false,
   }) async {
@@ -313,7 +346,7 @@ class MedicineRepository {
       // ── Search: fuzzy priority RPC — returns ALL items incl. unavailable ────
       List<Product> items;
       try {
-        final rows = await _client.rpc('search_medicines_priority', params: {
+        final rows = await _rpc('search_medicines_priority', params: {
           'search_term': term,
           'category_filter': category,
           'page_offset': offset,
@@ -323,14 +356,12 @@ class MedicineRepository {
             .map((r) => Product.fromMap(r as Map<String, dynamic>))
             .toList(growable: false);
       } catch (_) {
-        final pat = '%$term%';
-        var fb = _client.from('MEDICINE').select(_kListCols);
-        if (category != 'All') fb = fb.eq('therapeutic_class', category);
-        final rows = await fb
-            .or('product_name.ilike.$pat,salt_composition.ilike.$pat,marketer.ilike.$pat')
-            .order('sales_count', ascending: false)
-            .range(offset, offset + limit - 1);
-        items = rows.map((r) => Product.fromMap(r)).toList(growable: false);
+        items = await _fetchKeysetFallback(
+          category: category,
+          afterId: afterId,
+          limit: limit,
+          search: term,
+        );
       }
       final result = (items: items, exactCount: null);
       _cacheSet(_resultCache, cacheKey, result);
@@ -343,7 +374,7 @@ class MedicineRepository {
     // count cache (fetchAllCategoryCounts) instead of a per-switch RPC.
     if (onlyBuyable) {
       try {
-        final rows = await _client.rpc('get_storefront_feed', params: {
+        final rows = await _rpc('get_storefront_feed', params: {
           'category_filter': category,
           'page_offset': offset,
           'page_limit': limit,
@@ -355,18 +386,17 @@ class MedicineRepository {
         _cacheSet(_resultCache, cacheKey, result);
         return result;
       } catch (e) {
-        // get_storefront_feed failed — fall back to direct buyable table query.
+        // get_storefront_feed failed — fall back to the keyset RPC. It has
+        // no exact-count facility, so exactCount is null here (same as the
+        // primary RPC path above).
         _browseRpcError = '${category}:${e.toString().substring(0, e.toString().length.clamp(0, 80))}';
-        var fb = _client.from('MEDICINE').select(_kListCols).eq('buyable', true);
-        if (category != 'All') fb = fb.eq('therapeutic_class', category);
-        final res = await fb
-            .order('sales_count', ascending: false)
-            .range(offset, offset + limit - 1)
-            .count(CountOption.exact);
-        final items = (res.data as List)
-            .map((r) => Product.fromMap(r as Map<String, dynamic>))
-            .toList(growable: false);
-        final result = (items: items, exactCount: res.count);
+        final items = await _fetchKeysetFallback(
+          category: category,
+          afterId: afterId,
+          limit: limit,
+          buyable: true,
+        );
+        final result = (items: items, exactCount: null);
         _cacheSet(_resultCache, cacheKey, result);
         return result;
       }
@@ -375,7 +405,7 @@ class MedicineRepository {
     // ── Browse non-buyable: category/all priority RPC ─────────────────────────
     List<Product> items;
     try {
-      final rows = await _client.rpc('fetch_medicines_by_category_priority', params: {
+      final rows = await _rpc('fetch_medicines_by_category_priority', params: {
         'category_name': category,
         'page_offset': offset,
         'page_limit': limit,
@@ -384,12 +414,12 @@ class MedicineRepository {
           .map((r) => Product.fromMap(r as Map<String, dynamic>))
           .toList(growable: false);
     } catch (_) {
-      var fb = _client.from('MEDICINE').select(_kListCols);
-      if (category != 'All') fb = fb.eq('therapeutic_class', category);
-      final rows = await fb
-          .order('sales_count', ascending: false)
-          .range(offset, offset + limit - 1);
-      items = rows.map((r) => Product.fromMap(r)).toList(growable: false);
+      items = await _fetchKeysetFallback(
+        category: category,
+        afterId: afterId,
+        limit: limit,
+        buyable: false,
+      );
     }
     final result = (items: items, exactCount: null);
     _cacheSet(_resultCache, cacheKey, result);

@@ -318,6 +318,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         category: widget.category,
         query: widget.query,
         offset: 0,
+        afterId: null,
         onlyBuyable: _onlyBuyable,
       );
       sw.stop();
@@ -459,6 +460,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
     }
     final token = _loadToken;
     final offset = _items.length;
+    final afterId = _items.isEmpty ? null : _items.last.id;
     RenderLog.write('c195_load_more_batch', 'category=${widget.category};offset=$offset');
     setState(() => _loadingMore = true);
     try {
@@ -466,6 +468,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         category: widget.category,
         query: widget.query,
         offset: offset,
+        afterId: afterId,
         onlyBuyable: _onlyBuyable,
       );
       if (token != _loadToken || !mounted) return;

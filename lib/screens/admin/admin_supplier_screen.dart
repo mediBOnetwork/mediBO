@@ -1309,7 +1309,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
               builder: (c, setM) => Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text('Auto Meta', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
+                  const Text('AutoFlow', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
                   Switch(
                     value: _autoMeta,
                     onChanged: _autoMetaLoading ? null : (v) {
@@ -1360,7 +1360,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
               builder: (c, setM) => Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text('Auto Meta', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
+                  const Text('AutoFlow', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
                   Switch(
                     value: _orderAutoMeta,
                     onChanged: _orderAutoMetaLoading ? null : (v) {
@@ -1868,6 +1868,19 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     } catch (_) {
       return (shouldSend: true, viaAllowlist: false);
     }
+  }
+
+  // CHANGE #492: AutoFlow OFF — Send only opens the number popup. No status
+  // write, no toast, no optimistic chip repaint. The number tap is the trigger.
+  Future<void> _openSendPopupOnly(String supName, BuildContext btnCtx) async {
+    RenderLog.write('c492_send_popup_only', 'status_write=false');
+    await _showSendContactPicker(
+      supplierName: supName,
+      message: '',
+      btnCtx: btnCtx,
+      isOrders: false,
+      manualTrigger: true,
+    );
   }
 
   // Per-supplier Send: ALWAYS stamps fresh timer, then opens WhatsApp directly.
@@ -3269,9 +3282,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                     ]),
                   ),
                 );
-                final sendBtn = Builder(builder: (btnCtx) => GestureDetector(
-                  onTap: _inquiryLoading ? null : () => _sendPerSupplierDirect(supName, btnCtx),
-                  behavior: HitTestBehavior.opaque,
+                final sendBtn = Builder(builder: (btnCtx) => InquirySendButton(
+                  autoFlowOn: _autoMeta,
+                  enabled: !_inquiryLoading,
+                  onAutoSend: () => _sendPerSupplierDirect(supName, btnCtx),
+                  onOpenPopupOnly: () => _openSendPopupOnly(supName, btnCtx),
                   child: Container(
                     height: 30,
                     padding: const EdgeInsets.symmetric(horizontal: 10),
@@ -4670,6 +4685,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     required String message,
     required BuildContext btnCtx,
     bool isOrders = false,
+    bool manualTrigger = false,
   }) async {
     if (!mounted) return;
 
@@ -4705,9 +4721,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     final ot = List<String>.from(contactData['other']    as List? ?? []);
     final em = contactData['email'] as String?;
     final totalRows = wa.length + ct.length + ph.length + ot.length + (em != null ? 1 : 0);
+    final numberCount = wa.length + ct.length + ph.length + ot.length;
 
     RenderLog.write('send_contact_popup_opened', supplierName);
     RenderLog.write('send_contact_groups_$totalRows', 'true');
+    RenderLog.write('c492_share_popup', 'supplier=$supplierName numbers=$numberCount');
     if (isOrders) {
       RenderLog.write('send_contact_anchored_orders', 'true');
     } else {
@@ -4720,12 +4738,14 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       entry = null;
     }
     entry = OverlayEntry(
-      builder: (_) => _ContactPickerPopover(
+      builder: (_) => ContactPickerPopover(
         btnRect: Rect.fromLTWH(btnOffset.dx, btnOffset.dy, btnSize.width, btnSize.height),
         supplierName: supplierName,
         message: message,
         contactData: contactData,
         onDismiss: dismiss,
+        manualTrigger: manualTrigger,
+        onManualSendSuccess: manualTrigger ? () => _fetchInquiryOverview(silent: true) : null,
       ),
     );
     Overlay.of(context).insert(entry!);
@@ -11702,34 +11722,89 @@ class _InquirySendPopoverState extends State<_InquirySendPopover>
       );
 }
 
+// CHANGE #492: extracted so the AutoFlow gating on the per-supplier Send
+// button (Inquiry tab) is unit-testable without needing the full screen's
+// live Supabase init. Public — and named without a leading underscore — only
+// so test/inquiry_manual_send_test.dart can construct it directly.
+class InquirySendButton extends StatelessWidget {
+  final bool autoFlowOn;
+  final bool enabled;
+  final VoidCallback onAutoSend;
+  final VoidCallback onOpenPopupOnly;
+  final Widget child;
+
+  const InquirySendButton({
+    super.key,
+    required this.autoFlowOn,
+    required this.enabled,
+    required this.onAutoSend,
+    required this.onOpenPopupOnly,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: !enabled ? null : (autoFlowOn ? onAutoSend : onOpenPopupOnly),
+      behavior: HitTestBehavior.opaque,
+      child: child,
+    );
+  }
+}
+
+Future<Map<String, dynamic>> _defaultSendInquiryRpc({required String supplier, required String phone}) async {
+  final result = await Supabase.instance.client.rpc('send_supplier_inquiry_wa', params: {
+    'p_supplier': supplier,
+    'p_phone': phone,
+  });
+  return result is Map ? Map<String, dynamic>.from(result) : <String, dynamic>{};
+}
+
 // ── Contact-picker anchored popover (Send button on Inquiry + Orders cards) ───
 
-class _ContactPickerPopover extends StatefulWidget {
+class ContactPickerPopover extends StatefulWidget {
   final Rect btnRect;
   final String supplierName;
   final String message;
   final Map<String, dynamic> contactData;
   final VoidCallback onDismiss;
+  // CHANGE #492: when true, tapping a phone-type row calls
+  // send_supplier_inquiry_wa(p_supplier, p_phone) instead of opening wa.me.
+  // Only set for the Inquiry-tab, AutoFlow-OFF path; the EMAIL row is
+  // unaffected regardless of this flag.
+  final bool manualTrigger;
+  final Future<void> Function()? onManualSendSuccess;
+  // CHANGE #492: injectable so test/inquiry_manual_send_test.dart can stub
+  // the RPC without a live Supabase client. Defaults to the real call.
+  final Future<Map<String, dynamic>> Function({required String supplier, required String phone})?
+      sendInquiryRpc;
 
-  const _ContactPickerPopover({
+  const ContactPickerPopover({
+    super.key,
     required this.btnRect,
     required this.supplierName,
     required this.message,
     required this.contactData,
     required this.onDismiss,
+    this.manualTrigger = false,
+    this.onManualSendSuccess,
+    this.sendInquiryRpc,
   });
 
   @override
-  State<_ContactPickerPopover> createState() => _ContactPickerPopoverState();
+  State<ContactPickerPopover> createState() => ContactPickerPopoverState();
 }
 
-class _ContactPickerPopoverState extends State<_ContactPickerPopover>
+class ContactPickerPopoverState extends State<ContactPickerPopover>
     with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl;
   late final Animation<double> _scale;
   late final Animation<double> _fade;
   late String? _lastUsed;
   bool _dismissing = false;
+  // CHANGE #492: value currently in-flight through send_supplier_inquiry_wa,
+  // null when idle. Guards against a double-tap firing two WhatsApp sends.
+  String? _sendingValue;
 
   @override
   void initState() {
@@ -11782,35 +11857,97 @@ class _ContactPickerPopoverState extends State<_ContactPickerPopover>
     } catch (_) {}
   }
 
+  // CHANGE #492: manual-trigger path. This RPC atomically flips the
+  // supplier's inquiry_forms draft -> pending AND queues the WhatsApp Cloud
+  // API send — so unlike the wa.me path, a failure here means nothing moved
+  // and nothing was queued. Never dismiss the popup on a failure path, or
+  // the admin will wrongly assume the message went out.
+  Future<void> _onManualTap(String value) async {
+    if (_sendingValue != null) return; // B3.3: prevent double-tap
+    if (mounted) setState(() => _sendingValue = value);
+    try {
+      final rpc = widget.sendInquiryRpc ?? _defaultSendInquiryRpc;
+      final map = await rpc(supplier: widget.supplierName, phone: value);
+      final ok = map['ok'] == true;
+      RenderLog.write('c492_manual_trigger', 'supplier=${widget.supplierName} ok=$ok');
+      if (ok) {
+        if (mounted) {
+          showToast(context, 'Inquiry sent to ${widget.supplierName}');
+          await _ctrl.animateTo(0, duration: const Duration(milliseconds: 180), curve: Curves.easeIn);
+          widget.onDismiss();
+        }
+        await widget.onManualSendSuccess?.call();
+        return;
+      }
+      final error = map['error'] as String?;
+      final msg = switch (error) {
+        'not_authorized' => "You don't have permission to send",
+        'no_supplier' => 'Supplier missing',
+        'bad_phone' => 'This number looks invalid',
+        _ => 'Failed to send inquiry',
+      };
+      if (mounted) {
+        showToast(context, msg, isError: true);
+        setState(() => _sendingValue = null);
+      }
+    } on PostgrestException catch (e) {
+      RenderLog.write('c492_manual_trigger', 'supplier=${widget.supplierName} ok=false');
+      final blocked = e.message.contains('inquiry_send_blocked') || (e.code ?? '').contains('inquiry_send_blocked');
+      if (mounted) {
+        showToast(context, blocked ? 'Inquiry not ready to send yet' : 'Failed to send inquiry', isError: true);
+        setState(() => _sendingValue = null);
+      }
+    } catch (e) {
+      RenderLog.write('c492_manual_trigger', 'supplier=${widget.supplierName} ok=false');
+      if (mounted) {
+        showToast(context, 'Failed to send inquiry', isError: true);
+        setState(() => _sendingValue = null);
+      }
+    }
+  }
+
   Widget _row(String value, {bool isEmail = false}) {
     final isLast = _lastUsed != null && _lastUsed == value;
     if (isLast) RenderLog.write('send_contact_last_used_badge', 'true');
+    // CHANGE #492: EMAIL row is always the legacy _onTap path, untouched.
+    final manual = widget.manualTrigger && !isEmail;
+    final isSending = manual && _sendingValue == value;
+    final rowDisabled = manual && _sendingValue != null && !isSending;
     return InkWell(
-      onTap: () => _onTap(value, isEmail: isEmail),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
-        child: Row(children: [
-          Icon(isEmail ? Icons.email_outlined : Icons.phone_outlined,
-            size: 16, color: const Color(0xFF6B7280)),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(value,
-              style: const TextStyle(fontSize: 14, color: Color(0xFF111827)),
-              maxLines: 1, overflow: TextOverflow.ellipsis),
-          ),
-          if (isLast) ...[
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                color: const Color(0xFFD1FAE5),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const Text('Last used',
-                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF065F46))),
+      onTap: rowDisabled
+          ? null
+          : () => manual ? _onManualTap(value) : _onTap(value, isEmail: isEmail),
+      child: Opacity(
+        opacity: rowDisabled ? 0.4 : 1.0,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+          child: Row(children: [
+            isSending
+                ? const SizedBox(
+                    width: 16, height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF6B7280)))
+                : Icon(isEmail ? Icons.email_outlined : Icons.phone_outlined,
+                    size: 16, color: const Color(0xFF6B7280)),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(value,
+                style: const TextStyle(fontSize: 14, color: Color(0xFF111827)),
+                maxLines: 1, overflow: TextOverflow.ellipsis),
             ),
-          ],
-        ]),
+            if (isLast) ...[
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFD1FAE5),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Text('Last used',
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF065F46))),
+              ),
+            ],
+          ]),
+        ),
       ),
     );
   }

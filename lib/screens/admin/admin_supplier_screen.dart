@@ -4693,6 +4693,20 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     final box = btnCtx.findRenderObject() as RenderBox?;
     final btnOffset = (box != null && box.attached) ? box.localToGlobal(Offset.zero) : Offset.zero;
     final btnSize = (box != null && box.attached) ? box.size : const Size(60, 32);
+    final btnRect = Rect.fromLTWH(btnOffset.dx, btnOffset.dy, btnSize.width, btnSize.height);
+
+    // Show a tiny anchored spinner INSTANTLY — get_supplier_contacts is a
+    // network round-trip and previously nothing rendered until it resolved,
+    // so a slow/cold connection made the button look unresponsive for
+    // several seconds instead of opening a popup right away.
+    OverlayEntry? loadingEntry = OverlayEntry(
+      builder: (_) => _SendPopoverLoadingBubble(btnRect: btnRect),
+    );
+    Overlay.of(context).insert(loadingEntry);
+    void dismissLoading() {
+      loadingEntry?.remove();
+      loadingEntry = null;
+    }
 
     Map<String, dynamic> contactData;
     try {
@@ -4706,13 +4720,16 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         contactData = {};
       }
     } catch (e) {
+      dismissLoading();
       if (mounted) showToast(context, 'Failed to load contacts: $e', isError: true);
       return;
     }
     if (contactData.containsKey('error')) {
+      dismissLoading();
       if (mounted) showToast(context, 'Contact error: ${contactData['error']}', isError: true);
       return;
     }
+    dismissLoading();
     if (!mounted) return;
 
     final wa = List<String>.from(contactData['whatsapp'] as List? ?? []);
@@ -4739,7 +4756,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     }
     entry = OverlayEntry(
       builder: (_) => ContactPickerPopover(
-        btnRect: Rect.fromLTWH(btnOffset.dx, btnOffset.dy, btnSize.width, btnSize.height),
+        btnRect: btnRect,
         supplierName: supplierName,
         message: message,
         contactData: contactData,
@@ -11758,6 +11775,44 @@ Future<Map<String, dynamic>> _defaultSendInquiryRpc({required String supplier, r
     'p_phone': phone,
   });
   return result is Map ? Map<String, dynamic>.from(result) : <String, dynamic>{};
+}
+
+// Tiny anchored spinner shown the instant Send is tapped, while
+// get_supplier_contacts is still in flight — so the button never looks
+// unresponsive on a slow/cold connection. Purely cosmetic; ContactPickerPopover
+// replaces it once contacts have loaded.
+class _SendPopoverLoadingBubble extends StatelessWidget {
+  final Rect btnRect;
+  const _SendPopoverLoadingBubble({required this.btnRect});
+
+  @override
+  Widget build(BuildContext context) {
+    const bubbleW = 40.0, bubbleH = 40.0, gap = 8.0;
+    final left = (btnRect.right - bubbleW).clamp(12.0, MediaQuery.of(context).size.width - bubbleW - 12.0);
+    return Positioned(
+      left: left,
+      top: btnRect.bottom + gap,
+      child: Material(
+        color: Colors.transparent,
+        child: Container(
+          width: bubbleW,
+          height: bubbleH,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(14),
+            boxShadow: [
+              BoxShadow(color: Colors.black.withValues(alpha: 0.12), blurRadius: 20, offset: const Offset(0, 4)),
+            ],
+          ),
+          child: const SizedBox(
+            width: 16, height: 16,
+            child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF128C7E)),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 // ── Contact-picker anchored popover (Send button on Inquiry + Orders cards) ───

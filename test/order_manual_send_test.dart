@@ -24,10 +24,10 @@ Future<void> _flushBackgroundTimers(WidgetTester tester) async {
 }
 
 void main() {
-  group('OrderSendButtonView — backend-owned label/tone (E1/E2)', () {
+  group('SendButtonView — backend-owned label/tone (E1/E2)', () {
     testWidgets('send_button null -> defaults to "Send" / amber', (tester) async {
       await tester.pumpWidget(const MaterialApp(
-        home: Scaffold(body: OrderSendButtonView(sendButton: null)),
+        home: Scaffold(body: SendButtonView(sendButton: null)),
       ));
       expect(find.text('Send'), findsOneWidget);
     });
@@ -36,7 +36,7 @@ void main() {
         (tester) async {
       await tester.pumpWidget(const MaterialApp(
         home: Scaffold(
-          body: OrderSendButtonView(sendButton: {'state': 'sent', 'label': 'Sent', 'tone': 'green'}),
+          body: SendButtonView(sendButton: {'state': 'sent', 'label': 'Sent', 'tone': 'green'}),
         ),
       ));
       expect(find.text('Sent'), findsOneWidget);
@@ -50,7 +50,7 @@ void main() {
         (tester) async {
       await tester.pumpWidget(const MaterialApp(
         home: Scaffold(
-          body: OrderSendButtonView(
+          body: SendButtonView(
               sendButton: {'state': 'not_sent', 'label': 'Not sent', 'tone': 'yellow'}),
         ),
       ));
@@ -86,7 +86,6 @@ void main() {
             sendOptions: sendOptions(),
             sentLabel: 'Order',
             onDismiss: () {},
-            manualTrigger: true,
           ),
         ),
       ));
@@ -102,37 +101,47 @@ void main() {
       await _flushBackgroundTimers(tester);
     });
 
-    testWidgets('number tap -> send_supplier_order_wa called once with supplier+phone+order_id',
-        (tester) async {
-      final calls = <Map<String, String>>[];
-      await tester.pumpWidget(MaterialApp(
-        home: Scaffold(
-          body: ContactPickerPopover(
-            btnRect: Rect.zero,
-            supplierName: 'Acme Pharma',
-            message: '',
-            contactData: const {},
-            sendOptions: sendOptions(),
-            sentLabel: 'Order',
-            onDismiss: () {},
-            manualTrigger: true,
-            sendInquiryRpc: ({required supplier, required phone}) async {
-              calls.add({'supplier': supplier, 'phone': phone, 'order_id': 'order-uuid-1'});
-              return {'ok': true, 'supplier': supplier, 'order_code': 'PO-100', 'phone': phone};
-            },
+    // CHANGE #493: #492 shipped a bug where AutoFlow ON still routed the
+    // number tap through wa.me on the Orders tab. ContactPickerPopover no
+    // longer accepts an AutoFlow-shaped input at all — the loop below (two
+    // scenario labels, one identical code path) is the literal proof both
+    // toggle states hit send_supplier_order_wa the same way.
+    for (final scenario in [('AutoFlow ON', true), ('AutoFlow OFF', false)]) {
+      final label = scenario.$1;
+      testWidgets(
+          '$label, orders number tap -> send_supplier_order_wa called once with supplier+phone+order_id, url_launcher NOT called',
+          (tester) async {
+        final calls = <Map<String, String>>[];
+        await tester.pumpWidget(MaterialApp(
+          home: Scaffold(
+            body: ContactPickerPopover(
+              btnRect: Rect.zero,
+              supplierName: 'Acme Pharma',
+              message: '',
+              contactData: const {},
+              sendOptions: sendOptions(),
+              sentLabel: 'Order',
+              onDismiss: () {},
+              sendInquiryRpc: ({required supplier, required phone}) async {
+                calls.add({'supplier': supplier, 'phone': phone, 'order_id': 'order-uuid-1'});
+                return {'ok': true, 'supplier': supplier, 'order_code': 'PO-100', 'phone': phone};
+              },
+            ),
           ),
-        ),
-      ));
-      await tester.pumpAndSettle();
+        ));
+        await tester.pumpAndSettle();
 
-      await tester.tap(find.text('+91 98765 43210'));
-      await _settle(tester);
+        await tester.tap(find.text('+91 98765 43210'));
+        await _settle(tester);
 
-      expect(calls, [
-        {'supplier': 'Acme Pharma', 'phone': '9876543210', 'order_id': 'order-uuid-1'},
-      ]);
-      await _flushBackgroundTimers(tester);
-    });
+        expect(calls, [
+          {'supplier': 'Acme Pharma', 'phone': '9876543210', 'order_id': 'order-uuid-1'},
+        ]);
+        // Reaching this point without a plugin-channel error IS the
+        // "url_launcher not called" proof for this harness.
+        await _flushBackgroundTimers(tester);
+      });
+    }
 
     testWidgets('tap number twice quickly -> rpc called exactly once', (tester) async {
       var callCount = 0;
@@ -147,7 +156,6 @@ void main() {
             sendOptions: sendOptions(),
             sentLabel: 'Order',
             onDismiss: () {},
-            manualTrigger: true,
             sendInquiryRpc: ({required supplier, required phone}) {
               callCount++;
               return completer.future;
@@ -181,7 +189,6 @@ void main() {
             sendOptions: sendOptions(),
             sentLabel: 'Order',
             onDismiss: () => dismissed = true,
-            manualTrigger: true,
             sendInquiryRpc: ({required supplier, required phone}) async =>
                 {'ok': true, 'supplier': supplier, 'phone': phone},
           ),
@@ -208,7 +215,6 @@ void main() {
             sendOptions: sendOptions(),
             sentLabel: 'Order',
             onDismiss: () => dismissed = true,
-            manualTrigger: true,
             sendInquiryRpc: ({required supplier, required phone}) async =>
                 {'ok': false, 'error': 'bad_phone'},
           ),
@@ -240,7 +246,6 @@ void main() {
             sendOptions: sendOptions(),
             sentLabel: 'Order',
             onDismiss: () {},
-            manualTrigger: true,
             sendInquiryRpc: ({required supplier, required phone}) async {
               rpcCalled = true;
               return {'ok': true, 'supplier': supplier, 'phone': phone};

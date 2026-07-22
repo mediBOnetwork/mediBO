@@ -1853,108 +1853,29 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     }
   }
 
-  // CHANGE #506: this supplier's registered WhatsApp number, for the
-  // notif_should_send allow-list check. Same lookup _sendAllMeta already
-  // uses to build its per-supplier send list.
-  String? _supplierPrimaryPhone(String supName) {
-    final sup = _suppliers.cast<_SupRow?>().firstWhere(
-      (s) => s!.supplierName.toLowerCase() == supName.toLowerCase(),
-      orElse: () => null,
-    );
-    final waNumbers = _parsePhoneList(sup?.rawData['whatsapp_no'] as String? ?? '');
-    return waNumbers.isNotEmpty ? _normalizePhone(waNumbers.first) : null;
-  }
+  // CHANGE #493: _supplierPrimaryPhone/_supplierShouldSend (the pre-send
+  // notif_should_send/notif_is_enabled gate) were only ever called from the
+  // deleted wa.me-launching flows (_sendPerSupplierDirect, the legacy tail
+  // of _sendOrderWhatsApp). The new single tap path has no client-side
+  // pre-check — success/failure is driven entirely by the RPC's {ok} response.
 
-  // CHANGE #506: notif_should_send() ORs the toggle with the allow-list, so a
-  // number added to Notifications → Allowed test numbers still gets sent to
-  // even while the toggle is off. Fails open (send) on RPC error, same as
-  // the #498 fail-open behavior this replaces. viaAllowlist is true only when
-  // the toggle itself is off but the allow-list is what let the send through
-  // — that's the specific case c506_supplier_send_allowlisted reports.
-  Future<({bool shouldSend, bool viaAllowlist})> _supplierShouldSend(
-      String actionKey, String? phone) async {
-    try {
-      final client = Supabase.instance.client;
-      final results = await Future.wait([
-        client.rpc('notif_should_send', params: {
-          'p_audience': 'supplier',
-          'p_action_key': actionKey,
-          'p_phone': phone,
-        }),
-        client.rpc('notif_is_enabled',
-            params: {'p_audience': 'supplier', 'p_action_key': actionKey}),
-      ]);
-      final shouldSend = results[0] != false;
-      final toggleOn = results[1] != false;
-      return (shouldSend: shouldSend, viaAllowlist: shouldSend && !toggleOn);
-    } catch (_) {
-      return (shouldSend: true, viaAllowlist: false);
-    }
-  }
-
-  // CHANGE #492: AutoFlow OFF — Send only opens the number popup. No status
-  // write, no toast, no optimistic chip repaint. The number tap is the trigger.
+  // CHANGE #493: Send only opens the number popup, in EVERY AutoFlow state.
+  // No status write, no toast, no optimistic chip repaint — the number tap
+  // is the only trigger.
   Future<void> _openSendPopupOnly(String supName, BuildContext btnCtx) async {
     RenderLog.write('c492_send_popup_only', 'status_write=false');
     await _showSendContactPicker(
       supplierName: supName,
       message: '',
       btnCtx: btnCtx,
-      isOrders: false,
-      manualTrigger: true,
     );
   }
 
-  // Per-supplier Send: ALWAYS stamps fresh timer, then opens WhatsApp directly.
-  Future<void> _sendPerSupplierDirect(String supName, BuildContext btnCtx) async {
-    final phone = _supplierPrimaryPhone(supName);
-    final gate = await _supplierShouldSend('supplier_inquiry_sent', phone);
-    if (!gate.shouldSend) {
-      RenderLog.write('c498_supplier_send_blocked', 'supplier_inquiry_sent:$supName');
-      if (mounted) showToast(context, 'Supplier inquiry notifications are turned off', isError: true);
-      return;
-    }
-    if (gate.viaAllowlist) {
-      try { RenderLog.write('c506_supplier_send_allowlisted', 'supplier_inquiry_sent:$supName'); } catch (_) {}
-    }
-    if (mounted) setState(() => _inquiryLoading = true);
-    try {
-      final slug = supName.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '_');
-      // Always stamp a FRESH timer for this supplier (even if token already exists)
-      // Stamp a fresh timer for this supplier
-      await Supabase.instance.client
-          .rpc('start_inquiry_for_suppliers', params: {'p_supplier_names': [supName]});
-
-      // Refresh overview so this card shows its fresh Exp timer and inquiry_code is populated
-      _fetchInquiryOverview(silent: true);
-      _fetchUnassignedItems(silent: true);
-      RenderLog.write('row_send_expiry_stamped', supName);
-
-      // Get the short link via get_supplier_contacts (returns link = 'https://medibo.in/<code>')
-      final link = await _getInquiryShortLink(supName);
-      RenderLog.write('row_send_started_$slug', 'link:${link != null ? "ok" : "null"}');
-
-      if (!mounted) return;
-
-      setState(() => _inquiryLoading = false);
-
-      if (link == null || link.isEmpty) {
-        showToast(context, 'Send the inquiry first', isError: true);
-        return;
-      }
-
-      RenderLog.write('c319_share_uses_rpc_link', 'inquiry:$supName');
-      final message = 'Hello $supName,\nWe want to buy some items from you. Please confirm availability:\n$link';
-
-      // Open contact-picker popup — user selects which number to WhatsApp
-      await _showSendContactPicker(supplierName: supName, message: message, btnCtx: btnCtx, isOrders: false);
-    } catch (e) {
-      if (mounted) {
-        setState(() => _inquiryLoading = false);
-        showToast(context, 'Failed to send: $e', isError: true);
-      }
-    }
-  }
+  // CHANGE #493: the old "stamp fresh timer, build a link into the message,
+  // open wa.me" flow is gone — send_supplier_inquiry_wa now owns composing
+  // and atomically flipping draft->pending server-side, so nothing here is
+  // needed before the popup opens. Deleted along with its only caller
+  // (the InquirySendButton AutoFlow-ON branch).
 
   // Meta path: send all via edge function (only when toggle ON)
   Future<void> _sendAllMeta() async {
@@ -3246,6 +3167,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     final expiresAt  = ov['expires_at'] != null ? DateTime.tryParse(ov['expires_at'] as String) : null;
     final inquiryCode = (ov['inquiry_code'] as String? ?? '').trim();
     final canSend = ov['can_send'] as bool? ?? true; // CHANGE #466
+    // CHANGE #493 (C1-C4): backend-owned {state,label,tone} — never derived
+    // from form_status/expires_at/needs_auto_send locally.
+    final sendButton = ov['send_button'] as Map<String, dynamic>?;
     final isExpanded = _expandedInquirySupplier == supName;
     final linkData   = _inquiryLinks[supName];
 
@@ -3337,25 +3261,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                     ]),
                   ),
                 );
+                // C4: stays tappable in every state — re-sending is allowed.
                 final sendBtn = Builder(builder: (btnCtx) => InquirySendButton(
-                  autoFlowOn: _autoMeta,
                   enabled: !_inquiryLoading,
-                  onAutoSend: () => _sendPerSupplierDirect(supName, btnCtx),
                   onOpenPopupOnly: () => _openSendPopupOnly(supName, btnCtx),
-                  child: Container(
-                    height: 30,
-                    padding: const EdgeInsets.symmetric(horizontal: 10),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFECFDF5),
-                      borderRadius: BorderRadius.circular(6),
-                      border: Border.all(color: const Color(0xFF25D366)),
-                    ),
-                    child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                      Icon(Icons.send_outlined, size: 12, color: Color(0xFF128C7E)),
-                      SizedBox(width: 4),
-                      Text('Send', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF128C7E))),
-                    ]),
-                  ),
+                  child: SendButtonView(sendButton: sendButton),
                 ));
                 if (narrow) {
                   return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -4685,56 +4595,18 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   Widget _buildOrderSendButton(_OrderRow row) {
     RenderLog.write('order_send_button_rendered', 'true');
     // E3: stays tappable in every state — re-sending an already-sent order is allowed.
+    // CHANGE #493: exactly ONE tap path regardless of AutoFlow — it only
+    // controls whether the backend trigger already auto-sent, never what
+    // tapping Send does. #492 wrongly kept a wa.me branch here for AutoFlow
+    // ON; deleted along with get_supplier_order_send_payload/_supplierShouldSend
+    // (both now unreachable — no other caller).
     return Builder(builder: (btnCtx) => GestureDetector(
-      onTap: () => _sendOrderWhatsApp(row, btnCtx),
-      child: OrderSendButtonView(sendButton: row.sendButton),
+      onTap: () => _showOrderSendPopup(row, btnCtx),
+      child: SendButtonView(sendButton: row.sendButton),
     ));
   }
 
-  Future<void> _sendOrderWhatsApp(_OrderRow row, BuildContext btnCtx) async {
-    final supName = row.supplierName;
-    if (supName == null) return;
-
-    // CHANGE #492 (C1/C2): AutoFlow OFF -> the number tap is the trigger, via
-    // a small floating popup fed by sup_order_send_options. Tapping Send
-    // itself sends nothing and changes no state. AutoFlow ON keeps today's
-    // wa.me flow below, byte-for-byte unchanged.
-    if (!_orderAutoMeta) {
-      await _showOrderSendPopup(row, btnCtx);
-      return;
-    }
-
-    final phone = _supplierPrimaryPhone(supName);
-    final gate = await _supplierShouldSend('supplier_order_sent', phone);
-    if (!gate.shouldSend) {
-      RenderLog.write('c498_supplier_send_blocked', 'supplier_order_sent:$supName');
-      if (mounted) showToast(context, 'Supplier order notifications are turned off', isError: true);
-      return;
-    }
-    if (gate.viaAllowlist) {
-      try { RenderLog.write('c506_supplier_send_allowlisted', 'supplier_order_sent:$supName'); } catch (_) {}
-    }
-    try {
-      final rows = await Supabase.instance.client
-          .rpc('get_supplier_order_send_payload', params: {
-            'p_supplier_name': supName,
-            'p_order_id': row.id,
-          }) as List;
-      final link = rows.isNotEmpty
-          ? (Map<String, dynamic>.from(rows.first as Map)['link'] as String?)
-          : null;
-
-      final greeting = 'mediBO order for $supName. View & confirm here:';
-      final message = link != null && link.isNotEmpty ? '$greeting\n$link' : greeting;
-      RenderLog.write('c188_send_uses_order_link', link != null && link.isNotEmpty ? 'true' : 'no_link');
-
-      await _showSendContactPicker(supplierName: supName, message: message, btnCtx: btnCtx, isOrders: true);
-    } catch (e) {
-      if (mounted) showToast(context, 'Failed to send: $e', isError: true);
-    }
-  }
-
-  // CHANGE #492 (Orders tab, AutoFlow OFF): opens the number popup fed by
+  // CHANGE #492 (Orders tab): opens the number popup fed by
   // sup_order_send_options — tapping a number calls send_supplier_order_wa
   // directly (Cloud API), never wa.me. Mirrors the instant-spinner fix
   // already applied to _showSendContactPicker (the Inquiry-tab path).
@@ -4795,7 +4667,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         sendOptions: opts,
         sentLabel: 'Order',
         onDismiss: dismiss,
-        manualTrigger: true,
         sendInquiryRpc: ({required supplier, required phone}) =>
             _sendSupplierOrderWaRpc(supplier: supplier, phone: phone, orderId: row.id),
         onManualSendSuccess: _refetchOrderSendButtons,
@@ -4804,12 +4675,12 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     Overlay.of(context).insert(entry!);
   }
 
+  // CHANGE #493: Inquiry-tab only now (Orders uses _showOrderSendPopup) —
+  // exactly one caller (_openSendPopupOnly), exactly one tap path.
   Future<void> _showSendContactPicker({
     required String supplierName,
     required String message,
     required BuildContext btnCtx,
-    bool isOrders = false,
-    bool manualTrigger = false,
   }) async {
     if (!mounted) return;
 
@@ -4867,11 +4738,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     RenderLog.write('send_contact_popup_opened', supplierName);
     RenderLog.write('send_contact_groups_$totalRows', 'true');
     RenderLog.write('c492_share_popup', 'supplier=$supplierName numbers=$numberCount');
-    if (isOrders) {
-      RenderLog.write('send_contact_anchored_orders', 'true');
-    } else {
-      RenderLog.write('send_contact_anchored_inquiry', 'true');
-    }
+    RenderLog.write('send_contact_anchored_inquiry', 'true');
 
     OverlayEntry? entry;
     void dismiss() {
@@ -4885,8 +4752,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         message: message,
         contactData: contactData,
         onDismiss: dismiss,
-        manualTrigger: manualTrigger,
-        onManualSendSuccess: manualTrigger ? () => _fetchInquiryOverview(silent: true) : null,
+        onManualSendSuccess: () => _fetchInquiryOverview(silent: true),
       ),
     );
     Overlay.of(context).insert(entry!);
@@ -11863,22 +11729,22 @@ class _InquirySendPopoverState extends State<_InquirySendPopover>
       );
 }
 
-// CHANGE #492: extracted so the AutoFlow gating on the per-supplier Send
-// button (Inquiry tab) is unit-testable without needing the full screen's
-// live Supabase init. Public — and named without a leading underscore — only
-// so test/inquiry_manual_send_test.dart can construct it directly.
+// CHANGE #493: exactly ONE tap path, identical in both AutoFlow states — the
+// AutoFlow toggle only controls whether the backend already auto-sent (a
+// separate, backend-owned concern, per needs_auto_send/mark_inquiry_wa_sent);
+// it must never change what tapping Send does. #492 shipped a bug here: with
+// AutoFlow ON this still branched into the legacy wa.me path (see git blame),
+// so a number tap opened the WhatsApp app instead of calling the Cloud API.
+// Extracted (public, no leading underscore) so the tap wiring is
+// unit-testable without the full screen's live Supabase init.
 class InquirySendButton extends StatelessWidget {
-  final bool autoFlowOn;
   final bool enabled;
-  final VoidCallback onAutoSend;
   final VoidCallback onOpenPopupOnly;
   final Widget child;
 
   const InquirySendButton({
     super.key,
-    required this.autoFlowOn,
     required this.enabled,
-    required this.onAutoSend,
     required this.onOpenPopupOnly,
     required this.child,
   });
@@ -11886,20 +11752,25 @@ class InquirySendButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: !enabled ? null : (autoFlowOn ? onAutoSend : onOpenPopupOnly),
+      onTap: !enabled ? null : onOpenPopupOnly,
       behavior: HitTestBehavior.opaque,
       child: child,
     );
   }
 }
 
-// CHANGE #492 (E1/E2, Orders tab): label + colour rendered verbatim from the
-// backend's send_button.label/tone — never hardcoded, never derived from
-// status/auto_order_sent_at. Extracted (public, no leading underscore) so
-// the tone->style mapping is unit-testable in isolation.
-class OrderSendButtonView extends StatelessWidget {
+// CHANGE #492/#493: label + colour rendered verbatim from the backend's
+// send_button.label/tone — never hardcoded, never derived from status/
+// auto_order_sent_at/form_status/needs_auto_send locally. Shared by both
+// tabs: Orders reads it from admin_supplier_orders, Inquiry from
+// get_supplier_inquiry_overview — same {state,label,tone} shape, same
+// yellow/green tone mapping (C2: only a CONFIRMED DELIVERY is green on the
+// Inquiry tab; Orders' own not_sent/sent/delivered mapping is unchanged).
+// Extracted (public, no leading underscore) so the tone->style mapping is
+// unit-testable in isolation.
+class SendButtonView extends StatelessWidget {
   final Map<String, dynamic>? sendButton;
-  const OrderSendButtonView({super.key, required this.sendButton});
+  const SendButtonView({super.key, required this.sendButton});
 
   @override
   Widget build(BuildContext context) {
@@ -11992,11 +11863,6 @@ class ContactPickerPopover extends StatefulWidget {
   final String message;
   final Map<String, dynamic> contactData;
   final VoidCallback onDismiss;
-  // CHANGE #492: when true, tapping a phone-type row calls
-  // send_supplier_inquiry_wa(p_supplier, p_phone) instead of opening wa.me.
-  // Only set for the Inquiry-tab, AutoFlow-OFF path; the EMAIL row is
-  // unaffected regardless of this flag.
-  final bool manualTrigger;
   final Future<void> Function()? onManualSendSuccess;
   // CHANGE #492: injectable so test/inquiry_manual_send_test.dart can stub
   // the RPC without a live Supabase client. Defaults to the real call.
@@ -12019,7 +11885,6 @@ class ContactPickerPopover extends StatefulWidget {
     required this.message,
     required this.contactData,
     required this.onDismiss,
-    this.manualTrigger = false,
     this.onManualSendSuccess,
     this.sendInquiryRpc,
     this.sendOptions,
@@ -12064,32 +11929,17 @@ class ContactPickerPopoverState extends State<ContactPickerPopover>
     widget.onDismiss();
   }
 
-  String _normalizeForWa(String raw) {
-    final d = raw.replaceAll(RegExp(r'[^0-9]'), '');
-    if (d.length == 12 && d.startsWith('91')) return d;
-    if (d.length >= 10) return '91${d.substring(d.length - 10)}';
-    return d;
-  }
-
-  Future<void> _onTap(String value, {bool isEmail = false}) async {
+  // CHANGE #493: the EMAIL row is the only remaining non-RPC tap — it opens
+  // the device's mail client via mailto:, which is not a WhatsApp send and
+  // is explicitly out of scope (E2: EMAIL row behaviour untouched). Every
+  // phone-number row goes through _onManualTap below; there is no wa.me
+  // path left in this widget.
+  Future<void> _onEmailTap(String value) async {
     if (_dismissing) return;
     _dismissing = true;
-    if (isEmail) {
-      html.window.open('mailto:$value', '_blank');
-    } else {
-      final intl = _normalizeForWa(value);
-      final msg = Uri.encodeComponent(widget.message);
-      html.window.open('https://wa.me/$intl?text=$msg', '_blank');
-    }
+    html.window.open('mailto:$value', '_blank');
     await _ctrl.animateTo(0, duration: const Duration(milliseconds: 180), curve: Curves.easeIn);
     widget.onDismiss();
-    try {
-      await Supabase.instance.client.rpc(
-        'set_supplier_last_send_contact',
-        params: {'p_supplier_name': widget.supplierName, 'p_value': value},
-      );
-      RenderLog.write('send_contact_picked_recorded', value);
-    } catch (_) {}
   }
 
   // CHANGE #492: manual-trigger path. This RPC atomically flips the
@@ -12148,14 +11998,16 @@ class ContactPickerPopoverState extends State<ContactPickerPopover>
   Widget _row(String value, {bool isEmail = false, String? displayText, bool? lastFlag}) {
     final isLast = lastFlag ?? (_lastUsed != null && _lastUsed == value);
     if (isLast) RenderLog.write('send_contact_last_used_badge', 'true');
-    // CHANGE #492: EMAIL row is always the legacy _onTap path, untouched.
-    final manual = widget.manualTrigger && !isEmail;
+    // CHANGE #493: exactly one path per row type — EMAIL always mailto
+    // (_onEmailTap, out of scope per E2), every phone number always the
+    // Cloud API RPC (_onManualTap). No toggle, no branch.
+    final manual = !isEmail;
     final isSending = manual && _sendingValue == value;
     final rowDisabled = manual && _sendingValue != null && !isSending;
     return InkWell(
       onTap: rowDisabled
           ? null
-          : () => manual ? _onManualTap(value) : _onTap(value, isEmail: isEmail),
+          : () => manual ? _onManualTap(value) : _onEmailTap(value),
       child: Opacity(
         opacity: rowDisabled ? 0.4 : 1.0,
         child: Padding(

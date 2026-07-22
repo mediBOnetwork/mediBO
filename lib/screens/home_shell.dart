@@ -1064,7 +1064,7 @@ class _MobileProfileAvatar extends StatelessWidget {
                 RenderLog.write('c209_upi_tile_rendered', 1);
                 return _SheetTile(
                   icon: Icons.qr_code_outlined,
-                  label: 'Payment / UPI',
+                  label: 'Payment and Partner',
                   color: const Color(0xFF1B7A43),
                   onTap: () { Navigator.pop(context); nav('payment_upi'); },
                 );
@@ -3656,7 +3656,7 @@ class _DesktopProfileButton extends StatelessWidget {
               child: Row(children: [
                 Icon(Icons.qr_code_outlined, size: 16, color: Color(0xFF1B7A43)),
                 SizedBox(width: 10),
-                Text('Payment / UPI', style: TextStyle(fontSize: 14, color: Color(0xFF1B7A43))),
+                Text('Payment and Partner', style: TextStyle(fontSize: 14, color: Color(0xFF1B7A43))),
               ]),
             ),
           const PopupMenuItem(

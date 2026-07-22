@@ -106,6 +106,10 @@ class _OrderRow {
   final DateTime? createdAt;
   final List<Map<String, dynamic>> items;
   final String? orderCode;
+  // CHANGE #492 (Orders tab): backend-owned Send button state from
+  // admin_supplier_orders — {state,label,tone}. Rendered verbatim, never
+  // derived from status/auto_order_sent_at client-side (spec E1).
+  final Map<String, dynamic>? sendButton;
 
   const _OrderRow({
     required this.id,
@@ -116,6 +120,7 @@ class _OrderRow {
     this.createdAt,
     this.items = const [],
     this.orderCode,
+    this.sendButton,
   });
 
   factory _OrderRow.fromMap(Map<String, dynamic> m) => _OrderRow(
@@ -129,6 +134,12 @@ class _OrderRow {
                       ?.map((e) => Map<String, dynamic>.from(e as Map))
                       .toList() ?? [],
     orderCode:    (m['order_code'] as String?)?.trim(),
+  );
+
+  _OrderRow copyWithSendButton(Map<String, dynamic>? sb) => _OrderRow(
+    id: id, supplierName: supplierName, description: description,
+    totalAmount: totalAmount, status: status, createdAt: createdAt,
+    items: items, orderCode: orderCode, sendButton: sb,
   );
 }
 
@@ -747,6 +758,12 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             .select('assigned_supplier, product_id, fulfillment_state')
             .not('fulfillment_state', 'in', '("shipped","cancelled")')
             .catchError((_) => <dynamic>[]),
+        // CHANGE #492 (Orders tab): backend-owned Send button state — kept as
+        // an ADDITIONAL fetch alongside the existing supplier_orders table
+        // query rather than replacing it, so items/View Bill/View Payment
+        // stay on the untouched pipeline.
+        client.rpc('admin_supplier_orders', params: {'p_date': ymd(_ordersDate)})
+            .catchError((_) => <String, dynamic>{}),
       ]);
 
       final profRows   = results[0] as List;
@@ -756,6 +773,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       final countRows  = results[4] as List;
       final inquiryRaw = results[5] as List;
       final liveItems  = results[6] as List; // CHANGE #277
+      final sendButtonById = _parseSendButtonMap(results[7]); // CHANGE #492
 
       final newCounts = <String, int>{};
       for (final r in countRows) {
@@ -783,7 +801,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       });
 
       final rawOrders = orderRows.map((r) => _OrderRow.fromMap(Map<String, dynamic>.from(r as Map))).toList();
-      final orders = await _enrichOrderItems(rawOrders);
+      final enrichedOrders = await _enrichOrderItems(rawOrders);
+      // CHANGE #492: attach backend-owned send_button per order (matched by id).
+      final orders = enrichedOrders
+          .map((o) => o.copyWithSendButton(sendButtonById[o.id]))
+          .toList();
       final leads  = leadRows.map((r) {
         final m = Map<String, dynamic>.from(r as Map);
         return _LeadItem(
@@ -2606,6 +2628,38 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     }
   }
 
+  // CHANGE #492 (Orders tab): admin_supplier_orders(p_date) response ->
+  // {supplier_order_id: send_button}. Tolerant of the RPC failing/erroring
+  // (Future.wait above swallows that to {}), in which case every order just
+  // falls back to the button's own default label/tone.
+  Map<String, Map<String, dynamic>> _parseSendButtonMap(dynamic raw) {
+    final map = raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
+    final list = map['supplier_orders'] as List? ?? const [];
+    final byId = <String, Map<String, dynamic>>{};
+    for (final r in list) {
+      final m = Map<String, dynamic>.from(r as Map);
+      final id = m['supplier_order_id']?.toString();
+      final sb = m['send_button'];
+      if (id != null && sb is Map) byId[id] = Map<String, dynamic>.from(sb);
+    }
+    return byId;
+  }
+
+  // CHANGE #492: after a successful manual send, repaint just the Send
+  // button (not the whole tab) from a fresh admin_supplier_orders read —
+  // avoids re-running the full _load() Future.wait for a one-field change.
+  Future<void> _refetchOrderSendButtons() async {
+    try {
+      final res = await Supabase.instance.client
+          .rpc('admin_supplier_orders', params: {'p_date': ymd(_ordersDate)});
+      final byId = _parseSendButtonMap(res);
+      if (!mounted) return;
+      setState(() {
+        _orders = _orders.map((o) => o.copyWithSendButton(byId[o.id] ?? o.sendButton)).toList();
+      });
+    } catch (_) {}
+  }
+
   Future<List<_OrderRow>> _enrichOrderItems(List<_OrderRow> orders) async {
     final ids = orders
         .expand((o) => o.items)
@@ -2645,6 +2699,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           createdAt: order.createdAt,
           items: enrichedItems,
           orderCode: order.orderCode,
+          sendButton: order.sendButton,
         );
       }).toList();
       RenderLog.write('c108_admin_suporder_item_enriched', enrichedCount);
@@ -4629,27 +4684,26 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   Widget _buildOrderSendButton(_OrderRow row) {
     RenderLog.write('order_send_button_rendered', 'true');
+    // E3: stays tappable in every state — re-sending an already-sent order is allowed.
     return Builder(builder: (btnCtx) => GestureDetector(
       onTap: () => _sendOrderWhatsApp(row, btnCtx),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: const Color(0xFFD1FAE5),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: const Color(0xFF065F46).withValues(alpha: 0.3)),
-        ),
-        child: const Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(Icons.send_outlined, size: 13, color: Color(0xFF065F46)),
-          SizedBox(width: 4),
-          Text('Send', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF065F46))),
-        ]),
-      ),
+      child: OrderSendButtonView(sendButton: row.sendButton),
     ));
   }
 
   Future<void> _sendOrderWhatsApp(_OrderRow row, BuildContext btnCtx) async {
     final supName = row.supplierName;
     if (supName == null) return;
+
+    // CHANGE #492 (C1/C2): AutoFlow OFF -> the number tap is the trigger, via
+    // a small floating popup fed by sup_order_send_options. Tapping Send
+    // itself sends nothing and changes no state. AutoFlow ON keeps today's
+    // wa.me flow below, byte-for-byte unchanged.
+    if (!_orderAutoMeta) {
+      await _showOrderSendPopup(row, btnCtx);
+      return;
+    }
+
     final phone = _supplierPrimaryPhone(supName);
     final gate = await _supplierShouldSend('supplier_order_sent', phone);
     if (!gate.shouldSend) {
@@ -4678,6 +4732,76 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     } catch (e) {
       if (mounted) showToast(context, 'Failed to send: $e', isError: true);
     }
+  }
+
+  // CHANGE #492 (Orders tab, AutoFlow OFF): opens the number popup fed by
+  // sup_order_send_options — tapping a number calls send_supplier_order_wa
+  // directly (Cloud API), never wa.me. Mirrors the instant-spinner fix
+  // already applied to _showSendContactPicker (the Inquiry-tab path).
+  Future<void> _showOrderSendPopup(_OrderRow row, BuildContext btnCtx) async {
+    if (!mounted) return;
+    final box = btnCtx.findRenderObject() as RenderBox?;
+    final btnOffset = (box != null && box.attached) ? box.localToGlobal(Offset.zero) : Offset.zero;
+    final btnSize = (box != null && box.attached) ? box.size : const Size(60, 32);
+    final btnRect = Rect.fromLTWH(btnOffset.dx, btnOffset.dy, btnSize.width, btnSize.height);
+
+    OverlayEntry? loadingEntry = OverlayEntry(
+      builder: (_) => _SendPopoverLoadingBubble(btnRect: btnRect),
+    );
+    Overlay.of(context).insert(loadingEntry);
+    void dismissLoading() {
+      loadingEntry?.remove();
+      loadingEntry = null;
+    }
+
+    Map<String, dynamic> opts;
+    try {
+      final result = await Supabase.instance.client
+          .rpc('sup_order_send_options', params: {'p_order_id': row.id});
+      opts = result is Map ? Map<String, dynamic>.from(result) : <String, dynamic>{};
+    } catch (e) {
+      dismissLoading();
+      if (mounted) showToast(context, 'Failed to load send options', isError: true);
+      return;
+    }
+    if (opts['ok'] != true) {
+      dismissLoading();
+      final error = opts['error'] as String?;
+      final msg = switch (error) {
+        'not_authorized' => "You don't have permission to send",
+        'no_order' => 'Order not found',
+        _ => 'Failed to load send options',
+      };
+      if (mounted) showToast(context, msg, isError: true);
+      return;
+    }
+    dismissLoading();
+    if (!mounted) return;
+
+    RenderLog.write('send_contact_popup_opened', row.supplierName ?? '');
+    RenderLog.write('c492_order_send_popup', 'order=${row.id}');
+
+    OverlayEntry? entry;
+    void dismiss() {
+      entry?.remove();
+      entry = null;
+    }
+    entry = OverlayEntry(
+      builder: (_) => ContactPickerPopover(
+        btnRect: btnRect,
+        supplierName: row.supplierName ?? '',
+        message: '',
+        contactData: const {},
+        sendOptions: opts,
+        sentLabel: 'Order',
+        onDismiss: dismiss,
+        manualTrigger: true,
+        sendInquiryRpc: ({required supplier, required phone}) =>
+            _sendSupplierOrderWaRpc(supplier: supplier, phone: phone, orderId: row.id),
+        onManualSendSuccess: _refetchOrderSendButtons,
+      ),
+    );
+    Overlay.of(context).insert(entry!);
   }
 
   Future<void> _showSendContactPicker({
@@ -11769,9 +11893,54 @@ class InquirySendButton extends StatelessWidget {
   }
 }
 
+// CHANGE #492 (E1/E2, Orders tab): label + colour rendered verbatim from the
+// backend's send_button.label/tone — never hardcoded, never derived from
+// status/auto_order_sent_at. Extracted (public, no leading underscore) so
+// the tone->style mapping is unit-testable in isolation.
+class OrderSendButtonView extends StatelessWidget {
+  final Map<String, dynamic>? sendButton;
+  const OrderSendButtonView({super.key, required this.sendButton});
+
+  @override
+  Widget build(BuildContext context) {
+    final label = sendButton?['label'] as String? ?? 'Send';
+    final tone = sendButton?['tone'] as String? ?? 'yellow';
+    final bg = tone == 'green' ? const Color(0xFFD1FAE5) : const Color(0xFFFEF3C7);
+    final fg = tone == 'green' ? const Color(0xFF065F46) : const Color(0xFF92400E);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: fg.withValues(alpha: 0.3)),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.send_outlined, size: 13, color: fg),
+        const SizedBox(width: 4),
+        Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: fg)),
+      ]),
+    );
+  }
+}
+
 Future<Map<String, dynamic>> _defaultSendInquiryRpc({required String supplier, required String phone}) async {
   final result = await Supabase.instance.client.rpc('send_supplier_inquiry_wa', params: {
     'p_supplier': supplier,
+    'p_phone': phone,
+  });
+  return result is Map ? Map<String, dynamic>.from(result) : <String, dynamic>{};
+}
+
+// CHANGE #492 (Orders tab): manual-trigger send — real WhatsApp Cloud API
+// send via send_supplier_order_wa(supplier, order_id, phone). NO wa.me.
+Future<Map<String, dynamic>> _sendSupplierOrderWaRpc({
+  required String supplier,
+  required String phone,
+  required String orderId,
+}) async {
+  final result = await Supabase.instance.client.rpc('send_supplier_order_wa', params: {
+    'p_supplier': supplier,
+    'p_order_id': orderId,
     'p_phone': phone,
   });
   return result is Map ? Map<String, dynamic>.from(result) : <String, dynamic>{};
@@ -11833,6 +12002,15 @@ class ContactPickerPopover extends StatefulWidget {
   // the RPC without a live Supabase client. Defaults to the real call.
   final Future<Map<String, dynamic>> Function({required String supplier, required String phone})?
       sendInquiryRpc;
+  // CHANGE #492 (Orders tab): when set, the popup renders ENTIRELY from this
+  // sup_order_send_options response (title/numbers[]/email) instead of the
+  // Inquiry tab's grouped-by-type contactData layout. Null on every existing
+  // Inquiry-tab call site, so that path is byte-for-byte unchanged.
+  final Map<String, dynamic>? sendOptions;
+  // "Inquiry sent to X" vs "Order sent to X" / "Failed to send inquiry" vs
+  // "Failed to send order" — the only wording difference between the two
+  // manual-trigger flows.
+  final String sentLabel;
 
   const ContactPickerPopover({
     super.key,
@@ -11844,6 +12022,8 @@ class ContactPickerPopover extends StatefulWidget {
     this.manualTrigger = false,
     this.onManualSendSuccess,
     this.sendInquiryRpc,
+    this.sendOptions,
+    this.sentLabel = 'Inquiry',
   });
 
   @override
@@ -11920,6 +12100,7 @@ class ContactPickerPopoverState extends State<ContactPickerPopover>
   Future<void> _onManualTap(String value) async {
     if (_sendingValue != null) return; // B3.3: prevent double-tap
     if (mounted) setState(() => _sendingValue = value);
+    final genericFail = 'Failed to send ${widget.sentLabel.toLowerCase()}';
     try {
       final rpc = widget.sendInquiryRpc ?? _defaultSendInquiryRpc;
       final map = await rpc(supplier: widget.supplierName, phone: value);
@@ -11927,7 +12108,7 @@ class ContactPickerPopoverState extends State<ContactPickerPopover>
       RenderLog.write('c492_manual_trigger', 'supplier=${widget.supplierName} ok=$ok');
       if (ok) {
         if (mounted) {
-          showToast(context, 'Inquiry sent to ${widget.supplierName}');
+          showToast(context, '${widget.sentLabel} sent to ${widget.supplierName}');
           await _ctrl.animateTo(0, duration: const Duration(milliseconds: 180), curve: Curves.easeIn);
           widget.onDismiss();
         }
@@ -11938,8 +12119,9 @@ class ContactPickerPopoverState extends State<ContactPickerPopover>
       final msg = switch (error) {
         'not_authorized' => "You don't have permission to send",
         'no_supplier' => 'Supplier missing',
+        'no_order' => 'Order not found',
         'bad_phone' => 'This number looks invalid',
-        _ => 'Failed to send inquiry',
+        _ => genericFail,
       };
       if (mounted) {
         showToast(context, msg, isError: true);
@@ -11947,22 +12129,24 @@ class ContactPickerPopoverState extends State<ContactPickerPopover>
       }
     } on PostgrestException catch (e) {
       RenderLog.write('c492_manual_trigger', 'supplier=${widget.supplierName} ok=false');
-      final blocked = e.message.contains('inquiry_send_blocked') || (e.code ?? '').contains('inquiry_send_blocked');
+      // Inquiry-only special case — preserved exactly for that flow (F1).
+      final blocked = widget.sendOptions == null &&
+          (e.message.contains('inquiry_send_blocked') || (e.code ?? '').contains('inquiry_send_blocked'));
       if (mounted) {
-        showToast(context, blocked ? 'Inquiry not ready to send yet' : 'Failed to send inquiry', isError: true);
+        showToast(context, blocked ? 'Inquiry not ready to send yet' : genericFail, isError: true);
         setState(() => _sendingValue = null);
       }
     } catch (e) {
       RenderLog.write('c492_manual_trigger', 'supplier=${widget.supplierName} ok=false');
       if (mounted) {
-        showToast(context, 'Failed to send inquiry', isError: true);
+        showToast(context, genericFail, isError: true);
         setState(() => _sendingValue = null);
       }
     }
   }
 
-  Widget _row(String value, {bool isEmail = false}) {
-    final isLast = _lastUsed != null && _lastUsed == value;
+  Widget _row(String value, {bool isEmail = false, String? displayText, bool? lastFlag}) {
+    final isLast = lastFlag ?? (_lastUsed != null && _lastUsed == value);
     if (isLast) RenderLog.write('send_contact_last_used_badge', 'true');
     // CHANGE #492: EMAIL row is always the legacy _onTap path, untouched.
     final manual = widget.manualTrigger && !isEmail;
@@ -11985,7 +12169,7 @@ class ContactPickerPopoverState extends State<ContactPickerPopover>
                     size: 16, color: const Color(0xFF6B7280)),
             const SizedBox(width: 10),
             Expanded(
-              child: Text(value,
+              child: Text(displayText ?? value,
                 style: const TextStyle(fontSize: 14, color: Color(0xFF111827)),
                 maxLines: 1, overflow: TextOverflow.ellipsis),
             ),
@@ -12023,12 +12207,27 @@ class ContactPickerPopoverState extends State<ContactPickerPopover>
   @override
   Widget build(BuildContext context) {
     RenderLog.write('send_contact_minipopup_style', 'true');
-    final wa = List<String>.from(widget.contactData['whatsapp'] as List? ?? []);
-    final ct = List<String>.from(widget.contactData['contact']  as List? ?? []);
-    final ph = List<String>.from(widget.contactData['phone']    as List? ?? []);
-    final ot = List<String>.from(widget.contactData['other']    as List? ?? []);
-    final em = widget.contactData['email'] as String?;
-    final hasAny = wa.isNotEmpty || ct.isNotEmpty || ph.isNotEmpty || ot.isNotEmpty || em != null;
+    // CHANGE #492 (Orders tab): render ENTIRELY from sup_order_send_options
+    // when supplied — flat numbers[] (display text arrives pre-formatted,
+    // never built here) + a real title, instead of the Inquiry-tab's
+    // grouped-by-type contactData layout.
+    final ordersMode = widget.sendOptions != null;
+    final orderNumbers = ordersMode
+        ? List<Map>.from(widget.sendOptions!['numbers'] as List? ?? [])
+        : const <Map>[];
+    final orderEmail = ordersMode ? widget.sendOptions!['email'] as String? : null;
+    final orderTitle = ordersMode
+        ? (widget.sendOptions!['title'] as String? ?? 'Send to ${widget.supplierName}')
+        : null;
+
+    final wa = ordersMode ? <String>[] : List<String>.from(widget.contactData['whatsapp'] as List? ?? []);
+    final ct = ordersMode ? <String>[] : List<String>.from(widget.contactData['contact']  as List? ?? []);
+    final ph = ordersMode ? <String>[] : List<String>.from(widget.contactData['phone']    as List? ?? []);
+    final ot = ordersMode ? <String>[] : List<String>.from(widget.contactData['other']    as List? ?? []);
+    final em = ordersMode ? null : widget.contactData['email'] as String?;
+    final hasAny = ordersMode
+        ? (orderNumbers.isNotEmpty || orderEmail != null)
+        : (wa.isNotEmpty || ct.isNotEmpty || ph.isNotEmpty || ot.isNotEmpty || em != null);
 
     final mq = MediaQuery.of(context);
     final screen = mq.size;
@@ -12119,7 +12318,7 @@ class ContactPickerPopoverState extends State<ContactPickerPopover>
                     padding: const EdgeInsets.fromLTRB(16, 14, 8, 8),
                     child: Row(children: [
                       Expanded(
-                        child: Text('Send to ${widget.supplierName}',
+                        child: Text(ordersMode ? orderTitle! : 'Send to ${widget.supplierName}',
                           style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
                           maxLines: 1, overflow: TextOverflow.ellipsis),
                       ),
@@ -12136,6 +12335,21 @@ class ContactPickerPopoverState extends State<ContactPickerPopover>
                       padding: EdgeInsets.all(24),
                       child: Text('No contact numbers on file',
                         style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+                    )
+                  else if (ordersMode)
+                    Flexible(
+                      child: SingleChildScrollView(
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          const SizedBox(height: 4),
+                          ...orderNumbers.map((n) => _row(
+                                n['phone'] as String,
+                                displayText: n['display'] as String?,
+                                lastFlag: n['last_used'] == true,
+                              )),
+                          if (orderEmail != null) _section('EMAIL', [orderEmail], isEmail: true),
+                          const SizedBox(height: 12),
+                        ]),
+                      ),
                     )
                   else
                     Flexible(

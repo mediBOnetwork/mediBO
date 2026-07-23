@@ -22,20 +22,21 @@ import '../utils/render_log.dart';
 // the (huge, Supabase-backed) admin_fulfillment_screen widget tree.
 // ════════════════════════════════════════════════════════════════════════════
 
-/// The exact params map every fw_get_state call must send. p_date/p_include_older
-/// are NEVER omitted — relying on the server default was the #471 bug (it made
-/// the box ignore the selected Fulfill date and show the wrong day's items).
+/// The exact params map every fw_get_state call must send. p_date is NEVER
+/// omitted — relying on the server default was the #471 bug (it made the box
+/// ignore the selected Fulfill date and show the wrong day's items).
+/// p_include_older is deliberately NOT sent: fw_get_state (like every other
+/// Fulfill RPC) is strict single-date now — the date picker is the only
+/// intended way to view another date, and the RPC ignores this param anyway.
 Map<String, dynamic> fwGetStateParams({
   required String supplierName,
   required String stage,
   required DateTime date,
-  required bool includeOlder,
 }) =>
     {
       'p_supplier_name': supplierName,
       'p_stage': stage,
       'p_date': ymd(date),
-      'p_include_older': includeOlder,
     };
 
 /// Backend-owned progress fields for the box header. Renders progress.label

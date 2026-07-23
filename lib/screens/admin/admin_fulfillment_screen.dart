@@ -1612,9 +1612,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (!_loadingSuppliers && _suppliers.isEmpty) setState(() => _loadingSuppliers = true);
       try {
         final scope = FulfillDateScope.instance;
+        // p_include_older not sent — fw_list_arrivals is strict single-date now.
         final res = await Supabase.instance.client.rpc('fw_list_arrivals', params: {
           'p_date': ymd(scope.date),
-          'p_include_older': scope.includeOlder,
         }) as Map;
         if (!mounted) return;
         _olderOpen = (res['older_open'] as num?)?.toInt() ?? 0;
@@ -1722,9 +1722,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       // query. This is what makes Shop show 0 suppliers on a date with no open
       // work instead of every pending/sent supplier regardless of when placed.
       final scope = FulfillDateScope.instance;
+      // p_include_older not sent — fw_list_arrivals is strict single-date now.
       final res = await Supabase.instance.client.rpc('fw_list_arrivals', params: {
         'p_date': ymd(scope.date),
-        'p_include_older': scope.includeOlder,
       }) as Map;
       if (!mounted) return;
       _olderOpen = (res['older_open'] as num?)?.toInt() ?? 0;
@@ -1872,12 +1872,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       try {
         // #160: shape-tolerant parse — fw_get_state returns jsonb object; guard against
         // PostgREST wrapping it in [{fw_get_state: value}] on older versions.
-        // CHANGE #471: p_date/p_include_older ALWAYS sent — the shared
-        // FulfillDateScope.date for p_date, this box's own toggle for older.
+        // CHANGE #471: p_date ALWAYS sent — the shared FulfillDateScope.date.
+        // p_include_older is not sent — fw_get_state is strict single-date now.
         final dynamic _rawState = await Supabase.instance.client.rpc('fw_get_state',
             params: fwGetStateParams(
               supplierName: supplier, stage: 'arrivals',
-              date: FulfillDateScope.instance.date, includeOlder: _boxIncludeOlder,
+              date: FulfillDateScope.instance.date,
             ));
         if (!mounted) return;
         Map<String, dynamic> stateRes;
@@ -1963,11 +1963,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
     try {
       // #333: fw_get_state('collect') returns items WITH shop_qty and top-level stage
-      // CHANGE #471: p_date/p_include_older ALWAYS sent
+      // CHANGE #471: p_date ALWAYS sent; p_include_older not sent (strict single-date).
       final dynamic _rawCollect = await Supabase.instance.client.rpc('fw_get_state',
           params: fwGetStateParams(
             supplierName: supplier, stage: 'collect',
-            date: FulfillDateScope.instance.date, includeOlder: _boxIncludeOlder,
+            date: FulfillDateScope.instance.date,
           ));
       if (!mounted) return;
       Map<String, dynamic> collectState;
@@ -2031,12 +2031,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // #156: Check if this supplier's arrivals are confirmed/locked via fw_get_state.
   Future<void> _checkArrivalsLocked(String supplier) async {
     try {
-      // CHANGE #471: p_date/p_include_older ALWAYS sent
+      // CHANGE #471: p_date ALWAYS sent; p_include_older not sent (strict single-date).
       final dynamic _rawLock = await Supabase.instance.client.rpc('fw_get_state',
           params: fwGetStateParams(
             supplierName: supplier, stage: 'arrivals',
             date: FulfillDateScope.instance.date,
-            includeOlder: supplier == _selectedSupplier ? _boxIncludeOlder : false,
           ));
       if (!mounted) return;
       Map<String, dynamic> res;
@@ -2698,11 +2697,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     // #127 BUG1 FIX: Arrivals reload uses fw_get_state directly (no get_receiving_box).
     if (widget.arrivals) {
       try {
-        // CHANGE #471: p_date/p_include_older ALWAYS sent
+        // CHANGE #471: p_date ALWAYS sent; p_include_older not sent (strict single-date).
         final dynamic _rawReload = await Supabase.instance.client.rpc('fw_get_state',
             params: fwGetStateParams(
               supplierName: supplier, stage: 'arrivals',
-              date: FulfillDateScope.instance.date, includeOlder: _boxIncludeOlder,
+              date: FulfillDateScope.instance.date,
             ));
         if (!mounted) return;
         Map<String, dynamic> stateRes;
@@ -2767,11 +2766,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     }
     try {
       // #333: fw_get_state('collect') returns items WITH shop_qty and top-level stage
-      // CHANGE #471: p_date/p_include_older ALWAYS sent
+      // CHANGE #471: p_date ALWAYS sent; p_include_older not sent (strict single-date).
       final dynamic _rawReloadCollect = await Supabase.instance.client.rpc('fw_get_state',
           params: fwGetStateParams(
             supplierName: supplier, stage: 'collect',
-            date: FulfillDateScope.instance.date, includeOlder: _boxIncludeOlder,
+            date: FulfillDateScope.instance.date,
           ));
       if (!mounted) return;
       Map<String, dynamic> reloadState;
@@ -11009,9 +11008,9 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
     if (!silent) setState(() { _loading = true; _error = null; });
     try {
       final scope = FulfillDateScope.instance;
+      // p_include_older not sent — fw_list_bags is strict single-date now.
       final data = await Supabase.instance.client.rpc('fw_list_bags', params: {
         'p_date': ymd(scope.date),
-        'p_include_older': scope.includeOlder,
       }) as Map;
       if (!mounted) return;
       final bags = (data['bags'] as List? ?? [])
@@ -11939,8 +11938,8 @@ class _PackTabState extends State<_PackTab>
   @override
   bool get wantKeepAlive => true;
 
-  // CHANGE #444 — shared date scope
-  int _olderOpen = 0;
+  // CHANGE #444 — shared date scope. pack_list_orders is strict single-date
+  // (no older-orders support) — see _load(), no _olderOpen tracking here.
   void _onDateScopeChanged() => _load();
 
   @override
@@ -11995,23 +11994,20 @@ class _PackTabState extends State<_PackTab>
     if (!mounted) return;
     if (!silent) setState(() { _loading = true; _error = null; });
     try {
-      // pack_list_orders(p_date, p_include_older) — per-order dot/pack_button/
-      // can_mark_ready are backend-owned now (verbatim, see _buildPackingButton
-      // and _buildPackDispatchButton). NOTE: as of this RPC, p_include_older is
-      // accepted but NOT honoured server-side (always filters to exact p_date,
-      // older_open always 0) — the "include older orders" toggle on this tab is
-      // currently a no-op pending a backend fix; flagged, not worked around here.
+      // pack_list_orders(p_date) — per-order dot/pack_button/can_mark_ready are
+      // backend-owned now (verbatim, see _buildPackingButton and
+      // _buildPackDispatchButton). Strict single-date by design — the date
+      // picker (FulfillDateScope) is the only way to view another date; no
+      // include-older support, so p_include_older is not sent.
       final scope = FulfillDateScope.instance;
       final res = await Supabase.instance.client.rpc('pack_list_orders', params: {
         'p_date': ymd(scope.date),
-        'p_include_older': scope.includeOlder,
       }) as Map;
       if (!mounted) return;
       final orders = (res['orders'] as List? ?? [])
           .map((r) => Map<String, dynamic>.from(r as Map))
           .map((m) => {...m, 'total_items': m['items_total']})
           .toList();
-      _olderOpen = (res['older_open'] as num?)?.toInt() ?? 0;
       RenderLog.write('c444_pack_orders', '${orders.length}');
       setState(() {
         _customers = orders;
@@ -15592,9 +15588,9 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     }
     try {
       final scope = FulfillDateScope.instance;
+      // p_include_older not sent — fw_get_disputes is strict single-date now.
       final res = await Supabase.instance.client.rpc('fw_get_disputes', params: {
         'p_date': ymd(scope.date),
-        'p_include_older': scope.includeOlder,
       }) as Map;
       if (!mounted) return;
       _olderOpen = (res['older_open'] as num?)?.toInt() ?? 0;

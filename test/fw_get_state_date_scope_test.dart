@@ -3,8 +3,10 @@
 //
 // Proves:
 //   1. The RPC params map always carries p_date (= the selected date's
-//      'yyyy-MM-dd' string) and p_include_older — the #471 bug was the
-//      client silently relying on the server default for both.
+//      'yyyy-MM-dd' string) — the #471 bug was the client silently relying
+//      on the server default for it. p_include_older is deliberately NOT
+//      sent (as of the fulfillment-wide strict-single-date change): every
+//      Fulfill RPC now ignores it server-side, so sending it is misleading.
 //   2. The header progress reads progress.counted/total/label verbatim
 //      from a stubbed fw_get_state response (no client-side counting).
 //   3. The include-older control is absent when older.show is false and
@@ -24,28 +26,25 @@ import 'package:pharma_b2b/widgets/date_scope_chip.dart';
 
 void main() {
   group('fwGetStateParams (CHANGE #471)', () {
-    test('always sends p_date and p_include_older — never relies on server default', () {
+    test('always sends p_date — never relies on server default', () {
       final params = fwGetStateParams(
         supplierName: 'Acme Pharma',
         stage: 'arrivals',
         date: DateTime(2026, 7, 22),
-        includeOlder: false,
       );
       expect(params['p_supplier_name'], 'Acme Pharma');
       expect(params['p_stage'], 'arrivals');
       expect(params['p_date'], '2026-07-22');
-      expect(params['p_include_older'], false);
     });
 
-    test('p_include_older reflects the toggle', () {
+    test('never sends p_include_older — fw_get_state is strict single-date', () {
       final params = fwGetStateParams(
         supplierName: 'Acme Pharma',
         stage: 'collect',
         date: DateTime(2026, 7, 20),
-        includeOlder: true,
       );
       expect(params['p_date'], '2026-07-20');
-      expect(params['p_include_older'], true);
+      expect(params.containsKey('p_include_older'), false);
     });
   });
 

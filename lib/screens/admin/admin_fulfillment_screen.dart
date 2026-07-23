@@ -294,6 +294,14 @@ class _MergedProduct {
   final bool showDateChip;
   final String? dateChip;
 
+  // fw_get_state()'s merged_items[] — rendered verbatim, no client derivation.
+  final String statusLabel;
+  final String statusTone;
+  final Map<String, String>? statusColors; // {bg, fg} hex
+  final String qtyLabel;
+  final Map<String, dynamic>? issueChip; // {label, qty} | null
+  final List<Map<String, dynamic>> lines; // underlying per-order-item rows
+
   const _MergedProduct({
     required this.productId,
     required this.productName,
@@ -313,7 +321,66 @@ class _MergedProduct {
     this.mergedIssueQty = 0,
     this.showDateChip = false,
     this.dateChip,
+    this.statusLabel = '',
+    this.statusTone = '',
+    this.statusColors,
+    this.qtyLabel = '',
+    this.issueChip,
+    this.lines = const [],
   });
+
+  // fw_get_state()'s merged_items[] entry -> _MergedProduct. Pure field
+  // extraction — the aggregation (state, totals, qty_label, status fields)
+  // is already done server-side; this just unwraps the JSON.
+  factory _MergedProduct.fromBackend(Map<String, dynamic> m) {
+    final lines = (m['lines'] as List? ?? [])
+        .whereType<Map>()
+        .map((r) => Map<String, dynamic>.from(r))
+        .toList();
+    final orderItemIds = lines
+        .map((r) => r['order_item_id']?.toString() ?? '')
+        .where((s) => s.isNotEmpty)
+        .toList();
+    final rawBd = m['bag_breakdown'];
+    final bagBreakdown = rawBd is List ? rawBd.cast<Map>().toList() : null;
+    // CHANGE #471: date chip — backend-owned; text from the first underlying
+    // line flagged show_date_chip (older item mixed into today's list).
+    String? mergedDateChip;
+    for (final r in lines) {
+      mergedDateChip = itemDateChip(r);
+      if (mergedDateChip != null) break;
+    }
+    final colors = m['status_colors'];
+    final issueChip = m['issue_chip'];
+    return _MergedProduct(
+      productId: (m['product_id'] as num?)?.toInt() ?? 0,
+      productName: m['product_name']?.toString() ?? '—',
+      packType: m['pack_type']?.toString() ?? '',
+      imageUrl: m['image_url']?.toString(),
+      orderedTotal: (m['ordered_total'] as num?)?.toInt() ?? 0,
+      receivedTotal: (m['received_total'] as num?)?.toInt() ?? 0,
+      shopQtyTotal: (m['shop_qty_total'] as num?)?.toInt(),
+      shopQtyCounted: (m['shop_qty_counted'] as num?)?.toInt() ?? 0,
+      expectedTotal: (m['expected_total'] as num?)?.toInt(),
+      orderItemIds: orderItemIds,
+      combinedState: m['state']?.toString() ?? 'pending',
+      hasArrived: m['has_arrived'] == true,
+      bagBreakdown: bagBreakdown,
+      firstLineData: lines.isNotEmpty ? lines.first : null,
+      mergedCountIssue: m['count_issue']?.toString(),
+      mergedIssueQty: (m['issue_qty'] as num?)?.toInt() ?? 0,
+      showDateChip: mergedDateChip != null,
+      dateChip: mergedDateChip,
+      statusLabel: m['status_label']?.toString() ?? '',
+      statusTone: m['status_tone']?.toString() ?? '',
+      statusColors: colors is Map
+          ? {'bg': colors['bg']?.toString() ?? '', 'fg': colors['fg']?.toString() ?? ''}
+          : null,
+      qtyLabel: m['qty_label']?.toString() ?? '',
+      issueChip: issueChip is Map ? Map<String, dynamic>.from(issueChip) : null,
+      lines: lines,
+    );
+  }
 }
 
 class _FulfilImageTile extends StatelessWidget {
@@ -994,6 +1061,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // ── Box data ──
   List<Map<String, dynamic>> _items = [];
+  // fw_get_state()'s merged_items[] — one row per product_id, pre-aggregated
+  // and pre-sorted server-side. Rendered verbatim; never recomputed from _items.
+  List<_MergedProduct> _mergedItemsBackend = [];
   bool _loadingBox = false;
   String? _error;
 
@@ -1142,11 +1212,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   bool get _currentIsPending {
     final cur = _currentItem;
-    return cur != null && stateOf(cur) == 'pending';
+    return cur != null && (cur['fulfillment_state']?.toString() ?? 'pending') == 'pending';
   }
 
-  int get _pendingCount =>
-      _items.where((i) => stateOf(i) == 'pending').length;
+  int get _pendingCount => _items
+      .where((i) => (i['fulfillment_state']?.toString() ?? 'pending') == 'pending')
+      .length;
 
   bool get _allDone => _items.isNotEmpty && _pendingCount == 0;
 
@@ -1154,102 +1225,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   List<Map<String, dynamic>> _visibleItems() => _items;
 
   // #197: group _items by product_id → one display row per product
-  List<_MergedProduct> get _mergedItems {
-    final groups = <int, List<Map<String, dynamic>>>{};
-    for (final item in _items) {
-      final pid = (item['product_id'] as num?)?.toInt();
-      if (pid == null) continue;
-      groups.putIfAbsent(pid, () => []).add(item);
-    }
-    final merged = <_MergedProduct>[];
-    for (final entry in groups.entries) {
-      final lines = entry.value;
-      final first = lines.first;
-      final orderedTotal = lines.fold(0, (s, r) => s + ordQtyOf(r));
-      final receivedTotal = lines.fold(0, (s, r) => s + recQtyOf(r));
-      // #331: shop_qty per product — null means at least one line uncounted at shop stage
-      int shopSum = 0;
-      bool anyUncounted = false;
-      for (final r in lines) {
-        final sq = (r['shop_qty'] as num?)?.toInt();
-        if (sq == null) { anyUncounted = true; break; }
-        shopSum += sq;
-      }
-      final shopQtyTotal = anyUncounted ? null : shopSum;
-      // C365: running SUM of counted shop_qty (uncounted lines = 0) — the real counted total
-      // even for a partially-counted product, so the popup gap/breakdown is not inflated.
-      final shopQtyCounted = lines.fold<int>(
-          0, (s, r) => s + (((r['shop_qty'] as num?)?.toInt()) ?? 0));
-      // #333: expected per product — sum of backend 'expected' field (forwarded qty at warehouse)
-      final expectedTotal = lines.fold(0, (s, r) => s + ((r['expected'] as num?)?.toInt() ?? ordQtyOf(r)));
-      // C361: first flagged count_issue across ALL underlying lines (chip/Dispute Type
-      // must reflect a flagged sibling line, not only lines.first).
-      String? mergedCountIssue;
-      for (final r in lines) {
-        final ci = r['count_issue']?.toString();
-        if (ci != null && ci.isNotEmpty && ci != 'null') { mergedCountIssue = ci; break; }
-      }
-      // C364: sum issue_qty across all flagged lines -> disputed units for the row chip.
-      final mergedIssueQty = lines.fold<int>(0, (s, r) {
-        final ci = r['count_issue']?.toString();
-        final flagged = ci != null && ci.isNotEmpty && ci != 'null';
-        return s + (flagged ? ((r['issue_qty'] as num?)?.toInt() ?? 0) : 0);
-      });
-      final oiids = lines
-          .map((r) => r['order_item_id']?.toString() ?? '')
-          .where((s) => s.isNotEmpty)
-          .toList();
-      final states = lines.map(stateOf).toSet();
-      String combinedState;
-      if (states.every((s) => s == 'received') && receivedTotal >= orderedTotal) {
-        combinedState = 'received';
-      } else if (states.contains('wrong')) {
-        combinedState = 'wrong';
-      } else if (states.contains('not_coming')) {
-        combinedState = 'not_coming';
-      } else if (receivedTotal == 0) {
-        combinedState = 'pending';
-      } else {
-        combinedState = 'short';
-      }
-      final hasArrived = lines.any((r) => r['received_locked'] == true);
-      // #254: collect bag_breakdown from first line (Arrivals only; one line per product)
-      final rawBd = first['bag_breakdown'];
-      final bagBreakdown = rawBd is List ? rawBd.cast<Map>().toList() : null;
-      // CHANGE #471: date chip — backend-owned; text from the first underlying
-      // line flagged show_date_chip (older item mixed into today's list).
-      String? mergedDateChip;
-      for (final r in lines) {
-        mergedDateChip = itemDateChip(r);
-        if (mergedDateChip != null) break;
-      }
-      merged.add(_MergedProduct(
-        productId: entry.key,
-        productName: first['product_name']?.toString() ?? '—',
-        packType: first['pack_type']?.toString() ?? '',
-        imageUrl: first['image_url']?.toString(),
-        orderedTotal: orderedTotal,
-        receivedTotal: receivedTotal,
-        shopQtyTotal: shopQtyTotal,
-        shopQtyCounted: shopQtyCounted,
-        expectedTotal: expectedTotal,
-        orderItemIds: oiids,
-        combinedState: combinedState,
-        hasArrived: hasArrived,
-        bagBreakdown: bagBreakdown,
-        firstLineData: Map<String, dynamic>.from(first),
-        mergedCountIssue: mergedCountIssue,
-        mergedIssueQty: mergedIssueQty,
-        showDateChip: mergedDateChip != null,
-        dateChip: mergedDateChip,
-      ));
-    }
-    // CHANGE #269 — strict A-Z, no status grouping
-    merged.sort((a, b) => a.productName.toLowerCase().compareTo(b.productName.toLowerCase()));
-    RenderLog.write('c269_alpha_sort', 'merged;count=${merged.length}');
-    return merged;
-  }
-
   // ── C359: dispute-candidate / balance / response-gate (shared logic) ─────────
   // Computed PER order-line — the backend raises disputes per line and the
   // few_wrong/damaged/excess flags are written per order_item_id, so a merged
@@ -1262,7 +1237,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         received: recQtyOf(line),
         expected: (line['expected'] as num?)?.toInt(),
         countIssue: line['count_issue']?.toString(),
-        state: stateOf(line),
+        state: line['fulfillment_state']?.toString() ?? 'pending',
       );
 
   // A merged product row is a candidate (tint yellow + tappable) if ANY of its
@@ -1301,7 +1276,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           ref: ref, counted: counted,
           countIssue: l['count_issue']?.toString(),
           issueQty: (l['issue_qty'] as num?)?.toInt(),
-          state: stateOf(l),
+          state: l['fulfillment_state']?.toString() ?? 'pending',
         );
       }
       final ok = productSatisfiesConfirmGate(
@@ -1326,17 +1301,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       ((item['received_qty'] as num?) ?? 0).toInt();
   static bool lockedOf(Map<String, dynamic> item) =>
       item['collect_locked'] == true || item['received_locked'] == true;
-  // Collect has explicit fulfillment_state; Arrivals derives from received_locked+qty
-  static String stateOf(Map<String, dynamic> item) {
-    final explicit = item['fulfillment_state']?.toString();
-    if (explicit != null && explicit.isNotEmpty) return explicit;
-    if (lockedOf(item)) return 'received';
-    final ord = ordQtyOf(item);
-    final rec = recQtyOf(item);
-    if (rec >= ord && ord > 0) return 'received';
-    if (rec > 0) return 'short';
-    return 'pending';
-  }
   // RC3: mode is top-level in fw_get_state response, never per-item
   // #333: backend now returns 'stage' (not 'mode'); keep 'mode' as fallback for legacy shapes
   static String? supplierModeOf(Map<String, dynamic> stateRes) =>
@@ -1932,11 +1896,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         final stateItems = (rawItems is List ? rawItems : <dynamic>[])
             .map((r) => Map<String, dynamic>.from(r as Map))
             .toList();
-        // CHANGE #269 — strict A-Z, no status grouping
-        stateItems.sort((a, b) => (a['product_name'] ?? '').toString().toLowerCase()
-            .compareTo((b['product_name'] ?? '').toString().toLowerCase()));
-        RenderLog.write('c269_alpha_sort', 'arrivals;count=${stateItems.length}');
-        final firstPending = stateItems.indexWhere((i) => stateOf(i) == 'pending');
+        // items[] and merged_items[] both arrive pre-sorted (product_name) server-side.
+        final rawMerged = stateRes['merged_items'];
+        final mergedItems = (rawMerged is List ? rawMerged : <dynamic>[])
+            .map((r) => _MergedProduct.fromBackend(Map<String, dynamic>.from(r as Map)))
+            .toList();
+        final firstPending = stateItems.indexWhere(
+            (i) => (i['fulfillment_state']?.toString() ?? 'pending') == 'pending');
         final confirmed = stateRes['arrivals_confirmed'] == true ||
             stateRes['supplier_fully_locked'] == true;
         final parsedMode = supplierModeOf(stateRes); // B5: top-level, not per-item
@@ -1950,6 +1916,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             'supplier=$supplier;bag=${activeBag != null ? activeBag['bag_no'] : 'none'}');
         setState(() {
           _items = stateItems;
+          _mergedItemsBackend = mergedItems;
           _focusIdx = firstPending >= 0 ? firstPending : 0;
           _loadingBox = false;
           _showListView = false;
@@ -2017,16 +1984,19 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       final items = (rawItems is List ? rawItems : <dynamic>[])
           .map((r) => Map<String, dynamic>.from(r as Map))
           .toList();
-      // CHANGE #269 — strict A-Z, no status or bag grouping
-      items.sort((a, b) => (a['product_name'] ?? '').toString().toLowerCase()
-          .compareTo((b['product_name'] ?? '').toString().toLowerCase()));
-      RenderLog.write('c269_alpha_sort', 'collect;count=${items.length}');
-      final firstPending = items.indexWhere((i) => stateOf(i) == 'pending');
+      // items[] and merged_items[] both arrive pre-sorted (product_name) server-side.
+      final rawMerged = collectState['merged_items'];
+      final mergedItems = (rawMerged is List ? rawMerged : <dynamic>[])
+          .map((r) => _MergedProduct.fromBackend(Map<String, dynamic>.from(r as Map)))
+          .toList();
+      final firstPending = items.indexWhere(
+          (i) => (i['fulfillment_state']?.toString() ?? 'pending') == 'pending');
       final freshMode = supplierModeOf(collectState); // #333: reads top-level stage field
       RenderLog.write('c333_state_stage', 'stage=${freshMode ?? 'null'};supplier=$supplier');
       if (!mounted) return;
       setState(() {
         _items = items;
+        _mergedItemsBackend = mergedItems;
         _focusIdx = firstPending >= 0 ? firstPending : 0;
         _loadingBox = false;
         _showListView = false;
@@ -2350,13 +2320,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // ── Navigation ─────────────────────────────────────────────────────────────
 
   void _advance() {
-    final nextPending = _items.indexWhere(
-        (i) => stateOf(i) == 'pending', _focusIdx + 1);
+    bool isPending(Map<String, dynamic> i) =>
+        (i['fulfillment_state']?.toString() ?? 'pending') == 'pending';
+    final nextPending = _items.indexWhere(isPending, _focusIdx + 1);
     setState(() {
       if (nextPending >= 0) {
         _focusIdx = nextPending;
       } else {
-        final firstPending = _items.indexWhere((i) => stateOf(i) == 'pending');
+        final firstPending = _items.indexWhere(isPending);
         if (firstPending >= 0) _focusIdx = firstPending;
       }
     });
@@ -2750,9 +2721,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         final stateItems = (rawItems is List ? rawItems : <dynamic>[])
             .map((r) => Map<String, dynamic>.from(r as Map))
             .toList();
-        // CHANGE #269 A-Z sort (fixes missed reload path)
-        stateItems.sort((a, b) => (a['product_name'] ?? '').toString().toLowerCase()
-            .compareTo((b['product_name'] ?? '').toString().toLowerCase()));
+        // items[] and merged_items[] both arrive pre-sorted (product_name) server-side.
+        final rawMerged = stateRes['merged_items'];
+        final mergedItems = (rawMerged is List ? rawMerged : <dynamic>[])
+            .map((r) => _MergedProduct.fromBackend(Map<String, dynamic>.from(r as Map)))
+            .toList();
         final confirmed = stateRes['arrivals_confirmed'] == true ||
             stateRes['supplier_fully_locked'] == true;
         final reloadedMode = supplierModeOf(stateRes); // B6: top-level, not per-item
@@ -2765,6 +2738,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         RenderLog.write('c273_flow_from_backend', 'bag_flow=${reloadBagFlow ?? 'null'};supplier=$supplier');
         setState(() {
           _items = stateItems;
+          _mergedItemsBackend = mergedItems;
           if (confirmed != _arrivalsLocked) _arrivalsLocked = confirmed;
           if (reloadedMode != _supplierMode) _supplierMode = reloadedMode;
           _activeBag = reloadActiveBag;
@@ -2814,11 +2788,15 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       final reloadItems = (rawReloadItems is List ? rawReloadItems : <dynamic>[])
           .map((r) => Map<String, dynamic>.from(r as Map))
           .toList();
-      reloadItems.sort((a, b) => (a['product_name'] ?? '').toString().toLowerCase()
-          .compareTo((b['product_name'] ?? '').toString().toLowerCase()));
+      // items[] and merged_items[] both arrive pre-sorted (product_name) server-side.
+      final rawReloadMerged = reloadState['merged_items'];
+      final reloadMergedItems = (rawReloadMerged is List ? rawReloadMerged : <dynamic>[])
+          .map((r) => _MergedProduct.fromBackend(Map<String, dynamic>.from(r as Map)))
+          .toList();
       final reloadedMode = supplierModeOf(reloadState); // #333: reads stage field
       setState(() {
         _items = reloadItems;
+        _mergedItemsBackend = reloadMergedItems;
         // B5: always assign (even null) so mode clears correctly after undo
         _supplierMode = reloadedMode ?? _supplierMode;
         if (reloadedMode != null) _collectModeMap[supplier] = reloadedMode;
@@ -3691,13 +3669,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   List<Map<String, dynamic>> _buildAgentItems() {
     return _items
-        .where((r) => stateOf(r) != 'cancelled')
+        .where((r) => (r['fulfillment_state']?.toString() ?? 'pending') != 'cancelled')
         .map((r) => {
               'product_id': (r['product_id'] as num?)?.toInt() ?? 0,
               'name': r['product_name']?.toString() ?? '',
               'ordered': ordQtyOf(r), // B3: shape-tolerant (ordered_qty OR ordered)
               'received': recQtyOf(r),
-              'state': stateOf(r),    // B3: derive state for Arrivals items
+              'state': r['fulfillment_state']?.toString() ?? 'pending',
               'pack_type': r['pack_type']?.toString(),
             })
         .toList();
@@ -3989,7 +3967,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   void _advanceIfReceived() {
     final item = _currentItem;
     if (item == null) return;
-    if (stateOf(item) != 'pending') _advance(); // B4: use stateOf, not raw key
+    if ((item['fulfillment_state']?.toString() ?? 'pending') != 'pending') _advance();
   }
 
 
@@ -4235,7 +4213,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     // exactly as they did while the bag was attached.
     final bool anyCounted = _items.any((i) {
       final ci = i['count_issue']?.toString();
-      final st = stateOf(i);
+      final st = i['fulfillment_state']?.toString() ?? 'pending';
       return recQtyOf(i) > 0 ||
           (ci != null && ci.isNotEmpty && ci != 'null') ||
           st == 'short' || st == 'wrong' || st == 'not_coming';
@@ -4890,8 +4868,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     if (locked) RenderLog.write('change_91_locked', '1');
     else RenderLog.write('change_91_confirm_present', '1');
 
-    // #197: one row per product
-    final merged = _mergedItems;
+    // #197: one row per product — backend-owned, pre-aggregated, pre-sorted.
+    final merged = _mergedItemsBackend;
     if (widget.arrivals) {
       RenderLog.write('c197_merged_rows_wh', 'products=${merged.length};raw_lines=${_items.length}');
       RenderLog.write('c283_warehouse_rows_render',
@@ -4924,7 +4902,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   }
 
   // C355: single amber count_issue chip widget — ONE styling used by both the
-  // mobile tiles and the web table row (label text comes from issueChipLabel()).
+  // mobile tiles and the web table row.
   Widget _issueChip(String lbl) => Padding(
         padding: const EdgeInsets.only(top: 3),
         child: Container(
@@ -4944,7 +4922,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // #113: extracted so PinnedFooterList can pass items as List<Widget>
   // #331: shop tab shows shop_qty/ordQty; warehouse shows recQty/expected (mode-aware)
   Widget _buildItemTile(Map<String, dynamic> item) {
-    final state    = stateOf(item); // B2: derive — fw_get_state has no fulfillment_state
+    final state    = item['fulfillment_state']?.toString() ?? 'pending';
     final name     = item['product_name']?.toString() ?? '—';
     final ordQty   = ordQtyOf(item); // B1: dual-key ordered_qty ?? ordered
     final recQty   = (item['received_qty'] as num?)?.toInt() ?? 0;
@@ -5093,8 +5071,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // ── #197: Merged product card ─────────────────────────────────────────────
   Widget _buildMergedItemTile(_MergedProduct merged) {
-    final state = merged.combinedState;
-    // C355: qty/pill/expected logic moved into fulfillRowView() (shared helper).
     // Dispute: first match across all underlying lines
     DisputeItem? disputeItem;
     Map<String, dynamic>? openDispute;
@@ -5149,7 +5125,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           border: Border.all(
             color: isCandidate
                 ? _kCandidateBorder
-                : (state == 'pending' ? _kBorder : (_stateBgMap[state] ?? _kBorder)),
+                : _hexColor(merged.statusColors?['bg'], _kBorder),
           ),
         ),
         // #198: crossAxisAlignment.start so both columns align at their first line
@@ -5249,26 +5225,19 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 120),
             child: Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
-              // C355: qty label + pill state from the SHARED helper (identical rule
-              // to the single tile and the web row).
+              // Backend-owned: fw_get_state()'s merged_items[] qty_label + status_label/
+              // status_colors, verbatim — no client aggregation or derivation.
               Builder(builder: (_) {
-                final rv = fulfillRowView(
-                  arrivals: widget.arrivals,
-                  ordered: merged.orderedTotal,
-                  shopQty: merged.shopQtyTotal,
-                  received: merged.receivedTotal,
-                  expected: widget.arrivals ? merged.expectedTotal : null,
-                  combinedState: merged.combinedState,
-                );
-                if (rv.awaitingResolution) {
-                  return const Text('in dispute · awaiting resolution',
-                      style: TextStyle(fontSize: 10, color: _kSub, height: 1.3));
-                }
+                final colors = merged.statusColors;
                 return Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
-                  Text(rv.qtyLabel,
+                  Text(merged.qtyLabel,
                       style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
                   const SizedBox(height: 3),
-                  _StatePill(rv.pillState),
+                  _BackendStatePill(
+                    label: merged.statusLabel,
+                    bg: _hexColor(colors?['bg'], _kPendingBg),
+                    fg: _hexColor(colors?['fg'], _kPendingFg),
+                  ),
                 ]);
               }),
               // CHANGE #471: backend date chip (older item mixed into today's list) — muted, verbatim.
@@ -5365,6 +5334,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       shopQtyCounted: merged.shopQtyCounted,
       expectedTotal: merged.expectedTotal,
       combinedState: merged.combinedState,
+      statusLabel: merged.statusLabel,
+      statusColors: merged.statusColors,
       existingDispute: existingDispute,
       // C365: product-level flag + summed disputed qty for the aggregated popup pre-fill.
       mergedCountIssue: merged.mergedCountIssue,
@@ -5992,8 +5963,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               border: Border.all(color: _kBorder),
             ),
             child: Builder(builder: (_) {
-              // #197: merged product rows for desktop table
-              final deskMerged = _mergedItems;
+              // #197: merged product rows for desktop table — backend-owned, pre-sorted.
+              final deskMerged = _mergedItemsBackend;
               if (widget.arrivals) {
                 RenderLog.write('c197_merged_rows_wh', 'products=${deskMerged.length};raw_lines=${_items.length}');
               } else {
@@ -6018,17 +5989,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   for (final oiid in mp.orderItemIds) {
                     deskDisputeItem ??= _disputeItemMap[oiid];
                   }
-                  // C355: qty label + pill from the SHARED helper — the web row
-                  // now honours expected-at-warehouse and terminal states exactly
-                  // like the mobile tiles (it used to ignore both).
-                  final rv = fulfillRowView(
-                    arrivals: widget.arrivals,
-                    ordered: mp.orderedTotal,
-                    shopQty: mp.shopQtyTotal,
-                    received: mp.receivedTotal,
-                    expected: widget.arrivals ? mp.expectedTotal : null,
-                    combinedState: mp.combinedState,
-                  );
                   // C359: only a dispute candidate is tappable + tinted light-yellow.
                   final isCandidate = _mIsCandidate(mp);
                   if (isCandidate) {
@@ -6153,20 +6113,20 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                           mp.packType.isEmpty ? '—' : mp.packType,
                           style: const TextStyle(fontSize: 12, color: _kSub),
                         )),
-                        // col3: qty progress (SHARED helper — awaiting shows a dash)
+                        // col3: qty progress — backend-owned merged_items[].qty_label, verbatim.
                         Expanded(flex: 2, child: Text(
-                          rv.awaitingResolution ? '—' : rv.qtyLabel,
+                          mp.qtyLabel,
                           style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
                           textAlign: TextAlign.right,
                         )),
                         const SizedBox(width: 16), // C358 B2: gap after Received
                         // C357 col: Dispute Type — SHARED kind label for the matched
-                        // dispute, else the flagged count_issue kind, else "—".
+                        // dispute, else the backend's issue_chip label, else "—".
                         Expanded(flex: 3, child: Builder(builder: (_) {
                           final tab = widget.arrivals ? 'warehouse' : 'shop';
                           final kindLabel = deskDisputeItem != null
                               ? disputeKindLabel(deskDisputeItem.kind)
-                              : issueChipLabel(mp.mergedCountIssue); // C361: any flagged line
+                              : mp.issueChip?['label']?.toString(); // C361: any flagged line
                           if (kindLabel == null) {
                             return const Text('—', style: TextStyle(fontSize: 12, color: _kSub));
                           }
@@ -6193,18 +6153,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                         })),
                         const SizedBox(width: 12), // C358 B2: gap after Dispute Type
                         // C357 col: Item Status — backend item_status_label for the
-                        // dispute, else the plain line status ("—" when just pending).
+                        // dispute, else the backend's merged_items[].status_label, verbatim.
                         Expanded(flex: 3, child: Builder(builder: (_) {
                           final tab = widget.arrivals ? 'warehouse' : 'shop';
-                          String statusText;
-                          if (deskDisputeItem != null && deskDisputeItem.itemStatusLabel.isNotEmpty) {
-                            statusText = deskDisputeItem.itemStatusLabel;
-                          } else {
-                            final ps = rv.pillState;
-                            // C361: same shared label as this row's _StatePill — no casing drift.
-                            statusText = ps == 'pending' ? '—' : statusPillLabel(ps);
-                          }
-                          if (statusText == '—') {
+                          final statusText = (deskDisputeItem != null && deskDisputeItem.itemStatusLabel.isNotEmpty)
+                              ? deskDisputeItem.itemStatusLabel
+                              : mp.statusLabel;
+                          if (statusText.isEmpty) {
                             return const Text('—', style: TextStyle(fontSize: 12, color: _kSub));
                           }
                           RenderLog.write('c357_status_cell', 'tab=$tab');
@@ -6216,12 +6171,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                           );
                         })),
                         const SizedBox(width: 12), // C358 B2: gap after Item Status
-                        // col4: status chip (SHARED helper pill state)
+                        // col4: status chip — backend-owned merged_items[].status_label/status_colors.
                         Expanded(flex: 2, child: Align(
                           alignment: Alignment.centerRight,
-                          child: rv.awaitingResolution
-                              ? const Text('awaiting', style: TextStyle(fontSize: 10, color: _kSub))
-                              : _StatePill(rv.pillState),
+                          child: _BackendStatePill(
+                            label: mp.statusLabel,
+                            bg: _hexColor(mp.statusColors?['bg'], _kPendingBg),
+                            fg: _hexColor(mp.statusColors?['fg'], _kPendingFg),
+                          ),
                         )),
                       ]),
                     ),
@@ -6836,170 +6793,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           ),
       ]),
     );
-  }
-
-  // ── Focused item card ──────────────────────────────────────────────────────
-
-
-
-
-  Widget _buildDoneState() {
-    final total     = _items.length;
-    final received  = _items.where((i) => stateOf(i) == 'received').length;
-    final short     = _items.where((i) => stateOf(i) == 'short').length;
-    final wrong     = _items.where((i) => stateOf(i) == 'wrong').length;
-    final notComing = _items.where((i) => stateOf(i) == 'not_coming').length;
-
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Container(
-            padding: const EdgeInsets.all(20),
-            decoration: const BoxDecoration(color: _kReceivedBg, shape: BoxShape.circle),
-            child: const Icon(Icons.check_circle_rounded, color: _kReceivedFg, size: 48),
-          ),
-          const SizedBox(height: 16),
-          Text('${_selectedSupplier ?? 'Supplier'} counted ✓',
-              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: _kText),
-              textAlign: TextAlign.center),
-          const SizedBox(height: 4),
-          Text('$total items processed',
-              style: const TextStyle(fontSize: 14, color: _kSub)),
-          const SizedBox(height: 12),
-          Wrap(spacing: 8, runSpacing: 8, alignment: WrapAlignment.center, children: [
-            _SummaryChip('$received received', _kReceivedBg, _kReceivedFg),
-            if (short > 0)     _SummaryChip('$short short',     _kShortBg,     _kShortFg),
-            if (wrong > 0)     _SummaryChip('$wrong wrong',     _kWrongBg,     _kWrongFg),
-            if (notComing > 0) _SummaryChip('$notComing N/A',   _kNotComingBg, _kNotComingFg),
-          ]),
-          const SizedBox(height: 16),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            decoration: BoxDecoration(
-              color: _kPendingBg,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: _kPendingFg.withValues(alpha: 0.3)),
-            ),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              const Icon(Icons.local_shipping_outlined, size: 14, color: _kPendingFg),
-              const SizedBox(width: 8),
-              const Flexible(child: Text(
-                'Counted — not yet at warehouse.\nGo to Warehouse tab to mark this box arrived.',
-                style: TextStyle(fontSize: 12, color: _kPendingFg),
-              )),
-            ]),
-          ),
-          const SizedBox(height: 20),
-          OutlinedButton.icon(
-            onPressed: () => setState(() => _showListView = true),
-            icon: const Icon(Icons.list_rounded, size: 16),
-            label: const Text('Review all items'),
-            style: OutlinedButton.styleFrom(
-                foregroundColor: _kGreen, side: const BorderSide(color: _kGreen)),
-          ),
-          const SizedBox(height: 12),
-          OutlinedButton.icon(
-            onPressed: () {
-              setState(() { _items = []; _selectedSupplier = null; });
-              _loadSuppliers();
-            },
-            icon: const Icon(Icons.refresh_rounded, size: 16),
-            label: const Text('New supplier'),
-            style: OutlinedButton.styleFrom(
-                foregroundColor: _kSub, side: const BorderSide(color: _kBorder)),
-          ),
-        ]),
-      ),
-    );
-  }
-
-  Widget _buildListView() => _buildItemList(); // legacy alias
-
-  Widget _buildItemList() {
-    RenderLog.write('81_item_list_rendered', '${_items.length}');
-    RenderLog.write('81_progress', _boxProgressLabel);
-
-    return Column(children: [
-      if (widget.arrivals) _buildBagControl(),
-      Expanded(
-        child: ListView.separated(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-          itemCount: _items.length,
-          separatorBuilder: (_, __) => const SizedBox(height: 6),
-          itemBuilder: (_, i) {
-            final item    = _items[i];
-            final state   = item['fulfillment_state']?.toString() ?? 'pending';
-            final name    = item['product_name']?.toString() ?? '—';
-            final ordQty   = (item['ordered_qty'] as num?)?.toInt() ?? 0;
-            final recQty   = (item['received_qty'] as num?)?.toInt() ?? 0;
-            final packType = item['pack_type']?.toString() ?? '';
-            final imageUrl = item['image_url']?.toString();
-            if (state == 'wrong' || state == 'not_coming') {
-              RenderLog.write('c177_wh_states', 'state=$state;idx=$i');
-            }
-
-            // #253/#254: bag_breakdown per item (Arrivals only), format: "37:03 38:05"
-            final breakdownRaw = item['bag_breakdown'];
-            final breakdown = breakdownRaw is List && (breakdownRaw as List).isNotEmpty
-                ? breakdownRaw.cast<Map>()
-                    .map((b) => '${b['bag_no']}:${(b['qty'] as num).toInt().toString().padLeft(2, '0')}')
-                    .join(' ')
-                : null;
-            if (widget.arrivals && breakdown != null && breakdown.isNotEmpty) {
-              RenderLog.write('c254_breakdown_ok', 'mobile;idx=$i;bags=$breakdown');
-            }
-
-            return GestureDetector(
-              onTap: () => _showItemSheet(item),
-              child: Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: _kCard,
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                    color: state == 'pending' ? _kBorder : (_stateBgMap[state] ?? _kBorder),
-                  ),
-                ),
-                child: Row(children: [
-                  _FulfilImageTile(imageUrl, size: 40),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text(name,
-                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
-                          maxLines: 1, overflow: TextOverflow.ellipsis),
-                      const SizedBox(height: 2),
-                      Text('$recQty/$ordQty${packType.isNotEmpty ? ' $packType' : ''}',
-                          style: const TextStyle(fontSize: 12, color: _kSub)),
-                      if (widget.arrivals && breakdown != null && breakdown.isNotEmpty) ...[
-                        const SizedBox(height: 2),
-                        // CHANGE #269 — black-on-grey badge style
-                        Builder(builder: (_) {
-                          RenderLog.write('c269_bag_badge', 'list;$breakdown');
-                          return Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                            decoration: BoxDecoration(
-                              color: Color(0xFFEEEEEE),
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Text(breakdown!,
-                                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Colors.black87),
-                                maxLines: 2, overflow: TextOverflow.ellipsis),
-                          );
-                        }),
-                      ],
-                    ]),
-                  ),
-                  const SizedBox(width: 8),
-                  _StatePill(state),
-                ]),
-              ),
-            );
-          },
-        ),
-      ),
-    ]);
   }
 
   // #162: delegates to FulfillItemSheet in lib/widgets/fulfill_item_sheet.dart.
@@ -9852,6 +9645,10 @@ class _ProductReceiveSheet extends StatefulWidget {
   // balance reference at warehouse is `expected`, not raw ordered.
   final int? expectedTotal;
   final String combinedState;
+  // Backend-owned: fw_get_state()'s merged_items[] status_label/status_colors,
+  // rendered verbatim by the header pill.
+  final String statusLabel;
+  final Map<String, String>? statusColors;
   final DisputeItem? existingDispute;
   // #258 BUG4: arrivals mode — "Got all" calls bag_count_set instead of fw_product_action.
   final bool arrivals;
@@ -9886,6 +9683,8 @@ class _ProductReceiveSheet extends StatefulWidget {
     this.shopQtyCounted = 0,
     this.expectedTotal,
     required this.combinedState,
+    this.statusLabel = '',
+    this.statusColors,
     this.existingDispute,
     this.arrivals = false,
     this.activeBagNo,
@@ -10529,25 +10328,15 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
   Widget build(BuildContext context) {
     final ord = _orderedTotal;
     final state = _localState;
-    // C365 (E): unify the header status with the LIST ROW — derive from fulfillRowView on the
-    // AGGREGATE product totals (received>=ordered rule) so the popup and list can never diverge.
-    final rv365 = fulfillRowView(
-      arrivals: widget.arrivals,
-      ordered: widget.orderedTotal,
-      shopQty: widget.shopQtyTotal,
-      received: widget.receivedTotal,
-      expected: widget.expectedTotal,
-      combinedState: widget.combinedState,
-    );
-    final unifiedStatus = rv365.pillState;
     // C365 (D): breakdown values — counted total (Σ received @wh / Σ shop_qty @shop), disputed (Σ issue_qty).
     final countedTotal = widget.arrivals ? widget.receivedTotal : widget.shopQtyCounted;
     final disputedTotal = widget.mergedIssueQty;
     // C359: counting is VOICE-ONLY — the manual Got-all / Report-missing buttons
     // were removed from this popup. The only remaining in-flight guard is Undo.
     final isBusy = _undoing;
-    final bg = _stateBgMap[unifiedStatus] ?? _kPendingBg;
-    final fg = _stateFgMap[unifiedStatus] ?? _kPendingFg;
+    // Backend-owned: fw_get_state()'s merged_items[] status_label/status_colors, verbatim.
+    final bg = _hexColor(widget.statusColors?['bg'], _kPendingBg);
+    final fg = _hexColor(widget.statusColors?['fg'], _kPendingFg);
     final isActioned = state != 'pending';
 
     // C359: this popup only opens for a dispute candidate. "Report missing / Short"
@@ -10586,15 +10375,10 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
                 ]);
               }),
               const SizedBox(height: 4),
-              // C365 (E): unified status label — same fulfillRowView source as the list row.
+              // Backend-owned: fw_get_state()'s merged_items[] status_label, verbatim.
               Builder(builder: (_) {
-                RenderLog.write('c365_status_one', 'status=$unifiedStatus');
-                return Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
-                  child: Text(statusPillLabel(unifiedStatus),
-                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg)),
-                );
+                RenderLog.write('c365_status_one', 'status=${widget.statusLabel}');
+                return _BackendStatePill(label: widget.statusLabel, bg: bg, fg: fg);
               }),
             ]),
           ),

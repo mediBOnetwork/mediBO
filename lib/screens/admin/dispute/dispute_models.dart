@@ -112,6 +112,9 @@ class DisputeItem {
   // Backend-owned (fw_get_disputes): friendly kind text + its tag colour.
   final String kindLabel;
   final Map<String, String>? kindColors; // {bg, fg}
+  // Backend-owned (fw_get_disputes): Active/Inactive label + the full badge/chip
+  // colour set for this dispute's active state — {label, bg, fg, border}.
+  final Map<String, String>? activeColors;
   // Backend-owned: null when there's no return note, else the full chip payload.
   final DisputeReturnNoteChip? returnNoteChip;
 
@@ -154,6 +157,7 @@ class DisputeItem {
     this.adjAmount,
     this.kindLabel = '',
     this.kindColors,
+    this.activeColors,
     this.returnNoteChip,
   });
 
@@ -211,6 +215,14 @@ class DisputeItem {
           ? {
               'bg': (j['kind_colors'] as Map)['bg']?.toString() ?? '',
               'fg': (j['kind_colors'] as Map)['fg']?.toString() ?? '',
+            }
+          : null,
+      activeColors: j['active_colors'] is Map
+          ? {
+              'label': (j['active_colors'] as Map)['label']?.toString() ?? '',
+              'bg': (j['active_colors'] as Map)['bg']?.toString() ?? '',
+              'fg': (j['active_colors'] as Map)['fg']?.toString() ?? '',
+              'border': (j['active_colors'] as Map)['border']?.toString() ?? '',
             }
           : null,
       returnNoteChip: DisputeReturnNoteChip.fromJson(j['return_note_chip']),
@@ -275,6 +287,9 @@ class AggregatedDispute {
   String? get token => representative.token;
   String? get response => representative.response;
   String? get resolutionOutcome => representative.resolutionOutcome;
+  // Backend-owned (fw_get_disputes): representative is chosen to be an active
+  // line whenever one exists, so its active_colors always matches `active` above.
+  Map<String, String>? get activeColors => representative.activeColors;
 
   /// C362: the ACTIVE underlying dispute ids — an action on the aggregated row fans out to
   /// each ACTIVE line only. Never re-touch a settled/inactive line: the special 'close'

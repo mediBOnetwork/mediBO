@@ -155,19 +155,6 @@ String? disputedChipLabel(String? countIssue, int? issueQty, [String? packType])
   return 'In dispute';
 }
 
-/// Canonical status-pill label. C361: the web "Item Status" column re-derived this
-/// inline (capitalised) with a different casing than the _StatePill chip in the SAME
-/// row ("Received" vs "received"). One definition so a pill and any text column that
-/// shows the same state can never disagree.
-String statusPillLabel(String state) {
-  RenderLog.write('c355_shared', 'fn=statusLabel');
-  return switch (state) {
-    'wrong' => 'Wrong item',
-    'not_coming' => 'Not coming',
-    _ => state.replaceAll('_', ' '),
-  };
-}
-
 /// Whether a row should show the active-dispute strip. Canonical rule: only when
 /// a dispute exists AND is still active (web used to show it for resolved ones).
 bool disputeStripVisible(DisputeItem? item) {

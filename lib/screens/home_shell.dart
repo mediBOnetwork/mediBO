@@ -384,6 +384,13 @@ class _HomeShellState extends State<HomeShell> {
     if (!kIsWeb) return false;
     if (event is! KeyDownEvent) return false;
     if (!mounted) return false;
+    // This handler is registered on the global HardwareKeyboard singleton,
+    // so it keeps firing even when a screen/dialog is pushed on top of the
+    // shell (e.g. an admin sub-screen, or a form dialog inside one) — the
+    // storefront search box underneath isn't even visible then, so never
+    // steal keystrokes meant for whatever IS on top.
+    final route = ModalRoute.of(context);
+    if (route != null && !route.isCurrent) return false;
     // Search box only exists on the storefront tab, and only while no
     // overlay (cart/login) with its own fields is open on top of it.
     if (_index != 0 || _cartOpen || _loginOpen) return false;

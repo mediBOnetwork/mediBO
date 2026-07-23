@@ -38,6 +38,16 @@ import 'package:zxing2/qrcode.dart';
 // ── C174/B10: single canonical dispute domain (no www per Cloudflare redirects) ──
 const _kDisputeDomain = 'https://medibo.in';
 
+// Parses a backend-supplied "#RRGGBB" (or "RRGGBB") hex colour string.
+// Pure format conversion — Flutter needs a Color object, the RPC gives a
+// string; no colour/state decision is made here.
+Color _hexColor(String? hex, Color fallback) {
+  if (hex == null || hex.isEmpty) return fallback;
+  final h = hex.startsWith('#') ? hex.substring(1) : hex;
+  final v = int.tryParse(h.length == 6 ? 'FF$h' : h, radix: 16);
+  return v == null ? fallback : Color(v);
+}
+
 // ── Color tokens ────────────────────────────────────────────────────────────
 const _kGreen        = Color(0xFF1B7A43);
 const _kBg           = Color(0xFFF5F6F8);
@@ -186,6 +196,25 @@ class _VoiceCaps {
 }
 
 // ── Shared micro-widgets ────────────────────────────────────────────────────
+
+// Renders fw_get_state()'s per-item status_label/status_colors verbatim — no
+// client-side label or colour derivation. Only usable where a single raw
+// order-item (not a merged, multi-line product) is available.
+class _BackendStatePill extends StatelessWidget {
+  final String label;
+  final Color bg;
+  final Color fg;
+  const _BackendStatePill({required this.label, required this.bg, required this.fg});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
+      child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg)),
+    );
+  }
+}
 
 class _StatePill extends StatelessWidget {
   final String state;
@@ -992,8 +1021,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   bool _recording = false;
   bool _showListView = false;
 
-  // #142: per-supplier dot state: 'green' | 'light_yellow' | 'yellow'
-  Map<String, String> _supplierDotMap = {};
+  // Per-supplier dot {fill,border} hex colours straight from fw_list_arrivals()'s
+  // dot.shop (Supplier Shop tab) / dot.warehouse (Warehouse tab) — rendered
+  // verbatim, never recomputed client-side.
+  Map<String, Map<String, String>> _supplierDotMap = {};
 
   // Per-supplier badge {letter,color} straight from fw_list_arrivals() — the
   // backend's own C/CR/P classification. Rendered verbatim by CountBadge;
@@ -1031,9 +1062,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   }
   bool _confirmingAll = false;
   bool _submittingCollect = false; // #125: Z1 guard — disables both Collect submit buttons mid-flight
-  // #339: per-supplier arrivals confirmed/received state from fw_list_arrivals (for chip colour)
-  Map<String, bool> _arrivalsConfirmedMap = {};
-  Map<String, int> _arrivalsReceivedMap = {};
 
   // #116: supplier count mode from fw_get_state ('shop'|'warehouse'|null)
   String? _supplierMode;
@@ -1637,18 +1665,26 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         RenderLog.write('c473_fw_sync',
             'date=${ymd(scope.date)} shop=$c473Shop warehouse=$c473Warehouse');
         final rawList = (res['warehouse_suppliers'] as List? ?? []);
-        final dotMap = <String, String>{};
+        // Backend-owned dot: fw_list_arrivals() now returns per supplier
+        // dot.shop/dot.warehouse = {state, fill, border} (fill/border are hex
+        // strings). Warehouse tab reads dot.warehouse verbatim.
+        final dotMap = <String, Map<String, String>>{};
         final badgeMap = <String, Map<String, String>>{};
         final modeMap = <String, String?>{};
-        final arrivalsConfirmedMap = <String, bool>{};
-        final arrivalsReceivedMap = <String, int>{};
         final names = <String>[];
         for (final r in rawList) {
           final m = r as Map;
           final name = (m['supplier'] ?? m['supplier_name'])?.toString() ?? '';
           if (name.isEmpty) continue;
           if (!names.contains(name)) names.add(name);
-          dotMap[name] = m['dot']?.toString() ?? 'yellow';
+          final dotObj = m['dot'];
+          if (dotObj is Map && dotObj['warehouse'] is Map) {
+            final wh = dotObj['warehouse'] as Map;
+            dotMap[name] = {
+              'fill': wh['fill']?.toString() ?? '',
+              'border': wh['border']?.toString() ?? '',
+            };
+          }
           final badge = m['badge'];
           if (badge is Map) {
             badgeMap[name] = {
@@ -1658,17 +1694,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           }
           final mv = m['mode']?.toString();
           modeMap[name] = (mv != null && mv.isNotEmpty) ? mv : null;
-          // #339: chip colour — extract if backend provides these fields
-          if (m.containsKey('arrivals_confirmed')) {
-            arrivalsConfirmedMap[name] = m['arrivals_confirmed'] == true;
-          }
-          if (m.containsKey('received_total')) {
-            arrivalsReceivedMap[name] = (m['received_total'] as num?)?.toInt() ?? 0;
-          }
-          // #340: dot state logged (chip colour restored to response-status meaning)
-          RenderLog.write('c340_dot_state',
-              'supplier=$name;confirmed=${arrivalsConfirmedMap[name]};received=${arrivalsReceivedMap[name]};'
-              'state=${arrivalsConfirmedMap[name]==true?"confirmed":(arrivalsReceivedMap[name]??0)>0?"partial":"pending"}');
         }
         // #117 badge counts render-log
         final cCount = modeMap.values.where((v) => v == 'shop').length;
@@ -1714,12 +1739,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           _supplierDotMap = {..._supplierDotMap, ...dotMap};
           _supplierBadgeMap = {..._supplierBadgeMap, ...badgeMap};
           _supplierModeMap = {..._supplierModeMap, ...modeMap};
-          if (arrivalsConfirmedMap.isNotEmpty) {
-            _arrivalsConfirmedMap = {..._arrivalsConfirmedMap, ...arrivalsConfirmedMap};
-          }
-          if (arrivalsReceivedMap.isNotEmpty) {
-            _arrivalsReceivedMap = {..._arrivalsReceivedMap, ...arrivalsReceivedMap};
-          }
           // Do NOT reset _arrivalsLocked here — it is set by _checkArrivalsLocked()
           // after _loadBox(). Resetting it here clobbers the locked state immediately
           // after fw_confirm_all_received sets it to true. (bug fix #337-A)
@@ -1757,6 +1776,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       final seen = <String>{};
       final names = <String>[];
       final badgeMap = <String, Map<String, String>>{};
+      // Backend-owned dot: fw_list_arrivals() now returns per supplier
+      // dot.shop/dot.warehouse = {state, fill, border} (fill/border are hex
+      // strings). Supplier Shop tab reads dot.shop verbatim.
+      final dotMap = <String, Map<String, String>>{};
       for (final r in rawList) {
         final m = r as Map;
         final s = (m['supplier'] ?? m['supplier_name'])?.toString();
@@ -1769,6 +1792,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             'color': badge['color']?.toString() ?? '',
           };
         }
+        final dotObj = m['dot'];
+        if (dotObj is Map && dotObj['shop'] is Map) {
+          final shop = dotObj['shop'] as Map;
+          dotMap[s] = {
+            'fill': shop['fill']?.toString() ?? '',
+            'border': shop['border']?.toString() ?? '',
+          };
+        }
       }
       RenderLog.write('78_collect_suppliers_count', '${names.length}');
       RenderLog.write('c444_shop_suppliers', '${names.length}');
@@ -1776,9 +1807,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         _suppliers = names;
         _loadingSuppliers = false;
         _supplierBadgeMap = {..._supplierBadgeMap, ...badgeMap};
+        _supplierDotMap = {..._supplierDotMap, ...dotMap};
       });
       widget.onSupplierCountChanged?.call(names.length);
-      _loadSupplierDots(); // #142: populate status dots
       _loadCollectModes(); // #120: populate C/CR badge map
       _loadDisputes();     // #132A: populate dispute badge map
     } catch (e) {
@@ -1847,52 +1878,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._setDisputeCount(rawOpenCount);
       setState(() { _disputeMap = map; _disputeItemMap = itemMap; });
     } catch (_) {}
-  }
-
-  // #142: query per-supplier dot state for the accordion list.
-  Future<void> _loadSupplierDots() async {
-    if (_suppliers.isEmpty || !mounted) return;
-    try {
-      // #335 BUG-1: derive dot from order_items only — never read supplier_count_mode for stage/colour
-      // collect_locked=true → confirmed/forwarded → green
-      // any shop_qty > 0 → counting started → amber
-      // neither → not started → yellow
-      final itemsRes = await Supabase.instance.client
-          .from('order_items')
-          .select('assigned_supplier, collect_locked, shop_qty')
-          .inFilter('assigned_supplier', _suppliers)
-          .not('fulfillment_state', 'in', '("shipped","cancelled")') as List;
-      if (!mounted) return;
-
-      // Per-supplier: confirmed (locked) or any shop_qty set
-      final lockedSet  = <String>{};
-      final countedSet = <String>{}; // any shop_qty > 0
-      for (final r in itemsRes) {
-        final s = (r as Map)['assigned_supplier']?.toString();
-        if (s == null) continue;
-        if (r['collect_locked'] == true) lockedSet.add(s);
-        final sq = (r['shop_qty'] as num?)?.toInt();
-        if (sq != null && sq > 0) countedSet.add(s);
-      }
-
-      // #335 D1: green = confirmed; amber = counting in progress; yellow = not started
-      final dotMap = <String, String>{};
-      for (final name in _suppliers) {
-        final String dot;
-        if (lockedSet.contains(name)) {
-          dot = 'green';
-        } else if (countedSet.contains(name)) {
-          dot = 'light_yellow'; // amber — counting started, not yet confirmed
-        } else {
-          dot = 'yellow';
-        }
-        dotMap[name] = dot;
-        RenderLog.write('c334_dot_rule', 'supplier=$name;state=$dot');
-      }
-      if (mounted) setState(() => _supplierDotMap = dotMap);
-    } catch (_) {
-      // Silently fail — dots just stay default
-    }
   }
 
   Future<void> _loadBox(String supplier) async {
@@ -3585,7 +3570,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       RenderLog.write('c335_confirm', 'shop_confirm_ok=y;shorts=$shortsDisputed');
       RenderLog.write('c337_shop_confirmed', 'supplier=$supplier;shorts=$shortsDisputed');
       RenderLog.write('c353_refetch', 'src=action,tab=collect'); // C353: confirm refetch
-      _loadSupplierDots();
+      _loadSuppliers(); // refreshes badge + dot (both backend-owned, from fw_list_arrivals)
       _loadCollectModes(); // R2: badge P→C immediately
       _loadDisputes(); // #332 D1: refresh Disputes tab so new short-item disputes appear immediately
       context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._refreshArrivals(); // R2: supplier appears in Arrivals
@@ -3641,7 +3626,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       RenderLog.write('c117_collect_confirm_text_mode', 'warehouse');
       RenderLog.write('c125_submit_refresh', 'true');
       RenderLog.write('c337_skip_to_wh', 'supplier=$supplier');
-      _loadSupplierDots();
+      _loadSuppliers(); // refreshes badge + dot (both backend-owned, from fw_list_arrivals)
       _loadCollectModes(); // R2: badge P→CR immediately
       context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._refreshArrivals(); // R2: supplier appears in Arrivals
       if (mounted) {
@@ -4338,11 +4323,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // Column layout: compact header → voice bar → progress → Expanded item list → pinned footer.
   Widget _buildCollectSingleSupplier(bool isAdmin) {
     final name = _selectedSupplier!;
-    final dot = _supplierDotMap[name] ?? 'yellow';
-    final dotFill   = dot == 'green' ? _kDotGreen
-        : dot == 'light_yellow' ? _kDotLightYellow
-        : _kDotYellow;
-    final dotBorder = dot == 'green' ? _kDotGreen : _kDotBorderLight;
+    final dot = _supplierDotMap[name];
+    final dotFill   = _hexColor(dot?['fill'], _kDotYellow);
+    final dotBorder = _hexColor(dot?['border'], _kDotBorderLight);
     final locked = _boxLocked;
 
     RenderLog.write('c143_fullscreen', 'supplier=$name;pinned_footer=y');
@@ -4423,22 +4406,19 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     ]);
   }
 
-  // Dot colour constants for the 3-state indicator.
-  static const _kDotGreen       = Color(0xFF1B7A43); // confirmed/sent
-  static const _kDotLightYellow = Color(0xFFFEF3C7); // counting in progress
-  static const _kDotYellow      = Color(0xFFFCD34D); // nothing started yet
-  static const _kDotBorderLight = Color(0xFFF59E0B); // border for yellow tones
+  // Fallback dot colours used only while _supplierDotMap hasn't loaded yet.
+  static const _kDotYellow      = Color(0xFFFCD34D);
+  static const _kDotBorderLight = Color(0xFFF59E0B);
 
   Widget _buildSupplierAccordionRow(String name, bool isAdmin) {
     final isExpanded = _selectedSupplier == name;
-    final dot = _supplierDotMap[name] ?? 'yellow';
     // #147 FIX A: per-row GlobalKey for Scrollable.ensureVisible (header pin)
     final rowKey = _rowKeys.putIfAbsent(name, () => GlobalKey());
 
     // #153: outer shell is shared with Arrivals; only expandedContent differs.
     return _SupplierAccordionShell(
       name: name,
-      dot: dot,
+      dot: _supplierDotMap[name],
       isExpanded: isExpanded,
       anyExpanded: _selectedSupplier != null,
       rowKey: rowKey,
@@ -4482,35 +4462,17 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       // #183: in-place animated expand — body reveals via _sharedSmoothReveal in shell.
       expandedContent: isExpanded ? _buildExpandedSupplierBody(name, isAdmin) : const SizedBox.shrink(),
       badge: _supplierBadgeMap[name],
-      // #339: pass server-truth arrivals state for chip colour (null if backend doesn't provide)
-      arrivalsConfirmed: widget.arrivals ? _arrivalsConfirmedMap[name] : null,
-      arrivalsReceived: widget.arrivals ? _arrivalsReceivedMap[name] : null,
     );
   }
 
   // ── #116: Full-height card with sticky supplier-name header ─────────────────
   // Replaces the accordion expanded view — name row is pinned; content scrolls.
   Widget _buildExpandedSupplierCard(String name, bool isAdmin) {
-    final dot = _supplierDotMap[name] ?? 'yellow';
-    // #340: warehouse dot binds to receiving state; shop dot keeps legacy 'dot' string.
-    final Color dotFill;
-    final Color dotBorder;
-    if (widget.arrivals) {
-      final confirmed = _arrivalsConfirmedMap[name];
-      final received = _arrivalsReceivedMap[name] ?? 0;
-      if (confirmed == true) {
-        dotFill = _kDotGreen; dotBorder = _kDotGreen;
-      } else if (received > 0) {
-        dotFill = _kDotYellow; dotBorder = _kDotBorderLight;
-      } else {
-        dotFill = dot == 'light_yellow' ? _kDotLightYellow : _kDotYellow;
-        dotBorder = _kDotBorderLight;
-      }
-    } else {
-      dotFill = dot == 'green' ? _kDotGreen
-          : dot == 'light_yellow' ? _kDotLightYellow : _kDotYellow;
-      dotBorder = dot == 'green' ? _kDotGreen : _kDotBorderLight;
-    }
+    // Backend-owned dot: fw_list_arrivals()'s dot.shop/dot.warehouse, already
+    // resolved to the right stage per-tab in _loadSuppliers().
+    final dot = _supplierDotMap[name];
+    final dotFill   = _hexColor(dot?['fill'], _kDotYellow);
+    final dotBorder = _hexColor(dot?['border'], _kDotBorderLight);
     final locked = widget.arrivals ? _arrivalsLocked : _boxLocked;
     final safeBottom = MediaQuery.of(context).padding.bottom;
     final visibleItems = _visibleItems();
@@ -5012,8 +4974,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         decoration: BoxDecoration(
           color: _kCard,
           borderRadius: BorderRadius.circular(10),
+          // Backend-owned: fw_get_state()'s per-item status_colors.bg, verbatim.
           border: Border.all(
-            color: state == 'pending' ? _kBorder : (_stateBgMap[state] ?? _kBorder),
+            color: _hexColor((item['status_colors'] as Map?)?['bg']?.toString(), _kBorder),
           ),
         ),
         child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
@@ -5064,7 +5027,15 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   Text(rv.qtyLabel,
                       style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
                   const SizedBox(width: 6),
-                  _StatePill(rv.pillState),
+                  // Backend-owned: fw_get_state()'s per-item status_label + status_colors, verbatim.
+                  Builder(builder: (_) {
+                    final colors = item['status_colors'] as Map?;
+                    return _BackendStatePill(
+                      label: item['status_label']?.toString() ?? '',
+                      bg: _hexColor(colors?['bg']?.toString(), _kPendingBg),
+                      fg: _hexColor(colors?['fg']?.toString(), _kPendingFg),
+                    );
+                  }),
                 ]);
               }),
               // CHANGE #471: backend date chip (older item mixed into today's list) — muted, verbatim.
@@ -5104,10 +5075,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   ),
                 ),
               ],
-              // C355: count_issue amber chip — label from the SHARED helper
+              // Backend-owned: fw_get_state()'s per-item issue_chip.label, verbatim.
               Builder(builder: (_) {
-                final lbl = issueChipLabel(item['count_issue']?.toString());
-                if (lbl == null) return const SizedBox.shrink();
+                final issueChip = item['issue_chip'] as Map?;
+                final lbl = issueChip?['label']?.toString();
+                if (lbl == null || lbl.isEmpty) return const SizedBox.shrink();
                 RenderLog.write('c351_chip', 'kind=${item['count_issue']}');
                 return _issueChip(lbl);
               }),
@@ -5484,11 +5456,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c354_live', 'tab=${widget.arrivals ? 'warehouse' : 'shop'},src=action');
     await _loadDisputes();
     await _reloadItemsFromDB();
-    if (widget.arrivals) {
-      await _loadSuppliers();
-    } else {
+    await _loadSuppliers(); // refreshes badge + dot (both backend-owned, from fw_list_arrivals)
+    if (!widget.arrivals) {
       await _loadCollectModes();
-      await _loadSupplierDots();
     }
   }
 
@@ -5498,10 +5468,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     if (!mounted) return;
     RenderLog.write('c353_refetch', 'src=rt,tab=${widget.arrivals ? 'arrivals' : 'collect'}');
     RenderLog.write('c354_live', 'tab=${widget.arrivals ? 'warehouse' : 'shop'},src=rt');
-    await _loadSuppliers();
+    await _loadSuppliers(); // refreshes badge + dot (both backend-owned, from fw_list_arrivals)
     if (!widget.arrivals) {
       await _loadCollectModes();
-      await _loadSupplierDots();
     }
     await _loadDisputes();
     await _reloadItemsFromDB();
@@ -9550,7 +9519,10 @@ Widget _sharedSmoothReveal(bool expanded, Widget child) => AnimatedSize(
 
 class _SupplierAccordionShell extends StatelessWidget {
   final String name;
-  final String dot;           // 'green' | 'light_yellow' | 'yellow'
+  // Verbatim {fill, border} hex colours from fw_list_arrivals()'s per-supplier
+  // dot.shop/dot.warehouse — already resolved to the right stage by the
+  // caller. null = nothing loaded yet (e.g. Pack tab, which uses `dots` below).
+  final Map<String, String>? dot;
   final bool isExpanded;
   final bool anyExpanded;     // any supplier open → bigger bottom gap
   final GlobalKey rowKey;
@@ -9559,9 +9531,6 @@ class _SupplierAccordionShell extends StatelessWidget {
   // Verbatim {letter, color} from fw_list_arrivals()'s per-supplier `badge`
   // field, passed straight to CountBadge. null = nothing to show (e.g. Pack tab).
   final Map<String, String>? badge;
-  // #339: arrivals chip colour from server truth (null = not available, use legacy)
-  final bool? arrivalsConfirmed;
-  final int? arrivalsReceived;
   // fix(pack): Pack tab's 3 status dots [allPacked, allCounted, readyDone] —
   // true=green, false=yellow. Null (every other caller) keeps the single
   // `dot` behavior below completely unchanged.
@@ -9569,44 +9538,24 @@ class _SupplierAccordionShell extends StatelessWidget {
 
   const _SupplierAccordionShell({
     required this.name,
-    required this.dot,
+    this.dot,
     required this.isExpanded,
     required this.anyExpanded,
     required this.rowKey,
     required this.onTap,
     required this.expandedContent,
     this.badge,
-    this.arrivalsConfirmed,
-    this.arrivalsReceived,
     this.dots,
   });
 
   static const _kDotGreen       = Color(0xFF1B7A43);
-  static const _kDotLightYellow = Color(0xFFFEF3C7);
   static const _kDotYellow      = Color(0xFFFCD34D);
   static const _kDotBorderLight = Color(0xFFF59E0B);
 
   @override
   Widget build(BuildContext context) {
-    // #340: warehouse dot binds to receiving state; shop/collect keeps legacy dot string.
-    final Color dotFill;
-    final Color dotBorder;
-    if (arrivalsConfirmed != null) {
-      final received = arrivalsReceived ?? 0;
-      if (arrivalsConfirmed!) {
-        dotFill = _kDotGreen; dotBorder = _kDotGreen;
-      } else if (received > 0) {
-        dotFill = _kDotYellow; dotBorder = _kDotBorderLight;
-      } else {
-        dotFill = dot == 'light_yellow' ? _kDotLightYellow : _kDotYellow;
-        dotBorder = _kDotBorderLight;
-      }
-    } else {
-      dotFill = dot == 'green' ? _kDotGreen
-              : dot == 'light_yellow' ? _kDotLightYellow
-              : _kDotYellow;
-      dotBorder = dot == 'green' ? _kDotGreen : _kDotBorderLight;
-    }
+    final dotFill   = _hexColor(dot?['fill'], _kDotYellow);
+    final dotBorder = _hexColor(dot?['border'], _kDotBorderLight);
     final bottomGap = anyExpanded ? 16.0 : 8.0;
 
     return Padding(
@@ -12904,13 +12853,6 @@ class _PackTabState extends State<_PackTab>
     return [allPacked, allCounted, readyDone];
   }
 
-  String _dot(Map<String, dynamic> c) {
-    final s = c['fulfillment_status']?.toString() ?? '';
-    if (s == 'ready') return 'green';
-    if (s == 'partial_ready' || s == 'in_transit') return 'light_yellow';
-    return 'yellow';
-  }
-
   @override
   Widget build(BuildContext context) {
     super.build(context);
@@ -12974,7 +12916,6 @@ class _PackTabState extends State<_PackTab>
 
     return _SupplierAccordionShell(
       name: name,
-      dot: _dot(c),
       dots: _packDots(c),
       isExpanded: isExpanded,
       anyExpanded: _expandedOrderId != null,

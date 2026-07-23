@@ -995,6 +995,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // #142: per-supplier dot state: 'green' | 'light_yellow' | 'yellow'
   Map<String, String> _supplierDotMap = {};
 
+  // Per-supplier badge {letter,color} straight from fw_list_arrivals() — the
+  // backend's own C/CR/P classification. Rendered verbatim by CountBadge;
+  // never recomputed client-side from mode/forwarded/arrivals_confirmed.
+  Map<String, Map<String, String>> _supplierBadgeMap = {};
+
   // #117: per-supplier count mode from fw_list_arrivals ('shop'|'warehouse'|null)
   Map<String, String?> _supplierModeMap = {};
 
@@ -1633,6 +1638,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             'date=${ymd(scope.date)} shop=$c473Shop warehouse=$c473Warehouse');
         final rawList = (res['warehouse_suppliers'] as List? ?? []);
         final dotMap = <String, String>{};
+        final badgeMap = <String, Map<String, String>>{};
         final modeMap = <String, String?>{};
         final arrivalsConfirmedMap = <String, bool>{};
         final arrivalsReceivedMap = <String, int>{};
@@ -1643,6 +1649,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           if (name.isEmpty) continue;
           if (!names.contains(name)) names.add(name);
           dotMap[name] = m['dot']?.toString() ?? 'yellow';
+          final badge = m['badge'];
+          if (badge is Map) {
+            badgeMap[name] = {
+              'letter': badge['letter']?.toString() ?? '',
+              'color': badge['color']?.toString() ?? '',
+            };
+          }
           final mv = m['mode']?.toString();
           modeMap[name] = (mv != null && mv.isNotEmpty) ? mv : null;
           // #339: chip colour — extract if backend provides these fields
@@ -1657,7 +1670,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               'supplier=$name;confirmed=${arrivalsConfirmedMap[name]};received=${arrivalsReceivedMap[name]};'
               'state=${arrivalsConfirmedMap[name]==true?"confirmed":(arrivalsReceivedMap[name]??0)>0?"partial":"pending"}');
         }
-        names.sort();
         // #117 badge counts render-log
         final cCount = modeMap.values.where((v) => v == 'shop').length;
         final crCount = modeMap.values.where((v) => v != 'shop').length;
@@ -1700,6 +1712,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           _suppliers = names;
           _loadingSuppliers = false;
           _supplierDotMap = {..._supplierDotMap, ...dotMap};
+          _supplierBadgeMap = {..._supplierBadgeMap, ...badgeMap};
           _supplierModeMap = {..._supplierModeMap, ...modeMap};
           if (arrivalsConfirmedMap.isNotEmpty) {
             _arrivalsConfirmedMap = {..._arrivalsConfirmedMap, ...arrivalsConfirmedMap};
@@ -1743,14 +1756,27 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       final rawList = (res['suppliers'] as List? ?? []);
       final seen = <String>{};
       final names = <String>[];
+      final badgeMap = <String, Map<String, String>>{};
       for (final r in rawList) {
-        final s = ((r as Map)['supplier'] ?? r['supplier_name'])?.toString();
-        if (s != null && s.isNotEmpty && seen.add(s)) names.add(s);
+        final m = r as Map;
+        final s = (m['supplier'] ?? m['supplier_name'])?.toString();
+        if (s == null || s.isEmpty || !seen.add(s)) continue;
+        names.add(s);
+        final badge = m['badge'];
+        if (badge is Map) {
+          badgeMap[s] = {
+            'letter': badge['letter']?.toString() ?? '',
+            'color': badge['color']?.toString() ?? '',
+          };
+        }
       }
-      names.sort();
       RenderLog.write('78_collect_suppliers_count', '${names.length}');
       RenderLog.write('c444_shop_suppliers', '${names.length}');
-      setState(() { _suppliers = names; _loadingSuppliers = false; });
+      setState(() {
+        _suppliers = names;
+        _loadingSuppliers = false;
+        _supplierBadgeMap = {..._supplierBadgeMap, ...badgeMap};
+      });
       widget.onSupplierCountChanged?.call(names.length);
       _loadSupplierDots(); // #142: populate status dots
       _loadCollectModes(); // #120: populate C/CR badge map
@@ -4455,8 +4481,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       },
       // #183: in-place animated expand — body reveals via _sharedSmoothReveal in shell.
       expandedContent: isExpanded ? _buildExpandedSupplierBody(name, isAdmin) : const SizedBox.shrink(),
-      mode: widget.arrivals ? _supplierModeMap[name] : _collectModeMap[name],
-      showPending: !widget.arrivals,
+      badge: _supplierBadgeMap[name],
       // #339: pass server-truth arrivals state for chip colour (null if backend doesn't provide)
       arrivalsConfirmed: widget.arrivals ? _arrivalsConfirmedMap[name] : null,
       arrivalsReceived: widget.arrivals ? _arrivalsReceivedMap[name] : null,
@@ -4563,10 +4588,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 const Icon(Icons.keyboard_arrow_up_rounded, size: 18, color: _kSub),
                 const SizedBox(width: 12),
                 // Constant-width badge slot matching the collapsed header exactly.
-                CountBadge(
-                  mode: widget.arrivals ? _supplierModeMap[name] : _collectModeMap[name],
-                  showPending: !widget.arrivals,
-                ),
+                CountBadge(badge: _supplierBadgeMap[name]),
                 const SizedBox(width: 8),
                 Container(
                   width: 12, height: 12,
@@ -9534,8 +9556,9 @@ class _SupplierAccordionShell extends StatelessWidget {
   final GlobalKey rowKey;
   final VoidCallback onTap;
   final Widget expandedContent; // AnimatedSize handles show/hide
-  final String? mode;         // #117: arrivals mode ('shop'|'warehouse'|null)
-  final bool showPending;     // #121: true = Collect tab, renders P when mode==null
+  // Verbatim {letter, color} from fw_list_arrivals()'s per-supplier `badge`
+  // field, passed straight to CountBadge. null = nothing to show (e.g. Pack tab).
+  final Map<String, String>? badge;
   // #339: arrivals chip colour from server truth (null = not available, use legacy)
   final bool? arrivalsConfirmed;
   final int? arrivalsReceived;
@@ -9552,8 +9575,7 @@ class _SupplierAccordionShell extends StatelessWidget {
     required this.rowKey,
     required this.onTap,
     required this.expandedContent,
-    this.mode,
-    this.showPending = false,
+    this.badge,
     this.arrivalsConfirmed,
     this.arrivalsReceived,
     this.dots,
@@ -9627,10 +9649,7 @@ class _SupplierAccordionShell extends StatelessWidget {
                 ),
                 const SizedBox(width: 12),
                 // Constant-width badge slot (38px) — flush right next to dot.
-                CountBadge(
-                  mode: mode,
-                  showPending: showPending,
-                ),
+                CountBadge(badge: badge),
                 const SizedBox(width: 8),
                 if (dots != null)
                   Row(mainAxisSize: MainAxisSize.min, children: [
@@ -9734,24 +9753,22 @@ class _HoldToUndoState extends State<_HoldToUndo>
 // ── #117: Count badge — fixed-width chip shown on Arrivals accordion rows ─────
 
 class CountBadge extends StatelessWidget {
-  const CountBadge({super.key, required this.mode, this.showPending = false});
-  final String? mode;
-  final bool showPending; // true = Collect tab; renders 'P' yellow when mode==null
+  const CountBadge({super.key, required this.badge});
+  // Verbatim {letter, color} from fw_list_arrivals()'s per-supplier `badge`
+  // field — never recomputed client-side. null = nothing to show yet.
+  final Map<String, String>? badge;
+
+  static const _kBadgeColors = {
+    'yellow': Color(0xFFF59E0B),
+    'green': Color(0xFF1B7A43),
+    'red': Color(0xFFD32F2F),
+  };
 
   @override
   Widget build(BuildContext context) {
-    final String? label = mode == 'shop' ? 'C'
-        : mode == 'warehouse' ? 'CR'
-        : showPending ? 'P'
-        : null;
-    if (label == null) return const SizedBox(width: 38, height: 24);
-    // #334 D2: C badge amber at shop stage (counting in progress); CR red for warehouse direct.
-    // #340: chip restored to supplier-response meaning (pre-#339); receiving state moved to dot.
-    final Color color = mode == 'shop'
-        ? const Color(0xFFF59E0B)
-        : mode == 'warehouse'
-            ? const Color(0xFFD32F2F)
-            : const Color(0xFFF59E0B);
+    final label = badge?['letter'];
+    if (label == null || label.isEmpty) return const SizedBox(width: 38, height: 24);
+    final color = _kBadgeColors[badge?['color']] ?? const Color(0xFFF59E0B);
     return SizedBox(
       width: 38,
       height: 24,
@@ -13007,8 +13024,6 @@ class _PackTabState extends State<_PackTab>
       },
       expandedContent:
           isExpanded ? _buildExpandedBody(c) : const SizedBox.shrink(),
-      mode: null,
-      showPending: false,
     );
   }
 
@@ -15949,13 +15964,8 @@ class _DisputesScreenState extends State<_DisputesScreen> {
       if (items.isNotEmpty) {
         RenderLog.write('c188_models_loaded', 'count=${items.length}');
       }
-      // Sort active first, then closed; newest first within each group
-      items.sort((a, b) {
-        if (a.isActive != b.isActive) return a.isActive ? -1 : 1;
-        final ac = a.createdAt ?? '';
-        final bc = b.createdAt ?? '';
-        return bc.compareTo(ac);
-      });
+      // fw_get_disputes() already returns items pre-sorted by (active-phase
+      // desc, status-priority desc, created_at desc) — render as received.
       final activeCount = items.where((d) => d.isActive).length;
       widget.onCountChanged(activeCount);
       // Load unfillable banner items (separate RPC — keep for existing banner)

@@ -167,20 +167,6 @@ String statusPillLabel(String state) {
   };
 }
 
-/// Dispute-kind tag label (Disputes tab card + action sheet). One definition so
-/// the card and the sheet header can never disagree.
-String disputeKindLabel(String kind) {
-  RenderLog.write('c355_shared', 'fn=kindTag');
-  return switch (kind) {
-    'wrong_item' => 'Wrong item',
-    'few_wrong' => 'Few wrong',
-    'damaged' => 'Damaged',
-    'excess' => 'Excess',
-    'not_coming' => 'Not coming',
-    _ => 'Short',
-  };
-}
-
 /// Whether a row should show the active-dispute strip. Canonical rule: only when
 /// a dispute exists AND is still active (web used to show it for resolved ones).
 bool disputeStripVisible(DisputeItem? item) {

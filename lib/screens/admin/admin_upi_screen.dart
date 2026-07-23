@@ -392,6 +392,58 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
     if (mounted) setState(() => _docBusy.remove(busyKey));
   }
 
+  Future<void> _confirmDeleteDoc(String area, Map<String, dynamic> doc) async {
+    final kind = doc['kind'] as String? ?? '';
+    final busyKey = '$area|$kind';
+    if (_docBusy.contains(busyKey)) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: const Text('Remove this document?',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+        content: const Text('This cannot be undone.',
+            style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFDC2626),
+              foregroundColor: Colors.white,
+              elevation: 0,
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) await _deleteDoc(area, doc);
+  }
+
+  Future<void> _deleteDoc(String area, Map<String, dynamic> doc) async {
+    final kind = doc['kind'] as String? ?? '';
+    final busyKey = '$area|$kind';
+    if (_docBusy.contains(busyKey)) return;
+    setState(() => _docBusy.add(busyKey));
+    try {
+      final res = await Supabase.instance.client.rpc('save_region_partner_doc',
+          params: {'p_area': area, 'p_kind': kind, 'p_path': null});
+      final data = Map<String, dynamic>.from(res as Map);
+      final message = data['message'] as String?;
+      if (mounted && message != null) {
+        showToast(context, message, isError: data['ok'] != true);
+      }
+      if (data['ok'] == true) await _fetchPartnerData();
+    } catch (e) {
+      if (mounted) showToast(context, 'Something went wrong. Please try again.', isError: true);
+    }
+    if (mounted) setState(() => _docBusy.remove(busyKey));
+  }
+
   Future<void> _viewDoc(String area, Map<String, dynamic> doc) async {
     final kind = doc['kind'] as String? ?? '';
     try {
@@ -654,6 +706,7 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
                   onEdit: () => _openPartnerForm(editing: p),
                   onUploadDoc: (doc) => _uploadDoc(area, doc),
                   onViewDoc: (doc) => _viewDoc(area, doc),
+                  onDeleteDoc: (doc) => _confirmDeleteDoc(area, doc),
                 ),
               );
             }).toList(),
@@ -935,6 +988,7 @@ class _PartnerCard extends StatelessWidget {
   final VoidCallback onEdit;
   final void Function(Map<String, dynamic> doc) onUploadDoc;
   final void Function(Map<String, dynamic> doc) onViewDoc;
+  final void Function(Map<String, dynamic> doc) onDeleteDoc;
 
   const _PartnerCard({
     required this.partner,
@@ -945,6 +999,7 @@ class _PartnerCard extends StatelessWidget {
     required this.onEdit,
     required this.onUploadDoc,
     required this.onViewDoc,
+    required this.onDeleteDoc,
   });
 
   @override
@@ -1022,6 +1077,7 @@ class _PartnerCard extends StatelessWidget {
                       ),
                     if (canDelete)
                       IconButton(
+                        key: const Key('partner_delete_button'),
                         icon: const Icon(Icons.delete_outline, size: 18, color: Color(0xFFDC2626)),
                         tooltip: 'Remove partner',
                         onPressed: onDelete,
@@ -1032,6 +1088,7 @@ class _PartnerCard extends StatelessWidget {
                       Tooltip(
                         message: blockedReason ?? '',
                         child: IconButton(
+                          key: const Key('partner_delete_button'),
                           icon: const Icon(Icons.delete_outline, size: 18, color: Color(0xFFD1D5DB)),
                           onPressed: null,
                           padding: EdgeInsets.zero,
@@ -1062,6 +1119,7 @@ class _PartnerCard extends StatelessWidget {
                   busy: docBusyKind(doc['kind'] as String? ?? ''),
                   onUpload: () => onUploadDoc(doc),
                   onView: () => onViewDoc(doc),
+                  onDelete: () => onDeleteDoc(doc),
                 ),
               )),
         ],
@@ -1077,12 +1135,14 @@ class _DocRow extends StatelessWidget {
   final bool busy;
   final VoidCallback onUpload;
   final VoidCallback onView;
+  final VoidCallback onDelete;
 
   const _DocRow({
     required this.doc,
     required this.busy,
     required this.onUpload,
     required this.onView,
+    required this.onDelete,
   });
 
   @override
@@ -1128,6 +1188,15 @@ class _DocRow extends StatelessWidget {
             ),
             child: const Text('View', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
           ),
+          if (canView)
+            IconButton(
+              key: Key('doc_delete_button_${doc['kind']}'),
+              icon: const Icon(Icons.delete_outline, size: 16, color: Color(0xFFDC2626)),
+              tooltip: 'Remove document',
+              onPressed: onDelete,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+            ),
         ],
       ],
     );

@@ -162,6 +162,19 @@ void main() {
   });
 
   testWidgets(
+      'a doc with can_view=false shows no Delete button; can_view=true shows one',
+      (tester) async {
+    await tester.pumpWidget(_screen(partners: [_partner(area: 'ZoneA')]));
+    await tester.pumpAndSettle();
+
+    // Only dl20b has can_view=true, so only its delete button exists.
+    expect(find.byKey(const Key('doc_delete_button_dl20b')), findsOneWidget);
+    expect(find.byKey(const Key('doc_delete_button_gst')), findsNothing);
+
+    await tester.pump(const Duration(seconds: 5));
+  });
+
+  testWidgets(
       'can_delete=false shows Delete disabled with delete_blocked_reason; the card stays after the attempt',
       (tester) async {
     var deleteCalls = 0;
@@ -178,7 +191,7 @@ void main() {
 
     expect(find.text('CANT_DELETE_STUB'), findsOneWidget);
     final deleteButton =
-        tester.widget<IconButton>(find.widgetWithIcon(IconButton, Icons.delete_outline));
+        tester.widget<IconButton>(find.byKey(const Key('partner_delete_button')));
     expect(deleteButton.onPressed, isNull);
     expect(deleteCalls, 0);
     expect(find.text('PARTNER_ZoneA'), findsOneWidget);

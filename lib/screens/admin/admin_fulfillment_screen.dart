@@ -10584,22 +10584,19 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
         maxLines: 1, overflow: TextOverflow.ellipsis),
   );
 
+  // Backend-owned: fw_search_bag_items()'s pre-formatted display strings, rendered
+  // verbatim — no client-side concatenation or state->label/colour mapping.
   Widget _buildSearchResultTile(Map<String, dynamic> item) {
-    final name             = item['product_name']?.toString() ?? '—';
-    final customer         = item['customer']?.toString() ?? '';
-    final customerCode     = item['customer_code']?.toString() ?? '';
-    final packType         = item['pack_type']?.toString() ?? '';
-    final imageUrl         = item['image_url']?.toString();
-    final recQty           = (item['received_qty'] as num?)?.toInt() ?? 0;
-    final bagNo            = (item['bag_no'] as num?)?.toInt();
-    final assignedSupplier = item['assigned_supplier']?.toString() ?? '';
-    final bagLabel         = bagNo != null
-        ? (packType.isNotEmpty ? 'Bag $bagNo • $recQty $packType' : 'Bag $bagNo • $recQty')
-        : (packType.isNotEmpty ? '$recQty $packType' : '$recQty');
-    final custLabel        = customerCode.isNotEmpty ? 'C • $customer ($customerCode)' : 'C • $customer';
+    final name          = item['product_name']?.toString() ?? '—';
+    final imageUrl      = item['image_url']?.toString();
+    final qtyLabel      = item['qty_label']?.toString() ?? '';
+    final customerLabel = item['customer_label']?.toString() ?? '';
+    final supplierLabel = item['supplier_label']?.toString() ?? '';
+    final statusLabel   = item['status_label']?.toString() ?? '';
+    final statusColors  = item['status_colors'] as Map?;
 
     return Builder(builder: (ctx) {
-      RenderLog.write('c286_search_row_v3', 'bag=$bagNo;qty=$recQty;combined_badge=true');
+      RenderLog.write('c286_search_row_v3', 'qty=$qtyLabel;combined_badge=true');
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
@@ -10616,33 +10613,35 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
                   style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
                   maxLines: 2, overflow: TextOverflow.ellipsis),
               const SizedBox(height: 4),
-              _greyBadge(bagLabel),
-              if (assignedSupplier.isNotEmpty) ...[
-                const SizedBox(height: 4),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: _kReceivedBg,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text('S • $assignedSupplier',
-                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: _kReceivedFg),
-                      maxLines: 1, overflow: TextOverflow.ellipsis),
+              _greyBadge(qtyLabel),
+              const SizedBox(height: 4),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                decoration: BoxDecoration(
+                  color: _kReceivedBg,
+                  borderRadius: BorderRadius.circular(20),
                 ),
-              ],
-              if (customer.isNotEmpty) ...[
-                const SizedBox(height: 4),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFFF3CD),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text(custLabel,
-                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Color(0xFF8A6D00)),
-                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                child: Text(supplierLabel,
+                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: _kReceivedFg),
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
+              ),
+              const SizedBox(height: 4),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF3CD),
+                  borderRadius: BorderRadius.circular(20),
                 ),
-              ],
+                child: Text(customerLabel,
+                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Color(0xFF8A6D00)),
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
+              ),
+              const SizedBox(height: 4),
+              _BackendStatePill(
+                label: statusLabel,
+                bg: _hexColor(statusColors?['bg'], _kPendingBg),
+                fg: _hexColor(statusColors?['fg'], _kPendingFg),
+              ),
             ]),
           ),
         ]),
@@ -14602,12 +14601,11 @@ class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
     return rows;
   }
 
+  // Backend-owned: pack_get_queue()'s qty_label, rendered verbatim.
   Widget _buildTableRow(Map<String, dynamic> item) {
     final name     = item['product_name']?.toString() ?? '—';
-    final packType = item['pack_type']?.toString() ?? '';
-    final qty      = (item['ordered'] as num?)?.toInt() ?? (item['qty'] as num?)?.toInt() ?? 0;
     final isPacked = item['packed'] == true;
-    final qtyLabel = packType.isNotEmpty ? '$qty $packType' : '$qty';
+    final qtyLabel = item['qty_label']?.toString() ?? '';
 
     return Container(
       decoration: const BoxDecoration(
@@ -15339,8 +15337,11 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     final item = agg.representative;
     final isWrong  = item.kind == 'wrong_item';
     final isActive = agg.active;
-    final statusBgColor  = isActive ? const Color(0xFFFEF3C7) : const Color(0xFFD1FAE5);
-    final statusTxtColor = isActive ? const Color(0xFF92400E) : const Color(0xFF065F46);
+    // Backend-owned: fw_get_disputes()'s active_colors, verbatim — drives the
+    // Active/Inactive badge and both status chips below.
+    final activeLabel = agg.activeColors?['label'] ?? (isActive ? 'Active' : 'Inactive');
+    final activeBg = _hexColor(agg.activeColors?['bg'], const Color(0xFFF3F4F6));
+    final activeFg = _hexColor(agg.activeColors?['fg'], _kSub);
 
     // Meta line: packType / company / category (only the present ones)
     final metaParts = <String>[
@@ -15440,42 +15441,34 @@ class _DisputesScreenState extends State<_DisputesScreen> {
               // (e+f) Status chips
               const SizedBox(height: 4),
               Wrap(spacing: 4, runSpacing: 4, children: [
-                // C363-F: Active = RED, Inactive = GREEN badge per item.
                 Builder(builder: (_) {
                   RenderLog.write('c363_badge', 'where=disp_tab,active=$isActive');
                   return Container(
                     padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                     decoration: BoxDecoration(
-                        color: isActive
-                            ? const Color(0xFFFEE2E2)
-                            : const Color(0xFFD1FAE5),
-                        borderRadius: BorderRadius.circular(20)),
-                    child: Text(isActive ? 'Active' : 'Inactive',
+                        color: activeBg, borderRadius: BorderRadius.circular(20)),
+                    child: Text(activeLabel,
                         style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w700,
-                            color: isActive
-                                ? const Color(0xFF991B1B)
-                                : const Color(0xFF065F46))),
+                            fontSize: 10, fontWeight: FontWeight.w700, color: activeFg)),
                   );
                 }),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
-                      color: statusBgColor, borderRadius: BorderRadius.circular(20)),
+                      color: activeBg, borderRadius: BorderRadius.circular(20)),
                   child: Text(item.itemStatusLabel,
                       style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
-                          color: statusTxtColor)),
+                          color: activeFg)),
                 ),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
-                    color: isActive ? const Color(0xFFFEF3C7) : const Color(0xFFF3F4F6),
+                    color: activeBg,
                     borderRadius: BorderRadius.circular(20),
                   ),
                   child: Text(item.disputeStatus,
                       style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
-                          color: isActive ? const Color(0xFF92400E) : _kSub)),
+                          color: activeFg)),
                 ),
                 if (item.unfillable)
                   Container(
@@ -15664,9 +15657,9 @@ class _DisputeActionSheetState extends State<_DisputeActionSheet> {
   Widget build(BuildContext context) {
     final item = widget.item;
     final isWrong  = item.kind == 'wrong_item';
-    final isActive = item.isActive;
-    final statusBgColor  = isActive ? const Color(0xFFFEF3C7) : const Color(0xFFD1FAE5);
-    final statusTxtColor = isActive ? const Color(0xFF92400E) : const Color(0xFF065F46);
+    // Backend-owned: fw_get_disputes()'s active_colors, verbatim.
+    final activeBg = _hexColor(item.activeColors?['bg'], const Color(0xFFF3F4F6));
+    final activeFg = _hexColor(item.activeColors?['fg'], _kSub);
     final safeBottom = MediaQuery.of(context).padding.bottom;
 
     return Container(
@@ -15733,20 +15726,20 @@ class _DisputeActionSheetState extends State<_DisputeActionSheet> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                   decoration: BoxDecoration(
-                      color: statusBgColor, borderRadius: BorderRadius.circular(20)),
+                      color: activeBg, borderRadius: BorderRadius.circular(20)),
                   child: Text(item.itemStatusLabel,
                       style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
-                          color: statusTxtColor)),
+                          color: activeFg)),
                 ),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                   decoration: BoxDecoration(
-                    color: isActive ? const Color(0xFFFEF3C7) : const Color(0xFFF3F4F6),
+                    color: activeBg,
                     borderRadius: BorderRadius.circular(20),
                   ),
                   child: Text(item.disputeStatus,
                       style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
-                          color: isActive ? const Color(0xFF92400E) : _kSub)),
+                          color: activeFg)),
                 ),
               ]),
             ]),

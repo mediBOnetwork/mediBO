@@ -75,14 +75,13 @@ String? itemDateChip(Map<String, dynamic> item) =>
         ? item['date_chip'].toString()
         : null;
 
-/// Canonical derived view for one fulfill row (shop or warehouse stage).
+/// Canonical derived view for one fulfill row — used only by the single raw
+/// order-item tile (_buildItemTile). Merged/product-level rows read
+/// fw_get_state()'s merged_items[] fields (qty_label, status_label,
+/// status_colors, issue_chip) verbatim instead — see _MergedProduct.fromBackend.
 class FulfillRowView {
   /// e.g. "3/5" — right-aligned quantity progress for the row.
   final String qtyLabel;
-
-  /// State string handed to the status pill widget
-  /// ('pending'|'received'|'short'|'wrong'|'not_coming').
-  final String pillState;
 
   /// Warehouse-only: the line is fully short and awaiting dispute resolution
   /// (expected == 0). Layouts render a muted "in dispute · awaiting resolution".
@@ -90,18 +89,16 @@ class FulfillRowView {
 
   const FulfillRowView({
     required this.qtyLabel,
-    required this.pillState,
     required this.awaitingResolution,
   });
 }
 
-/// Derive the qty label + pill state for a fulfill row. Works for both a single
-/// line and a merged product — the caller passes the right totals.
+/// Derive the qty label for a single fulfill row (not a merged product).
 ///
 /// [arrivals]      false = Supplier Shop stage, true = Warehouse stage.
-/// [ordered]       ordered qty (merged: orderedTotal).
+/// [ordered]       ordered qty.
 /// [shopQty]       shop-stage counted qty; null = not yet counted (shop only).
-/// [received]      received qty (merged: receivedTotal).
+/// [received]      received qty.
 /// [expected]      warehouse forwarded/expected qty; null → falls back to ordered.
 /// [combinedState] the row's fulfillment state ('pending'|'received'|'short'|
 ///                 'wrong'|'not_coming').
@@ -118,48 +115,21 @@ FulfillRowView fulfillRowView({
     // Warehouse: measure against the forwarded/expected qty, not raw ordered.
     final whExpected = (expected != null) ? expected : ordered;
     if (whExpected == 0) {
-      return const FulfillRowView(
-          qtyLabel: '', pillState: 'pending', awaitingResolution: true);
+      return const FulfillRowView(qtyLabel: '', awaitingResolution: true);
     }
-    final pill = received >= whExpected ? 'received' : combinedState;
     return FulfillRowView(
       qtyLabel: '$received/$whExpected',
-      pillState: pill,
       awaitingResolution: false,
     );
   }
-  // Supplier Shop: pill derives from shop_qty vs ordered, EXCEPT terminal
-  // fulfillment states ("Got all"/"Wrong"/"Not coming") which write
-  // fulfillment_state but not shop_qty — those must win over the shop_qty pill.
+  // Supplier Shop: EXCEPT terminal fulfillment states ("Got all"/"Wrong"/
+  // "Not coming") which write fulfillment_state but not shop_qty.
   const terminals = {'received', 'wrong', 'not_coming'};
   final terminal = terminals.contains(combinedState);
   final qtyLabel = (terminal && shopQty == null)
       ? '$received/$ordered'
       : '${shopQty ?? 0}/$ordered';
-  final pill = terminal
-      ? combinedState
-      : (shopQty == null
-          ? 'pending'
-          : (shopQty >= ordered && ordered > 0 ? 'received' : 'short'));
-  return FulfillRowView(
-      qtyLabel: qtyLabel, pillState: pill, awaitingResolution: false);
-}
-
-/// Amber "count_issue" chip label from the raw payload value. Returns null when
-/// there is no issue (so the layout renders nothing). Used by every row chip.
-String? issueChipLabel(String? countIssue) {
-  if (countIssue == null || countIssue.isEmpty || countIssue == 'null') {
-    return null;
-  }
-  RenderLog.write('c355_shared', 'fn=issueChip');
-  return switch (countIssue) {
-    'wrong' => 'Wrong',
-    'few_wrong' => 'Few wrong',
-    'damaged' => 'Damaged',
-    'excess' => 'Excess',
-    'not_coming' => 'Not coming',
-    _ => countIssue,
-  };
+  return FulfillRowView(qtyLabel: qtyLabel, awaitingResolution: false);
 }
 
 /// C365: renders a qty with its pack type pluralised, e.g. `2 strips` (falls back to

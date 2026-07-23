@@ -74,19 +74,6 @@ const _kPendingFg    = Color(0xFF92400E);
 const _kCandidateBg     = Color(0xFFFEFCE8);
 const _kCandidateBorder = Color(0xFFF59E0B);
 
-const _stateBgMap = <String, Color>{
-  'received': _kReceivedBg, 'short':     _kShortBg,
-  'wrong':    _kWrongBg,    'not_coming':_kNotComingBg,
-  'packed':   _kShippedBg,  'shipped':   _kShippedBg,
-  'pending':  _kPendingBg,
-};
-const _stateFgMap = <String, Color>{
-  'received': _kReceivedFg, 'short':     _kShortFg,
-  'wrong':    _kWrongFg,    'not_coming':_kNotComingFg,
-  'packed':   _kShippedFg,  'shipped':   _kShippedFg,
-  'pending':  _kPendingFg,
-};
-
 // ── #331 VoiceCaps — daily 3h cap + 1h continuous stop ─────────────────────
 // One shared helper used by every voice counting surface (Shop, Warehouse, Pack).
 class _VoiceCaps {
@@ -212,25 +199,6 @@ class _BackendStatePill extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
       child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg)),
-    );
-  }
-}
-
-class _StatePill extends StatelessWidget {
-  final String state;
-  const _StatePill(this.state);
-
-  @override
-  Widget build(BuildContext context) {
-    final bg = _stateBgMap[state] ?? _kPendingBg;
-    final fg = _stateFgMap[state] ?? _kPendingFg;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
-      child: Text(
-        statusPillLabel(state), // C361: shared canonical label (see fulfill_view_logic)
-        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg),
-      ),
     );
   }
 }
@@ -460,14 +428,13 @@ class _StepBtn extends StatelessWidget {
 
 // ── Bag breakdown formatter ───────────────────────────────────────────────────
 // #261: format "B{bag}:{qty}{packInitial}" e.g. "B1:07P", "B38:05S"
+// bag_breakdown arrives pre-sorted by bag_no from fw_get_state — no client sort.
 String _fmtBreakdown(List? bd, String? packType) {
   if (bd == null || bd.isEmpty) return '';
   final pl = (packType ?? '').trim().isNotEmpty
       ? packType!.trim()[0].toUpperCase()
       : '';
-  final sorted = List.from(bd)
-    ..sort((a, b) => (a['bag_no'] as num).compareTo(b['bag_no'] as num));
-  return sorted
+  return bd
       .map((e) => 'B${e['bag_no']}:${(e['qty'] as num).toInt().toString().padLeft(2, '0')}$pl')
       .join(', ');
 }
@@ -4296,93 +4263,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     ]);
   }
 
-  // #143 FIX 2+3: full-screen view for the expanded supplier.
-  // Column layout: compact header → voice bar → progress → Expanded item list → pinned footer.
-  Widget _buildCollectSingleSupplier(bool isAdmin) {
-    final name = _selectedSupplier!;
-    final dot = _supplierDotMap[name];
-    final dotFill   = _hexColor(dot?['fill'], _kDotYellow);
-    final dotBorder = _hexColor(dot?['border'], _kDotBorderLight);
-    final locked = _boxLocked;
-
-    RenderLog.write('c143_fullscreen', 'supplier=$name;pinned_footer=y');
-    RenderLog.write('c143_buttons_clear', 'bottom_pad=y;pinned=y');
-    RenderLog.write('c143_no_border', 'expanded_border=none');
-
-    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      // ── Compact header: supplier name + dot + collapse chevron ────────────
-      InkWell(
-        onTap: () {
-          RenderLog.write('c142_expand', 'supplier=$name;expanded=n');
-          setState(() { _selectedSupplier = null; _items = []; });
-        },
-        child: Container(
-          color: Colors.white,
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-          child: Row(children: [
-            Icon(Icons.keyboard_arrow_left_rounded, size: 20, color: _kSub),
-            const SizedBox(width: 4),
-            Expanded(
-              child: Text(name,
-                  style: const TextStyle(
-                    fontSize: 15, fontWeight: FontWeight.w600, color: _kText),
-                  maxLines: 1, overflow: TextOverflow.ellipsis),
-            ),
-            const SizedBox(width: 12),
-            Container(
-              width: 12, height: 12,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: dotFill,
-                border: Border.all(color: dotBorder, width: 1.5),
-              ),
-            ),
-          ]),
-        ),
-      ),
-      const Divider(height: 1, color: _kBorder),
-
-      // ── Voice bar + progress ──────────────────────────────────────────────
-      _buildNarrowVoiceBar(isAdmin),
-      if (_items.isNotEmpty) _buildNarrowProgressRow(),
-      const SizedBox(height: 8),
-
-      // ── Item list — Expanded so it fills remaining space ─────────────────
-      if (_loadingBox)
-        const Expanded(child: Center(
-            child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2)))
-      // #160: error-aware guard
-      else if (_error != null)
-        Expanded(child: Center(
-            child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: Builder(builder: (_) {
-                RenderLog.write('c160_guard_buildCollectSingleSupplier',
-                    'items=${_items.length};visible=${_items.length};error=true');
-                return Text('Error loading items: $_error',
-                    style: const TextStyle(color: Color(0xFFDC2626), fontSize: 13),
-                    textAlign: TextAlign.center);
-              }))))
-      else if (_items.isEmpty)
-        const Expanded(child: Center(
-            child: Text('No items in this box',
-                style: TextStyle(color: _kSub, fontSize: 15))))
-      else
-        Expanded(child: _buildNarrowItemList(showFooter: false)),
-
-      // ── Pinned footer — sits above the bottom nav, always reachable ───────
-      if (!_loadingBox && _items.isNotEmpty) ...[
-        const Divider(height: 1, color: _kBorder),
-        Padding(
-          padding: EdgeInsets.fromLTRB(
-              16, 12, 16,
-              12 + MediaQuery.of(context).padding.bottom),
-          child: _buildConfirmFooter(locked),
-        ),
-      ],
-    ]);
-  }
-
   // Fallback dot colours used only while _supplierDotMap hasn't loaded yet.
   static const _kDotYellow      = Color(0xFFFCD34D);
   static const _kDotBorderLight = Color(0xFFF59E0B);
@@ -4442,170 +4322,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     );
   }
 
-  // ── #116: Full-height card with sticky supplier-name header ─────────────────
-  // Replaces the accordion expanded view — name row is pinned; content scrolls.
-  Widget _buildExpandedSupplierCard(String name, bool isAdmin) {
-    // Backend-owned dot: fw_list_arrivals()'s dot.shop/dot.warehouse, already
-    // resolved to the right stage per-tab in _loadSuppliers().
-    final dot = _supplierDotMap[name];
-    final dotFill   = _hexColor(dot?['fill'], _kDotYellow);
-    final dotBorder = _hexColor(dot?['border'], _kDotBorderLight);
-    final locked = widget.arrivals ? _arrivalsLocked : _boxLocked;
-    final safeBottom = MediaQuery.of(context).padding.bottom;
-    final visibleItems = _visibleItems();
-
-    RenderLog.write('c116_supplier_header_pinned', 'true');
-    RenderLog.write('c116_footer_gap_fixed', 'true');
-    RenderLog.write('c118_footer_bottom_gap', '24');
-    if (widget.arrivals) {
-      RenderLog.write('c133_arrivals_filter_removed', 'true');
-      RenderLog.write('c133_arrivals_item_count', '${visibleItems.length}');
-    }
-
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _kBorder),
-        boxShadow: [BoxShadow(
-          color: Colors.black.withValues(alpha: 0.04),
-          blurRadius: 6, offset: const Offset(0, 2))],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // ── STICKY SUPPLIER NAME ROW ──────────────────────────────────────
-          InkWell(
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
-            onTap: () {
-              RenderLog.write('c142_expand', 'supplier=$name;expanded=n');
-              setState(() { _selectedSupplier = null; _items = []; _supplierMode = null; });
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                if (!mounted) return;
-                if (_listScrollCtrl.hasClients) {
-                  _listScrollCtrl.animateTo(_savedScrollOffset,
-                      duration: const Duration(milliseconds: 280),
-                      curve: Curves.easeInOutCubic);
-                }
-              });
-            },
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-              child: Row(children: [
-                Expanded(
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-                    Text(name,
-                        style: const TextStyle(
-                            fontSize: 15, fontWeight: FontWeight.w600, color: _kGreen),
-                        maxLines: 2, overflow: TextOverflow.ellipsis),
-                    if (widget.arrivals && _supplierMode != null) ...[
-                      const SizedBox(height: 2),
-                      Builder(builder: (_) {
-                        final chip = _supplierMode == 'shop' ? 'via Shop' : 'direct';
-                        RenderLog.write('c337_mode_chip', 'mode=${_supplierMode ?? ''};supplier=$name;chip=$chip');
-                        return Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: _supplierMode == 'shop'
-                                ? const Color(0xFFD1FAE5)
-                                : const Color(0xFFEFF6FF),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(chip,
-                              style: TextStyle(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w600,
-                                  color: _supplierMode == 'shop'
-                                      ? const Color(0xFF065F46)
-                                      : const Color(0xFF1E40AF))),
-                        );
-                      }),
-                    ],
-                  ]),
-                ),
-                const SizedBox(width: 8),
-                const Icon(Icons.keyboard_arrow_up_rounded, size: 18, color: _kSub),
-                const SizedBox(width: 12),
-                // Constant-width badge slot matching the collapsed header exactly.
-                CountBadge(badge: _supplierBadgeMap[name]),
-                const SizedBox(width: 8),
-                Container(
-                  width: 12, height: 12,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: dotFill,
-                    border: Border.all(color: dotBorder, width: 1.5),
-                  ),
-                ),
-              ]),
-            ),
-          ),
-          const Divider(height: 1, color: _kBorder),
-
-          // ── SCROLLABLE CONTENT (voice, progress, items, footer) ───────────
-          Expanded(
-            child: PinnedFooterList(
-              // Single source of bottom clearance — no extra SafeArea below.
-              padding: EdgeInsets.only(bottom: 24 + safeBottom),
-              footerGap: 16,
-              children: [
-                _buildNarrowVoiceBar(isAdmin),
-                if (_items.isNotEmpty) _buildNarrowProgressRow(),
-                const SizedBox(height: 8),
-                if (_loadingBox)
-                  const Center(
-                    child: Padding(
-                      padding: EdgeInsets.all(24),
-                      child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2),
-                    ),
-                  )
-                // #160: error-aware guard
-                else if (_error != null)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-                    child: Builder(builder: (_) {
-                      RenderLog.write('c160_guard_buildExpandedSupplierCard',
-                          'items=${_items.length};visible=${visibleItems.length};error=true');
-                      return Text('Error loading items: $_error',
-                          style: const TextStyle(color: Color(0xFFDC2626), fontSize: 13));
-                    }),
-                  )
-                else if (visibleItems.isEmpty)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-                    child: Text(
-                      _items.isEmpty ? 'No items in this box' : 'No counted items',
-                      style: const TextStyle(color: _kSub, fontSize: 14),
-                    ),
-                  )
-                else
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        for (int i = 0; i < visibleItems.length; i++) ...[
-                          _buildItemTile(visibleItems[i]),
-                          if (i < visibleItems.length - 1)
-                            const SizedBox(height: 4),
-                        ],
-                      ],
-                    ),
-                  ),
-              ],
-              footer: (!_loadingBox && _items.isNotEmpty)
-                  ? Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: _buildConfirmFooter(locked),
-                    )
-                  : const SizedBox.shrink(),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   // ── BUILD ───────────────────────────────────────────────────────────────────
 
   @override
@@ -4635,69 +4351,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       RenderLog.write('c148_mobile_untouched', 'list_accordion=y');
       return _buildCollectList(isAdmin);
     });
-  }
-
-  // ── Narrow layout (< 900px) — existing tree verbatim ────────────────────────
-  Widget _buildCollectNarrow(bool isAdmin) {
-    // #114 render-log (mobile path)
-    RenderLog.write('c114_fulfillment_header_built', 'mobile');
-    // #90 render-log
-    RenderLog.write('change_90_layout', 'narrow');
-    RenderLog.write('change_90_header_hidden', '1');
-    RenderLog.write('change_90_pills_equal', '1');
-    RenderLog.write('change_90_no_overflow', '1');
-    // backward-compat
-    RenderLog.write('change_89_layout', 'narrow');
-    RenderLog.write('change_89_no_voiceinput_card', '1');
-    RenderLog.write('change_89_compact_voicebar', '1');
-    RenderLog.write('change_89_dense_items', '1');
-    RenderLog.write('change_88_layout', 'narrow');
-    RenderLog.write('change_86_layout', 'narrow');
-    RenderLog.write('change_86_narrow_cards_present', '1');
-
-    // Drive popup bubble show/hide from build cycle (same as wide)
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      if (_agentPhase != AgentPhase.idle && _agentReply.isNotEmpty) {
-        _ensureAgentBubble();
-      } else {
-        _hideAgentBubble();
-      }
-    });
-
-    return Column(children: [
-      // 1. Supplier dropdown (no progress bar here — #90 moved it below voice row)
-      _buildSupplierPicker(),
-      // 2. Voice row — two Expanded equal-width pills (#90 fix)
-      if (_items.isNotEmpty) _buildNarrowVoiceBar(isAdmin),
-      // 3. Progress row — BELOW voice row (#90 moved from above supplier)
-      if (_items.isNotEmpty) _buildNarrowProgressRow(),
-      // 4. Item list — fills remaining space
-      if (_loadingBox)
-        const Expanded(child: Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2)))
-      else if (_selectedSupplier == null)
-        const Expanded(child: Center(
-            child: Text('Choose a supplier to begin',
-                style: TextStyle(color: _kSub, fontSize: 15))))
-      // #160: error-aware guard
-      else if (_error != null)
-        Expanded(child: Center(
-            child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: Builder(builder: (_) {
-                RenderLog.write('c160_guard_buildCollectNarrow',
-                    'items=${_items.length};visible=${_items.length};error=true');
-                return Text('Error loading items: $_error',
-                    style: const TextStyle(color: Color(0xFFDC2626), fontSize: 13),
-                    textAlign: TextAlign.center);
-              }))))
-      else if (_items.isEmpty)
-        const Expanded(child: Center(
-            child: Text('No items in this box',
-                style: TextStyle(color: _kSub, fontSize: 15))))
-      else
-        Expanded(child: _buildNarrowItemList()),
-    ]);
   }
 
   // ── #90: Narrow voice bar — two Expanded equal-width pills, no overflow ─────
@@ -8685,513 +8338,6 @@ class _BagLabelsScreenState extends State<_BagLabelsScreen> {
   }
 }
 
-// ── PACK SCREEN ──────────────────────────────────────────────────────────────
-
-class _PackScreen extends StatefulWidget {
-  const _PackScreen({super.key});
-
-  @override
-  State<_PackScreen> createState() => _PackScreenState();
-}
-
-class _PackScreenState extends State<_PackScreen> {
-  List<Map<String, dynamic>> _bags = [];
-  bool _loading = true;
-  String? _error;
-  final Set<String> _expanded = {};
-  final Map<String, List<Map<String, dynamic>>> _bagItems = {};
-  final Map<String, bool> _loadingBag = {};
-  final Map<String, bool> _shipping = {};
-
-  bool _showLabels = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-    RenderLog.write('fulfillment_pack_screen', 'true');
-    RenderLog.write('pack_area_rendered', 'true');
-  }
-
-  Future<void> _load() async {
-    setState(() { _loading = true; _error = null; });
-    try {
-      final res = await Supabase.instance.client.rpc('get_customer_pack_status') as List;
-      if (!mounted) return;
-      final bags = res.map((r) => Map<String, dynamic>.from(r as Map)).toList();
-      setState(() { _bags = bags; _loading = false; });
-      for (var i = 0; i < bags.length; i++) {
-        RenderLog.write('fulfillment_pack_card_$i', bags[i]['customer']?.toString() ?? '');
-      }
-    } catch (e) {
-      if (!mounted) return;
-      setState(() { _loading = false; _error = e.toString(); });
-    }
-  }
-
-  Future<void> _loadBagItems(String orderId) async {
-    setState(() => _loadingBag[orderId] = true);
-    try {
-      final res = await Supabase.instance.client
-          .rpc('get_customer_bag_items', params: {'p_order_id': orderId}) as List;
-      if (!mounted) return;
-      setState(() {
-        _bagItems[orderId] = res.map((r) => Map<String, dynamic>.from(r as Map)).toList();
-        _loadingBag[orderId] = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _loadingBag[orderId] = false);
-    }
-  }
-
-  Future<void> _ship(String orderId, {required bool partial}) async {
-    setState(() => _shipping[orderId] = true);
-    try {
-      final res = await Supabase.instance.client.rpc('ship_order', params: {
-        'p_order_id': orderId, 'p_partial': partial,
-      });
-      if (!mounted) return;
-      final resMap = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
-      if (resMap['error'] != null) {
-        final blocking = resMap['blocking']?.toString() ?? '';
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Not ready to ship${blocking.isNotEmpty ? ' ($blocking items pending/in transit)' : ''} — refresh and check arrivals'),
-          backgroundColor: const Color(0xFFDC2626),
-        ));
-        await _load();
-        return;
-      }
-      RenderLog.write('fulfillment_ship_ok', '$orderId:${partial ? 'partial' : 'full'}');
-      RenderLog.write('pack_ship_ok', '$orderId:${partial ? 'partial' : 'full'}');
-      await _load();
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _shipping[orderId] = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e'), backgroundColor: const Color(0xFFDC2626)),
-      );
-    }
-  }
-
-  Future<void> _showShipDialog(Map<String, dynamic> bag, {required bool partial}) async {
-    final orderId  = bag['order_id'].toString();
-    final customer = bag['customer']?.toString() ?? '—';
-    final bagNo    = bag['bag_no']?.toString() ?? '';
-    final inTransit = (bag['in_transit_items'] as num?)?.toInt() ?? 0;
-    final shortItems = (bag['short_items'] as num?)?.toInt() ?? 0;
-    final notComingItems = (bag['not_coming_items'] as num?)?.toInt() ?? 0;
-
-    String warningText = '';
-    if (partial) {
-      warningText = 'Ship the arrived items now and close the rest of Bag $bagNo ($customer)?';
-    } else if (shortItems > 0 || notComingItems > 0) {
-      warningText = 'Some items are short or not coming.';
-    }
-
-    final result = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text(partial ? 'Ship Partial?' : 'Ship Order',
-            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: _kText)),
-        content: Column(mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('Bag $bagNo — $customer',
-              style: const TextStyle(fontSize: 14, color: _kSub)),
-          if (inTransit > 0 && !partial) ...[
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(color: _kShortBg, borderRadius: BorderRadius.circular(8)),
-              child: Row(children: [
-                const Icon(Icons.local_shipping_outlined, size: 16, color: _kShortFg),
-                const SizedBox(width: 8),
-                Expanded(child: Text('$inTransit item${inTransit==1?'':'s'} still in transit.',
-                    style: const TextStyle(fontSize: 13, color: _kShortFg))),
-              ]),
-            ),
-          ],
-          if (warningText.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(color: _kPendingBg, borderRadius: BorderRadius.circular(8)),
-              child: Row(children: [
-                const Icon(Icons.warning_amber_rounded, size: 16, color: _kPendingFg),
-                const SizedBox(width: 8),
-                Expanded(child: Text(warningText,
-                    style: const TextStyle(fontSize: 13, color: _kPendingFg))),
-              ]),
-            ),
-          ],
-        ]),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel', style: TextStyle(color: _kSub))),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, partial ? 'partial' : 'full'),
-            style: FilledButton.styleFrom(backgroundColor: partial ? _kShortFg : _kGreen,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
-            child: Text(partial ? 'Ship Partial' : 'Ship',
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
-          ),
-        ],
-      ),
-    );
-    if (result == 'full') await _ship(orderId, partial: false);
-    else if (result == 'partial') await _ship(orderId, partial: true);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    // Bag-labels sub-view
-    if (_showLabels) {
-      return Column(children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-          child: Row(children: [
-            GestureDetector(
-              onTap: () => setState(() => _showLabels = false),
-              child: const Row(children: [
-                Icon(Icons.arrow_back_rounded, size: 18, color: _kGreen),
-                SizedBox(width: 6),
-                Text('Back to Pack', style: TextStyle(fontSize: 14, color: _kGreen, fontWeight: FontWeight.w600)),
-              ]),
-            ),
-            const Spacer(),
-            FilledButton.icon(
-              onPressed: () => html.window.print(),
-              icon: const Icon(Icons.print_rounded, size: 16),
-              label: const Text('Print'),
-              style: FilledButton.styleFrom(
-                backgroundColor: _kGreen,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              ),
-            ),
-          ]),
-        ),
-        Expanded(child: _BagLabelsInline()),
-      ]);
-    }
-
-    if (_loading) {
-      return const Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2));
-    }
-    if (_error != null) {
-      return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-        const Text('Error loading bags', style: TextStyle(color: Color(0xFFDC2626))),
-        const SizedBox(height: 8),
-        OutlinedButton(onPressed: _load, child: const Text('Retry')),
-      ]));
-    }
-    if (_bags.isEmpty) {
-      return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-        const Icon(Icons.inventory_2_outlined, size: 48, color: Color(0xFFD1D5DB)),
-        const SizedBox(height: 12),
-        const Text('No bags to pack', style: TextStyle(fontSize: 15, color: _kSub)),
-        const SizedBox(height: 12),
-        OutlinedButton.icon(
-          onPressed: () => setState(() => _showLabels = true),
-          icon: const Icon(Icons.label_outline_rounded, size: 16),
-          label: const Text('Bag Labels'),
-          style: OutlinedButton.styleFrom(foregroundColor: _kSub, side: const BorderSide(color: _kBorder)),
-        ),
-      ]));
-    }
-    return Column(children: [
-      Padding(
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
-        child: Row(children: [
-          Text('${_bags.length} bag${_bags.length == 1 ? '' : 's'}',
-              style: const TextStyle(fontSize: 13, color: _kSub)),
-          const Spacer(),
-          OutlinedButton.icon(
-            onPressed: () => setState(() => _showLabels = true),
-            icon: const Icon(Icons.label_outline_rounded, size: 14),
-            label: const Text('Bag Labels'),
-            style: OutlinedButton.styleFrom(
-                foregroundColor: _kSub, side: const BorderSide(color: _kBorder),
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                visualDensity: VisualDensity.compact),
-          ),
-        ]),
-      ),
-      Expanded(
-        child: RefreshIndicator(
-          color: _kGreen,
-          onRefresh: _load,
-          child: ListView.separated(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-            itemCount: _bags.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 8),
-            itemBuilder: (_, i) => _buildBagCard(_bags[i]),
-          ),
-        ),
-      ),
-    ]);
-  }
-
-  Widget _buildBagCard(Map<String, dynamic> bag) {
-    final orderId       = bag['order_id'].toString();
-    final customer      = bag['customer']?.toString() ?? '—';
-    final bagNo         = bag['bag_no']?.toString() ?? '';
-    final status        = bag['fulfillment_status']?.toString() ?? 'open';
-    final totalItems    = (bag['total_items']      as num?)?.toInt() ?? 0;
-    final pendingItems  = (bag['pending_items']    as num?)?.toInt() ?? 0;
-    final inTransit     = (bag['in_transit_items'] as num?)?.toInt() ?? 0;
-    final readyItems    = (bag['ready_items']      as num?)?.toInt() ?? 0;
-    final shortItems    = (bag['short_items']      as num?)?.toInt() ?? 0;
-    final wrongItems    = (bag['wrong_items']      as num?)?.toInt() ?? 0;
-    final notComing     = (bag['not_coming_items'] as num?)?.toInt() ?? 0;
-    final isExpanded    = _expanded.contains(orderId);
-    final isShipping    = _shipping[orderId] == true;
-    final isShipped     = status == 'shipped' || status == 'partially_shipped' || status == 'cancelled';
-
-    // Determine action
-    final bool canFullShip    = status == 'ready' && !isShipped;
-    final bool canPartialShip = (status == 'partial_ready' || (status == 'in_transit' && readyItems > 0)) && !isShipped;
-    final bool isBlocked      = (status == 'in_transit' && readyItems == 0) || status == 'collecting' || status == 'open';
-
-    return Container(
-      decoration: BoxDecoration(
-        color: _kCard, borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: isShipped ? _kShippedBg : _kBorder),
-        boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 6, offset: Offset(0, 2))],
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // ── Header (tap to expand) ──────────────────────────────────────────
-        InkWell(
-          onTap: () {
-            setState(() {
-              if (isExpanded) {
-                _expanded.remove(orderId);
-              } else {
-                _expanded.add(orderId);
-                if (!_bagItems.containsKey(orderId)) _loadBagItems(orderId);
-              }
-            });
-          },
-          borderRadius: BorderRadius.vertical(
-            top: const Radius.circular(12),
-            bottom: (isExpanded || canFullShip || canPartialShip || isBlocked)
-                ? Radius.zero
-                : const Radius.circular(12),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Row(children: [
-              Container(
-                width: 40, height: 40,
-                decoration: BoxDecoration(
-                    color: _kBg, borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: _kBorder)),
-                alignment: Alignment.center,
-                child: Text('B$bagNo',
-                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: _kGreen)),
-              ),
-              const SizedBox(width: 12),
-              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(customer,
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText),
-                    maxLines: 1, overflow: TextOverflow.ellipsis),
-                const SizedBox(height: 4),
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(children: [
-                    _OrderStatusBadge(status),
-                    const SizedBox(width: 8),
-                    Text('$readyItems/$totalItems ready',
-                        style: const TextStyle(fontSize: 12, color: _kSub)),
-                    if (inTransit > 0) ...[
-                      const SizedBox(width: 6),
-                      Text('$inTransit transit',
-                          style: const TextStyle(fontSize: 12, color: _kPendingFg, fontWeight: FontWeight.w600)),
-                    ],
-                    if (pendingItems > 0) ...[
-                      const SizedBox(width: 6),
-                      Text('$pendingItems uncollected',
-                          style: const TextStyle(fontSize: 12, color: _kSub)),
-                    ],
-                    if (shortItems > 0) ...[
-                      const SizedBox(width: 6),
-                      Text('$shortItems short',
-                          style: const TextStyle(fontSize: 12, color: _kShortFg, fontWeight: FontWeight.w600)),
-                    ],
-                    if (wrongItems > 0) ...[
-                      const SizedBox(width: 6),
-                      Text('$wrongItems wrong',
-                          style: const TextStyle(fontSize: 12, color: _kWrongFg, fontWeight: FontWeight.w600)),
-                    ],
-                    if (notComing > 0) ...[
-                      const SizedBox(width: 6),
-                      Text('$notComing N/A',
-                          style: const TextStyle(fontSize: 12, color: _kNotComingFg, fontWeight: FontWeight.w600)),
-                    ],
-                  ]),
-                ),
-              ])),
-              Icon(isExpanded
-                  ? Icons.keyboard_arrow_up_rounded
-                  : Icons.keyboard_arrow_down_rounded, color: _kSub),
-            ]),
-          ),
-        ),
-
-        // ── Action area ────────────────────────────────────────────────────
-        if (canFullShip) ...[
-          const Divider(height: 1, color: _kBorder),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-            child: SizedBox(
-              width: double.infinity, height: 44,
-              child: FilledButton.icon(
-                onPressed: isShipping ? null : () => _showShipDialog(bag, partial: false),
-                icon: isShipping
-                    ? const SizedBox(width: 16, height: 16,
-                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                    : const Icon(Icons.local_shipping_outlined, size: 18),
-                label: Text(isShipping ? 'Shipping…' : 'Pack & Ship',
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
-                style: FilledButton.styleFrom(
-                  backgroundColor: _kGreen,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                ),
-              ),
-            ),
-          ),
-        ] else if (canPartialShip) ...[
-          const Divider(height: 1, color: _kBorder),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-            child: Column(children: [
-              if (inTransit > 0)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    decoration: BoxDecoration(color: _kPendingBg, borderRadius: BorderRadius.circular(8)),
-                    child: Row(children: [
-                      const Icon(Icons.local_shipping_outlined, size: 14, color: _kPendingFg),
-                      const SizedBox(width: 8),
-                      Expanded(child: Text('$inTransit item${inTransit==1?'':'s'} still in transit — mark arrived first to ship all.',
-                          style: const TextStyle(fontSize: 12, color: _kPendingFg))),
-                    ]),
-                  ),
-                ),
-              SizedBox(
-                width: double.infinity, height: 44,
-                child: FilledButton.icon(
-                  onPressed: isShipping ? null : () => _showShipDialog(bag, partial: true),
-                  icon: isShipping
-                      ? const SizedBox(width: 16, height: 16,
-                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                      : const Icon(Icons.local_shipping_outlined, size: 18),
-                  label: Text(isShipping ? 'Shipping…' : 'Ship Partial',
-                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: _kShortFg,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  ),
-                ),
-              ),
-            ]),
-          ),
-        ] else if (isBlocked && !isShipped) ...[
-          const Divider(height: 1, color: _kBorder),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              decoration: BoxDecoration(color: _kBg, borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: _kBorder)),
-              child: Row(children: [
-                const Icon(Icons.hourglass_top_rounded, size: 14, color: _kSub),
-                const SizedBox(width: 8),
-                Expanded(child: Text(
-                  status == 'in_transit'
-                      ? 'Waiting — mark box arrived in the Warehouse tab'
-                      : 'Still counting — count stock in the Supplier Shop tab first',
-                  style: const TextStyle(fontSize: 12, color: _kSub),
-                )),
-              ]),
-            ),
-          ),
-        ],
-
-        // ── Expanded item list ─────────────────────────────────────────────
-        if (isExpanded) ...[
-          const Divider(height: 1, color: _kBorder),
-          if (_loadingBag[orderId] == true)
-            const Padding(padding: EdgeInsets.all(16),
-                child: Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2)))
-          else if (_bagItems[orderId]?.isEmpty ?? true)
-            const Padding(padding: EdgeInsets.all(16),
-                child: Text('No items', style: TextStyle(color: _kSub, fontSize: 13)))
-          else
-            ...(_bagItems[orderId]!.map(_buildPickItem)),
-        ],
-      ]),
-    );
-  }
-
-  Widget _buildPickItem(Map<String, dynamic> item) {
-    final name       = item['product_name']?.toString() ?? '—';
-    final orderedQty = (item['ordered_qty']  as num?)?.toInt() ?? 0;
-    final recvQty    = (item['received_qty'] as num?)?.toInt() ?? 0;
-    final state      = item['fulfillment_state']?.toString() ?? 'pending';
-    final imageUrl   = item['image_url']?.toString();
-    final atWarehouse = item['at_warehouse'] as bool?;
-    final supplier   = item['assigned_supplier']?.toString() ?? '';
-
-    return Container(
-      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-      decoration: const BoxDecoration(
-          border: Border(top: BorderSide(color: _kBorder, width: 0.5))),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        _FulfilImageTile(imageUrl, size: 40),
-        const SizedBox(width: 10),
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(name,
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kText),
-              maxLines: 1, overflow: TextOverflow.ellipsis),
-          const SizedBox(height: 3),
-          Row(children: [
-            Text('$recvQty/$orderedQty',
-                style: const TextStyle(fontSize: 12, color: _kSub)),
-            if (supplier.isNotEmpty) ...[
-              const SizedBox(width: 6),
-              Flexible(child: Text('from $supplier',
-                  style: const TextStyle(fontSize: 11, color: _kSub),
-                  maxLines: 1, overflow: TextOverflow.ellipsis)),
-            ],
-          ]),
-          if (atWarehouse != null) ...[
-            const SizedBox(height: 4),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: atWarehouse ? _kReceivedBg : _kPendingBg,
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Text(
-                atWarehouse ? 'At warehouse' : 'In transit',
-                style: TextStyle(
-                  fontSize: 10, fontWeight: FontWeight.w700,
-                  color: atWarehouse ? _kReceivedFg : _kPendingFg,
-                ),
-              ),
-            ),
-          ],
-        ])),
-        const SizedBox(width: 8),
-        _StatePill(state),
-      ]),
-    );
-  }
-}
-
 // ── BAG LABELS INLINE (used inside Pack tab) ──────────────────────────────────
 
 class _BagLabelsInline extends StatefulWidget {
@@ -11359,20 +10505,21 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
     );
   }
 
+  // Backend-owned: fw_get_bag_items()'s pre-formatted display strings
+  // (qty_label/customer_label/supplier_label/status_label/status_colors),
+  // rendered verbatim — no client-side concatenation or state->label/colour mapping.
   Widget _buildBagItemTile(Map<String, dynamic> item) {
-    final name             = item['product_name']?.toString() ?? '—';
-    final customer         = item['customer']?.toString() ?? '';
-    final customerCode     = item['customer_code']?.toString() ?? '';
-    final packType         = item['pack_type']?.toString() ?? '';
-    final imageUrl         = item['image_url']?.toString();
-    final recQty           = (item['received_qty'] as num?)?.toInt() ?? 0;
-    final assignedSupplier = item['assigned_supplier']?.toString() ?? '';
-    final packLabel        = packType.isNotEmpty ? '$recQty $packType' : '$recQty';
-    final custLabel        = customerCode.isNotEmpty ? 'C • $customer ($customerCode)' : 'C • $customer';
+    final name         = item['product_name']?.toString() ?? '—';
+    final imageUrl     = item['image_url']?.toString();
+    final qtyLabel     = item['qty_label']?.toString() ?? '';
+    final customerLabel = item['customer_label']?.toString() ?? '';
+    final supplierLabel = item['supplier_label']?.toString() ?? '';
+    final statusLabel   = item['status_label']?.toString() ?? '';
+    final statusColors  = item['status_colors'] as Map?;
 
     return Builder(builder: (ctx) {
-      RenderLog.write('c288_pack_badge_grey', 'pack=$recQty $packType;grey=true');
-      RenderLog.write('c288_customer_with_code', 'cust=$customer;code=$customerCode');
+      RenderLog.write('c288_pack_badge_grey', 'qty=$qtyLabel');
+      RenderLog.write('c288_customer_with_code', 'cust=$customerLabel');
       RenderLog.write('c288_bag_img_72', 'w=72;h=72');
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -11390,33 +10537,35 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
                   style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
                   maxLines: 2, overflow: TextOverflow.ellipsis),
               const SizedBox(height: 4),
-              _greyBadge(packLabel),
-              if (assignedSupplier.isNotEmpty) ...[
-                const SizedBox(height: 4),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: _kReceivedBg,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text('S • $assignedSupplier',
-                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: _kReceivedFg),
-                      maxLines: 1, overflow: TextOverflow.ellipsis),
+              _greyBadge(qtyLabel),
+              const SizedBox(height: 4),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                decoration: BoxDecoration(
+                  color: _kReceivedBg,
+                  borderRadius: BorderRadius.circular(20),
                 ),
-              ],
-              if (customer.isNotEmpty) ...[
-                const SizedBox(height: 4),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFFF3CD),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text(custLabel,
-                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Color(0xFF8A6D00)),
-                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                child: Text(supplierLabel,
+                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: _kReceivedFg),
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
+              ),
+              const SizedBox(height: 4),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF3CD),
+                  borderRadius: BorderRadius.circular(20),
                 ),
-              ],
+                child: Text(customerLabel,
+                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Color(0xFF8A6D00)),
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
+              ),
+              const SizedBox(height: 4),
+              _BackendStatePill(
+                label: statusLabel,
+                bg: _hexColor(statusColors?['bg'], _kPendingBg),
+                fg: _hexColor(statusColors?['fg'], _kPendingFg),
+              ),
             ]),
           ),
         ]),
@@ -14440,28 +13589,24 @@ class _PackingScreenState extends State<_PackingScreen>
 
   // ── Header popups ────────────────────────────────────────────────────────────
 
+  // pack_get_queue's items[] arrive pre-sorted (primary_bag, product_name) —
+  // no client re-sort, so these popups keep the bag-grouped backend order.
   void _showItemsPopup() {
-    final sorted = List<Map<String, dynamic>>.from(_items)
-        ..sort((a, b) => (a['product_name']?.toString() ?? '')
-            .compareTo(b['product_name']?.toString() ?? ''));
-    try { RenderLog.write('c292_hdr_popup', 'which=items;rows=${sorted.length}'); } catch (_) {}
-    _showListSheet('All items', sorted, showTick: true);
+    final items = List<Map<String, dynamic>>.from(_items);
+    try { RenderLog.write('c292_hdr_popup', 'which=items;rows=${items.length}'); } catch (_) {}
+    _showListSheet('All items', items, showTick: true);
   }
 
   void _showPackedPopup() {
-    final sorted = _items.where(_isItemDone).toList() // #368: done-predicate
-        ..sort((a, b) => (a['product_name']?.toString() ?? '')
-            .compareTo(b['product_name']?.toString() ?? ''));
-    try { RenderLog.write('c292_hdr_popup', 'which=packed;rows=${sorted.length}'); } catch (_) {}
-    _showListSheet('Packed items', sorted, showTick: true);
+    final items = _items.where(_isItemDone).toList(); // #368: done-predicate
+    try { RenderLog.write('c292_hdr_popup', 'which=packed;rows=${items.length}'); } catch (_) {}
+    _showListSheet('Packed items', items, showTick: true);
   }
 
   void _showLeftPopup() {
-    final sorted = _items.where((i) => !_isItemDone(i)).toList() // #368: done-predicate
-        ..sort((a, b) => (a['product_name']?.toString() ?? '')
-            .compareTo(b['product_name']?.toString() ?? ''));
-    try { RenderLog.write('c292_hdr_popup', 'which=left;rows=${sorted.length}'); } catch (_) {}
-    _showListSheet('Items left', sorted, showTick: false);
+    final items = _items.where((i) => !_isItemDone(i)).toList(); // #368: done-predicate
+    try { RenderLog.write('c292_hdr_popup', 'which=left;rows=${items.length}'); } catch (_) {}
+    _showListSheet('Items left', items, showTick: false);
   }
 
   void _showBagsPopup() {

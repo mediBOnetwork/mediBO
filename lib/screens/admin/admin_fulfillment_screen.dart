@@ -6120,12 +6120,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                           textAlign: TextAlign.right,
                         )),
                         const SizedBox(width: 16), // C358 B2: gap after Received
-                        // C357 col: Dispute Type — SHARED kind label for the matched
+                        // C357 col: Dispute Type — backend kind_label for the matched
                         // dispute, else the backend's issue_chip label, else "—".
                         Expanded(flex: 3, child: Builder(builder: (_) {
                           final tab = widget.arrivals ? 'warehouse' : 'shop';
                           final kindLabel = deskDisputeItem != null
-                              ? disputeKindLabel(deskDisputeItem.kind)
+                              ? deskDisputeItem.kindLabel
                               : mp.issueChip?['label']?.toString(); // C361: any flagged line
                           if (kindLabel == null) {
                             return const Text('—', style: TextStyle(fontSize: 12, color: _kSub));
@@ -11247,6 +11247,7 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
     final isExpanded = _expandedBagNo == bagNo;
     final rowKey     = _rowKeys.putIfAbsent(bagNo, () => GlobalKey());
 
+    final bagColors = bag['colors'] as Map?;
     return _BagAccordionShell(
       key: ValueKey(bagNo),
       bagNo: bagNo,
@@ -11254,6 +11255,15 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
       isExpanded: isExpanded,
       anyExpanded: _expandedBagNo != null,
       rowKey: rowKey,
+      progressLabel: bag['progress_label']?.toString(),
+      colors: bagColors == null
+          ? null
+          : {
+              'bg': bagColors['bg']?.toString() ?? '',
+              'border': bagColors['border']?.toString() ?? '',
+              'fg': bagColors['fg']?.toString() ?? '',
+            },
+      dot: bag['dot']?.toString(),
       onTap: () {
         if (isExpanded) {
           setState(() => _expandedBagNo = null);
@@ -11503,6 +11513,10 @@ class _BagAccordionShell extends StatelessWidget {
   final GlobalKey rowKey;
   final VoidCallback onTap;
   final Widget expandedContent;
+  // Backend-owned: fw_list_bags()'s per-bag progress_label/colors/dot, verbatim.
+  final String? progressLabel;
+  final Map<String, String>? colors;
+  final String? dot;
 
   const _BagAccordionShell({
     super.key,
@@ -11513,11 +11527,17 @@ class _BagAccordionShell extends StatelessWidget {
     required this.rowKey,
     required this.onTap,
     required this.expandedContent,
+    this.progressLabel,
+    this.colors,
+    this.dot,
   });
 
   @override
   Widget build(BuildContext context) {
     final bottomGap = anyExpanded ? 16.0 : 8.0;
+    final badgeBg = _hexColor(colors?['bg'], _kReceivedBg);
+    final badgeFg = _hexColor(colors?['fg'], _kReceivedFg);
+    final badgeBorder = _hexColor(colors?['border'], _kReceivedBg);
     return Padding(
       key: rowKey,
       padding: EdgeInsets.only(bottom: bottomGap),
@@ -11541,9 +11561,9 @@ class _BagAccordionShell extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
               child: Builder(builder: (ctx) {
                 RenderLog.write('c286_bag_header_v2',
-                    'bag=$bagNo;items=$totalProducts;arrow=removed;dot=removed');
+                    'bag=$bagNo;items=$totalProducts;arrow=removed;dot=backend');
                 RenderLog.write('c289_items_badge_green',
-                    'items=$totalProducts;green=true;fixedw=true');
+                    'items=$totalProducts;progress=${progressLabel ?? ''}');
                 return Row(children: [
                   Text('Bag $bagNo',
                       style: TextStyle(
@@ -11551,19 +11571,30 @@ class _BagAccordionShell extends StatelessWidget {
                         color: isExpanded ? _kGreen : _kText,
                       )),
                   const Spacer(),
+                  if (dot != null) ...[
+                    Container(
+                      width: 10, height: 10,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: badgeBg,
+                        border: Border.all(color: badgeBorder, width: 1.5),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                  ],
                   SizedBox(
                     width: 80,
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                       decoration: BoxDecoration(
-                        color: _kReceivedBg,
+                        color: badgeBg,
                         borderRadius: BorderRadius.circular(20),
                       ),
-                      child: Text('$totalProducts items',
+                      child: Text(progressLabel ?? '$totalProducts items',
                           textAlign: TextAlign.center,
-                          style: const TextStyle(
+                          style: TextStyle(
                               fontSize: 11, fontWeight: FontWeight.w500,
-                              color: _kReceivedFg)),
+                              color: badgeFg)),
                     ),
                   ),
                 ]);
@@ -11839,9 +11870,6 @@ class _BagPickerSheetState extends State<_BagPickerSheet> {
 
 // ── CHANGE #278: Pack tab — customer-wise packing view ───────────────────────
 
-// CHANGE #304b: fill-state enum shared by Packed and Counted badges.
-enum _FillState { empty, partial, full }
-
 class _PackTab extends StatefulWidget {
   const _PackTab({super.key});
   @override
@@ -11963,20 +11991,18 @@ class _PackTabState extends State<_PackTab>
     _loadFromPackQueue(oid);
   }
 
-  Future<void> _load() async {
+  Future<void> _load({bool silent = false}) async {
     if (!mounted) return;
-    setState(() { _loading = true; _error = null; });
+    if (!silent) setState(() { _loading = true; _error = null; });
     try {
-      // CHANGE #444 — Pack's customer list now comes from fw_pack_orders(p_date,
-      // p_include_older) instead of the undated get_customer_pack_status(). The
-      // per-order expand (pack_get_queue / pack_item_bag_breakdown) is untouched —
-      // only this top-level list gains date scoping. items_total is normalized
-      // to the old total_items key since _buildExpandedBody() falls back to it
-      // before pack_get_queue's own rollup loads; bag_no and the old per-status
-      // breakdown fields were never read by this tab (verified unused) so their
-      // absence from the new RPC's shape is not a regression.
+      // pack_list_orders(p_date, p_include_older) — per-order dot/pack_button/
+      // can_mark_ready are backend-owned now (verbatim, see _buildPackingButton
+      // and _buildPackDispatchButton). NOTE: as of this RPC, p_include_older is
+      // accepted but NOT honoured server-side (always filters to exact p_date,
+      // older_open always 0) — the "include older orders" toggle on this tab is
+      // currently a no-op pending a backend fix; flagged, not worked around here.
       final scope = FulfillDateScope.instance;
-      final res = await Supabase.instance.client.rpc('fw_pack_orders', params: {
+      final res = await Supabase.instance.client.rpc('pack_list_orders', params: {
         'p_date': ymd(scope.date),
         'p_include_older': scope.includeOlder,
       }) as Map;
@@ -12313,6 +12339,9 @@ class _PackTabState extends State<_PackTab>
       _packVoiceSession = null;
       if (!mounted) return;
       await _loadFromPackQueue(orderId);
+      // Voice counting can change counted_qty, which feeds can_mark_ready —
+      // refresh the order list so this row's backend-owned eligibility stays current.
+      _load(silent: true);
       if (!mounted) return;
       _refreshPackMentions(orderId);
       _showPackFinalizeSummary(result, orderId);
@@ -12569,23 +12598,13 @@ class _PackTabState extends State<_PackTab>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _fetchPackStatus(orderId);
     });
-    final status = _packStatus[orderId];
-    final int packed = status?['packed'] ?? 0;
-    final int total  = status?['total']  ?? 0;
-    final String label;
-    final String logLabel;
-    if (status == null || total <= 0) {
-      label = 'Start Packing'; logLabel = 'Start';
-    } else if (packed == 0) {
-      label = 'Start Packing'; logLabel = 'Start';
-    } else if (packed >= total) {
-      label = 'Packed ✓ — View'; logLabel = 'Packed';
-    } else {
-      label = 'Resume Packing ($packed/$total)'; logLabel = 'Resume';
-    }
+    // Backend-owned: pack_list_orders()'s pack_button, verbatim.
+    final packButton = c['pack_button'] as Map?;
+    final label = packButton?['label']?.toString() ?? 'Start Packing';
+    final fill = _hexColor(packButton?['fill']?.toString(), _kGreen);
     try {
       RenderLog.write('c291_pack_btn_build',
-          'order=${orderId.substring(0, orderId.length.clamp(0, 8))};branch=narrow;shown=true;label=$logLabel');
+          'order=${orderId.substring(0, orderId.length.clamp(0, 8))};branch=narrow;shown=true;label=$label');
     } catch (_) {}
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
@@ -12594,7 +12613,7 @@ class _PackTabState extends State<_PackTab>
         height: 44,
         child: FilledButton(
           style: FilledButton.styleFrom(
-            backgroundColor: _kGreen,
+            backgroundColor: fill,
             shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(10)),
           ),
@@ -12609,6 +12628,10 @@ class _PackTabState extends State<_PackTab>
             if (mounted) {
               _fetchPackStatus(orderId);
               if (_expandedOrderId == orderId) _loadFromPackQueue(orderId);
+              // Items may have been packed/counted inside _PackingScreen — refresh the
+              // order list so this row's backend-owned pack_button/dot/can_mark_ready
+              // (and label on this very button) reflect the new state.
+              _load(silent: true);
             }
           },
           child: Text(label,
@@ -12694,7 +12717,7 @@ class _PackTabState extends State<_PackTab>
 
   Widget _buildCustomerRow(Map<String, dynamic> c) {
     final orderId = c['order_id']?.toString() ?? '';
-    final name = c['customer']?.toString() ?? 'Unknown';
+    final name = c['pharmacy_name']?.toString() ?? 'Unknown';
     final isExpanded = _expandedOrderId == orderId;
     final rowKey = _rowKeys.putIfAbsent(orderId, () => GlobalKey());
 
@@ -12841,8 +12864,9 @@ class _PackTabState extends State<_PackTab>
         const Divider(height: 1, color: _kBorder),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-          // #346: footer reads rollup + dispatch_ready from qData
-          child: _buildPackFooter(orderId, qData, rollup, items),
+          // #346: footer reads rollup + dispatch_ready + can_mark_ready from qData
+          // (pack_get_queue) — always fresh since every mutating action reloads it.
+          child: _buildPackFooter(orderId, qData, rollup, qData?['can_mark_ready'] == true),
         ),
       ] else
         const SizedBox(height: 8),
@@ -13038,27 +13062,16 @@ class _PackTabState extends State<_PackTab>
   // C354: read-only chip for lines that must not be packed as-is. Derives from the
   // pack_get_queue fulfillment_state plus the single fw_get_disputes index (matched by
   // order_item_id). Returns an empty box for normal rows.
+  // Backend-owned: pack_get_queue()'s per-item dispute_chip, verbatim
+  // (priority-ordered not_coming / wrong / active-dispute, or null).
   Widget _buildPackDisputeChip(Map<String, dynamic> item) {
-    final fs   = item['fulfillment_state']?.toString();
-    final oiid = item['order_item_id']?.toString();
-    final disp = (oiid != null && oiid.isNotEmpty) ? _packDisputeIdx[oiid] : null;
+    final chip = item['dispute_chip'] as Map?;
+    if (chip == null) return const SizedBox.shrink();
+    final label = chip['label']?.toString() ?? '';
+    final bg = _hexColor(chip['bg']?.toString(), const Color(0xFFF3F4F6));
+    final fg = _hexColor(chip['fg']?.toString(), _kSub);
 
-    String? label;
-    Color bg = const Color(0xFFF3F4F6);
-    Color fg = _kSub;
-    if (fs == 'not_coming') {
-      label = 'Not coming';
-      bg = const Color(0xFFEFEEE9); fg = const Color(0xFF5A5A57);
-    } else if (fs == 'wrong') {
-      label = 'Wrong — re-sourcing';
-      bg = const Color(0xFFFEE2E2); fg = const Color(0xFFB42318);
-    } else if (disp != null && disp.isActive) {
-      label = 'In dispute';
-      bg = const Color(0xFFEDE9FE); fg = const Color(0xFF6D28D9);
-    }
-    if (label == null) return const SizedBox.shrink();
-
-    RenderLog.write('c354_pack_chip', 'state=${fs == 'not_coming' ? 'not_coming' : fs == 'wrong' ? 'wrong' : 'in_dispute'}');
+    RenderLog.write('c354_pack_chip', 'label=$label');
     return Padding(
       padding: const EdgeInsets.only(top: 4),
       child: Align(
@@ -13105,8 +13118,6 @@ class _PackTabState extends State<_PackTab>
   // #347: item card — stacked multi-bag tags; mismatch chip removed; Counted colour vs received
   Widget _buildPackItemTile(Map<String, dynamic> item) {
     final name       = item['product_name']?.toString() ?? '—';
-    final packType   = (item['pack_type']?.toString() ?? '').trim();
-    final pt         = packType.isNotEmpty ? ' $packType' : ' unit';
     final imageUrl   = item['image_url']?.toString();
     final ordered    = (item['ordered'] as num?)?.toInt() ?? 0;
     final received   = (item['received'] as num?)?.toInt() ?? 0;
@@ -13204,30 +13215,28 @@ class _PackTabState extends State<_PackTab>
                 // #368: workflow note — an un-bagged line can't be packed yet.
                 if (!isBagged) _buildNotBaggedChip(),
                 const SizedBox(height: 5),
-                // Received
-                _packChip('Received • $received/$ordered$pt', received, ordered),
+                // Backend-owned: pack_get_queue()'s per-item chips (received/packed/
+                // counted), each {label, colors:{bg,fg,border}} — rendered verbatim.
+                // NOTE: Counted's label reads "/ordered" while its colour is computed
+                // against received — that mismatch is intentional (server-capped
+                // counting) and preserved exactly as the backend returns it.
+                _packChipFromBackend(item['chips']?['received'] as Map?),
                 const SizedBox(height: 4),
-                // Packed
-                _packChip('Packed • $packedQty/$ordered$pt', packedQty, ordered),
+                _packChipFromBackend(item['chips']?['packed'] as Map?),
                 const SizedBox(height: 4),
-                // §4: Counted colour vs received (not ordered) — green when fully counted what arrived
-                _packChipVs('Counted • $ct/$ordered$pt', ct, received),
+                _packChipFromBackend(item['chips']?['counted'] as Map?),
               ]),
         ),
       ]),
     );
   }
 
-  // §4: colour variant that uses a separate denominator for colour vs display value.
-  // Used for Counted: display x/ordered but colour against received (server-capped).
-  Widget _packChipVs(String label, int x, int colourDenominator) {
-    final s = _fillStateFor(x, colourDenominator);
-    final (bg, text) = _fillColors(s);
-    final Color border = switch (s) {
-      _FillState.empty   => const Color(0xFFD1D5DB),
-      _FillState.partial => const Color(0xFFD97706).withValues(alpha: 0.4),
-      _FillState.full    => const Color(0xFF166534).withValues(alpha: 0.4),
-    };
+  Widget _packChipFromBackend(Map? chip) {
+    if (chip == null) return const SizedBox.shrink();
+    final colors = chip['colors'] as Map?;
+    final bg = _hexColor(colors?['bg']?.toString(), const Color(0xFFF3F4F6));
+    final fg = _hexColor(colors?['fg']?.toString(), const Color(0xFF6B7280));
+    final border = _hexColor(colors?['border']?.toString(), const Color(0xFFD1D5DB));
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
@@ -13235,44 +13244,8 @@ class _PackTabState extends State<_PackTab>
         borderRadius: BorderRadius.circular(6),
         border: Border.all(color: border),
       ),
-      child: Text(label,
-          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: text),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis),
-    );
-  }
-
-  // CHANGE #304: badge colour helper — grey/yellow/green by fill ratio.
-  // x=0 → grey; 0<x<y → yellow; x>=y && y>0 → green.
-  // CHANGE #304b: shared fill-state enum + colour helper used by BOTH Packed and Counted badges.
-  _FillState _fillStateFor(int x, int y) {
-    if (y <= 0 || x <= 0) return _FillState.empty;
-    if (x >= y) return _FillState.full;
-    return _FillState.partial;
-  }
-  (Color bg, Color fg) _fillColors(_FillState s) => switch (s) {
-    _FillState.empty   => (const Color(0xFFF3F4F6), const Color(0xFF6B7280)),
-    _FillState.partial => (const Color(0xFFFEF3C7), const Color(0xFF92400E)),
-    _FillState.full    => (const Color(0xFFDCFCE7), const Color(0xFF166534)),
-  };
-
-  Widget _packChip(String label, int x, int y) {
-    final s = _fillStateFor(x, y);
-    final (bg, text) = _fillColors(s);
-    final Color border = switch (s) {
-      _FillState.empty   => const Color(0xFFD1D5DB),
-      _FillState.partial => const Color(0xFFD97706).withValues(alpha: 0.4),
-      _FillState.full    => const Color(0xFF166534).withValues(alpha: 0.4),
-    };
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: border),
-      ),
-      child: Text(label,
-          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: text),
+      child: Text(chip['label']?.toString() ?? '',
+          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg),
           maxLines: 1,
           overflow: TextOverflow.ellipsis),
     );
@@ -13280,55 +13253,41 @@ class _PackTabState extends State<_PackTab>
 
   // #346: footer = master rollup list + dispatch button.
   // dispatch_ready=true  → GREEN tap "Ready to dispatch" (undo, always enabled)
-  // canMarkPacked=true   → YELLOW tap "Mark fully packed"
+  // canMarkReady=true    → YELLOW tap "Mark fully packed"
   // otherwise            → muted, disabled "Mark fully packed"
-  Widget _buildPackFooter(String orderId, Map<String, dynamic>? qData, Map<String, dynamic> rollup, List<Map<String, dynamic>> items) {
+  // canMarkReady is backend-owned: pack_get_queue()'s can_mark_ready, verbatim
+  // (the real pack_set_dispatch_ready eligibility — no client recomputation).
+  Widget _buildPackFooter(String orderId, Map<String, dynamic>? qData, Map<String, dynamic> rollup, bool canMarkReady) {
     final bool dispatchReady = qData?['dispatch_ready'] == true;
 
     final String state = dispatchReady
         ? 'readytodispatch'
-        : (_packCanMarkReady(items) ? 'fullypacked' : 'progress');
+        : (canMarkReady ? 'fullypacked' : 'progress');
     try { RenderLog.write('c304_footer', 'state=$state'); } catch (_) {}
+    final rollupRows = (qData?['rollup_rows'] as List? ?? [])
+        .map((r) => Map<String, dynamic>.from(r as Map))
+        .toList();
+    final ord = (rollup['ordered'] as num?)?.toInt() ?? 0;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _buildPackMasterRollup(rollup),
+        _buildPackMasterRollup(rollupRows, ord),
         const SizedBox(height: 12),
-        _buildPackDispatchButton(orderId, dispatchReady, items),
+        _buildPackDispatchButton(orderId, dispatchReady, canMarkReady),
       ],
     );
   }
 
-  // Mirrors pack_set_dispatch_ready's backend eligibility check exactly — every
-  // received/short item must be packed to (and counted to) its packable_qty.
-  bool _packCanMarkReady(List<Map<String, dynamic>> items) {
-    num n(v) => (v == null) ? 0 : (v as num);
-    bool packedOk(Map<String, dynamic> i) =>
-        n(i['packed_qty']) >= n(i['packable_qty']) && n(i['packed_qty']) > 0;
-    bool countedOk(Map<String, dynamic> i) =>
-        i['counted_qty'] != null &&
-        n(i['counted_qty']) >= n(i['packable_qty']) &&
-        n(i['counted_qty']) > 0;
-    final arrived = items.where((i) =>
-        i['fulfillment_state'] == 'received' || i['fulfillment_state'] == 'short').toList();
-    return arrived.isNotEmpty && arrived.every((i) => packedOk(i) && countedOk(i));
-  }
-
-  // #346: 5-row master rollup list — reads ONLY from rollup map (never sums items).
-  Widget _buildPackMasterRollup(Map<String, dynamic> rollup) {
-    final ord = (rollup['ordered']   as num?)?.toInt() ?? 0;
-    final sup = (rollup['supplier']  as num?)?.toInt() ?? 0;
-    final trn = (rollup['transit']   as num?)?.toInt() ?? 0;
-    final wh  = (rollup['warehouse'] as num?)?.toInt() ?? 0;
-    final pk  = (rollup['packed']    as num?)?.toInt() ?? 0;
-    final ct  = (rollup['counted']   as num?)?.toInt() ?? 0;
-    try { RenderLog.write('c346_master_rollup', 'supplier=$sup;transit=$trn;warehouse=$wh;packed=$pk;counted=$ct;ordered=$ord'); } catch (_) {}
-    Widget row(String label, int x) {
-      final full = ord > 0 && x >= ord;
-      final none = x == 0;
-      final Color fg = full ? const Color(0xFF166534) : none ? _kSub : const Color(0xFF92400E);
-      final Color bg = full ? const Color(0xFFDCFCE7) : none ? const Color(0xFFF3F4F6) : const Color(0xFFFEF3C7);
+  // #346: 5-row master rollup list — label/value/colours are backend-owned
+  // (pack_get_queue's rollup_rows[]), rendered verbatim in the given order.
+  Widget _buildPackMasterRollup(List<Map<String, dynamic>> rollupRows, int ord) {
+    Widget row(Map<String, dynamic> r) {
+      final label = r['label']?.toString() ?? '';
+      final value = (r['value'] as num?)?.toInt() ?? 0;
+      final colors = r['colors'] as Map?;
+      final fg = _hexColor(colors?['fg']?.toString(), _kSub);
+      final bg = _hexColor(colors?['bg']?.toString(), const Color(0xFFF3F4F6));
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 3),
         child: Row(children: [
@@ -13337,7 +13296,7 @@ class _PackTabState extends State<_PackTab>
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
             decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(6)),
-            child: Text('$x / $ord items',
+            child: Text('$value / $ord items',
                 style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: fg)),
           ),
         ]),
@@ -13351,11 +13310,7 @@ class _PackTabState extends State<_PackTab>
         border: Border.all(color: _kBorder),
       ),
       child: Column(children: [
-        row('Supplier', sup),
-        row('Transit', trn),
-        row('Warehouse', wh),
-        row('Packed', pk),
-        row('Counted', ct),
+        for (final r in rollupRows) row(r),
       ]),
     );
   }
@@ -13363,7 +13318,7 @@ class _PackTabState extends State<_PackTab>
   // Dispatch button. Label is driven only by dispatch_ready (never by eligibility):
   //   dispatch_ready==false → "Mark fully packed" (disabled + helper text until eligible)
   //   dispatch_ready==true  → "Ready to dispatch" (undo — always enabled, unconditional RPC)
-  Widget _buildPackDispatchButton(String orderId, bool dispatchReady, List<Map<String, dynamic>> items) {
+  Widget _buildPackDispatchButton(String orderId, bool dispatchReady, bool canMarkReady) {
     if (dispatchReady) {
       // ── GREEN: tap to undo (unconditional — never gated on eligibility) ───
       return GestureDetector(
@@ -13387,16 +13342,15 @@ class _PackTabState extends State<_PackTab>
       );
     }
 
-    final bool canMarkPacked = _packCanMarkReady(items);
-    final Color bg     = canMarkPacked ? const Color(0xFFFEF3C7) : const Color(0xFFF9FAFB);
-    final Color fg     = canMarkPacked ? const Color(0xFF92400E) : _kSub;
-    final Color border = canMarkPacked ? const Color(0xFFD97706).withValues(alpha: 0.4) : _kBorder;
+    final Color bg     = canMarkReady ? const Color(0xFFFEF3C7) : const Color(0xFFF9FAFB);
+    final Color fg     = canMarkReady ? const Color(0xFF92400E) : _kSub;
+    final Color border = canMarkReady ? const Color(0xFFD97706).withValues(alpha: 0.4) : _kBorder;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         GestureDetector(
-          onTap: (canMarkPacked && !_dispatchLoading)
+          onTap: (canMarkReady && !_dispatchLoading)
               ? () => _doSetDispatchReady(orderId, true)
               : null,
           child: Container(
@@ -13415,7 +13369,7 @@ class _PackTabState extends State<_PackTab>
                     style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: fg)),
           ),
         ),
-        if (!canMarkPacked) ...[
+        if (!canMarkReady) ...[
           const SizedBox(height: 6),
           const Text('Count & pack all items first',
               style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: _kSub)),
@@ -13467,6 +13421,9 @@ class _PackTabState extends State<_PackTab>
     }
     // Always refetch — never optimistically flip dispatch_ready locally.
     if (mounted) await _loadFromPackQueue(orderId);
+    // Refresh the order list too — pack_list_orders' can_mark_ready/dot/pack_button
+    // for this row must reflect the just-changed dispatch_ready state.
+    if (mounted) _load(silent: true);
   }
 
   // CHANGE #306: opens the "Counted items" review sheet (same layout as Warehouse popup).
@@ -14479,38 +14436,11 @@ class _PackingScreenState extends State<_PackingScreen>
 
   // ── Per-bag rollup (#293 retained) ──────────────────────────────────────────
 
-  Map<int, Map<String, int>> _computeBagStats() {
-    final result = <int, Map<String, int>>{};
-    for (final item in _items) {
-      final bn    = (item['bag_no'] as num?)?.toInt() ?? 0;
-      final done  = _isItemDone(item); // #368: done-predicate
-      final entry = result.putIfAbsent(bn, () => {'packed': 0, 'total': 0});
-      entry['total'] = (entry['total'] ?? 0) + 1;
-      if (done) entry['packed'] = (entry['packed'] ?? 0) + 1;
-    }
-    return result;
-  }
-
-  int _bagStatus(int bagNo, Map<int, Map<String, int>> stats) {
-    final s = stats[bagNo];
-    if (s == null) return 0;
-    final total  = s['total']  ?? 0;
-    final packed = s['packed'] ?? 0;
-    if (total == 0) return 0;
-    if (packed == total) return 2;
-    if (packed > 0) return 1;
-    return 0;
-  }
-
-  Color _bagBg(int st)  => st == 2 ? _kReceivedBg
-      : st == 1 ? const Color(0xFFFFF3CD)
-      : const Color(0xFFF3F4F6);
-  Color _bagBorderC(int st) => st == 2 ? _kGreen
-      : st == 1 ? const Color(0xFFFFCA28)
-      : _kBorder;
-  Color _bagFg(int st)  => st == 2 ? _kReceivedFg
-      : st == 1 ? const Color(0xFF8A6D00)
-      : _kSub;
+  // Backend-owned: pack_get_queue()'s bag_stats[] — {bag_no,total,packed,label,
+  // state,colors}, pre-sorted by bag_no. Rendered verbatim, no client rollup.
+  List<Map<String, dynamic>> get _bagStats => (_queue?['bag_stats'] as List? ?? [])
+      .map((r) => Map<String, dynamic>.from(r as Map))
+      .toList();
 
   // ── Header popups ────────────────────────────────────────────────────────────
 
@@ -14539,9 +14469,8 @@ class _PackingScreenState extends State<_PackingScreen>
   }
 
   void _showBagsPopup() {
-    final bagStats = _computeBagStats();
-    final bags     = bagStats.keys.toList()..sort();
-    try { RenderLog.write('c292_hdr_popup', 'which=bags;rows=${bags.length}'); } catch (_) {}
+    final bagStats = _bagStats;
+    try { RenderLog.write('c292_hdr_popup', 'which=bags;rows=${bagStats.length}'); } catch (_) {}
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -14552,11 +14481,13 @@ class _PackingScreenState extends State<_PackingScreen>
         constraints: BoxConstraints(maxHeight: MediaQuery.of(ctx).size.height * 0.70),
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           _sheetHeader(ctx, 'Bags'),
-          Flexible(child: SingleChildScrollView(child: Column(children: bags.map((bn) {
-            final st        = _bagStatus(bn, bagStats);
-            final s         = bagStats[bn]!;
-            final bagPacked = s['packed'] ?? 0;
-            final bagTotal  = s['total']  ?? 0;
+          Flexible(child: SingleChildScrollView(child: Column(children: bagStats.map((s) {
+            final bn = (s['bag_no'] as num?)?.toInt() ?? 0;
+            final st = (s['state'] as num?)?.toInt() ?? 0;
+            final colors = s['colors'] as Map?;
+            final bg = _hexColor(colors?['bg']?.toString(), const Color(0xFFF3F4F6));
+            final fg = _hexColor(colors?['fg']?.toString(), _kSub);
+            final label = s['label']?.toString() ?? '';
             try {
               RenderLog.write('c293_bag_color',
                   'bag=$bn;state=${st == 2 ? "green" : st == 1 ? "yellow" : "grey"}');
@@ -14564,19 +14495,18 @@ class _PackingScreenState extends State<_PackingScreen>
             return Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               decoration: BoxDecoration(
-                  color: _bagBg(st),
+                  color: bg,
                   border: const Border(bottom: BorderSide(color: _kBorder))),
               child: Row(children: [
                 Text('Bag $bn',
                     style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500,
-                        color: _bagFg(st))),
+                        color: fg)),
                 const Spacer(),
                 if (st == 2)
                   Text('✓', style: TextStyle(fontSize: 14,
-                      fontWeight: FontWeight.w700, color: _bagFg(st)))
+                      fontWeight: FontWeight.w700, color: fg))
                 else
-                  Text('$bagPacked/$bagTotal',
-                      style: TextStyle(fontSize: 13, color: _bagFg(st))),
+                  Text(label, style: TextStyle(fontSize: 13, color: fg)),
               ]),
             );
           }).toList()))),
@@ -14689,7 +14619,7 @@ class _PackingScreenState extends State<_PackingScreen>
           borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
       builder: (_) => _BagQuickViewSheet(
           items: List<Map<String, dynamic>>.from(_items),
-          bagStats: _computeBagStats()),
+          bagStats: _bagStats),
     );
   }
 
@@ -15345,7 +15275,8 @@ class _ItemImageViewState extends State<_ItemImageView> {
 
 class _BagQuickViewSheet extends StatefulWidget {
   final List<Map<String, dynamic>> items;
-  final Map<int, Map<String, int>> bagStats;
+  // Backend-owned: pack_get_queue()'s bag_stats[], rendered verbatim.
+  final List<Map<String, dynamic>> bagStats;
   const _BagQuickViewSheet({required this.items, required this.bagStats});
   @override
   State<_BagQuickViewSheet> createState() => _BagQuickViewSheetState();
@@ -15370,26 +15301,12 @@ class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
         .toList();
   }
 
-  int _status(int bn) {
-    final s = widget.bagStats[bn];
-    if (s == null) return 0;
-    final total  = s['total']  ?? 0;
-    final packed = s['packed'] ?? 0;
-    if (total == 0) return 0;
-    if (packed == total) return 2;
-    if (packed > 0) return 1;
-    return 0;
+  Map<String, dynamic>? _statFor(int bn) {
+    for (final s in widget.bagStats) {
+      if ((s['bag_no'] as num?)?.toInt() == bn) return s;
+    }
+    return null;
   }
-
-  Color _bg(int st)     => st == 2 ? _kReceivedBg
-      : st == 1 ? const Color(0xFFFFF3CD)
-      : const Color(0xFFF3F4F6);
-  Color _border(int st) => st == 2 ? _kGreen
-      : st == 1 ? const Color(0xFFFFCA28)
-      : _kBorder;
-  Color _fg(int st)     => st == 2 ? _kReceivedFg
-      : st == 1 ? const Color(0xFF8A6D00)
-      : _kSub;
 
   @override
   Widget build(BuildContext context) {
@@ -15449,11 +15366,13 @@ class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
                 ),
               ),
               ...bags.map((bn) {
-                final st         = _status(bn);
+                final s          = _statFor(bn);
+                final colors     = s?['colors'] as Map?;
+                final st         = (s?['state'] as num?)?.toInt() ?? 0;
                 final isSelected = _selectedBag == bn;
-                final bgColor    = isSelected ? _kGreen : _bg(st);
-                final bdColor    = isSelected ? _kGreen : _border(st);
-                final txtColor   = isSelected ? Colors.white : _fg(st);
+                final bgColor    = isSelected ? _kGreen : _hexColor(colors?['bg']?.toString(), const Color(0xFFF3F4F6));
+                final bdColor    = isSelected ? _kGreen : _hexColor(colors?['border']?.toString(), _kBorder);
+                final txtColor   = isSelected ? Colors.white : _hexColor(colors?['fg']?.toString(), _kSub);
                 try {
                   RenderLog.write('c293_bag_color',
                       'bag=$bn;state=${st == 2 ? "green" : st == 1 ? "yellow" : "grey"}');
@@ -15966,28 +15885,6 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     );
   }
 
-  // ── #170: Per-item state chip (Needs you / Waiting / Re-sourcing / Exchange) ─
-  Widget _disputeStateChip(DisputeView view) {
-    Color bg, fg;
-    switch (view.state) {
-      case DisputeState.needsYou:
-        bg = const Color(0xFFFEE2E2); fg = const Color(0xFFC0392B); break;
-      case DisputeState.waiting:
-        bg = const Color(0xFFEDE9FE); fg = const Color(0xFF6D5BD0); break;
-      case DisputeState.resourcing:
-        bg = const Color(0xFFFEF3C7); fg = const Color(0xFFB26A00); break;
-      case DisputeState.exchange:
-        bg = const Color(0xFFD1FAE5); fg = _kGreen; break;
-      case DisputeState.resolved:
-        bg = const Color(0xFFF3F4F6); fg = _kSub; break;
-    }
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(10)),
-      child: Text(view.label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg)),
-    );
-  }
-
   // ── #170: Compact key→value table row ────────────────────────────────────────
   Widget _kvRow(String label, String value) => Padding(
     padding: const EdgeInsets.symmetric(vertical: 2),
@@ -16312,10 +16209,10 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     ];
     final metaLine = metaParts.join(' · ');
 
-    // Kind tag text for all 6 kinds
-    final kindTagText = disputeKindLabel(item.kind); // C355: shared kind label
-    final kindTagBg = isWrong ? const Color(0xFFEEF2FF) : const Color(0xFFF1F5F9);
-    final kindTagFg = isWrong ? const Color(0xFF4338CA) : const Color(0xFF475569);
+    // Backend-owned: fw_get_disputes()'s kind_label/kind_colors, verbatim.
+    final kindTagText = item.kindLabel;
+    final kindTagBg = _hexColor(item.kindColors?['bg'], const Color(0xFFF1F5F9));
+    final kindTagFg = _hexColor(item.kindColors?['fg'], const Color(0xFF475569));
 
     RenderLog.write('c192_dispute_card_rendered',
         'dispute=${item.disputeId};status=${item.statusCode}');
@@ -16480,18 +16377,18 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                             color: Color(0xFF1E40AF))),
                   );
                 }),
-                // Return-note chip
-                if ((item.returnNoteStatus ?? '').isNotEmpty) Builder(builder: (_) {
-                  RenderLog.write('c349_return_chip', 'state=${item.returnNoteStatus}');
-                  final isOpen = item.returnNoteStatus == 'open';
+                // Return-note chip — backend-owned (fw_get_disputes' return_note_chip), verbatim.
+                if (item.returnNoteChip != null) Builder(builder: (_) {
+                  final chip = item.returnNoteChip!;
+                  RenderLog.write('c349_return_chip', 'open=${chip.isOpen}');
                   return Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                     decoration: BoxDecoration(
-                        color: isOpen ? const Color(0xFFFFF8E1) : const Color(0xFFF3F4F6),
+                        color: _hexColor(chip.bg, const Color(0xFFF3F4F6)),
                         borderRadius: BorderRadius.circular(20)),
-                    child: Text(isOpen ? 'Stock to return' : 'Return collected ✓',
+                    child: Text(chip.labelCard,
                         style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
-                            color: isOpen ? const Color(0xFFB8860B) : _kSub)),
+                            color: _hexColor(chip.fg, _kSub))),
                   );
                 }),
               ]),
@@ -16666,16 +16563,16 @@ class _DisputeActionSheetState extends State<_DisputeActionSheet> {
                 ),
                 const SizedBox(width: 8),
                 Builder(builder: (_) {
-                  final kindTag = disputeKindLabel(item.kind); // C355: shared kind label
+                  // Backend-owned: fw_get_disputes()'s kind_label/kind_colors, verbatim.
                   return Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                     decoration: BoxDecoration(
-                      color: isWrong ? const Color(0xFFEEF2FF) : const Color(0xFFF1F5F9),
+                      color: _hexColor(item.kindColors?['bg'], const Color(0xFFF1F5F9)),
                       borderRadius: BorderRadius.circular(6),
                     ),
-                    child: Text(kindTag,
+                    child: Text(item.kindLabel,
                         style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
-                            color: isWrong ? const Color(0xFF4338CA) : const Color(0xFF475569))),
+                            color: _hexColor(item.kindColors?['fg'], const Color(0xFF475569)))),
                   );
                 }),
               ]),
@@ -16729,25 +16626,26 @@ class _DisputeActionSheetState extends State<_DisputeActionSheet> {
           ]),
         ],
 
-        // Return-note chip + admin close button
-        if ((item.returnNoteStatus ?? '').isNotEmpty) ...[
+        // Return-note chip + admin close button — backend-owned
+        // (fw_get_disputes' return_note_chip), verbatim.
+        if (item.returnNoteChip != null) ...[
           const SizedBox(height: 12),
           Builder(builder: (bCtx) {
-            final isOpen = item.returnNoteStatus == 'open';
+            final chip = item.returnNoteChip!;
             return Row(children: [
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  color: isOpen ? const Color(0xFFFFF8E1) : const Color(0xFFF3F4F6),
+                  color: _hexColor(chip.bg, const Color(0xFFF3F4F6)),
                   borderRadius: BorderRadius.circular(20),
                 ),
                 child: Text(
-                  isOpen ? 'Stock to return — supplier will pick up' : 'Return collected ✓',
+                  chip.labelSheet,
                   style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
-                      color: isOpen ? const Color(0xFFB8860B) : _kSub),
+                      color: _hexColor(chip.fg, _kSub)),
                 ),
               ),
-              if (isOpen) ...[
+              if (chip.showCollectedAction) ...[
                 const SizedBox(width: 8),
                 TextButton(
                   onPressed: () {

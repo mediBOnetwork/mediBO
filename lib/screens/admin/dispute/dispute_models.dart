@@ -36,6 +36,40 @@ class DisputeAction {
   }
 }
 
+// Backend-owned (fw_get_disputes' return_note_chip): null when there's no
+// return note; otherwise the exact label/colour/action-visibility to render.
+// label_card is for the dispute card, label_sheet for the action sheet — the
+// wording differs per-surface but is backend text either way, not composed here.
+class DisputeReturnNoteChip {
+  final bool isOpen;
+  final String labelCard;
+  final String labelSheet;
+  final String bg;
+  final String fg;
+  final bool showCollectedAction;
+
+  const DisputeReturnNoteChip({
+    required this.isOpen,
+    required this.labelCard,
+    required this.labelSheet,
+    required this.bg,
+    required this.fg,
+    required this.showCollectedAction,
+  });
+
+  static DisputeReturnNoteChip? fromJson(dynamic j) {
+    if (j is! Map) return null;
+    return DisputeReturnNoteChip(
+      isOpen: j['is_open'] == true,
+      labelCard: j['label_card']?.toString() ?? '',
+      labelSheet: j['label_sheet']?.toString() ?? '',
+      bg: j['bg']?.toString() ?? '',
+      fg: j['fg']?.toString() ?? '',
+      showCollectedAction: j['show_collected_action'] == true,
+    );
+  }
+}
+
 class DisputeItem {
   final String disputeId;
   final String orderItemId;
@@ -75,6 +109,11 @@ class DisputeItem {
   final String? lastReminderAt;
   // C354: monetary adjustment applied by the resolution (credit/debit), payload-driven.
   final num? adjAmount;
+  // Backend-owned (fw_get_disputes): friendly kind text + its tag colour.
+  final String kindLabel;
+  final Map<String, String>? kindColors; // {bg, fg}
+  // Backend-owned: null when there's no return note, else the full chip payload.
+  final DisputeReturnNoteChip? returnNoteChip;
 
   const DisputeItem({
     required this.disputeId,
@@ -113,6 +152,9 @@ class DisputeItem {
     this.nudgePending = false,
     this.lastReminderAt,
     this.adjAmount,
+    this.kindLabel = '',
+    this.kindColors,
+    this.returnNoteChip,
   });
 
   factory DisputeItem.fromJson(Map<String, dynamic> j) {
@@ -164,6 +206,14 @@ class DisputeItem {
       nudgePending: j['nudge_pending'] == true,
       lastReminderAt: j['last_reminder_at']?.toString(),
       adjAmount: j['adj_amount'] != null ? _n(j['adj_amount']) : null,
+      kindLabel: j['kind_label']?.toString() ?? '',
+      kindColors: j['kind_colors'] is Map
+          ? {
+              'bg': (j['kind_colors'] as Map)['bg']?.toString() ?? '',
+              'fg': (j['kind_colors'] as Map)['fg']?.toString() ?? '',
+            }
+          : null,
+      returnNoteChip: DisputeReturnNoteChip.fromJson(j['return_note_chip']),
     );
   }
 

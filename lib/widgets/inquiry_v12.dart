@@ -72,9 +72,10 @@ const _kWideBreakpoint = 960.0;
 
 /// Shared inquiry item list for all three surfaces (admin, token link, supplier).
 ///
-/// Items are sorted company→category→product_name A→Z and rendered as a clean
-/// flat list — no toggle, no company/category group headers. The per-card
-/// category chip and company name make headers redundant.
+/// Items are rendered in the exact order they arrive from the backend
+/// (inquiry.id DESC — the single source of truth) as a clean flat list — no
+/// toggle, no company/category group headers, no client-side re-sort. The
+/// per-card category chip and company name make headers redundant.
 ///
 /// onBulkCompanyCategory: bulk RPC for (company, category) — returns marked
 ///   count on success, null on error.
@@ -114,32 +115,24 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
     super.dispose();
   }
 
-  // ── Grouping: company → category → items, all A→Z ─────────────────────────
+  // ── Company/category keys (for slim-row bulk action grouping only —
+  // counts items per company+category without touching render order) ───────
 
-  Map<String, Map<String, List<Map<String, dynamic>>>> _nestedGrouped() {
-    final raw = <String, Map<String, List<Map<String, dynamic>>>>{};
+  (String, String) _groupKeyFor(Map<String, dynamic> item) {
+    final comp = (item['company'] as String? ?? '').trim();
+    final compKey = comp.isEmpty ? 'Other' : comp;
+    final cat = (item['therapeutic_class'] as String? ?? '').trim();
+    final catKey = cat.isEmpty ? 'Uncategorised' : cat.toUpperCase();
+    return (compKey, catKey);
+  }
+
+  Map<(String, String), int> _groupCounts() {
+    final counts = <(String, String), int>{};
     for (final item in widget.items) {
-      final comp = (item['company'] as String? ?? '').trim();
-      final compKey = comp.isEmpty ? 'Other' : comp;
-      final cat = (item['therapeutic_class'] as String? ?? '').trim();
-      final catKey = cat.isEmpty ? 'Uncategorised' : cat.toUpperCase();
-      ((raw[compKey] ??= {})[catKey] ??= []).add(item);
+      final key = _groupKeyFor(item);
+      counts[key] = (counts[key] ?? 0) + 1;
     }
-    final sortedComp = raw.keys.toList()..sort();
-    final result = <String, Map<String, List<Map<String, dynamic>>>>{};
-    for (final comp in sortedComp) {
-      final cats = raw[comp]!;
-      final sortedCats = cats.keys.toList()..sort();
-      final out = <String, List<Map<String, dynamic>>>{};
-      for (final cat in sortedCats) {
-        out[cat] = cats[cat]!
-          ..sort((a, b) =>
-              (a['product_name'] as String? ?? '')
-                  .compareTo(b['product_name'] as String? ?? ''));
-      }
-      result[comp] = out;
-    }
-    return result;
+    return counts;
   }
 
   bool _isLocked(Map<String, dynamic> item) {
@@ -213,22 +206,23 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
 
     return LayoutBuilder(builder: (context, constraints) {
       final isWide = constraints.maxWidth >= _kWideBreakpoint;
-      final nested = _nestedGrouped();
+      final counts = _groupCounts();
 
       final showSlim = !widget.readOnly && widget.onBulkCompanyCategory != null;
+      final seenGroupKeys = <(String, String)>{};
       int slimRowCount = 0;
       final children = <Widget>[];
-      for (final compEntry in nested.entries) {
-        for (final catEntry in compEntry.value.entries) {
-          final items = catEntry.value;
-          if (showSlim && items.length > 3) {
-            children.add(_buildSlimRow(compEntry.key, catEntry.key));
-            slimRowCount++;
-          }
-          children.addAll(items.map((item) => _buildItemCard(item, isWide)));
-          children.add(const SizedBox(height: 4));
+      // Render items in exactly the order received from the backend
+      // (inquiry.id DESC) — no sort, no grouping-induced reordering.
+      for (final item in widget.items) {
+        final key = _groupKeyFor(item);
+        if (showSlim && (counts[key] ?? 0) > 3 && seenGroupKeys.add(key)) {
+          children.add(_buildSlimRow(key.$1, key.$2));
+          slimRowCount++;
         }
+        children.add(_buildItemCard(item, isWide));
       }
+      if (children.isNotEmpty) children.add(const SizedBox(height: 4));
       RenderLog.write('inq_slim_rows', slimRowCount);
 
       return Column(

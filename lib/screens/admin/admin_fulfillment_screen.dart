@@ -13212,21 +13212,6 @@ class _DisputesScreenState extends State<_DisputesScreen> {
   }
 
 
-  List<MapEntry<String, List<DisputeItem>>> _groupBySupplier(
-      List<DisputeItem> items) {
-    final order = <String>[];
-    final map = <String, List<DisputeItem>>{};
-    for (final d in items) {
-      final s = d.supplier.isNotEmpty ? d.supplier : '—';
-      if (!map.containsKey(s)) {
-        order.add(s);
-        map[s] = [];
-      }
-      map[s]!.add(d);
-    }
-    return order.map((s) => MapEntry(s, map[s]!)).toList();
-  }
-
   String _supplierLinkFromItems(List<DisputeItem> items) {
     // Use dispute_code to build the short /<CODE> link — never the token form.
     const codeStatuses = {'reminder_sent', 'shop_logged'};
@@ -13345,7 +13330,6 @@ class _DisputesScreenState extends State<_DisputesScreen> {
 
     final activeDisputes = _disputes.where((d) => d.isActive).toList();
     final closedDisputes = _disputes.where((d) => !d.isActive).toList();
-    final activeGroups = _groupBySupplier(activeDisputes);
     // C362 point-7: ITEM-WISE, no Active/Closed sections — aggregate ALL disputes by product,
     // grouped by supplier (one row per product; disputed qty summed; Active/Inactive badge).
     // CHANGE #531: grouping, row order and every summed qty now come from
@@ -13364,8 +13348,8 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     RenderLog.write('c352_ready', 'a3=v2');
     RenderLog.write('c188_disputes_tab_built', 'active=${activeDisputes.length};closed=${closedDisputes.length}');
     RenderLog.write('c170_disputes_built', 'true');
-    RenderLog.write('c170_supplier_card_count', '${activeGroups.length}');
-    RenderLog.write('c191_admin_disputes_redesigned', 'active=${activeDisputes.length};closed=${closedDisputes.length};groups=${activeGroups.length}');
+    RenderLog.write('c170_supplier_card_count', '${supplierGroups.length}');
+    RenderLog.write('c191_admin_disputes_redesigned', 'active=${activeDisputes.length};closed=${closedDisputes.length};groups=${supplierGroups.length}');
     // C359: disputes raised at confirm land here (Disputes tab) after the realtime refresh.
     if (_disputes.isNotEmpty) RenderLog.write('c359_moved_disp', '${_disputes.length}');
 

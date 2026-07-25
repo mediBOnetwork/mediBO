@@ -31,6 +31,7 @@ import '../../widgets/pinned_footer_list.dart';
 import '../../widgets/fulfill_item_sheet.dart';
 import '../../widgets/report_issue_section.dart';
 import '../../widgets/mention_hold_row.dart'; // #342: MentionActionIcon + mentionRowDecoration
+import '../../widgets/supplier_map_groups_panel.dart'; // CHANGE: Supplier Shop map dropdown
 import 'package:file_picker/file_picker.dart';
 import 'package:image/image.dart' as img;
 import 'package:zxing2/qrcode.dart';
@@ -4122,6 +4123,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
+            if (!widget.arrivals) const SupplierMapGroupsPanel(),
             Text('No orders placed on ${dmy(FulfillDateScope.instance.date)}.',
                 style: const TextStyle(color: _kSub, fontSize: 15),
                 textAlign: TextAlign.center),
@@ -4143,12 +4145,21 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         alignment: Alignment.topCenter,
         child: ConstrainedBox(
           constraints: BoxConstraints(maxWidth: maxW),
-          child: ListView.builder(
-            controller: _listScrollCtrl,
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-            itemCount: displayList.length,
-            itemBuilder: (_, i) => _buildSupplierAccordionRow(displayList[i], isAdmin),
-          ),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            if (!widget.arrivals)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                child: const SupplierMapGroupsPanel(),
+              ),
+            Expanded(
+              child: ListView.builder(
+                controller: _listScrollCtrl,
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                itemCount: displayList.length,
+                itemBuilder: (_, i) => _buildSupplierAccordionRow(displayList[i], isAdmin),
+              ),
+            ),
+          ]),
         ),
       );
     });
@@ -5253,6 +5264,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         'items=${_items.length};visible=${visibleItems.length};error=${_error != null}');
 
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      // ── Supplier map dropdown (Supplier Shop tab only) — purely additive ─────
+      if (!widget.arrivals) ...[
+        const SupplierMapGroupsPanel(),
+        const SizedBox(height: 12),
+      ],
       // ── Single merged bar (dropdown + progress + both pills) ─────────────────
       _buildWideSingleBar(isAdmin),
       const SizedBox(height: 16),

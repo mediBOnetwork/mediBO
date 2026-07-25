@@ -7,6 +7,15 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../utils/render_log.dart';
 import 'report_issue_section.dart';
 
+// Parses a backend-supplied "#RRGGBB" (or "RRGGBB") hex colour string. Pure
+// format conversion — no colour/state decision is made here.
+Color _hexColor(String? hex, Color fallback) {
+  if (hex == null || hex.isEmpty) return fallback;
+  final h = hex.startsWith('#') ? hex.substring(1) : hex;
+  final v = int.tryParse(h.length == 6 ? 'FF$h' : h, radix: 16);
+  return v == null ? fallback : Color(v);
+}
+
 // ── Colours (match admin_fulfillment_screen tokens) ─────────────────────────
 const _kGreen        = Color(0xFF1B7A43);
 const _kBg           = Color(0xFFF5F6F8);
@@ -1059,7 +1068,7 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
               ]),
             ),
             const SizedBox(width: 8),
-            _StatusBadge(sheetState, _localFsState),
+            _StatusBadge(sheetState, _localFsState, item: widget.item, dispute: dispute),
           ]),
           const SizedBox(height: 14),
           const Divider(height: 1, color: _kBorder),
@@ -1371,9 +1380,15 @@ class _FulfillItemSheetState extends State<FulfillItemSheet> {
           // ── WRONG / NOT_COMING ────────────────────────────────────────────
           else if (sheetState == _ItemSheetState.wrongItem ||
                    sheetState == _ItemSheetState.notComing) ...[
+            // Backend-owned: fw_get_state items[].status_label/status_colors, verbatim.
             _StatusLine(
-              sheetState == _ItemSheetState.wrongItem ? 'Wrong item' : 'Not coming',
-              sheetState == _ItemSheetState.wrongItem ? _kWrongFg : _kNotComingFg,
+              (widget.item['status_label']?.toString().isNotEmpty ?? false)
+                  ? widget.item['status_label'].toString()
+                  : (sheetState == _ItemSheetState.wrongItem ? 'Wrong item' : 'Not coming'),
+              _hexColor(
+                (widget.item['status_colors'] as Map?)?['fg']?.toString(),
+                sheetState == _ItemSheetState.wrongItem ? _kWrongFg : _kNotComingFg,
+              ),
             ),
             const SizedBox(height: 12),
             _ActionRow(
@@ -1474,30 +1489,62 @@ class _ImageTile extends StatelessWidget {
 class _StatusBadge extends StatelessWidget {
   final _ItemSheetState sheetState;
   final String fsState;
-  const _StatusBadge(this.sheetState, this.fsState);
+  // Backend-owned (fw_get_state items[]): status_label/status_colors, read
+  // verbatim for every non-dispute state instead of a hardcoded per-state
+  // label/colour map.
+  final Map<String, dynamic>? item;
+  // Backend-owned (fw_get_disputes/supplier_my_disputes): item_status_label,
+  // read verbatim for the two dispute states' label text. The purple/grey
+  // dispute-context colours stay fixed UI chrome (not keyed off a status
+  // string) — see /tmp/fulfill360.md for the open question on whether these
+  // should instead read active_colors.
+  final Map<String, dynamic>? dispute;
+  const _StatusBadge(this.sheetState, this.fsState, {this.item, this.dispute});
 
   @override
   Widget build(BuildContext context) {
     Color bg; Color fg; String label;
+    final statusColors = item?['status_colors'] as Map?;
+    final statusLabel = item?['status_label']?.toString();
+    final disputeLabel = dispute?['item_status_label']?.toString();
     switch (sheetState) {
       case _ItemSheetState.receivedFull:
-        bg = const Color(0xFFD1FAE5); fg = _kReceivedFg; label = 'received'; break;
+        bg = _hexColor(statusColors?['bg']?.toString(), const Color(0xFFD1FAE5));
+        fg = _hexColor(statusColors?['fg']?.toString(), _kReceivedFg);
+        label = (statusLabel != null && statusLabel.isNotEmpty) ? statusLabel : 'received';
+        break;
       case _ItemSheetState.shortfall:
-        bg = const Color(0xFFFAECE7); fg = _kShortFg; label = 'short'; break;
+        bg = _hexColor(statusColors?['bg']?.toString(), const Color(0xFFFAECE7));
+        fg = _hexColor(statusColors?['fg']?.toString(), _kShortFg);
+        label = (statusLabel != null && statusLabel.isNotEmpty) ? statusLabel : 'short';
+        break;
       case _ItemSheetState.disputeActive:
-        bg = _kPurpleBg; fg = _kPurple; label = 'dispute'; break;
+        bg = _kPurpleBg; fg = _kPurple;
+        label = (disputeLabel != null && disputeLabel.isNotEmpty) ? disputeLabel : 'dispute';
+        break;
       case _ItemSheetState.disputeResolved:
-        bg = const Color(0xFFF3F4F6); fg = _kSub; label = 'resolved'; break;
+        bg = const Color(0xFFF3F4F6); fg = _kSub;
+        label = (disputeLabel != null && disputeLabel.isNotEmpty) ? disputeLabel : 'resolved';
+        break;
       case _ItemSheetState.wrongItem:
-        bg = const Color(0xFFFEE2E2); fg = _kWrongFg; label = 'wrong'; break;
+        bg = _hexColor(statusColors?['bg']?.toString(), const Color(0xFFFEE2E2));
+        fg = _hexColor(statusColors?['fg']?.toString(), _kWrongFg);
+        label = (statusLabel != null && statusLabel.isNotEmpty) ? statusLabel : 'wrong';
+        break;
       case _ItemSheetState.notComing:
-        bg = const Color(0xFFEFEEE9); fg = _kNotComingFg; label = 'not coming'; break;
+        bg = _hexColor(statusColors?['bg']?.toString(), const Color(0xFFEFEEE9));
+        fg = _hexColor(statusColors?['fg']?.toString(), _kNotComingFg);
+        label = (statusLabel != null && statusLabel.isNotEmpty) ? statusLabel : 'not coming';
+        break;
       case _ItemSheetState.fallback:
-        bg = const Color(0xFFF3F4F6); fg = _kSub; label = fsState; break;
+        bg = _hexColor(statusColors?['bg']?.toString(), const Color(0xFFF3F4F6));
+        fg = _hexColor(statusColors?['fg']?.toString(), _kSub);
+        label = (statusLabel != null && statusLabel.isNotEmpty) ? statusLabel : fsState;
+        break;
       default:
-        bg = const Color(0xFFFEF3C7);
-        fg = const Color(0xFF92400E);
-        label = 'pending';
+        bg = _hexColor(statusColors?['bg']?.toString(), const Color(0xFFFEF3C7));
+        fg = _hexColor(statusColors?['fg']?.toString(), const Color(0xFF92400E));
+        label = (statusLabel != null && statusLabel.isNotEmpty) ? statusLabel : 'pending';
     }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),

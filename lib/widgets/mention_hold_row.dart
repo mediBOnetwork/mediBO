@@ -71,23 +71,3 @@ class MentionActionIcon extends StatelessWidget {
   }
 }
 
-// #338 §2.3 (kept): row background by mention status ('deleted' | 'readded' | other).
-BoxDecoration? mentionRowDecoration(String? status) {
-  switch (status) {
-    case 'deleted':
-      return BoxDecoration(
-        color: const Color(0xFFFEE2E2),
-        borderRadius: BorderRadius.circular(8),
-        boxShadow: [
-          BoxShadow(color: Colors.red.withValues(alpha: 0.08), blurRadius: 4),
-        ],
-      );
-    case 'readded':
-      return BoxDecoration(
-        color: const Color(0xFFFEF3C7),
-        borderRadius: BorderRadius.circular(8),
-      );
-    default:
-      return null;
-  }
-}

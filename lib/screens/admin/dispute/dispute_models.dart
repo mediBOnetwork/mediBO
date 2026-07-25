@@ -508,24 +508,6 @@ Future<Map<String, dynamic>> submitDisputeResponse({
   return data;
 }
 
-/// Admin resolve a dispute (fw_resolve_dispute).
-Future<Map<String, dynamic>> resolveAdminDisputeRpc({
-  required String disputeId,
-  required String outcome,
-  String? note,
-}) async {
-  final res = await Supabase.instance.client.rpc(
-    'fw_resolve_dispute',
-    params: {
-      'p_dispute_id': disputeId,
-      'p_outcome': outcome,
-      'p_note': note,
-    },
-  ) as Map;
-  final err = res['error']?.toString();
-  if (err != null) throw DisputeException(err);
-  return Map<String, dynamic>.from(res);
-}
 
 /// Admin close a return note (fw_close_return_note).
 Future<Map<String, dynamic>> closeReturnNoteRpc({

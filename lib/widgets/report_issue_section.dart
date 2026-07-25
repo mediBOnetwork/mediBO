@@ -2,7 +2,16 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../fulfill/fulfill_lookups.dart';
 import '../utils/render_log.dart';
+
+/// '#RRGGBB' / '#AARRGGBB' -> Color. Fallback is a COLOUR only — never copy.
+Color _hexColor(String? hex, Color fallback) {
+  if (hex == null || hex.isEmpty) return fallback;
+  final h = hex.startsWith('#') ? hex.substring(1) : hex;
+  final v = int.tryParse(h.length == 6 ? 'FF$h' : h, radix: 16);
+  return v == null ? fallback : Color(v);
+}
 
 const _kGreen  = Color(0xFF1B7A43);
 const _kText   = Color(0xFF111827);
@@ -81,6 +90,10 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
   @override
   void initState() {
     super.initState();
+    // C531: option table + error copy are backend-owned (fw_issue_options /
+    // fw_error_messages). Nothing renders until they land.
+    FulfillLookups.instance.addListener(_onLookups);
+    FulfillLookups.instance.ensureLoaded();
     final ei = _cleanIssue(widget.existingIssue);
     if (ei != null) {
       _selected = ei;
@@ -93,18 +106,25 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
     }
   }
 
+  void _onLookups() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void didUpdateWidget(ReportIssueSection old) {
     super.didUpdateWidget(old);
-    // C353: item values may refresh in place while the sheet stays open —
-    // drop a selection that is no longer offered by the gated option list.
-    if (_selected != null && !_gatedOptions.any((o) => o.$1 == _selected)) {
+    // C353/C531: item values may refresh in place while the sheet stays open —
+    // drop a selection the backend's option table no longer offers.
+    if (_selected != null &&
+        FulfillLookups.instance.ready &&
+        FulfillLookups.instance.issueOption(_selected) == null) {
       _selected = null;
     }
   }
 
   @override
   void dispose() {
+    FulfillLookups.instance.removeListener(_onLookups);
     _nameCtrl.dispose();
     super.dispose();
   }
@@ -124,15 +144,21 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
 
   bool get _saveEnabled {
     if (_selected == null || _saving) return false;
-    // C365: few_wrong + wrong both need a qty AND the wrong-item name.
-    if (_selected == 'few_wrong' || _selected == 'wrong') {
-      return _qty >= 1 && _nameCtrl.text.trim().isNotEmpty;
-    }
-    // short/damaged/excess need a qty >= 1 (the stepper enforces min 1). not_coming needs none.
-    if (_selected == 'short' || _selected == 'damaged' || _selected == 'excess') {
-      return _qty >= 1;
-    }
+    // C531: WHICH inputs a kind requires is backend-owned (fw_issue_options
+    // needs_qty / needs_name). Only the pure keystroke checks live here.
+    final lk = FulfillLookups.instance;
+    if (lk.needsQty(_selected) && _qty < 1) return false;
+    if (lk.needsName(_selected) && _nameCtrl.text.trim().isEmpty) return false;
     return true;
+  }
+
+  /// Backend-owned error copy. Never falls back to a client string — an empty
+  /// result means the lookup cache has not landed and we stay silent.
+  void _showErr(String? code) {
+    final text = FulfillLookups.instance.message(code);
+    if (!mounted || text == null || text.isEmpty) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(text), backgroundColor: const Color(0xFFDC2626)));
   }
 
   Future<String?> _pickAndUpload() async {
@@ -175,8 +201,8 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
       } catch (e) {
         if (!mounted) return;
         setState(() => _saving = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e'), backgroundColor: const Color(0xFFDC2626)));
+        RenderLog.write('c531_issue_err', 'where=clear_missing');
+        _showErr(null); // backend 'default' message
       }
       return;
     }
@@ -191,8 +217,7 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
       final err = res['error']?.toString();
       if (err != null) {
         setState(() => _saving = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(_productIssueError(err, res)), backgroundColor: const Color(0xFFDC2626)));
+        _showErr(err);
         return;
       }
       RenderLog.write('c351_flag_cleared', 'ok=1');
@@ -201,8 +226,8 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e'), backgroundColor: const Color(0xFFDC2626)));
+      RenderLog.write('c531_issue_err', 'where=clear');
+      _showErr(null);
     }
   }
 
@@ -229,8 +254,7 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
         final err = res['error']?.toString();
         if (err != null) {
           setState(() => _saving = false);
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error: $err'), backgroundColor: const Color(0xFFDC2626)));
+          _showErr(err); // C531: backend fw_error_messages copy, not 'Error: <code>'
           return;
         }
         RenderLog.write('c351_typed', 'kind=$kind');
@@ -266,8 +290,7 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
           if (max != null && max > 0) _qty = max;
         }
         setState(() => _saving = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(_productIssueError(err, res)), backgroundColor: const Color(0xFFDC2626)));
+        _showErr(err);
         return;
       }
       final disputed = (res['disputed'] as num?)?.toInt() ?? qty;
@@ -280,24 +303,8 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e'), backgroundColor: const Color(0xFFDC2626)));
-    }
-  }
-
-  // C365: friendly text for the typed fw_set_product_issue error codes.
-  String _productIssueError(String code, Map res) {
-    if (code.startsWith('qty_required')) {
-      final max = (res['max'] as num?)?.toInt();
-      return max != null ? 'Enter disputed units (max $max)' : 'Enter the disputed units';
-    }
-    switch (code) {
-      case 'wrong_item_name_required': return 'Enter the wrong item name';
-      case 'line_locked': return 'Already confirmed — undo the response first to edit';
-      case 'product_not_for_supplier': return 'This product is not from this supplier';
-      case 'not_authorized': return 'Not allowed';
-      case 'bad_issue': return 'Invalid issue type';
-      default: return 'Error: $code';
+      RenderLog.write('c531_issue_err', 'where=save');
+      _showErr(null);
     }
   }
 
@@ -305,6 +312,18 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
   Widget build(BuildContext context) {
     return Builder(builder: (ctx) {
       RenderLog.write('c351_ready', 'ui=v2');
+      // C531: nothing here has a client-side copy fallback — while the backend
+      // option table / error map is still in flight we render a spinner only.
+      if (!FulfillLookups.instance.ready) {
+        RenderLog.write('c531_issue_wait', 'ready=0');
+        return const SizedBox(
+          height: 44,
+          child: Center(
+            child: SizedBox(width: 18, height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2, color: _kAmber)),
+          ),
+        );
+      }
       if (!_expanded) {
         final ei = _cleanIssue(widget.existingIssue);
         return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -328,7 +347,9 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
           borderRadius: BorderRadius.circular(6),
           border: Border.all(color: _kAmberBorder),
         ),
-        child: Text('Issue: ${_issueLabel(issue)}',
+        // C531: label verbatim from fw_issue_options; falls back to the raw
+        // backend key (never to a client-authored English string).
+        child: Text('Issue: ${FulfillLookups.instance.issueLabel(issue) ?? issue}',
             style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kAmber)),
       ),
       const SizedBox(width: 8),
@@ -368,26 +389,14 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
     );
   }
 
-  // C364: SIX dispute options, always shown. "Report missing / short" is back so the
-  // disputed units of a short line can be entered explicitly (backend stores it in issue_qty).
-  static const _options = [
-    ('short',      Icons.report_gmailerrorred_outlined, 'Report missing / short', 'Fewer units arrived than ordered'),
-    ('wrong',      Icons.swap_horiz_rounded,         'Wrong item',        'Whole line is wrong'),
-    ('few_wrong',  Icons.remove_circle_outline,      'Few units wrong',   'Some units are wrong'),
-    ('damaged',    Icons.broken_image_outlined,      'Damaged / expired', 'Units are damaged or expired'),
-    ('excess',     Icons.add_circle_outline_rounded, 'Excess received',   'More units than ordered'),
-    ('not_coming', Icons.block_outlined,             'Not coming',        'Item will leave the counting list'),
-  ];
-
-  // C363-B: no count-based gating — every option is always offered.
-  List<(String, IconData, String, String)> get _gatedOptions => _options.toList();
-
   Widget _buildExpandedSection() {
     return Builder(builder: (_) {
-      final opts = _gatedOptions;
+      // C531: the option table (keys, labels, help, colours AND their order) is
+      // fw_issue_options() verbatim. No client list, no client gating.
+      final opts = FulfillLookups.instance.issueOptions;
       RenderLog.write('c351_section', 'n=${opts.length}');
-      // C364: all six options always shown ('short' restored for explicit disputed-qty entry).
       RenderLog.write('c363_opts5', 'n=${opts.length}');
+      RenderLog.write('c531_issue_opts', 'n=${opts.length}');
       final hasExisting = _cleanIssue(widget.existingIssue) != null;
       const title = 'Report issue';
       return Container(
@@ -427,9 +436,8 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
           ]),
           const SizedBox(height: 10),
 
-          // C353 B2: gated options — only probable-dispute issues for this line
-          for (final opt in opts)
-            _buildOption(opt.$1, opt.$2, opt.$3, opt.$4),
+          // C531: backend order, backend labels/help/colours.
+          for (final opt in opts) _buildOption(opt),
 
           // Conditional inputs + save
           if (_selected != null) ...[
@@ -449,7 +457,7 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
                 child: _saving
                     ? const SizedBox(width: 18, height: 18,
                         child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                    : Text('Save — ${_issueLabel(_selected!)}',
+                    : Text('Save — ${FulfillLookups.instance.issueLabel(_selected) ?? _selected!}',
                         style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
                             color: Colors.white)),
               ),
@@ -460,7 +468,16 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
     });
   }
 
-  Widget _buildOption(String value, IconData icon, String label, String hint) {
+  // C531: one row per fw_issue_options() entry. label/help/colors are printed
+  // verbatim; the only client decision left is the selected/unselected glyph.
+  Widget _buildOption(Map<String, dynamic> opt) {
+    final value = opt['key']?.toString() ?? '';
+    final label = opt['label']?.toString() ?? '';
+    final hint  = opt['help']?.toString() ?? '';
+    final colors = opt['colors'];
+    final optBg = _hexColor(
+        colors is Map ? colors['bg']?.toString() : null, const Color(0xFFFEF3C7));
+    final optFg = _hexColor(colors is Map ? colors['fg']?.toString() : null, _kAmber);
     final isSelected = _selected == value;
     return GestureDetector(
       onTap: () => setState(() {
@@ -479,27 +496,26 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
         margin: const EdgeInsets.only(bottom: 4),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFFFEF3C7) : Colors.white,
+          color: isSelected ? optBg : Colors.white,
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
-            color: isSelected ? _kAmberBorder : _kBorder,
+            color: isSelected ? optFg : _kBorder,
             width: isSelected ? 1.5 : 1,
           ),
         ),
         child: Row(children: [
-          Icon(icon, size: 16, color: isSelected ? _kAmber : _kSub),
+          Icon(isSelected ? Icons.check_circle_rounded : Icons.radio_button_unchecked,
+              size: 16, color: isSelected ? optFg : _kSub),
           const SizedBox(width: 10),
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(label,
                   style: TextStyle(
                       fontSize: 13, fontWeight: FontWeight.w600,
-                      color: isSelected ? _kAmber : _kText)),
+                      color: isSelected ? optFg : _kText)),
               Text(hint, style: const TextStyle(fontSize: 11, color: _kSub)),
             ]),
           ),
-          if (isSelected)
-            const Icon(Icons.check_circle_rounded, size: 16, color: _kAmber),
         ]),
       ),
     );
@@ -507,12 +523,12 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
 
   Widget _buildInputs() {
     final issue = _selected!;
-    // C365: the "Disputed units" stepper shows for EVERY dispute type except not_coming
-    // (short/few_wrong/damaged/excess/wrong). The value IS the disputed count sent as p_qty to
-    // fw_set_product_issue. Default pre-filled in _buildOption (gap; wrong = full ordered_total).
-    final needsQty = issue != 'not_coming';
-    final needsName = issue == 'few_wrong' || issue == 'wrong';
-    final nameRequired = issue == 'few_wrong' || issue == 'wrong';
+    // C531: WHICH inputs this kind needs is fw_issue_options()'s needs_qty /
+    // needs_name / needs_proof — no client per-kind table.
+    final lk = FulfillLookups.instance;
+    final needsQty   = lk.needsQty(issue);
+    final needsName  = lk.needsName(issue);
+    final needsProof = lk.needsProof(issue);
     // C365: cap = the aggregate gap (short/few_wrong/damaged); excess uncapped; wrong = full ordered.
     final max = issue == 'excess' ? 9999 : issue == 'wrong' ? (_ref > 0 ? _ref : 1) : _maxQty;
 
@@ -546,9 +562,9 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
         const SizedBox(height: 10),
       ],
       if (needsName) ...[
-        Text(
-          nameRequired ? 'What item did they send? *' : 'What item (optional)',
-          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText),
+        const Text(
+          'What item did they send? *',
+          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText),
         ),
         const SizedBox(height: 6),
         TextField(
@@ -571,15 +587,18 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
         ),
         const SizedBox(height: 10),
       ],
-      if (issue == 'not_coming') ...[
-        const Text('Item will leave the counting list.',
-            style: TextStyle(fontSize: 12, color: _kSub)),
-        const SizedBox(height: 6),
-      ] else ...[
+      // C531: the photo affordance is offered when the backend says the kind
+      // takes proof (needs_proof); otherwise the option's own help text stands
+      // in — printed verbatim, never a client-authored sentence.
+      if (needsProof) ...[
         const Text('Photo proof (optional)',
             style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
         const SizedBox(height: 6),
         _buildPhotoRow(),
+      ] else ...[
+        Text(lk.issueOption(issue)?['help']?.toString() ?? '',
+            style: const TextStyle(fontSize: 12, color: _kSub)),
+        const SizedBox(height: 6),
       ],
     ]);
   }
@@ -628,15 +647,6 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
     );
   }
 
-  String _issueLabel(String issue) => switch (issue) {
-    'short'      => 'Report missing',
-    'wrong'      => 'Wrong item',
-    'few_wrong'  => 'Few wrong',
-    'damaged'    => 'Damaged',
-    'excess'     => 'Excess',
-    'not_coming' => 'Not coming',
-    _            => issue,
-  };
 }
 
 class _RisStepper extends StatelessWidget {

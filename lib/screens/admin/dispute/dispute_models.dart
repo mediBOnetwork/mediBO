@@ -124,6 +124,11 @@ class DisputeItem {
   final Map<String, String>? activeColors;
   // Backend-owned: null when there's no return note, else the full chip payload.
   final DisputeReturnNoteChip? returnNoteChip;
+  // Backend-owned (fw_get_disputes): {label,bg,fg} — null when not applicable.
+  // Read verbatim instead of a hardcoded label/colour in the widget.
+  final Map<String, String>? nudgeChip;
+  final Map<String, String>? unfillableChip;
+  final Map<String, String>? adjChip;
 
   const DisputeItem({
     required this.disputeId,
@@ -166,6 +171,9 @@ class DisputeItem {
     this.kindColors,
     this.activeColors,
     this.returnNoteChip,
+    this.nudgeChip,
+    this.unfillableChip,
+    this.adjChip,
   });
 
   factory DisputeItem.fromJson(Map<String, dynamic> j) {
@@ -236,7 +244,22 @@ class DisputeItem {
             }
           : null,
       returnNoteChip: DisputeReturnNoteChip.fromJson(j['return_note_chip']),
+      nudgeChip: _labelChip(j['nudge_chip']),
+      unfillableChip: _labelChip(j['unfillable_chip']),
+      adjChip: _labelChip(j['adj_chip']),
     );
+  }
+
+  // Backend-owned {label,bg,fg} chip payload — shared parsing for nudge_chip/
+  // unfillable_chip/adj_chip. Null when the RPC didn't include the chip
+  // (i.e. the condition it gates wasn't met).
+  static Map<String, String>? _labelChip(dynamic raw) {
+    if (raw is! Map) return null;
+    return {
+      'label': raw['label']?.toString() ?? '',
+      'bg': raw['bg']?.toString() ?? '',
+      'fg': raw['fg']?.toString() ?? '',
+    };
   }
 
   /// True when the dispute is awaiting the supplier's Yes/No response.

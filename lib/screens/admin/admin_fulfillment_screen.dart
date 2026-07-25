@@ -203,32 +203,6 @@ class _BackendStatePill extends StatelessWidget {
   }
 }
 
-class _OrderStatusBadge extends StatelessWidget {
-  final String status;
-  const _OrderStatusBadge(this.status);
-
-  @override
-  Widget build(BuildContext context) {
-    Color bg; Color fg;
-    switch (status) {
-      case 'shipped':           bg = _kShippedBg;  fg = _kShippedFg;  break;
-      case 'partially_shipped': bg = _kShippedBg;  fg = _kShippedFg;  break;
-      case 'ready':             bg = _kReceivedBg; fg = _kReceivedFg; break;
-      case 'partial_ready':     bg = _kPendingBg;  fg = _kPendingFg;  break;
-      case 'waiting':           bg = _kShortBg;    fg = _kShortFg;    break;
-      default:                  bg = _kPendingBg;  fg = _kPendingFg;
-    }
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
-      child: Text(
-        status.replaceAll('_', ' '),
-        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg),
-      ),
-    );
-  }
-}
-
 // ── #197: Merged product row (one per product, combining all customer lines) ──
 class _MergedProduct {
   final int productId;
@@ -15292,15 +15266,20 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                           Builder(builder: (_) {
                             RenderLog.write('c349_nudge', 'pending=y');
                             RenderLog.write('c352_nudge', 'p=1');
+                            // Backend-owned: fw_get_disputes().nudge_chip, verbatim.
+                            final chip = items
+                                .map((d) => d.nudgeChip)
+                                .whereType<Map<String, String>>()
+                                .firstOrNull;
                             return Container(
                               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                               decoration: BoxDecoration(
-                                color: const Color(0xFFFFF8E1),
+                                color: _hexColor(chip?['bg'], const Color(0xFFFFF8E1)),
                                 borderRadius: BorderRadius.circular(20),
                               ),
-                              child: const Text('Nudge due',
+                              child: Text(chip?['label'] ?? 'Nudge due',
                                   style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
-                                      color: Color(0xFFB8860B))),
+                                      color: _hexColor(chip?['fg'], const Color(0xFFB8860B)))),
                             );
                           }),
                         ],
@@ -15472,45 +15451,42 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                       style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
                           color: activeFg)),
                 ),
-                if (item.unfillable)
+                // Backend-owned: fw_get_disputes().unfillable_chip, verbatim.
+                if (item.unfillableChip != null)
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                     decoration: BoxDecoration(
-                        color: const Color(0xFFFEE2E2),
+                        color: _hexColor(item.unfillableChip!['bg'], const Color(0xFFFEE2E2)),
                         borderRadius: BorderRadius.circular(20)),
-                    child: const Text('No supplier',
+                    child: Text(item.unfillableChip!['label'] ?? 'No supplier',
                         style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
-                            color: Color(0xFF991B1B))),
+                            color: _hexColor(item.unfillableChip!['fg'], const Color(0xFF991B1B)))),
                   ),
-                // Nudge badge
-                if (item.nudgePending) Builder(builder: (_) {
+                // Nudge badge — backend-owned: fw_get_disputes().nudge_chip, verbatim.
+                if (item.nudgeChip != null) Builder(builder: (_) {
                   RenderLog.write('c349_nudge', 'pending=y');
                   RenderLog.write('c352_nudge', 'p=1');
                   return Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                     decoration: BoxDecoration(
-                        color: const Color(0xFFFFF8E1),
+                        color: _hexColor(item.nudgeChip!['bg'], const Color(0xFFFFF8E1)),
                         borderRadius: BorderRadius.circular(20)),
-                    child: const Text('Nudge due',
+                    child: Text(item.nudgeChip!['label'] ?? 'Nudge due',
                         style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
-                            color: Color(0xFFB8860B))),
+                            color: _hexColor(item.nudgeChip!['fg'], const Color(0xFFB8860B)))),
                   );
                 }),
-                // C354: adjustment chip — payload-driven (adj_amount)
-                if (item.adjAmount != null && item.adjAmount! != 0) Builder(builder: (_) {
+                // C354: adjustment chip — backend-owned: fw_get_disputes().adj_chip, verbatim.
+                if (item.adjChip != null) Builder(builder: (_) {
                   RenderLog.write('c354_adj', 'amt=${item.adjAmount}');
-                  final amt = item.adjAmount!;
-                  final label = amt > 0
-                      ? 'Adj +₹${amt.toStringAsFixed(2)}'
-                      : 'Adj −₹${amt.abs().toStringAsFixed(2)}';
                   return Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                     decoration: BoxDecoration(
-                        color: const Color(0xFFEFF6FF),
+                        color: _hexColor(item.adjChip!['bg'], const Color(0xFFEFF6FF)),
                         borderRadius: BorderRadius.circular(20)),
-                    child: Text(label,
-                        style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
-                            color: Color(0xFF1E40AF))),
+                    child: Text(item.adjChip!['label'] ?? '',
+                        style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
+                            color: _hexColor(item.adjChip!['fg'], const Color(0xFF1E40AF)))),
                   );
                 }),
                 // Return-note chip — backend-owned (fw_get_disputes' return_note_chip), verbatim.

@@ -4743,7 +4743,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   width: 120,
                   child: Align(
                     alignment: Alignment.centerRight,
-                    child: DisputeBadge(status: openDispute['status']?.toString() ?? ''),
+                    child: DisputeBadge(status: openDispute['status']?.toString() ?? '', dispute: openDispute),
                   ),
                 ),
               ],
@@ -4980,7 +4980,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   width: 120,
                   child: Align(
                     alignment: Alignment.centerRight,
-                    child: DisputeBadge(status: openDispute['status']?.toString() ?? ''),
+                    child: DisputeBadge(status: openDispute['status']?.toString() ?? '', dispute: openDispute),
                   ),
                 ),
               ],
@@ -8766,13 +8766,30 @@ class _DisputeStrip extends StatelessWidget {
   }
 }
 
+// Backend-owned (fw_get_disputes): kind_label/kind_colors, verbatim — matches
+// the admin Dispute tab's own kind tag instead of a locally re-derived
+// workflow-status label/colour. Falls back to the prior per-status map only
+// for a dispute whose response doesn't carry kind_label/kind_colors yet.
 class DisputeBadge extends StatelessWidget {
   final String status;
-  const DisputeBadge({super.key, required this.status});
+  final Map<String, dynamic>? dispute;
+  const DisputeBadge({super.key, required this.status, this.dispute});
 
   @override
   Widget build(BuildContext context) {
     if (status.isEmpty) return const SizedBox.shrink();
+    final kindLabel = dispute?['kind_label']?.toString();
+    final kindColors = dispute?['kind_colors'];
+    if (kindLabel != null && kindLabel.isNotEmpty && kindColors is Map) {
+      final bg = _hexColor(kindColors['bg']?.toString(), const Color(0xFFF3F4F6));
+      final fg = _hexColor(kindColors['fg']?.toString(), const Color(0xFF6B7280));
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(4)),
+        child: Text(kindLabel,
+            style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: fg)),
+      );
+    }
     final Color bg;
     final Color fg;
     final String label;

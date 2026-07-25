@@ -113,6 +113,10 @@ class DisputeItem {
   final String? packType;
   final String? category;
   final String? company;
+  /// CHANGE #532: backend-joined "pack_type · company · category" from
+  /// fw_get_disputes — already separated, null/blank parts omitted. Render
+  /// verbatim; never re-join packType/company/category in Dart.
+  final String? metaLine;
   final String? imageUrl;
   final String? resolutionOutcome;
   final String? resolutionNote;
@@ -166,6 +170,7 @@ class DisputeItem {
     this.packType,
     this.category,
     this.company,
+    this.metaLine,
     this.imageUrl,
     this.resolutionOutcome,
     this.resolutionNote,
@@ -227,6 +232,7 @@ class DisputeItem {
       packType: j['pack_type']?.toString(),
       category: j['category']?.toString(),
       company: j['company']?.toString(),
+      metaLine: j['meta_line']?.toString(),
       imageUrl: j['image_url']?.toString(),
       resolutionOutcome: j['resolution_outcome']?.toString(),
       resolutionNote: j['resolution_note']?.toString(),

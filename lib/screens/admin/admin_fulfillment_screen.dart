@@ -13637,14 +13637,11 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     final activeBg = _hexColor(item.activeColors?['bg'], const Color(0xFFF3F4F6));
     final activeFg = _hexColor(item.activeColors?['fg'], _kSub);
 
-    // Meta line: pack_type / company / category now come from the product entry
-    // (fw_get_disputes returns all three per product).
-    final metaParts = <String>[
-      if ((p['pack_type']?.toString() ?? '').isNotEmpty) p['pack_type'].toString(),
-      if ((p['company']?.toString() ?? '').isNotEmpty) p['company'].toString(),
-      if ((p['category']?.toString() ?? '').isNotEmpty) p['category'].toString(),
-    ];
-    final metaLine = metaParts.join(' · ');
+    // CHANGE #532: the JOIN is backend-owned too. fw_get_disputes emits a single
+    // meta_line on both disputes[] and supplier_products[].products[] — already
+    // separated, with null/blank parts omitted — rendered verbatim. The client
+    // no longer decides which parts appear or where the separators go.
+    final metaLine = p['meta_line']?.toString() ?? '';
 
     // Backend-owned kind_label/kind_colors from the product entry, verbatim.
     final kindTagText = p['kind_label']?.toString() ?? '';

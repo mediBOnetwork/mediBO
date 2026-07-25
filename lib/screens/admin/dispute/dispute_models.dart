@@ -376,7 +376,7 @@ class SupplierDisputesResult {
 
 /// Fetch admin dispute list (fw_get_disputes).
 Future<List<DisputeItem>> fetchAdminDisputesList() async {
-  final res = await Supabase.instance.client.rpc('fw_get_disputes') as Map;
+  final res = await Supabase.instance.client.rpc('fw_get_disputes').timeout(const Duration(seconds: 15)) as Map;
   return DisputeItem.listFromResponse(res);
 }
 

@@ -78,7 +78,7 @@ class _SupplierMapGroupsPanelState extends State<SupplierMapGroupsPanel> {
         'p_badge': _selectedBadge,
         'p_chip_key': _selectedChipKey,
         'p_chip_complex': _selectedChipComplex,
-      });
+      }).timeout(const Duration(seconds: 15));
       if (!mounted) return;
       setState(() {
         _data = Map<String, dynamic>.from(res as Map);

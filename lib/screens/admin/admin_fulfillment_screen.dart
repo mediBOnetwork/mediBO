@@ -1581,7 +1581,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         // p_include_older not sent — fw_list_arrivals is strict single-date now.
         final res = await Supabase.instance.client.rpc('fw_list_arrivals', params: {
           'p_date': ymd(scope.date),
-        }) as Map;
+        }).timeout(const Duration(seconds: 15)) as Map;
         if (!mounted) return;
         _olderOpen = (res['older_open'] as num?)?.toInt() ?? 0;
         RenderLog.write('c444_older_open', '$_olderOpen');
@@ -1686,7 +1686,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       // p_include_older not sent — fw_list_arrivals is strict single-date now.
       final res = await Supabase.instance.client.rpc('fw_list_arrivals', params: {
         'p_date': ymd(scope.date),
-      }) as Map;
+      }).timeout(const Duration(seconds: 15)) as Map;
       if (!mounted) return;
       _olderOpen = (res['older_open'] as num?)?.toInt() ?? 0;
       RenderLog.write('c444_older_open', '$_olderOpen');
@@ -1747,7 +1747,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Future<void> _loadCollectModes() async {
     if (widget.arrivals || !mounted) return;
     try {
-      final res = await Supabase.instance.client.rpc('fw_supplier_modes') as Map;
+      final res = await Supabase.instance.client.rpc('fw_supplier_modes').timeout(const Duration(seconds: 15)) as Map;
       if (!mounted) return;
       final modes = (res['modes'] as Map? ?? {});
       final map = <String, String?>{};
@@ -1769,7 +1769,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Future<void> _loadDisputes() async {
     if (!mounted) return;
     try {
-      final res = await Supabase.instance.client.rpc('fw_get_disputes') as Map;
+      final res = await Supabase.instance.client.rpc('fw_get_disputes').timeout(const Duration(seconds: 15)) as Map;
       if (!mounted) return;
       final disputes = (res['disputes'] as List? ?? []);
       // Keep legacy map for fulfill_item_sheet.dart compat
@@ -1838,7 +1838,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             params: fwGetStateParams(
               supplierName: supplier, stage: 'arrivals',
               date: FulfillDateScope.instance.date,
-            ));
+            )).timeout(const Duration(seconds: 15));
         if (!mounted) return;
         Map<String, dynamic> stateRes;
         if (_rawState is Map) {
@@ -1928,7 +1928,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           params: fwGetStateParams(
             supplierName: supplier, stage: 'collect',
             date: FulfillDateScope.instance.date,
-          ));
+          )).timeout(const Duration(seconds: 15));
       if (!mounted) return;
       Map<String, dynamic> collectState;
       if (_rawCollect is Map) {
@@ -1996,7 +1996,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           params: fwGetStateParams(
             supplierName: supplier, stage: 'arrivals',
             date: FulfillDateScope.instance.date,
-          ));
+          )).timeout(const Duration(seconds: 15));
       if (!mounted) return;
       Map<String, dynamic> res;
       if (_rawLock is Map) {
@@ -2662,7 +2662,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             params: fwGetStateParams(
               supplierName: supplier, stage: 'arrivals',
               date: FulfillDateScope.instance.date,
-            ));
+            )).timeout(const Duration(seconds: 15));
         if (!mounted) return;
         Map<String, dynamic> stateRes;
         if (_rawReload is Map) {
@@ -2731,7 +2731,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           params: fwGetStateParams(
             supplierName: supplier, stage: 'collect',
             date: FulfillDateScope.instance.date,
-          ));
+          )).timeout(const Duration(seconds: 15));
       if (!mounted) return;
       Map<String, dynamic> reloadState;
       if (_rawReloadCollect is Map) {
@@ -10164,7 +10164,7 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
       // p_include_older not sent — fw_list_bags is strict single-date now.
       final data = await Supabase.instance.client.rpc('fw_list_bags', params: {
         'p_date': ymd(scope.date),
-      }) as Map;
+      }).timeout(const Duration(seconds: 15)) as Map;
       if (!mounted) return;
       final bags = (data['bags'] as List? ?? [])
           .map((r) => Map<String, dynamic>.from(r as Map))
@@ -11157,7 +11157,7 @@ class _PackTabState extends State<_PackTab>
       final scope = FulfillDateScope.instance;
       final res = await Supabase.instance.client.rpc('pack_list_orders', params: {
         'p_date': ymd(scope.date),
-      }) as Map;
+      }).timeout(const Duration(seconds: 15)) as Map;
       if (!mounted) return;
       final orders = (res['orders'] as List? ?? [])
           .map((r) => Map<String, dynamic>.from(r as Map))
@@ -14741,7 +14741,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
       // p_include_older not sent — fw_get_disputes is strict single-date now.
       final res = await Supabase.instance.client.rpc('fw_get_disputes', params: {
         'p_date': ymd(scope.date),
-      }) as Map;
+      }).timeout(const Duration(seconds: 15)) as Map;
       if (!mounted) return;
       _olderOpen = (res['older_open'] as num?)?.toInt() ?? 0;
       final items = DisputeItem.listFromResponse(res);

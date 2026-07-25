@@ -16,6 +16,13 @@ const _kNeutralChip = Color(0xFFF1F3F4);
 const _kAmberText   = Color(0xFFB8860B);
 const _kAmberBg     = Color(0xFFFFF8E1);
 
+Color _hexColor(String? hex, Color fallback) {
+  if (hex == null || hex.isEmpty) return fallback;
+  final h = hex.startsWith('#') ? hex.substring(1) : hex;
+  final v = int.tryParse(h.length == 6 ? 'FF$h' : h, radix: 16);
+  return v == null ? fallback : Color(v);
+}
+
 String _packQty(num n, String? packType) {
   if (packType == null || packType.trim().isEmpty) return '$n';
   final unit = n == 1 ? packType.trim() : '${packType.trim()}s';
@@ -259,6 +266,16 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
     final hasImage   = (item.imageUrl ?? '').isNotEmpty;
     final isSubmitting = _submitting[item.disputeId] == true;
 
+    // Backend-owned (get_dispute_form): active_colors, kind_label/kind_colors —
+    // verbatim, drive the badge and kind tag below.
+    final activeColors = agg.activeColors;
+    final activeLabel = activeColors?['label'] ?? (isActive ? 'Active' : 'Inactive');
+    final activeBg = _hexColor(activeColors?['bg'], const Color(0xFFF3F4F6));
+    final activeFg = _hexColor(activeColors?['fg'], _kTextMuted);
+    final kindTagText = item.kindLabel;
+    final kindTagBg = _hexColor(item.kindColors?['bg'], const Color(0xFFF1F5F9));
+    final kindTagFg = _hexColor(item.kindColors?['fg'], const Color(0xFF475569));
+
     return Container(
       decoration: BoxDecoration(
         color: _kCard,
@@ -299,28 +316,38 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
                           style: const TextStyle(fontSize: 12, color: _kRed),
                           maxLines: 2, overflow: TextOverflow.ellipsis),
                     ],
+                    if (kindTagText.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                              color: kindTagBg, borderRadius: BorderRadius.circular(5)),
+                          child: Text(kindTagText,
+                              style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
+                                  color: kindTagFg)),
+                        ),
+                      ),
+                    ],
                   ]),
                 ),
                 const SizedBox(width: 6),
-                // C362 point-8: Active = RED / Inactive = GREEN badge — replaces the verbose
-                // "Awaiting supplier response" item_status_label pill.
+                // Backend-owned (get_dispute_form): active_colors, verbatim —
+                // replaces the verbose "Awaiting supplier response" item_status_label pill.
                 Builder(builder: (_) {
                   RenderLog.write('c363_badge', 'where=supplier,active=$isActive');
                   return Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                     decoration: BoxDecoration(
-                      color: isActive
-                          ? const Color(0xFFFEE2E2)
-                          : const Color(0xFFD1FAE5),
+                      color: activeBg,
                       borderRadius: BorderRadius.circular(20),
                     ),
-                    child: Text(isActive ? 'Active' : 'Inactive',
+                    child: Text(activeLabel,
                         style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w700,
-                            color: isActive
-                                ? const Color(0xFF991B1B)
-                                : const Color(0xFF065F46))),
+                            color: activeFg)),
                   );
                 }),
               ]),
@@ -372,25 +399,23 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
           return const SizedBox.shrink();
         }),
 
-        // Return-note chip
-        if ((item.returnNoteStatus ?? '').isNotEmpty) ...[
+        // Return-note chip — backend-owned (get_dispute_form's return_note_chip), verbatim.
+        if (item.returnNoteChip != null) ...[
           const SizedBox(height: 8),
           Builder(builder: (_) {
-            final isOpen = item.returnNoteStatus == 'open';
+            final chip = item.returnNoteChip!;
             return Align(
               alignment: Alignment.centerLeft,
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  color: isOpen ? _kAmberBg : _kNeutralChip,
+                  color: _hexColor(chip.bg, _kNeutralChip),
                   borderRadius: BorderRadius.circular(20),
                 ),
                 child: Text(
-                  isOpen
-                      ? 'Stock with buyer — pick up on next delivery'
-                      : 'Return collected ✓',
+                  chip.labelCard,
                   style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
-                      color: isOpen ? _kAmberText : _kTextMuted),
+                      color: _hexColor(chip.fg, _kTextMuted)),
                 ),
               ),
             );

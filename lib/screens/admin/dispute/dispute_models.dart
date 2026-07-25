@@ -57,12 +57,16 @@ class DisputeReturnNoteChip {
     required this.showCollectedAction,
   });
 
+  // fw_get_disputes (admin) sends label_card/label_sheet + show_collected_action;
+  // supplier_my_disputes/get_dispute_form send a single `label` (info-only, no
+  // close action) — fall back to it for both card/sheet labels.
   static DisputeReturnNoteChip? fromJson(dynamic j) {
     if (j is! Map) return null;
+    final label = j['label']?.toString();
     return DisputeReturnNoteChip(
       isOpen: j['is_open'] == true,
-      labelCard: j['label_card']?.toString() ?? '',
-      labelSheet: j['label_sheet']?.toString() ?? '',
+      labelCard: j['label_card']?.toString() ?? label ?? '',
+      labelSheet: j['label_sheet']?.toString() ?? label ?? '',
       bg: j['bg']?.toString() ?? '',
       fg: j['fg']?.toString() ?? '',
       showCollectedAction: j['show_collected_action'] == true,

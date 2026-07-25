@@ -15,6 +15,7 @@ import 'dart:convert';
 import '../../utils/render_log.dart';
 import 'dispute/dispute_models.dart';
 import '../../fulfill/fulfill_view_logic.dart'; // C355: shared logic for both layouts
+import '../../fulfill/fulfill_lookups.dart'; // C531: backend-owned strings/colours cache
 // dispute_card.dart removed in #170 — Disputes tab rebuilt with accordion layout
 import '../../utils/responsive.dart';
 import '../../utils/tts.dart';
@@ -2702,68 +2703,56 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     return {};
   }
 
-  // Maps bag attach/detach error codes to user-friendly messages.
+  // CHANGE #531: bag attach/detach error text is BACKEND-OWNED.
+  // Order of preference, with NO client-side English anywhere:
+  //   1. the RPC's own composed `hint` (bag_attach returns one)
+  //   2. fw_error_messages()[code], via the FulfillLookups cache
+  //   3. fw_error_messages()['default'] (also backend copy)
+  // Returns '' only while the lookup cache has not loaded yet — callers skip
+  // empty messages rather than substituting a hardcoded string.
   String _bagError(Map m) {
     final code = m['error']?.toString() ?? '';
-    switch (code) {
-      case 'bad_code': return 'Invalid QR — scan a valid BAG-xxx code';
-      case 'no_such_bag': return 'Bag not found — check the QR and retry';
-      case 'bag_not_found': return 'Bag not found — check the QR and retry';
-      // CHANGE #268 — bag_already_used_by_supplier: same supplier re-scanning their filled bag
-      case 'bag_already_used_by_supplier':
-        return m['hint']?.toString() ?? 'This bag was already used for this supplier — use a different bag.';
-      case 'bag_full': return 'Bag is full'; // kept as fallback; attach no longer returns this
-      case 'bag_in_use':
-        final held = m['held_by']?.toString() ?? '';
-        return held.isNotEmpty ? 'Bag in use by $held' : 'Bag already in use by another supplier';
-      case 'wrong_bag':
-        final expected = m['expected']?.toString() ?? '?';
-        final scanned = m['scanned']?.toString() ?? '?';
-        return 'Wrong bag — expected $expected, scanned $scanned';
-      case 'no_active_bag': return 'No bag attached — scan a bag first';
-      case 'bag_wrong_supplier': return 'Bag belongs to a different supplier';
-      case 'not_authorized': return 'Not authorized for this action';
-      default: return code.isNotEmpty ? 'Bag error: $code' : 'Unknown bag error';
-    }
+    final hint = m['hint']?.toString();
+    if (hint != null && hint.isNotEmpty) return hint;
+    return FulfillLookups.instance.message(code) ?? '';
   }
 
-  // Maps bag_count_set error codes to user-friendly messages.
+  // CHANGE #531: same policy for bag_count_set. The render-log breadcrumb for
+  // exceeds_ordered is kept (diagnostics, not user-visible).
   String _bagCountError(Map m) {
     final code = m['error']?.toString() ?? '';
-    switch (code) {
-      case 'no_bag_selected': return 'Count items into a bag first — scan a bag to begin.';
-      case 'received_locked': return 'Already locked — cannot change count';
-      case 'bad_qty': return 'Invalid quantity';
-      case 'product_not_for_supplier': return 'Product not in this supplier\'s order';
-      case 'not_authorized': return 'Not authorized';
-      case 'exceeds_ordered':
-        final ordered = m['ordered'];
-        final maxBag = m['max_for_this_bag'];
-        final inOther = m['already_in_other_bags'];
-        final attempted = m['attempted'];
-        RenderLog.write('c254_exceeds_handled',
-            'ordered=$ordered;max_bag=$maxBag;in_other=$inOther;attempted=$attempted');
-        if (maxBag != null && inOther != null && ordered != null) {
-          return 'Over-limit — only $maxBag can go in this bag '
-              '($inOther already counted in other bags, $ordered ordered). '
-              'Count not saved.';
-        }
-        return 'Quantity exceeds ordered amount. Count not saved.';
-      default: return code.isNotEmpty ? 'Count error: $code' : 'Unknown count error';
+    if (code == 'exceeds_ordered') {
+      RenderLog.write('c254_exceeds_handled',
+          'ordered=${m['ordered']};max_bag=${m['max_for_this_bag']};'
+          'in_other=${m['already_in_other_bags']};attempted=${m['attempted']}');
     }
+    final hint = m['hint']?.toString();
+    if (hint != null && hint.isNotEmpty) return hint;
+    return FulfillLookups.instance.message(code) ?? '';
   }
 
   // CHANGE #276 — friendly message for any backend check_violation / no-bag rejection
+  // CHANGE #531: these RPCs RAISE instead of returning {error}, so the only
+  // thing available is the Postgres exception text. We still classify it to a
+  // CODE here, but the user-visible copy is backend-owned via fw_error_messages
+  // (unknown code -> the backend's own 'default'). No client English survives.
+  //
+  // The remaining client-side part is the substring classification itself; the
+  // clean fix is for these RPCs to return {error: <code>} instead of raising.
   String _noBagFriendlyMessage(Object e) {
     final s = e.toString().toLowerCase();
+    String? code;
     if (s.contains('no bag') || s.contains('bag total') || s.contains('check_violation') ||
         s.contains('no_bag_selected') || s.contains('must equal')) {
-      RenderLog.write('c276_nobag_error_shown', 'error=${e.toString().substring(0, e.toString().length.clamp(0, 80))}');
-      return 'Count items into a bag first — scan a bag to begin.';
+      code = 'no_bag_selected';
+      RenderLog.write('c276_nobag_error_shown',
+          'error=${e.toString().substring(0, e.toString().length.clamp(0, 80))}');
+    } else if (s.contains('supplier_confirmed')) {
+      code = 'supplier_confirmed';
+    } else if (s.contains('bag_already_used_by_supplier')) {
+      code = 'bag_already_used_by_supplier';
     }
-    if (s.contains('supplier_confirmed')) return 'This supplier is already received.';
-    if (s.contains('bag_already_used_by_supplier')) return 'Bag was already used for this supplier — scan a different bag.';
-    return e.toString().substring(0, e.toString().length.clamp(0, 100));
+    return FulfillLookups.instance.message(code) ?? '';
   }
 
   // Attach a freshly scanned bag code to this supplier (initial attach — no existing bag).
@@ -3894,7 +3883,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 24),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             if (!widget.arrivals) const SupplierMapGroupsPanel(),
-            Text('No orders placed on ${dmy(FulfillDateScope.instance.date)}.',
+            Text(FulfillLookups.instance.emptyOrdersLabel ?? '',
                 style: const TextStyle(color: _kSub, fontSize: 15),
                 textAlign: TextAlign.center),
           ]),
@@ -5894,7 +5883,15 @@ class _FinalizeReviewDialogState extends State<_FinalizeReviewDialog> {
         bagNo: bagNo,
         mappedAtSec: tStart,
       );
-      final refreshed = await finalizeVoiceSession(widget.sessionKey);
+      // CHANGE #531 BUGFIX: this re-finalize (after assigning a bag to a
+      // reviewed mention) omitted p_date, so voice_finalize_session fell back to
+      // its server-side default of TODAY. On a non-today Fulfill view that
+      // re-finalized the session against the wrong date. The date scope is the
+      // single source of truth and must always be passed.
+      final refreshed = await finalizeVoiceSession(
+        widget.sessionKey,
+        dateYmd: ymd(FulfillDateScope.instance.date),
+      );
       final newReview = (refreshed['needs_bag_review'] as List?) ?? const [];
       RenderLog.write('c457_assign_bag', 'mention=$mentionId;bag=$bagNo;remaining=${newReview.length}');
       if (!mounted) return;
@@ -6951,16 +6948,17 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
                     runSpacing: 4,
                     children: g.entries.map((e) {
                       final active = playSeq != null && e.seq == playSeq;
-                      // Backend-owned (get_voice_clip_mentions.status_colors), verbatim.
-                      final isNormal = e.status == 'counted' || e.status == 'active';
-                      if (!isNormal) {
-                        RenderLog.write('c344_all_qty_colour', 'status=${e.status};stage=${widget.stage}');
-                      }
+                      // CHANGE #531: status_colors is now read verbatim for EVERY
+                      // status. It previously said "verbatim" while overriding
+                      // 'counted'/'active' with client constants, so the backend's
+                      // colours only ever applied to non-normal statuses.
+                      // `active` stays a local override — transient PLAYBACK state.
+                      RenderLog.write('c344_all_qty_colour', 'status=${e.status};stage=${widget.stage}');
                       final backendBg = _hexColor(e.statusColors?['bg'], const Color(0xFFF5F6F8));
                       final backendFg = _hexColor(e.statusColors?['fg'], _kText);
-                      final Color bg = active ? _kGreen : isNormal ? const Color(0xFFF5F6F8) : backendBg;
-                      final Color border = active ? _kGreen : isNormal ? _kBorder : backendFg;
-                      final Color fg = active ? Colors.white : isNormal ? _kText : backendFg;
+                      final Color bg = active ? _kGreen : backendBg;
+                      final Color border = active ? _kGreen : backendFg;
+                      final Color fg = active ? Colors.white : backendFg;
                       return Container(
                         padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                         decoration: BoxDecoration(
@@ -7136,8 +7134,10 @@ class _MentionClipTable extends StatelessWidget {
               const Color(0xFFF5F6F8));
           final backendFg = _hexColor(
               rStatusColors is Map ? rStatusColors['fg']?.toString() : null, _kText);
-          // "Nothing to flag" baseline — no row tint/shadow/subtitle for these.
-          final isNormal = status == 'counted' || status == 'active';
+          // CHANGE #531: is_complete is the backend's own "nothing to flag"
+          // baseline (get_voice_clip_mentions / get_pack_clip_mentions), replacing
+          // the client's `status == 'counted' || status == 'active'` derivation.
+          final isNormal = r['is_complete'] == true;
 
           // Whole-row tint — §3.1. isUnmatched has no backend status (product_id
           // is null regardless of status), so it stays a local presence check.
@@ -7148,10 +7148,10 @@ class _MentionClipTable extends StatelessWidget {
             RenderLog.write('c344_row_colour', 'status=$status;stage=$stage');
           }
 
-          // Qty chip colours
-          final Color chipBg = isPlaying ? _kGreen : isNormal ? const Color(0xFFF5F6F8) : backendBg;
-          final Color chipBorder = isPlaying ? _kGreen : isNormal ? _kBorder : backendFg;
-          final Color chipFg = isPlaying ? Colors.white : isNormal ? _kText : backendFg;
+          // Qty chip colours — status_colors verbatim; isPlaying is transient.
+          final Color chipBg = isPlaying ? _kGreen : backendBg;
+          final Color chipBorder = isPlaying ? _kGreen : backendFg;
+          final Color chipFg = isPlaying ? Colors.white : backendFg;
 
           final pill = Container(
             padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
@@ -7210,7 +7210,10 @@ class _MentionClipTable extends StatelessWidget {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         MentionActionIcon(
-                          status: status,
+                          // C531: verbatim backend fields, no status fork.
+                          isComplete: r['is_complete'] == true,
+                          statusColors: rStatusColors is Map ? rStatusColors : null,
+                          statusLabel: statusLabel,
                           isBusy: isBusy,
                           frozen: frozen,
                           onTap: frozen
@@ -8255,11 +8258,22 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
     if (mounted) setState(() {});
   }
 
+  // CHANGE #531: repaint when the backend lookup payloads land, so the tabs
+  // swap from their loading state to the real backend copy.
+  void _onLookupsChanged() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     FulfillDateScope.instance.addListener(_onDateScopeChanged);
+    // CHANGE #531: one fetch per session for fw_error_messages()+fw_issue_options(),
+    // plus fw_date_label() for the selected date (refetched by FulfillLookups'
+    // own FulfillDateScope listener). Never fetched per render.
+    FulfillLookups.instance.addListener(_onLookupsChanged);
+    FulfillLookups.instance.ensureLoaded();
     _subscribeRealtime();
     // C358 B1: the Fulfill area subscribes to realtime ONLY (event-driven). There is
     // NO periodic/interval refetch timer scheduled here or in any tab — refetches fire
@@ -8306,6 +8320,7 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
     _disputeDebounce?.cancel();
     FulfillRealtime.instance.removeListener(_onRealtimeChange);
     FulfillDateScope.instance.removeListener(_onDateScopeChanged);
+    FulfillLookups.instance.removeListener(_onLookupsChanged);
     super.dispose();
   }
 
@@ -8345,7 +8360,7 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
               Builder(builder: (context) {
                 final scope = FulfillDateScope.instance;
                 RenderLog.write('c444_chip_label',
-                    scope.isToday ? 'Today · ${dmy(scope.date)}' : dmy(scope.date));
+                    FulfillLookups.instance.dateChipLabel ?? '');
                 return DateScopeChip(
                   selected: scope.date,
                   isToday: scope.isToday,
@@ -8733,22 +8748,17 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
         ),
       ]));
     }
-    // CHANGE #444 — shared date-scope pill.
-    final olderPill = OlderOpenPill(
-      olderOpen: _olderOpen,
-      includeOlder: FulfillDateScope.instance.includeOlder,
-      onTap: () => FulfillDateScope.instance.toggleIncludeOlder(),
-    );
-
+    // CHANGE #531: the "+N from earlier dates" pill is GONE. Project rule: the
+    // date picker is the only way to change date, so there is no older-open
+    // chrome anywhere — the site is deleted rather than backed by a field.
     if (_bags.isEmpty) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Text('No orders placed on ${dmy(FulfillDateScope.instance.date)}.',
+            Text(FulfillLookups.instance.emptyOrdersLabel ?? '',
                 style: const TextStyle(color: _kSub, fontSize: 15),
                 textAlign: TextAlign.center),
-            if (_olderOpen > 0) ...[const SizedBox(height: 10), olderPill],
           ]),
         ),
       );
@@ -8756,16 +8766,8 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
     return ListView.builder(
       controller: _scroll,
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-      itemCount: _bags.length + (_olderOpen > 0 ? 1 : 0),
-      itemBuilder: (_, i) {
-        if (_olderOpen > 0) {
-          if (i == 0) {
-            return Padding(padding: const EdgeInsets.only(bottom: 10), child: olderPill);
-          }
-          return _buildBagCard(_bags[i - 1]);
-        }
-        return _buildBagCard(_bags[i]);
-      },
+      itemCount: _bags.length,
+      itemBuilder: (_, i) => _buildBagCard(_bags[i]),
     );
   }
 
@@ -9977,7 +9979,7 @@ class _PackTabState extends State<_PackTab>
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Text('No orders placed on ${dmy(FulfillDateScope.instance.date)}.',
+            Text(FulfillLookups.instance.emptyOrdersLabel ?? '',
                 style: const TextStyle(color: _kSub, fontSize: 15),
                 textAlign: TextAlign.center),
           ]),
@@ -11270,14 +11272,16 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
                                       spacing: 4, runSpacing: 4,
                                       children: g.entries.map((e) {
                                         final active = playSeq != null && e.seq == playSeq;
-                                        // Backend-owned (get_pack_clip_mentions.status_colors), verbatim.
+                                        // CHANGE #531: get_pack_clip_mentions.status_colors read
+                                        // verbatim for EVERY status (the 'counted'/'active'
+                                        // client override is gone). `active` stays local —
+                                        // transient playback state.
                                         final isDeleted = e.status == 'deleted';
-                                        final isNormal = e.status == 'counted' || e.status == 'active';
                                         final backendBg = _hexColor(e.statusColors?['bg'], const Color(0xFFF5F6F8));
                                         final backendFg = _hexColor(e.statusColors?['fg'], _kText);
-                                        final Color bg = active ? _kGreen : isNormal ? const Color(0xFFF5F6F8) : backendBg;
-                                        final Color borderC = active ? _kGreen : isNormal ? _kBorder : backendFg;
-                                        final Color fg = active ? Colors.white : isNormal ? _kText : backendFg;
+                                        final Color bg = active ? _kGreen : backendBg;
+                                        final Color borderC = active ? _kGreen : backendFg;
+                                        final Color fg = active ? Colors.white : backendFg;
                                         return Container(
                                           padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                                           decoration: BoxDecoration(
@@ -13286,7 +13290,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           const Icon(Icons.check_circle_outline_rounded, size: 48, color: _kGreen),
           const SizedBox(height: 12),
-          Text('No orders placed on ${dmy(FulfillDateScope.instance.date)}.',
+          Text(FulfillLookups.instance.emptyOrdersLabel ?? '',
               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _kSub)),
         ]),
       );

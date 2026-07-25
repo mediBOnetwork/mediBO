@@ -1779,7 +1779,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Future<void> _loadCollectModes() async {
     if (widget.arrivals || !mounted) return;
     try {
-      final res = await Supabase.instance.client.rpc('fw_supplier_modes').timeout(const Duration(seconds: 15)) as Map;
+      final res = await Supabase.instance.client.rpc('fw_supplier_modes', params: {
+        'p_date': ymd(FulfillDateScope.instance.date),
+      }).timeout(const Duration(seconds: 15)) as Map;
       if (!mounted) return;
       final modes = (res['modes'] as Map? ?? {});
       final map = <String, String?>{};
@@ -1801,7 +1803,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Future<void> _loadDisputes() async {
     if (!mounted) return;
     try {
-      final res = await Supabase.instance.client.rpc('fw_get_disputes').timeout(const Duration(seconds: 15)) as Map;
+      final res = await Supabase.instance.client.rpc('fw_get_disputes', params: {
+        'p_date': ymd(FulfillDateScope.instance.date),
+      }).timeout(const Duration(seconds: 15)) as Map;
       if (!mounted) return;
       final disputes = (res['disputes'] as List? ?? []);
       // Keep legacy map for fulfill_item_sheet.dart compat
@@ -2246,6 +2250,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           'p_product_id': productId,
           'p_qty': setQty,
           'p_note': note ?? 'tap:$state',
+          'p_date': ymd(FulfillDateScope.instance.date),
         });
         final res2 = rawVoice is Map ? Map<String, dynamic>.from(rawVoice) : <String, dynamic>{};
         if (!mounted) return;
@@ -2436,6 +2441,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final session = ContinuousVoiceSession(
       supplierName: supplier332,
       stage: stage,
+      dateYmd: ymd(FulfillDateScope.instance.date),
       orderItemsProvider: () => _items,
       expectedProvider: _buildExpectedList,
       onWindowError: (e, st) {
@@ -3839,6 +3845,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           'p_product_id': (action['product_id'] as num).toInt(),
           'p_qty': (action['qty'] as num).toDouble(),
           'p_note': 'voice-agent #85',
+          'p_date': ymd(FulfillDateScope.instance.date),
         });
         res = rawAgent is Map ? Map<String, dynamic>.from(rawAgent) : {};
       }
@@ -7281,6 +7288,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
         'p_product_id': productId,
         'p_qty': mentionQty.toDouble(),
         'p_note': 'voice: tap-fix to $productName',
+        'p_date': ymd(FulfillDateScope.instance.date),
       });
 
       if (mounted) {
@@ -10817,7 +10825,9 @@ class _BagPickerChipState extends State<_BagPickerChip> {
 
     List<Map<String, dynamic>> bags = [];
     try {
-      final data = await Supabase.instance.client.rpc('fw_list_bags') as Map;
+      final data = await Supabase.instance.client.rpc('fw_list_bags', params: {
+        'p_date': ymd(FulfillDateScope.instance.date),
+      }) as Map;
       bags = (data['bags'] as List? ?? [])
           .map((r) => Map<String, dynamic>.from(r as Map))
           .toList();

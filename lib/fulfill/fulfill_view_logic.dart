@@ -166,12 +166,14 @@ bool disputeStripVisible(DisputeItem? item) {
 // ════════════════════════════════════════════════════════════════════════════
 // CHANGE #359 — 2-STEP DISPUTE FLOW: shared candidate / balance / gate logic.
 //
-// SINGLE SOURCE OF TRUTH for both layouts (mobile card + web table) AND the
-// response button, so a "yellow candidate row" and a "yellow disabled button"
-// can never disagree. All pure — compute from the line/merged fields only, never
-// from ephemeral UI state (Om's rule: "put it in the shared helper so mobile and
-// web agree"). Counting is stage-dependent: SHOP counts shop_qty vs ordered,
-// WAREHOUSE counts received_qty vs expected.
+// FALLBACK ONLY as of the backend-fields migration: fw_get_state now returns
+// is_dispute_candidate / dispute_qty / confirm_gate.can_confirm directly on
+// items[] and merged_items[], and the live screen reads those verbatim. The
+// functions below run only when one of those fields is absent on a given
+// line/product, reproducing the prior client-side rule for that one line so
+// nothing crashes or silently misbehaves during a partial backend rollout.
+// Counting is stage-dependent: SHOP counts shop_qty vs ordered, WAREHOUSE
+// counts received_qty vs expected.
 // ════════════════════════════════════════════════════════════════════════════
 
 String? _cleanIssue359(String? raw) {
@@ -252,99 +254,19 @@ bool isDisputeCandidate({
   return candidate;
 }
 
-/// STEP B — a candidate is TAPPABLE (opens the Report-issue popup); a fully
-/// correct / un-counted line is not. Alias of [isDisputeCandidate] so the rule
-/// lives in one place and stage nuances can grow here later.
-bool isTappableLine({
-  required bool arrivals,
-  required int ordered,
-  int? shopQty,
-  required int received,
-  int? expected,
-  String? countIssue,
-  required String state,
-}) =>
-    isDisputeCandidate(
-      arrivals: arrivals, ordered: ordered, shopQty: shopQty, received: received,
-      expected: expected, countIssue: countIssue, state: state);
-
-/// STEP C — is a candidate's discrepancy fully accounted for by its chosen dispute
-/// type + qty? All measured against the SAME stage reference as candidacy (ordered
-/// at shop, expected/forwarded shop_qty at warehouse), so the gate matches what the
-/// backend actually disputes. Every balance point is REACHABLE via the popup stepper
-/// (max = ref - received), i.e. no deadlock.
-///   plain short (counted < ref, no flag) : accounted for — the confirm RPC auto-raises
-///                            the short (short_qty = ref - counted). Matches
-///                            `ref == counted + disputed`.
-///   few_wrong / damaged    : issue_qty == ref - counted (the wrong/damaged units ARE
-///                            the shortfall); if counted >= ref, any qty >= 1.
-///   excess                 : issue_qty == counted - ref when over-ref; else any qty>=1.
-///   not_coming             : whole remaining gap claimed  -> balanced once selected
-///   wrong item (whole line): balanced once the type is selected
-///   over-ref with no excess flag : NOT balanced (admin must flag excess — backend WILL
-///                            raise it: received > expected at warehouse / shop_qty > ordered)
-/// A non-candidate line is trivially balanced (nothing to reconcile).
-bool lineBalanced({
-  required bool arrivals,
-  required int ordered,
-  int? shopQty,
-  required int received,
-  int? expected,
-  String? countIssue,
-  int? issueQty,
-  required String state,
-}) {
-  if (!isDisputeCandidate(
-      arrivals: arrivals, ordered: ordered, shopQty: shopQty, received: received,
-      expected: expected, countIssue: countIssue, state: state)) {
-    return true;
-  }
-  final counted = countedQtyFor(arrivals: arrivals, shopQty: shopQty, received: received);
-  final ref = stageRefFor(arrivals: arrivals, ordered: ordered, expected: expected);
-  final ci = _cleanIssue359(countIssue);
-  final iq = issueQty ?? 0;
-  if (ci == 'wrong' || state == 'wrong') return true;           // whole line disputed
-  if (state == 'not_coming') return true;                       // whole remaining gap
-  if (ci == 'few_wrong' || ci == 'damaged') {
-    final gap = ref - counted;                                 // == popup stepper max
-    return gap > 0 ? iq == gap : iq >= 1;
-  }
-  if (ci == 'excess') {                                         // extra units = issue_qty
-    final over = counted - ref;
-    return over > 0 ? iq == over : iq >= 1;
-  }
-  if (counted < ref) return true;                              // plain short — RPC auto-raises
-  return false;                                                 // over-ref, unflagged → must flag excess
-}
-
-/// Response/confirm button visual state for a tab.
-enum ResponseButtonState { normal, yellowDisabled }
-
-/// STEP C — the response button is YELLOW + DISABLED while any candidate is still
-/// un-balanced; NORMAL + clickable when there are no candidates OR every candidate
-/// balances (ordered == counted + disputed for all lines).
-ResponseButtonState responseButtonState({
-  required int candidateCount,
-  required int unbalancedCandidateCount,
-}) {
-  if (candidateCount == 0) return ResponseButtonState.normal;
-  return unbalancedCandidateCount == 0
-      ? ResponseButtonState.normal
-      : ResponseButtonState.yellowDisabled;
-}
-
 // ════════════════════════════════════════════════════════════════════════════
-// CHANGE #363 (re-issued, narrow) — CONFIRM-BUTTON GATE + COLOR. SINGLE SOURCE for
-// BOTH layouts. The confirm button ("Confirm counting" @ shop / "Confirm all
-// received" @ warehouse) is GREEN + clickable ONLY when EVERY line satisfies
-//     ref <= counted + disputed
-// otherwise RED + disabled. ref = ordered @ shop / expected (forwarded shop_qty) @
-// warehouse (preserves the #360 over-forward fix). counted = shop_qty @ shop /
-// received_qty @ warehouse. disputed = the qty already flagged on the line by kind.
-// A short line with NO dispute flag has disputed=0 → ref<=counted is FALSE → the
-// button STAYS RED until a matching dispute (count_issue) is assigned to that line.
-// A fully-received line (counted>=ref, no flag) and an excess line are trivially
-// balanced and never block.
+// CHANGE #363 (re-issued, narrow) — CONFIRM-BUTTON GATE + COLOR.
+//
+// FALLBACK ONLY: the live screen reads each product's confirm_gate.can_confirm
+// straight off merged_items[]. The rule below (ref <= counted + disputed) only
+// runs for a product whose confirm_gate is absent, reproducing the prior
+// client-side gate for that one product. ref = ordered @ shop / expected
+// (forwarded shop_qty) @ warehouse (preserves the #360 over-forward fix).
+// counted = shop_qty @ shop / received_qty @ warehouse. disputed = the qty
+// already flagged on the line by kind. A short line with NO dispute flag has
+// disputed=0 → ref<=counted is FALSE → stays unsatisfied until a matching
+// dispute (count_issue) is assigned to that line. A fully-received line
+// (counted>=ref, no flag) and an excess line are trivially balanced.
 // ════════════════════════════════════════════════════════════════════════════
 
 /// #363/#364: qty already disputed on a line, by kind. #364 — the popup now stores an
@@ -378,29 +300,6 @@ int confirmDisputedQty({
   }
 }
 
-/// #363: does ONE line satisfy the confirm gate — ref <= counted + disputed? ref =
-/// ordered @ shop, expected (forwarded shop_qty) @ warehouse (#360). A short line with
-/// no dispute flag (disputed=0) does NOT satisfy → keeps the button RED. A fully-received
-/// line (counted>=ref) and an excess line satisfy trivially. Warehouse "awaiting
-/// resolution" rows (ref==0, already disputed at shop) never block.
-bool lineSatisfiesConfirmGate({
-  required bool arrivals,
-  required int ordered,
-  int? shopQty,
-  required int received,
-  int? expected,
-  String? countIssue,
-  int? issueQty,
-  required String state,
-}) {
-  final ref = arrivals ? (expected ?? ordered) : ordered;
-  if (ref <= 0) return true; // nothing to reconcile (already-disputed / empty line)
-  final counted = arrivals ? received : (shopQty ?? 0);
-  final disputed = confirmDisputedQty(
-      ref: ref, counted: counted, countIssue: countIssue, issueQty: issueQty, state: state);
-  return ref <= counted + disputed;
-}
-
 /// #365-F: does a whole PRODUCT (summed over its order-lines) satisfy the confirm gate?
 /// refTotal <= countedTotal + disputedTotal. refTotal = Σ (ordered@shop / expected@warehouse),
 /// countedTotal = Σ (shop_qty@shop / received_qty@warehouse), disputedTotal = Σ per-line
@@ -416,8 +315,9 @@ bool productSatisfiesConfirmGate({
   return refTotal <= countedTotal + disputedTotal;
 }
 
-/// #363-A: the confirm button's visual — GREEN + enabled when NO line is unsatisfied,
-/// else RED + disabled. Caller counts unsatisfied lines via [lineSatisfiesConfirmGate]
+/// #363-A: the confirm button's visual — GREEN + enabled when NO product is
+/// unsatisfied, else RED + disabled. Caller counts unsatisfied products via
+/// each product's confirm_gate.can_confirm (fallback: [productSatisfiesConfirmGate])
 /// so mobile + web agree by construction.
 class ConfirmButtonVisual {
   /// true → button is clickable (all lines satisfy the gate).

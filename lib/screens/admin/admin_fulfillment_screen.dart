@@ -271,6 +271,14 @@ class _MergedProduct {
   final Map<String, dynamic>? issueChip; // {label, qty} | null
   final List<Map<String, dynamic>> lines; // underlying per-order-item rows
 
+  // Backend-owned dispute/confirm-gate fields (fw_get_state's merged_items[]).
+  // Null means the field wasn't present on this response — callers fall back
+  // to the prior client-side rule for that one product only.
+  final bool? isDisputeCandidate;
+  final num? disputeQty;
+  final bool? confirmGateCanConfirm;
+  final String? confirmGateReason;
+
   const _MergedProduct({
     required this.productId,
     required this.productName,
@@ -296,6 +304,10 @@ class _MergedProduct {
     this.qtyLabel = '',
     this.issueChip,
     this.lines = const [],
+    this.isDisputeCandidate,
+    this.disputeQty,
+    this.confirmGateCanConfirm,
+    this.confirmGateReason,
   });
 
   // fw_get_state()'s merged_items[] entry -> _MergedProduct. Pure field
@@ -321,6 +333,7 @@ class _MergedProduct {
     }
     final colors = m['status_colors'];
     final issueChip = m['issue_chip'];
+    final confirmGate = m['confirm_gate'];
     return _MergedProduct(
       productId: (m['product_id'] as num?)?.toInt() ?? 0,
       productName: m['product_name']?.toString() ?? '—',
@@ -348,6 +361,12 @@ class _MergedProduct {
       qtyLabel: m['qty_label']?.toString() ?? '',
       issueChip: issueChip is Map ? Map<String, dynamic>.from(issueChip) : null,
       lines: lines,
+      isDisputeCandidate: m['is_dispute_candidate'] is bool ? m['is_dispute_candidate'] as bool : null,
+      disputeQty: m['dispute_qty'] as num?,
+      confirmGateCanConfirm: confirmGate is Map && confirmGate['can_confirm'] is bool
+          ? confirmGate['can_confirm'] as bool
+          : null,
+      confirmGateReason: confirmGate is Map ? confirmGate['reason']?.toString() : null,
     );
   }
 }
@@ -1196,58 +1215,71 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // few_wrong/damaged/excess flags are written per order_item_id, so a merged
   // product that spans several lines must be judged line-by-line (comparing one
   // line's issue_qty against the merged-sum gap would false-block or false-pass).
-  bool _lineIsCandidate(Map<String, dynamic> line) => isDisputeCandidate(
-        arrivals: widget.arrivals,
-        ordered: ordQtyOf(line),
-        shopQty: (line['shop_qty'] as num?)?.toInt(),
-        received: recQtyOf(line),
-        expected: (line['expected'] as num?)?.toInt(),
-        countIssue: line['count_issue']?.toString(),
-        state: line['fulfillment_state']?.toString() ?? 'pending',
-      );
+  // Backend-owned (fw_get_state's items[]/merged_items[]): is_dispute_candidate,
+  // verbatim. Falls back to the prior client-side rule only when a given line's
+  // response doesn't carry the field yet.
+  bool _lineIsCandidate(Map<String, dynamic> line) {
+    final backend = line['is_dispute_candidate'];
+    if (backend is bool) return backend;
+    return isDisputeCandidate(
+      arrivals: widget.arrivals,
+      ordered: ordQtyOf(line),
+      shopQty: (line['shop_qty'] as num?)?.toInt(),
+      received: recQtyOf(line),
+      expected: (line['expected'] as num?)?.toInt(),
+      countIssue: line['count_issue']?.toString(),
+      state: line['fulfillment_state']?.toString() ?? 'pending',
+    );
+  }
 
-  // A merged product row is a candidate (tint yellow + tappable) if ANY of its
-  // underlying lines is a candidate.
+  // A merged product row is a candidate (tint yellow + tappable). Backend-owned
+  // (merged_items[].is_dispute_candidate), verbatim; falls back to "any
+  // underlying line is a candidate" only when this product's response doesn't
+  // carry the field yet.
   bool _mIsCandidate(_MergedProduct m) {
+    if (m.isDisputeCandidate != null) return m.isDisputeCandidate!;
     final ids = m.orderItemIds.toSet();
     return _items.any((l) =>
         ids.contains(l['order_item_id']?.toString()) && _lineIsCandidate(l));
   }
 
-  // C365: confirm-button visual over the whole tab, aggregated PER PRODUCT. A product
-  // balances when refTotal <= countedTotal + disputedTotal (summed over its order-lines);
-  // GREEN + clickable only when EVERY product balances, else RED. This matches the one-row-
-  // per-product display and lets a multi-line dispute (distributed by fw_set_product_issue)
-  // cover the full gap and reach green. ref=ordered@shop / expected@warehouse (preserves #360).
+  // C365: confirm-button visual over the whole tab, aggregated PER PRODUCT.
+  // Backend-owned (fw_get_state's merged_items[].confirm_gate.can_confirm),
+  // verbatim — GREEN + clickable only when EVERY product's can_confirm is
+  // true, else RED. Falls back to the prior ref/counted/disputed aggregate
+  // for a given product only when its confirm_gate isn't present yet.
   ConfirmButtonVisual get _confirmVisual {
     final tab = widget.arrivals ? 'warehouse' : 'shop';
-    final byProduct = <String, List<Map<String, dynamic>>>{};
-    for (final l in _items) {
-      final pid = (l['product_id'] ?? l['order_item_id'])?.toString() ?? '';
-      byProduct.putIfAbsent(pid, () => []).add(l);
-    }
     int unsatisfied = 0;
-    for (final entry in byProduct.entries) {
-      int refTotal = 0, countedTotal = 0, disputedTotal = 0;
-      for (final l in entry.value) {
-        final ordered = ordQtyOf(l);
-        final expected = (l['expected'] as num?)?.toInt();
-        final received = recQtyOf(l);
-        final shopQty = (l['shop_qty'] as num?)?.toInt();
-        final ref = stageRefFor(arrivals: widget.arrivals, ordered: ordered, expected: expected);
-        final counted = countedQtyFor(arrivals: widget.arrivals, shopQty: shopQty, received: received);
-        refTotal += ref;
-        countedTotal += counted;
-        disputedTotal += confirmDisputedQty(
-          ref: ref, counted: counted,
-          countIssue: l['count_issue']?.toString(),
-          issueQty: (l['issue_qty'] as num?)?.toInt(),
-          state: l['fulfillment_state']?.toString() ?? 'pending',
-        );
+    for (final m in _mergedItemsBackend) {
+      bool ok;
+      final canConfirm = m.confirmGateCanConfirm;
+      if (canConfirm != null) {
+        ok = canConfirm;
+      } else {
+        int refTotal = 0, countedTotal = 0, disputedTotal = 0;
+        for (final l in m.lines) {
+          final ordered = ordQtyOf(l);
+          final expected = (l['expected'] as num?)?.toInt();
+          final received = recQtyOf(l);
+          final shopQty = (l['shop_qty'] as num?)?.toInt();
+          final ref = stageRefFor(arrivals: widget.arrivals, ordered: ordered, expected: expected);
+          final counted = countedQtyFor(arrivals: widget.arrivals, shopQty: shopQty, received: received);
+          refTotal += ref;
+          countedTotal += counted;
+          final lineDisputeQty = (l['dispute_qty'] as num?)?.toInt();
+          disputedTotal += lineDisputeQty ??
+              confirmDisputedQty(
+                ref: ref, counted: counted,
+                countIssue: l['count_issue']?.toString(),
+                issueQty: (l['issue_qty'] as num?)?.toInt(),
+                state: l['fulfillment_state']?.toString() ?? 'pending',
+              );
+        }
+        ok = productSatisfiesConfirmGate(
+            refTotal: refTotal, countedTotal: countedTotal, disputedTotal: disputedTotal);
       }
-      final ok = productSatisfiesConfirmGate(
-          refTotal: refTotal, countedTotal: countedTotal, disputedTotal: disputedTotal);
-      RenderLog.write('c361_balance', 'tab=$tab,product=${entry.key},satisfied=$ok');
+      RenderLog.write('c361_balance', 'tab=$tab,product=${m.productId},satisfied=$ok');
       if (!ok) unsatisfied++;
     }
     final vis = confirmButtonVisual(unsatisfiedLines: unsatisfied);
@@ -1747,7 +1779,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Future<void> _loadCollectModes() async {
     if (widget.arrivals || !mounted) return;
     try {
-      final res = await Supabase.instance.client.rpc('fw_supplier_modes').timeout(const Duration(seconds: 15)) as Map;
+      final res = await Supabase.instance.client.rpc('fw_supplier_modes', params: {
+        'p_date': ymd(FulfillDateScope.instance.date),
+      }).timeout(const Duration(seconds: 15)) as Map;
       if (!mounted) return;
       final modes = (res['modes'] as Map? ?? {});
       final map = <String, String?>{};
@@ -1769,7 +1803,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Future<void> _loadDisputes() async {
     if (!mounted) return;
     try {
-      final res = await Supabase.instance.client.rpc('fw_get_disputes').timeout(const Duration(seconds: 15)) as Map;
+      final res = await Supabase.instance.client.rpc('fw_get_disputes', params: {
+        'p_date': ymd(FulfillDateScope.instance.date),
+      }).timeout(const Duration(seconds: 15)) as Map;
       if (!mounted) return;
       final disputes = (res['disputes'] as List? ?? []);
       // Keep legacy map for fulfill_item_sheet.dart compat
@@ -2214,6 +2250,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           'p_product_id': productId,
           'p_qty': setQty,
           'p_note': note ?? 'tap:$state',
+          'p_date': ymd(FulfillDateScope.instance.date),
         });
         final res2 = rawVoice is Map ? Map<String, dynamic>.from(rawVoice) : <String, dynamic>{};
         if (!mounted) return;
@@ -2404,6 +2441,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final session = ContinuousVoiceSession(
       supplierName: supplier332,
       stage: stage,
+      dateYmd: ymd(FulfillDateScope.instance.date),
       orderItemsProvider: () => _items,
       expectedProvider: _buildExpectedList,
       onWindowError: (e, st) {
@@ -3807,6 +3845,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           'p_product_id': (action['product_id'] as num).toInt(),
           'p_qty': (action['qty'] as num).toDouble(),
           'p_note': 'voice-agent #85',
+          'p_date': ymd(FulfillDateScope.instance.date),
         });
         res = rawAgent is Map ? Map<String, dynamic>.from(rawAgent) : {};
       }
@@ -4704,7 +4743,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   width: 120,
                   child: Align(
                     alignment: Alignment.centerRight,
-                    child: DisputeBadge(status: openDispute['status']?.toString() ?? ''),
+                    child: DisputeBadge(status: openDispute['status']?.toString() ?? '', dispute: openDispute),
                   ),
                 ),
               ],
@@ -4941,7 +4980,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   width: 120,
                   child: Align(
                     alignment: Alignment.centerRight,
-                    child: DisputeBadge(status: openDispute['status']?.toString() ?? ''),
+                    child: DisputeBadge(status: openDispute['status']?.toString() ?? '', dispute: openDispute),
                   ),
                 ),
               ],
@@ -7249,6 +7288,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
         'p_product_id': productId,
         'p_qty': mentionQty.toDouble(),
         'p_note': 'voice: tap-fix to $productName',
+        'p_date': ymd(FulfillDateScope.instance.date),
       });
 
       if (mounted) {
@@ -8470,9 +8510,9 @@ class _SupplierAccordionShell extends StatelessWidget {
   final GlobalKey rowKey;
   final VoidCallback onTap;
   final Widget expandedContent; // AnimatedSize handles show/hide
-  // fix(pack): Pack tab's 3 status dots [allPacked, allCounted, readyDone] —
-  // true=green, false=yellow. Null (every other caller) keeps the `hexDots`
-  // behavior below completely unchanged.
+  // No current caller — the Pack tab's 3 status dots moved to `hexDots` below
+  // (pack_get_queue's rollup_rows[].colors, verbatim) so their green/yellow/grey
+  // states aren't limited to this boolean's 2 states. Kept for API compatibility.
   final List<bool>? dots;
   // Verbatim {fill, border} hex-colour dots from fw_list_arrivals() (Supplier
   // Shop: [dot_packed, dot_method, dot_submit]; Warehouse: [dot_method,
@@ -8726,13 +8766,30 @@ class _DisputeStrip extends StatelessWidget {
   }
 }
 
+// Backend-owned (fw_get_disputes): kind_label/kind_colors, verbatim — matches
+// the admin Dispute tab's own kind tag instead of a locally re-derived
+// workflow-status label/colour. Falls back to the prior per-status map only
+// for a dispute whose response doesn't carry kind_label/kind_colors yet.
 class DisputeBadge extends StatelessWidget {
   final String status;
-  const DisputeBadge({super.key, required this.status});
+  final Map<String, dynamic>? dispute;
+  const DisputeBadge({super.key, required this.status, this.dispute});
 
   @override
   Widget build(BuildContext context) {
     if (status.isEmpty) return const SizedBox.shrink();
+    final kindLabel = dispute?['kind_label']?.toString();
+    final kindColors = dispute?['kind_colors'];
+    if (kindLabel != null && kindLabel.isNotEmpty && kindColors is Map) {
+      final bg = _hexColor(kindColors['bg']?.toString(), const Color(0xFFF3F4F6));
+      final fg = _hexColor(kindColors['fg']?.toString(), const Color(0xFF6B7280));
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(4)),
+        child: Text(kindLabel,
+            style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: fg)),
+      );
+    }
     final Color bg;
     final Color fg;
     final String label;
@@ -10785,7 +10842,9 @@ class _BagPickerChipState extends State<_BagPickerChip> {
 
     List<Map<String, dynamic>> bags = [];
     try {
-      final data = await Supabase.instance.client.rpc('fw_list_bags') as Map;
+      final data = await Supabase.instance.client.rpc('fw_list_bags', params: {
+        'p_date': ymd(FulfillDateScope.instance.date),
+      }) as Map;
       bags = (data['bags'] as List? ?? [])
           .map((r) => Map<String, dynamic>.from(r as Map))
           .toList();
@@ -11044,6 +11103,9 @@ class _PackTabState extends State<_PackTab>
   final Map<String, Map<String, dynamic>> _packQueueData = {};
   // packed/total cache for packing button label
   final Map<String, Map<String, int>?> _packStatus = {};
+  // pack_get_queue's rollup_rows[] — {key,label,value,colors} per stage bucket,
+  // backend-owned. Drives the customer-row status dots (_packDots), verbatim.
+  final Map<String, List<Map<String, dynamic>>?> _packRollupRows = {};
   // C354: dispute index keyed by order_item_id — ONE fw_get_disputes fetch, matched per row.
   // Drives the read-only "In dispute" chip so packers never chase a phantom line.
   Map<String, DisputeItem> _packDisputeIdx = {};
@@ -11193,16 +11255,30 @@ class _PackTabState extends State<_PackTab>
       final total   = (rollup['ordered'] as num?)?.toInt() ?? 0;
       final packed  = (rollup['packed']  as num?)?.toInt() ?? 0;
       // fix(pack): counted already comes back on this same rollup — surfaced
-      // for the customer-row 3-status-dots (allPacked/allCounted/readyDone).
+      // for the customer-row 3-status-dots (_packDots).
       final counted = (rollup['counted'] as num?)?.toInt() ?? 0;
+      final rawRollupRows = m['rollup_rows'];
+      final rollupRows = rawRollupRows is List
+          ? rawRollupRows.map((r) => Map<String, dynamic>.from(r as Map)).toList()
+          : null;
       try {
         RenderLog.write('c291_pack_counts',
             'order=${orderId.substring(0, orderId.length.clamp(0, 8))};total=$total;packed=$packed');
         RenderLog.write('c335_pack', 'order=${orderId.substring(0, orderId.length.clamp(0, 8))};total=$total;packed=$packed');
       } catch (_) {}
-      if (mounted) setState(() => _packStatus[orderId] = {'packed': packed, 'total': total, 'counted': counted});
+      if (mounted) {
+        setState(() {
+          _packStatus[orderId] = {'packed': packed, 'total': total, 'counted': counted};
+          _packRollupRows[orderId] = rollupRows;
+        });
+      }
     } catch (e) {
-      if (mounted) setState(() => _packStatus[orderId] = {'packed': 0, 'total': -1, 'counted': 0});
+      if (mounted) {
+        setState(() {
+          _packStatus[orderId] = {'packed': 0, 'total': -1, 'counted': 0};
+          _packRollupRows[orderId] = null;
+        });
+      }
     }
   }
 
@@ -11225,6 +11301,10 @@ class _PackTabState extends State<_PackTab>
       final total   = (rollup['ordered'] as num?)?.toInt() ?? 0;
       final packed  = (rollup['packed']  as num?)?.toInt() ?? 0;
       final counted = (rollup['counted'] as num?)?.toInt() ?? 0;
+      final rawRollupRows = m['rollup_rows'];
+      final rollupRows = rawRollupRows is List
+          ? rawRollupRows.map((r) => Map<String, dynamic>.from(r as Map)).toList()
+          : null;
       final items   = ((m['items'] as List?) ?? const [])
           .map((i) => Map<String, dynamic>.from(i as Map))
           .toList();
@@ -11255,6 +11335,7 @@ class _PackTabState extends State<_PackTab>
         // fix(pack): keep 'counted' alongside packed/total — _fetchPackStatus
         // stores the same three keys; this write must not clobber it.
         _packStatus[orderId] = {'packed': packed, 'total': total, 'counted': counted};
+        _packRollupRows[orderId] = rollupRows;
         _loadingItems[orderId] = false;
       });
       RenderLog.write('c354_live', 'tab=pack,src=queue');
@@ -11268,6 +11349,7 @@ class _PackTabState extends State<_PackTab>
         _loadingItems[orderId] = false;
         if (!_packQueueData.containsKey(orderId)) {
           _packStatus[orderId] = {'packed': 0, 'total': -1, 'counted': 0};
+          _packRollupRows[orderId] = null;
         }
       });
     }
@@ -11795,20 +11877,44 @@ class _PackTabState extends State<_PackTab>
     );
   }
 
-  // fix(pack): 3 customer-row status dots — [allPacked, allCounted, readyDone].
-  // packed/counted/total come from _packStatus (already fetched via
-  // pack_get_queue by _fetchPackStatus/_loadFromPackQueue — no new RPC call);
-  // dispatch_ready is already on `c` from fw_pack_orders.
-  List<bool> _packDots(Map<String, dynamic> c) {
+  // fix(pack): 3 customer-row status dots — [packed, counted, readyDone].
+  // packed/counted colours are backend-owned: pack_get_queue's rollup_rows[]
+  // (already fetched via _fetchPackStatus/_loadFromPackQueue — no new RPC
+  // call) carries a {key,label,value,colors} entry per stage bucket, so the
+  // 'packed'/'counted' entries' colors are rendered verbatim instead of a
+  // client packed>=total / counted>=total threshold. readyDone is already
+  // c['dispatch_ready'] from fw_pack_orders, unchanged (already backend-owned).
+  // Falls back to the prior threshold colour only when rollup_rows hasn't
+  // landed yet for this order.
+  static const _packDotGreen = {'fill': '#1B7A43', 'border': '#1B7A43'};
+  static const _packDotYellow = {'fill': '#FCD34D', 'border': '#F59E0B'};
+
+  List<Map<String, String>?> _packDots(Map<String, dynamic> c) {
     final orderId = c['order_id']?.toString() ?? '';
+    final rows = _packRollupRows[orderId];
+    Map<String, String>? colorsFor(String key) {
+      if (rows == null) return null;
+      for (final r in rows) {
+        if (r['key']?.toString() != key) continue;
+        final colors = r['colors'];
+        if (colors is Map) {
+          return {
+            'fill': colors['bg']?.toString() ?? '',
+            'border': colors['fg']?.toString() ?? '',
+          };
+        }
+      }
+      return null;
+    }
+
     final status = _packStatus[orderId];
     final total = status?['total'] ?? 0;
     final packed = status?['packed'] ?? 0;
     final counted = status?['counted'] ?? 0;
-    final allPacked = total > 0 && packed >= total;
-    final allCounted = total > 0 && counted >= total;
-    final readyDone = c['dispatch_ready'] == true;
-    return [allPacked, allCounted, readyDone];
+    final packedDot = colorsFor('packed') ?? ((total > 0 && packed >= total) ? _packDotGreen : _packDotYellow);
+    final countedDot = colorsFor('counted') ?? ((total > 0 && counted >= total) ? _packDotGreen : _packDotYellow);
+    final readyDot = (c['dispatch_ready'] == true) ? _packDotGreen : _packDotYellow;
+    return [packedDot, countedDot, readyDot];
   }
 
   @override
@@ -11874,7 +11980,7 @@ class _PackTabState extends State<_PackTab>
 
     return _SupplierAccordionShell(
       name: name,
-      dots: _packDots(c),
+      hexDots: _packDots(c),
       isExpanded: isExpanded,
       anyExpanded: _expandedOrderId != null,
       rowKey: rowKey,

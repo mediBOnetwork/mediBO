@@ -4,6 +4,9 @@
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../services/fulfill_date_scope.dart';
+import '../../../utils/ist_date.dart' show ymd;
+
 num _n(dynamic v) =>
     v == null ? 0 : (v is num ? v : num.tryParse(v.toString()) ?? 0);
 
@@ -374,9 +377,13 @@ class SupplierDisputesResult {
 
 // ── Service functions (#189) — shared across screens ─────────────────────────
 
-/// Fetch admin dispute list (fw_get_disputes).
+/// Fetch admin dispute list (fw_get_disputes), scoped to the shared Fulfill
+/// date — never the server's "today" default, so a past-date admin view never
+/// leaks a wrong-day dispute chip (e.g. into the Pack tab's dispute index).
 Future<List<DisputeItem>> fetchAdminDisputesList() async {
-  final res = await Supabase.instance.client.rpc('fw_get_disputes').timeout(const Duration(seconds: 15)) as Map;
+  final res = await Supabase.instance.client.rpc('fw_get_disputes', params: {
+    'p_date': ymd(FulfillDateScope.instance.date),
+  }).timeout(const Duration(seconds: 15)) as Map;
   return DisputeItem.listFromResponse(res);
 }
 

@@ -172,17 +172,17 @@ class _VoiceCaps {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Text('Daily voice-count limit reached (3h).',
+              Text(FulfillLookups.instance.ui('daily_voice_count_limit_reached_3h'),
                   style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: _kText)),
               const SizedBox(height: 8),
               if (used.isNotEmpty || cap.isNotEmpty)
-                Text('$used · $cap. Try again tomorrow.',
+                Text(FulfillLookups.instance.uiFill('voice_cap_line', {'used': used, 'cap': cap}),
                     style: const TextStyle(fontSize: 13, color: _kSub)),
               const SizedBox(height: 20),
               FilledButton(
                 style: FilledButton.styleFrom(backgroundColor: _kGreen),
                 onPressed: () => Navigator.pop(ctx),
-                child: const Text('OK'),
+                child: Text(FulfillLookups.instance.ui('ok')),
               ),
             ],
           ),
@@ -568,9 +568,9 @@ class _BagScannerDialogState extends State<_BagScannerDialog> {
               ),
             ]),
           ),
-          const Padding(
+          Padding(
             padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            child: Text('Point camera at bag QR  •  or upload a photo',
+            child: Text(FulfillLookups.instance.ui('point_camera_at_bag_qr_or_upload_a_photo'),
                 style: TextStyle(fontSize: 13, color: _kSub)),
           ),
           Expanded(
@@ -586,11 +586,11 @@ class _BagScannerDialogState extends State<_BagScannerDialog> {
                       child: Column(mainAxisSize: MainAxisSize.min, children: [
                         const Icon(Icons.camera_alt_outlined, size: 48, color: Color(0xFFD1D5DB)),
                         const SizedBox(height: 12),
-                        const Text('Camera unavailable', style: TextStyle(color: _kSub, fontSize: 14)),
+                        Text(FulfillLookups.instance.ui('camera_unavailable'), style: TextStyle(color: _kSub, fontSize: 14)),
                         const SizedBox(height: 4),
                         Text(error.errorCode.name, style: const TextStyle(fontSize: 12, color: _kSub)),
                         const SizedBox(height: 16),
-                        TextButton(onPressed: () => _close(ctx), child: const Text('Close')),
+                        TextButton(onPressed: () => _close(ctx), child: Text(FulfillLookups.instance.ui('close'))),
                       ]),
                     ),
                   ),
@@ -614,7 +614,7 @@ class _BagScannerDialogState extends State<_BagScannerDialog> {
                       children: [
                         _scannerActionBtn(
                           icon: Icons.photo_library_outlined,
-                          label: 'Upload QR',
+                          label: FulfillLookups.instance.ui('upload_qr'),
                           onTap: () => _pickAndDecodeQr(ctx),
                         ),
                       ],
@@ -846,7 +846,7 @@ class _ChangeBagScannerState extends State<_ChangeBagScanner> {
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 14, 8, 0),
             child: Row(children: [
-              const Expanded(child: Text('Change Bag',
+              Expanded(child: Text(FulfillLookups.instance.ui('change_bag'),
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _kText))),
               IconButton(
                 onPressed: _busy ? null : () {
@@ -864,9 +864,9 @@ class _ChangeBagScannerState extends State<_ChangeBagScanner> {
               ),
             ]),
           ),
-          const Padding(
+          Padding(
             padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            child: Text('Point camera at bag QR  •  or upload a photo',
+            child: Text(FulfillLookups.instance.ui('point_camera_at_bag_qr_or_upload_a_photo'),
                 style: TextStyle(fontSize: 13, color: _kSub)),
           ),
           // Live camera with Upload QR overlay
@@ -882,7 +882,7 @@ class _ChangeBagScannerState extends State<_ChangeBagScanner> {
                     child: Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
                       const Icon(Icons.camera_alt_outlined, size: 40, color: Color(0xFFD1D5DB)),
                       const SizedBox(height: 8),
-                      const Text('Camera unavailable', style: TextStyle(color: _kSub, fontSize: 13)),
+                      Text(FulfillLookups.instance.ui('camera_unavailable'), style: TextStyle(color: _kSub, fontSize: 13)),
                     ])),
                   ),
                   onDetect: (capture) {
@@ -916,7 +916,7 @@ class _ChangeBagScannerState extends State<_ChangeBagScanner> {
                                 color: Colors.white, size: 22),
                           ),
                           const SizedBox(height: 4),
-                          const Text('Upload QR', style: TextStyle(
+                          Text(FulfillLookups.instance.ui('upload_qr'), style: TextStyle(
                               color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600,
                               shadows: [Shadow(color: Colors.black54, blurRadius: 4)])),
                         ]),
@@ -931,7 +931,7 @@ class _ChangeBagScannerState extends State<_ChangeBagScanner> {
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
             child: _statusBox(
-              label: 'Old Bag $currentNo',
+              label: FulfillLookups.instance.uiFill('old_bag_chip', {'n': currentNo}),
               subtitle: oldDone ? 'Detached ✓' : 'Scan to detach',
               color: oldDone ? green : red,
               icon: oldDone ? Icons.check_circle_outline : Icons.qr_code_scanner_rounded,
@@ -940,7 +940,7 @@ class _ChangeBagScannerState extends State<_ChangeBagScanner> {
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
             child: _statusBox(
-              label: newNo != null ? 'New Bag $newNo' : 'Scan new bag',
+              label: newNo != null ? FulfillLookups.instance.uiFill('new_bag_chip', {'n': newNo}) : FulfillLookups.instance.ui('scan_new_bag'),
               subtitle: newDone ? 'Attached ✓' : (newActive ? 'Scan bag to attach' : 'Waiting…'),
               color: newDone ? green : (newActive ? red : grey),
               icon: newDone ? Icons.check_circle_outline : Icons.qr_code_scanner_rounded,
@@ -1956,7 +1956,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         setState(() => _confirmingAll = false);
         if (mounted && names.isNotEmpty) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-              content: Text('Count all items first: ${names.join(', ')}')));
+              content: Text(FulfillLookups.instance.uiFill('count_all_items_first', {'names': names.join(', ')}))));
         }
         return;
       }
@@ -1997,7 +1997,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._refreshCollect();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('$lockedItems locked · $disputesRaised new dispute(s)'),
+          content: Text(FulfillLookups.instance.uiFill('confirm_all_summary', {'locked': lockedItems, 'disputes': disputesRaised})),
         ));
       }
     } catch (e) {
@@ -2467,9 +2467,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         .toSet()
         .length;
     final bagCount = bagBreakdown.keys.length;
+    // CHANGE #533: both plurals are backend-owned. The arrivals line pluralises
+    // products AND bags independently, so the backend publishes all four forms
+    // rather than Dart nesting two ternaries.
     final base = widget.arrivals
-        ? 'Counted $productCount product${productCount == 1 ? '' : 's'} across $bagCount bag${bagCount == 1 ? '' : 's'}.'
-        : 'Counted $productCount product${productCount == 1 ? '' : 's'}.';
+        ? FulfillLookups.instance.uiFill(
+            'counted_products_bags_${productCount == 1 ? 'one' : 'other'}_${bagCount == 1 ? 'one' : 'other'}',
+            {'n': productCount, 'bags': bagCount})
+        : FulfillLookups.instance.uiPlural('counted_products', productCount);
     RenderLog.write('c8_finalize_summary',
         'persisted=$productCount;bags=$bagCount;review=${needsReview.length};unmatched=${unmatched.length}');
     RenderLog.write('c457_over_count', 'count=${overCounts.length}');
@@ -2478,11 +2483,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       return;
     }
     final extra = <String>[
-      if (needsReview.isNotEmpty) '${needsReview.length} need bag review',
-      if (overCounts.isNotEmpty) '${overCounts.length} over-counted',
-      if (unmatched.isNotEmpty) '${unmatched.length} unmatched',
+      if (needsReview.isNotEmpty) FulfillLookups.instance.uiFill('finalize_extra_review', {'n': needsReview.length}),
+      if (overCounts.isNotEmpty) FulfillLookups.instance.uiFill('finalize_extra_over', {'n': overCounts.length}),
+      if (unmatched.isNotEmpty) FulfillLookups.instance.uiFill('finalize_extra_unmatched', {'n': unmatched.length}),
     ].join(', ');
-    _showSnack('$base $extra.');
+    _showSnack(FulfillLookups.instance.uiFill('finalize_summary', {'base': base, 'extra': extra}));
     final supplier = _selectedSupplier ?? '';
     showDialog<void>(
       context: context,
@@ -2538,10 +2543,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       builder: (ctx) => Padding(
         padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('Bag required',
+          Text(FulfillLookups.instance.ui('bag_required'),
               style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _kText)),
           const SizedBox(height: 8),
-          Text('Scan/select the bag for $productName so the bag total equals the counted qty, then count again.',
+          Text(FulfillLookups.instance.uiFill('bag_total_mismatch_help', {'product': productName}),
               style: const TextStyle(fontSize: 13, color: _kSub)),
           const SizedBox(height: 16),
           SizedBox(
@@ -2549,7 +2554,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             child: FilledButton(
               style: FilledButton.styleFrom(backgroundColor: _kGreen),
               onPressed: () => Navigator.pop(ctx),
-              child: const Text('OK'),
+              child: Text(FulfillLookups.instance.ui('ok')),
             ),
           ),
         ]),
@@ -2857,7 +2862,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c253_scanner_open', 'supplier=$supplier;action=first_attach');
     final code = await showDialog<String>(
       context: context,
-      builder: (_) => const _BagScannerDialog(title: 'Scan Bag to Attach'),
+      builder: (_) => _BagScannerDialog(title: FulfillLookups.instance.ui('scan_bag_to_attach')),
     );
     if (!mounted) return;
     if (code == null) {
@@ -2959,7 +2964,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   color: locked ? const Color(0xFF9CA3AF) : const Color(0xFF92400E)),
               const SizedBox(width: 8),
               Expanded(
-                child: Text('Bag $oldBagNo detached — tap to scan new bag',
+                child: Text(FulfillLookups.instance.uiFill('bag_detached_tap_scan', {'n': oldBagNo}),
                     style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
                         color: locked ? const Color(0xFF9CA3AF) : const Color(0xFF92400E))),
               ),
@@ -2978,7 +2983,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         child: OutlinedButton.icon(
           onPressed: locked ? null : _openBagFlow,
           icon: const Icon(Icons.qr_code_scanner_rounded, size: 18),
-          label: const Text('Scan bag to start counting'),
+          label: Text(FulfillLookups.instance.ui('scan_bag_to_start_counting')),
           style: OutlinedButton.styleFrom(
             foregroundColor: locked ? const Color(0xFF9CA3AF) : _kGreen,
             side: BorderSide(color: locked ? const Color(0xFFE5E7EB) : _kGreen),
@@ -3004,7 +3009,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           const Icon(Icons.shopping_bag_outlined, size: 18, color: Color(0xFF065F46)),
           const SizedBox(width: 8),
           Expanded(
-            child: Text('Bag $bagNo in Use',
+            child: Text(FulfillLookups.instance.uiFill('bag_in_use', {'n': bagNo}),
                 style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
                     color: Color(0xFF065F46))),
           ),
@@ -3021,7 +3026,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 Icon(Icons.swap_horiz_rounded, size: 16,
                     color: locked ? const Color(0xFF9CA3AF) : const Color(0xFF5D4037)),
                 const SizedBox(width: 4),
-                Text('Change Bag',
+                Text(FulfillLookups.instance.ui('change_bag'),
                     style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
                         color: locked ? const Color(0xFF9CA3AF) : const Color(0xFF5D4037))),
               ]),
@@ -3100,11 +3105,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 borderRadius: BorderRadius.circular(10),
                 border: Border.all(color: _kReceivedFg.withValues(alpha: 0.3)),
               ),
-              child: const Row(children: [
-                Icon(Icons.lock_rounded, size: 15, color: _kReceivedFg),
-                SizedBox(width: 8),
+              child: Row(children: [
+                const Icon(Icons.lock_rounded, size: 15, color: _kReceivedFg),
+                const SizedBox(width: 8),
                 Expanded(
-                  child: Text('Receiving confirmed ✓',
+                  child: Text(FulfillLookups.instance.ui('receiving_confirmed'),
                       style: TextStyle(
                           fontSize: 13, fontWeight: FontWeight.w600, color: _kReceivedFg)),
                 ),
@@ -3255,10 +3260,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             onPressed: _submittingCollect ? null : _fw_countInWarehouse,
             child: FittedBox(
               fit: BoxFit.scaleDown,
-              child: Row(mainAxisSize: MainAxisSize.min, children: const [
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
                 Icon(Icons.warehouse_outlined, size: 15, color: _kGreen),
                 SizedBox(width: 4),
-                Text('Count in warehouse',
+                Text(FulfillLookups.instance.ui('count_in_warehouse'),
                     style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kGreen)),
               ]),
             ),
@@ -3281,10 +3286,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   onPressed: null,
                   child: FittedBox(
                     fit: BoxFit.scaleDown,
-                    child: Row(mainAxisSize: MainAxisSize.min, children: const [
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
                       Icon(Icons.error_outline_rounded, size: 15, color: Color(0xFF991B1B)),
                       SizedBox(width: 4),
-                      Text('Count & resolve items to confirm',
+                      Text(FulfillLookups.instance.ui('count_resolve_items_to_confirm'),
                           style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF991B1B))),
                     ]),
                   ),
@@ -3298,10 +3303,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   onPressed: _submittingCollect ? null : _fw_confirmCounting,
                   child: FittedBox(
                     fit: BoxFit.scaleDown,
-                    child: Row(mainAxisSize: MainAxisSize.min, children: const [
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
                       Icon(Icons.check_circle_outline_rounded, size: 15, color: Colors.white),
                       SizedBox(width: 4),
-                      Text('Confirm counting',
+                      Text(FulfillLookups.instance.ui('confirm_counting'),
                           style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.white)),
                     ]),
                   ),
@@ -3374,14 +3379,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Confirm counting?'),
-        content: Text('This locks the Supplier Shop count for $supplier and forwards all items to the Warehouse for a bagged recount.'),
+        title: Text(FulfillLookups.instance.ui('confirm_counting_2')),
+        content: Text(FulfillLookups.instance.uiFill('confirm_counting_body', {'supplier': supplier})),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(FulfillLookups.instance.ui('cancel'))),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: _kGreen),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Confirm & send'),
+            child: Text(FulfillLookups.instance.ui('confirm_send')),
           ),
         ],
       ),
@@ -3402,7 +3407,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           setState(() => _submittingCollect = false);
           if (names.isNotEmpty) {
             ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                content: Text('Count all items first: ${names.join(', ')}')));
+                content: Text(FulfillLookups.instance.uiFill('count_all_items_first', {'names': names.join(', ')}))));
           }
         }
         return;
@@ -3430,10 +3435,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       final countedItems = _items.length;
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(
-            'Counting confirmed — $shortsDisputed short item(s) disputed. '
-            'Moved to Warehouse (0/$countedItems).'
-          )),
+          SnackBar(content: Text(FulfillLookups.instance.uiFill('counting_confirmed_toast',
+              {'shorts': shortsDisputed, 'counted': countedItems}))),
         );
       }
     } catch (e) {
@@ -3454,14 +3457,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Count in warehouse?'),
-        content: Text('Items from $supplier will be counted at the warehouse instead. This locks the Supplier Shop tab for this supplier.'),
+        title: Text(FulfillLookups.instance.ui('count_in_warehouse_2')),
+        content: Text(FulfillLookups.instance.uiFill('count_in_warehouse_body', {'supplier': supplier})),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(FulfillLookups.instance.ui('cancel'))),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: _kGreen),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Confirm'),
+            child: Text(FulfillLookups.instance.ui('confirm')),
           ),
         ],
       ),
@@ -3509,16 +3512,16 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Unlock this count?'),
-        content: Text('Unlock $supplier\'s count to allow edits again?'),
+        title: Text(FulfillLookups.instance.ui('unlock_this_count')),
+        content: Text(FulfillLookups.instance.uiFill('unlock_count_body', {'supplier': supplier})),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
+              child: Text(FulfillLookups.instance.ui('cancel'))),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: _kWrongFg),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Unlock'),
+            child: Text(FulfillLookups.instance.ui('unlock')),
           ),
         ],
       ),
@@ -3531,7 +3534,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Couldn\'t unlock. Please try again.')),
+          SnackBar(content: Text(FulfillLookups.instance.ui('couldn_t_unlock_please_try_again'))),
         );
       }
     }
@@ -3974,7 +3977,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           final isDetached = _changeBagPendingOldBag.containsKey(sup);
           final detachedBagNo = _changeBagPendingOldBag[sup];
           final subText = isDetached
-              ? 'Bag $detachedBagNo detached — scan a new bag to keep counting'
+              ? FulfillLookups.instance.uiFill('bag_detached_banner', {'n': detachedBagNo})
               : 'Scan a bag to begin counting';
           if (isDetached) {
             RenderLog.write('c272_detached_subtext', 'bag_no=$detachedBagNo;text=$subText');
@@ -4483,13 +4486,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                                 const Icon(Icons.broken_image_outlined, size: 24, color: _kSub)),
                       ),
                       const SizedBox(width: 4),
-                      const Text('proof', style: TextStyle(fontSize: 10, color: _kSub)),
+                      Text(FulfillLookups.instance.ui('proof'), style: TextStyle(fontSize: 10, color: _kSub)),
                     ]),
                   ),
                 ],
                 if (disputeItem != null && (disputeItem.wrongProductName ?? '').isNotEmpty) ...[
                   const SizedBox(height: 2),
-                  Text('↳ ${disputeItem!.wrongProductName}',
+                  Text(FulfillLookups.instance.uiFill('wrong_product_arrow', {'name': disputeItem!.wrongProductName}),
                       style: const TextStyle(fontSize: 10, color: Color(0xFF92400E)),
                       maxLines: 1, overflow: TextOverflow.ellipsis),
                 ],
@@ -4807,7 +4810,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                           child: Container(
                             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
                             decoration: BoxDecoration(color: _kGreen, borderRadius: BorderRadius.circular(8)),
-                            child: const Text('✓ Haan',
+                            child: Text(FulfillLookups.instance.ui('haan'),
                                 style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white)),
                           ),
                         ),
@@ -4821,7 +4824,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                               borderRadius: BorderRadius.circular(8),
                               border: Border.all(color: _kBorder),
                             ),
-                            child: const Text('✗ Nahi',
+                            child: Text(FulfillLookups.instance.ui('nahi'),
                                 style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kText)),
                           ),
                         ),
@@ -4905,8 +4908,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (_loadingBox)
         const Expanded(child: Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2)))
       else if (_selectedSupplier == null)
-        const Expanded(child: Center(
-            child: Text('Choose a supplier to begin',
+        Expanded(child: Center(
+            child: Text(FulfillLookups.instance.ui('choose_a_supplier_to_begin'),
                 style: TextStyle(color: _kSub, fontSize: 15))))
       // #160: show actual error instead of silent empty box
       else if (_error != null)
@@ -4917,8 +4920,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   style: const TextStyle(color: Color(0xFFDC2626), fontSize: 13),
                   textAlign: TextAlign.center))))
       else if (visibleItems.isEmpty)
-        const Expanded(child: Center(
-            child: Text('No items in this box',
+        Expanded(child: Center(
+            child: Text(FulfillLookups.instance.ui('no_items_in_this_box'),
                 style: TextStyle(color: _kSub, fontSize: 15))))
       else
         ...[
@@ -4977,14 +4980,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 240),
           child: _suppliers.isEmpty
-              ? const Text('No supplier orders to collect yet',
+              ? Text(FulfillLookups.instance.ui('no_supplier_orders_to_collect_yet'),
                   style: TextStyle(fontSize: 14, color: _kSub), overflow: TextOverflow.ellipsis)
               : Builder(builder: (ctx) {
                   RenderLog.write('change_99_arrow_constant', '1');
                   return DropdownButtonHideUnderline(
                     child: DropdownButton<String>(
                       isExpanded: true,
-                      hint: const Text('Select supplier…',
+                      hint: Text(FulfillLookups.instance.ui('select_supplier'),
                           style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 15)),
                       value: _selectedSupplier,
                       items: _suppliers
@@ -5224,21 +5227,21 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             // C357/C358: Received · Dispute Type · Item Status · Status are FOUR distinct
             // columns. C358 B2: 16px gaps between them so the right-aligned "Received"
             // header no longer butts against "Dispute Type" ("ReceivedDispute Type").
-            Expanded(flex: 5, child: Text('Product',
+            Expanded(flex: 5, child: Text(FulfillLookups.instance.ui('product'),
                 style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kSub))),
-            Expanded(flex: 2, child: Text('Pack',
+            Expanded(flex: 2, child: Text(FulfillLookups.instance.ui('pack'),
                 style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kSub))),
-            Expanded(flex: 2, child: Text('Received',
+            Expanded(flex: 2, child: Text(FulfillLookups.instance.ui('received'),
                 style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kSub),
                 textAlign: TextAlign.right)),
             const SizedBox(width: 16),
-            Expanded(flex: 3, child: Text('Dispute Type',
+            Expanded(flex: 3, child: Text(FulfillLookups.instance.ui('dispute_type'),
                 style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kSub))),
             const SizedBox(width: 12),
-            Expanded(flex: 3, child: Text('Item Status',
+            Expanded(flex: 3, child: Text(FulfillLookups.instance.ui('item_status'),
                 style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kSub))),
             const SizedBox(width: 12),
-            Expanded(flex: 2, child: Text('Status',
+            Expanded(flex: 2, child: Text(FulfillLookups.instance.ui('status'),
                 style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kSub),
                 textAlign: TextAlign.right)),
           ]),
@@ -5383,13 +5386,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                                             errorBuilder: (_, __, ___) => const Icon(Icons.broken_image_outlined, size: 20, color: _kSub)),
                                       ),
                                       const SizedBox(width: 4),
-                                      const Text('proof', style: TextStyle(fontSize: 10, color: _kSub)),
+                                      Text(FulfillLookups.instance.ui('proof'), style: TextStyle(fontSize: 10, color: _kSub)),
                                     ]),
                                   ),
                                 ],
                                 if (deskDisputeItem != null && (deskDisputeItem.wrongProductName ?? '').isNotEmpty) ...[
                                   const SizedBox(height: 2),
-                                  Text('↳ ${deskDisputeItem!.wrongProductName}',
+                                  Text(FulfillLookups.instance.uiFill('wrong_product_arrow', {'name': deskDisputeItem!.wrongProductName}),
                                       style: const TextStyle(fontSize: 10, color: Color(0xFF92400E)),
                                       maxLines: 1, overflow: TextOverflow.ellipsis),
                                 ],
@@ -5623,7 +5626,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           children: [
             const Icon(Icons.check_rounded, size: 11, color: _kReceivedFg),
             const SizedBox(width: 4),
-            Text('$count spoken',
+            Text(FulfillLookups.instance.uiCount('spoken_badge', count) ?? '',
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                     fontSize: 12, fontWeight: FontWeight.w600, color: _kReceivedFg,
@@ -5929,13 +5932,13 @@ class _FinalizeReviewDialogState extends State<_FinalizeReviewDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Count needs a look'),
+      title: Text(FulfillLookups.instance.ui('count_needs_a_look')),
       content: SingleChildScrollView(
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(widget.base),
           if (_needsReview.isNotEmpty) ...[
             const SizedBox(height: 12),
-            Text('${_needsReview.length} item${_needsReview.length == 1 ? '' : 's'} spoken before any bag was scanned:',
+            Text(FulfillLookups.instance.uiPlural('needs_review_header', _needsReview.length),
                 style: const TextStyle(fontWeight: FontWeight.w700)),
             if (_loadingBags)
               const Padding(
@@ -5943,9 +5946,9 @@ class _FinalizeReviewDialogState extends State<_FinalizeReviewDialog> {
                 child: SizedBox(height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2)),
               )
             else if (_bagOptions.isEmpty)
-              const Padding(
+              Padding(
                 padding: EdgeInsets.only(top: 4),
-                child: Text('No bags were scanned this session — nothing to assign to.',
+                child: Text(FulfillLookups.instance.ui('no_bags_were_scanned_this_session_nothing_to'),
                     style: TextStyle(fontSize: 12, color: Colors.grey)),
               )
             else
@@ -5958,13 +5961,13 @@ class _FinalizeReviewDialogState extends State<_FinalizeReviewDialog> {
                   return Padding(
                     padding: const EdgeInsets.symmetric(vertical: 4),
                     child: Row(children: [
-                      Expanded(child: Text('$name — qty $qty')),
+                      Expanded(child: Text(FulfillLookups.instance.uiFill('mention_row', {'name': name, 'qty': qty}))),
                       const SizedBox(width: 8),
                       DropdownButton<int>(
-                        hint: const Text('Bag'),
+                        hint: Text(FulfillLookups.instance.ui('bag')),
                         value: _pickedBag[mentionId],
                         items: _bagOptions
-                            .map((b) => DropdownMenuItem(value: b, child: Text('Bag $b')))
+                            .map((b) => DropdownMenuItem(value: b, child: Text(FulfillLookups.instance.uiFill('bag_chip', {'n': b}))))
                             .toList(),
                         onChanged: busy ? null : (v) => setState(() => _pickedBag[mentionId] = v),
                       ),
@@ -5974,7 +5977,7 @@ class _FinalizeReviewDialogState extends State<_FinalizeReviewDialog> {
                               height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2))
                           : TextButton(
                               onPressed: _pickedBag[mentionId] != null ? () => _assign(item) : null,
-                              child: const Text('Assign'),
+                              child: Text(FulfillLookups.instance.ui('assign')),
                             ),
                     ]),
                   );
@@ -5982,22 +5985,22 @@ class _FinalizeReviewDialogState extends State<_FinalizeReviewDialog> {
           ],
           if (widget.overCountWarnings.isNotEmpty) ...[
             const SizedBox(height: 12),
-            Text('${widget.overCountWarnings.length} product${widget.overCountWarnings.length == 1 ? '' : 's'} counted more than could be saved:',
+            Text(FulfillLookups.instance.uiPlural('over_count_header', widget.overCountWarnings.length),
                 style: const TextStyle(fontWeight: FontWeight.w700, color: Color(0xFFB45309))),
             for (final w in widget.overCountWarnings)
-              Text('• $w', style: const TextStyle(color: Color(0xFFB45309))),
+              Text(FulfillLookups.instance.uiFill('bullet_row', {'text': w}), style: const TextStyle(color: Color(0xFFB45309))),
           ],
           if (widget.unmatched.isNotEmpty) ...[
             const SizedBox(height: 12),
-            Text('${widget.unmatched.length} item${widget.unmatched.length == 1 ? '' : 's'} not matched to a product:',
+            Text(FulfillLookups.instance.uiPlural('unmatched_header', widget.unmatched.length),
                 style: const TextStyle(fontWeight: FontWeight.w700)),
             for (final m in widget.unmatched)
-              Text('• ${(m is Map ? m['matched_name'] : null) ?? '?'} — qty ${(m is Map ? m['qty'] : null) ?? '?'}'),
+              Text(FulfillLookups.instance.uiFill('unmatched_row', {'name': (m is Map ? m['matched_name'] : null) ?? '?', 'qty': (m is Map ? m['qty'] : null) ?? '?'})),
           ],
         ]),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK')),
+        TextButton(onPressed: () => Navigator.pop(context), child: Text(FulfillLookups.instance.ui('ok'))),
       ],
     );
   }
@@ -6359,12 +6362,12 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
               const SizedBox(height: 12),
               Container(width: 36, height: 4, decoration: BoxDecoration(color: const Color(0xFFE5E7EB), borderRadius: BorderRadius.circular(2))),
               const SizedBox(height: 12),
-              const Text('Pick product', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+              Text(FulfillLookups.instance.ui('pick_product'), style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
                 child: TextField(
                   autofocus: true,
-                  decoration: const InputDecoration(hintText: 'Search…', isDense: true, border: OutlineInputBorder()),
+                  decoration: InputDecoration(hintText: FulfillLookups.instance.ui('search_ellipsis'), isDense: true, border: const OutlineInputBorder()),
                   onChanged: (v) => setSt(() => query = v),
                 ),
               ),
@@ -6518,7 +6521,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                const Text('Counted items',
+                Text(FulfillLookups.instance.ui('counted_items'),
                     style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText)),
                 const Spacer(),
                 // #136: light grey circle + black X icon — no theme can override explicit Container color.
@@ -6593,7 +6596,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
                               borderRadius: BorderRadius.circular(20),
                               border: Border.all(color: _kGreen),
                             ),
-                            child: Text('All',
+                            child: Text(FulfillLookups.instance.ui('all'),
                                 style: TextStyle(
                                   fontSize: 12, fontWeight: FontWeight.w600,
                                   color: selGroupKey == null ? Colors.white : _kGreen,
@@ -6696,9 +6699,9 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
           // #112: genuine empty — no voice clips for this supplier today
           Builder(builder: (_) {
             RenderLog.write('c112_popup_branch', 'branch=empty'); // branch proof
-            return const Padding(
+            return Padding(
               padding: EdgeInsets.all(14),
-              child: Text('No clips recorded yet today.',
+              child: Text(FulfillLookups.instance.ui('no_clips_recorded_yet_today'),
                   style: TextStyle(fontSize: 13, color: _kSub)),
             );
           })
@@ -6821,17 +6824,16 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const Text('Bag required',
+                    Text(FulfillLookups.instance.ui('bag_required'),
                         style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: _kText)),
                     const SizedBox(height: 8),
-                    const Text(
-                        'Adjust the bag total to match the new count, then tap the icon to retry.',
+                    Text(FulfillLookups.instance.ui('adjust_the_bag_total_to_match_the_new_count'),
                         style: TextStyle(fontSize: 13, color: _kSub)),
                     const SizedBox(height: 20),
                     FilledButton(
                         style: FilledButton.styleFrom(backgroundColor: _kGreen),
                         onPressed: () => Navigator.pop(ctx),
-                        child: const Text('OK')),
+                        child: Text(FulfillLookups.instance.ui('ok'))),
                   ],
                 ),
               ),
@@ -7102,16 +7104,16 @@ class _MentionClipTable extends StatelessWidget {
           child: Row(children: [
             Expanded(child: Padding(
               padding: const EdgeInsets.fromLTRB(14, 6, 4, 6),
-              child: const Text('Product',
+              child: Text(FulfillLookups.instance.ui('product'),
                   style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
             )),
             const SizedBox(width: _kG1),
-            SizedBox(width: _kBW, child: const Text('Qty spoken',
+            SizedBox(width: _kBW, child: Text(FulfillLookups.instance.ui('qty_spoken'),
                 style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kSub))),
             const SizedBox(width: _kG2),
             SizedBox(width: _kTW, child: Padding(
               padding: const EdgeInsets.only(right: 10),
-              child: const Text('Total', textAlign: TextAlign.right,
+              child: Text(FulfillLookups.instance.ui('total'), textAlign: TextAlign.right,
                   style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
             )),
           ]),
@@ -7547,7 +7549,7 @@ class _DisputeStrip extends StatelessWidget {
         borderRadius: BorderRadius.circular(4),
       ),
       child: Text(
-        'In dispute — ${item.itemStatusLabel}',
+        FulfillLookups.instance.uiFill('in_dispute_line', {'qty': item.itemStatusLabel}),
         style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: chipColor),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
@@ -7847,17 +7849,17 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
         ],
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-            const Text('Previously uploaded proof',
+            Text(FulfillLookups.instance.ui('previously_uploaded_proof'),
                 style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF92400E))),
             if (hasName) ...[
               const SizedBox(height: 2),
-              Text('Wrong item: ${dispute.wrongProductName}',
+              Text(FulfillLookups.instance.uiFill('wrong_item_line', {'name': dispute.wrongProductName}),
                   style: const TextStyle(fontSize: 12, color: _kText),
                   maxLines: 2, overflow: TextOverflow.ellipsis),
             ],
             if (hasProof) ...[
               const SizedBox(height: 2),
-              const Text('Tap image to view full size',
+              Text(FulfillLookups.instance.ui('tap_image_to_view_full_size'),
                   style: TextStyle(fontSize: 11, color: _kSub)),
             ],
           ]),
@@ -7910,12 +7912,12 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
                 RenderLog.write('c365_breakdown', 'where=popup');
                 final pack = widget.packType;
                 return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text('Ordered — ${qtyWithPack(ord, pack)}',
+                  Text(FulfillLookups.instance.uiFill('ordered_line', {'qty': qtyWithPack(ord, pack)}),
                       style: const TextStyle(fontSize: 12, color: _kSub)),
-                  Text('Received — ${qtyWithPack(countedTotal, pack)}',
+                  Text(FulfillLookups.instance.uiFill('received_line', {'qty': qtyWithPack(countedTotal, pack)}),
                       style: const TextStyle(fontSize: 12, color: _kSub)),
                   if (disputedTotal > 0)
-                    Text('In dispute — ${qtyWithPack(disputedTotal, pack)}',
+                    Text(FulfillLookups.instance.uiFill('in_dispute_line', {'qty': qtyWithPack(disputedTotal, pack)}),
                         style: const TextStyle(
                             fontSize: 12, fontWeight: FontWeight.w600, color: _kPendingFg)),
                 ]);
@@ -7942,7 +7944,7 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
                         minimumSize: Size.zero,
                         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
-                      child: const Text('Undo', style: TextStyle(fontSize: 13)),
+                      child: Text(FulfillLookups.instance.ui('undo'), style: TextStyle(fontSize: 13)),
                     );
             }),
           ],
@@ -8025,7 +8027,7 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
                     ? const SizedBox(width: 16, height: 16,
                         child: CircularProgressIndicator(strokeWidth: 2))
                     : const Icon(Icons.undo_rounded, size: 18),
-                label: const Text('↩ Undo last action',
+                label: Text(FulfillLookups.instance.ui('undo_last_action'),
                     style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: _kSub,
@@ -8047,7 +8049,7 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
             child: OutlinedButton.icon(
               onPressed: () => Navigator.of(context).pop(),
               icon: const Icon(Icons.arrow_back_rounded, size: 18),
-              label: const Text('← Back',
+              label: Text(FulfillLookups.instance.ui('back'),
                   style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
               style: OutlinedButton.styleFrom(
                 foregroundColor: _kSub,
@@ -8680,7 +8682,7 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
                 controller: _searchCtrl,
                 onChanged: _onSearchChanged,
                 decoration: InputDecoration(
-                  hintText: 'Search medicine in bags…',
+                  hintText: FulfillLookups.instance.ui('search_medicine_in_bags'),
                   hintStyle: const TextStyle(fontSize: 14, color: _kSub),
                   prefixIcon: const Icon(Icons.search, size: 20, color: _kSub),
                   suffixIcon: _searchCtrl.text.isNotEmpty
@@ -8726,7 +8728,7 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
     if (_searchResults.isEmpty) {
       return Center(
         child: Text(
-          'No items found in any bag for "${_searchCtrl.text}"',
+          FulfillLookups.instance.uiFill('no_items_found_for_query', {'query': _searchCtrl.text}),
           style: const TextStyle(color: _kSub, fontSize: 15),
           textAlign: TextAlign.center,
         ),
@@ -8750,7 +8752,7 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
       return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
         const Icon(Icons.error_outline, size: 40, color: _kSub),
         const SizedBox(height: 12),
-        const Text('Could not load bags', style: TextStyle(color: _kSub, fontSize: 14)),
+        Text(FulfillLookups.instance.ui('could_not_load_bags'), style: TextStyle(color: _kSub, fontSize: 14)),
         const SizedBox(height: 16),
         OutlinedButton(
           onPressed: _load,
@@ -8759,7 +8761,7 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
             foregroundColor: _kGreen,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           ),
-          child: const Text('Retry'),
+          child: Text(FulfillLookups.instance.ui('retry')),
         ),
       ]));
     }
@@ -8851,9 +8853,9 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
             child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2),
           ))
         else if (items.isEmpty)
-          const Padding(
+          Padding(
             padding: EdgeInsets.fromLTRB(16, 12, 16, 16),
-            child: Text('No items in this bag', style: TextStyle(color: _kSub, fontSize: 14)),
+            child: Text(FulfillLookups.instance.ui('no_items_in_this_bag'), style: TextStyle(color: _kSub, fontSize: 14)),
           )
         else
           Padding(
@@ -9082,7 +9084,7 @@ class _BagAccordionShell extends StatelessWidget {
                 RenderLog.write('c289_items_badge_green',
                     'items=$totalProducts;progress=${progressLabel ?? ''}');
                 return Row(children: [
-                  Text('Bag $bagNo',
+                  Text(FulfillLookups.instance.uiFill('bag_chip', {'n': bagNo}),
                       style: TextStyle(
                         fontSize: 15, fontWeight: FontWeight.w600,
                         color: isExpanded ? _kGreen : _kText,
@@ -9665,33 +9667,35 @@ class _PackTabState extends State<_PackTab>
       _showPackSnack(FulfillLookups.instance.message('nothing_heard') ?? '');
       return;
     }
-    final base = 'Counted $productCount product${productCount == 1 ? '' : 's'}.';
+    final base = FulfillLookups.instance.uiPlural('counted_products', productCount);
     if (overCounts.isEmpty) {
-      _showPackSnack(unmatched.isEmpty ? base : '$base ${unmatched.length} unmatched.');
+      _showPackSnack(unmatched.isEmpty
+          ? base
+          : FulfillLookups.instance.uiFill('finalize_unmatched_suffix', {'base': base, 'n': unmatched.length}));
       return;
     }
-    _showPackSnack('$base ${overCounts.length} over-counted.');
+    _showPackSnack(FulfillLookups.instance.uiFill('finalize_over_suffix', {'base': base, 'n': overCounts.length}));
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Count needs a look'),
+        title: Text(FulfillLookups.instance.ui('count_needs_a_look')),
         content: SingleChildScrollView(
           child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(base),
             const SizedBox(height: 12),
-            Text('${overCounts.length} product${overCounts.length == 1 ? '' : 's'} counted more than could be saved:',
+            Text(FulfillLookups.instance.uiPlural('over_count_header', overCounts.length),
                 style: const TextStyle(fontWeight: FontWeight.w700, color: Color(0xFFB45309))),
-            for (final w in overCounts) Text('• $w', style: const TextStyle(color: Color(0xFFB45309))),
+            for (final w in overCounts) Text(FulfillLookups.instance.uiFill('bullet_row', {'text': w}), style: const TextStyle(color: Color(0xFFB45309))),
             if (unmatched.isNotEmpty) ...[
               const SizedBox(height: 12),
-              Text('${unmatched.length} item${unmatched.length == 1 ? '' : 's'} not matched to a product:',
+              Text(FulfillLookups.instance.uiPlural('unmatched_header', unmatched.length),
                   style: const TextStyle(fontWeight: FontWeight.w700)),
               for (final m in unmatched)
-                Text('• ${(m is Map ? m['matched_name'] : null) ?? '?'} — qty ${(m is Map ? m['qty'] : null) ?? '?'}'),
+                Text(FulfillLookups.instance.uiFill('unmatched_row', {'name': (m is Map ? m['matched_name'] : null) ?? '?', 'qty': (m is Map ? m['qty'] : null) ?? '?'})),
             ],
           ]),
         ),
-        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK'))],
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: Text(FulfillLookups.instance.ui('ok')))],
       ),
     );
   }
@@ -9974,7 +9978,7 @@ class _PackTabState extends State<_PackTab>
           child: Column(mainAxisSize: MainAxisSize.min, children: [
         const Icon(Icons.error_outline, size: 40, color: _kSub),
         const SizedBox(height: 12),
-        const Text('Could not load pack status',
+        Text(FulfillLookups.instance.ui('could_not_load_pack_status'),
             style: TextStyle(color: _kSub, fontSize: 14)),
         const SizedBox(height: 16),
         OutlinedButton(
@@ -9984,7 +9988,7 @@ class _PackTabState extends State<_PackTab>
               foregroundColor: _kGreen,
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(8))),
-          child: const Text('Retry'),
+          child: Text(FulfillLookups.instance.ui('retry')),
         ),
       ]));
     }
@@ -10129,9 +10133,9 @@ class _PackTabState extends State<_PackTab>
               CircularProgressIndicator(color: _kGreen, strokeWidth: 2),
         ))
       else if (items.isEmpty && qData != null)
-        const Padding(
+        Padding(
           padding: EdgeInsets.fromLTRB(16, 12, 16, 16),
-          child: Text('No items found',
+          child: Text(FulfillLookups.instance.ui('no_items_found'),
               style: TextStyle(color: _kSub, fontSize: 14)),
         )
       else if (items.isNotEmpty)
@@ -10665,7 +10669,7 @@ class _PackTabState extends State<_PackTab>
               ? const SizedBox(
                   width: 20, height: 20,
                   child: CircularProgressIndicator(color: _kReceivedFg, strokeWidth: 2))
-              : const Text('Ready to dispatch',
+              : Text(FulfillLookups.instance.ui('ready_to_dispatch'),
                   style: TextStyle(
                       fontSize: 13, fontWeight: FontWeight.w700, color: _kReceivedFg)),
         ),
@@ -10698,13 +10702,13 @@ class _PackTabState extends State<_PackTab>
                 ? SizedBox(
                     width: 20, height: 20,
                     child: CircularProgressIndicator(color: fg, strokeWidth: 2))
-                : Text('Mark fully packed',
+                : Text(FulfillLookups.instance.ui('mark_fully_packed'),
                     style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: fg)),
           ),
         ),
         if (!canMarkReady) ...[
           const SizedBox(height: 6),
-          const Text('Count & pack all items first',
+          Text(FulfillLookups.instance.ui('count_pack_all_items_first'),
               style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: _kSub)),
         ],
       ],
@@ -11112,7 +11116,7 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
           Padding(
             padding: const EdgeInsets.fromLTRB(14, 10, 4, 6),
             child: Row(children: [
-              const Text('Counted items',
+              Text(FulfillLookups.instance.ui('counted_items'),
                   style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText)),
               const Spacer(),
               GestureDetector(
@@ -11152,7 +11156,7 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
                         borderRadius: BorderRadius.circular(20),
                         border: Border.all(color: _kGreen),
                       ),
-                      child: Text('All',
+                      child: Text(FulfillLookups.instance.ui('all'),
                           style: TextStyle(
                               fontSize: 12, fontWeight: FontWeight.w600,
                               color: _selectedGroupKey == null ? Colors.white : _kGreen)),
@@ -11208,16 +11212,16 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
               child: Row(children: [
                 Expanded(child: Padding(
                   padding: const EdgeInsets.fromLTRB(14, 6, 4, 6),
-                  child: const Text('Product',
+                  child: Text(FulfillLookups.instance.ui('product'),
                       style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
                 )),
                 const SizedBox(width: _kNameToBadgeMinGap),
-                SizedBox(width: _kBadgeClusterMaxW, child: const Text('Qty spoken',
+                SizedBox(width: _kBadgeClusterMaxW, child: Text(FulfillLookups.instance.ui('qty_spoken'),
                     style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kSub))),
                 const SizedBox(width: _kBadgeToTotalGap),
                 SizedBox(width: _kTotalColW, child: Padding(
                   padding: const EdgeInsets.only(right: 10),
-                  child: const Text('Total', textAlign: TextAlign.right,
+                  child: Text(FulfillLookups.instance.ui('total'), textAlign: TextAlign.right,
                       style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
                 )),
               ]),
@@ -11239,7 +11243,7 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
               }
               return Expanded(
                 child: filtered.isEmpty
-                    ? const Center(child: Text('No mentions for this selection',
+                    ? Center(child: Text(FulfillLookups.instance.ui('no_mentions_for_this_selection'),
                         style: TextStyle(color: _kSub)))
                     : SingleChildScrollView(
                         controller: ctrl,
@@ -11279,7 +11283,7 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
               RenderLog.write('c344_all_qty_colour', 'stage=pack;groups=${groups.length}');
               return Expanded(
                 child: groups.isEmpty
-                    ? const Center(child: Text('No mentions for this selection',
+                    ? Center(child: Text(FulfillLookups.instance.ui('no_mentions_for_this_selection'),
                         style: TextStyle(color: _kSub)))
                     : ListView.builder(
                         controller: ctrl,
@@ -11487,19 +11491,20 @@ class _PackingScreenState extends State<_PackingScreen>
       final items    = ((m['items'] as List?) ?? const [])
           .map((i) => Map<String, dynamic>.from(i as Map))
           .toList();
-      // #346: old flat fields gone; derive navigation counters from items[]
-      // #368: "done" = packed to bagged capacity (_isItemDone), NOT raw item['packed']
-      // (which requires packed_qty>=ordered and never flips for partially-bagged lines).
-      final total    = items.length;
-      final packed   = items.where(_isItemDone).length;
-      final left     = items.where((i) => !_isItemDone(i)).length;
-      // Backend-owned: pack_get_queue()'s bag_stats[].length — one entry per
-      // bag already computed server-side — instead of re-deriving the set of
-      // distinct bag numbers from items[] client-side.
-      final bagCount = (m['bag_stats'] as List? ?? const []).length;
-      final startIdx = items.indexWhere((i) => !_isItemDone(i));
-      final allDone  = startIdx == -1;
-      final startPage = allDone ? 0 : startIdx;
+      // CHANGE #533: the navigation counters are backend-owned. pack_get_queue's
+      // nav{} computes total/packed/left/bag_count and the first not-done index
+      // with the SAME is_done predicate over the SAME emitted order the client
+      // renders, so the counters and the start page can no longer drift from
+      // what the rows actually show. Read verbatim — never re-derive.
+      final nav = m['nav'] is Map
+          ? Map<String, dynamic>.from(m['nav'] as Map)
+          : const <String, dynamic>{};
+      final total     = (nav['total'] as num?)?.toInt() ?? 0;
+      final packed    = (nav['packed'] as num?)?.toInt() ?? 0;
+      final left      = (nav['left'] as num?)?.toInt() ?? 0;
+      final bagCount  = (nav['bag_count'] as num?)?.toInt() ?? 0;
+      final allDone   = nav['all_packed'] == true;
+      final startPage = (nav['start_index'] as num?)?.toInt() ?? 0;
       if (!mounted) return;
       _itemPageController?.dispose();
       _itemPageController = PageController(initialPage: startPage);
@@ -11909,20 +11914,20 @@ class _PackingScreenState extends State<_PackingScreen>
           Container(
             color: const Color(0xFFF5F6F8),
             child: Row(children: [
-              const Expanded(child: Padding(
+              Expanded(child: Padding(
                 padding: EdgeInsets.fromLTRB(10, 6, 4, 6),
-                child: Text('Product', style: TextStyle(
+                child: Text(FulfillLookups.instance.ui('product'), style: TextStyle(
                     fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
               )),
-              const SizedBox(width: 72, child: Padding(
+              SizedBox(width: 72, child: Padding(
                 padding: EdgeInsets.symmetric(vertical: 6),
-                child: Text('Qty', textAlign: TextAlign.center,
+                child: Text(FulfillLookups.instance.ui('qty'), textAlign: TextAlign.center,
                     style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
               )),
               if (showTick)
-                const SizedBox(width: 52, child: Padding(
+                SizedBox(width: 52, child: Padding(
                   padding: EdgeInsets.fromLTRB(0, 6, 8, 6),
-                  child: Text('Packed', textAlign: TextAlign.center,
+                  child: Text(FulfillLookups.instance.ui('packed'), textAlign: TextAlign.center,
                       style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
                           color: _kGreen)),
                 )),
@@ -12036,7 +12041,7 @@ class _PackingScreenState extends State<_PackingScreen>
           if (!_loading && _queue != null)
             TextButton.icon(
               icon: const Icon(Icons.inventory_2_outlined, size: 16, color: _kGreen),
-              label: const Text('Bags',
+              label: Text(FulfillLookups.instance.ui('bags'),
                   style: TextStyle(color: _kGreen, fontWeight: FontWeight.w600,
                       fontSize: 13)),
               onPressed: _showBagQuickView,
@@ -12165,11 +12170,11 @@ class _PackingScreenState extends State<_PackingScreen>
             color: const Color(0xFFFEF3C7),
             borderRadius: BorderRadius.circular(10),
           ),
-          child: const Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(Icons.shopping_bag_outlined, size: 16, color: Color(0xFF92400E)),
-            SizedBox(width: 6),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            const Icon(Icons.shopping_bag_outlined, size: 16, color: Color(0xFF92400E)),
+            const SizedBox(width: 6),
             Flexible(
-              child: Text('Not bagged — map this item to a bag before packing',
+              child: Text(FulfillLookups.instance.ui('not_bagged_map_this_item_to_a_bag_before_pac'),
                   style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
                       color: Color(0xFF92400E))),
             ),
@@ -12403,7 +12408,7 @@ class _PackingScreenState extends State<_PackingScreen>
                       color: _kReceivedFg.withValues(alpha: 0.3)),
                 ),
                 alignment: Alignment.center,
-                child: Text('Packed ✓  ·  hold to undo',
+                child: Text(FulfillLookups.instance.ui('packed_hold_to_undo'),
                     style: const TextStyle(
                         fontSize: 16, fontWeight: FontWeight.w700,
                         color: _kReceivedFg)),
@@ -12498,7 +12503,7 @@ class _PackingScreenState extends State<_PackingScreen>
             side: const BorderSide(color: _kGreen),
             foregroundColor: _kGreen,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
-        child: const Text('Retry'),
+        child: Text(FulfillLookups.instance.ui('retry')),
       ),
     ]),
   );
@@ -12516,7 +12521,7 @@ class _PackingScreenState extends State<_PackingScreen>
               size: 48, color: _kReceivedFg),
         ),
         const SizedBox(height: 20),
-        const Text('All Packed', style: TextStyle(
+        Text(FulfillLookups.instance.ui('all_packed'), style: TextStyle(
             fontSize: 24, fontWeight: FontWeight.w700, color: _kText)),
         const SizedBox(height: 8),
         // CHANGE #532: backend-owned labels.all_packed_summary, verbatim.
@@ -12532,7 +12537,7 @@ class _PackingScreenState extends State<_PackingScreen>
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(10))),
             onPressed: () => Navigator.pop(context),
-            child: const Text('Done', style: TextStyle(
+            child: Text(FulfillLookups.instance.ui('done'), style: TextStyle(
                 fontSize: 16, fontWeight: FontWeight.w700, color: Colors.white)),
           ),
         ),
@@ -12725,7 +12730,7 @@ class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
         Padding(
           padding: const EdgeInsets.fromLTRB(14, 10, 4, 6),
           child: Row(children: [
-            const Text('Bags', style: TextStyle(
+            Text(FulfillLookups.instance.ui('bags'), style: TextStyle(
                 fontSize: 14, fontWeight: FontWeight.w700, color: _kText)),
             const Spacer(),
             GestureDetector(
@@ -12760,7 +12765,7 @@ class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(color: _kGreen),
                   ),
-                  child: Text('All', style: TextStyle(
+                  child: Text(FulfillLookups.instance.ui('all'), style: TextStyle(
                       fontSize: 12, fontWeight: FontWeight.w600,
                       color: _selectedBag == null ? Colors.white : _kGreen)),
                 ),
@@ -12803,20 +12808,20 @@ class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
         Container(
           color: const Color(0xFFF5F6F8),
           child: Row(children: [
-            const Expanded(child: Padding(
+            Expanded(child: Padding(
               padding: EdgeInsets.fromLTRB(10, 6, 4, 6),
-              child: Text('Product', style: TextStyle(
+              child: Text(FulfillLookups.instance.ui('product'), style: TextStyle(
                   fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
             )),
-            const SizedBox(width: 72, child: Padding(
+            SizedBox(width: 72, child: Padding(
               padding: EdgeInsets.symmetric(vertical: 6),
-              child: Text('Qty', textAlign: TextAlign.center,
+              child: Text(FulfillLookups.instance.ui('qty'), textAlign: TextAlign.center,
                   style: TextStyle(
                       fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
             )),
-            const SizedBox(width: 52, child: Padding(
+            SizedBox(width: 52, child: Padding(
               padding: EdgeInsets.fromLTRB(0, 6, 8, 6),
-              child: Text('Packed', textAlign: TextAlign.center,
+              child: Text(FulfillLookups.instance.ui('packed'), textAlign: TextAlign.center,
                   style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
                       color: _kGreen)),
             )),
@@ -13106,7 +13111,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
               maxLines: 3,
               autofocus: required,
               decoration: InputDecoration(
-                labelText: required ? 'Note (required)' : 'Note (optional)',
+                labelText: FulfillLookups.instance.ui(required ? 'note_required_label' : 'note_optional_label'),
                 border: const OutlineInputBorder(),
                 isDense: true,
               ),
@@ -13116,7 +13121,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
           actions: [
             TextButton(
                 onPressed: () { noteCtrl.dispose(); Navigator.pop(ctx); },
-                child: const Text('Cancel')),
+                child: Text(FulfillLookups.instance.ui('cancel'))),
             FilledButton(
               style: FilledButton.styleFrom(backgroundColor: _kGreen),
               onPressed: required && noteCtrl.text.trim().isEmpty
@@ -13126,7 +13131,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                       noteCtrl.dispose();
                       Navigator.pop(ctx, note.isEmpty ? '' : note);
                     },
-              child: const Text('Confirm'),
+              child: Text(FulfillLookups.instance.ui('confirm')),
             ),
           ],
         ),
@@ -13182,7 +13187,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
           RenderLog.write('c362_disp_group', 'fanout_resolved=${others.length}');
         }
         final newStatus = res['new_status']?.toString() ?? action.label;
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Updated: $newStatus')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(FulfillLookups.instance.uiFill('updated_status', {'status': newStatus}))));
         Future.delayed(const Duration(seconds: 1), () {
           if (mounted) _load();
         });
@@ -13318,7 +13323,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             const Icon(Icons.wifi_off_rounded, size: 48, color: _kSub),
             const SizedBox(height: 12),
-            const Text("Couldn't load disputes",
+            Text(FulfillLookups.instance.ui('couldn_t_load_disputes'),
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _kSub)),
             const SizedBox(height: 8),
             Text(_error!, style: const TextStyle(fontSize: 12, color: _kSub),
@@ -13331,7 +13336,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
               ),
               icon: const Icon(Icons.refresh_rounded, size: 16),
-              label: const Text('Retry'),
+              label: Text(FulfillLookups.instance.ui('retry')),
             ),
           ]),
         ),
@@ -13431,7 +13436,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    '$n item${n == 1 ? '' : 's'} couldn\'t be re-sourced — no supplier available',
+                    FulfillLookups.instance.uiPlural('unresourceable', n),
                     style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
                         color: Color(0xFFDC2626)),
                   ),
@@ -13462,7 +13467,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      'Qty: ${item['qty'] ?? '?'} · Bag ${item['bag_no'] ?? '?'} · ${item['pharmacy_name'] ?? '?'}',
+                      FulfillLookups.instance.uiFill('dispute_qty_meta', {'qty': item['qty'] ?? '?', 'bag': item['bag_no'] ?? '?', 'pharmacy': item['pharmacy_name'] ?? '?'}),
                       style: const TextStyle(fontSize: 12, color: _kSub),
                     ),
                   ]),
@@ -13586,7 +13591,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                     ]),
                     if (relTime.isNotEmpty) ...[
                       const SizedBox(height: 4),
-                      Text('reminded $relTime',
+                      Text(FulfillLookups.instance.uiFill('reminded_rel', {'when': relTime}),
                           style: const TextStyle(fontSize: 11, color: _kSub)),
                     ],
                   ]),
@@ -13689,7 +13694,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                     ],
                     if ((item.wrongProductName ?? '').isNotEmpty) ...[
                       const SizedBox(height: 1),
-                      Text('They sent: ${item.wrongProductName}',
+                      Text(FulfillLookups.instance.uiFill('they_sent_line', {'name': item.wrongProductName}),
                           style: const TextStyle(fontSize: 11, color: Color(0xFFDC2626)),
                           maxLines: 1, overflow: TextOverflow.ellipsis),
                     ],
@@ -13904,9 +13909,9 @@ class _DisputeActionSheetState extends State<_DisputeActionSheet> {
                 controller: noteCtrl,
                 maxLines: 3,
                 autofocus: true,
-                decoration: const InputDecoration(
-                  labelText: 'Note (required)',
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  labelText: FulfillLookups.instance.ui('note_required_label'),
+                  border: const OutlineInputBorder(),
                   isDense: true,
                 ),
                 onChanged: (_) => set(() {}),
@@ -13915,13 +13920,13 @@ class _DisputeActionSheetState extends State<_DisputeActionSheet> {
             actions: [
               TextButton(
                   onPressed: () => Navigator.pop(ctx, false),
-                  child: const Text('Cancel')),
+                  child: Text(FulfillLookups.instance.ui('cancel'))),
               FilledButton(
                 style: FilledButton.styleFrom(backgroundColor: _kGreen),
                 onPressed: noteCtrl.text.trim().isEmpty
                     ? null
                     : () => Navigator.pop(ctx, true),
-                child: const Text('Confirm'),
+                child: Text(FulfillLookups.instance.ui('confirm')),
               ),
             ],
           ),
@@ -14000,13 +14005,13 @@ class _DisputeActionSheetState extends State<_DisputeActionSheet> {
               ]),
               if ((item.wrongProductName ?? '').isNotEmpty) ...[
                 const SizedBox(height: 2),
-                Text('They sent: ${item.wrongProductName}',
+                Text(FulfillLookups.instance.uiFill('they_sent_line', {'name': item.wrongProductName}),
                     style: const TextStyle(fontSize: 12, color: Color(0xFFDC2626)),
                     maxLines: 1, overflow: TextOverflow.ellipsis),
               ],
               const SizedBox(height: 4),
               Text(
-                'Ordered ${item.ordered.toInt()} · Received ${item.received.toInt()} · Short ${item.short.toInt()}',
+                FulfillLookups.instance.uiFill('ord_rec_short_line', {'ordered': item.ordered.toInt(), 'received': item.received.toInt(), 'short': item.short.toInt()}),
                 style: const TextStyle(fontSize: 12, color: _kSub),
               ),
               const SizedBox(height: 4),
@@ -14038,7 +14043,7 @@ class _DisputeActionSheetState extends State<_DisputeActionSheet> {
         if ((item.proofUrl ?? '').isNotEmpty) ...[
           const SizedBox(height: 12),
           Row(children: [
-            const Text('Proof:',
+            Text(FulfillLookups.instance.ui('proof_2'),
                 style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
@@ -14081,7 +14086,7 @@ class _DisputeActionSheetState extends State<_DisputeActionSheet> {
                     minimumSize: Size.zero,
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
-                  child: const Text('Return collected ✓',
+                  child: Text(FulfillLookups.instance.ui('return_collected'),
                       style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
                 ),
               ],
@@ -14095,7 +14100,7 @@ class _DisputeActionSheetState extends State<_DisputeActionSheet> {
 
         // Action buttons (item.actions verbatim from backend)
         if (item.actions.isEmpty) ...[
-          const Text('No actions available for this status.',
+          Text(FulfillLookups.instance.ui('no_actions_available_for_this_status'),
               style: TextStyle(fontSize: 14, color: _kSub)),
           const SizedBox(height: 16),
           SizedBox(
@@ -14107,7 +14112,7 @@ class _DisputeActionSheetState extends State<_DisputeActionSheet> {
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                 padding: const EdgeInsets.symmetric(vertical: 12),
               ),
-              child: const Text('Close', style: TextStyle(fontSize: 14)),
+              child: Text(FulfillLookups.instance.ui('close'), style: TextStyle(fontSize: 14)),
             ),
           ),
         ] else
@@ -14417,7 +14422,7 @@ class _DisputeContactPopoverBodyState extends State<_DisputeContactPopoverBody>
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           const Icon(Icons.contact_phone_outlined, color: _kSub, size: 28),
           const SizedBox(height: 8),
-          const Text('No contacts saved for this supplier.',
+          Text(FulfillLookups.instance.ui('no_contacts_saved_for_this_supplier'),
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 13, color: _kSub)),
           const SizedBox(height: 12),
@@ -14431,7 +14436,7 @@ class _DisputeContactPopoverBodyState extends State<_DisputeContactPopoverBody>
                     SnackBar(content: Text(FulfillLookups.instance.message('link_copied') ?? '')));
               },
               icon: const Icon(Icons.copy_rounded, size: 14),
-              label: const Text('Copy link', style: TextStyle(fontSize: 13)),
+              label: Text(FulfillLookups.instance.ui('copy_link'), style: TextStyle(fontSize: 13)),
               style: OutlinedButton.styleFrom(
                 foregroundColor: _kGreen,
                 side: const BorderSide(color: Color(0xFFBBDDC8)),

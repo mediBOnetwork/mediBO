@@ -335,7 +335,7 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
         }
         RenderLog.write('c351_typed', 'kind=$kind');
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Dispute raised')));
+          SnackBar(content: Text(FulfillLookups.instance.ui('dispute_raised'))));
         widget.onSaved();
         return;
       }
@@ -425,7 +425,7 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
         ),
         // C531: label verbatim from fw_issue_options; falls back to the raw
         // backend key (never to a client-authored English string).
-        child: Text('Issue: ${FulfillLookups.instance.issueLabel(issue) ?? issue}',
+        child: Text(FulfillLookups.instance.uiFill('issue_line', {'label': FulfillLookups.instance.issueLabel(issue) ?? issue}),
             style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kAmber)),
       ),
       const SizedBox(width: 8),
@@ -440,7 +440,7 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
         child: _saving
             ? const SizedBox(width: 12, height: 12,
                 child: CircularProgressIndicator(strokeWidth: 2))
-            : const Text('Clear', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+            : Text(FulfillLookups.instance.ui('clear'), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
       ),
     ]);
   }
@@ -504,7 +504,7 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
                   minimumSize: Size.zero,
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
-                child: const Text('Clear issue',
+                child: Text(FulfillLookups.instance.ui('clear_issue'),
                     style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
               ),
             GestureDetector(
@@ -538,7 +538,7 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
                 child: _saving
                     ? const SizedBox(width: 18, height: 18,
                         child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                    : Text('Save — ${FulfillLookups.instance.issueLabel(_selected) ?? _selected!}',
+                    : Text(FulfillLookups.instance.uiFill('save_issue', {'label': FulfillLookups.instance.issueLabel(_selected) ?? _selected!}),
                         style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
                             color: Colors.white)),
               ),
@@ -636,7 +636,7 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
             RenderLog.write('c365_qty_alltypes', 'type=$issue');
             RenderLog.write('c365_qty_max', 'tab=${widget.tab ?? "?"},max=$max');
             return Text(
-              'Disputed units — how many?  (max $max)',
+              FulfillLookups.instance.uiFill('disputed_units_prompt', {'max': max}),
               style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText),
             );
           }),
@@ -649,7 +649,7 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
               onChanged: (v) => setState(() => _qty = v),
             ),
             const SizedBox(width: 8),
-            const Text('units', style: TextStyle(fontSize: 12, color: _kSub)),
+            Text(FulfillLookups.instance.ui('units'), style: const TextStyle(fontSize: 12, color: _kSub)),
             if (_refLabel.isNotEmpty) ...[
               const SizedBox(width: 8),
               // C532: ref_label ('<counted>/<ref_qty>') printed verbatim.
@@ -660,15 +660,15 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
         const SizedBox(height: 10),
       ],
       if (needsName) ...[
-        const Text(
-          'What item did they send? *',
-          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText),
+        Text(
+          FulfillLookups.instance.ui('what_item_sent'),
+          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText),
         ),
         const SizedBox(height: 6),
         TextField(
           controller: _nameCtrl,
           decoration: InputDecoration(
-            hintText: 'e.g. Paracetamol 500mg instead',
+            hintText: FulfillLookups.instance.ui('wrong_item_hint'),
             hintStyle: const TextStyle(fontSize: 13, color: _kSub),
             filled: true, fillColor: Colors.white, isDense: true,
             contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -689,7 +689,7 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
       // takes proof (needs_proof); otherwise the option's own help text stands
       // in — printed verbatim, never a client-authored sentence.
       if (needsProof) ...[
-        const Text('Photo proof (optional)',
+        Text(FulfillLookups.instance.ui('photo_proof_optional'),
             style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
         const SizedBox(height: 6),
         _buildPhotoRow(),
@@ -714,7 +714,7 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
         TextButton.icon(
           onPressed: () => setState(() => _proofUrl = null),
           icon: const Icon(Icons.close, size: 14),
-          label: const Text('Remove', style: TextStyle(fontSize: 12)),
+          label: Text(FulfillLookups.instance.ui('remove'), style: const TextStyle(fontSize: 12)),
           style: TextButton.styleFrom(
               foregroundColor: const Color(0xFFDC2626),
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4)),
@@ -735,7 +735,7 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
             ? const SizedBox(width: 14, height: 14,
                 child: CircularProgressIndicator(strokeWidth: 2))
             : const Icon(Icons.camera_alt_outlined, size: 16),
-        label: const Text('Attach photo', style: TextStyle(fontSize: 12)),
+        label: Text(FulfillLookups.instance.ui('attach_photo'), style: const TextStyle(fontSize: 12)),
         style: OutlinedButton.styleFrom(
           foregroundColor: _kSub,
           side: const BorderSide(color: _kBorder),

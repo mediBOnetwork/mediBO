@@ -1265,14 +1265,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // #263: spoken badge = distinct products (product_id) in voice clip mentions, not clip count
   List<Map<String, dynamic>> _voiceMentions = [];
-  int get _spokenCount {
-    final count = _voiceMentions
-        .map((m) => m['product_id'])
-        .where((id) => id != null)
-        .toSet()
-        .length;
-    return count;
-  }
+  // CHANGE #536: backend-owned. get_voice_clip_mentions returns
+  // distinct_products (distinct product_id over ALL statuses) — the exact rule
+  // this getter used to compute — on every row of the session-scoped set.
+  int get _spokenCount => _voiceMentions.isEmpty
+      ? 0
+      : (_voiceMentions.first['distinct_products'] as num?)?.toInt() ?? 0;
 
   // ── Lifecycle ───────────────────────────────────────────────────────────────
 
@@ -2579,7 +2577,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         sessionKey: _activeVoiceSessionKey,
       );
       if (!mounted) return;
-      final distinct = mentions.map((m) => m['product_id']).where((id) => id != null).toSet().length;
+      // CHANGE #536: both figures are backend-owned columns now.
+      final distinct = mentions.isEmpty
+          ? 0
+          : (mentions.first['distinct_products'] as num?)?.toInt() ?? 0;
       RenderLog.write('c263_spoken_count', 'distinct_products=$distinct;total_mentions=${mentions.length}');
       setState(() => _voiceMentions = mentions);
     } catch (_) {}
@@ -5667,14 +5668,18 @@ Future<List<Map<String, dynamic>>> fetchScopedVoiceMentions({
   required String stage,
   required String? sessionKey,
 }) async {
+  // CHANGE #536: the session filter AND the date now belong to the RPC. The
+  // client used to fetch today's rows and filter by session_key in Dart, which
+  // also meant a non-today Fulfill view read TODAY's mentions while its writes
+  // went to the selected date.
   final rows = await Supabase.instance.client
       .rpc('get_voice_clip_mentions', params: {
         'p_supplier_name': supplierName,
         'p_stage': stage,
+        'p_session_key': sessionKey,
+        'p_date': ymd(FulfillDateScope.instance.date),
       }) as List;
-  final mentions = rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
-  if (sessionKey == null || sessionKey.isEmpty) return mentions;
-  return mentions.where((r) => r['session_key']?.toString() == sessionKey).toList();
+  return rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
 }
 
 // CHANGE #454: same single-source-of-truth pattern as fetchScopedVoiceMentions
@@ -5686,11 +5691,13 @@ Future<List<Map<String, dynamic>>> fetchScopedPackMentions({
   required String orderId,
   required String? sessionKey,
 }) async {
+  // CHANGE #536: session scoping is server-side (see fetchScopedVoiceMentions).
   final rows = await Supabase.instance.client
-      .rpc('get_pack_clip_mentions', params: {'p_order_id': orderId}) as List;
-  final mentions = rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
-  if (sessionKey == null || sessionKey.isEmpty) return mentions;
-  return mentions.where((r) => r['session_key']?.toString() == sessionKey).toList();
+      .rpc('get_pack_clip_mentions', params: {
+        'p_order_id': orderId,
+        'p_session_key': sessionKey,
+      }) as List;
+  return rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
 }
 
 String _fmtQty(num n) => n == n.roundToDouble() ? n.toInt().toString() : n.toString();
@@ -5777,9 +5784,10 @@ List<ClipGroup> groupMentionsIntoClips(List<Map<String, dynamic>> rows) {
   }
   final result = <ClipGroup>[];
   groups.forEach((groupKey, groupRows) {
-    final sorted = List<Map<String, dynamic>>.from(groupRows)
-      ..sort((a, b) => ((a['recording_seq'] as num?)?.toInt() ?? 0)
-          .compareTo((b['recording_seq'] as num?)?.toInt() ?? 0));
+    // CHANGE #536: no client re-sort — get_voice_clip_mentions /
+    // get_pack_clip_mentions both return ORDER BY recording_seq, ord, and the
+    // grouping below preserves that insertion order.
+    final sorted = groupRows;
     final seen = <String>{};
     final windows = <ClipWindow>[];
     for (final r in sorted) {
@@ -5866,17 +5874,14 @@ class _FinalizeReviewDialogState extends State<_FinalizeReviewDialog> {
   // fabricated one.
   Future<void> _loadBagOptions() async {
     try {
+      // CHANGE #536: fw_session_bag_options does the DISTINCT and the ORDER BY.
       final rows = await Supabase.instance.client
-          .from('voice_bag_boundaries')
-          .select('bag_no')
-          .eq('session_key', widget.sessionKey);
-      final bags = (rows as List)
+          .rpc('fw_session_bag_options', params: {'p_session_key': widget.sessionKey});
+      final bags = (rows as List? ?? const [])
           .map((r) => (r as Map)['bag_no'])
           .whereType<num>()
           .map((n) => n.toInt())
-          .toSet()
-          .toList()
-        ..sort();
+          .toList();
       if (mounted) setState(() { _bagOptions = bags; _loadingBags = false; });
     } catch (_) {
       if (mounted) setState(() => _loadingBags = false);
@@ -9432,9 +9437,9 @@ class _PackTabState extends State<_PackTab>
         final raw = await client.rpc('pack_item_bag_breakdown',
             params: {'p_order_item_id': oid});
         final list = raw is String ? (jsonDecode(raw) as List) : (raw as List? ?? const []);
-        final bags = list.whereType<Map>().map((b) => Map<String, dynamic>.from(b)).toList()
-          ..sort((a, b) => ((a['bag_no'] as num?)?.toInt() ?? 0)
-              .compareTo((b['bag_no'] as num?)?.toInt() ?? 0));
+        // CHANGE #536: no client re-sort — pack_item_bag_breakdown already
+        // returns its rows ORDER BY bag_no.
+        final bags = list.whereType<Map>().map((b) => Map<String, dynamic>.from(b)).toList();
         return MapEntry(oid, bags);
       } catch (_) {
         return MapEntry(oid, const <Map<String, dynamic>>[]);
@@ -9492,7 +9497,9 @@ class _PackTabState extends State<_PackTab>
         sessionKey: _activePackSessionKey,
       );
       if (!mounted) return;
-      final distinct = mentions.map((m) => m['product_id']).where((id) => id != null).toSet().length;
+      final distinct = mentions.isEmpty
+          ? 0
+          : (mentions.first['distinct_products'] as num?)?.toInt() ?? 0;
       RenderLog.write('c299_spoken', 'distinct=$distinct;total=${mentions.length}');
       RenderLog.write('c301_mentions', 'rows=${mentions.length};distinct=$distinct');
       if (_expandedOrderId == orderId) setState(() => _packMentions = mentions);
@@ -10117,12 +10124,12 @@ class _PackTabState extends State<_PackTab>
 
     // CHANGE #304: spokenCount = distinct products in today's mention rows (not counted_count).
     // #338: deleted mentions no longer count as spoken.
-    final spokenCount = _packMentions
-        .where((m) => m['status']?.toString() != 'deleted')
-        .map((m) => m['product_id'])
-        .where((id) => id != null)
-        .toSet()
-        .length;
+    // CHANGE #536: backend-owned. get_pack_clip_mentions returns spoken_count
+    // (distinct product_id excluding 'deleted') — the exact rule computed here —
+    // on every row of the session-scoped set.
+    final spokenCount = _packMentions.isEmpty
+        ? 0
+        : (_packMentions.first['spoken_count'] as num?)?.toInt() ?? 0;
     try {
       RenderLog.write('c301_spoken', '$spokenCount');
       RenderLog.write('c304_spoken', '$spokenCount');
@@ -10784,7 +10791,9 @@ class _PackTabState extends State<_PackTab>
             .map((i) => Map<String, dynamic>.from(i as Map))
             .toList()
         : <Map<String, dynamic>>[];
-    final distinctProds = mentions.map((m) => m['product_id']).whereType<int>().toSet().length;
+    final distinctProds = mentions.isEmpty
+        ? 0
+        : (mentions.first['distinct_products'] as num?)?.toInt() ?? 0;
     final unknownRows = mentions.where((m) => (m['product_id'] as num?) == null).length;
     try {
       RenderLog.write('c304_review', 'mentions=${mentions.length}');

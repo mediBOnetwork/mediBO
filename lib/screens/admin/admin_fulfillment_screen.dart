@@ -4007,7 +4007,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       else if (_error != null)
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-          child: Text('Error loading items: $_error',
+          child: Text(_error ?? '',
               style: const TextStyle(color: Color(0xFFDC2626), fontSize: 13)),
         )
       else if (visibleItems.isEmpty)
@@ -4913,7 +4913,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         Expanded(child: Center(
             child: Padding(
               padding: const EdgeInsets.all(24),
-              child: Text('Error loading items: $_error',
+              child: Text(_error ?? '',
                   style: const TextStyle(color: Color(0xFFDC2626), fontSize: 13),
                   textAlign: TextAlign.center))))
       else if (visibleItems.isEmpty)

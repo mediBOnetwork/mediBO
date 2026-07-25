@@ -60,23 +60,23 @@ Map<String, String>? _bgFgColors(dynamic raw) {
 }
 
 // ── Color tokens ────────────────────────────────────────────────────────────
-const _kGreen        = Color(0xFF1B7A43);
-const _kBg           = Color(0xFFF5F6F8);
+Color get _kGreen        => FulfillLookups.instance.color('c_ff1b7a43');
+Color get _kBg           => FulfillLookups.instance.color('c_fff5f6f8');
 const _kCard         = Colors.white;
-const _kBorder       = Color(0xFFE5E7EB);
-const _kText         = Color(0xFF111827);
-const _kSub          = Color(0xFF6B7280);
+Color get _kBorder       => FulfillLookups.instance.color('c_ffe5e7eb');
+Color get _kText         => FulfillLookups.instance.color('c_ff111827');
+Color get _kSub          => FulfillLookups.instance.color('c_ff6b7280');
 
-const _kReceivedBg   = Color(0xFFE1F5EE);
-const _kReceivedFg   = Color(0xFF0F6E56);
-const _kWrongFg      = Color(0xFFB42318);
-const _kPendingBg    = Color(0xFFFEF3C7);
-const _kPendingFg    = Color(0xFF92400E);
+Color get _kReceivedBg   => FulfillLookups.instance.color('c_ffe1f5ee');
+Color get _kReceivedFg   => FulfillLookups.instance.color('c_ff0f6e56');
+Color get _kWrongFg      => FulfillLookups.instance.color('c_ffb42318');
+Color get _kPendingBg    => FulfillLookups.instance.color('c_fffef3c7');
+Color get _kPendingFg    => FulfillLookups.instance.color('c_ff92400e');
 // C359: light-yellow tint for a dispute-candidate row (short/excess/flagged after
 // voice counting). Lighter than _kPendingBg so text stays readable; the stronger
 // 0xFFFEF3C7 yellow is reserved for the disabled Confirm button gate.
-const _kCandidateBg     = Color(0xFFFEFCE8);
-const _kCandidateBorder = Color(0xFFF59E0B);
+Color get _kCandidateBg     => FulfillLookups.instance.color('c_fffefce8');
+Color get _kCandidateBorder => FulfillLookups.instance.color('c_fff59e0b');
 
 // ── #331 VoiceCaps — daily 3h cap + 1h continuous stop ─────────────────────
 // One shared helper used by every voice counting surface (Shop, Warehouse, Pack).
@@ -177,7 +177,7 @@ class _VoiceCaps {
               const SizedBox(height: 8),
               if (used.isNotEmpty || cap.isNotEmpty)
                 Text(FulfillLookups.instance.uiFill('voice_cap_line', {'used': used, 'cap': cap}),
-                    style: const TextStyle(fontSize: 13, color: _kSub)),
+                    style: TextStyle(fontSize: 13, color: _kSub)),
               const SizedBox(height: 20),
               FilledButton(
                 style: FilledButton.styleFrom(backgroundColor: _kGreen),
@@ -364,8 +364,8 @@ class _FulfilImageTile extends StatelessWidget {
     if (imageUrl == null || imageUrl!.isEmpty) {
       return Container(
         width: size, height: size,
-        decoration: BoxDecoration(color: const Color(0xFFF3F4F6), borderRadius: BorderRadius.circular(8)),
-        child: const Icon(Icons.medication_outlined, size: 24, color: Color(0xFFD1D5DB)),
+        decoration: BoxDecoration(color: FulfillLookups.instance.color('c_fff3f4f6'), borderRadius: BorderRadius.circular(8)),
+        child: Icon(Icons.medication_outlined, size: 24, color: FulfillLookups.instance.color('c_ffd1d5db')),
       );
     }
     return ClipRRect(
@@ -373,8 +373,8 @@ class _FulfilImageTile extends StatelessWidget {
       child: Image.network(
         imageUrl!, width: size, height: size, fit: BoxFit.cover,
         errorBuilder: (_, __, ___) => Container(
-          width: size, height: size, color: const Color(0xFFF3F4F6),
-          child: const Icon(Icons.medication_outlined, size: 24, color: Color(0xFFD1D5DB)),
+          width: size, height: size, color: FulfillLookups.instance.color('c_fff3f4f6'),
+          child: Icon(Icons.medication_outlined, size: 24, color: FulfillLookups.instance.color('c_ffd1d5db')),
         ),
       ),
     );
@@ -561,10 +561,10 @@ class _BagScannerDialogState extends State<_BagScannerDialog> {
             padding: const EdgeInsets.fromLTRB(16, 16, 8, 0),
             child: Row(children: [
               Expanded(child: Text(widget.title,
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _kText))),
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _kText))),
               IconButton(
                 onPressed: () => _close(context),
-                icon: const Icon(Icons.close_rounded, size: 20, color: _kSub),
+                icon: Icon(Icons.close_rounded, size: 20, color: _kSub),
               ),
             ]),
           ),
@@ -584,11 +584,11 @@ class _BagScannerDialogState extends State<_BagScannerDialog> {
                     child: Padding(
                       padding: const EdgeInsets.all(24),
                       child: Column(mainAxisSize: MainAxisSize.min, children: [
-                        const Icon(Icons.camera_alt_outlined, size: 48, color: Color(0xFFD1D5DB)),
+                        Icon(Icons.camera_alt_outlined, size: 48, color: FulfillLookups.instance.color('c_ffd1d5db')),
                         const SizedBox(height: 12),
                         Text(FulfillLookups.instance.ui('camera_unavailable'), style: TextStyle(color: _kSub, fontSize: 14)),
                         const SizedBox(height: 4),
-                        Text(error.errorCode.name, style: const TextStyle(fontSize: 12, color: _kSub)),
+                        Text(error.errorCode.name, style: TextStyle(fontSize: 12, color: _kSub)),
                         const SizedBox(height: 16),
                         TextButton(onPressed: () => _close(ctx), child: Text(FulfillLookups.instance.ui('close'))),
                       ]),
@@ -813,7 +813,7 @@ class _ChangeBagScannerState extends State<_ChangeBagScanner> {
         const SizedBox(width: 10),
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(label, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: color)),
-          Text(subtitle, style: const TextStyle(fontSize: 11, color: _kSub)),
+          Text(subtitle, style: TextStyle(fontSize: 11, color: _kSub)),
         ])),
         if (_busy)
           SizedBox(width: 14, height: 14,
@@ -832,9 +832,9 @@ class _ChangeBagScannerState extends State<_ChangeBagScanner> {
     final newActive = _step == _CBStep.needNew || _step == _CBStep.attaching;
     final newDone = _step == _CBStep.done;
 
-    const red = Color(0xFFD32F2F);
-    const green = Color(0xFF1B7A43);
-    const grey = Color(0xFF9CA3AF);
+    final red = FulfillLookups.instance.color('c_ffd32f2f');
+    final green = FulfillLookups.instance.color('c_ff1b7a43');
+    final grey = FulfillLookups.instance.color('c_ff9ca3af');
 
     return Dialog(
       insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 24),
@@ -860,7 +860,7 @@ class _ChangeBagScannerState extends State<_ChangeBagScanner> {
                     Navigator.of(context).pop(null);
                   }
                 },
-                icon: const Icon(Icons.close_rounded, size: 20, color: _kSub),
+                icon: Icon(Icons.close_rounded, size: 20, color: _kSub),
               ),
             ]),
           ),
@@ -880,7 +880,7 @@ class _ChangeBagScannerState extends State<_ChangeBagScanner> {
                   errorBuilder: (ctx, error, _) => Container(
                     color: Colors.black12,
                     child: Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-                      const Icon(Icons.camera_alt_outlined, size: 40, color: Color(0xFFD1D5DB)),
+                      Icon(Icons.camera_alt_outlined, size: 40, color: FulfillLookups.instance.color('c_ffd1d5db')),
                       const SizedBox(height: 8),
                       Text(FulfillLookups.instance.ui('camera_unavailable'), style: TextStyle(color: _kSub, fontSize: 13)),
                     ])),
@@ -950,7 +950,7 @@ class _ChangeBagScannerState extends State<_ChangeBagScanner> {
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
               child: Text(_error!,
-                  style: const TextStyle(color: Color(0xFFD32F2F), fontSize: 12)),
+                  style: TextStyle(color: FulfillLookups.instance.color('c_ffd32f2f'), fontSize: 12)),
             ),
           const SizedBox(height: 6),
         ]),
@@ -1247,17 +1247,17 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
-        color: _hexColor(chip['bg']?.toString(), const Color(0xFFFEF3C7)),
+        color: _hexColor(chip['bg']?.toString(), FulfillLookups.instance.color('c_fffef3c7')),
         borderRadius: BorderRadius.circular(4),
         border: Border.all(
-            color: _hexColor(chip['border']?.toString(), const Color(0xFFF59E0B)),
+            color: _hexColor(chip['border']?.toString(), FulfillLookups.instance.color('c_fff59e0b')),
             width: 0.5),
       ),
       child: Text(
         chip['label']?.toString() ?? '',
         style: TextStyle(
             fontSize: 10,
-            color: _hexColor(chip['fg']?.toString(), const Color(0xFF92400E)),
+            color: _hexColor(chip['fg']?.toString(), FulfillLookups.instance.color('c_ff92400e')),
             fontWeight: FontWeight.w600),
       ),
     );
@@ -2548,7 +2548,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _kText)),
           const SizedBox(height: 8),
           Text(FulfillLookups.instance.uiFill('bag_total_mismatch_help', {'product': productName}),
-              style: const TextStyle(fontSize: 13, color: _kSub)),
+              style: TextStyle(fontSize: 13, color: _kSub)),
           const SizedBox(height: 16),
           SizedBox(
             width: double.infinity,
@@ -2957,23 +2957,23 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             decoration: BoxDecoration(
-              color: locked ? const Color(0xFFF3F4F6) : const Color(0xFFFEF3C7),
+              color: locked ? FulfillLookups.instance.color('c_fff3f4f6') : FulfillLookups.instance.color('c_fffef3c7'),
               borderRadius: BorderRadius.circular(10),
               border: Border.all(color: locked
-                  ? const Color(0xFFE5E7EB)
-                  : const Color(0xFFD97706).withValues(alpha: 0.5)),
+                  ? FulfillLookups.instance.color('c_ffe5e7eb')
+                  : FulfillLookups.instance.color('c_ffd97706').withValues(alpha: 0.5)),
             ),
             child: Row(children: [
               Icon(Icons.swap_horiz_rounded, size: 18,
-                  color: locked ? const Color(0xFF9CA3AF) : const Color(0xFF92400E)),
+                  color: locked ? FulfillLookups.instance.color('c_ff9ca3af') : FulfillLookups.instance.color('c_ff92400e')),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(FulfillLookups.instance.uiFill('bag_detached_tap_scan', {'n': oldBagNo}),
                     style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
-                        color: locked ? const Color(0xFF9CA3AF) : const Color(0xFF92400E))),
+                        color: locked ? FulfillLookups.instance.color('c_ff9ca3af') : FulfillLookups.instance.color('c_ff92400e'))),
               ),
               Icon(Icons.chevron_right_rounded, size: 18,
-                  color: locked ? const Color(0xFF9CA3AF) : const Color(0xFF92400E)),
+                  color: locked ? FulfillLookups.instance.color('c_ff9ca3af') : FulfillLookups.instance.color('c_ff92400e')),
             ]),
           ),
         ),
@@ -2989,8 +2989,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           icon: const Icon(Icons.qr_code_scanner_rounded, size: 18),
           label: Text(FulfillLookups.instance.ui('scan_bag_to_start_counting')),
           style: OutlinedButton.styleFrom(
-            foregroundColor: locked ? const Color(0xFF9CA3AF) : _kGreen,
-            side: BorderSide(color: locked ? const Color(0xFFE5E7EB) : _kGreen),
+            foregroundColor: locked ? FulfillLookups.instance.color('c_ff9ca3af') : _kGreen,
+            side: BorderSide(color: locked ? FulfillLookups.instance.color('c_ffe5e7eb') : _kGreen),
             minimumSize: const Size.fromHeight(44),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
           ),
@@ -3005,17 +3005,17 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
-          color: const Color(0xFFD1FAE5),
+          color: FulfillLookups.instance.color('c_ffd1fae5'),
           borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: const Color(0xFF065F46).withValues(alpha: 0.3)),
+          border: Border.all(color: FulfillLookups.instance.color('c_ff065f46').withValues(alpha: 0.3)),
         ),
         child: Row(children: [
-          const Icon(Icons.shopping_bag_outlined, size: 18, color: Color(0xFF065F46)),
+          Icon(Icons.shopping_bag_outlined, size: 18, color: FulfillLookups.instance.color('c_ff065f46')),
           const SizedBox(width: 8),
           Expanded(
             child: Text(FulfillLookups.instance.uiFill('bag_in_use', {'n': bagNo}),
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
-                    color: Color(0xFF065F46))),
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
+                    color: FulfillLookups.instance.color('c_ff065f46'))),
           ),
           // #261: yellow pill "Change Bag" button; disabled when locked (#274)
           GestureDetector(
@@ -3023,16 +3023,16 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
               decoration: BoxDecoration(
-                color: locked ? const Color(0xFFE5E7EB) : const Color(0xFFFFC107),
+                color: locked ? FulfillLookups.instance.color('c_ffe5e7eb') : FulfillLookups.instance.color('c_ffffc107'),
                 borderRadius: BorderRadius.circular(20),
               ),
               child: Row(mainAxisSize: MainAxisSize.min, children: [
                 Icon(Icons.swap_horiz_rounded, size: 16,
-                    color: locked ? const Color(0xFF9CA3AF) : const Color(0xFF5D4037)),
+                    color: locked ? FulfillLookups.instance.color('c_ff9ca3af') : FulfillLookups.instance.color('c_ff5d4037')),
                 const SizedBox(width: 4),
                 Text(FulfillLookups.instance.ui('change_bag'),
                     style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
-                        color: locked ? const Color(0xFF9CA3AF) : const Color(0xFF5D4037))),
+                        color: locked ? FulfillLookups.instance.color('c_ff9ca3af') : FulfillLookups.instance.color('c_ff5d4037'))),
               ]),
             ),
           ),
@@ -3057,14 +3057,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.fromLTRB(12, 2, 6, 2),
       decoration: BoxDecoration(
-        color: _disputeToggleOn ? const Color(0xFFFFFBEB) : const Color(0xFFF5F6F8),
+        color: _disputeToggleOn ? FulfillLookups.instance.color('c_fffffbeb') : FulfillLookups.instance.color('c_fff5f6f8'),
         borderRadius: BorderRadius.circular(10),
         border: Border.all(
-            color: _disputeToggleOn ? const Color(0xFFFCD34D) : _kBorder),
+            color: _disputeToggleOn ? FulfillLookups.instance.color('c_fffcd34d') : _kBorder),
       ),
       child: Row(children: [
         Icon(Icons.flag_outlined,
-            size: 16, color: _disputeToggleOn ? const Color(0xFFB45309) : _kSub),
+            size: 16, color: _disputeToggleOn ? FulfillLookups.instance.color('c_ffb45309') : _kSub),
         const SizedBox(width: 8),
         Expanded(
           child: Text(
@@ -3074,7 +3074,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             style: TextStyle(
                 fontSize: 12.5,
                 fontWeight: FontWeight.w600,
-                color: _disputeToggleOn ? const Color(0xFF92400E) : _kText)),
+                color: _disputeToggleOn ? FulfillLookups.instance.color('c_ff92400e') : _kText)),
         ),
         Switch(
           value: _disputeToggleOn,
@@ -3110,7 +3110,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 border: Border.all(color: _kReceivedFg.withValues(alpha: 0.3)),
               ),
               child: Row(children: [
-                const Icon(Icons.lock_rounded, size: 15, color: _kReceivedFg),
+                Icon(Icons.lock_rounded, size: 15, color: _kReceivedFg),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(FulfillLookups.instance.ui('receiving_confirmed'),
@@ -3140,9 +3140,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           height: 44,
           child: FilledButton(
             style: FilledButton.styleFrom(
-              backgroundColor: whRed ? const Color(0xFFFEE2E2) : _kGreen,
+              backgroundColor: whRed ? FulfillLookups.instance.color('c_fffee2e2') : _kGreen,
               disabledBackgroundColor:
-                  whRed ? const Color(0xFFFEE2E2) : _kGreen.withValues(alpha: 0.5),
+                  whRed ? FulfillLookups.instance.color('c_fffee2e2') : _kGreen.withValues(alpha: 0.5),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
             ),
             onPressed: (whRed || _confirmingAll) ? null : _fw_confirmAllReceived,
@@ -3158,7 +3158,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                             ? Icons.error_outline_rounded
                             : Icons.check_circle_outline_rounded,
                         size: 15,
-                        color: whRed ? const Color(0xFF991B1B) : Colors.white),
+                        color: whRed ? FulfillLookups.instance.color('c_ff991b1b') : Colors.white),
                     const SizedBox(width: 4),
                     Text(
                         bagAttached
@@ -3169,7 +3169,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                         style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w700,
-                            color: whRed ? const Color(0xFF991B1B) : Colors.white)),
+                            color: whRed ? FulfillLookups.instance.color('c_ff991b1b') : Colors.white)),
                   ]),
           ),
         ),
@@ -3199,10 +3199,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   border: Border.all(color: _kReceivedFg.withValues(alpha: 0.3)),
                 ),
                 child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  const Icon(Icons.lock_rounded, size: 14, color: _kReceivedFg),
+                  Icon(Icons.lock_rounded, size: 14, color: _kReceivedFg),
                   const SizedBox(width: 6),
                   Text(_collectLockedText,
-                      style: const TextStyle(
+                      style: TextStyle(
                           fontSize: 12.5, fontWeight: FontWeight.w600, color: _kReceivedFg)),
                   if (isAdmin) ...[
                     const SizedBox(width: 6),
@@ -3226,11 +3226,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             border: Border.all(color: _kReceivedFg.withValues(alpha: 0.3)),
           ),
           child: Row(children: [
-            const Icon(Icons.lock_rounded, size: 15, color: _kReceivedFg),
+            Icon(Icons.lock_rounded, size: 15, color: _kReceivedFg),
             const SizedBox(width: 8),
             Expanded(
               child: Text(_collectLockedText,
-                  style: const TextStyle(
+                  style: TextStyle(
                       fontSize: 13, fontWeight: FontWeight.w600, color: _kReceivedFg)),
             ),
           ]),
@@ -3257,7 +3257,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           child: OutlinedButton(
             style: OutlinedButton.styleFrom(
               foregroundColor: _kGreen,
-              side: const BorderSide(color: _kGreen),
+              side: BorderSide(color: _kGreen),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
               padding: const EdgeInsets.symmetric(horizontal: 6),
             ),
@@ -3282,8 +3282,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           child: shopVis.red
               ? FilledButton(
                   style: FilledButton.styleFrom(
-                    backgroundColor: const Color(0xFFFEE2E2),
-                    disabledBackgroundColor: const Color(0xFFFEE2E2),
+                    backgroundColor: FulfillLookups.instance.color('c_fffee2e2'),
+                    disabledBackgroundColor: FulfillLookups.instance.color('c_fffee2e2'),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                     padding: const EdgeInsets.symmetric(horizontal: 6),
                   ),
@@ -3291,10 +3291,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   child: FittedBox(
                     fit: BoxFit.scaleDown,
                     child: Row(mainAxisSize: MainAxisSize.min, children: [
-                      Icon(Icons.error_outline_rounded, size: 15, color: Color(0xFF991B1B)),
+                      Icon(Icons.error_outline_rounded, size: 15, color: FulfillLookups.instance.color('c_ff991b1b')),
                       SizedBox(width: 4),
                       Text(FulfillLookups.instance.ui('count_resolve_items_to_confirm'),
-                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF991B1B))),
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: FulfillLookups.instance.color('c_ff991b1b'))),
                     ]),
                   ),
                 )
@@ -3862,7 +3862,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(msg),
-      backgroundColor: isGood ? _kGreen : const Color(0xFFDC2626),
+      backgroundColor: isGood ? _kGreen : FulfillLookups.instance.color('c_ffdc2626'),
       duration: const Duration(seconds: 3),
     ));
   }
@@ -3905,7 +3905,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             if (!widget.arrivals) const SupplierMapGroupsPanel(),
             Text(FulfillLookups.instance.emptyOrdersLabel ?? '',
-                style: const TextStyle(color: _kSub, fontSize: 15),
+                style: TextStyle(color: _kSub, fontSize: 15),
                 textAlign: TextAlign.center),
           ]),
         ),
@@ -3971,7 +3971,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c255_bag_control_rendered',
         'arrivals=${widget.arrivals};activeBag=${_activeBag != null};supplier=$name');
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      const Divider(height: 1, color: _kBorder),
+      Divider(height: 1, color: _kBorder),
       _buildNarrowVoiceBar(isAdmin),
       if (_items.isNotEmpty) _buildNarrowProgressRow(),
       // #255: Bag control appears directly above the item list (mobile accordion).
@@ -3994,21 +3994,21 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
               decoration: BoxDecoration(
-                color: const Color(0xFFFFF8E1),
+                color: FulfillLookups.instance.color('c_fffff8e1'),
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFFFFB300).withValues(alpha: 0.5)),
+                border: Border.all(color: FulfillLookups.instance.color('c_ffffb300').withValues(alpha: 0.5)),
               ),
               child: Row(children: [
-                const Icon(Icons.info_outline_rounded, size: 15, color: Color(0xFF92400E)),
+                Icon(Icons.info_outline_rounded, size: 15, color: FulfillLookups.instance.color('c_ff92400e')),
                 const SizedBox(width: 6),
                 Expanded(child: Text(subText,
-                    style: const TextStyle(fontSize: 12, color: Color(0xFF92400E)))),
+                    style: TextStyle(fontSize: 12, color: FulfillLookups.instance.color('c_ff92400e')))),
               ]),
             ),
           );
         }),
       if (_loadingBox)
-        const Center(
+        Center(
           child: Padding(
             padding: EdgeInsets.all(24),
             child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2),
@@ -4018,14 +4018,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
           child: Text(_error ?? '',
-              style: const TextStyle(color: Color(0xFFDC2626), fontSize: 13)),
+              style: TextStyle(color: FulfillLookups.instance.color('c_ffdc2626'), fontSize: 13)),
         )
       else if (visibleItems.isEmpty)
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
           child: Text(
             _items.isEmpty ? 'No items in this box' : 'No counted items',
-            style: const TextStyle(color: _kSub, fontSize: 14),
+            style: TextStyle(color: _kSub, fontSize: 14),
           ),
         )
       else
@@ -4036,7 +4036,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           child: _buildNarrowItemList(showFooter: false, shrinkWrap: true),
         ),
       if (!_loadingBox && _items.isNotEmpty) ...[
-        const Divider(height: 1, color: _kBorder),
+        Divider(height: 1, color: _kBorder),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
           child: _buildConfirmFooter(locked),
@@ -4110,11 +4110,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   @override
   Widget build(BuildContext context) {
     if (_loadingSuppliers) {
-      return const Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2));
+      return Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2));
     }
     if (_error != null && _suppliers.isEmpty) {
       return Center(child: Text(_error ?? '',
-          style: const TextStyle(color: Color(0xFFDC2626))));
+          style: TextStyle(color: FulfillLookups.instance.color('c_ffdc2626'))));
     }
 
     final isAdmin = UserState.of(context).isAdmin;
@@ -4286,7 +4286,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           const SizedBox(width: 8),
           Text(
             _boxProgressLabel,
-            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
+            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
           ),
         ]),
       ),
@@ -4343,13 +4343,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
           decoration: BoxDecoration(
-            color: const Color(0xFFFEF3C7),
-            border: Border.all(color: const Color(0xFFFCD34D), width: 1),
+            color: FulfillLookups.instance.color('c_fffef3c7'),
+            border: Border.all(color: FulfillLookups.instance.color('c_fffcd34d'), width: 1),
             borderRadius: BorderRadius.circular(4),
           ),
           child: Text(lbl,
-              style: const TextStyle(
-                  fontSize: 10, fontWeight: FontWeight.w700, color: Color(0xFFB45309)),
+              style: TextStyle(
+                  fontSize: 10, fontWeight: FontWeight.w700, color: FulfillLookups.instance.color('c_ffb45309')),
               maxLines: 1, overflow: TextOverflow.ellipsis),
         ),
       );
@@ -4425,11 +4425,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               child: Column(crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min, children: [
                 Text(merged.productName,
-                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
                     maxLines: 2, overflow: TextOverflow.ellipsis),
                 const SizedBox(height: 2),
                 Text(merged.packType.isNotEmpty ? merged.packType : '—',
-                    style: const TextStyle(fontSize: 11, color: _kSub),
+                    style: TextStyle(fontSize: 11, color: _kSub),
                     maxLines: 1, overflow: TextOverflow.ellipsis),
                 // #261: per-bag breakdown (Arrivals only, mobile tile) — B#:##P format
                 if (widget.arrivals && merged.bagBreakdown != null && merged.bagBreakdown!.isNotEmpty) ...[
@@ -4444,7 +4444,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                     return Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                       decoration: BoxDecoration(
-                        color: Color(0xFFEEEEEE),
+                        color: FulfillLookups.instance.color('c_ffeeeeee'),
                         borderRadius: BorderRadius.circular(6),
                       ),
                       child: Text(bd,
@@ -4490,7 +4490,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                         child: Image.network(disputeItem!.proofUrl!, width: 36, height: 36,
                             fit: BoxFit.cover,
                             errorBuilder: (_, __, ___) =>
-                                const Icon(Icons.broken_image_outlined, size: 24, color: _kSub)),
+                                Icon(Icons.broken_image_outlined, size: 24, color: _kSub)),
                       ),
                       const SizedBox(width: 4),
                       Text(FulfillLookups.instance.ui('proof'), style: TextStyle(fontSize: 10, color: _kSub)),
@@ -4500,7 +4500,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 if (disputeItem != null && (disputeItem.wrongProductName ?? '').isNotEmpty) ...[
                   const SizedBox(height: 2),
                   Text(FulfillLookups.instance.uiFill('wrong_product_arrow', {'name': disputeItem!.wrongProductName}),
-                      style: const TextStyle(fontSize: 10, color: Color(0xFF92400E)),
+                      style: TextStyle(fontSize: 10, color: FulfillLookups.instance.color('c_ff92400e')),
                       maxLines: 1, overflow: TextOverflow.ellipsis),
                 ],
               ]),
@@ -4517,7 +4517,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 final colors = merged.statusColors;
                 return Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
                   Text(merged.qtyLabel,
-                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
                   const SizedBox(height: 3),
                   _BackendStatePill(
                     label: merged.statusLabel,
@@ -4531,7 +4531,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 Padding(
                   padding: const EdgeInsets.only(top: 3),
                   child: Text(merged.dateChip!,
-                      style: const TextStyle(fontSize: 10, color: _kSub)),
+                      style: TextStyle(fontSize: 10, color: _kSub)),
                 ),
               // #338: voice-vs-actual mismatch chip (audit fetched on expand)
               Builder(builder: (_) {
@@ -4800,20 +4800,20 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             child: confirming
                 ? Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Text(reply,
-                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: _kText)),
+                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: _kText)),
                     if (action != null) ...[
                       const SizedBox(height: 8),
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                         decoration: BoxDecoration(
-                          color: const Color(0xFFF5F6F8),
+                          color: FulfillLookups.instance.color('c_fff5f6f8'),
                           borderRadius: BorderRadius.circular(6),
                           border: Border.all(color: _kBorder),
                         ),
                         child: Text(
                           '${action['product_name'] ?? ''}'
                           '${action['qty'] != null ? ' — qty ${(action['qty'] as num).toInt()}' : ''}',
-                          style: const TextStyle(fontSize: 12, color: _kText, fontWeight: FontWeight.w500),
+                          style: TextStyle(fontSize: 12, color: _kText, fontWeight: FontWeight.w500),
                         ),
                       ),
                       const SizedBox(height: 8),
@@ -4850,7 +4850,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                     const SizedBox(width: 8),
                     Flexible(
                       child: Text(reply,
-                          style: const TextStyle(fontSize: 13, color: _kText),
+                          style: TextStyle(fontSize: 13, color: _kText),
                           maxLines: 3, overflow: TextOverflow.ellipsis),
                     ),
                   ]),
@@ -4919,7 +4919,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       const SizedBox(height: 16),
       // ── Item table — never pushed down by agent output (#88) ─────────────────
       if (_loadingBox)
-        const Expanded(child: Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2)))
+        Expanded(child: Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2)))
       else if (_selectedSupplier == null)
         Expanded(child: Center(
             child: Text(FulfillLookups.instance.ui('choose_a_supplier_to_begin'),
@@ -4930,7 +4930,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             child: Padding(
               padding: const EdgeInsets.all(24),
               child: Text(_error ?? '',
-                  style: const TextStyle(color: Color(0xFFDC2626), fontSize: 13),
+                  style: TextStyle(color: FulfillLookups.instance.color('c_ffdc2626'), fontSize: 13),
                   textAlign: TextAlign.center))))
       else if (visibleItems.isEmpty)
         Expanded(child: Center(
@@ -5001,12 +5001,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                     child: DropdownButton<String>(
                       isExpanded: true,
                       hint: Text(FulfillLookups.instance.ui('select_supplier'),
-                          style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 15)),
+                          style: TextStyle(color: FulfillLookups.instance.color('c_ff9ca3af'), fontSize: 15)),
                       value: _selectedSupplier,
                       items: _suppliers
                           .map((s) => DropdownMenuItem(
                                 value: s,
-                                child: Text(s, style: const TextStyle(fontSize: 15, color: _kText),
+                                child: Text(s, style: TextStyle(fontSize: 15, color: _kText),
                                     overflow: TextOverflow.ellipsis),
                               ))
                           .toList(),
@@ -5043,7 +5043,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           const SizedBox(width: 8),
           Text(
             _boxProgressLabel,
-            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
+            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
           ),
         ] else
           // No items: spacer pushes buttons to the right
@@ -5088,10 +5088,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             children: [
               Text(
                 '${(_continuousSecs ~/ 60).toString().padLeft(2, '0')}:${(_continuousSecs % 60).toString().padLeft(2, '0')}',
-                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kWrongFg),
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kWrongFg),
               ),
               Text(_VoiceCaps.remainingLabel(),
-                  style: const TextStyle(fontSize: 10, color: _kSub)),
+                  style: TextStyle(fontSize: 10, color: _kSub)),
             ],
           ),
         ],
@@ -5230,7 +5230,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           decoration: BoxDecoration(
             color: _kBg,
             borderRadius: const BorderRadius.vertical(top: Radius.circular(10)),
-            border: const Border(
+            border: Border(
               top: BorderSide(color: _kBorder),
               left: BorderSide(color: _kBorder),
               right: BorderSide(color: _kBorder),
@@ -5241,21 +5241,21 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             // columns. C358 B2: 16px gaps between them so the right-aligned "Received"
             // header no longer butts against "Dispute Type" ("ReceivedDispute Type").
             Expanded(flex: 5, child: Text(FulfillLookups.instance.ui('product'),
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kSub))),
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kSub))),
             Expanded(flex: 2, child: Text(FulfillLookups.instance.ui('pack'),
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kSub))),
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kSub))),
             Expanded(flex: 2, child: Text(FulfillLookups.instance.ui('received'),
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kSub),
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kSub),
                 textAlign: TextAlign.right)),
             const SizedBox(width: 16),
             Expanded(flex: 3, child: Text(FulfillLookups.instance.ui('dispute_type'),
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kSub))),
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kSub))),
             const SizedBox(width: 12),
             Expanded(flex: 3, child: Text(FulfillLookups.instance.ui('item_status'),
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kSub))),
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kSub))),
             const SizedBox(width: 12),
             Expanded(flex: 2, child: Text(FulfillLookups.instance.ui('status'),
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kSub),
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kSub),
                 textAlign: TextAlign.right)),
           ]),
         ),
@@ -5338,7 +5338,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(mp.productName,
-                                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kText),
+                                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _kText),
                                     maxLines: 1, overflow: TextOverflow.ellipsis),
                                 // #261: bag breakdown (Arrivals only, desktop) — B#:##P format
                                 if (widget.arrivals && mp.bagBreakdown != null && mp.bagBreakdown!.isNotEmpty) ...[
@@ -5351,7 +5351,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                                     return Container(
                                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                                       decoration: BoxDecoration(
-                                        color: Color(0xFFEEEEEE),
+                                        color: FulfillLookups.instance.color('c_ffeeeeee'),
                                         borderRadius: BorderRadius.circular(6),
                                       ),
                                       child: Text(bd,
@@ -5396,7 +5396,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                                       ClipRRect(
                                         borderRadius: BorderRadius.circular(4),
                                         child: Image.network(deskDisputeItem!.proofUrl!, width: 32, height: 32, fit: BoxFit.cover,
-                                            errorBuilder: (_, __, ___) => const Icon(Icons.broken_image_outlined, size: 20, color: _kSub)),
+                                            errorBuilder: (_, __, ___) => Icon(Icons.broken_image_outlined, size: 20, color: _kSub)),
                                       ),
                                       const SizedBox(width: 4),
                                       Text(FulfillLookups.instance.ui('proof'), style: TextStyle(fontSize: 10, color: _kSub)),
@@ -5406,7 +5406,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                                 if (deskDisputeItem != null && (deskDisputeItem.wrongProductName ?? '').isNotEmpty) ...[
                                   const SizedBox(height: 2),
                                   Text(FulfillLookups.instance.uiFill('wrong_product_arrow', {'name': deskDisputeItem!.wrongProductName}),
-                                      style: const TextStyle(fontSize: 10, color: Color(0xFF92400E)),
+                                      style: TextStyle(fontSize: 10, color: FulfillLookups.instance.color('c_ff92400e')),
                                       maxLines: 1, overflow: TextOverflow.ellipsis),
                                 ],
                               ],
@@ -5416,12 +5416,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                         // col2: pack type
                         Expanded(flex: 2, child: Text(
                           mp.packType.isEmpty ? '—' : mp.packType,
-                          style: const TextStyle(fontSize: 12, color: _kSub),
+                          style: TextStyle(fontSize: 12, color: _kSub),
                         )),
                         // col3: qty progress — backend-owned merged_items[].qty_label, verbatim.
                         Expanded(flex: 2, child: Text(
                           mp.qtyLabel,
-                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
+                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
                           textAlign: TextAlign.right,
                         )),
                         const SizedBox(width: 16), // C358 B2: gap after Received
@@ -5433,7 +5433,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                               ? deskDisputeItem.kindLabel
                               : mp.issueChip?['label']?.toString(); // C361: any flagged line
                           if (kindLabel == null) {
-                            return const Text('—', style: TextStyle(fontSize: 12, color: _kSub));
+                            return Text('—', style: TextStyle(fontSize: 12, color: _kSub));
                           }
                           RenderLog.write('c357_disp_cell',
                               'tab=$tab,kind=${deskDisputeItem?.kind ?? mp.mergedCountIssue}');
@@ -5448,11 +5448,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                           }
                           return Row(mainAxisSize: MainAxisSize.min, children: [
                             Container(width: 7, height: 7,
-                                decoration: const BoxDecoration(
-                                    color: Color(0xFFB45309), shape: BoxShape.circle)),
+                                decoration: BoxDecoration(
+                                    color: FulfillLookups.instance.color('c_ffb45309'), shape: BoxShape.circle)),
                             const SizedBox(width: 6),
                             Flexible(child: Text(label,
-                                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText),
+                                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText),
                                 maxLines: 1, overflow: TextOverflow.ellipsis)),
                           ]);
                         })),
@@ -5465,13 +5465,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                               ? deskDisputeItem.itemStatusLabel
                               : mp.statusLabel;
                           if (statusText.isEmpty) {
-                            return const Text('—', style: TextStyle(fontSize: 12, color: _kSub));
+                            return Text('—', style: TextStyle(fontSize: 12, color: _kSub));
                           }
                           RenderLog.write('c357_status_cell', 'tab=$tab');
                           return Tooltip(
                             message: statusText,
                             child: Text(statusText,
-                                style: const TextStyle(fontSize: 12, color: _kText),
+                                style: TextStyle(fontSize: 12, color: _kText),
                                 maxLines: 1, overflow: TextOverflow.ellipsis),
                           );
                         })),
@@ -5499,7 +5499,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
   // ── Voice card (#86) ─────────────────────────────────────────────────────────
 
-  static const _kAgentAccent = Color(0xFF3B5BDB); // indigo — distinct from green
+  static Color get _kAgentAccent => FulfillLookups.instance.color('c_ff3b5bdb'); // indigo — distinct from green
 
 
 
@@ -5637,11 +5637,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            const Icon(Icons.check_rounded, size: 11, color: _kReceivedFg),
+            Icon(Icons.check_rounded, size: 11, color: _kReceivedFg),
             const SizedBox(width: 4),
             Text(FulfillLookups.instance.uiCount('spoken_badge', count) ?? '',
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
+                style: TextStyle(
                     fontSize: 12, fontWeight: FontWeight.w600, color: _kReceivedFg,
                     height: 1.0)),
           ],
@@ -5798,19 +5798,11 @@ List<ClipGroup> groupMentionsIntoClips(List<Map<String, dynamic>> rows) {
     if (windows.isEmpty) return;
     result.add((groupKey: groupKey, windows: windows));
   });
-  // Chronological order across sessions: recording_seq is a per-session counter
-  // (each new session restarts at 0), so it can't order sessions against each
-  // other. newVoiceSessionKey's own format (entity|stage|ms) embeds the actual
-  // start-time millis — parse that back out as the real sort key. Legacy
-  // (date-keyed) groups have no such value and sort first, tied-broken by key.
-  int sortMs(String groupKey) {
-    if (!groupKey.contains('|')) return 0;
-    return int.tryParse(groupKey.split('|').last) ?? 0;
-  }
-  result.sort((a, b) {
-    final c = sortMs(a.groupKey).compareTo(sortMs(b.groupKey));
-    return c != 0 ? c : a.groupKey.compareTo(b.groupKey);
-  });
+  // CHANGE #538: group ordering is backend-owned. get_voice_clip_mentions and
+  // get_pack_clip_mentions both emit rows ORDER BY clip_group_ord (the same
+  // rule this used to apply in Dart: session-key millis, legacy date-keyed
+  // groups first), so the insertion-ordered grouping above is already correct
+  // and there is nothing left to sort here.
   return result;
 }
 
@@ -6003,9 +5995,9 @@ class _FinalizeReviewDialogState extends State<_FinalizeReviewDialog> {
           if (widget.overCountWarnings.isNotEmpty) ...[
             const SizedBox(height: 12),
             Text(FulfillLookups.instance.uiPlural('over_count_header', widget.overCountWarnings.length),
-                style: const TextStyle(fontWeight: FontWeight.w700, color: Color(0xFFB45309))),
+                style: TextStyle(fontWeight: FontWeight.w700, color: FulfillLookups.instance.color('c_ffb45309'))),
             for (final w in widget.overCountWarnings)
-              Text(FulfillLookups.instance.uiFill('bullet_row', {'text': w}), style: const TextStyle(color: Color(0xFFB45309))),
+              Text(FulfillLookups.instance.uiFill('bullet_row', {'text': w}), style: TextStyle(color: FulfillLookups.instance.color('c_ffb45309'))),
           ],
           if (widget.unmatched.isNotEmpty) ...[
             const SizedBox(height: 12),
@@ -6381,9 +6373,9 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
             padding: EdgeInsets.only(bottom: MediaQuery.of(ctx2).viewInsets.bottom),
             child: Column(mainAxisSize: MainAxisSize.min, children: [
               const SizedBox(height: 12),
-              Container(width: 36, height: 4, decoration: BoxDecoration(color: const Color(0xFFE5E7EB), borderRadius: BorderRadius.circular(2))),
+              Container(width: 36, height: 4, decoration: BoxDecoration(color: FulfillLookups.instance.color('c_ffe5e7eb'), borderRadius: BorderRadius.circular(2))),
               const SizedBox(height: 12),
-              Text(FulfillLookups.instance.ui('pick_product'), style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+              Text(FulfillLookups.instance.ui('pick_product'), style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: FulfillLookups.instance.color('c_ff111827'))),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
                 child: TextField(
@@ -6561,15 +6553,15 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
                       child: Container(
                         width: 28,
                         height: 28,
-                        decoration: const BoxDecoration(
-                          color: Color(0xFFE0E0E0), // light grey — explicit, no theme token
+                        decoration: BoxDecoration(
+                          color: FulfillLookups.instance.color('c_ffe0e0e0'), // light grey — explicit, no theme token
                           shape: BoxShape.circle,
                         ),
                         alignment: Alignment.center,
-                        child: const Icon(
+                        child: Icon(
                           Icons.close,
                           size: 18,
-                          color: Color(0xFF000000), // black — explicit, never overridden
+                          color: FulfillLookups.instance.color('c_ff000000'), // black — explicit, never overridden
                         ),
                       ),
                     ),
@@ -6613,7 +6605,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
                           child: Container(
                             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                             decoration: BoxDecoration(
-                              color: selGroupKey == null ? _kGreen : const Color(0xFFE8F5E9),
+                              color: selGroupKey == null ? _kGreen : FulfillLookups.instance.color('c_ffe8f5e9'),
                               borderRadius: BorderRadius.circular(20),
                               border: Border.all(color: _kGreen),
                             ),
@@ -6665,8 +6657,8 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
                           ),
                           alignment: Alignment.centerLeft,
                           padding: const EdgeInsets.only(left: 4),
-                          child: const Text('•••',
-                              style: TextStyle(fontSize: 8, color: Color(0xFF9CA3AF),
+                          child: Text('•••',
+                              style: TextStyle(fontSize: 8, color: FulfillLookups.instance.color('c_ff9ca3af'),
                                   letterSpacing: 1)),
                         ),
                       ),
@@ -6687,8 +6679,8 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
                           ),
                           alignment: Alignment.centerRight,
                           padding: const EdgeInsets.only(right: 4),
-                          child: const Text('•••',
-                              style: TextStyle(fontSize: 8, color: Color(0xFF9CA3AF),
+                          child: Text('•••',
+                              style: TextStyle(fontSize: 8, color: FulfillLookups.instance.color('c_ff9ca3af'),
                                   letterSpacing: 1)),
                         ),
                       ),
@@ -6697,7 +6689,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
               ),
             );
           }),
-        const Divider(height: 1, color: _kBorder),
+        Divider(height: 1, color: _kBorder),
         // #112: log clip source length before branch decision — runtime proof of data presence
         Builder(builder: (_) {
           final srcLen = mentions?.length ?? 0;
@@ -6711,7 +6703,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
             child: Text(_error ?? '', style: const TextStyle(fontSize: 12, color: Colors.red)),
           )
         else if (mentions == null)
-          const Padding(
+          Padding(
             padding: EdgeInsets.all(20),
             child: Center(child: SizedBox(width: 20, height: 20,
                 child: CircularProgressIndicator(strokeWidth: 2, color: _kGreen))),
@@ -6945,7 +6937,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
       children: [
         // Header row — mirrors body column zones
         Container(
-          color: const Color(0xFFF5F6F8),
+          color: FulfillLookups.instance.color('c_fff5f6f8'),
           child: Row(
             children: [
               Expanded(child: _th('Product')),
@@ -6958,7 +6950,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
         ),
         // Body rows: name (Expanded) | min-gap | badges (ConstrainedBox) | small-gap | Total
         ...groups.map((g) => Container(
-          decoration: const BoxDecoration(
+          decoration: BoxDecoration(
             border: Border(bottom: BorderSide(color: _kBorder)),
           ),
           child: Row(
@@ -6969,7 +6961,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(10, 8, 4, 8),
                   child: Text(g.name,
-                      style: const TextStyle(fontSize: 12, color: _kText),
+                      style: TextStyle(fontSize: 12, color: _kText),
                       overflow: TextOverflow.ellipsis, maxLines: 2),
                 ),
               ),
@@ -6992,7 +6984,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
                       // colours only ever applied to non-normal statuses.
                       // `active` stays a local override — transient PLAYBACK state.
                       RenderLog.write('c344_all_qty_colour', 'status=${e.status};stage=${widget.stage}');
-                      final backendBg = _hexColor(e.statusColors?['bg'], const Color(0xFFF5F6F8));
+                      final backendBg = _hexColor(e.statusColors?['bg'], FulfillLookups.instance.color('c_fff5f6f8'));
                       final backendFg = _hexColor(e.statusColors?['fg'], _kText);
                       final Color bg = active ? _kGreen : backendBg;
                       final Color border = active ? _kGreen : backendFg;
@@ -7049,21 +7041,21 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   Widget _th(String text) => Padding(
     padding: const EdgeInsets.fromLTRB(10, 6, 4, 6),
     child: Text(text,
-        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
+        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
   );
 
   // #111: zero left padding so "Qty sequence" header aligns with badge Wrap (which has no h-padding)
   Widget _thQty(String text) => Padding(
     padding: const EdgeInsets.fromLTRB(0, 6, 4, 6),
     child: Text(text,
-        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
+        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
   );
 
   Widget _thRight(String text) => Padding(
     padding: const EdgeInsets.fromLTRB(4, 6, 10, 6),
     child: Text(text,
         textAlign: TextAlign.right,
-        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
+        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
   );
 }
 
@@ -7121,7 +7113,7 @@ class _MentionClipTable extends StatelessWidget {
       children: [
         // Header
         Container(
-          color: const Color(0xFFF5F6F8),
+          color: FulfillLookups.instance.color('c_fff5f6f8'),
           child: Row(children: [
             Expanded(child: Padding(
               padding: const EdgeInsets.fromLTRB(14, 6, 4, 6),
@@ -7139,7 +7131,7 @@ class _MentionClipTable extends StatelessWidget {
             )),
           ]),
         ),
-        const Divider(height: 1, color: _kBorder),
+        Divider(height: 1, color: _kBorder),
         // One row per mention
         ...rows.map((r) {
           final id = r['id']?.toString() ?? '';
@@ -7169,7 +7161,7 @@ class _MentionClipTable extends StatelessWidget {
           final rStatusColors = r['status_colors'];
           final backendBg = _hexColor(
               rStatusColors is Map ? rStatusColors['bg']?.toString() : null,
-              const Color(0xFFF5F6F8));
+              FulfillLookups.instance.color('c_fff5f6f8'));
           final backendFg = _hexColor(
               rStatusColors is Map ? rStatusColors['fg']?.toString() : null, _kText);
           // CHANGE #531: is_complete is the backend's own "nothing to flag"
@@ -7179,7 +7171,7 @@ class _MentionClipTable extends StatelessWidget {
 
           // Whole-row tint — §3.1. isUnmatched has no backend status (product_id
           // is null regardless of status), so it stays a local presence check.
-          final rowTint = isUnmatched ? const Color(0x28F59E0B)
+          final rowTint = isUnmatched ? FulfillLookups.instance.color('c_28f59e0b')
               : isNormal ? null
               : backendBg.withValues(alpha: 0.35);
           if (!isUnmatched && !isNormal) {
@@ -7199,7 +7191,7 @@ class _MentionClipTable extends StatelessWidget {
               border: Border.all(color: chipBorder),
             ),
             child: isBusy
-                ? const SizedBox(width: 12, height: 12,
+                ? SizedBox(width: 12, height: 12,
                     child: CircularProgressIndicator(strokeWidth: 2, color: _kGreen))
                 : Text('$qty',
                     style: TextStyle(
@@ -7213,7 +7205,7 @@ class _MentionClipTable extends StatelessWidget {
             duration: const Duration(milliseconds: 200),
             decoration: BoxDecoration(
               color: rowTint,
-              border: const Border(bottom: BorderSide(color: _kBorder)),
+              border: Border(bottom: BorderSide(color: _kBorder)),
               boxShadow: (!isUnmatched && !isNormal)
                   ? [BoxShadow(color: backendBg.withValues(alpha: 0.4), blurRadius: 3, offset: const Offset(0, 1))]
                   : null,
@@ -7327,7 +7319,7 @@ class _ClipPlayButton extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
         decoration: BoxDecoration(
-          color: playing ? _kGreen : const Color(0xFFE8F5E9),
+          color: playing ? _kGreen : FulfillLookups.instance.color('c_ffe8f5e9'),
           borderRadius: BorderRadius.circular(20),
           border: Border.all(color: playing ? _kGreen : _kReceivedFg.withValues(alpha: 0.3)),
         ),
@@ -7397,8 +7389,8 @@ class _SupplierAccordionShell extends StatelessWidget {
     this.hexDots,
   });
 
-  static const _kDotYellow      = Color(0xFFFCD34D);
-  static const _kDotBorderLight = Color(0xFFF59E0B);
+  static Color get _kDotYellow      => FulfillLookups.instance.color('c_fffcd34d');
+  static Color get _kDotBorderLight => FulfillLookups.instance.color('c_fff59e0b');
 
   @override
   Widget build(BuildContext context) {
@@ -7440,7 +7432,7 @@ class _SupplierAccordionShell extends StatelessWidget {
                   turns: isExpanded ? 0.5 : 0.0,
                   duration: const Duration(milliseconds: 280),
                   curve: Curves.easeInOutCubic,
-                  child: const Icon(Icons.keyboard_arrow_down_rounded, size: 18, color: _kSub),
+                  child: Icon(Icons.keyboard_arrow_down_rounded, size: 18, color: _kSub),
                 ),
                 const SizedBox(width: 8),
                 if (hexDots != null)
@@ -7560,7 +7552,7 @@ class _DisputeStrip extends StatelessWidget {
     // hardcoded colour, no manual label truncation (maxLines/ellipsis handles it).
     final chipColor = _hexColor(
       item.activeColors?['fg'] ?? item.kindColors?['fg'],
-      const Color(0xFFDC2626),
+      FulfillLookups.instance.color('c_ffdc2626'),
     );
 
     return Container(
@@ -7597,8 +7589,8 @@ class DisputeBadge extends StatelessWidget {
     if (kindLabel == null || kindLabel.isEmpty || kindColors is! Map) {
       return const SizedBox.shrink();
     }
-    final bg = _hexColor(kindColors['bg']?.toString(), const Color(0xFFF3F4F6));
-    final fg = _hexColor(kindColors['fg']?.toString(), const Color(0xFF6B7280));
+    final bg = _hexColor(kindColors['bg']?.toString(), FulfillLookups.instance.color('c_fff3f4f6'));
+    final fg = _hexColor(kindColors['fg']?.toString(), FulfillLookups.instance.color('c_ff6b7280'));
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(4)),
@@ -7782,7 +7774,7 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
           SnackBar(content: Text(FulfillLookups.instance.message('nothing_to_revert') ?? '')));
       } else if (err != null) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(FulfillLookups.instance.errorText(err) ?? ''), backgroundColor: const Color(0xFFDC2626)));
+          SnackBar(content: Text(FulfillLookups.instance.errorText(err) ?? ''), backgroundColor: FulfillLookups.instance.color('c_ffdc2626')));
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(FulfillLookups.instance.message('reverted') ?? '')));
@@ -7792,7 +7784,7 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
       if (!mounted) return;
       setState(() => _undoing = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(FulfillLookups.instance.errorText(e) ?? ''), backgroundColor: const Color(0xFFDC2626)));
+        SnackBar(content: Text(FulfillLookups.instance.errorText(e) ?? ''), backgroundColor: FulfillLookups.instance.color('c_ffdc2626')));
     }
   }
 
@@ -7825,9 +7817,9 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
     return Container(
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: const Color(0xFFFEF3C7),
+        color: FulfillLookups.instance.color('c_fffef3c7'),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFD97706).withValues(alpha: 0.4)),
+        border: Border.all(color: FulfillLookups.instance.color('c_ffd97706').withValues(alpha: 0.4)),
       ),
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         if (hasProof) ...[
@@ -7863,7 +7855,7 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
               borderRadius: BorderRadius.circular(6),
               child: Image.network(dispute.proofUrl!, width: 64, height: 64, fit: BoxFit.cover,
                   errorBuilder: (_, __, ___) =>
-                      const Icon(Icons.broken_image_outlined, size: 40, color: _kSub)),
+                      Icon(Icons.broken_image_outlined, size: 40, color: _kSub)),
             ),
           ),
           const SizedBox(width: 10),
@@ -7871,11 +7863,11 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
             Text(FulfillLookups.instance.ui('previously_uploaded_proof'),
-                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF92400E))),
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: FulfillLookups.instance.color('c_ff92400e'))),
             if (hasName) ...[
               const SizedBox(height: 2),
               Text(FulfillLookups.instance.uiFill('wrong_item_line', {'name': dispute.wrongProductName}),
-                  style: const TextStyle(fontSize: 12, color: _kText),
+                  style: TextStyle(fontSize: 12, color: _kText),
                   maxLines: 2, overflow: TextOverflow.ellipsis),
             ],
             if (hasProof) ...[
@@ -7925,7 +7917,7 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(widget.productName,
-                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _kText),
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _kText),
                   maxLines: 2, overflow: TextOverflow.ellipsis),
               const SizedBox(height: 4),
               // C365 (D): Ordered / Received / In dispute breakdown WITH pack type.
@@ -7934,12 +7926,12 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
                 final pack = widget.packType;
                 return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text(FulfillLookups.instance.uiFill('ordered_line', {'qty': qtyWithPack(ord, pack)}),
-                      style: const TextStyle(fontSize: 12, color: _kSub)),
+                      style: TextStyle(fontSize: 12, color: _kSub)),
                   Text(FulfillLookups.instance.uiFill('received_line', {'qty': qtyWithPack(countedTotal, pack)}),
-                      style: const TextStyle(fontSize: 12, color: _kSub)),
+                      style: TextStyle(fontSize: 12, color: _kSub)),
                   if (disputedTotal > 0)
                     Text(FulfillLookups.instance.uiFill('in_dispute_line', {'qty': qtyWithPack(disputedTotal, pack)}),
-                        style: const TextStyle(
+                        style: TextStyle(
                             fontSize: 12, fontWeight: FontWeight.w600, color: _kPendingFg)),
                 ]);
               }),
@@ -7970,13 +7962,13 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
             }),
           ],
           IconButton(
-            icon: const Icon(Icons.close_rounded, size: 20, color: _kSub),
+            icon: Icon(Icons.close_rounded, size: 20, color: _kSub),
             onPressed: () => Navigator.of(context).pop(),
             padding: EdgeInsets.zero,
           ),
         ]),
         const SizedBox(height: 20),
-        const Divider(height: 1, color: _kBorder),
+        Divider(height: 1, color: _kBorder),
         const SizedBox(height: 16),
 
         // #203: Show existing dispute proof + wrong name if already flagged
@@ -8052,7 +8044,7 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
                     style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: _kSub,
-                  side: const BorderSide(color: _kBorder),
+                  side: BorderSide(color: _kBorder),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                 ),
               ),
@@ -8074,7 +8066,7 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
                   style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
               style: OutlinedButton.styleFrom(
                 foregroundColor: _kSub,
-                side: const BorderSide(color: _kBorder),
+                side: BorderSide(color: _kBorder),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
               ),
             ),
@@ -8424,7 +8416,7 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF6B7280),
+                        color: FulfillLookups.instance.color('c_ff6b7280'),
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: Text('$_shopCount',
@@ -8447,7 +8439,7 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF6B7280),
+                        color: FulfillLookups.instance.color('c_ff6b7280'),
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: Text('$_warehouseCount',
@@ -8487,7 +8479,7 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF7C3AED),
+                        color: FulfillLookups.instance.color('c_ff7c3aed'),
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: Text('$_disputeCount',
@@ -8499,7 +8491,7 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
             ]),
           ),
           const SizedBox(height: 1),
-          const Divider(height: 1, color: _kBorder),
+          Divider(height: 1, color: _kBorder),
         ]),
       ),
       Expanded(
@@ -8705,11 +8697,11 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
                 onChanged: _onSearchChanged,
                 decoration: InputDecoration(
                   hintText: FulfillLookups.instance.ui('search_medicine_in_bags'),
-                  hintStyle: const TextStyle(fontSize: 14, color: _kSub),
-                  prefixIcon: const Icon(Icons.search, size: 20, color: _kSub),
+                  hintStyle: TextStyle(fontSize: 14, color: _kSub),
+                  prefixIcon: Icon(Icons.search, size: 20, color: _kSub),
                   suffixIcon: _searchCtrl.text.isNotEmpty
                       ? IconButton(
-                          icon: const Icon(Icons.close, size: 18, color: _kSub),
+                          icon: Icon(Icons.close, size: 18, color: _kSub),
                           onPressed: () {
                             _searchCtrl.clear();
                             _onSearchChanged('');
@@ -8729,7 +8721,7 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
                   ),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: _kGreen, width: 1.5),
+                    borderSide: BorderSide(color: _kGreen, width: 1.5),
                   ),
                 ),
               ),
@@ -8745,13 +8737,13 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
 
   Widget _buildSearchBody() {
     if (_searchLoading) {
-      return const Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2));
+      return Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2));
     }
     if (_searchResults.isEmpty) {
       return Center(
         child: Text(
           FulfillLookups.instance.uiFill('no_items_found_for_query', {'query': _searchCtrl.text}),
-          style: const TextStyle(color: _kSub, fontSize: 15),
+          style: TextStyle(color: _kSub, fontSize: 15),
           textAlign: TextAlign.center,
         ),
       );
@@ -8768,18 +8760,18 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
 
   Widget _buildCardListBody() {
     if (_loading) {
-      return const Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2));
+      return Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2));
     }
     if (_error != null) {
       return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-        const Icon(Icons.error_outline, size: 40, color: _kSub),
+        Icon(Icons.error_outline, size: 40, color: _kSub),
         const SizedBox(height: 12),
         Text(FulfillLookups.instance.ui('could_not_load_bags'), style: TextStyle(color: _kSub, fontSize: 14)),
         const SizedBox(height: 16),
         OutlinedButton(
           onPressed: _load,
           style: OutlinedButton.styleFrom(
-            side: const BorderSide(color: _kGreen),
+            side: BorderSide(color: _kGreen),
             foregroundColor: _kGreen,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           ),
@@ -8796,7 +8788,7 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
           padding: const EdgeInsets.symmetric(horizontal: 24),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             Text(FulfillLookups.instance.emptyOrdersLabel ?? '',
-                style: const TextStyle(color: _kSub, fontSize: 15),
+                style: TextStyle(color: _kSub, fontSize: 15),
                 textAlign: TextAlign.center),
           ]),
         ),
@@ -8868,9 +8860,9 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
       RenderLog.write('c286_no_inner_strip', 'strip=removed');
       RenderLog.write('c286_no_received_footer', 'footer=removed');
       return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        const Divider(height: 1, color: _kBorder),
+        Divider(height: 1, color: _kBorder),
         if (isLoading)
-          const Center(child: Padding(
+          Center(child: Padding(
             padding: EdgeInsets.all(24),
             child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2),
           ))
@@ -8928,7 +8920,7 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
               Text(name,
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
                   maxLines: 2, overflow: TextOverflow.ellipsis),
               const SizedBox(height: 4),
               _greyBadge(qtyLabel),
@@ -8940,18 +8932,18 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
                   borderRadius: BorderRadius.circular(20),
                 ),
                 child: Text(supplierLabel,
-                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: _kReceivedFg),
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: _kReceivedFg),
                     maxLines: 1, overflow: TextOverflow.ellipsis),
               ),
               const SizedBox(height: 4),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFFFF3CD),
+                  color: FulfillLookups.instance.color('c_fffff3cd'),
                   borderRadius: BorderRadius.circular(20),
                 ),
                 child: Text(customerLabel,
-                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Color(0xFF8A6D00)),
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: FulfillLookups.instance.color('c_ff8a6d00')),
                     maxLines: 1, overflow: TextOverflow.ellipsis),
               ),
               const SizedBox(height: 4),
@@ -8970,11 +8962,11 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
   Widget _greyBadge(String text) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
     decoration: BoxDecoration(
-      color: const Color(0xFFF3F4F6),
+      color: FulfillLookups.instance.color('c_fff3f4f6'),
       borderRadius: BorderRadius.circular(20),
     ),
     child: Text(text,
-        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: _kSub),
+        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: _kSub),
         maxLines: 1, overflow: TextOverflow.ellipsis),
   );
 
@@ -9004,7 +8996,7 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
               Text(name,
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
                   maxLines: 2, overflow: TextOverflow.ellipsis),
               const SizedBox(height: 4),
               _greyBadge(qtyLabel),
@@ -9016,18 +9008,18 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
                   borderRadius: BorderRadius.circular(20),
                 ),
                 child: Text(supplierLabel,
-                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: _kReceivedFg),
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: _kReceivedFg),
                     maxLines: 1, overflow: TextOverflow.ellipsis),
               ),
               const SizedBox(height: 4),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFFFF3CD),
+                  color: FulfillLookups.instance.color('c_fffff3cd'),
                   borderRadius: BorderRadius.circular(20),
                 ),
                 child: Text(customerLabel,
-                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Color(0xFF8A6D00)),
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: FulfillLookups.instance.color('c_ff8a6d00')),
                     maxLines: 1, overflow: TextOverflow.ellipsis),
               ),
               const SizedBox(height: 4),
@@ -9708,8 +9700,8 @@ class _PackTabState extends State<_PackTab>
             Text(base),
             const SizedBox(height: 12),
             Text(FulfillLookups.instance.uiPlural('over_count_header', overCounts.length),
-                style: const TextStyle(fontWeight: FontWeight.w700, color: Color(0xFFB45309))),
-            for (final w in overCounts) Text(FulfillLookups.instance.uiFill('bullet_row', {'text': w}), style: const TextStyle(color: Color(0xFFB45309))),
+                style: TextStyle(fontWeight: FontWeight.w700, color: FulfillLookups.instance.color('c_ffb45309'))),
+            for (final w in overCounts) Text(FulfillLookups.instance.uiFill('bullet_row', {'text': w}), style: TextStyle(color: FulfillLookups.instance.color('c_ffb45309'))),
             if (unmatched.isNotEmpty) ...[
               const SizedBox(height: 12),
               Text(FulfillLookups.instance.uiPlural('unmatched_header', unmatched.length),
@@ -9819,7 +9811,7 @@ class _PackTabState extends State<_PackTab>
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(msg),
       duration: duration ?? const Duration(seconds: 3),
-      backgroundColor: const Color(0xFF1B7A43),
+      backgroundColor: FulfillLookups.instance.color('c_ff1b7a43'),
     ));
   }
 
@@ -9994,13 +9986,13 @@ class _PackTabState extends State<_PackTab>
   Widget build(BuildContext context) {
     super.build(context);
     if (_loading) {
-      return const Center(
+      return Center(
           child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2));
     }
     if (_error != null) {
       return Center(
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-        const Icon(Icons.error_outline, size: 40, color: _kSub),
+        Icon(Icons.error_outline, size: 40, color: _kSub),
         const SizedBox(height: 12),
         Text(FulfillLookups.instance.ui('could_not_load_pack_status'),
             style: TextStyle(color: _kSub, fontSize: 14)),
@@ -10008,7 +10000,7 @@ class _PackTabState extends State<_PackTab>
         OutlinedButton(
           onPressed: _load,
           style: OutlinedButton.styleFrom(
-              side: const BorderSide(color: _kGreen),
+              side: BorderSide(color: _kGreen),
               foregroundColor: _kGreen,
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(8))),
@@ -10022,7 +10014,7 @@ class _PackTabState extends State<_PackTab>
           padding: const EdgeInsets.symmetric(horizontal: 24),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             Text(FulfillLookups.instance.emptyOrdersLabel ?? '',
-                style: const TextStyle(color: _kSub, fontSize: 15),
+                style: TextStyle(color: _kSub, fontSize: 15),
                 textAlign: TextAlign.center),
           ]),
         ),
@@ -10142,7 +10134,7 @@ class _PackTabState extends State<_PackTab>
     } catch (_) {}
 
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      const Divider(height: 1, color: _kBorder),
+      Divider(height: 1, color: _kBorder),
       _buildPackingButton(c),
       _buildPackVoiceBar(orderId, spokenCount),
       if (totalItems > 0)
@@ -10150,7 +10142,7 @@ class _PackTabState extends State<_PackTab>
             countedCount, totalItems, orderId, spokenCount, countedProgressLabel),
 
       if (isLoading)
-        const Center(
+        Center(
             child: Padding(
           padding: EdgeInsets.all(24),
           child:
@@ -10198,7 +10190,7 @@ class _PackTabState extends State<_PackTab>
 
       if (!isLoading) ...[
         const SizedBox(height: 12),
-        const Divider(height: 1, color: _kBorder),
+        Divider(height: 1, color: _kBorder),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
           // #346: footer reads rollup + dispatch_ready + can_mark_ready from qData
@@ -10246,7 +10238,7 @@ class _PackTabState extends State<_PackTab>
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             if (processing)
-              const SizedBox(
+              SizedBox(
                   width: 14,
                   height: 14,
                   child: CircularProgressIndicator(
@@ -10286,7 +10278,7 @@ class _PackTabState extends State<_PackTab>
                         color: _kReceivedFg.withValues(alpha: 0.25)),
                   ),
                   child: Text('$spokenCount',
-                      style: const TextStyle(
+                      style: TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.w700,
                           color: _kReceivedFg)),
@@ -10307,11 +10299,11 @@ class _PackTabState extends State<_PackTab>
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
         decoration: BoxDecoration(
-          color: listening ? const Color(0xFF1E40AF) : Colors.white,
+          color: listening ? FulfillLookups.instance.color('c_ff1e40af') : Colors.white,
           borderRadius: BorderRadius.circular(22),
           border: Border.all(
               color: listening
-                  ? const Color(0xFF1E40AF)
+                  ? FulfillLookups.instance.color('c_ff1e40af')
                   : _kBorder),
         ),
         child: Row(
@@ -10393,7 +10385,7 @@ class _PackTabState extends State<_PackTab>
         ),
         const SizedBox(width: 8),
         Text(progressLabel,
-            style: const TextStyle(
+            style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w700,
                 color: _kText)),
@@ -10410,7 +10402,7 @@ class _PackTabState extends State<_PackTab>
     final chip = item['dispute_chip'] as Map?;
     if (chip == null) return const SizedBox.shrink();
     final label = chip['label']?.toString() ?? '';
-    final bg = _hexColor(chip['bg']?.toString(), const Color(0xFFF3F4F6));
+    final bg = _hexColor(chip['bg']?.toString(), FulfillLookups.instance.color('c_fff3f4f6'));
     final fg = _hexColor(chip['fg']?.toString(), _kSub);
 
     RenderLog.write('c354_pack_chip', 'label=$label');
@@ -10447,16 +10439,16 @@ class _PackTabState extends State<_PackTab>
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
           decoration: BoxDecoration(
-            color: _hexColor(chip['bg']?.toString(), const Color(0xFFFEF3C7)),
+            color: _hexColor(chip['bg']?.toString(), FulfillLookups.instance.color('c_fffef3c7')),
             borderRadius: BorderRadius.circular(20),
           ),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
             Icon(Icons.shopping_bag_outlined, size: 12,
-                color: _hexColor(chip['fg']?.toString(), const Color(0xFF92400E))),
+                color: _hexColor(chip['fg']?.toString(), FulfillLookups.instance.color('c_ff92400e'))),
             const SizedBox(width: 4),
             Text(chip['label']?.toString() ?? 'Not bagged',
                 style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
-                    color: _hexColor(chip['fg']?.toString(), const Color(0xFF92400E)))),
+                    color: _hexColor(chip['fg']?.toString(), FulfillLookups.instance.color('c_ff92400e')))),
           ]),
         ),
       ),
@@ -10518,12 +10510,12 @@ class _PackTabState extends State<_PackTab>
         margin: const EdgeInsets.only(top: 3),
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
         decoration: BoxDecoration(
-          color: const Color(0xFFEFF6FF),
+          color: FulfillLookups.instance.color('c_ffeff6ff'),
           borderRadius: BorderRadius.circular(4),
-          border: Border.all(color: const Color(0xFF3B82F6), width: 0.5),
+          border: Border.all(color: FulfillLookups.instance.color('c_ff3b82f6'), width: 0.5),
         ),
         child: Text(label,
-            style: const TextStyle(fontSize: 10, color: Color(0xFF1E40AF), fontWeight: FontWeight.w600)),
+            style: TextStyle(fontSize: 10, color: FulfillLookups.instance.color('c_ff1e40af'), fontWeight: FontWeight.w600)),
       );
     }
 
@@ -10545,7 +10537,7 @@ class _PackTabState extends State<_PackTab>
                 Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Expanded(
                     child: Text(name,
-                        style: const TextStyle(
+                        style: TextStyle(
                             fontSize: 13, fontWeight: FontWeight.w700, color: _kText),
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis),
@@ -10588,9 +10580,9 @@ class _PackTabState extends State<_PackTab>
   Widget _packChipFromBackend(Map? chip) {
     if (chip == null) return const SizedBox.shrink();
     final colors = chip['colors'] as Map?;
-    final bg = _hexColor(colors?['bg']?.toString(), const Color(0xFFF3F4F6));
-    final fg = _hexColor(colors?['fg']?.toString(), const Color(0xFF6B7280));
-    final border = _hexColor(colors?['border']?.toString(), const Color(0xFFD1D5DB));
+    final bg = _hexColor(colors?['bg']?.toString(), FulfillLookups.instance.color('c_fff3f4f6'));
+    final fg = _hexColor(colors?['fg']?.toString(), FulfillLookups.instance.color('c_ff6b7280'));
+    final border = _hexColor(colors?['border']?.toString(), FulfillLookups.instance.color('c_ffd1d5db'));
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
@@ -10642,7 +10634,7 @@ class _PackTabState extends State<_PackTab>
       final valueLabel = r['value_label']?.toString() ?? '';
       final colors = r['colors'] as Map?;
       final fg = _hexColor(colors?['fg']?.toString(), _kSub);
-      final bg = _hexColor(colors?['bg']?.toString(), const Color(0xFFF3F4F6));
+      final bg = _hexColor(colors?['bg']?.toString(), FulfillLookups.instance.color('c_fff3f4f6'));
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 3),
         child: Row(children: [
@@ -10660,7 +10652,7 @@ class _PackTabState extends State<_PackTab>
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: const Color(0xFFF9FAFB),
+        color: FulfillLookups.instance.color('c_fff9fafb'),
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: _kBorder),
       ),
@@ -10690,7 +10682,7 @@ class _PackTabState extends State<_PackTab>
           ),
           alignment: Alignment.center,
           child: _dispatchLoading
-              ? const SizedBox(
+              ? SizedBox(
                   width: 20, height: 20,
                   child: CircularProgressIndicator(color: _kReceivedFg, strokeWidth: 2))
               : Text(FulfillLookups.instance.ui('ready_to_dispatch'),
@@ -10701,11 +10693,11 @@ class _PackTabState extends State<_PackTab>
     }
 
     final Color bg     = _hexColor(dispatchColors?['bg']?.toString(),
-        canMarkReady ? const Color(0xFFFEF3C7) : const Color(0xFFF9FAFB));
+        canMarkReady ? FulfillLookups.instance.color('c_fffef3c7') : FulfillLookups.instance.color('c_fff9fafb'));
     final Color fg     = _hexColor(dispatchColors?['fg']?.toString(),
-        canMarkReady ? const Color(0xFF92400E) : _kSub);
+        canMarkReady ? FulfillLookups.instance.color('c_ff92400e') : _kSub);
     final Color border = _hexColor(dispatchColors?['border']?.toString(),
-        canMarkReady ? const Color(0xFFD97706).withValues(alpha: 0.4) : _kBorder);
+        canMarkReady ? FulfillLookups.instance.color('c_ffd97706').withValues(alpha: 0.4) : _kBorder);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -11136,7 +11128,7 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
           Center(child: Container(
             width: 36, height: 4,
             decoration: BoxDecoration(
-                color: const Color(0xFFD1D5DB), borderRadius: BorderRadius.circular(2)),
+                color: FulfillLookups.instance.color('c_ffd1d5db'), borderRadius: BorderRadius.circular(2)),
           )),
           // Header: "Counted items" + X
           Padding(
@@ -11153,8 +11145,8 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
                   child: Center(child: Container(
                     width: 28, height: 28,
                     decoration: BoxDecoration(
-                        color: const Color(0xFFF3F4F6), shape: BoxShape.circle),
-                    child: const Icon(Icons.close_rounded, size: 16, color: Color(0xFF111827)),
+                        color: FulfillLookups.instance.color('c_fff3f4f6'), shape: BoxShape.circle),
+                    child: Icon(Icons.close_rounded, size: 16, color: FulfillLookups.instance.color('c_ff111827')),
                   )),
                 ),
               ),
@@ -11178,7 +11170,7 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                       decoration: BoxDecoration(
-                        color: _selectedGroupKey == null ? _kGreen : const Color(0xFFE8F5E9),
+                        color: _selectedGroupKey == null ? _kGreen : FulfillLookups.instance.color('c_ffe8f5e9'),
                         borderRadius: BorderRadius.circular(20),
                         border: Border.all(color: _kGreen),
                       ),
@@ -11202,7 +11194,7 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
                         child: Container(
                           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                           decoration: BoxDecoration(
-                            color: isSelected ? _kGreen : const Color(0xFFF3F4F6),
+                            color: isSelected ? _kGreen : FulfillLookups.instance.color('c_fff3f4f6'),
                             borderRadius: BorderRadius.circular(20),
                             border: Border.all(color: isSelected ? _kGreen : _kBorder),
                           ),
@@ -11234,7 +11226,7 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
           // !showActions so exactly one header ever renders.
           if (!showActions) ...[
             Container(
-              color: const Color(0xFFF5F6F8),
+              color: FulfillLookups.instance.color('c_fff5f6f8'),
               child: Row(children: [
                 Expanded(child: Padding(
                   padding: const EdgeInsets.fromLTRB(14, 6, 4, 6),
@@ -11318,7 +11310,7 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
                         itemBuilder: (_, i) {
                           final g = groups[i];
                           return Container(
-                            decoration: const BoxDecoration(
+                            decoration: BoxDecoration(
                                 border: Border(bottom: BorderSide(color: _kBorder))),
                             child: Row(
                               crossAxisAlignment: CrossAxisAlignment.center,
@@ -11326,7 +11318,7 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
                                 Expanded(child: Padding(
                                   padding: const EdgeInsets.fromLTRB(14, 8, 4, 8),
                                   child: Text(g.name,
-                                      style: const TextStyle(fontSize: 12, color: _kText),
+                                      style: TextStyle(fontSize: 12, color: _kText),
                                       overflow: TextOverflow.ellipsis, maxLines: 2),
                                 )),
                                 const SizedBox(width: _kNameToBadgeMinGap),
@@ -11343,7 +11335,7 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
                                         // client override is gone). `active` stays local —
                                         // transient playback state.
                                         final isDeleted = e.status == 'deleted';
-                                        final backendBg = _hexColor(e.statusColors?['bg'], const Color(0xFFF5F6F8));
+                                        final backendBg = _hexColor(e.statusColors?['bg'], FulfillLookups.instance.color('c_fff5f6f8'));
                                         final backendFg = _hexColor(e.statusColors?['fg'], _kText);
                                         final Color bg = active ? _kGreen : backendBg;
                                         final Color borderC = active ? _kGreen : backendFg;
@@ -11912,7 +11904,7 @@ class _PackingScreenState extends State<_PackingScreen>
             final bn = (s['bag_no'] as num?)?.toInt() ?? 0;
             final st = (s['state'] as num?)?.toInt() ?? 0;
             final colors = s['colors'] as Map?;
-            final bg = _hexColor(colors?['bg']?.toString(), const Color(0xFFF3F4F6));
+            final bg = _hexColor(colors?['bg']?.toString(), FulfillLookups.instance.color('c_fff3f4f6'));
             final fg = _hexColor(colors?['fg']?.toString(), _kSub);
             final label = s['label']?.toString() ?? '';
             try {
@@ -11923,7 +11915,7 @@ class _PackingScreenState extends State<_PackingScreen>
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               decoration: BoxDecoration(
                   color: bg,
-                  border: const Border(bottom: BorderSide(color: _kBorder))),
+                  border: Border(bottom: BorderSide(color: _kBorder))),
               child: Row(children: [
                 // CHANGE #532: backend-owned bag_stats[].bag_label, verbatim.
                 Text(s['bag_label']?.toString() ?? '',
@@ -11956,7 +11948,7 @@ class _PackingScreenState extends State<_PackingScreen>
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           _sheetHeader(ctx, title),
           Container(
-            color: const Color(0xFFF5F6F8),
+            color: FulfillLookups.instance.color('c_fff5f6f8'),
             child: Row(children: [
               Expanded(child: Padding(
                 padding: EdgeInsets.fromLTRB(10, 6, 4, 6),
@@ -11988,23 +11980,23 @@ class _PackingScreenState extends State<_PackingScreen>
               // from qty + pack_type here while :12807 already read it correctly).
               final qtyLabel = item['qty_label']?.toString() ?? '';
               return Container(
-                decoration: const BoxDecoration(
+                decoration: BoxDecoration(
                     border: Border(bottom: BorderSide(color: _kBorder))),
                 child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
                   Expanded(child: Padding(
                     padding: const EdgeInsets.fromLTRB(10, 8, 4, 8),
-                    child: Text(name, style: const TextStyle(fontSize: 12, color: _kText),
+                    child: Text(name, style: TextStyle(fontSize: 12, color: _kText),
                         overflow: TextOverflow.ellipsis, maxLines: 2),
                   )),
                   SizedBox(width: 72, child: Center(child: Padding(
                     padding: const EdgeInsets.symmetric(vertical: 6),
                     child: Text(qtyLabel, textAlign: TextAlign.center,
-                        style: const TextStyle(fontSize: 12, color: _kSub)),
+                        style: TextStyle(fontSize: 12, color: _kSub)),
                   ))),
                   if (showTick)
                     SizedBox(width: 52, child: Center(
                       child: isPacked
-                          ? const Text('✓', style: TextStyle(fontSize: 14,
+                          ? Text('✓', style: TextStyle(fontSize: 14,
                               fontWeight: FontWeight.w700, color: _kGreen))
                           : const SizedBox.shrink(),
                     )),
@@ -12020,7 +12012,7 @@ class _PackingScreenState extends State<_PackingScreen>
   Widget _sheetHeader(BuildContext ctx, String title) => Padding(
     padding: const EdgeInsets.fromLTRB(14, 10, 4, 6),
     child: Row(children: [
-      Text(title, style: const TextStyle(
+      Text(title, style: TextStyle(
           fontSize: 14, fontWeight: FontWeight.w700, color: _kText)),
       const Spacer(),
       GestureDetector(
@@ -12029,10 +12021,10 @@ class _PackingScreenState extends State<_PackingScreen>
         child: SizedBox(width: 44, height: 44, child: Center(
           child: Container(
             width: 28, height: 28,
-            decoration: const BoxDecoration(
-                color: Color(0xFFE0E0E0), shape: BoxShape.circle),
+            decoration: BoxDecoration(
+                color: FulfillLookups.instance.color('c_ffe0e0e0'), shape: BoxShape.circle),
             alignment: Alignment.center,
-            child: const Icon(Icons.close, size: 18, color: Color(0xFF000000)),
+            child: Icon(Icons.close, size: 18, color: FulfillLookups.instance.color('c_ff000000')),
           ),
         )),
       ),
@@ -12073,22 +12065,22 @@ class _PackingScreenState extends State<_PackingScreen>
         leading: Builder(builder: (ctx) {
           try { RenderLog.write('c296_back_icon', 'icon=back_chevron'); } catch (_) {}
           return IconButton(
-            icon: const Icon(Icons.arrow_back_ios_new, color: _kText, size: 20),
+            icon: Icon(Icons.arrow_back_ios_new, color: _kText, size: 20),
             onPressed: () => Navigator.pop(ctx),
           );
         }),
         title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(customer.isNotEmpty ? customer : 'Packing',
-              style: const TextStyle(
+              style: TextStyle(
                   fontSize: 16, fontWeight: FontWeight.w700, color: _kText)),
           if (customerCode.isNotEmpty)
             Text(customerCode,
-                style: const TextStyle(fontSize: 12, color: _kSub)),
+                style: TextStyle(fontSize: 12, color: _kSub)),
         ]),
         actions: [
           if (!_loading && _queue != null)
             TextButton.icon(
-              icon: const Icon(Icons.inventory_2_outlined, size: 16, color: _kGreen),
+              icon: Icon(Icons.inventory_2_outlined, size: 16, color: _kGreen),
               label: Text(FulfillLookups.instance.ui('bags'),
                   style: TextStyle(color: _kGreen, fontWeight: FontWeight.w600,
                       fontSize: 13)),
@@ -12101,7 +12093,7 @@ class _PackingScreenState extends State<_PackingScreen>
         ),
       ),
       body: _loading
-          ? const Center(
+          ? Center(
               child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2))
           : _error != null
               ? _buildErrorView()
@@ -12149,9 +12141,9 @@ class _PackingScreenState extends State<_PackingScreen>
     child: Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-          color: const Color(0xFFF3F4F6),
+          color: FulfillLookups.instance.color('c_fff3f4f6'),
           borderRadius: BorderRadius.circular(20)),
-      child: Text(text, style: const TextStyle(
+      child: Text(text, style: TextStyle(
           fontSize: 11, fontWeight: FontWeight.w500, color: _kSub)),
     ),
   );
@@ -12215,16 +12207,16 @@ class _PackingScreenState extends State<_PackingScreen>
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
-            color: const Color(0xFFFEF3C7),
+            color: FulfillLookups.instance.color('c_fffef3c7'),
             borderRadius: BorderRadius.circular(10),
           ),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
-            const Icon(Icons.shopping_bag_outlined, size: 16, color: Color(0xFF92400E)),
+            Icon(Icons.shopping_bag_outlined, size: 16, color: FulfillLookups.instance.color('c_ff92400e')),
             const SizedBox(width: 6),
             Flexible(
               child: Text(FulfillLookups.instance.ui('not_bagged_map_this_item_to_a_bag_before_pac'),
                   style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
-                      color: Color(0xFF92400E))),
+                      color: FulfillLookups.instance.color('c_ff92400e'))),
             ),
           ]),
         ),
@@ -12239,7 +12231,7 @@ class _PackingScreenState extends State<_PackingScreen>
           partial
               ? 'Packed $packedQty / $ordered  ·  only $packableQty bagged'
               : 'Packed $packedQty / $ordered',
-          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
               color: _kReceivedFg),
           textAlign: TextAlign.center,
         ),
@@ -12273,13 +12265,13 @@ class _PackingScreenState extends State<_PackingScreen>
     Widget stepBtn(IconData icon, VoidCallback? onTap) => SizedBox(
       width: 44, height: 44,
       child: Material(
-        color: onTap == null ? const Color(0xFFF3F4F6) : const Color(0xFFEFF6FF),
+        color: onTap == null ? FulfillLookups.instance.color('c_fff3f4f6') : FulfillLookups.instance.color('c_ffeff6ff'),
         borderRadius: BorderRadius.circular(10),
         child: InkWell(
           borderRadius: BorderRadius.circular(10),
           onTap: onTap,
           child: Icon(icon, size: 20,
-              color: onTap == null ? const Color(0xFF9CA3AF) : const Color(0xFF1E40AF)),
+              color: onTap == null ? FulfillLookups.instance.color('c_ff9ca3af') : FulfillLookups.instance.color('c_ff1e40af')),
         ),
       ),
     );
@@ -12289,15 +12281,15 @@ class _PackingScreenState extends State<_PackingScreen>
       child: Column(mainAxisSize: MainAxisSize.min, children: [
         // CHANGE #532: backend-owned items[].partial_bag_label, verbatim.
         Text(item['partial_bag_label']?.toString() ?? '',
-            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
-                color: Color(0xFF92400E))),
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+                color: FulfillLookups.instance.color('c_ff92400e'))),
         const SizedBox(height: 6),
         Row(mainAxisSize: MainAxisSize.min, children: [
           stepBtn(Icons.remove_rounded, chosen > 1 ? () => setQty(chosen - 1) : null),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 14),
             child: Text(_packQtyLabel(item, chosen),
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700,
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700,
                     color: _kText)),
           ),
           stepBtn(Icons.add_rounded, chosen < packableQty ? () => setQty(chosen + 1) : null),
@@ -12356,13 +12348,13 @@ class _PackingScreenState extends State<_PackingScreen>
               // SAME ordering items[] is emitted in — index_label /
               // bag_position_label / bag_packed_label, rendered verbatim.
               Text(item['index_label']?.toString() ?? '',
-                  style: const TextStyle(fontSize: 13, color: _kSub,
+                  style: TextStyle(fontSize: 13, color: _kSub,
                       fontWeight: FontWeight.w600)),
               Text(item['bag_position_label']?.toString() ?? '',
-                  style: const TextStyle(fontSize: 13, color: _kSub,
+                  style: TextStyle(fontSize: 13, color: _kSub,
                       fontWeight: FontWeight.w600)),
               Text(item['bag_packed_label']?.toString() ?? '',
-                  style: const TextStyle(fontSize: 13, color: _kSub,
+                  style: TextStyle(fontSize: 13, color: _kSub,
                       fontWeight: FontWeight.w600)),
             ],
           ),
@@ -12378,7 +12370,7 @@ class _PackingScreenState extends State<_PackingScreen>
               width: double.infinity,
               padding: EdgeInsets.symmetric(vertical: kBagBandVPad),
               decoration: BoxDecoration(
-                  color: const Color(0xFFDC2626),
+                  color: FulfillLookups.instance.color('c_ffdc2626'),
                   borderRadius: BorderRadius.circular(14)),
               // CHANGE #532: backend-owned items[].bag_label, verbatim.
               child: Text(item['bag_label']?.toString() ?? '',
@@ -12390,7 +12382,7 @@ class _PackingScreenState extends State<_PackingScreen>
           const SizedBox(height: 14),
           // CHANGE #298 (#6): name sits directly above image — normal gap here
           Text(name,
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700,
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700,
                   color: _kText),
               textAlign: TextAlign.center,
               maxLines: 2,
@@ -12450,14 +12442,14 @@ class _PackingScreenState extends State<_PackingScreen>
                 width: double.infinity,
                 height: 56,
                 decoration: BoxDecoration(
-                  color: const Color(0xFFD1FAE5),
+                  color: FulfillLookups.instance.color('c_ffd1fae5'),
                   borderRadius: BorderRadius.circular(14),
                   border: Border.all(
                       color: _kReceivedFg.withValues(alpha: 0.3)),
                 ),
                 alignment: Alignment.center,
                 child: Text(FulfillLookups.instance.ui('packed_hold_to_undo'),
-                    style: const TextStyle(
+                    style: TextStyle(
                         fontSize: 16, fontWeight: FontWeight.w700,
                         color: _kReceivedFg)),
               ),
@@ -12516,7 +12508,7 @@ class _PackingScreenState extends State<_PackingScreen>
           width: double.infinity,
           height: 56,
           decoration: BoxDecoration(
-            color: greyLook ? const Color(0xFFE5E7EB) : _kGreen,
+            color: greyLook ? FulfillLookups.instance.color('c_ffe5e7eb') : _kGreen,
             borderRadius: BorderRadius.circular(14),
           ),
           alignment: Alignment.center,
@@ -12528,7 +12520,7 @@ class _PackingScreenState extends State<_PackingScreen>
               : Text(label,
                   style: TextStyle(
                       fontSize: 18, fontWeight: FontWeight.w700,
-                      color: blocked ? const Color(0xFF6B7280) : Colors.white)),
+                      color: blocked ? FulfillLookups.instance.color('c_ff6b7280') : Colors.white)),
         ),
       ),
     );
@@ -12536,19 +12528,19 @@ class _PackingScreenState extends State<_PackingScreen>
 
   Widget _buildErrorView() => Center(
     child: Column(mainAxisSize: MainAxisSize.min, children: [
-      const Icon(Icons.error_outline, size: 40, color: _kSub),
+      Icon(Icons.error_outline, size: 40, color: _kSub),
       const SizedBox(height: 12),
       Padding(
         padding: const EdgeInsets.symmetric(horizontal: 24),
         child: Text(_error!,
-            style: const TextStyle(color: _kSub, fontSize: 14),
+            style: TextStyle(color: _kSub, fontSize: 14),
             textAlign: TextAlign.center),
       ),
       const SizedBox(height: 16),
       OutlinedButton(
         onPressed: _loadQueue,
         style: OutlinedButton.styleFrom(
-            side: const BorderSide(color: _kGreen),
+            side: BorderSide(color: _kGreen),
             foregroundColor: _kGreen,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
         child: Text(FulfillLookups.instance.ui('retry')),
@@ -12564,8 +12556,8 @@ class _PackingScreenState extends State<_PackingScreen>
         Container(
           width: 80, height: 80,
           decoration:
-              const BoxDecoration(color: _kReceivedBg, shape: BoxShape.circle),
-          child: const Icon(Icons.check_circle_outline_rounded,
+              BoxDecoration(color: _kReceivedBg, shape: BoxShape.circle),
+          child: Icon(Icons.check_circle_outline_rounded,
               size: 48, color: _kReceivedFg),
         ),
         const SizedBox(height: 20),
@@ -12574,7 +12566,7 @@ class _PackingScreenState extends State<_PackingScreen>
         const SizedBox(height: 8),
         // CHANGE #532: backend-owned labels.all_packed_summary, verbatim.
         Text(_queueLabel('all_packed_summary'),
-            style: const TextStyle(fontSize: 14, color: _kSub),
+            style: TextStyle(fontSize: 14, color: _kSub),
             textAlign: TextAlign.center),
         const SizedBox(height: 32),
         SizedBox(
@@ -12619,8 +12611,8 @@ class _ItemImageViewState extends State<_ItemImageView> {
     final curImg   = imgCount > 0 ? imgs[safeIdx] : null;
 
     // CHANGE #298 (#3): grey dots (was brown in #296)
-    const Color dotActive   = Color(0xFF6B7280);   // medium grey
-    const Color dotInactive = Color(0xFFD1D5DB);   // light grey
+    Color dotActive   = FulfillLookups.instance.color('c_ff6b7280');   // medium grey
+    Color dotInactive = FulfillLookups.instance.color('c_ffd1d5db');   // light grey
 
     return LayoutBuilder(builder: (ctx, constraints) {
       final size = constraints.maxHeight.clamp(0.0, constraints.maxWidth);
@@ -12681,7 +12673,7 @@ class _ItemImageViewState extends State<_ItemImageView> {
                     color: _kReceivedBg,
                     borderRadius: BorderRadius.circular(16)),
                 child: Text(widget.qtyLabel,
-                    style: const TextStyle(
+                    style: TextStyle(
                         fontSize: 13, fontWeight: FontWeight.w700,
                         color: _kReceivedFg)),
               ),
@@ -12715,10 +12707,10 @@ class _ItemImageViewState extends State<_ItemImageView> {
   Widget _placeholder(double size) => Container(
     width: size, height: size,
     decoration: BoxDecoration(
-        color: const Color(0xFFF3F4F6),
+        color: FulfillLookups.instance.color('c_fff3f4f6'),
         borderRadius: BorderRadius.circular(16)),
-    child: const Icon(Icons.medication_outlined,
-        size: 64, color: Color(0xFFD1D5DB)),
+    child: Icon(Icons.medication_outlined,
+        size: 64, color: FulfillLookups.instance.color('c_ffd1d5db')),
   );
 }
 
@@ -12791,11 +12783,11 @@ class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
               child: SizedBox(width: 44, height: 44, child: Center(
                 child: Container(
                   width: 28, height: 28,
-                  decoration: const BoxDecoration(
-                      color: Color(0xFFE0E0E0), shape: BoxShape.circle),
+                  decoration: BoxDecoration(
+                      color: FulfillLookups.instance.color('c_ffe0e0e0'), shape: BoxShape.circle),
                   alignment: Alignment.center,
-                  child: const Icon(Icons.close, size: 18,
-                      color: Color(0xFF000000)),
+                  child: Icon(Icons.close, size: 18,
+                      color: FulfillLookups.instance.color('c_ff000000')),
                 ),
               )),
             ),
@@ -12813,7 +12805,7 @@ class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(
-                    color: _selectedBag == null ? _kGreen : const Color(0xFFE8F5E9),
+                    color: _selectedBag == null ? _kGreen : FulfillLookups.instance.color('c_ffe8f5e9'),
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(color: _kGreen),
                   ),
@@ -12827,7 +12819,7 @@ class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
                 final colors     = s?['colors'] as Map?;
                 final st         = (s?['state'] as num?)?.toInt() ?? 0;
                 final isSelected = _selectedBag == bn;
-                final bgColor    = isSelected ? _kGreen : _hexColor(colors?['bg']?.toString(), const Color(0xFFF3F4F6));
+                final bgColor    = isSelected ? _kGreen : _hexColor(colors?['bg']?.toString(), FulfillLookups.instance.color('c_fff3f4f6'));
                 final bdColor    = isSelected ? _kGreen : _hexColor(colors?['border']?.toString(), _kBorder);
                 final txtColor   = isSelected ? Colors.white : _hexColor(colors?['fg']?.toString(), _kSub);
                 try {
@@ -12855,10 +12847,10 @@ class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
             ]),
           ),
         ),
-        const Divider(height: 1, color: _kBorder),
+        Divider(height: 1, color: _kBorder),
         // Table header: Product | Qty (centered) | Packed — NO Bag column (#294)
         Container(
-          color: const Color(0xFFF5F6F8),
+          color: FulfillLookups.instance.color('c_fff5f6f8'),
           child: Row(children: [
             Expanded(child: Padding(
               padding: EdgeInsets.fromLTRB(10, 6, 4, 6),
@@ -12915,10 +12907,10 @@ class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
           .toList();
       if (members.isEmpty) continue;
       rows.add(Container(
-        color: const Color(0xFFF5F6F8),
+        color: FulfillLookups.instance.color('c_fff5f6f8'),
         padding: const EdgeInsets.fromLTRB(10, 4, 10, 4),
         child: Text(g['header_label']?.toString() ?? '',
-            style: const TextStyle(
+            style: TextStyle(
                 fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
       ));
       rows.addAll(members.map(_buildTableRow));
@@ -12937,12 +12929,12 @@ class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
     final qtyLabel = item['qty_label']?.toString() ?? '';
 
     return Container(
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
           border: Border(bottom: BorderSide(color: _kBorder))),
       child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
         Expanded(child: Padding(
           padding: const EdgeInsets.fromLTRB(10, 8, 4, 8),
-          child: Text(name, style: const TextStyle(fontSize: 12, color: _kText),
+          child: Text(name, style: TextStyle(fontSize: 12, color: _kText),
               overflow: TextOverflow.ellipsis, maxLines: 2),
         )),
         SizedBox(width: 72, child: Center(child: Padding(
@@ -12950,17 +12942,17 @@ class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
             decoration: BoxDecoration(
-                color: const Color(0xFFF5F6F8),
+                color: FulfillLookups.instance.color('c_fff5f6f8'),
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: _kBorder)),
             child: Text(qtyLabel, textAlign: TextAlign.center,
-                style: const TextStyle(
+                style: TextStyle(
                     fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
           ),
         ))),
         SizedBox(width: 52, child: Center(
           child: isPacked
-              ? const Text('✓', style: TextStyle(
+              ? Text('✓', style: TextStyle(
                   fontSize: 14, fontWeight: FontWeight.w700, color: _kGreen))
               : const SizedBox.shrink(),
         )),
@@ -13316,7 +13308,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
           turns: isOpen ? 0.5 : 0.0,
           duration: const Duration(milliseconds: 280),
           curve: Curves.easeInOutCubic,
-          child: const Icon(Icons.keyboard_arrow_down_rounded, size: 18, color: _kSub),
+          child: Icon(Icons.keyboard_arrow_down_rounded, size: 18, color: _kSub),
         ),
         const SizedBox(width: 12),
         Container(
@@ -13354,7 +13346,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const Center(
+      return Center(
           child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2));
     }
 
@@ -13364,12 +13356,12 @@ class _DisputesScreenState extends State<_DisputesScreen> {
         child: Padding(
           padding: const EdgeInsets.all(32),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            const Icon(Icons.wifi_off_rounded, size: 48, color: _kSub),
+            Icon(Icons.wifi_off_rounded, size: 48, color: _kSub),
             const SizedBox(height: 12),
             Text(FulfillLookups.instance.ui('couldn_t_load_disputes'),
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _kSub)),
             const SizedBox(height: 8),
-            Text(_error!, style: const TextStyle(fontSize: 12, color: _kSub),
+            Text(_error!, style: TextStyle(fontSize: 12, color: _kSub),
                 textAlign: TextAlign.center),
             const SizedBox(height: 16),
             FilledButton.icon(
@@ -13414,10 +13406,10 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     if (_disputes.isEmpty) {
       return Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.check_circle_outline_rounded, size: 48, color: _kGreen),
+          Icon(Icons.check_circle_outline_rounded, size: 48, color: _kGreen),
           const SizedBox(height: 12),
           Text(FulfillLookups.instance.emptyOrdersLabel ?? '',
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _kSub)),
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _kSub)),
         ]),
       );
     }
@@ -13460,9 +13452,9 @@ class _DisputesScreenState extends State<_DisputesScreen> {
       padding: const EdgeInsets.only(bottom: 8),
       child: Container(
         decoration: BoxDecoration(
-          color: const Color(0xFFFEF2F2),
+          color: FulfillLookups.instance.color('c_fffef2f2'),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0xFFFCA5A5)),
+          border: Border.all(color: FulfillLookups.instance.color('c_fffca5a5')),
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           // ── Header ─────────────────────────────────────────────────────
@@ -13474,13 +13466,13 @@ class _DisputesScreenState extends State<_DisputesScreen> {
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               child: Row(children: [
-                const Icon(Icons.warning_amber_rounded, color: Color(0xFFDC2626), size: 20),
+                Icon(Icons.warning_amber_rounded, color: FulfillLookups.instance.color('c_ffdc2626'), size: 20),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
                     FulfillLookups.instance.uiPlural('unresourceable', n),
-                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
-                        color: Color(0xFFDC2626)),
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
+                        color: FulfillLookups.instance.color('c_ffdc2626')),
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -13488,8 +13480,8 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                   turns: _unfillableExpanded ? 0.5 : 0.0,
                   duration: const Duration(milliseconds: 280),
                   curve: Curves.easeInOutCubic,
-                  child: const Icon(Icons.keyboard_arrow_down_rounded,
-                      size: 18, color: Color(0xFFDC2626)),
+                  child: Icon(Icons.keyboard_arrow_down_rounded,
+                      size: 18, color: FulfillLookups.instance.color('c_ffdc2626')),
                 ),
               ]),
             ),
@@ -13498,19 +13490,19 @@ class _DisputesScreenState extends State<_DisputesScreen> {
           _smoothReveal(
             _unfillableExpanded,
             Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              const Divider(height: 1, color: Color(0xFFFCA5A5)),
+              Divider(height: 1, color: FulfillLookups.instance.color('c_fffca5a5')),
               for (final item in _unfillable)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Text(
                       item['product_name']?.toString() ?? '—',
-                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: _kText),
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: _kText),
                     ),
                     const SizedBox(height: 2),
                     Text(
                       FulfillLookups.instance.uiFill('dispute_qty_meta', {'qty': item['qty'] ?? '?', 'bag': item['bag_no'] ?? '?', 'pharmacy': item['pharmacy_name'] ?? '?'}),
-                      style: const TextStyle(fontSize: 12, color: _kSub),
+                      style: TextStyle(fontSize: 12, color: _kSub),
                     ),
                   ]),
                 ),
@@ -13578,7 +13570,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
           _smoothReveal(
             isOpen,
             Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              const Divider(height: 1, color: _kBorder),
+              Divider(height: 1, color: _kBorder),
 
               // Send link button row + nudge badge + last_reminder_at
               Builder(builder: (_) {
@@ -13598,7 +13590,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                           },
                           style: OutlinedButton.styleFrom(
                             foregroundColor: _kGreen,
-                            side: const BorderSide(color: Color(0xFFBBDDC8)),
+                            side: BorderSide(color: FulfillLookups.instance.color('c_ffbbddc8')),
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -13620,12 +13612,12 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                             return Container(
                               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                               decoration: BoxDecoration(
-                                color: _hexColor(chip?['bg'], const Color(0xFFFFF8E1)),
+                                color: _hexColor(chip?['bg'], FulfillLookups.instance.color('c_fffff8e1')),
                                 borderRadius: BorderRadius.circular(20),
                               ),
                               child: Text(chip?['label'] ?? 'Nudge due',
                                   style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
-                                      color: _hexColor(chip?['fg'], const Color(0xFFB8860B)))),
+                                      color: _hexColor(chip?['fg'], FulfillLookups.instance.color('c_ffb8860b')))),
                             );
                           }),
                         ],
@@ -13634,7 +13626,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                     if (relTime.isNotEmpty) ...[
                       const SizedBox(height: 4),
                       Text(FulfillLookups.instance.uiFill('reminded_rel', {'when': relTime}),
-                          style: const TextStyle(fontSize: 11, color: _kSub)),
+                          style: TextStyle(fontSize: 11, color: _kSub)),
                     ],
                   ]),
                 );
@@ -13676,7 +13668,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     final isActive = p['is_active'] == true;
     // Backend-owned active_colors, verbatim — Active/Inactive badge + status chips.
     final activeLabel = item.activeColors?['label'] ?? '';
-    final activeBg = _hexColor(item.activeColors?['bg'], const Color(0xFFF3F4F6));
+    final activeBg = _hexColor(item.activeColors?['bg'], FulfillLookups.instance.color('c_fff3f4f6'));
     final activeFg = _hexColor(item.activeColors?['fg'], _kSub);
 
     // CHANGE #532: the JOIN is backend-owned too. fw_get_disputes emits a single
@@ -13688,8 +13680,8 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     // Backend-owned kind_label/kind_colors from the product entry, verbatim.
     final kindTagText = p['kind_label']?.toString() ?? '';
     final kindColors = p['kind_colors'] as Map?;
-    final kindTagBg = _hexColor(kindColors?['bg']?.toString(), const Color(0xFFF1F5F9));
-    final kindTagFg = _hexColor(kindColors?['fg']?.toString(), const Color(0xFF475569));
+    final kindTagBg = _hexColor(kindColors?['bg']?.toString(), FulfillLookups.instance.color('c_fff1f5f9'));
+    final kindTagFg = _hexColor(kindColors?['fg']?.toString(), FulfillLookups.instance.color('c_ff475569'));
 
     RenderLog.write('c192_dispute_card_rendered',
         'dispute=${item.disputeId};status=${item.statusCode}');
@@ -13721,7 +13713,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                 Expanded(
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Text(p['product_name']?.toString() ?? '—',
-                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
+                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
                             color: _kText, height: 1.3),
                         maxLines: 2, overflow: TextOverflow.ellipsis),
                     if ((item.disputeCode ?? '').isNotEmpty) ...[
@@ -13729,15 +13721,15 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                       Builder(builder: (_) {
                         try { RenderLog.write('c318_disp_id', item.disputeCode!); } catch (_) {}
                         return Text(item.disputeCode!,
-                            style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w500,
-                                color: Color(0xFF9CA3AF), letterSpacing: 0.3),
+                            style: TextStyle(fontSize: 10, fontWeight: FontWeight.w500,
+                                color: FulfillLookups.instance.color('c_ff9ca3af'), letterSpacing: 0.3),
                             maxLines: 1, overflow: TextOverflow.ellipsis);
                       }),
                     ],
                     if ((item.wrongProductName ?? '').isNotEmpty) ...[
                       const SizedBox(height: 1),
                       Text(FulfillLookups.instance.uiFill('they_sent_line', {'name': item.wrongProductName}),
-                          style: const TextStyle(fontSize: 11, color: Color(0xFFDC2626)),
+                          style: TextStyle(fontSize: 11, color: FulfillLookups.instance.color('c_ffdc2626')),
                           maxLines: 1, overflow: TextOverflow.ellipsis),
                     ],
                   ]),
@@ -13759,7 +13751,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
               if (metaLine.isNotEmpty) ...[
                 const SizedBox(height: 2),
                 Text(metaLine,
-                    style: const TextStyle(fontSize: 11, color: _kSub),
+                    style: TextStyle(fontSize: 11, color: _kSub),
                     maxLines: 1, overflow: TextOverflow.ellipsis),
               ],
 
@@ -13772,7 +13764,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                     'where=disp_tab,qty_line=${p['qty_line'] ?? ''}');
                 return Text(
                   p['qty_line']?.toString() ?? '',
-                  style: const TextStyle(fontSize: 11, color: _kSub),
+                  style: TextStyle(fontSize: 11, color: _kSub),
                 );
               }),
 
@@ -13814,11 +13806,11 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                     decoration: BoxDecoration(
-                        color: _hexColor(item.unfillableChip!['bg'], const Color(0xFFFEE2E2)),
+                        color: _hexColor(item.unfillableChip!['bg'], FulfillLookups.instance.color('c_fffee2e2')),
                         borderRadius: BorderRadius.circular(20)),
                     child: Text(item.unfillableChip!['label'] ?? 'No supplier',
                         style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
-                            color: _hexColor(item.unfillableChip!['fg'], const Color(0xFF991B1B)))),
+                            color: _hexColor(item.unfillableChip!['fg'], FulfillLookups.instance.color('c_ff991b1b')))),
                   ),
                 // Nudge badge — backend-owned: fw_get_disputes().nudge_chip, verbatim.
                 if (item.nudgeChip != null) Builder(builder: (_) {
@@ -13827,11 +13819,11 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                   return Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                     decoration: BoxDecoration(
-                        color: _hexColor(item.nudgeChip!['bg'], const Color(0xFFFFF8E1)),
+                        color: _hexColor(item.nudgeChip!['bg'], FulfillLookups.instance.color('c_fffff8e1')),
                         borderRadius: BorderRadius.circular(20)),
                     child: Text(item.nudgeChip!['label'] ?? 'Nudge due',
                         style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
-                            color: _hexColor(item.nudgeChip!['fg'], const Color(0xFFB8860B)))),
+                            color: _hexColor(item.nudgeChip!['fg'], FulfillLookups.instance.color('c_ffb8860b')))),
                   );
                 }),
                 // C354: adjustment chip — backend-owned: fw_get_disputes().adj_chip, verbatim.
@@ -13840,11 +13832,11 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                   return Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                     decoration: BoxDecoration(
-                        color: _hexColor(item.adjChip!['bg'], const Color(0xFFEFF6FF)),
+                        color: _hexColor(item.adjChip!['bg'], FulfillLookups.instance.color('c_ffeff6ff')),
                         borderRadius: BorderRadius.circular(20)),
                     child: Text(item.adjChip!['label'] ?? '',
                         style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
-                            color: _hexColor(item.adjChip!['fg'], const Color(0xFF1E40AF)))),
+                            color: _hexColor(item.adjChip!['fg'], FulfillLookups.instance.color('c_ff1e40af')))),
                   );
                 }),
                 // Return-note chip — backend-owned (fw_get_disputes' return_note_chip), verbatim.
@@ -13854,7 +13846,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                   return Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                     decoration: BoxDecoration(
-                        color: _hexColor(chip.bg, const Color(0xFFF3F4F6)),
+                        color: _hexColor(chip.bg, FulfillLookups.instance.color('c_fff3f4f6')),
                         borderRadius: BorderRadius.circular(20)),
                     child: Text(chip.labelCard,
                         style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
@@ -13867,7 +13859,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
 
           // (g) Trailing chevron — signals tappable
           const SizedBox(width: 6),
-          const Icon(Icons.chevron_right_rounded, size: 18, color: _kSub),
+          Icon(Icons.chevron_right_rounded, size: 18, color: _kSub),
         ]),
       ),
     );
@@ -13993,7 +13985,7 @@ class _DisputeActionSheetState extends State<_DisputeActionSheet> {
   Widget build(BuildContext context) {
     final item = widget.item;
     // Backend-owned: fw_get_disputes()'s active_colors, verbatim.
-    final activeBg = _hexColor(item.activeColors?['bg'], const Color(0xFFF3F4F6));
+    final activeBg = _hexColor(item.activeColors?['bg'], FulfillLookups.instance.color('c_fff3f4f6'));
     final activeFg = _hexColor(item.activeColors?['fg'], _kSub);
     final safeBottom = MediaQuery.of(context).padding.bottom;
 
@@ -14010,7 +14002,7 @@ class _DisputeActionSheetState extends State<_DisputeActionSheet> {
           child: Container(
             width: 36, height: 4,
             decoration: BoxDecoration(
-              color: const Color(0xFFD1D5DB),
+              color: FulfillLookups.instance.color('c_ffd1d5db'),
               borderRadius: BorderRadius.circular(2),
             ),
           ),
@@ -14026,7 +14018,7 @@ class _DisputeActionSheetState extends State<_DisputeActionSheet> {
               Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Expanded(
                   child: Text(item.productName.isNotEmpty ? item.productName : '—',
-                      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700,
+                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700,
                           color: _kText, height: 1.3),
                       maxLines: 2, overflow: TextOverflow.ellipsis),
                 ),
@@ -14036,25 +14028,25 @@ class _DisputeActionSheetState extends State<_DisputeActionSheet> {
                   return Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                     decoration: BoxDecoration(
-                      color: _hexColor(item.kindColors?['bg'], const Color(0xFFF1F5F9)),
+                      color: _hexColor(item.kindColors?['bg'], FulfillLookups.instance.color('c_fff1f5f9')),
                       borderRadius: BorderRadius.circular(6),
                     ),
                     child: Text(item.kindLabel,
                         style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
-                            color: _hexColor(item.kindColors?['fg'], const Color(0xFF475569)))),
+                            color: _hexColor(item.kindColors?['fg'], FulfillLookups.instance.color('c_ff475569')))),
                   );
                 }),
               ]),
               if ((item.wrongProductName ?? '').isNotEmpty) ...[
                 const SizedBox(height: 2),
                 Text(FulfillLookups.instance.uiFill('they_sent_line', {'name': item.wrongProductName}),
-                    style: const TextStyle(fontSize: 12, color: Color(0xFFDC2626)),
+                    style: TextStyle(fontSize: 12, color: FulfillLookups.instance.color('c_ffdc2626')),
                     maxLines: 1, overflow: TextOverflow.ellipsis),
               ],
               const SizedBox(height: 4),
               Text(
                 FulfillLookups.instance.uiFill('ord_rec_short_line', {'ordered': item.ordered.toInt(), 'received': item.received.toInt(), 'short': item.short.toInt()}),
-                style: const TextStyle(fontSize: 12, color: _kSub),
+                style: TextStyle(fontSize: 12, color: _kSub),
               ),
               const SizedBox(height: 4),
               Wrap(spacing: 4, runSpacing: 4, children: [
@@ -14089,7 +14081,7 @@ class _DisputeActionSheetState extends State<_DisputeActionSheet> {
                 style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
-                    color: Color(0xFF6B7280))),
+                    color: FulfillLookups.instance.color('c_ff6b7280'))),
             const SizedBox(width: 10),
             ProofThumbnail(proofUrl: item.proofUrl!, size: 72),
           ]),
@@ -14105,7 +14097,7 @@ class _DisputeActionSheetState extends State<_DisputeActionSheet> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  color: _hexColor(chip.bg, const Color(0xFFF3F4F6)),
+                  color: _hexColor(chip.bg, FulfillLookups.instance.color('c_fff3f4f6')),
                   borderRadius: BorderRadius.circular(20),
                 ),
                 child: Text(
@@ -14137,7 +14129,7 @@ class _DisputeActionSheetState extends State<_DisputeActionSheet> {
         ],
 
         const SizedBox(height: 20),
-        const Divider(height: 1, color: Color(0xFFE5E7EB)),
+        Divider(height: 1, color: FulfillLookups.instance.color('c_ffe5e7eb')),
         const SizedBox(height: 16),
 
         // Action buttons (item.actions verbatim from backend)
@@ -14150,7 +14142,7 @@ class _DisputeActionSheetState extends State<_DisputeActionSheet> {
             child: OutlinedButton(
               onPressed: () => Navigator.of(context).pop(),
               style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: Color(0xFFE5E7EB)),
+                side: BorderSide(color: FulfillLookups.instance.color('c_ffe5e7eb')),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                 padding: const EdgeInsets.symmetric(vertical: 12),
               ),
@@ -14194,7 +14186,7 @@ class _DisputeActionSheetState extends State<_DisputeActionSheet> {
                           onPressed: _resolving ? null : () => _tap(action),
                           style: OutlinedButton.styleFrom(
                             foregroundColor: _kGreen,
-                            side: const BorderSide(color: Color(0xFFBBDDC8)),
+                            side: BorderSide(color: FulfillLookups.instance.color('c_ffbbddc8')),
                             shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(8)),
                             padding: const EdgeInsets.symmetric(vertical: 13),
@@ -14302,10 +14294,10 @@ class _DisputeContactPopoverBodyState extends State<_DisputeContactPopoverBody>
   bool _loading = true;
   Map<String, dynamic> _contacts = {};
 
-  static const _kGreen  = Color(0xFF1B7A43);
-  static const _kText   = Color(0xFF111827);
-  static const _kSub    = Color(0xFF6B7280);
-  static const _kBorder = Color(0xFFE5E7EB);
+  static Color get _kGreen  => FulfillLookups.instance.color('c_ff1b7a43');
+  static Color get _kText   => FulfillLookups.instance.color('c_ff111827');
+  static Color get _kSub    => FulfillLookups.instance.color('c_ff6b7280');
+  static Color get _kBorder => FulfillLookups.instance.color('c_ffe5e7eb');
 
   @override
   void initState() {
@@ -14433,7 +14425,7 @@ class _DisputeContactPopoverBodyState extends State<_DisputeContactPopoverBody>
               borderRadius: BorderRadius.circular(12),
               color: Colors.white,
               child: _loading
-                  ? const Padding(
+                  ? Padding(
                       padding: EdgeInsets.all(24),
                       child: Center(
                         child: SizedBox(
@@ -14462,7 +14454,7 @@ class _DisputeContactPopoverBodyState extends State<_DisputeContactPopoverBody>
       return Padding(
         padding: const EdgeInsets.all(20),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.contact_phone_outlined, color: _kSub, size: 28),
+          Icon(Icons.contact_phone_outlined, color: _kSub, size: 28),
           const SizedBox(height: 8),
           Text(FulfillLookups.instance.ui('no_contacts_saved_for_this_supplier'),
               textAlign: TextAlign.center,
@@ -14481,7 +14473,7 @@ class _DisputeContactPopoverBodyState extends State<_DisputeContactPopoverBody>
               label: Text(FulfillLookups.instance.ui('copy_link'), style: TextStyle(fontSize: 13)),
               style: OutlinedButton.styleFrom(
                 foregroundColor: _kGreen,
-                side: const BorderSide(color: Color(0xFFBBDDC8)),
+                side: BorderSide(color: FulfillLookups.instance.color('c_ffbbddc8')),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
               ),
             ),
@@ -14516,7 +14508,7 @@ class _DisputeContactPopoverBodyState extends State<_DisputeContactPopoverBody>
   Widget _section(String label) => Padding(
     padding: const EdgeInsets.fromLTRB(14, 8, 14, 2),
     child: Text(label,
-        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
+        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
             color: _kSub, letterSpacing: 0.4)),
   );
 
@@ -14528,7 +14520,7 @@ class _DisputeContactPopoverBodyState extends State<_DisputeContactPopoverBody>
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: isLast
             ? BoxDecoration(
-                color: const Color(0xFFE7F4EC),
+                color: FulfillLookups.instance.color('c_ffe7f4ec'),
                 border: Border(
                     left: BorderSide(color: _kGreen, width: 3)),
               )

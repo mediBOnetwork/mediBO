@@ -13,13 +13,13 @@ Color _hexColor(String? hex, Color fallback) {
   return v == null ? fallback : Color(v);
 }
 
-const _kGreen  = Color(0xFF1B7A43);
-const _kText   = Color(0xFF111827);
-const _kSub    = Color(0xFF6B7280);
-const _kBorder = Color(0xFFE5E7EB);
-const _kAmber  = Color(0xFFB45309);
-const _kAmberBg = Color(0xFFFFFBEB);
-const _kAmberBorder = Color(0xFFFCD34D);
+Color get _kGreen  => FulfillLookups.instance.color('c_ff1b7a43');
+Color get _kText   => FulfillLookups.instance.color('c_ff111827');
+Color get _kSub    => FulfillLookups.instance.color('c_ff6b7280');
+Color get _kBorder => FulfillLookups.instance.color('c_ffe5e7eb');
+Color get _kAmber  => FulfillLookups.instance.color('c_ffb45309');
+Color get _kAmberBg => FulfillLookups.instance.color('c_fffffbeb');
+Color get _kAmberBorder => FulfillLookups.instance.color('c_fffcd34d');
 
 /// Unified 5-option issue-flagging section embedded in item popups.
 /// Replaces the old ad-hoc "Few item wrong / Wrong item / Not coming" buttons.
@@ -232,7 +232,7 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
     final text = FulfillLookups.instance.message(code);
     if (!mounted || text == null || text.isEmpty) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(text), backgroundColor: const Color(0xFFDC2626)));
+      SnackBar(content: Text(text), backgroundColor: FulfillLookups.instance.color('c_ffdc2626')));
   }
 
   Future<String?> _pickAndUpload() async {
@@ -392,7 +392,7 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
       // option table / error map is still in flight we render a spinner only.
       if (!FulfillLookups.instance.ready) {
         RenderLog.write('c531_issue_wait', 'ready=0');
-        return const SizedBox(
+        return SizedBox(
           height: 44,
           child: Center(
             child: SizedBox(width: 18, height: 18,
@@ -419,20 +419,20 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
       Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: BoxDecoration(
-          color: const Color(0xFFFEF3C7),
+          color: FulfillLookups.instance.color('c_fffef3c7'),
           borderRadius: BorderRadius.circular(6),
           border: Border.all(color: _kAmberBorder),
         ),
         // C531: label verbatim from fw_issue_options; falls back to the raw
         // backend key (never to a client-authored English string).
         child: Text(FulfillLookups.instance.uiFill('issue_line', {'label': FulfillLookups.instance.issueLabel(issue) ?? issue}),
-            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kAmber)),
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kAmber)),
       ),
       const SizedBox(width: 8),
       TextButton(
         onPressed: _saving ? null : _clear,
         style: TextButton.styleFrom(
-          foregroundColor: const Color(0xFFDC2626),
+          foregroundColor: FulfillLookups.instance.color('c_ffdc2626'),
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           minimumSize: Size.zero,
           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -462,7 +462,7 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
             style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
         style: OutlinedButton.styleFrom(
           foregroundColor: _kAmber,
-          side: const BorderSide(color: _kAmberBorder),
+          side: BorderSide(color: _kAmberBorder),
           backgroundColor: _kAmberBg,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         ),
@@ -490,16 +490,16 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           // Header
           Row(children: [
-            const Icon(Icons.flag_outlined, size: 14, color: _kAmber),
+            Icon(Icons.flag_outlined, size: 14, color: _kAmber),
             const SizedBox(width: 6),
             Text(title,
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kAmber)),
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kAmber)),
             const Spacer(),
             if (hasExisting)
               TextButton(
                 onPressed: _saving ? null : _clear,
                 style: TextButton.styleFrom(
-                  foregroundColor: const Color(0xFFDC2626),
+                  foregroundColor: FulfillLookups.instance.color('c_ffdc2626'),
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   minimumSize: Size.zero,
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -509,7 +509,7 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
               ),
             GestureDetector(
               onTap: () => setState(() => _expanded = false),
-              child: const Padding(
+              child: Padding(
                 padding: EdgeInsets.only(left: 8),
                 child: Icon(Icons.close, size: 18, color: _kSub),
               ),
@@ -557,7 +557,7 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
     final hint  = opt['help']?.toString() ?? '';
     final colors = opt['colors'];
     final optBg = _hexColor(
-        colors is Map ? colors['bg']?.toString() : null, const Color(0xFFFEF3C7));
+        colors is Map ? colors['bg']?.toString() : null, FulfillLookups.instance.color('c_fffef3c7'));
     final optFg = _hexColor(colors is Map ? colors['fg']?.toString() : null, _kAmber);
     final isSelected = _selected == value;
     return GestureDetector(
@@ -590,7 +590,7 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
                   style: TextStyle(
                       fontSize: 13, fontWeight: FontWeight.w600,
                       color: isSelected ? optFg : _kText)),
-              Text(hint, style: const TextStyle(fontSize: 11, color: _kSub)),
+              Text(hint, style: TextStyle(fontSize: 11, color: _kSub)),
             ]),
           ),
         ]),
@@ -619,7 +619,7 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
           // C532: rules not landed — loading state only, never a guessed number.
           Builder(builder: (_) {
             RenderLog.write('c532_qty_wait', 'type=$issue');
-            return const SizedBox(
+            return SizedBox(
               height: 36,
               child: Align(
                 alignment: Alignment.centerLeft,
@@ -637,7 +637,7 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
             RenderLog.write('c365_qty_max', 'tab=${widget.tab ?? "?"},max=$max');
             return Text(
               FulfillLookups.instance.uiFill('disputed_units_prompt', {'max': max}),
-              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText),
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText),
             );
           }),
           const SizedBox(height: 6),
@@ -649,11 +649,11 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
               onChanged: (v) => setState(() => _qty = v),
             ),
             const SizedBox(width: 8),
-            Text(FulfillLookups.instance.ui('units'), style: const TextStyle(fontSize: 12, color: _kSub)),
+            Text(FulfillLookups.instance.ui('units'), style: TextStyle(fontSize: 12, color: _kSub)),
             if (_refLabel.isNotEmpty) ...[
               const SizedBox(width: 8),
               // C532: ref_label ('<counted>/<ref_qty>') printed verbatim.
-              Text(_refLabel, style: const TextStyle(fontSize: 12, color: _kSub)),
+              Text(_refLabel, style: TextStyle(fontSize: 12, color: _kSub)),
             ],
           ]),
         ],
@@ -662,22 +662,22 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
       if (needsName) ...[
         Text(
           FulfillLookups.instance.ui('what_item_sent'),
-          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText),
+          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText),
         ),
         const SizedBox(height: 6),
         TextField(
           controller: _nameCtrl,
           decoration: InputDecoration(
             hintText: FulfillLookups.instance.ui('wrong_item_hint'),
-            hintStyle: const TextStyle(fontSize: 13, color: _kSub),
+            hintStyle: TextStyle(fontSize: 13, color: _kSub),
             filled: true, fillColor: Colors.white, isDense: true,
             contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
-                borderSide: const BorderSide(color: _kBorder)),
+                borderSide: BorderSide(color: _kBorder)),
             enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
-                borderSide: const BorderSide(color: _kBorder)),
+                borderSide: BorderSide(color: _kBorder)),
             focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
-                borderSide: const BorderSide(color: _kGreen, width: 1.5)),
+                borderSide: BorderSide(color: _kGreen, width: 1.5)),
           ),
           style: const TextStyle(fontSize: 13),
           textCapitalization: TextCapitalization.sentences,
@@ -695,7 +695,7 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
         _buildPhotoRow(),
       ] else ...[
         Text(lk.issueOption(issue)?['help']?.toString() ?? '',
-            style: const TextStyle(fontSize: 12, color: _kSub)),
+            style: TextStyle(fontSize: 12, color: _kSub)),
         const SizedBox(height: 6),
       ],
     ]);
@@ -708,7 +708,7 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
           borderRadius: BorderRadius.circular(6),
           child: Image.network(_proofUrl!, width: 48, height: 48, fit: BoxFit.cover,
               errorBuilder: (_, __, ___) =>
-                  const Icon(Icons.broken_image_outlined, size: 32, color: _kSub)),
+                  Icon(Icons.broken_image_outlined, size: 32, color: _kSub)),
         ),
         const SizedBox(width: 8),
         TextButton.icon(
@@ -716,7 +716,7 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
           icon: const Icon(Icons.close, size: 14),
           label: Text(FulfillLookups.instance.ui('remove'), style: const TextStyle(fontSize: 12)),
           style: TextButton.styleFrom(
-              foregroundColor: const Color(0xFFDC2626),
+              foregroundColor: FulfillLookups.instance.color('c_ffdc2626'),
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4)),
         ),
       ]);
@@ -738,7 +738,7 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
         label: Text(FulfillLookups.instance.ui('attach_photo'), style: const TextStyle(fontSize: 12)),
         style: OutlinedButton.styleFrom(
           foregroundColor: _kSub,
-          side: const BorderSide(color: _kBorder),
+          side: BorderSide(color: _kBorder),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         ),
       ),
@@ -773,7 +773,7 @@ class _RisStepper extends StatelessWidget {
         height: 36,
         alignment: Alignment.center,
         child: Text('$value',
-            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText)),
+            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: _kText)),
       ),
       _RisStepBtn(
         icon: Icons.add,
@@ -798,7 +798,7 @@ class _RisStepBtn extends StatelessWidget {
       child: Container(
         width: 32, height: 36,
         decoration: BoxDecoration(
-          color: enabled ? const Color(0xFFF5F6F8) : const Color(0xFFF9FAFB),
+          color: enabled ? FulfillLookups.instance.color('c_fff5f6f8') : FulfillLookups.instance.color('c_fff9fafb'),
           borderRadius: BorderRadius.circular(6),
           border: Border.all(color: _kBorder),
         ),

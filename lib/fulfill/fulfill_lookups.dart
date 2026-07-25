@@ -16,6 +16,7 @@
 // render their existing empty/loading state — there is no hardcoded fallback
 // copy anywhere in this file by design.
 
+import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../services/fulfill_date_scope.dart';
@@ -33,6 +34,7 @@ class FulfillLookups {
   Map<String, String> _messages = const {};
   List<Map<String, dynamic>> _issueOptions = const [];
   Map<String, String> _uiLabels = const {};
+  Map<String, int> _uiColors = const {};
 
   /// fw_date_label payloads keyed by 'YYYY-MM-DD'. Keyed (rather than a single
   /// slot) because DateScopeChip is also used by admin_customer_screen and
@@ -139,6 +141,18 @@ class FulfillLookups {
   /// hardcoded English fallback.
   String ui(String key) => uiLabel(key) ?? '';
 
+  /// CHANGE #538: the fulfillment palette. Every static colour in the tab is a
+  /// token in fw_ui_color, so a palette edit is a migration rather than a
+  /// Flutter rebuild. Values are byte-identical to the literals they replaced.
+  ///
+  /// Before the catalog lands this returns [fallback] (default transparent) —
+  /// the same "render nothing yet" policy the copy catalog uses. The catalog is
+  /// fetched once per session during boot, alongside the labels.
+  Color color(String token, [Color fallback = const Color(0x00000000)]) {
+    final v = _staticLoaded ? _uiColors[token] : null;
+    return v == null ? fallback : Color(v);
+  }
+
   /// [ui] with the backend's own named `{slot}`s filled from runtime data the
   /// client already holds (a supplier name, a list length). The SENTENCE and
   /// its punctuation stay backend-owned; only the values are substituted.
@@ -212,6 +226,7 @@ class FulfillLookups {
         c.rpc('fw_error_messages'),
         c.rpc('fw_issue_options'),
         c.rpc('fw_ui_labels'),
+        c.rpc('fw_ui_colors'),
       ]);
 
       final errRes = res[0];
@@ -241,11 +256,22 @@ class FulfillLookups {
         }
       }
 
+      final colRes = res[3];
+      if (colRes is Map) {
+        final raw = colRes['colors'];
+        if (raw is Map) {
+          _uiColors = raw.map((k, v) => MapEntry(
+              k.toString(), int.tryParse(v?.toString() ?? '', radix: 16) ??
+                  int.tryParse((v?.toString() ?? '').replaceFirst('0x', ''), radix: 16) ?? 0));
+        }
+      }
+
       _staticLoaded =
           _messages.isNotEmpty || _issueOptions.isNotEmpty || _uiLabels.isNotEmpty;
       RenderLog.write('c531_lookups',
           'messages=${_messages.length};issue_options=${_issueOptions.length}');
       RenderLog.write('c532_ui_labels', 'labels=${_uiLabels.length}');
+      RenderLog.write('c538_ui_colors', 'colors=${_uiColors.length}');
       _notify();
     } catch (_) {
       // Leave unloaded — callers render their loading/empty state rather than

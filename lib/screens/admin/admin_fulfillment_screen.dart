@@ -14757,6 +14757,11 @@ class _DisputesScreenState extends State<_DisputesScreen> {
   bool _closedExpanded = false;
   final Map<String, GlobalKey> _sendLinkKeys = {};
   bool _unfillableExpanded = false;
+  // Backend-owned (fw_get_disputes' supplier_groups[]): supplier -> {total,
+  // active_count, label, dot{state,fill,border}, colors{bg,fg}} — the
+  // per-supplier header row reads this verbatim instead of aggregating
+  // active/total counts from the flat disputes[] list client-side.
+  Map<String, Map<String, dynamic>> _supplierGroups = {};
 
   // CHANGE #444 — shared date scope
   int _olderOpen = 0;
@@ -14797,6 +14802,16 @@ class _DisputesScreenState extends State<_DisputesScreen> {
       if (!mounted) return;
       _olderOpen = (res['older_open'] as num?)?.toInt() ?? 0;
       final items = DisputeItem.listFromResponse(res);
+      final rawGroups = res['supplier_groups'];
+      final supplierGroups = <String, Map<String, dynamic>>{};
+      if (rawGroups is List) {
+        for (final g in rawGroups) {
+          if (g is Map) {
+            final s = g['supplier']?.toString();
+            if (s != null) supplierGroups[s] = Map<String, dynamic>.from(g);
+          }
+        }
+      }
       RenderLog.write('c354_live', 'tab=disputes,src=load');
       // C358 B3: Disputes list rendered after a (realtime-driven) refetch — includes
       // 'shop_logged' flagged disputes which the backend returns as active.
@@ -14826,7 +14841,12 @@ class _DisputesScreenState extends State<_DisputesScreen> {
       RenderLog.write('c181_unfillable', '${unfillable.length}');
       RenderLog.write('c182_supplier_anim',
           'change:182,uses_shared_reveal:true,duration_ms:280,curve:easeInOutCubic,chevron_animated:true');
-      setState(() { _disputes = items; _unfillable = unfillable; _loading = false; });
+      setState(() {
+        _disputes = items;
+        _unfillable = unfillable;
+        _supplierGroups = supplierGroups;
+        _loading = false;
+      });
     } on DisputeException catch (e) {
       if (!mounted) return;
       setState(() { _error = e.message; _loading = false; });
@@ -14994,41 +15014,27 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     return code.isNotEmpty ? '$_kDisputeDomain/$code' : '';
   }
 
-  // Supplier counts — (active, total)
-  ({int active, int total}) _supplierCounts(List<DisputeItem> items) {
-    final active = items.where((d) => d.isActive).length;
-    return (active: active, total: items.length);
-  }
-
-  // ── #180: Fixed-width count badge (mirrors CountBadge style) ─────────────────
-  Widget _countBadge(int count, {required bool red}) {
-    final bg = red ? const Color(0xFFDC2626) : _kGreen;
-    return SizedBox(
-      width: 28, height: 20,
-      child: Container(
-        alignment: Alignment.center,
-        decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(5)),
-        child: Text('$count', style: const TextStyle(
-          color: Colors.white, fontWeight: FontWeight.w700, fontSize: 12, height: 1.0)),
-      ),
-    );
-  }
-
   // ── #180: Shared header row — pixel-identical open vs closed ─────────────────
+  // Backend-owned (fw_get_disputes' supplier_groups[]): label/dot/colors,
+  // read verbatim — no client active/total aggregation over the flat
+  // disputes[] list.
   Widget _buildDisputeHeader(String supplier, List<DisputeItem> items,
       {required bool isOpen}) {
-    final counts = _supplierCounts(items);
-    final allClosed = counts.active == 0;
-    final dotColor = allClosed ? _kGreen : const Color(0xFFE8A700);
+    final group = _supplierGroups[supplier];
+    final label = group?['label']?.toString() ?? supplier;
+    final dot = group?['dot'] as Map?;
+    final colors = group?['colors'] as Map?;
+    final dotFill = _hexColor(dot?['fill']?.toString(), _kGreen);
+    final dotBorder = _hexColor(dot?['border']?.toString(), _kGreen);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       child: Row(children: [
         Expanded(
-          child: Text(supplier,
+          child: Text(label,
               style: TextStyle(
                   fontSize: 15,
                   fontWeight: FontWeight.w600,
-                  color: isOpen ? _kGreen : _kText),
+                  color: isOpen ? _kGreen : _hexColor(colors?['fg']?.toString(), _kText)),
               maxLines: 1,
               overflow: TextOverflow.ellipsis),
         ),
@@ -15041,24 +15047,12 @@ class _DisputesScreenState extends State<_DisputesScreen> {
           child: const Icon(Icons.keyboard_arrow_down_rounded, size: 18, color: _kSub),
         ),
         const SizedBox(width: 12),
-        // B5: fixed-width slot so header width is constant open vs closed
-        SizedBox(
-          width: 32,
-          child: allClosed
-              ? const SizedBox.shrink()
-              : Row(mainAxisSize: MainAxisSize.min, children: [
-                  _countBadge(counts.active, red: true),
-                  const SizedBox(width: 4),
-                ]),
-        ),
-        _countBadge(counts.total, red: false),
-        const SizedBox(width: 8),
         Container(
           width: 12, height: 12,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            color: dotColor,
-            border: Border.all(color: dotColor, width: 1.5),
+            color: dotFill,
+            border: Border.all(color: dotBorder, width: 1.5),
           ),
         ),
       ]),

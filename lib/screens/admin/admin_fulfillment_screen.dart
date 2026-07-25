@@ -498,7 +498,7 @@ class _BagScannerDialogState extends State<_BagScannerDialog> {
     } catch (e) {
       RenderLog.write('c259_picker_opened', 'error;$e');
       if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(
-          const SnackBar(content: Text('Could not open file chooser')));
+          SnackBar(content: Text(FulfillLookups.instance.message('file_chooser_failed') ?? '')));
       return;
     }
     if (result == null || result.files.isEmpty) return;
@@ -520,7 +520,7 @@ class _BagScannerDialogState extends State<_BagScannerDialog> {
     if (code == null || code.trim().isEmpty) {
       RenderLog.write('c259_upload_decoded', 'fail;no_qr');
       if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(
-          const SnackBar(content: Text('No QR found — try a clearer photo')));
+          SnackBar(content: Text(FulfillLookups.instance.message('no_qr_found') ?? '')));
       return;
     }
     _detected = true;
@@ -709,7 +709,7 @@ class _ChangeBagScannerState extends State<_ChangeBagScanner> {
       try { await _ctrl.start(); } catch (_) {}
     } catch (e) {
       if (mounted) {
-        setState(() { _busy = false; _detected = false; _error = 'Could not detach: $e'; });
+        setState(() { _busy = false; _detected = false; _error = FulfillLookups.instance.message('bag_detach_failed') ?? ''; });
         try { await _ctrl.start(); } catch (_) {}
       }
     }
@@ -750,7 +750,7 @@ class _ChangeBagScannerState extends State<_ChangeBagScanner> {
       if (mounted && Navigator.of(context).canPop()) Navigator.of(context).pop(bagData);
     } catch (e) {
       if (mounted) {
-        setState(() { _busy = false; _detected = false; _error = 'Could not attach: $e'; });
+        setState(() { _busy = false; _detected = false; _error = FulfillLookups.instance.message('bag_attach_failed') ?? ''; });
         try { await _ctrl.start(); } catch (_) {}
       }
     }
@@ -767,7 +767,7 @@ class _ChangeBagScannerState extends State<_ChangeBagScanner> {
     } catch (e) {
       RenderLog.write('c259_picker_opened', 'error;$e');
       if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(
-          const SnackBar(content: Text('Could not open file chooser')));
+          SnackBar(content: Text(FulfillLookups.instance.message('file_chooser_failed') ?? '')));
       return;
     }
     if (result == null || result.files.isEmpty) return;
@@ -789,7 +789,7 @@ class _ChangeBagScannerState extends State<_ChangeBagScanner> {
     if (code == null || code.trim().isEmpty) {
       RenderLog.write('c259_upload_decoded', 'fail;no_qr;step=${_step.name}');
       if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(
-          const SnackBar(content: Text('No QR found — try a clearer photo')));
+          SnackBar(content: Text(FulfillLookups.instance.message('no_qr_found') ?? '')));
       return;
     }
     RenderLog.write('c259_upload_decoded', 'ok;step=${_step.name}');
@@ -1583,7 +1583,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         widget.onSupplierCountChanged?.call(names.length);
       } catch (e) {
         if (!mounted) return;
-        setState(() { _loadingSuppliers = false; _error = e.toString(); });
+        setState(() { _loadingSuppliers = false; _error = FulfillLookups.instance.errorText(e) ?? ''; });
       }
       return;
     }
@@ -1651,7 +1651,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     } catch (e) {
       if (!mounted) return;
       RenderLog.write('78_collect_query_error', e.toString().substring(0, e.toString().length.clamp(0, 80)));
-      setState(() { _loadingSuppliers = false; _error = e.toString(); });
+      setState(() { _loadingSuppliers = false; _error = FulfillLookups.instance.errorText(e) ?? ''; });
     }
   }
 
@@ -1901,7 +1901,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       }
     } catch (e) {
       if (!mounted) return;
-      setState(() { _loadingBox = false; _error = e.toString(); });
+      setState(() { _loadingBox = false; _error = FulfillLookups.instance.errorText(e) ?? ''; });
     }
   }
 
@@ -1966,7 +1966,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         RenderLog.write('c362_bag_gate', 'blocked=true;src=rpc');
         setState(() => _confirmingAll = false);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text((res['hint'] ?? 'Detach the bag before confirming all received').toString())));
+            content: Text((res['hint'] ?? FulfillLookups.instance.message('detach_bag_first') ?? '').toString())));
         return;
       }
       // Branch 2 — Hard unknown error
@@ -1974,7 +1974,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         RenderLog.write('c339_wh_confirm_fail', 'error=${res['error']}');
         setState(() => _confirmingAll = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: ${res['error']}')));
+          SnackBar(content: Text(FulfillLookups.instance.errorText(res['error']) ?? '')));
         return;
       }
 
@@ -2004,7 +2004,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (mounted) {
         setState(() => _confirmingAll = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: ${e.toString().substring(0, e.toString().length.clamp(0, 80))}')),
+          SnackBar(content: Text(FulfillLookups.instance.errorText(e) ?? '')),
         );
       }
     }
@@ -2029,7 +2029,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Undo error: ${e.toString().substring(0, e.toString().length.clamp(0, 80))}')),
+          SnackBar(content: Text(FulfillLookups.instance.errorText(e) ?? '')),
         );
       }
     }
@@ -2085,7 +2085,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (widget.arrivals && (state == 'received' || state == 'short')) {
         if (_activeBag == null) {
           if (mounted) setState(() => _recording = false);
-          _showSnack('Scan a bag first before counting');
+          _showSnack(FulfillLookups.instance.message('scan_bag_first') ?? '');
           return;
         }
         final productId = (item['product_id'] as num?)?.toInt();
@@ -2138,12 +2138,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         final err2 = res2['error']?.toString();
         if (err2 == 'collect_locked') {
           if (mounted) setState(() => _recording = false);
-          _showSnack('Counting locked — already forwarded to warehouse');
+          _showSnack(FulfillLookups.instance.message('counting_forwarded') ?? '');
           return;
         }
         if (err2 == 'warehouse_only_state') {
           if (mounted) setState(() => _recording = false);
-          _showSnack('This item is counted at warehouse only');
+          _showSnack(FulfillLookups.instance.message('warehouse_only') ?? '');
           return;
         }
         if (err2 != null) throw Exception(err2);
@@ -2199,9 +2199,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         final msg = e.toString();
         if (msg.contains('not forwarded')) {
           RenderLog.write('c337_gate_notforwarded', 'supplier=${_selectedSupplier ?? ''}');
-          _showSnack('Supplier not forwarded — count in warehouse instead');
+          _showSnack(FulfillLookups.instance.message('not_forwarded') ?? '');
         } else {
-          _showSnack('Error: $e');
+          _showSnack(FulfillLookups.instance.errorText(e) ?? '');
         }
       }
     }
@@ -2251,7 +2251,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       RenderLog.write('change_91_edit_blocked', '1');
       RenderLog.write('c337_shop_locked_card',
           'supplier=${_selectedSupplier ?? ''};mode=${_supplierMode ?? 'unknown'};mic_blocked=y');
-      if (mounted) _showSnack('Counting locked — unlock first to edit');
+      if (mounted) _showSnack(FulfillLookups.instance.message('counting_locked_edit') ?? '');
       return;
     }
     if (_voiceListening) {
@@ -2287,7 +2287,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     // #332: obtain background session key — never record without one (prevents session mixing)
     final supplier332 = _selectedSupplier;
     if (supplier332 == null || supplier332.isEmpty) {
-      _showSnack('No supplier selected');
+      _showSnack(FulfillLookups.instance.message('no_supplier_selected') ?? '');
       return;
     }
     try {
@@ -2300,11 +2300,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       RenderLog.write('c332_session_key', 'key=${_sessionKey ?? ''};stage=${_sessionStage ?? ''}');
       RenderLog.write('c335_session', 'key=${_sessionKey ?? ''};stage=${_sessionStage ?? ''}');
     } catch (e) {
-      if (mounted) _showSnack('Voice session error — retry');
+      if (mounted) _showSnack(FulfillLookups.instance.message('voice_session_error') ?? '');
       return;
     }
     if (_sessionKey == null || _sessionKey!.isEmpty) {
-      if (mounted) _showSnack('Voice session error — retry');
+      if (mounted) _showSnack(FulfillLookups.instance.message('voice_session_error') ?? '');
       return;
     }
     _continuousSecs = 0;
@@ -2314,11 +2314,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       setState(() => _continuousSecs++);
       if (_continuousSecs >= 3600) {
         t.cancel();
-        _showSnack('1-hour clip limit — recording split/stopped');
+        _showSnack(FulfillLookups.instance.message('clip_limit') ?? '');
         _stopAndTranscribe();
       } else if (_continuousSecs >= _VoiceCaps._remainingToday) {
         t.cancel();
-        _showSnack('Daily 3-hour voice limit reached');
+        _showSnack(FulfillLookups.instance.message('daily_voice_limit') ?? '');
         _stopAndTranscribe();
       }
     });
@@ -2341,7 +2341,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       onWindowError: (e, st) {
         RenderLog.write('c8_voice_window_err',
             e.toString().substring(0, e.toString().length.clamp(0, 100)));
-        if (mounted) _showSnack('A recording window failed to save — counting continues');
+        if (mounted) _showSnack(FulfillLookups.instance.message('window_save_failed') ?? '');
       },
       // #331/#8: restore the daily 3-hour usage-cap ledger for continuous sessions — without
       // this, voice_clip_register never runs during a long session, so the server-side cap
@@ -2352,7 +2352,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             ctxStr: capCtx, supplier: supplier332, path: path, seconds: seconds,
             sessionKey: _sessionKey,
             stage: stage,
-            onLocked: () { if (mounted) _showSnack('Daily 3-hour voice limit reached'); }).ignore();
+            onLocked: () { if (mounted) _showSnack(FulfillLookups.instance.message('daily_voice_limit') ?? ''); }).ignore();
       },
     );
     try {
@@ -2369,7 +2369,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (e is MicPermissionException) {
         try { RenderLog.write('c303_mic_result', 'denied'); } catch (_) {}
         setState(() { _voiceListening = false; _voiceInterim = ''; _voiceSupported = false; });
-        _showSnack('Mic access needed for voice — enable it in the browser site settings');
+        _showSnack(FulfillLookups.instance.message('mic_permission') ?? '');
       } else {
         setState(() { _voiceListening = false; _voiceInterim = ''; _voiceError = msg; });
         Future.delayed(const Duration(seconds: 3), () {
@@ -2900,7 +2900,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (session != null && newBagNo != null) await session.recordBagMap(newBagNo);
       await _reloadItemsFromDB();
     } catch (e) {
-      if (mounted) _showSnack('Could not attach bag: $e');
+      if (mounted) _showSnack(FulfillLookups.instance.message('bag_attach_failed') ?? '');
     }
   }
 
@@ -2925,7 +2925,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       RenderLog.write('c253_bag_detached', 'bag=$bagNo;supplier=$supplier');
       await _reloadItemsFromDB();
     } catch (e) {
-      if (mounted) _showSnack('Could not detach bag: $e');
+      if (mounted) _showSnack(FulfillLookups.instance.message('bag_detach_failed') ?? '');
     }
   }
 
@@ -3333,7 +3333,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         RenderLog.write('c337_undo_shop_blocked', 'reason=${m['error']};supplier=$supplier');
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(m['message']?.toString() ?? 'Cannot undo yet.')),
+            SnackBar(content: Text(m['message']?.toString() ?? FulfillLookups.instance.message('cannot_undo_yet') ?? '')),
           );
         }
         return;
@@ -3352,16 +3352,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._refreshArrivals(); // R3: supplier leaves Arrivals
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(m['note'] == 'not_submitted'
-              ? 'Nothing to undo.'
-              : 'Shop submission undone.')),
+          SnackBar(content: Text(FulfillLookups.instance.message(m['note'] == 'not_submitted' ? 'nothing_to_undo' : 'shop_undone') ?? '')),
         );
       }
     } catch (e) {
       if (mounted) {
         final msg = e.toString();
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Undo error: ${msg.substring(0, msg.length.clamp(0, 80))}')),
+          SnackBar(content: Text(FulfillLookups.instance.errorText(msg) ?? '')),
         );
       }
     }
@@ -3442,7 +3440,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (mounted) {
         setState(() => _submittingCollect = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: ${e.toString().substring(0, e.toString().length.clamp(0, 80))}')),
+          SnackBar(content: Text(FulfillLookups.instance.errorText(e) ?? '')),
         );
       }
     }
@@ -3485,14 +3483,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._refreshArrivals(); // R2: supplier appears in Arrivals
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Collected & sent to warehouse for counting')),
+          SnackBar(content: Text(FulfillLookups.instance.message('collected_to_warehouse') ?? '')),
         );
       }
     } catch (e) {
       if (mounted) {
         setState(() => _submittingCollect = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: ${e.toString().substring(0, e.toString().length.clamp(0, 80))}')),
+          SnackBar(content: Text(FulfillLookups.instance.errorText(e) ?? '')),
         );
       }
     }
@@ -3577,9 +3575,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       _agentRecStarted = false;
       if (e is MicPermissionException) {
         try { RenderLog.write('c303_mic_result', 'denied'); } catch (_) {}
-        if (mounted) _showSnack('Mic access needed for voice — enable it in the browser site settings');
+        if (mounted) _showSnack(FulfillLookups.instance.message('mic_permission') ?? '');
       } else {
-        if (mounted) _showSnack('Mic error: $e');
+        if (mounted) _showSnack(FulfillLookups.instance.message('mic_error') ?? '');
       }
     }
     _agentBusy = false;
@@ -3594,7 +3592,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (!mounted) return;
       if (result == null || result.bytes.length < 1500) {
         if (mounted) setState(() { _agentPhase = AgentPhase.idle; _agentReply = ''; });
-        _showSnack('No audio captured — try again');
+        _showSnack(FulfillLookups.instance.message('no_audio') ?? '');
         return;
       }
       await _askAgent(bytes: result.bytes, mime: result.mime);
@@ -4009,7 +4007,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       else if (_error != null)
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-          child: Text('Error loading items: $_error',
+          child: Text(_error ?? '',
               style: const TextStyle(color: Color(0xFFDC2626), fontSize: 13)),
         )
       else if (visibleItems.isEmpty)
@@ -4105,7 +4103,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       return const Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2));
     }
     if (_error != null && _suppliers.isEmpty) {
-      return Center(child: Text('Error: $_error',
+      return Center(child: Text(_error ?? '',
           style: const TextStyle(color: Color(0xFFDC2626))));
     }
 
@@ -4915,7 +4913,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         Expanded(child: Center(
             child: Padding(
               padding: const EdgeInsets.all(24),
-              child: Text('Error loading items: $_error',
+              child: Text(_error ?? '',
                   style: const TextStyle(color: Color(0xFFDC2626), fontSize: 13),
                   textAlign: TextAlign.center))))
       else if (visibleItems.isEmpty)
@@ -5886,7 +5884,7 @@ class _FinalizeReviewDialogState extends State<_FinalizeReviewDialog> {
       if (tStart == null) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text("Can't assign — this item has no timestamp")));
+              SnackBar(content: Text(FulfillLookups.instance.message('no_timestamp') ?? '')));
         }
         return;
       }
@@ -5919,7 +5917,7 @@ class _FinalizeReviewDialogState extends State<_FinalizeReviewDialog> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('Assign failed — try again')));
+            .showSnackBar(SnackBar(content: Text(FulfillLookups.instance.message('assign_failed') ?? '')));
       }
       RenderLog.write('c457_assign_err',
           e.toString().substring(0, e.toString().length.clamp(0, 80)));
@@ -6189,7 +6187,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
         _productTotals = productTotals;
       });
     } catch (e) {
-      if (mounted) setState(() => _error = e.toString());
+      if (mounted) setState(() => _error = FulfillLookups.instance.errorText(e) ?? '');
     }
   }
 
@@ -6610,7 +6608,11 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
                             padding: const EdgeInsets.only(left: 8),
                             child: _ClipPlayButton(
                               // #455: "Clip N" for Shop, "Part N" for Warehouse (see #455).
-                              label: widget.stage == 'warehouse' ? 'Part ${idx + 1}' : 'Clip ${idx + 1}',
+                              // CHANGE #532: backend-owned chip wording (fw_ui_labels).
+                              label: FulfillLookups.instance.uiCount(
+                                      widget.stage == 'warehouse' ? 'part_chip' : 'clip_chip',
+                                      idx + 1) ??
+                                  '',
                               clipPath: group.windows.first.clipPath,
                               recordingSeq: group.windows.first.seq,
                               playing: _playingClip != null &&
@@ -6682,7 +6684,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
         if (_error != null)
           Padding(
             padding: const EdgeInsets.all(14),
-            child: Text('Error: $_error', style: const TextStyle(fontSize: 12, color: Colors.red)),
+            child: Text(_error ?? '', style: const TextStyle(fontSize: 12, color: Colors.red)),
           )
         else if (mentions == null)
           const Padding(
@@ -7754,20 +7756,20 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
       final err = res['error']?.toString();
       if (err == 'nothing_to_undo') {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Nothing to undo (already confirmed or re-sourced)')));
+          SnackBar(content: Text(FulfillLookups.instance.message('nothing_to_revert') ?? '')));
       } else if (err != null) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $err'), backgroundColor: const Color(0xFFDC2626)));
+          SnackBar(content: Text(FulfillLookups.instance.errorText(err) ?? ''), backgroundColor: const Color(0xFFDC2626)));
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Reverted')));
+          SnackBar(content: Text(FulfillLookups.instance.message('reverted') ?? '')));
         Navigator.of(context).pop();
       }
     } catch (e) {
       if (!mounted) return;
       setState(() => _undoing = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e'), backgroundColor: const Color(0xFFDC2626)));
+        SnackBar(content: Text(FulfillLookups.instance.errorText(e) ?? ''), backgroundColor: const Color(0xFFDC2626)));
     }
   }
 
@@ -8588,7 +8590,7 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
       }
     } catch (e) {
       if (!mounted) return;
-      if (!silent) setState(() { _error = e.toString(); _loading = false; });
+      if (!silent) setState(() { _error = FulfillLookups.instance.errorText(e) ?? ''; _loading = false; });
     }
   }
 
@@ -9284,7 +9286,7 @@ class _PackTabState extends State<_PackTab>
       }
     } catch (e) {
       if (!mounted) return;
-      setState(() { _error = e.toString(); _loading = false; });
+      setState(() { _error = FulfillLookups.instance.errorText(e) ?? ''; _loading = false; });
     }
   }
 
@@ -9530,7 +9532,7 @@ class _PackTabState extends State<_PackTab>
     if (!mounted || !capsAllowed) return;
     final orderId = _activeVoiceOrderId;
     if (orderId.isEmpty) {
-      _showPackSnack('No order selected');
+      _showPackSnack(FulfillLookups.instance.message('no_order_selected') ?? '');
       return;
     }
     try { RenderLog.write('c303_mic_on_tap', 'pack_count_voice'); } catch (_) {}
@@ -9542,11 +9544,11 @@ class _PackTabState extends State<_PackTab>
       setState(() => _continuousSecs++);
       if (_continuousSecs >= 3600) {
         t.cancel();
-        _showPackSnack('1-hour clip limit — recording split/stopped');
+        _showPackSnack(FulfillLookups.instance.message('clip_limit') ?? '');
         _stopCountVoice(_activeVoiceOrderId);
       } else if (_continuousSecs >= _VoiceCaps._remainingToday) {
         t.cancel();
-        _showPackSnack('Daily 3-hour voice limit reached');
+        _showPackSnack(FulfillLookups.instance.message('daily_voice_limit') ?? '');
         _stopCountVoice(_activeVoiceOrderId);
       }
     });
@@ -9559,7 +9561,7 @@ class _PackTabState extends State<_PackTab>
       onWindowError: (e, st) {
         RenderLog.write('c454_pack_window_err',
             e.toString().substring(0, e.toString().length.clamp(0, 100)));
-        if (mounted) _showPackSnack('A recording window failed to save — counting continues');
+        if (mounted) _showPackSnack(FulfillLookups.instance.message('window_save_failed') ?? '');
       },
       // #331: restore the daily 3-hour usage-cap ledger for continuous sessions,
       // same as Warehouse/Shop — without this, a long session never registers
@@ -9567,7 +9569,7 @@ class _PackTabState extends State<_PackTab>
       onClipUploaded: (path, seconds, seq) {
         _VoiceCaps.onClipSaved(Supabase.instance.client,
             ctxStr: 'pack', supplier: orderId, path: path, seconds: seconds,
-            onLocked: () { if (mounted) _showPackSnack('Daily 3-hour voice limit reached'); }).ignore();
+            onLocked: () { if (mounted) _showPackSnack(FulfillLookups.instance.message('daily_voice_limit') ?? ''); }).ignore();
       },
     );
     try {
@@ -9581,9 +9583,9 @@ class _PackTabState extends State<_PackTab>
       _capsTimer?.cancel();
       if (e is MicPermissionException) {
         try { RenderLog.write('c303_mic_result', 'denied'); } catch (_) {}
-        if (mounted) _showPackSnack('Mic access needed for voice — enable it in the browser site settings');
+        if (mounted) _showPackSnack(FulfillLookups.instance.message('mic_permission') ?? '');
       } else {
-        if (mounted) _showPackSnack('Mic error: $e');
+        if (mounted) _showPackSnack(FulfillLookups.instance.message('mic_error') ?? '');
       }
     }
   }
@@ -9630,7 +9632,7 @@ class _PackTabState extends State<_PackTab>
     } catch (e) {
       _packVoiceSession = null;
       if (!mounted) return;
-      _showPackSnack('Voice error — try again');
+      _showPackSnack(FulfillLookups.instance.message('voice_error') ?? '');
       RenderLog.write('c454_pack_finalize_err',
           e.toString().substring(0, e.toString().length.clamp(0, 60)));
     } finally {
@@ -9660,7 +9662,7 @@ class _PackTabState extends State<_PackTab>
         'persisted=$productCount;unmatched=${unmatched.length}');
     RenderLog.write('c457_over_count', 'count=${overCounts.length}');
     if (productCount == 0 && unmatched.isEmpty && overCounts.isEmpty) {
-      _showPackSnack("Didn't catch anything — try again");
+      _showPackSnack(FulfillLookups.instance.message('nothing_heard') ?? '');
       return;
     }
     final base = 'Counted $productCount product${productCount == 1 ? '' : 's'}.';
@@ -9710,9 +9712,8 @@ class _PackTabState extends State<_PackTab>
       await _voiceService.start();
     } catch (e) {
       if (mounted) setState(() { _askListening = false; _askInterim = ''; });
-      if (mounted) _showPackSnack(e is MicPermissionException
-          ? 'Mic access needed — enable it in browser site settings'
-          : 'Mic error: $e');
+      if (mounted) _showPackSnack(FulfillLookups.instance.message(
+          e is MicPermissionException ? 'mic_permission' : 'mic_error') ?? '');
     }
   }
 
@@ -9724,7 +9725,7 @@ class _PackTabState extends State<_PackTab>
       final result = await _voiceService.stop();
       if (!mounted) return;
       if (result == null || result.bytes.length < 1500) {
-        _showPackSnack('No audio captured — try again');
+        _showPackSnack(FulfillLookups.instance.message('no_audio') ?? '');
         return;
       }
       final b64 = base64Encode(result.bytes);
@@ -9760,7 +9761,7 @@ class _PackTabState extends State<_PackTab>
       if (!mounted) return;
       final data = res.data;
       if (data is Map && data['error'] != null) {
-        _showPackSnack('Ask mediBO error — try again');
+        _showPackSnack(FulfillLookups.instance.message('ask_medibo_error') ?? '');
         return;
       }
       final reply = (data is Map ? data['reply'] : null)?.toString() ?? '';
@@ -9774,10 +9775,10 @@ class _PackTabState extends State<_PackTab>
         try { speakText(reply); } catch (_) {}
         try { RenderLog.write('c304_ask', 'ok'); } catch (_) {}
       } else {
-        _showPackSnack('No reply — try again');
+        _showPackSnack(FulfillLookups.instance.message('ask_medibo_no_reply') ?? '');
       }
     } catch (e) {
-      if (mounted) _showPackSnack('Ask mediBO error — try again');
+      if (mounted) _showPackSnack(FulfillLookups.instance.message('ask_medibo_error') ?? '');
       try { RenderLog.write('c304_ask', 'err=${e.toString().substring(0, 40)}'); } catch (_) {}
     } finally {
       _askProcessing = false;
@@ -10092,6 +10093,11 @@ class _PackTabState extends State<_PackTab>
         : <String, dynamic>{};
     final countedCount = (rollup['counted'] as num?)?.toInt() ?? 0;
     final totalItems   = (rollup['ordered'] as num?)?.toInt() ?? total;
+    // CHANGE #532: order-level composed copy, backend-owned (pack_get_queue labels{}).
+    final qLabels = qData != null && qData['labels'] is Map
+        ? Map<String, dynamic>.from(qData['labels'] as Map)
+        : const <String, dynamic>{};
+    final countedProgressLabel = qLabels['counted_progress']?.toString() ?? '';
 
     // CHANGE #304: spokenCount = distinct products in today's mention rows (not counted_count).
     // #338: deleted mentions no longer count as spoken.
@@ -10111,7 +10117,9 @@ class _PackTabState extends State<_PackTab>
       const Divider(height: 1, color: _kBorder),
       _buildPackingButton(c),
       _buildPackVoiceBar(orderId, spokenCount),
-      if (totalItems > 0) _buildPackProgressRow(countedCount, totalItems, orderId, spokenCount),
+      if (totalItems > 0)
+        _buildPackProgressRow(
+            countedCount, totalItems, orderId, spokenCount, countedProgressLabel),
 
       if (isLoading)
         const Center(
@@ -10315,7 +10323,10 @@ class _PackTabState extends State<_PackTab>
   // fix(pack): `counted` is a QTY sum (rollup['counted'], used for the progress
   // bar/fraction below — unchanged) — the "N spoken" label needs the distinct-
   // product count instead, passed in separately as spokenCount.
-  Widget _buildPackProgressRow(int counted, int total, String orderId, int spokenCount) {
+  // CHANGE #532: `progressLabel` is pack_get_queue's labels.counted_progress,
+  // rendered verbatim — the "$counted/$total" fraction is no longer composed here.
+  Widget _buildPackProgressRow(int counted, int total, String orderId,
+      int spokenCount, String progressLabel) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
       child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
@@ -10329,7 +10340,9 @@ class _PackTabState extends State<_PackTab>
                 color: _kGreen,
                 borderRadius: BorderRadius.circular(6),
               ),
-              child: Text('$spokenCount spoken',
+              // CHANGE #532: wording is backend-owned (fw_ui_labels spoken_badge);
+              // only the client-side distinct-product count fills the {n} slot.
+              child: Text(FulfillLookups.instance.uiCount('spoken_badge', spokenCount) ?? '',
                   style: const TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w600,
@@ -10351,7 +10364,7 @@ class _PackTabState extends State<_PackTab>
           ),
         ),
         const SizedBox(width: 8),
-        Text('$counted/$total',
+        Text(progressLabel,
             style: const TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w700,
@@ -10444,7 +10457,14 @@ class _PackTabState extends State<_PackTab>
             return rawBags.whereType<Map>().map((b) => Map<String, dynamic>.from(b)).toList();
           }
           final fallback = (item['bag_no'] as num?)?.toInt();
-          return fallback != null && fallback > 0 ? [<String, dynamic>{'bag_no': fallback}] : <Map<String, dynamic>>[];
+          // CHANGE #532: carry the item's backend-owned bag_label so the chip
+          // still renders backend copy on this (never-hit) defensive path.
+          return fallback != null && fallback > 0
+              ? [<String, dynamic>{
+                  'bag_no': fallback,
+                  'tag_label': item['bag_label']?.toString() ?? '',
+                }]
+              : <Map<String, dynamic>>[];
         })();
     final bagNums = bags.map((b) => (b['bag_no'] as num?)?.toInt() ?? 0).where((n) => n > 0).toList();
 
@@ -10462,9 +10482,10 @@ class _PackTabState extends State<_PackTab>
     // §3: mismatch chip removed — counted is server-clamped to received; chip was misleading.
 
     Widget bagTag(Map<String, dynamic> b) {
-      final n = (b['bag_no'] as num?)?.toInt() ?? 0;
-      final q = (b['qty'] as num?);
-      final label = q != null ? 'Bag $n • x${q.toInt()}' : 'Bag $n';
+      // CHANGE #532: backend-owned tag_label — emitted identically by
+      // pack_get_queue's items[].bags[] and pack_item_bag_breakdown, so the chip
+      // reads the same whichever source populated `bags`.
+      final label = b['tag_label']?.toString() ?? '';
       return Container(
         margin: const EdgeInsets.only(top: 3),
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -10572,12 +10593,11 @@ class _PackTabState extends State<_PackTab>
     final rollupRows = (qData?['rollup_rows'] as List? ?? [])
         .map((r) => Map<String, dynamic>.from(r as Map))
         .toList();
-    final ord = (rollup['ordered'] as num?)?.toInt() ?? 0;
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _buildPackMasterRollup(rollupRows, ord),
+        // CHANGE #532: no `ord` passed — each row carries its own backend value_label.
+        _buildPackMasterRollup(rollupRows),
         const SizedBox(height: 12),
         _buildPackDispatchButton(orderId, dispatchReady, canMarkReady,
             qData?['dispatch_button_colors'] as Map?),
@@ -10587,10 +10607,11 @@ class _PackTabState extends State<_PackTab>
 
   // #346: 5-row master rollup list — label/value/colours are backend-owned
   // (pack_get_queue's rollup_rows[]), rendered verbatim in the given order.
-  Widget _buildPackMasterRollup(List<Map<String, dynamic>> rollupRows, int ord) {
+  Widget _buildPackMasterRollup(List<Map<String, dynamic>> rollupRows) {
     Widget row(Map<String, dynamic> r) {
       final label = r['label']?.toString() ?? '';
-      final value = (r['value'] as num?)?.toInt() ?? 0;
+      // CHANGE #532: backend-owned value_label ("2 / 12 items"), verbatim.
+      final valueLabel = r['value_label']?.toString() ?? '';
       final colors = r['colors'] as Map?;
       final fg = _hexColor(colors?['fg']?.toString(), _kSub);
       final bg = _hexColor(colors?['bg']?.toString(), const Color(0xFFF3F4F6));
@@ -10602,7 +10623,7 @@ class _PackTabState extends State<_PackTab>
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
             decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(6)),
-            child: Text('$value / $ord items',
+            child: Text(valueLabel,
                 style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: fg)),
           ),
         ]),
@@ -10715,18 +10736,18 @@ class _PackTabState extends State<_PackTab>
               'err=$err;packed=${resMap['packed']};counted=${resMap['counted']};total=${resMap['total']}');
         } catch (_) {}
         if (!ready) {
-          _showPackSnack('Could not undo. Try again.');
+          _showPackSnack(FulfillLookups.instance.message('undo_failed') ?? '');
         } else if (err == 'not_fully_packed') {
-          _showPackSnack('Pack all items before dispatch.');
+          _showPackSnack(FulfillLookups.instance.message('not_fully_packed') ?? '');
         } else if (err == 'not_fully_counted') {
-          _showPackSnack('Count all packed items before dispatch.');
+          _showPackSnack(FulfillLookups.instance.message('not_fully_counted') ?? '');
         } else {
-          _showPackSnack('Could not mark ready. Try again.');
+          _showPackSnack(FulfillLookups.instance.message('mark_ready_failed') ?? '');
         }
       }
     } catch (e) {
       if (mounted) {
-        _showPackSnack(ready ? 'Could not mark ready. Try again.' : 'Could not undo. Try again.');
+        _showPackSnack(FulfillLookups.instance.message(ready ? 'mark_ready_failed' : 'undo_failed') ?? '');
       }
     } finally {
       if (mounted) setState(() => _dispatchLoading = false);
@@ -10886,7 +10907,7 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
         if (mounted) {
           if (err.contains('packed_locked')) {
             ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Item packed — unpack to edit voice counts')));
+                SnackBar(content: Text(FulfillLookups.instance.message('item_packed_unpack') ?? '')));
           } else if (err.contains('exceeds_ordered')) {
             final max = res['max_qty']?.toString();
             ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -10895,7 +10916,7 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
                     : "Can't re-add — ordered quantity already reached")));
           } else if (applyErr.contains('received_locked')) {
             ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Line locked — Undo receiving first')));
+                SnackBar(content: Text(FulfillLookups.instance.message('line_locked_receiving') ?? '')));
           } else if (err.contains('already_deleted') || err.contains('not_deleted')) {
             // silent reconcile — state drift
             try {
@@ -10906,7 +10927,7 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
             } catch (_) {}
           } else {
             ScaffoldMessenger.of(context)
-                .showSnackBar(const SnackBar(content: Text("Couldn't update count — try again")));
+                .showSnackBar(SnackBar(content: Text(FulfillLookups.instance.message('count_update_failed') ?? '')));
           }
         }
       }
@@ -10916,7 +10937,7 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
       RenderLog.write('c389_pack_qty_err', 'error=exception');
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text("Couldn't update count — try again")));
+            .showSnackBar(SnackBar(content: Text(FulfillLookups.instance.message('count_update_failed') ?? '')));
       }
     } finally {
       if (mounted) setState(() => _mentionLoading.remove(id));
@@ -11019,7 +11040,7 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
         if (!mounted || !identical(_clipAudio, el)) return;
         setState(() { _playingClip = null; _playingSeq = null; });
         ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Couldn't play this clip")));
+            SnackBar(content: Text(FulfillLookups.instance.message('clip_play_failed') ?? '')));
       });
       await el.play();
       if (mounted) setState(() { _playingClip = clipPath; _playingSeq = seq; });
@@ -11156,7 +11177,9 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
                             border: Border.all(color: isSelected ? _kGreen : _kBorder),
                           ),
                           child: Row(mainAxisSize: MainAxisSize.min, children: [
-                            Text('Clip ${idx + 1}',
+                            // CHANGE #532: wording backend-owned (fw_ui_labels
+                            // clip_chip); only the list index fills {n}.
+                            Text(FulfillLookups.instance.uiCount('clip_chip', idx + 1) ?? '',
                                 style: TextStyle(
                                     fontSize: 12, fontWeight: FontWeight.w600,
                                     color: isSelected ? Colors.white : _kSub)),
@@ -11408,6 +11431,14 @@ class _PackingScreenState extends State<_PackingScreen>
   // non-null and >= packable_qty.
   bool _isItemDone(Map<String, dynamic> item) => item['is_done'] == true;
 
+  // CHANGE #532: order-level composed copy from pack_get_queue's labels{}.
+  // Empty string while the queue has not loaded — never a Dart-composed string.
+  String _queueLabel(String key) {
+    final l = _queue?['labels'];
+    if (l is Map) return l[key]?.toString() ?? '';
+    return '';
+  }
+
   // #368: qty the Pack action will submit for this item — clamped to [1, packable_qty],
   // defaulting to packable_qty when the user hasn't touched the stepper.
   int _chosenQtyFor(Map<String, dynamic> item) {
@@ -11491,7 +11522,7 @@ class _PackingScreenState extends State<_PackingScreen>
             'cust=${m['customer']};total=$total;bags=$bagCount;startIdx=${allDone ? "done" : startPage}');
       } catch (_) {}
     } catch (e) {
-      if (mounted) setState(() { _error = e.toString(); _loading = false; });
+      if (mounted) setState(() { _error = FulfillLookups.instance.errorText(e) ?? ''; _loading = false; });
     }
   }
 
@@ -11560,7 +11591,7 @@ class _PackingScreenState extends State<_PackingScreen>
       final isBagged = item['is_bagged'] == true;
       if (!isBagged) {
         try { RenderLog.write('c368_notbagged', 'src=packing;idx=$index'); } catch (_) {}
-        _showPackingSnack('Map this item to a bag first');
+        _showPackingSnack(FulfillLookups.instance.message('not_bagged') ?? '');
         return;
       }
 
@@ -11582,9 +11613,7 @@ class _PackingScreenState extends State<_PackingScreen>
         if (resMap['error'] != null) {
           final err = resMap['error'].toString();
           setState(() => _marking = false);
-          _showPackingSnack(err == 'not_bagged'
-              ? 'Map this item to a bag first'
-              : 'Could not pack ($err)');
+          _showPackingSnack(FulfillLookups.instance.message(err == 'not_bagged' ? 'not_bagged' : 'pack_failed') ?? '');
           return;
         }
         final newPackedQty = (resMap['packed_qty'] as num?)?.toInt() ?? chosenQty;
@@ -11610,7 +11639,7 @@ class _PackingScreenState extends State<_PackingScreen>
         if (mounted) {
           setState(() => _marking = false);
           ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Error: $e'),
+              SnackBar(content: Text(FulfillLookups.instance.errorText(e) ?? ''),
                   duration: const Duration(seconds: 3)));
         }
         return;
@@ -11690,7 +11719,7 @@ class _PackingScreenState extends State<_PackingScreen>
       if (mounted) {
         setState(() => _marking = false);
         ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error: $e'),
+            SnackBar(content: Text(FulfillLookups.instance.errorText(e) ?? ''),
                 duration: const Duration(seconds: 3)));
       }
     }
@@ -11778,7 +11807,7 @@ class _PackingScreenState extends State<_PackingScreen>
       if (mounted) {
         setState(() => _marking = false);
         ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Undo error: $e'),
+            SnackBar(content: Text(FulfillLookups.instance.errorText(e) ?? ''),
                 duration: const Duration(seconds: 3)));
       }
       _holdProgressCtrl.reset();
@@ -11847,7 +11876,8 @@ class _PackingScreenState extends State<_PackingScreen>
                   color: bg,
                   border: const Border(bottom: BorderSide(color: _kBorder))),
               child: Row(children: [
-                Text('Bag $bn',
+                // CHANGE #532: backend-owned bag_stats[].bag_label, verbatim.
+                Text(s['bag_label']?.toString() ?? '',
                     style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500,
                         color: fg)),
                 const Spacer(),
@@ -11970,7 +12000,9 @@ class _PackingScreenState extends State<_PackingScreen>
           borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
       builder: (_) => _BagQuickViewSheet(
           items: List<Map<String, dynamic>>.from(_items),
-          bagStats: _bagStats),
+          bagStats: _bagStats,
+          // CHANGE #532: backend-owned labels.no_bag for the unbagged group header.
+          noBagLabel: _queueLabel('no_bag')),
     );
   }
 
@@ -12031,7 +12063,8 @@ class _PackingScreenState extends State<_PackingScreen>
                           _goBackFromAllPackedScreen();
                         }
                       },
-                      child: _buildAllPackedScreen(customer, _bagCount),
+                      // CHANGE #532: summary copy comes from the queue payload.
+                      child: _buildAllPackedScreen(),
                     )
                   : _buildItemView(),
     );
@@ -12164,10 +12197,19 @@ class _PackingScreenState extends State<_PackingScreen>
     if (packableQty >= ordered) return const SizedBox.shrink();
 
     // Bagged, not done, partially bagged → qty stepper.
-    return _packQtyStepper(item, packableQty, ordered);
+    return _packQtyStepper(item, packableQty);
   }
 
-  Widget _packQtyStepper(Map<String, dynamic> item, int packableQty, int ordered) {
+  // CHANGE #532: "Pack N" for every selectable stepper value is pre-composed by
+  // pack_get_queue as items[].pack_qty_labels (index 0 => N=1). Nothing is
+  // composed here — an out-of-range qty simply renders nothing.
+  String _packQtyLabel(Map<String, dynamic> item, int qty) {
+    final labels = item['pack_qty_labels'] as List?;
+    if (labels == null || qty < 1 || qty > labels.length) return '';
+    return labels[qty - 1]?.toString() ?? '';
+  }
+
+  Widget _packQtyStepper(Map<String, dynamic> item, int packableQty) {
     final id      = item['order_item_id']?.toString() ?? '';
     final chosen  = _chosenQtyFor(item);
     void setQty(int v) {
@@ -12192,7 +12234,8 @@ class _PackingScreenState extends State<_PackingScreen>
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Text('Only $packableQty of $ordered bagged',
+        // CHANGE #532: backend-owned items[].partial_bag_label, verbatim.
+        Text(item['partial_bag_label']?.toString() ?? '',
             style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
                 color: Color(0xFF92400E))),
         const SizedBox(height: 6),
@@ -12200,7 +12243,7 @@ class _PackingScreenState extends State<_PackingScreen>
           stepBtn(Icons.remove_rounded, chosen > 1 ? () => setQty(chosen - 1) : null),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 14),
-            child: Text('Pack $chosen',
+            child: Text(_packQtyLabel(item, chosen),
                 style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700,
                     color: _kText)),
           ),
@@ -12230,20 +12273,10 @@ class _PackingScreenState extends State<_PackingScreen>
     }
     final imgCount = imgs.length;
 
-    final bagItems    = _items.where(
-        (i) => (i['bag_no'] as num?)?.toInt() == bagNo).toList();
-    final posInBag    = bagItems.indexWhere(
-        (i) => i['order_item_id']?.toString() == itemId) + 1;
-    // Backend-owned: pack_get_queue()'s bag_stats[].total/.packed for this bag
-    // — computed server-side with the same packable_qty>=packed_qty rule as
-    // _isItemDone — instead of re-deriving the bag's item/packed counts from
-    // items[] client-side.
-    final bagStat     = _bagStats.firstWhere(
-        (s) => (s['bag_no'] as num?)?.toInt() == bagNo,
-        orElse: () => const {});
-    final itemsInBag  = (bagStat['total'] as num?)?.toInt() ?? bagItems.length;
-    final packedInBag = (bagStat['packed'] as num?)?.toInt() ??
-        bagItems.where(_isItemDone).length;
+    // CHANGE #532: the bag-position / bag-packed counters are no longer derived
+    // here. pack_get_queue composes bag_position_label and bag_packed_label with
+    // the same packable_qty>=packed_qty rule bag_stats uses, over the same item
+    // ordering, so the three counters can never disagree with the bag sheet.
 
     // CHANGE #298 layout constants (instrumented once per card build)
     const double kCounterBagGap = 20;   // (#7) bigger gap counter → bag band
@@ -12266,13 +12299,16 @@ class _PackingScreenState extends State<_PackingScreen>
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('${index + 1}/$_totalItems',
+              // CHANGE #532: all three counters are backend-composed over the
+              // SAME ordering items[] is emitted in — index_label /
+              // bag_position_label / bag_packed_label, rendered verbatim.
+              Text(item['index_label']?.toString() ?? '',
                   style: const TextStyle(fontSize: 13, color: _kSub,
                       fontWeight: FontWeight.w600)),
-              Text('$posInBag/$itemsInBag',
+              Text(item['bag_position_label']?.toString() ?? '',
                   style: const TextStyle(fontSize: 13, color: _kSub,
                       fontWeight: FontWeight.w600)),
-              Text('$packedInBag/$itemsInBag',
+              Text(item['bag_packed_label']?.toString() ?? '',
                   style: const TextStyle(fontSize: 13, color: _kSub,
                       fontWeight: FontWeight.w600)),
             ],
@@ -12291,7 +12327,8 @@ class _PackingScreenState extends State<_PackingScreen>
               decoration: BoxDecoration(
                   color: const Color(0xFFDC2626),
                   borderRadius: BorderRadius.circular(14)),
-              child: Text('Bag $bagNo',
+              // CHANGE #532: backend-owned items[].bag_label, verbatim.
+              child: Text(item['bag_label']?.toString() ?? '',
                   style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800,
                       color: Colors.white),
                   textAlign: TextAlign.center),
@@ -12466,7 +12503,7 @@ class _PackingScreenState extends State<_PackingScreen>
     ]),
   );
 
-  Widget _buildAllPackedScreen(String customer, int bagCount) {
+  Widget _buildAllPackedScreen() {
     return Center(child: Padding(
       padding: const EdgeInsets.all(32),
       child: Column(mainAxisSize: MainAxisSize.min,
@@ -12482,7 +12519,8 @@ class _PackingScreenState extends State<_PackingScreen>
         const Text('All Packed', style: TextStyle(
             fontSize: 24, fontWeight: FontWeight.w700, color: _kText)),
         const SizedBox(height: 8),
-        Text('$_totalItems items · $bagCount bags packed for $customer',
+        // CHANGE #532: backend-owned labels.all_packed_summary, verbatim.
+        Text(_queueLabel('all_packed_summary'),
             style: const TextStyle(fontSize: 14, color: _kSub),
             textAlign: TextAlign.center),
         const SizedBox(height: 32),
@@ -12637,7 +12675,10 @@ class _BagQuickViewSheet extends StatefulWidget {
   final List<Map<String, dynamic>> items;
   // Backend-owned: pack_get_queue()'s bag_stats[], rendered verbatim.
   final List<Map<String, dynamic>> bagStats;
-  const _BagQuickViewSheet({required this.items, required this.bagStats});
+  // CHANGE #532: pack_get_queue's labels.no_bag — the unbagged group header.
+  final String noBagLabel;
+  const _BagQuickViewSheet(
+      {required this.items, required this.bagStats, required this.noBagLabel});
   @override
   State<_BagQuickViewSheet> createState() => _BagQuickViewSheetState();
 }
@@ -12746,7 +12787,8 @@ class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
                           color: bgColor,
                           borderRadius: BorderRadius.circular(20),
                           border: Border.all(color: bdColor)),
-                      child: Text('Bag $bn', style: TextStyle(
+                      // CHANGE #532: backend-owned bag_stats[].bag_label, verbatim.
+                      child: Text(s?['bag_label']?.toString() ?? '', style: TextStyle(
                           fontSize: 12, fontWeight: FontWeight.w600,
                           color: txtColor)),
                     ),
@@ -12813,7 +12855,11 @@ class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
       rows.add(Container(
         color: const Color(0xFFF5F6F8),
         padding: const EdgeInsets.fromLTRB(10, 4, 10, 4),
-        child: Text(bn != null ? 'Bag $bn' : 'No bag',
+        // CHANGE #532: backend-owned — bag_stats[].bag_label, else labels.no_bag.
+        child: Text(
+            bn != null
+                ? (_statFor(bn)?['bag_label']?.toString() ?? '')
+                : widget.noBagLabel,
             style: const TextStyle(
                 fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
       ));
@@ -13038,7 +13084,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
       setState(() { _error = e.message; _loading = false; });
     } catch (e) {
       if (!mounted) return;
-      setState(() { _error = e.toString().substring(0, e.toString().length.clamp(0, 120)); _loading = false; });
+      setState(() { _error = FulfillLookups.instance.errorText(e) ?? ''; _loading = false; });
     }
   }
 
@@ -13117,7 +13163,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
         return;
       }
       if (err != null) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $err')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(FulfillLookups.instance.errorText(err) ?? '')));
       } else {
         RenderLog.write('c349_resolved', 'code=${action.code}');
         RenderLog.write('c352_resolved', 'code=${action.code}');
@@ -13147,7 +13193,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(e.toString().substring(0, e.toString().length.clamp(0, 80)))));
+          content: Text(FulfillLookups.instance.errorText(e) ?? '')));
     } finally {
       if (mounted) {
         setState(() => _resolving.remove(item.disputeId));
@@ -13586,14 +13632,11 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     final activeBg = _hexColor(item.activeColors?['bg'], const Color(0xFFF3F4F6));
     final activeFg = _hexColor(item.activeColors?['fg'], _kSub);
 
-    // Meta line: pack_type / company / category now come from the product entry
-    // (fw_get_disputes returns all three per product).
-    final metaParts = <String>[
-      if ((p['pack_type']?.toString() ?? '').isNotEmpty) p['pack_type'].toString(),
-      if ((p['company']?.toString() ?? '').isNotEmpty) p['company'].toString(),
-      if ((p['category']?.toString() ?? '').isNotEmpty) p['category'].toString(),
-    ];
-    final metaLine = metaParts.join(' · ');
+    // CHANGE #532: the JOIN is backend-owned too. fw_get_disputes emits a single
+    // meta_line on both disputes[] and supplier_products[].products[] — already
+    // separated, with null/blank parts omitted — rendered verbatim. The client
+    // no longer decides which parts appear or where the separators go.
+    final metaLine = p['meta_line']?.toString() ?? '';
 
     // Backend-owned kind_label/kind_colors from the product entry, verbatim.
     final kindTagText = p['kind_label']?.toString() ?? '';
@@ -13810,7 +13853,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
       RenderLog.write('c349_return_close', 'ok=y');
       RenderLog.write('c352_return_close', 'ok=1');
       ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Return note closed ✓')));
+          SnackBar(content: Text(FulfillLookups.instance.message('return_note_closed') ?? '')));
       _load();
     } on DisputeException catch (e) {
       if (!mounted) return;
@@ -13818,7 +13861,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(e.toString().substring(0, e.toString().length.clamp(0, 80)))));
+          content: Text(FulfillLookups.instance.errorText(e) ?? '')));
     }
   }
 }
@@ -14256,7 +14299,7 @@ class _DisputeContactPopoverBodyState extends State<_DisputeContactPopoverBody>
       final messenger = ScaffoldMessenger.maybeOf(context);
       widget.onClose();
       messenger?.showSnackBar(
-          const SnackBar(content: Text('No valid phone number for this contact')));
+          SnackBar(content: Text(FulfillLookups.instance.message('no_phone') ?? '')));
       return;
     }
     // CHANGE #506: notif_should_send() ORs the toggle with the allow-list —
@@ -14285,7 +14328,7 @@ class _DisputeContactPopoverBodyState extends State<_DisputeContactPopoverBody>
       widget.onClose();
       final messenger = ScaffoldMessenger.maybeOf(context);
       messenger?.showSnackBar(
-          const SnackBar(content: Text('Supplier dispute notifications are turned off')));
+          SnackBar(content: Text(FulfillLookups.instance.message('notifications_off') ?? '')));
       return;
     }
     if (viaAllowlist) {
@@ -14385,7 +14428,7 @@ class _DisputeContactPopoverBodyState extends State<_DisputeContactPopoverBody>
                 Clipboard.setData(ClipboardData(text: widget.link));
                 widget.onClose();
                 ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-                    const SnackBar(content: Text('Link copied')));
+                    SnackBar(content: Text(FulfillLookups.instance.message('link_copied') ?? '')));
               },
               icon: const Icon(Icons.copy_rounded, size: 14),
               label: const Text('Copy link', style: TextStyle(fontSize: 13)),

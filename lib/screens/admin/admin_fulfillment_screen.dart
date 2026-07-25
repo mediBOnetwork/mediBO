@@ -271,6 +271,14 @@ class _MergedProduct {
   final Map<String, dynamic>? issueChip; // {label, qty} | null
   final List<Map<String, dynamic>> lines; // underlying per-order-item rows
 
+  // Backend-owned dispute/confirm-gate fields (fw_get_state's merged_items[]).
+  // Null means the field wasn't present on this response — callers fall back
+  // to the prior client-side rule for that one product only.
+  final bool? isDisputeCandidate;
+  final num? disputeQty;
+  final bool? confirmGateCanConfirm;
+  final String? confirmGateReason;
+
   const _MergedProduct({
     required this.productId,
     required this.productName,
@@ -296,6 +304,10 @@ class _MergedProduct {
     this.qtyLabel = '',
     this.issueChip,
     this.lines = const [],
+    this.isDisputeCandidate,
+    this.disputeQty,
+    this.confirmGateCanConfirm,
+    this.confirmGateReason,
   });
 
   // fw_get_state()'s merged_items[] entry -> _MergedProduct. Pure field
@@ -321,6 +333,7 @@ class _MergedProduct {
     }
     final colors = m['status_colors'];
     final issueChip = m['issue_chip'];
+    final confirmGate = m['confirm_gate'];
     return _MergedProduct(
       productId: (m['product_id'] as num?)?.toInt() ?? 0,
       productName: m['product_name']?.toString() ?? '—',
@@ -348,6 +361,12 @@ class _MergedProduct {
       qtyLabel: m['qty_label']?.toString() ?? '',
       issueChip: issueChip is Map ? Map<String, dynamic>.from(issueChip) : null,
       lines: lines,
+      isDisputeCandidate: m['is_dispute_candidate'] is bool ? m['is_dispute_candidate'] as bool : null,
+      disputeQty: m['dispute_qty'] as num?,
+      confirmGateCanConfirm: confirmGate is Map && confirmGate['can_confirm'] is bool
+          ? confirmGate['can_confirm'] as bool
+          : null,
+      confirmGateReason: confirmGate is Map ? confirmGate['reason']?.toString() : null,
     );
   }
 }
@@ -1196,58 +1215,71 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // few_wrong/damaged/excess flags are written per order_item_id, so a merged
   // product that spans several lines must be judged line-by-line (comparing one
   // line's issue_qty against the merged-sum gap would false-block or false-pass).
-  bool _lineIsCandidate(Map<String, dynamic> line) => isDisputeCandidate(
-        arrivals: widget.arrivals,
-        ordered: ordQtyOf(line),
-        shopQty: (line['shop_qty'] as num?)?.toInt(),
-        received: recQtyOf(line),
-        expected: (line['expected'] as num?)?.toInt(),
-        countIssue: line['count_issue']?.toString(),
-        state: line['fulfillment_state']?.toString() ?? 'pending',
-      );
+  // Backend-owned (fw_get_state's items[]/merged_items[]): is_dispute_candidate,
+  // verbatim. Falls back to the prior client-side rule only when a given line's
+  // response doesn't carry the field yet.
+  bool _lineIsCandidate(Map<String, dynamic> line) {
+    final backend = line['is_dispute_candidate'];
+    if (backend is bool) return backend;
+    return isDisputeCandidate(
+      arrivals: widget.arrivals,
+      ordered: ordQtyOf(line),
+      shopQty: (line['shop_qty'] as num?)?.toInt(),
+      received: recQtyOf(line),
+      expected: (line['expected'] as num?)?.toInt(),
+      countIssue: line['count_issue']?.toString(),
+      state: line['fulfillment_state']?.toString() ?? 'pending',
+    );
+  }
 
-  // A merged product row is a candidate (tint yellow + tappable) if ANY of its
-  // underlying lines is a candidate.
+  // A merged product row is a candidate (tint yellow + tappable). Backend-owned
+  // (merged_items[].is_dispute_candidate), verbatim; falls back to "any
+  // underlying line is a candidate" only when this product's response doesn't
+  // carry the field yet.
   bool _mIsCandidate(_MergedProduct m) {
+    if (m.isDisputeCandidate != null) return m.isDisputeCandidate!;
     final ids = m.orderItemIds.toSet();
     return _items.any((l) =>
         ids.contains(l['order_item_id']?.toString()) && _lineIsCandidate(l));
   }
 
-  // C365: confirm-button visual over the whole tab, aggregated PER PRODUCT. A product
-  // balances when refTotal <= countedTotal + disputedTotal (summed over its order-lines);
-  // GREEN + clickable only when EVERY product balances, else RED. This matches the one-row-
-  // per-product display and lets a multi-line dispute (distributed by fw_set_product_issue)
-  // cover the full gap and reach green. ref=ordered@shop / expected@warehouse (preserves #360).
+  // C365: confirm-button visual over the whole tab, aggregated PER PRODUCT.
+  // Backend-owned (fw_get_state's merged_items[].confirm_gate.can_confirm),
+  // verbatim — GREEN + clickable only when EVERY product's can_confirm is
+  // true, else RED. Falls back to the prior ref/counted/disputed aggregate
+  // for a given product only when its confirm_gate isn't present yet.
   ConfirmButtonVisual get _confirmVisual {
     final tab = widget.arrivals ? 'warehouse' : 'shop';
-    final byProduct = <String, List<Map<String, dynamic>>>{};
-    for (final l in _items) {
-      final pid = (l['product_id'] ?? l['order_item_id'])?.toString() ?? '';
-      byProduct.putIfAbsent(pid, () => []).add(l);
-    }
     int unsatisfied = 0;
-    for (final entry in byProduct.entries) {
-      int refTotal = 0, countedTotal = 0, disputedTotal = 0;
-      for (final l in entry.value) {
-        final ordered = ordQtyOf(l);
-        final expected = (l['expected'] as num?)?.toInt();
-        final received = recQtyOf(l);
-        final shopQty = (l['shop_qty'] as num?)?.toInt();
-        final ref = stageRefFor(arrivals: widget.arrivals, ordered: ordered, expected: expected);
-        final counted = countedQtyFor(arrivals: widget.arrivals, shopQty: shopQty, received: received);
-        refTotal += ref;
-        countedTotal += counted;
-        disputedTotal += confirmDisputedQty(
-          ref: ref, counted: counted,
-          countIssue: l['count_issue']?.toString(),
-          issueQty: (l['issue_qty'] as num?)?.toInt(),
-          state: l['fulfillment_state']?.toString() ?? 'pending',
-        );
+    for (final m in _mergedItemsBackend) {
+      bool ok;
+      final canConfirm = m.confirmGateCanConfirm;
+      if (canConfirm != null) {
+        ok = canConfirm;
+      } else {
+        int refTotal = 0, countedTotal = 0, disputedTotal = 0;
+        for (final l in m.lines) {
+          final ordered = ordQtyOf(l);
+          final expected = (l['expected'] as num?)?.toInt();
+          final received = recQtyOf(l);
+          final shopQty = (l['shop_qty'] as num?)?.toInt();
+          final ref = stageRefFor(arrivals: widget.arrivals, ordered: ordered, expected: expected);
+          final counted = countedQtyFor(arrivals: widget.arrivals, shopQty: shopQty, received: received);
+          refTotal += ref;
+          countedTotal += counted;
+          final lineDisputeQty = (l['dispute_qty'] as num?)?.toInt();
+          disputedTotal += lineDisputeQty ??
+              confirmDisputedQty(
+                ref: ref, counted: counted,
+                countIssue: l['count_issue']?.toString(),
+                issueQty: (l['issue_qty'] as num?)?.toInt(),
+                state: l['fulfillment_state']?.toString() ?? 'pending',
+              );
+        }
+        ok = productSatisfiesConfirmGate(
+            refTotal: refTotal, countedTotal: countedTotal, disputedTotal: disputedTotal);
       }
-      final ok = productSatisfiesConfirmGate(
-          refTotal: refTotal, countedTotal: countedTotal, disputedTotal: disputedTotal);
-      RenderLog.write('c361_balance', 'tab=$tab,product=${entry.key},satisfied=$ok');
+      RenderLog.write('c361_balance', 'tab=$tab,product=${m.productId},satisfied=$ok');
       if (!ok) unsatisfied++;
     }
     final vis = confirmButtonVisual(unsatisfiedLines: unsatisfied);

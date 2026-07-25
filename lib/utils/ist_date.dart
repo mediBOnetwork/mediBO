@@ -61,9 +61,3 @@ DateTime? tryIstFromDb(String? raw) {
   }
 }
 
-/// The UTC instant of IST midnight for the given IST calendar date (as
-/// returned by [todayIst] or a `DatePicker` value derived from it). Use for
-/// building `.gte('col', ...)`/`.lt('col', ...)` day-range query bounds
-/// without depending on the device's timezone.
-DateTime istDayStartUtc(DateTime istDate) =>
-    DateTime.utc(istDate.year, istDate.month, istDate.day).subtract(_istOffset);

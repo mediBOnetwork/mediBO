@@ -1058,15 +1058,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   bool _recording = false;
   bool _showListView = false;
 
-  // Per-supplier dot {fill,border} hex colours straight from fw_list_arrivals()'s
-  // dot.shop (Supplier Shop tab) / dot.warehouse (Warehouse tab) — rendered
-  // verbatim, never recomputed client-side.
-  Map<String, Map<String, String>> _supplierDotMap = {};
-
-  // Per-supplier badge {letter,color} straight from fw_list_arrivals() — the
-  // backend's own C/CR/P classification. Rendered verbatim by CountBadge;
-  // never recomputed client-side from mode/forwarded/arrivals_confirmed.
-  Map<String, Map<String, String>> _supplierBadgeMap = {};
+  // Per-supplier dots {fill,border} hex colours straight from fw_list_arrivals()'s
+  // dot_packed / dot_method / dot_submit — rendered verbatim, never recomputed
+  // client-side. Supplier Shop shows [packed, method, submit]; Warehouse shows
+  // [method, packed].
+  Map<String, Map<String, String>> _supplierDotPackedMap = {};
+  Map<String, Map<String, String>> _supplierDotMethodMap = {};
+  Map<String, Map<String, String>> _supplierDotSubmitMap = {};
 
   // #117: per-supplier count mode from fw_list_arrivals ('shop'|'warehouse'|null)
   Map<String, String?> _supplierModeMap = {};
@@ -1596,33 +1594,28 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         RenderLog.write('c473_fw_sync',
             'date=${ymd(scope.date)} shop=$c473Shop warehouse=$c473Warehouse');
         final rawList = (res['warehouse_suppliers'] as List? ?? []);
-        // Backend-owned dot: fw_list_arrivals() now returns per supplier
-        // dot.shop/dot.warehouse = {state, fill, border} (fill/border are hex
-        // strings). Warehouse tab reads dot.warehouse verbatim.
-        final dotMap = <String, Map<String, String>>{};
-        final badgeMap = <String, Map<String, String>>{};
+        // Backend-owned dots: fw_list_arrivals() now returns per supplier
+        // dot_packed/dot_method/dot_submit = {state, fill, border} (fill/border
+        // are hex strings). Warehouse tab reads dot_method + dot_packed verbatim.
+        final packedMap = <String, Map<String, String>>{};
+        final methodMap = <String, Map<String, String>>{};
         final modeMap = <String, String?>{};
         final names = <String>[];
+        Map<String, String>? asDot(dynamic v) => v is Map
+            ? {
+                'fill': v['fill']?.toString() ?? '',
+                'border': v['border']?.toString() ?? '',
+              }
+            : null;
         for (final r in rawList) {
           final m = r as Map;
           final name = (m['supplier'] ?? m['supplier_name'])?.toString() ?? '';
           if (name.isEmpty) continue;
           if (!names.contains(name)) names.add(name);
-          final dotObj = m['dot'];
-          if (dotObj is Map && dotObj['warehouse'] is Map) {
-            final wh = dotObj['warehouse'] as Map;
-            dotMap[name] = {
-              'fill': wh['fill']?.toString() ?? '',
-              'border': wh['border']?.toString() ?? '',
-            };
-          }
-          final badge = m['badge'];
-          if (badge is Map) {
-            badgeMap[name] = {
-              'letter': badge['letter']?.toString() ?? '',
-              'color': badge['color']?.toString() ?? '',
-            };
-          }
+          final dp = asDot(m['dot_packed']);
+          if (dp != null) packedMap[name] = dp;
+          final dm = asDot(m['dot_method']);
+          if (dm != null) methodMap[name] = dm;
           final mv = m['mode']?.toString();
           modeMap[name] = (mv != null && mv.isNotEmpty) ? mv : null;
         }
@@ -1667,8 +1660,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         setState(() {
           _suppliers = names;
           _loadingSuppliers = false;
-          _supplierDotMap = {..._supplierDotMap, ...dotMap};
-          _supplierBadgeMap = {..._supplierBadgeMap, ...badgeMap};
+          _supplierDotPackedMap = {..._supplierDotPackedMap, ...packedMap};
+          _supplierDotMethodMap = {..._supplierDotMethodMap, ...methodMap};
           _supplierModeMap = {..._supplierModeMap, ...modeMap};
           // Do NOT reset _arrivalsLocked here — it is set by _checkArrivalsLocked()
           // after _loadBox(). Resetting it here clobbers the locked state immediately
@@ -1706,39 +1699,38 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       final rawList = (res['suppliers'] as List? ?? []);
       final seen = <String>{};
       final names = <String>[];
-      final badgeMap = <String, Map<String, String>>{};
-      // Backend-owned dot: fw_list_arrivals() now returns per supplier
-      // dot.shop/dot.warehouse = {state, fill, border} (fill/border are hex
-      // strings). Supplier Shop tab reads dot.shop verbatim.
-      final dotMap = <String, Map<String, String>>{};
+      // Backend-owned dots: fw_list_arrivals() now returns per supplier
+      // dot_packed/dot_method/dot_submit = {state, fill, border} (fill/border
+      // are hex strings). Supplier Shop tab reads all three verbatim.
+      final packedMap = <String, Map<String, String>>{};
+      final methodMap = <String, Map<String, String>>{};
+      final submitMap = <String, Map<String, String>>{};
+      Map<String, String>? asDot(dynamic v) => v is Map
+          ? {
+              'fill': v['fill']?.toString() ?? '',
+              'border': v['border']?.toString() ?? '',
+            }
+          : null;
       for (final r in rawList) {
         final m = r as Map;
         final s = (m['supplier'] ?? m['supplier_name'])?.toString();
         if (s == null || s.isEmpty || !seen.add(s)) continue;
         names.add(s);
-        final badge = m['badge'];
-        if (badge is Map) {
-          badgeMap[s] = {
-            'letter': badge['letter']?.toString() ?? '',
-            'color': badge['color']?.toString() ?? '',
-          };
-        }
-        final dotObj = m['dot'];
-        if (dotObj is Map && dotObj['shop'] is Map) {
-          final shop = dotObj['shop'] as Map;
-          dotMap[s] = {
-            'fill': shop['fill']?.toString() ?? '',
-            'border': shop['border']?.toString() ?? '',
-          };
-        }
+        final dp = asDot(m['dot_packed']);
+        if (dp != null) packedMap[s] = dp;
+        final dm = asDot(m['dot_method']);
+        if (dm != null) methodMap[s] = dm;
+        final ds = asDot(m['dot_submit']);
+        if (ds != null) submitMap[s] = ds;
       }
       RenderLog.write('78_collect_suppliers_count', '${names.length}');
       RenderLog.write('c444_shop_suppliers', '${names.length}');
       setState(() {
         _suppliers = names;
         _loadingSuppliers = false;
-        _supplierBadgeMap = {..._supplierBadgeMap, ...badgeMap};
-        _supplierDotMap = {..._supplierDotMap, ...dotMap};
+        _supplierDotPackedMap = {..._supplierDotPackedMap, ...packedMap};
+        _supplierDotMethodMap = {..._supplierDotMethodMap, ...methodMap};
+        _supplierDotSubmitMap = {..._supplierDotSubmitMap, ...submitMap};
       });
       widget.onSupplierCountChanged?.call(names.length);
       _loadCollectModes(); // #120: populate C/CR badge map
@@ -4263,19 +4255,20 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     ]);
   }
 
-  // Fallback dot colours used only while _supplierDotMap hasn't loaded yet.
-  static const _kDotYellow      = Color(0xFFFCD34D);
-  static const _kDotBorderLight = Color(0xFFF59E0B);
-
   Widget _buildSupplierAccordionRow(String name, bool isAdmin) {
     final isExpanded = _selectedSupplier == name;
     // #147 FIX A: per-row GlobalKey for Scrollable.ensureVisible (header pin)
     final rowKey = _rowKeys.putIfAbsent(name, () => GlobalKey());
+    // Backend-owned dots from fw_list_arrivals(): Supplier Shop shows
+    // [packed, method, submit]; Warehouse shows [method, packed].
+    final hexDots = widget.arrivals
+        ? [_supplierDotMethodMap[name], _supplierDotPackedMap[name]]
+        : [_supplierDotPackedMap[name], _supplierDotMethodMap[name], _supplierDotSubmitMap[name]];
 
     // #153: outer shell is shared with Arrivals; only expandedContent differs.
     return _SupplierAccordionShell(
       name: name,
-      dot: _supplierDotMap[name],
+      hexDots: hexDots,
       isExpanded: isExpanded,
       anyExpanded: _selectedSupplier != null,
       rowKey: rowKey,
@@ -4318,7 +4311,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       },
       // #183: in-place animated expand — body reveals via _sharedSmoothReveal in shell.
       expandedContent: isExpanded ? _buildExpandedSupplierBody(name, isAdmin) : const SizedBox.shrink(),
-      badge: _supplierBadgeMap[name],
     );
   }
 
@@ -8457,33 +8449,30 @@ Widget _sharedSmoothReveal(bool expanded, Widget child) => AnimatedSize(
 
 class _SupplierAccordionShell extends StatelessWidget {
   final String name;
-  // Verbatim {fill, border} hex colours from fw_list_arrivals()'s per-supplier
-  // dot.shop/dot.warehouse — already resolved to the right stage by the
-  // caller. null = nothing loaded yet (e.g. Pack tab, which uses `dots` below).
-  final Map<String, String>? dot;
   final bool isExpanded;
   final bool anyExpanded;     // any supplier open → bigger bottom gap
   final GlobalKey rowKey;
   final VoidCallback onTap;
   final Widget expandedContent; // AnimatedSize handles show/hide
-  // Verbatim {letter, color} from fw_list_arrivals()'s per-supplier `badge`
-  // field, passed straight to CountBadge. null = nothing to show (e.g. Pack tab).
-  final Map<String, String>? badge;
   // fix(pack): Pack tab's 3 status dots [allPacked, allCounted, readyDone] —
-  // true=green, false=yellow. Null (every other caller) keeps the single
-  // `dot` behavior below completely unchanged.
+  // true=green, false=yellow. Null (every other caller) keeps the `hexDots`
+  // behavior below completely unchanged.
   final List<bool>? dots;
+  // Verbatim {fill, border} hex-colour dots from fw_list_arrivals() (Supplier
+  // Shop: [dot_packed, dot_method, dot_submit]; Warehouse: [dot_method,
+  // dot_packed]) — already ordered by the caller. null entries render the
+  // fallback yellow dot. Null list (e.g. Pack tab, which uses `dots` above).
+  final List<Map<String, String>?>? hexDots;
 
   const _SupplierAccordionShell({
     required this.name,
-    this.dot,
     required this.isExpanded,
     required this.anyExpanded,
     required this.rowKey,
     required this.onTap,
     required this.expandedContent,
-    this.badge,
     this.dots,
+    this.hexDots,
   });
 
   static const _kDotGreen       = Color(0xFF1B7A43);
@@ -8492,8 +8481,6 @@ class _SupplierAccordionShell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final dotFill   = _hexColor(dot?['fill'], _kDotYellow);
-    final dotBorder = _hexColor(dot?['border'], _kDotBorderLight);
     final bottomGap = anyExpanded ? 16.0 : 8.0;
 
     return Padding(
@@ -8534,9 +8521,6 @@ class _SupplierAccordionShell extends StatelessWidget {
                   curve: Curves.easeInOutCubic,
                   child: const Icon(Icons.keyboard_arrow_down_rounded, size: 18, color: _kSub),
                 ),
-                const SizedBox(width: 12),
-                // Constant-width badge slot (38px) — flush right next to dot.
-                CountBadge(badge: badge),
                 const SizedBox(width: 8),
                 if (dots != null)
                   Row(mainAxisSize: MainAxisSize.min, children: [
@@ -8554,15 +8538,22 @@ class _SupplierAccordionShell extends StatelessWidget {
                       ),
                     ],
                   ])
-                else
-                  Container(
-                    width: 12, height: 12,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: dotFill,
-                      border: Border.all(color: dotBorder, width: 1.5),
-                    ),
-                  ),
+                else if (hexDots != null)
+                  Row(mainAxisSize: MainAxisSize.min, children: [
+                    for (int i = 0; i < hexDots!.length; i++) ...[
+                      if (i > 0) const SizedBox(width: 4),
+                      Container(
+                        width: 12, height: 12,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: _hexColor(hexDots![i]?['fill'], _kDotYellow),
+                          border: Border.all(
+                              color: _hexColor(hexDots![i]?['border'], _kDotBorderLight),
+                              width: 1.5),
+                        ),
+                      ),
+                    ],
+                  ]),
               ]),
             ),
           ),

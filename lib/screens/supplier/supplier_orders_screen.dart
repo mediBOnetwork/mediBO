@@ -12,6 +12,14 @@ import '../../widgets/bill_viewer.dart';
 import '../../widgets/order_item_card.dart';
 import '../../widgets/sup_pay_panel.dart';
 
+// Parses a backend-supplied "#RRGGBB" (or "RRGGBB") hex colour string.
+Color _hexColor(String? hex, Color fallback) {
+  if (hex == null || hex.isEmpty) return fallback;
+  final h = hex.startsWith('#') ? hex.substring(1) : hex;
+  final v = int.tryParse(h.length == 6 ? 'FF$h' : h, radix: 16);
+  return v == null ? fallback : Color(v);
+}
+
 // ── Screen ────────────────────────────────────────────────────────────────────
 
 class SupplierOrdersScreen extends StatefulWidget {
@@ -150,6 +158,7 @@ class _SupplierOrdersScreenState extends State<SupplierOrdersScreen> {
             supplierName: widget.supplierName,
             isOpen: isOpen,
             onToggle: () => _toggleOrder(orderId),
+            onReload: () => _fetch(source: 'pack_toggle', silent: true),
           );
         },
       );
@@ -164,12 +173,14 @@ class _OrderCard extends StatefulWidget {
   final String supplierName;
   final bool isOpen;
   final VoidCallback onToggle;
+  final VoidCallback onReload;
 
   const _OrderCard({
     required this.order,
     required this.supplierName,
     required this.isOpen,
     required this.onToggle,
+    required this.onReload,
   });
 
   @override
@@ -192,6 +203,7 @@ class _OrderCardState extends State<_OrderCard> {
   bool _deletingBill = false;
   bool _downloadingBill = false;
   bool _sharingBill = false;
+  bool _togglingPacked = false;
 
   String get _orderId => widget.order['order_id'] as String? ?? '';
 
@@ -411,6 +423,23 @@ class _OrderCardState extends State<_OrderCard> {
     }
   }
 
+  Future<void> _setPacked(String orderCode, bool nextPacked) async {
+    if (_togglingPacked || orderCode.isEmpty) return;
+    setState(() => _togglingPacked = true);
+    try {
+      await Supabase.instance.client.rpc('supplier_set_packed', params: {
+        'p_order_code': orderCode,
+        'p_packed': nextPacked,
+        'p_via': 'order_tab',
+      });
+      widget.onReload();
+    } catch (e) {
+      if (mounted) showToast(context, 'Could not update pack status', isError: true);
+    } finally {
+      if (mounted) setState(() => _togglingPacked = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final orderNo   = widget.order['order_no']?.toString() ?? '';
@@ -596,6 +625,38 @@ class _OrderCardState extends State<_OrderCard> {
               ),
             ]),
           ),
+
+          // ── Pack button ─────────────────────────────────────────────────────
+          if (widget.order['pack_button'] is Map) ...[
+            Builder(builder: (_) {
+              final packButton = Map<String, dynamic>.from(widget.order['pack_button'] as Map);
+              final label = packButton['label']?.toString() ?? '';
+              final bg = _hexColor(packButton['bg']?.toString(), const Color(0xFF1B7A43));
+              final fg = _hexColor(packButton['fg']?.toString(), Colors.white);
+              final nextPacked = packButton['next_packed'] == true;
+              return Padding(
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: FilledButton(
+                    onPressed: _togglingPacked ? null : () => _setPacked(orderCode, nextPacked),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: bg,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                    ),
+                    child: _togglingPacked
+                        ? SizedBox(
+                            width: 16, height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: fg),
+                          )
+                        : Text(label,
+                            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: fg)),
+                  ),
+                ),
+              );
+            }),
+          ],
 
           // ── View Payment panel ───────────────────────────────────────────────
           if (_payOpen) _buildPayPanel(),

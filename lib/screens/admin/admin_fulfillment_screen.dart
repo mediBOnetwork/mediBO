@@ -2103,6 +2103,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           'p_product_id': productId,
           'p_qty': setQty,
           'p_note': note ?? 'tap:$state',
+          // CHANGE #535: write against the SELECTED Fulfill date, not the
+          // server's today — same source the tab loads its data with.
+          'p_date': ymd(FulfillDateScope.instance.date),
         });
         final res = _normRpc(rawCount);
         if (!mounted) return;
@@ -3717,6 +3720,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           'p_product_id': (action['product_id'] as num).toInt(),
           'p_qty': (action['qty'] as num).toDouble(),
           'p_note': 'voice-agent #253',
+          // CHANGE #535: selected Fulfill date (matches the set_voice_received
+          // sibling below, which already passed it).
+          'p_date': ymd(FulfillDateScope.instance.date),
         });
         res = _normRpc(rawAgent);
       } else {
@@ -4649,6 +4655,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             'p_product_id': pid,
             'p_qty': qty,
             'p_note': 'got_all #258',
+            // CHANGE #535: selected Fulfill date.
+            'p_date': ymd(FulfillDateScope.instance.date),
           });
           final res = _normRpc(raw);
           if (res['error'] != null) return _bagCountError(res);
@@ -4662,6 +4670,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             'p_supplier_name': supplier,
             'p_product_id': pid,
             'p_bag_no': null,
+            // CHANGE #535: clear the SELECTED date's rows — uniqueness is now
+            // (supplier, product, bag_no, order_date), so omitting this cleared
+            // today's row instead of the one on screen.
+            'p_date': ymd(FulfillDateScope.instance.date),
           });
         } catch (_) {}
         _reloadItemsFromDB();

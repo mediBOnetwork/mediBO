@@ -8510,14 +8510,10 @@ class _SupplierAccordionShell extends StatelessWidget {
   final GlobalKey rowKey;
   final VoidCallback onTap;
   final Widget expandedContent; // AnimatedSize handles show/hide
-  // No current caller — the Pack tab's 3 status dots moved to `hexDots` below
-  // (pack_get_queue's rollup_rows[].colors, verbatim) so their green/yellow/grey
-  // states aren't limited to this boolean's 2 states. Kept for API compatibility.
-  final List<bool>? dots;
   // Verbatim {fill, border} hex-colour dots from fw_list_arrivals() (Supplier
   // Shop: [dot_packed, dot_method, dot_submit]; Warehouse: [dot_method,
   // dot_packed]) — already ordered by the caller. null entries render the
-  // fallback yellow dot. Null list (e.g. Pack tab, which uses `dots` above).
+  // fallback yellow dot.
   final List<Map<String, String>?>? hexDots;
 
   const _SupplierAccordionShell({
@@ -8527,11 +8523,9 @@ class _SupplierAccordionShell extends StatelessWidget {
     required this.rowKey,
     required this.onTap,
     required this.expandedContent,
-    this.dots,
     this.hexDots,
   });
 
-  static const _kDotGreen       = Color(0xFF1B7A43);
   static const _kDotYellow      = Color(0xFFFCD34D);
   static const _kDotBorderLight = Color(0xFFF59E0B);
 
@@ -8578,23 +8572,7 @@ class _SupplierAccordionShell extends StatelessWidget {
                   child: const Icon(Icons.keyboard_arrow_down_rounded, size: 18, color: _kSub),
                 ),
                 const SizedBox(width: 8),
-                if (dots != null)
-                  Row(mainAxisSize: MainAxisSize.min, children: [
-                    for (int i = 0; i < dots!.length; i++) ...[
-                      if (i > 0) const SizedBox(width: 4),
-                      Container(
-                        width: 12, height: 12,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: dots![i] ? _kDotGreen : _kDotYellow,
-                          border: Border.all(
-                              color: dots![i] ? _kDotGreen : _kDotBorderLight,
-                              width: 1.5),
-                        ),
-                      ),
-                    ],
-                  ])
-                else if (hexDots != null)
+                if (hexDots != null)
                   Row(mainAxisSize: MainAxisSize.min, children: [
                     for (int i = 0; i < hexDots!.length; i++) ...[
                       if (i > 0) const SizedBox(width: 4),
@@ -8684,46 +8662,7 @@ class _HoldToUndoState extends State<_HoldToUndo>
   }
 }
 
-// ── #117: Count badge — fixed-width chip shown on Arrivals accordion rows ─────
-
-class CountBadge extends StatelessWidget {
-  const CountBadge({super.key, required this.badge});
-  // Verbatim {letter, color} from fw_list_arrivals()'s per-supplier `badge`
-  // field — never recomputed client-side. null = nothing to show yet.
-  final Map<String, String>? badge;
-
-  static const _kBadgeColors = {
-    'yellow': Color(0xFFF59E0B),
-    'green': Color(0xFF1B7A43),
-    'red': Color(0xFFD32F2F),
-  };
-
-  @override
-  Widget build(BuildContext context) {
-    final label = badge?['letter'];
-    if (label == null || label.isEmpty) return const SizedBox(width: 38, height: 24);
-    final color = _kBadgeColors[badge?['color']] ?? const Color(0xFFF59E0B);
-    return SizedBox(
-      width: 38,
-      height: 24,
-      child: Container(
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: color,
-          borderRadius: BorderRadius.circular(6),
-        ),
-        child: Text(label, style: const TextStyle(
-          color: Colors.white,
-          fontWeight: FontWeight.w700,
-          fontSize: 12,
-          height: 1.0,
-        )),
-      ),
-    );
-  }
-}
-
-// ── #132A: Dispute badge — item-row indicator, distinct colour from C/CR/P ────
+// ── #132A: Dispute badge — item-row indicator ──────────────────────────────
 
 // #189: Verbatim dispute status strip for Supplier Shop + Warehouse line rows.
 // Shows item_status_label + dispute_status chip from backend — no client-side mapping.
@@ -8745,20 +8684,23 @@ class _DisputeStrip extends StatelessWidget {
     RenderLog.write('c349_item_chip', 'tab=$surface');
     RenderLog.write('c352_item_chip', 'tab=$surface');
 
-    // B2 (#349): red-outline chip "In dispute — <item_status_label>" (24-char truncated)
-    const kRed = Color(0xFFDC2626);
-    final rawLabel = item.itemStatusLabel;
-    final label = rawLabel.length > 24 ? '${rawLabel.substring(0, 24)}…' : rawLabel;
+    // B2 (#349): outline chip "In dispute — <item_status_label>", verbatim from
+    // fw_get_disputes' active_colors (falls back to kind_colors.fg) — no
+    // hardcoded colour, no manual label truncation (maxLines/ellipsis handles it).
+    final chipColor = _hexColor(
+      item.activeColors?['fg'] ?? item.kindColors?['fg'],
+      const Color(0xFFDC2626),
+    );
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
       decoration: BoxDecoration(
-        border: Border.all(color: kRed, width: 1),
+        border: Border.all(color: chipColor, width: 1),
         borderRadius: BorderRadius.circular(4),
       ),
       child: Text(
-        'In dispute — $label',
-        style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: kRed),
+        'In dispute — ${item.itemStatusLabel}',
+        style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: chipColor),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),
@@ -8767,9 +8709,7 @@ class _DisputeStrip extends StatelessWidget {
 }
 
 // Backend-owned (fw_get_disputes): kind_label/kind_colors, verbatim — matches
-// the admin Dispute tab's own kind tag instead of a locally re-derived
-// workflow-status label/colour. Falls back to the prior per-status map only
-// for a dispute whose response doesn't carry kind_label/kind_colors yet.
+// the admin Dispute tab's own kind tag. No client-side per-status fallback.
 class DisputeBadge extends StatelessWidget {
   final String status;
   final Map<String, dynamic>? dispute;
@@ -8778,37 +8718,20 @@ class DisputeBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (status.isEmpty) return const SizedBox.shrink();
+    // Verbatim from fw_get_disputes/supplier_my_disputes — kind_label/kind_colors
+    // are populated by construction (backend CASE has no NULL branch), so there
+    // is no client-side per-status fallback map.
     final kindLabel = dispute?['kind_label']?.toString();
     final kindColors = dispute?['kind_colors'];
-    if (kindLabel != null && kindLabel.isNotEmpty && kindColors is Map) {
-      final bg = _hexColor(kindColors['bg']?.toString(), const Color(0xFFF3F4F6));
-      final fg = _hexColor(kindColors['fg']?.toString(), const Color(0xFF6B7280));
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-        decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(4)),
-        child: Text(kindLabel,
-            style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: fg)),
-      );
+    if (kindLabel == null || kindLabel.isEmpty || kindColors is! Map) {
+      return const SizedBox.shrink();
     }
-    final Color bg;
-    final Color fg;
-    final String label;
-    switch (status) {
-      case 'reminder_sent':
-        bg = const Color(0xFFEDE9FE); fg = const Color(0xFF7C3AED); label = 'Reminder sent'; break;
-      case 'accepted_missing':
-        bg = const Color(0xFFDBEAFE); fg = const Color(0xFF1D4ED8); label = 'Awaiting stock'; break;
-      case 'denied':
-        bg = const Color(0xFFFFEDD5); fg = const Color(0xFFC2410C); label = 'Disputed'; break;
-      case 'shop_logged':
-        bg = const Color(0xFFF3F4F6); fg = const Color(0xFF6B7280); label = 'Re-sourced'; break;
-      default:
-        bg = const Color(0xFFF3F4F6); fg = const Color(0xFF6B7280); label = status;
-    }
+    final bg = _hexColor(kindColors['bg']?.toString(), const Color(0xFFF3F4F6));
+    final fg = _hexColor(kindColors['fg']?.toString(), const Color(0xFF6B7280));
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(4)),
-      child: Text(label,
+      child: Text(kindLabel,
           style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: fg)),
     );
   }

@@ -11760,15 +11760,17 @@ class _PackTabState extends State<_PackTab>
     );
   }
 
-  // fix(pack): 3 customer-row status dots — [packed, counted, readyDone].
+  // 3 customer-row status dots — [packed, counted, readyDone].
   // packed/counted colours are backend-owned: pack_get_queue's rollup_rows[]
   // (already fetched via _fetchPackStatus/_loadFromPackQueue — no new RPC
-  // call) carries a {key,label,value,colors} entry per stage bucket, so the
-  // 'packed'/'counted' entries' colors are rendered verbatim instead of a
-  // client packed>=total / counted>=total threshold. readyDone is already
-  // c['dispatch_ready'] from fw_pack_orders, unchanged (already backend-owned).
-  // Falls back to the prior threshold colour only when rollup_rows hasn't
-  // landed yet for this order.
+  // call) carries a {key,label,value,colors} entry per stage bucket, read
+  // verbatim — no packed>=total / counted>=total threshold. A null entry
+  // (rollup_rows hasn't landed for this order yet) renders as the
+  // _SupplierAccordionShell's own placeholder yellow dot, same as every
+  // other hexDots consumer, rather than a locally recomputed colour.
+  // readyDone has no backend colour field yet (only the dispatch_ready
+  // boolean) — BACKEND GAP, see /tmp/fulfill360.md — so it still maps the
+  // boolean to a fixed green/yellow pair, not a threshold.
   static const _packDotGreen = {'fill': '#1B7A43', 'border': '#1B7A43'};
   static const _packDotYellow = {'fill': '#FCD34D', 'border': '#F59E0B'};
 
@@ -11790,14 +11792,8 @@ class _PackTabState extends State<_PackTab>
       return null;
     }
 
-    final status = _packStatus[orderId];
-    final total = status?['total'] ?? 0;
-    final packed = status?['packed'] ?? 0;
-    final counted = status?['counted'] ?? 0;
-    final packedDot = colorsFor('packed') ?? ((total > 0 && packed >= total) ? _packDotGreen : _packDotYellow);
-    final countedDot = colorsFor('counted') ?? ((total > 0 && counted >= total) ? _packDotGreen : _packDotYellow);
     final readyDot = (c['dispatch_ready'] == true) ? _packDotGreen : _packDotYellow;
-    return [packedDot, countedDot, readyDot];
+    return [colorsFor('packed'), colorsFor('counted'), readyDot];
   }
 
   @override
@@ -13252,7 +13248,10 @@ class _PackingScreenState extends State<_PackingScreen>
       final total    = items.length;
       final packed   = items.where(_isItemDone).length;
       final left     = items.where((i) => !_isItemDone(i)).length;
-      final bagCount = items.map((i) => i['bag_no']).where((b) => b != null).toSet().length;
+      // Backend-owned: pack_get_queue()'s bag_stats[].length — one entry per
+      // bag already computed server-side — instead of re-deriving the set of
+      // distinct bag numbers from items[] client-side.
+      final bagCount = (m['bag_stats'] as List? ?? const []).length;
       final startIdx = items.indexWhere((i) => !_isItemDone(i));
       final allDone  = startIdx == -1;
       final startPage = allDone ? 0 : startIdx;
@@ -14018,8 +14017,16 @@ class _PackingScreenState extends State<_PackingScreen>
         (i) => (i['bag_no'] as num?)?.toInt() == bagNo).toList();
     final posInBag    = bagItems.indexWhere(
         (i) => i['order_item_id']?.toString() == itemId) + 1;
-    final itemsInBag  = bagItems.length;
-    final packedInBag = bagItems.where(_isItemDone).length; // #368: done-predicate
+    // Backend-owned: pack_get_queue()'s bag_stats[].total/.packed for this bag
+    // — computed server-side with the same packable_qty>=packed_qty rule as
+    // _isItemDone — instead of re-deriving the bag's item/packed counts from
+    // items[] client-side.
+    final bagStat     = _bagStats.firstWhere(
+        (s) => (s['bag_no'] as num?)?.toInt() == bagNo,
+        orElse: () => const {});
+    final itemsInBag  = (bagStat['total'] as num?)?.toInt() ?? bagItems.length;
+    final packedInBag = (bagStat['packed'] as num?)?.toInt() ??
+        bagItems.where(_isItemDone).length;
 
     // CHANGE #298 layout constants (instrumented once per card build)
     const double kCounterBagGap = 20;   // (#7) bigger gap counter → bag band
@@ -14421,14 +14428,13 @@ class _BagQuickViewSheet extends StatefulWidget {
 class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
   int? _selectedBag;
 
-  List<int> get _bags {
-    final seen = <int>{};
-    for (final item in widget.items) {
-      final bn = (item['bag_no'] as num?)?.toInt();
-      if (bn != null) seen.add(bn);
-    }
-    return seen.toList()..sort();
-  }
+  // Backend-owned: pack_get_queue()'s bag_stats[] is already one entry per
+  // bag, pre-sorted by bag_no — read the bag numbers straight off it instead
+  // of re-deriving the distinct/sorted set from items[].
+  List<int> get _bags => widget.bagStats
+      .map((s) => (s['bag_no'] as num?)?.toInt())
+      .whereType<int>()
+      .toList();
 
   List<Map<String, dynamic>> get _filtered {
     if (_selectedBag == null) return widget.items;

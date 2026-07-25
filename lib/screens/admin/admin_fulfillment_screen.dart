@@ -8502,9 +8502,9 @@ class _SupplierAccordionShell extends StatelessWidget {
   final GlobalKey rowKey;
   final VoidCallback onTap;
   final Widget expandedContent; // AnimatedSize handles show/hide
-  // fix(pack): Pack tab's 3 status dots [allPacked, allCounted, readyDone] —
-  // true=green, false=yellow. Null (every other caller) keeps the `hexDots`
-  // behavior below completely unchanged.
+  // No current caller — the Pack tab's 3 status dots moved to `hexDots` below
+  // (pack_get_queue's rollup_rows[].colors, verbatim) so their green/yellow/grey
+  // states aren't limited to this boolean's 2 states. Kept for API compatibility.
   final List<bool>? dots;
   // Verbatim {fill, border} hex-colour dots from fw_list_arrivals() (Supplier
   // Shop: [dot_packed, dot_method, dot_submit]; Warehouse: [dot_method,
@@ -11076,6 +11076,9 @@ class _PackTabState extends State<_PackTab>
   final Map<String, Map<String, dynamic>> _packQueueData = {};
   // packed/total cache for packing button label
   final Map<String, Map<String, int>?> _packStatus = {};
+  // pack_get_queue's rollup_rows[] — {key,label,value,colors} per stage bucket,
+  // backend-owned. Drives the customer-row status dots (_packDots), verbatim.
+  final Map<String, List<Map<String, dynamic>>?> _packRollupRows = {};
   // C354: dispute index keyed by order_item_id — ONE fw_get_disputes fetch, matched per row.
   // Drives the read-only "In dispute" chip so packers never chase a phantom line.
   Map<String, DisputeItem> _packDisputeIdx = {};
@@ -11225,16 +11228,30 @@ class _PackTabState extends State<_PackTab>
       final total   = (rollup['ordered'] as num?)?.toInt() ?? 0;
       final packed  = (rollup['packed']  as num?)?.toInt() ?? 0;
       // fix(pack): counted already comes back on this same rollup — surfaced
-      // for the customer-row 3-status-dots (allPacked/allCounted/readyDone).
+      // for the customer-row 3-status-dots (_packDots).
       final counted = (rollup['counted'] as num?)?.toInt() ?? 0;
+      final rawRollupRows = m['rollup_rows'];
+      final rollupRows = rawRollupRows is List
+          ? rawRollupRows.map((r) => Map<String, dynamic>.from(r as Map)).toList()
+          : null;
       try {
         RenderLog.write('c291_pack_counts',
             'order=${orderId.substring(0, orderId.length.clamp(0, 8))};total=$total;packed=$packed');
         RenderLog.write('c335_pack', 'order=${orderId.substring(0, orderId.length.clamp(0, 8))};total=$total;packed=$packed');
       } catch (_) {}
-      if (mounted) setState(() => _packStatus[orderId] = {'packed': packed, 'total': total, 'counted': counted});
+      if (mounted) {
+        setState(() {
+          _packStatus[orderId] = {'packed': packed, 'total': total, 'counted': counted};
+          _packRollupRows[orderId] = rollupRows;
+        });
+      }
     } catch (e) {
-      if (mounted) setState(() => _packStatus[orderId] = {'packed': 0, 'total': -1, 'counted': 0});
+      if (mounted) {
+        setState(() {
+          _packStatus[orderId] = {'packed': 0, 'total': -1, 'counted': 0};
+          _packRollupRows[orderId] = null;
+        });
+      }
     }
   }
 
@@ -11257,6 +11274,10 @@ class _PackTabState extends State<_PackTab>
       final total   = (rollup['ordered'] as num?)?.toInt() ?? 0;
       final packed  = (rollup['packed']  as num?)?.toInt() ?? 0;
       final counted = (rollup['counted'] as num?)?.toInt() ?? 0;
+      final rawRollupRows = m['rollup_rows'];
+      final rollupRows = rawRollupRows is List
+          ? rawRollupRows.map((r) => Map<String, dynamic>.from(r as Map)).toList()
+          : null;
       final items   = ((m['items'] as List?) ?? const [])
           .map((i) => Map<String, dynamic>.from(i as Map))
           .toList();
@@ -11287,6 +11308,7 @@ class _PackTabState extends State<_PackTab>
         // fix(pack): keep 'counted' alongside packed/total — _fetchPackStatus
         // stores the same three keys; this write must not clobber it.
         _packStatus[orderId] = {'packed': packed, 'total': total, 'counted': counted};
+        _packRollupRows[orderId] = rollupRows;
         _loadingItems[orderId] = false;
       });
       RenderLog.write('c354_live', 'tab=pack,src=queue');
@@ -11300,6 +11322,7 @@ class _PackTabState extends State<_PackTab>
         _loadingItems[orderId] = false;
         if (!_packQueueData.containsKey(orderId)) {
           _packStatus[orderId] = {'packed': 0, 'total': -1, 'counted': 0};
+          _packRollupRows[orderId] = null;
         }
       });
     }
@@ -11827,20 +11850,44 @@ class _PackTabState extends State<_PackTab>
     );
   }
 
-  // fix(pack): 3 customer-row status dots — [allPacked, allCounted, readyDone].
-  // packed/counted/total come from _packStatus (already fetched via
-  // pack_get_queue by _fetchPackStatus/_loadFromPackQueue — no new RPC call);
-  // dispatch_ready is already on `c` from fw_pack_orders.
-  List<bool> _packDots(Map<String, dynamic> c) {
+  // fix(pack): 3 customer-row status dots — [packed, counted, readyDone].
+  // packed/counted colours are backend-owned: pack_get_queue's rollup_rows[]
+  // (already fetched via _fetchPackStatus/_loadFromPackQueue — no new RPC
+  // call) carries a {key,label,value,colors} entry per stage bucket, so the
+  // 'packed'/'counted' entries' colors are rendered verbatim instead of a
+  // client packed>=total / counted>=total threshold. readyDone is already
+  // c['dispatch_ready'] from fw_pack_orders, unchanged (already backend-owned).
+  // Falls back to the prior threshold colour only when rollup_rows hasn't
+  // landed yet for this order.
+  static const _packDotGreen = {'fill': '#1B7A43', 'border': '#1B7A43'};
+  static const _packDotYellow = {'fill': '#FCD34D', 'border': '#F59E0B'};
+
+  List<Map<String, String>?> _packDots(Map<String, dynamic> c) {
     final orderId = c['order_id']?.toString() ?? '';
+    final rows = _packRollupRows[orderId];
+    Map<String, String>? colorsFor(String key) {
+      if (rows == null) return null;
+      for (final r in rows) {
+        if (r['key']?.toString() != key) continue;
+        final colors = r['colors'];
+        if (colors is Map) {
+          return {
+            'fill': colors['bg']?.toString() ?? '',
+            'border': colors['fg']?.toString() ?? '',
+          };
+        }
+      }
+      return null;
+    }
+
     final status = _packStatus[orderId];
     final total = status?['total'] ?? 0;
     final packed = status?['packed'] ?? 0;
     final counted = status?['counted'] ?? 0;
-    final allPacked = total > 0 && packed >= total;
-    final allCounted = total > 0 && counted >= total;
-    final readyDone = c['dispatch_ready'] == true;
-    return [allPacked, allCounted, readyDone];
+    final packedDot = colorsFor('packed') ?? ((total > 0 && packed >= total) ? _packDotGreen : _packDotYellow);
+    final countedDot = colorsFor('counted') ?? ((total > 0 && counted >= total) ? _packDotGreen : _packDotYellow);
+    final readyDot = (c['dispatch_ready'] == true) ? _packDotGreen : _packDotYellow;
+    return [packedDot, countedDot, readyDot];
   }
 
   @override
@@ -11906,7 +11953,7 @@ class _PackTabState extends State<_PackTab>
 
     return _SupplierAccordionShell(
       name: name,
-      dots: _packDots(c),
+      hexDots: _packDots(c),
       isExpanded: isExpanded,
       anyExpanded: _expandedOrderId != null,
       rowKey: rowKey,

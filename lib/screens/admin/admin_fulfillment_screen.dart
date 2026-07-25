@@ -6610,7 +6610,11 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
                             padding: const EdgeInsets.only(left: 8),
                             child: _ClipPlayButton(
                               // #455: "Clip N" for Shop, "Part N" for Warehouse (see #455).
-                              label: widget.stage == 'warehouse' ? 'Part ${idx + 1}' : 'Clip ${idx + 1}',
+                              // CHANGE #532: backend-owned chip wording (fw_ui_labels).
+                              label: FulfillLookups.instance.uiCount(
+                                      widget.stage == 'warehouse' ? 'part_chip' : 'clip_chip',
+                                      idx + 1) ??
+                                  '',
                               clipPath: group.windows.first.clipPath,
                               recordingSeq: group.windows.first.seq,
                               playing: _playingClip != null &&
@@ -10092,6 +10096,11 @@ class _PackTabState extends State<_PackTab>
         : <String, dynamic>{};
     final countedCount = (rollup['counted'] as num?)?.toInt() ?? 0;
     final totalItems   = (rollup['ordered'] as num?)?.toInt() ?? total;
+    // CHANGE #532: order-level composed copy, backend-owned (pack_get_queue labels{}).
+    final qLabels = qData != null && qData['labels'] is Map
+        ? Map<String, dynamic>.from(qData['labels'] as Map)
+        : const <String, dynamic>{};
+    final countedProgressLabel = qLabels['counted_progress']?.toString() ?? '';
 
     // CHANGE #304: spokenCount = distinct products in today's mention rows (not counted_count).
     // #338: deleted mentions no longer count as spoken.
@@ -10111,7 +10120,9 @@ class _PackTabState extends State<_PackTab>
       const Divider(height: 1, color: _kBorder),
       _buildPackingButton(c),
       _buildPackVoiceBar(orderId, spokenCount),
-      if (totalItems > 0) _buildPackProgressRow(countedCount, totalItems, orderId, spokenCount),
+      if (totalItems > 0)
+        _buildPackProgressRow(
+            countedCount, totalItems, orderId, spokenCount, countedProgressLabel),
 
       if (isLoading)
         const Center(
@@ -10315,7 +10326,10 @@ class _PackTabState extends State<_PackTab>
   // fix(pack): `counted` is a QTY sum (rollup['counted'], used for the progress
   // bar/fraction below — unchanged) — the "N spoken" label needs the distinct-
   // product count instead, passed in separately as spokenCount.
-  Widget _buildPackProgressRow(int counted, int total, String orderId, int spokenCount) {
+  // CHANGE #532: `progressLabel` is pack_get_queue's labels.counted_progress,
+  // rendered verbatim — the "$counted/$total" fraction is no longer composed here.
+  Widget _buildPackProgressRow(int counted, int total, String orderId,
+      int spokenCount, String progressLabel) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
       child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
@@ -10329,7 +10343,9 @@ class _PackTabState extends State<_PackTab>
                 color: _kGreen,
                 borderRadius: BorderRadius.circular(6),
               ),
-              child: Text('$spokenCount spoken',
+              // CHANGE #532: wording is backend-owned (fw_ui_labels spoken_badge);
+              // only the client-side distinct-product count fills the {n} slot.
+              child: Text(FulfillLookups.instance.uiCount('spoken_badge', spokenCount) ?? '',
                   style: const TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w600,
@@ -10351,7 +10367,7 @@ class _PackTabState extends State<_PackTab>
           ),
         ),
         const SizedBox(width: 8),
-        Text('$counted/$total',
+        Text(progressLabel,
             style: const TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w700,
@@ -10444,7 +10460,14 @@ class _PackTabState extends State<_PackTab>
             return rawBags.whereType<Map>().map((b) => Map<String, dynamic>.from(b)).toList();
           }
           final fallback = (item['bag_no'] as num?)?.toInt();
-          return fallback != null && fallback > 0 ? [<String, dynamic>{'bag_no': fallback}] : <Map<String, dynamic>>[];
+          // CHANGE #532: carry the item's backend-owned bag_label so the chip
+          // still renders backend copy on this (never-hit) defensive path.
+          return fallback != null && fallback > 0
+              ? [<String, dynamic>{
+                  'bag_no': fallback,
+                  'tag_label': item['bag_label']?.toString() ?? '',
+                }]
+              : <Map<String, dynamic>>[];
         })();
     final bagNums = bags.map((b) => (b['bag_no'] as num?)?.toInt() ?? 0).where((n) => n > 0).toList();
 
@@ -10462,9 +10485,10 @@ class _PackTabState extends State<_PackTab>
     // §3: mismatch chip removed — counted is server-clamped to received; chip was misleading.
 
     Widget bagTag(Map<String, dynamic> b) {
-      final n = (b['bag_no'] as num?)?.toInt() ?? 0;
-      final q = (b['qty'] as num?);
-      final label = q != null ? 'Bag $n • x${q.toInt()}' : 'Bag $n';
+      // CHANGE #532: backend-owned tag_label — emitted identically by
+      // pack_get_queue's items[].bags[] and pack_item_bag_breakdown, so the chip
+      // reads the same whichever source populated `bags`.
+      final label = b['tag_label']?.toString() ?? '';
       return Container(
         margin: const EdgeInsets.only(top: 3),
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -10572,12 +10596,11 @@ class _PackTabState extends State<_PackTab>
     final rollupRows = (qData?['rollup_rows'] as List? ?? [])
         .map((r) => Map<String, dynamic>.from(r as Map))
         .toList();
-    final ord = (rollup['ordered'] as num?)?.toInt() ?? 0;
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _buildPackMasterRollup(rollupRows, ord),
+        // CHANGE #532: no `ord` passed — each row carries its own backend value_label.
+        _buildPackMasterRollup(rollupRows),
         const SizedBox(height: 12),
         _buildPackDispatchButton(orderId, dispatchReady, canMarkReady,
             qData?['dispatch_button_colors'] as Map?),
@@ -10587,10 +10610,11 @@ class _PackTabState extends State<_PackTab>
 
   // #346: 5-row master rollup list — label/value/colours are backend-owned
   // (pack_get_queue's rollup_rows[]), rendered verbatim in the given order.
-  Widget _buildPackMasterRollup(List<Map<String, dynamic>> rollupRows, int ord) {
+  Widget _buildPackMasterRollup(List<Map<String, dynamic>> rollupRows) {
     Widget row(Map<String, dynamic> r) {
       final label = r['label']?.toString() ?? '';
-      final value = (r['value'] as num?)?.toInt() ?? 0;
+      // CHANGE #532: backend-owned value_label ("2 / 12 items"), verbatim.
+      final valueLabel = r['value_label']?.toString() ?? '';
       final colors = r['colors'] as Map?;
       final fg = _hexColor(colors?['fg']?.toString(), _kSub);
       final bg = _hexColor(colors?['bg']?.toString(), const Color(0xFFF3F4F6));
@@ -10602,7 +10626,7 @@ class _PackTabState extends State<_PackTab>
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
             decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(6)),
-            child: Text('$value / $ord items',
+            child: Text(valueLabel,
                 style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: fg)),
           ),
         ]),
@@ -11156,7 +11180,9 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
                             border: Border.all(color: isSelected ? _kGreen : _kBorder),
                           ),
                           child: Row(mainAxisSize: MainAxisSize.min, children: [
-                            Text('Clip ${idx + 1}',
+                            // CHANGE #532: wording backend-owned (fw_ui_labels
+                            // clip_chip); only the list index fills {n}.
+                            Text(FulfillLookups.instance.uiCount('clip_chip', idx + 1) ?? '',
                                 style: TextStyle(
                                     fontSize: 12, fontWeight: FontWeight.w600,
                                     color: isSelected ? Colors.white : _kSub)),
@@ -11407,6 +11433,14 @@ class _PackingScreenState extends State<_PackingScreen>
   // disagreed. The backend rule additionally requires pack_counted_qty to be
   // non-null and >= packable_qty.
   bool _isItemDone(Map<String, dynamic> item) => item['is_done'] == true;
+
+  // CHANGE #532: order-level composed copy from pack_get_queue's labels{}.
+  // Empty string while the queue has not loaded — never a Dart-composed string.
+  String _queueLabel(String key) {
+    final l = _queue?['labels'];
+    if (l is Map) return l[key]?.toString() ?? '';
+    return '';
+  }
 
   // #368: qty the Pack action will submit for this item — clamped to [1, packable_qty],
   // defaulting to packable_qty when the user hasn't touched the stepper.
@@ -11847,7 +11881,8 @@ class _PackingScreenState extends State<_PackingScreen>
                   color: bg,
                   border: const Border(bottom: BorderSide(color: _kBorder))),
               child: Row(children: [
-                Text('Bag $bn',
+                // CHANGE #532: backend-owned bag_stats[].bag_label, verbatim.
+                Text(s['bag_label']?.toString() ?? '',
                     style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500,
                         color: fg)),
                 const Spacer(),
@@ -11970,7 +12005,9 @@ class _PackingScreenState extends State<_PackingScreen>
           borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
       builder: (_) => _BagQuickViewSheet(
           items: List<Map<String, dynamic>>.from(_items),
-          bagStats: _bagStats),
+          bagStats: _bagStats,
+          // CHANGE #532: backend-owned labels.no_bag for the unbagged group header.
+          noBagLabel: _queueLabel('no_bag')),
     );
   }
 
@@ -12031,7 +12068,8 @@ class _PackingScreenState extends State<_PackingScreen>
                           _goBackFromAllPackedScreen();
                         }
                       },
-                      child: _buildAllPackedScreen(customer, _bagCount),
+                      // CHANGE #532: summary copy comes from the queue payload.
+                      child: _buildAllPackedScreen(),
                     )
                   : _buildItemView(),
     );
@@ -12164,10 +12202,19 @@ class _PackingScreenState extends State<_PackingScreen>
     if (packableQty >= ordered) return const SizedBox.shrink();
 
     // Bagged, not done, partially bagged → qty stepper.
-    return _packQtyStepper(item, packableQty, ordered);
+    return _packQtyStepper(item, packableQty);
   }
 
-  Widget _packQtyStepper(Map<String, dynamic> item, int packableQty, int ordered) {
+  // CHANGE #532: "Pack N" for every selectable stepper value is pre-composed by
+  // pack_get_queue as items[].pack_qty_labels (index 0 => N=1). Nothing is
+  // composed here — an out-of-range qty simply renders nothing.
+  String _packQtyLabel(Map<String, dynamic> item, int qty) {
+    final labels = item['pack_qty_labels'] as List?;
+    if (labels == null || qty < 1 || qty > labels.length) return '';
+    return labels[qty - 1]?.toString() ?? '';
+  }
+
+  Widget _packQtyStepper(Map<String, dynamic> item, int packableQty) {
     final id      = item['order_item_id']?.toString() ?? '';
     final chosen  = _chosenQtyFor(item);
     void setQty(int v) {
@@ -12192,7 +12239,8 @@ class _PackingScreenState extends State<_PackingScreen>
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Text('Only $packableQty of $ordered bagged',
+        // CHANGE #532: backend-owned items[].partial_bag_label, verbatim.
+        Text(item['partial_bag_label']?.toString() ?? '',
             style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
                 color: Color(0xFF92400E))),
         const SizedBox(height: 6),
@@ -12200,7 +12248,7 @@ class _PackingScreenState extends State<_PackingScreen>
           stepBtn(Icons.remove_rounded, chosen > 1 ? () => setQty(chosen - 1) : null),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 14),
-            child: Text('Pack $chosen',
+            child: Text(_packQtyLabel(item, chosen),
                 style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700,
                     color: _kText)),
           ),
@@ -12230,20 +12278,10 @@ class _PackingScreenState extends State<_PackingScreen>
     }
     final imgCount = imgs.length;
 
-    final bagItems    = _items.where(
-        (i) => (i['bag_no'] as num?)?.toInt() == bagNo).toList();
-    final posInBag    = bagItems.indexWhere(
-        (i) => i['order_item_id']?.toString() == itemId) + 1;
-    // Backend-owned: pack_get_queue()'s bag_stats[].total/.packed for this bag
-    // — computed server-side with the same packable_qty>=packed_qty rule as
-    // _isItemDone — instead of re-deriving the bag's item/packed counts from
-    // items[] client-side.
-    final bagStat     = _bagStats.firstWhere(
-        (s) => (s['bag_no'] as num?)?.toInt() == bagNo,
-        orElse: () => const {});
-    final itemsInBag  = (bagStat['total'] as num?)?.toInt() ?? bagItems.length;
-    final packedInBag = (bagStat['packed'] as num?)?.toInt() ??
-        bagItems.where(_isItemDone).length;
+    // CHANGE #532: the bag-position / bag-packed counters are no longer derived
+    // here. pack_get_queue composes bag_position_label and bag_packed_label with
+    // the same packable_qty>=packed_qty rule bag_stats uses, over the same item
+    // ordering, so the three counters can never disagree with the bag sheet.
 
     // CHANGE #298 layout constants (instrumented once per card build)
     const double kCounterBagGap = 20;   // (#7) bigger gap counter → bag band
@@ -12266,13 +12304,16 @@ class _PackingScreenState extends State<_PackingScreen>
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('${index + 1}/$_totalItems',
+              // CHANGE #532: all three counters are backend-composed over the
+              // SAME ordering items[] is emitted in — index_label /
+              // bag_position_label / bag_packed_label, rendered verbatim.
+              Text(item['index_label']?.toString() ?? '',
                   style: const TextStyle(fontSize: 13, color: _kSub,
                       fontWeight: FontWeight.w600)),
-              Text('$posInBag/$itemsInBag',
+              Text(item['bag_position_label']?.toString() ?? '',
                   style: const TextStyle(fontSize: 13, color: _kSub,
                       fontWeight: FontWeight.w600)),
-              Text('$packedInBag/$itemsInBag',
+              Text(item['bag_packed_label']?.toString() ?? '',
                   style: const TextStyle(fontSize: 13, color: _kSub,
                       fontWeight: FontWeight.w600)),
             ],
@@ -12291,7 +12332,8 @@ class _PackingScreenState extends State<_PackingScreen>
               decoration: BoxDecoration(
                   color: const Color(0xFFDC2626),
                   borderRadius: BorderRadius.circular(14)),
-              child: Text('Bag $bagNo',
+              // CHANGE #532: backend-owned items[].bag_label, verbatim.
+              child: Text(item['bag_label']?.toString() ?? '',
                   style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800,
                       color: Colors.white),
                   textAlign: TextAlign.center),
@@ -12466,7 +12508,7 @@ class _PackingScreenState extends State<_PackingScreen>
     ]),
   );
 
-  Widget _buildAllPackedScreen(String customer, int bagCount) {
+  Widget _buildAllPackedScreen() {
     return Center(child: Padding(
       padding: const EdgeInsets.all(32),
       child: Column(mainAxisSize: MainAxisSize.min,
@@ -12482,7 +12524,8 @@ class _PackingScreenState extends State<_PackingScreen>
         const Text('All Packed', style: TextStyle(
             fontSize: 24, fontWeight: FontWeight.w700, color: _kText)),
         const SizedBox(height: 8),
-        Text('$_totalItems items · $bagCount bags packed for $customer',
+        // CHANGE #532: backend-owned labels.all_packed_summary, verbatim.
+        Text(_queueLabel('all_packed_summary'),
             style: const TextStyle(fontSize: 14, color: _kSub),
             textAlign: TextAlign.center),
         const SizedBox(height: 32),
@@ -12637,7 +12680,10 @@ class _BagQuickViewSheet extends StatefulWidget {
   final List<Map<String, dynamic>> items;
   // Backend-owned: pack_get_queue()'s bag_stats[], rendered verbatim.
   final List<Map<String, dynamic>> bagStats;
-  const _BagQuickViewSheet({required this.items, required this.bagStats});
+  // CHANGE #532: pack_get_queue's labels.no_bag — the unbagged group header.
+  final String noBagLabel;
+  const _BagQuickViewSheet(
+      {required this.items, required this.bagStats, required this.noBagLabel});
   @override
   State<_BagQuickViewSheet> createState() => _BagQuickViewSheetState();
 }
@@ -12746,7 +12792,8 @@ class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
                           color: bgColor,
                           borderRadius: BorderRadius.circular(20),
                           border: Border.all(color: bdColor)),
-                      child: Text('Bag $bn', style: TextStyle(
+                      // CHANGE #532: backend-owned bag_stats[].bag_label, verbatim.
+                      child: Text(s?['bag_label']?.toString() ?? '', style: TextStyle(
                           fontSize: 12, fontWeight: FontWeight.w600,
                           color: txtColor)),
                     ),
@@ -12813,7 +12860,11 @@ class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
       rows.add(Container(
         color: const Color(0xFFF5F6F8),
         padding: const EdgeInsets.fromLTRB(10, 4, 10, 4),
-        child: Text(bn != null ? 'Bag $bn' : 'No bag',
+        // CHANGE #532: backend-owned — bag_stats[].bag_label, else labels.no_bag.
+        child: Text(
+            bn != null
+                ? (_statFor(bn)?['bag_label']?.toString() ?? '')
+                : widget.noBagLabel,
             style: const TextStyle(
                 fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
       ));

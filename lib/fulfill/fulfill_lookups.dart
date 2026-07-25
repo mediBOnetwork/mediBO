@@ -32,6 +32,7 @@ class FulfillLookups {
   // ── backend payloads (verbatim, never synthesised) ────────────────────────
   Map<String, String> _messages = const {};
   List<Map<String, dynamic>> _issueOptions = const [];
+  Map<String, String> _uiLabels = const {};
 
   /// fw_date_label payloads keyed by 'YYYY-MM-DD'. Keyed (rather than a single
   /// slot) because DateScopeChip is also used by admin_customer_screen and
@@ -83,6 +84,18 @@ class FulfillLookups {
     if (code != null && _messages.containsKey(code)) return _messages[code];
     return _messages['default'];
   }
+
+  // ── ui labels (CHANGE #532) ───────────────────────────────────────────────
+
+  /// Backend-owned copy for the handful of Pack labels whose COUNT is a
+  /// client-side list/set size (voice clips, distinct spoken products) and so
+  /// cannot reach pack_get_queue. The backend owns the wording; [uiCount] only
+  /// substitutes the numeral into the backend's own `{n}` slot — no English is
+  /// composed in Dart. Returns null while unloaded, so callers render nothing.
+  String? uiLabel(String key) => _staticLoaded ? _uiLabels[key] : null;
+
+  /// [uiLabel] with the backend's `{n}` placeholder filled in.
+  String? uiCount(String key, int n) => uiLabel(key)?.replaceAll('{n}', '$n');
 
   // ── issue options (report-issue form) ─────────────────────────────────────
 
@@ -140,6 +153,7 @@ class FulfillLookups {
       final res = await Future.wait<dynamic>([
         c.rpc('fw_error_messages'),
         c.rpc('fw_issue_options'),
+        c.rpc('fw_ui_labels'),
       ]);
 
       final errRes = res[0];
@@ -161,9 +175,19 @@ class FulfillLookups {
         }
       }
 
-      _staticLoaded = _messages.isNotEmpty || _issueOptions.isNotEmpty;
+      final uiRes = res[2];
+      if (uiRes is Map) {
+        final raw = uiRes['labels'];
+        if (raw is Map) {
+          _uiLabels = raw.map((k, v) => MapEntry(k.toString(), v?.toString() ?? ''));
+        }
+      }
+
+      _staticLoaded =
+          _messages.isNotEmpty || _issueOptions.isNotEmpty || _uiLabels.isNotEmpty;
       RenderLog.write('c531_lookups',
           'messages=${_messages.length};issue_options=${_issueOptions.length}');
+      RenderLog.write('c532_ui_labels', 'labels=${_uiLabels.length}');
       _notify();
     } catch (_) {
       // Leave unloaded — callers render their loading/empty state rather than

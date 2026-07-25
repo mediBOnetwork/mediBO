@@ -1215,70 +1215,25 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // few_wrong/damaged/excess flags are written per order_item_id, so a merged
   // product that spans several lines must be judged line-by-line (comparing one
   // line's issue_qty against the merged-sum gap would false-block or false-pass).
-  // Backend-owned (fw_get_state's items[]/merged_items[]): is_dispute_candidate,
-  // verbatim. Falls back to the prior client-side rule only when a given line's
-  // response doesn't carry the field yet.
-  bool _lineIsCandidate(Map<String, dynamic> line) {
-    final backend = line['is_dispute_candidate'];
-    if (backend is bool) return backend;
-    return isDisputeCandidate(
-      arrivals: widget.arrivals,
-      ordered: ordQtyOf(line),
-      shopQty: (line['shop_qty'] as num?)?.toInt(),
-      received: recQtyOf(line),
-      expected: (line['expected'] as num?)?.toInt(),
-      countIssue: line['count_issue']?.toString(),
-      state: line['fulfillment_state']?.toString() ?? 'pending',
-    );
-  }
+  // Backend-owned (fw_get_state's items[]): is_dispute_candidate, verbatim —
+  // fw_get_state always computes this field, so there is no client fallback.
+  bool _lineIsCandidate(Map<String, dynamic> line) =>
+      line['is_dispute_candidate'] == true;
 
   // A merged product row is a candidate (tint yellow + tappable). Backend-owned
-  // (merged_items[].is_dispute_candidate), verbatim; falls back to "any
-  // underlying line is a candidate" only when this product's response doesn't
-  // carry the field yet.
-  bool _mIsCandidate(_MergedProduct m) {
-    if (m.isDisputeCandidate != null) return m.isDisputeCandidate!;
-    final ids = m.orderItemIds.toSet();
-    return _items.any((l) =>
-        ids.contains(l['order_item_id']?.toString()) && _lineIsCandidate(l));
-  }
+  // (merged_items[].is_dispute_candidate), verbatim.
+  bool _mIsCandidate(_MergedProduct m) => m.isDisputeCandidate == true;
 
   // C365: confirm-button visual over the whole tab, aggregated PER PRODUCT.
   // Backend-owned (fw_get_state's merged_items[].confirm_gate.can_confirm),
   // verbatim — GREEN + clickable only when EVERY product's can_confirm is
-  // true, else RED. Falls back to the prior ref/counted/disputed aggregate
-  // for a given product only when its confirm_gate isn't present yet.
+  // true, else RED. fw_get_state always computes confirm_gate, so there is
+  // no client-side ref/counted/disputed fallback.
   ConfirmButtonVisual get _confirmVisual {
     final tab = widget.arrivals ? 'warehouse' : 'shop';
     int unsatisfied = 0;
     for (final m in _mergedItemsBackend) {
-      bool ok;
-      final canConfirm = m.confirmGateCanConfirm;
-      if (canConfirm != null) {
-        ok = canConfirm;
-      } else {
-        int refTotal = 0, countedTotal = 0, disputedTotal = 0;
-        for (final l in m.lines) {
-          final ordered = ordQtyOf(l);
-          final expected = (l['expected'] as num?)?.toInt();
-          final received = recQtyOf(l);
-          final shopQty = (l['shop_qty'] as num?)?.toInt();
-          final ref = stageRefFor(arrivals: widget.arrivals, ordered: ordered, expected: expected);
-          final counted = countedQtyFor(arrivals: widget.arrivals, shopQty: shopQty, received: received);
-          refTotal += ref;
-          countedTotal += counted;
-          final lineDisputeQty = (l['dispute_qty'] as num?)?.toInt();
-          disputedTotal += lineDisputeQty ??
-              confirmDisputedQty(
-                ref: ref, counted: counted,
-                countIssue: l['count_issue']?.toString(),
-                issueQty: (l['issue_qty'] as num?)?.toInt(),
-                state: l['fulfillment_state']?.toString() ?? 'pending',
-              );
-        }
-        ok = productSatisfiesConfirmGate(
-            refTotal: refTotal, countedTotal: countedTotal, disputedTotal: disputedTotal);
-      }
+      final ok = m.confirmGateCanConfirm == true;
       RenderLog.write('c361_balance', 'tab=$tab,product=${m.productId},satisfied=$ok');
       if (!ok) unsatisfied++;
     }
@@ -4673,18 +4628,16 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 120),
             child: Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
-              // C355: qty label + pill state from the SHARED helper (same rule as
-              // the merged tile and the web row — no per-layout drift).
+              // Backend-owned: fw_get_state()'s per-item qty_label + status_label +
+              // status_colors, verbatim — no client qty-label recomputation.
               Builder(builder: (_) {
-                final rv = fulfillRowView(
-                  arrivals: widget.arrivals,
-                  ordered: ordQty,
-                  shopQty: shopQty,
-                  received: recQty,
-                  expected: (item['expected'] as num?)?.toInt(),
-                  combinedState: state,
-                );
-                if (rv.awaitingResolution) {
+                // Warehouse "awaiting resolution" rows (fully-short lines forwarded
+                // from shop, expected==0) are already disputed and not
+                // admin-actionable — muted text instead of a qty/pill. `expected`
+                // itself is a real backend field; this is a presence check, not a
+                // derived value.
+                final expected = (item['expected'] as num?)?.toInt();
+                if (widget.arrivals && (expected ?? ordQty) == 0) {
                   return const Text('in dispute · awaiting resolution',
                       style: TextStyle(fontSize: 10, color: _kSub));
                 }
@@ -4696,10 +4649,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                     const Icon(Icons.lock_rounded, size: 12, color: _kReceivedFg),
                     const SizedBox(width: 3),
                   ],
-                  Text(rv.qtyLabel,
+                  Text(item['qty_label']?.toString() ?? '',
                       style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText)),
                   const SizedBox(width: 6),
-                  // Backend-owned: fw_get_state()'s per-item status_label + status_colors, verbatim.
                   Builder(builder: (_) {
                     final colors = item['status_colors'] as Map?;
                     return _BackendStatePill(
@@ -4951,13 +4903,21 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               // the mobile merged layout silently dropped issue flags the single
               // tile and web row showed. Now shared with both.
               Builder(builder: (_) {
-                // C365: "In dispute — <n> <pack>" using the summed disputed qty + pack type.
-                final lbl = disputedChipLabel(
-                    merged.mergedCountIssue, merged.mergedIssueQty, merged.packType);
-                if (lbl == null) return const SizedBox.shrink();
+                // Backend-owned (fw_get_state merged_items[].issue_chip): {label, qty}
+                // verbatim — label is "Wrong"/"Few wrong"/"Damaged"/"Excess"/"Not coming"/
+                // "Short", matching the desktop Dispute Type column instead of a generic
+                // "In dispute" that had drifted from it. qty is appended with pack_type
+                // pluralised via qtyWithPack (no combined field exists on the backend yet).
+                final chip = merged.issueChip;
+                final chipLabel = chip?['label']?.toString();
+                if (chipLabel == null || chipLabel.isEmpty) return const SizedBox.shrink();
+                final chipQty = (chip?['qty'] as num?)?.toInt() ?? 0;
+                final lbl = chipQty > 0
+                    ? '$chipLabel — ${qtyWithPack(chipQty, merged.packType)}'
+                    : chipLabel;
                 RenderLog.write('c351_chip', 'kind=${merged.mergedCountIssue}');
-                RenderLog.write('c364_qty_shown', 'where=row,qty=${merged.mergedIssueQty}');
-                if (merged.mergedIssueQty > 0) RenderLog.write('c365_breakdown', 'where=row');
+                RenderLog.write('c364_qty_shown', 'where=row,qty=$chipQty');
+                if (chipQty > 0) RenderLog.write('c365_breakdown', 'where=row');
                 return _issueChip(lbl);
               }),
               // #265: arrival status line removed — "Arrival pending"/"Arrived" not shown on Warehouse rows

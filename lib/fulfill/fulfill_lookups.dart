@@ -132,6 +132,23 @@ class FulfillLookups {
   /// [uiLabel] with the backend's `{n}` placeholder filled in.
   String? uiCount(String key, int n) => uiLabel(key)?.replaceAll('{n}', '$n');
 
+  /// CHANGE #533: the fulfillment copy catalog. Every static user-visible
+  /// string in the tab lives in fw_ui_labels() and is read through here, so
+  /// copy edits are a migration and never a Flutter rebuild. Returns '' while
+  /// the catalog has not loaded — callers render an empty slot, never a
+  /// hardcoded English fallback.
+  String ui(String key) => uiLabel(key) ?? '';
+
+  /// [ui] with the backend's own named `{slot}`s filled from runtime data the
+  /// client already holds (a supplier name, a list length). The SENTENCE and
+  /// its punctuation stay backend-owned; only the values are substituted.
+  String uiFill(String key, Map<String, Object?> slots) {
+    var s = uiLabel(key);
+    if (s == null) return '';
+    slots.forEach((k, v) => s = s!.replaceAll('{$k}', '${v ?? ''}'));
+    return s!;
+  }
+
   // ── issue options (report-issue form) ─────────────────────────────────────
 
   /// options[] as returned: {key,label,help,needs_qty,needs_name,needs_proof,colors}

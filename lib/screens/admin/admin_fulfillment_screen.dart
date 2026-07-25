@@ -176,7 +176,7 @@ class _VoiceCaps {
                   style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: _kText)),
               const SizedBox(height: 8),
               if (used.isNotEmpty || cap.isNotEmpty)
-                Text('$used · $cap. Try again tomorrow.',
+                Text(FulfillLookups.instance.uiFill('voice_cap_line', {'used': used, 'cap': cap}),
                     style: const TextStyle(fontSize: 13, color: _kSub)),
               const SizedBox(height: 20),
               FilledButton(
@@ -614,7 +614,7 @@ class _BagScannerDialogState extends State<_BagScannerDialog> {
                       children: [
                         _scannerActionBtn(
                           icon: Icons.photo_library_outlined,
-                          label: 'Upload QR',
+                          label: FulfillLookups.instance.ui('upload_qr'),
                           onTap: () => _pickAndDecodeQr(ctx),
                         ),
                       ],
@@ -931,7 +931,7 @@ class _ChangeBagScannerState extends State<_ChangeBagScanner> {
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
             child: _statusBox(
-              label: 'Old Bag $currentNo',
+              label: FulfillLookups.instance.uiFill('old_bag_chip', {'n': currentNo}),
               subtitle: oldDone ? 'Detached ✓' : 'Scan to detach',
               color: oldDone ? green : red,
               icon: oldDone ? Icons.check_circle_outline : Icons.qr_code_scanner_rounded,
@@ -940,7 +940,7 @@ class _ChangeBagScannerState extends State<_ChangeBagScanner> {
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
             child: _statusBox(
-              label: newNo != null ? 'New Bag $newNo' : 'Scan new bag',
+              label: newNo != null ? FulfillLookups.instance.uiFill('new_bag_chip', {'n': newNo}) : FulfillLookups.instance.ui('scan_new_bag'),
               subtitle: newDone ? 'Attached ✓' : (newActive ? 'Scan bag to attach' : 'Waiting…'),
               color: newDone ? green : (newActive ? red : grey),
               icon: newDone ? Icons.check_circle_outline : Icons.qr_code_scanner_rounded,
@@ -1956,7 +1956,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         setState(() => _confirmingAll = false);
         if (mounted && names.isNotEmpty) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-              content: Text('Count all items first: ${names.join(', ')}')));
+              content: Text(FulfillLookups.instance.uiFill('count_all_items_first', {'names': names.join(', ')}))));
         }
         return;
       }
@@ -1997,7 +1997,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       context.findAncestorStateOfType<_AdminFulfillmentScreenState>()?._refreshCollect();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('$lockedItems locked · $disputesRaised new dispute(s)'),
+          content: Text(FulfillLookups.instance.uiFill('confirm_all_summary', {'locked': lockedItems, 'disputes': disputesRaised})),
         ));
       }
     } catch (e) {
@@ -2467,9 +2467,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         .toSet()
         .length;
     final bagCount = bagBreakdown.keys.length;
+    // CHANGE #533: both plurals are backend-owned. The arrivals line pluralises
+    // products AND bags independently, so the backend publishes all four forms
+    // rather than Dart nesting two ternaries.
     final base = widget.arrivals
-        ? 'Counted $productCount product${productCount == 1 ? '' : 's'} across $bagCount bag${bagCount == 1 ? '' : 's'}.'
-        : 'Counted $productCount product${productCount == 1 ? '' : 's'}.';
+        ? FulfillLookups.instance.uiFill(
+            'counted_products_bags_${productCount == 1 ? 'one' : 'other'}_${bagCount == 1 ? 'one' : 'other'}',
+            {'n': productCount, 'bags': bagCount})
+        : FulfillLookups.instance.uiPlural('counted_products', productCount);
     RenderLog.write('c8_finalize_summary',
         'persisted=$productCount;bags=$bagCount;review=${needsReview.length};unmatched=${unmatched.length}');
     RenderLog.write('c457_over_count', 'count=${overCounts.length}');
@@ -2478,11 +2483,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       return;
     }
     final extra = <String>[
-      if (needsReview.isNotEmpty) '${needsReview.length} need bag review',
-      if (overCounts.isNotEmpty) '${overCounts.length} over-counted',
-      if (unmatched.isNotEmpty) '${unmatched.length} unmatched',
+      if (needsReview.isNotEmpty) FulfillLookups.instance.uiFill('finalize_extra_review', {'n': needsReview.length}),
+      if (overCounts.isNotEmpty) FulfillLookups.instance.uiFill('finalize_extra_over', {'n': overCounts.length}),
+      if (unmatched.isNotEmpty) FulfillLookups.instance.uiFill('finalize_extra_unmatched', {'n': unmatched.length}),
     ].join(', ');
-    _showSnack('$base $extra.');
+    _showSnack(FulfillLookups.instance.uiFill('finalize_summary', {'base': base, 'extra': extra}));
     final supplier = _selectedSupplier ?? '';
     showDialog<void>(
       context: context,
@@ -2541,7 +2546,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           Text(FulfillLookups.instance.ui('bag_required'),
               style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _kText)),
           const SizedBox(height: 8),
-          Text('Scan/select the bag for $productName so the bag total equals the counted qty, then count again.',
+          Text(FulfillLookups.instance.uiFill('bag_total_mismatch_help', {'product': productName}),
               style: const TextStyle(fontSize: 13, color: _kSub)),
           const SizedBox(height: 16),
           SizedBox(
@@ -2857,7 +2862,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     RenderLog.write('c253_scanner_open', 'supplier=$supplier;action=first_attach');
     final code = await showDialog<String>(
       context: context,
-      builder: (_) => const _BagScannerDialog(title: 'Scan Bag to Attach'),
+      builder: (_) => _BagScannerDialog(title: FulfillLookups.instance.ui('scan_bag_to_attach')),
     );
     if (!mounted) return;
     if (code == null) {
@@ -2959,7 +2964,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                   color: locked ? const Color(0xFF9CA3AF) : const Color(0xFF92400E)),
               const SizedBox(width: 8),
               Expanded(
-                child: Text('Bag $oldBagNo detached — tap to scan new bag',
+                child: Text(FulfillLookups.instance.uiFill('bag_detached_tap_scan', {'n': oldBagNo}),
                     style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
                         color: locked ? const Color(0xFF9CA3AF) : const Color(0xFF92400E))),
               ),
@@ -3004,7 +3009,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           const Icon(Icons.shopping_bag_outlined, size: 18, color: Color(0xFF065F46)),
           const SizedBox(width: 8),
           Expanded(
-            child: Text('Bag $bagNo in Use',
+            child: Text(FulfillLookups.instance.uiFill('bag_in_use', {'n': bagNo}),
                 style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
                     color: Color(0xFF065F46))),
           ),
@@ -3375,7 +3380,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(FulfillLookups.instance.ui('confirm_counting_2')),
-        content: Text('This locks the Supplier Shop count for $supplier and forwards all items to the Warehouse for a bagged recount.'),
+        content: Text(FulfillLookups.instance.uiFill('confirm_counting_body', {'supplier': supplier})),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(FulfillLookups.instance.ui('cancel'))),
           FilledButton(
@@ -3402,7 +3407,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           setState(() => _submittingCollect = false);
           if (names.isNotEmpty) {
             ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                content: Text('Count all items first: ${names.join(', ')}')));
+                content: Text(FulfillLookups.instance.uiFill('count_all_items_first', {'names': names.join(', ')}))));
           }
         }
         return;
@@ -3430,10 +3435,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       final countedItems = _items.length;
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(
-            'Counting confirmed — $shortsDisputed short item(s) disputed. '
-            'Moved to Warehouse (0/$countedItems).'
-          )),
+          SnackBar(content: Text(FulfillLookups.instance.uiFill('counting_confirmed_toast',
+              {'shorts': shortsDisputed, 'counted': countedItems}))),
         );
       }
     } catch (e) {
@@ -3455,7 +3458,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(FulfillLookups.instance.ui('count_in_warehouse_2')),
-        content: Text('Items from $supplier will be counted at the warehouse instead. This locks the Supplier Shop tab for this supplier.'),
+        content: Text(FulfillLookups.instance.uiFill('count_in_warehouse_body', {'supplier': supplier})),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(FulfillLookups.instance.ui('cancel'))),
           FilledButton(
@@ -3510,7 +3513,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(FulfillLookups.instance.ui('unlock_this_count')),
-        content: Text('Unlock $supplier\'s count to allow edits again?'),
+        content: Text(FulfillLookups.instance.uiFill('unlock_count_body', {'supplier': supplier})),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
@@ -3974,7 +3977,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           final isDetached = _changeBagPendingOldBag.containsKey(sup);
           final detachedBagNo = _changeBagPendingOldBag[sup];
           final subText = isDetached
-              ? 'Bag $detachedBagNo detached — scan a new bag to keep counting'
+              ? FulfillLookups.instance.uiFill('bag_detached_banner', {'n': detachedBagNo})
               : 'Scan a bag to begin counting';
           if (isDetached) {
             RenderLog.write('c272_detached_subtext', 'bag_no=$detachedBagNo;text=$subText');
@@ -4489,7 +4492,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                 ],
                 if (disputeItem != null && (disputeItem.wrongProductName ?? '').isNotEmpty) ...[
                   const SizedBox(height: 2),
-                  Text('↳ ${disputeItem!.wrongProductName}',
+                  Text(FulfillLookups.instance.uiFill('wrong_product_arrow', {'name': disputeItem!.wrongProductName}),
                       style: const TextStyle(fontSize: 10, color: Color(0xFF92400E)),
                       maxLines: 1, overflow: TextOverflow.ellipsis),
                 ],
@@ -5389,7 +5392,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                                 ],
                                 if (deskDisputeItem != null && (deskDisputeItem.wrongProductName ?? '').isNotEmpty) ...[
                                   const SizedBox(height: 2),
-                                  Text('↳ ${deskDisputeItem!.wrongProductName}',
+                                  Text(FulfillLookups.instance.uiFill('wrong_product_arrow', {'name': deskDisputeItem!.wrongProductName}),
                                       style: const TextStyle(fontSize: 10, color: Color(0xFF92400E)),
                                       maxLines: 1, overflow: TextOverflow.ellipsis),
                                 ],
@@ -5623,7 +5626,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           children: [
             const Icon(Icons.check_rounded, size: 11, color: _kReceivedFg),
             const SizedBox(width: 4),
-            Text('$count spoken',
+            Text(FulfillLookups.instance.uiCount('spoken_badge', count) ?? '',
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                     fontSize: 12, fontWeight: FontWeight.w600, color: _kReceivedFg,
@@ -5935,7 +5938,7 @@ class _FinalizeReviewDialogState extends State<_FinalizeReviewDialog> {
           Text(widget.base),
           if (_needsReview.isNotEmpty) ...[
             const SizedBox(height: 12),
-            Text('${_needsReview.length} item${_needsReview.length == 1 ? '' : 's'} spoken before any bag was scanned:',
+            Text(FulfillLookups.instance.uiPlural('needs_review_header', _needsReview.length),
                 style: const TextStyle(fontWeight: FontWeight.w700)),
             if (_loadingBags)
               const Padding(
@@ -5958,13 +5961,13 @@ class _FinalizeReviewDialogState extends State<_FinalizeReviewDialog> {
                   return Padding(
                     padding: const EdgeInsets.symmetric(vertical: 4),
                     child: Row(children: [
-                      Expanded(child: Text('$name — qty $qty')),
+                      Expanded(child: Text(FulfillLookups.instance.uiFill('mention_row', {'name': name, 'qty': qty}))),
                       const SizedBox(width: 8),
                       DropdownButton<int>(
                         hint: Text(FulfillLookups.instance.ui('bag')),
                         value: _pickedBag[mentionId],
                         items: _bagOptions
-                            .map((b) => DropdownMenuItem(value: b, child: Text('Bag $b')))
+                            .map((b) => DropdownMenuItem(value: b, child: Text(FulfillLookups.instance.uiFill('bag_chip', {'n': b}))))
                             .toList(),
                         onChanged: busy ? null : (v) => setState(() => _pickedBag[mentionId] = v),
                       ),
@@ -5982,17 +5985,17 @@ class _FinalizeReviewDialogState extends State<_FinalizeReviewDialog> {
           ],
           if (widget.overCountWarnings.isNotEmpty) ...[
             const SizedBox(height: 12),
-            Text('${widget.overCountWarnings.length} product${widget.overCountWarnings.length == 1 ? '' : 's'} counted more than could be saved:',
+            Text(FulfillLookups.instance.uiPlural('over_count_header', widget.overCountWarnings.length),
                 style: const TextStyle(fontWeight: FontWeight.w700, color: Color(0xFFB45309))),
             for (final w in widget.overCountWarnings)
-              Text('• $w', style: const TextStyle(color: Color(0xFFB45309))),
+              Text(FulfillLookups.instance.uiFill('bullet_row', {'text': w}), style: const TextStyle(color: Color(0xFFB45309))),
           ],
           if (widget.unmatched.isNotEmpty) ...[
             const SizedBox(height: 12),
-            Text('${widget.unmatched.length} item${widget.unmatched.length == 1 ? '' : 's'} not matched to a product:',
+            Text(FulfillLookups.instance.uiPlural('unmatched_header', widget.unmatched.length),
                 style: const TextStyle(fontWeight: FontWeight.w700)),
             for (final m in widget.unmatched)
-              Text('• ${(m is Map ? m['matched_name'] : null) ?? '?'} — qty ${(m is Map ? m['qty'] : null) ?? '?'}'),
+              Text(FulfillLookups.instance.uiFill('unmatched_row', {'name': (m is Map ? m['matched_name'] : null) ?? '?', 'qty': (m is Map ? m['qty'] : null) ?? '?'})),
           ],
         ]),
       ),
@@ -6364,7 +6367,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
                 child: TextField(
                   autofocus: true,
-                  decoration: const InputDecoration(hintText: 'Search…', isDense: true, border: OutlineInputBorder()),
+                  decoration: InputDecoration(hintText: FulfillLookups.instance.ui('search_ellipsis'), isDense: true, border: const OutlineInputBorder()),
                   onChanged: (v) => setSt(() => query = v),
                 ),
               ),
@@ -7546,7 +7549,7 @@ class _DisputeStrip extends StatelessWidget {
         borderRadius: BorderRadius.circular(4),
       ),
       child: Text(
-        'In dispute — ${item.itemStatusLabel}',
+        FulfillLookups.instance.uiFill('in_dispute_line', {'qty': item.itemStatusLabel}),
         style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: chipColor),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
@@ -7850,7 +7853,7 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
                 style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF92400E))),
             if (hasName) ...[
               const SizedBox(height: 2),
-              Text('Wrong item: ${dispute.wrongProductName}',
+              Text(FulfillLookups.instance.uiFill('wrong_item_line', {'name': dispute.wrongProductName}),
                   style: const TextStyle(fontSize: 12, color: _kText),
                   maxLines: 2, overflow: TextOverflow.ellipsis),
             ],
@@ -7909,12 +7912,12 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
                 RenderLog.write('c365_breakdown', 'where=popup');
                 final pack = widget.packType;
                 return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text('Ordered — ${qtyWithPack(ord, pack)}',
+                  Text(FulfillLookups.instance.uiFill('ordered_line', {'qty': qtyWithPack(ord, pack)}),
                       style: const TextStyle(fontSize: 12, color: _kSub)),
-                  Text('Received — ${qtyWithPack(countedTotal, pack)}',
+                  Text(FulfillLookups.instance.uiFill('received_line', {'qty': qtyWithPack(countedTotal, pack)}),
                       style: const TextStyle(fontSize: 12, color: _kSub)),
                   if (disputedTotal > 0)
-                    Text('In dispute — ${qtyWithPack(disputedTotal, pack)}',
+                    Text(FulfillLookups.instance.uiFill('in_dispute_line', {'qty': qtyWithPack(disputedTotal, pack)}),
                         style: const TextStyle(
                             fontSize: 12, fontWeight: FontWeight.w600, color: _kPendingFg)),
                 ]);
@@ -8679,7 +8682,7 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
                 controller: _searchCtrl,
                 onChanged: _onSearchChanged,
                 decoration: InputDecoration(
-                  hintText: 'Search medicine in bags…',
+                  hintText: FulfillLookups.instance.ui('search_medicine_in_bags'),
                   hintStyle: const TextStyle(fontSize: 14, color: _kSub),
                   prefixIcon: const Icon(Icons.search, size: 20, color: _kSub),
                   suffixIcon: _searchCtrl.text.isNotEmpty
@@ -8725,7 +8728,7 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
     if (_searchResults.isEmpty) {
       return Center(
         child: Text(
-          'No items found in any bag for "${_searchCtrl.text}"',
+          FulfillLookups.instance.uiFill('no_items_found_for_query', {'query': _searchCtrl.text}),
           style: const TextStyle(color: _kSub, fontSize: 15),
           textAlign: TextAlign.center,
         ),
@@ -9081,7 +9084,7 @@ class _BagAccordionShell extends StatelessWidget {
                 RenderLog.write('c289_items_badge_green',
                     'items=$totalProducts;progress=${progressLabel ?? ''}');
                 return Row(children: [
-                  Text('Bag $bagNo',
+                  Text(FulfillLookups.instance.uiFill('bag_chip', {'n': bagNo}),
                       style: TextStyle(
                         fontSize: 15, fontWeight: FontWeight.w600,
                         color: isExpanded ? _kGreen : _kText,
@@ -9664,12 +9667,14 @@ class _PackTabState extends State<_PackTab>
       _showPackSnack(FulfillLookups.instance.message('nothing_heard') ?? '');
       return;
     }
-    final base = 'Counted $productCount product${productCount == 1 ? '' : 's'}.';
+    final base = FulfillLookups.instance.uiPlural('counted_products', productCount);
     if (overCounts.isEmpty) {
-      _showPackSnack(unmatched.isEmpty ? base : '$base ${unmatched.length} unmatched.');
+      _showPackSnack(unmatched.isEmpty
+          ? base
+          : FulfillLookups.instance.uiFill('finalize_unmatched_suffix', {'base': base, 'n': unmatched.length}));
       return;
     }
-    _showPackSnack('$base ${overCounts.length} over-counted.');
+    _showPackSnack(FulfillLookups.instance.uiFill('finalize_over_suffix', {'base': base, 'n': overCounts.length}));
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -9678,15 +9683,15 @@ class _PackTabState extends State<_PackTab>
           child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(base),
             const SizedBox(height: 12),
-            Text('${overCounts.length} product${overCounts.length == 1 ? '' : 's'} counted more than could be saved:',
+            Text(FulfillLookups.instance.uiPlural('over_count_header', overCounts.length),
                 style: const TextStyle(fontWeight: FontWeight.w700, color: Color(0xFFB45309))),
-            for (final w in overCounts) Text('• $w', style: const TextStyle(color: Color(0xFFB45309))),
+            for (final w in overCounts) Text(FulfillLookups.instance.uiFill('bullet_row', {'text': w}), style: const TextStyle(color: Color(0xFFB45309))),
             if (unmatched.isNotEmpty) ...[
               const SizedBox(height: 12),
-              Text('${unmatched.length} item${unmatched.length == 1 ? '' : 's'} not matched to a product:',
+              Text(FulfillLookups.instance.uiPlural('unmatched_header', unmatched.length),
                   style: const TextStyle(fontWeight: FontWeight.w700)),
               for (final m in unmatched)
-                Text('• ${(m is Map ? m['matched_name'] : null) ?? '?'} — qty ${(m is Map ? m['qty'] : null) ?? '?'}'),
+                Text(FulfillLookups.instance.uiFill('unmatched_row', {'name': (m is Map ? m['matched_name'] : null) ?? '?', 'qty': (m is Map ? m['qty'] : null) ?? '?'})),
             ],
           ]),
         ),
@@ -13105,7 +13110,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
               maxLines: 3,
               autofocus: required,
               decoration: InputDecoration(
-                labelText: required ? 'Note (required)' : 'Note (optional)',
+                labelText: FulfillLookups.instance.ui(required ? 'note_required_label' : 'note_optional_label'),
                 border: const OutlineInputBorder(),
                 isDense: true,
               ),
@@ -13181,7 +13186,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
           RenderLog.write('c362_disp_group', 'fanout_resolved=${others.length}');
         }
         final newStatus = res['new_status']?.toString() ?? action.label;
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Updated: $newStatus')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(FulfillLookups.instance.uiFill('updated_status', {'status': newStatus}))));
         Future.delayed(const Duration(seconds: 1), () {
           if (mounted) _load();
         });
@@ -13430,7 +13435,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    '$n item${n == 1 ? '' : 's'} couldn\'t be re-sourced — no supplier available',
+                    FulfillLookups.instance.uiPlural('unresourceable', n),
                     style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
                         color: Color(0xFFDC2626)),
                   ),
@@ -13461,7 +13466,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      'Qty: ${item['qty'] ?? '?'} · Bag ${item['bag_no'] ?? '?'} · ${item['pharmacy_name'] ?? '?'}',
+                      FulfillLookups.instance.uiFill('dispute_qty_meta', {'qty': item['qty'] ?? '?', 'bag': item['bag_no'] ?? '?', 'pharmacy': item['pharmacy_name'] ?? '?'}),
                       style: const TextStyle(fontSize: 12, color: _kSub),
                     ),
                   ]),
@@ -13585,7 +13590,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                     ]),
                     if (relTime.isNotEmpty) ...[
                       const SizedBox(height: 4),
-                      Text('reminded $relTime',
+                      Text(FulfillLookups.instance.uiFill('reminded_rel', {'when': relTime}),
                           style: const TextStyle(fontSize: 11, color: _kSub)),
                     ],
                   ]),
@@ -13688,7 +13693,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                     ],
                     if ((item.wrongProductName ?? '').isNotEmpty) ...[
                       const SizedBox(height: 1),
-                      Text('They sent: ${item.wrongProductName}',
+                      Text(FulfillLookups.instance.uiFill('they_sent_line', {'name': item.wrongProductName}),
                           style: const TextStyle(fontSize: 11, color: Color(0xFFDC2626)),
                           maxLines: 1, overflow: TextOverflow.ellipsis),
                     ],
@@ -13903,9 +13908,9 @@ class _DisputeActionSheetState extends State<_DisputeActionSheet> {
                 controller: noteCtrl,
                 maxLines: 3,
                 autofocus: true,
-                decoration: const InputDecoration(
-                  labelText: 'Note (required)',
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  labelText: FulfillLookups.instance.ui('note_required_label'),
+                  border: const OutlineInputBorder(),
                   isDense: true,
                 ),
                 onChanged: (_) => set(() {}),
@@ -13999,13 +14004,13 @@ class _DisputeActionSheetState extends State<_DisputeActionSheet> {
               ]),
               if ((item.wrongProductName ?? '').isNotEmpty) ...[
                 const SizedBox(height: 2),
-                Text('They sent: ${item.wrongProductName}',
+                Text(FulfillLookups.instance.uiFill('they_sent_line', {'name': item.wrongProductName}),
                     style: const TextStyle(fontSize: 12, color: Color(0xFFDC2626)),
                     maxLines: 1, overflow: TextOverflow.ellipsis),
               ],
               const SizedBox(height: 4),
               Text(
-                'Ordered ${item.ordered.toInt()} · Received ${item.received.toInt()} · Short ${item.short.toInt()}',
+                FulfillLookups.instance.uiFill('ord_rec_short_line', {'ordered': item.ordered.toInt(), 'received': item.received.toInt(), 'short': item.short.toInt()}),
                 style: const TextStyle(fontSize: 12, color: _kSub),
               ),
               const SizedBox(height: 4),

@@ -142,6 +142,12 @@ class FulfillLookups {
   /// [ui] with the backend's own named `{slot}`s filled from runtime data the
   /// client already holds (a supplier name, a list length). The SENTENCE and
   /// its punctuation stay backend-owned; only the values are substituted.
+  /// Plural-aware [uiFill]. The BACKEND owns both forms (`<key>_one` /
+  /// `<key>_other`) so the plural rule is a migration, not a Dart ternary.
+  /// `{n}` is filled automatically; extra slots may be passed.
+  String uiPlural(String key, int n, [Map<String, Object?> slots = const {}]) =>
+      uiFill('${key}_${n == 1 ? 'one' : 'other'}', {'n': n, ...slots});
+
   String uiFill(String key, Map<String, Object?> slots) {
     var s = uiLabel(key);
     if (s == null) return '';

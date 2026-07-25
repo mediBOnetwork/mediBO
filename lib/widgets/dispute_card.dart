@@ -62,6 +62,7 @@ class DisputeCard extends StatelessWidget {
     final activeLabel = activeColors?['label'] ?? (isActive ? 'Active' : 'Inactive');
     final activeBg = _hexColor(activeColors?['bg'], const Color(0xFFF3F4F6));
     final activeFg = _hexColor(activeColors?['fg'], _kSub);
+    final activeBorder = _hexColor(activeColors?['border'], Colors.transparent);
     final kindTagText = item.kindLabel;
     final kindTagBg = _hexColor(item.kindColors?['bg'], const Color(0xFFF1F5F9));
     final kindTagFg = _hexColor(item.kindColors?['fg'], const Color(0xFF475569));
@@ -130,6 +131,7 @@ class DisputeCard extends StatelessWidget {
                     decoration: BoxDecoration(
                       color: activeBg,
                       borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: activeBorder),
                     ),
                     child: Text(activeLabel,
                         style: TextStyle(

@@ -6199,7 +6199,10 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
       // CHANGE #456: clip count = distinct RECORDINGS (session groups), not distinct
       // chunk-window clip_paths — verifiable via curl/render-log for this change.
       final distinctClips = groupMentionsIntoClips(mentions).length;
-      final distinctWindows = mentions.map((r) => r['clip_path']?.toString() ?? '').toSet().length;
+      // CHANGE #537: backend-owned column.
+      final distinctWindows = mentions.isEmpty
+          ? 0
+          : (mentions.first['distinct_windows'] as num?)?.toInt() ?? 0;
       RenderLog.write('c119_popup_built',
           'clips=$distinctClips;windows=$distinctWindows;products=${_uniqueNames(mentions)};total_mentions=${mentions.length};retains_seq=y');
       setState(() {
@@ -6211,8 +6214,9 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
     }
   }
 
+  // CHANGE #537: backend-owned column (get_voice_clip_mentions.distinct_names).
   int _uniqueNames(List<Map<String, dynamic>> rows) =>
-      rows.map((r) => r['matched_name']?.toString() ?? '').toSet().length;
+      rows.isEmpty ? 0 : (rows.first['distinct_names'] as num?)?.toInt() ?? 0;
 
   // #130/#131: fires after the LAST window of a tapped clip finishes playing.
   // Resets popup to All combined view + scrolls chip row to start.
@@ -8604,7 +8608,8 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
       RenderLog.write('c281_bag_cards_reloaded', bags.length);
       if (!_allStatesLogged) {
         _allStatesLogged = true;
-        final totalItems = bags.fold<int>(0, (s, b) => s + ((b['total_products'] as num?)?.toInt() ?? 0));
+        // CHANGE #537: backend-owned fw_list_bags.total_products.
+        final totalItems = (data['total_products'] as num?)?.toInt() ?? 0;
         RenderLog.write('c281_all_states_shown', totalItems);
       }
     } catch (e) {
@@ -11456,6 +11461,27 @@ class _PackingScreenState extends State<_PackingScreen>
   // non-null and >= packable_qty.
   bool _isItemDone(Map<String, dynamic> item) => item['is_done'] == true;
 
+  // CHANGE #537: navigation counters are backend-owned everywhere — pack_get_queue's
+  // nav{} on load, pack_mark_item's nav{} after every pack/undo. Both use the SAME
+  // is_done rule, so an optimistic update can never drift from a later reload.
+  Map<String, dynamic>? _navOf(dynamic res) {
+    final m = res is String
+        ? (jsonDecode(res) as Map?)?.cast<String, dynamic>()
+        : (res is Map ? Map<String, dynamic>.from(res) : null);
+    final n = m?['nav'];
+    return n is Map ? Map<String, dynamic>.from(n) : null;
+  }
+
+  /// Applies a backend nav{} block. Caller is already inside setState.
+  void _applyNav(dynamic nav) {
+    final n = nav is Map ? Map<String, dynamic>.from(nav) : null;
+    if (n == null) return;
+    _packedCount = (n['packed'] as num?)?.toInt() ?? _packedCount;
+    _leftCount   = (n['left'] as num?)?.toInt() ?? _leftCount;
+    _totalItems  = (n['total'] as num?)?.toInt() ?? _totalItems;
+    _allPacked   = n['all_packed'] == true;
+  }
+
   // CHANGE #532: order-level composed copy from pack_get_queue's labels{}.
   // Empty string while the queue has not loaded — never a Dart-composed string.
   String _queueLabel(String key) {
@@ -11647,9 +11673,10 @@ class _PackingScreenState extends State<_PackingScreen>
         setState(() {
           // Patch local from authoritative RPC response (server truth).
           _items[index] = {...item, 'packed_qty': newPackedQty, 'packed': fully};
-          _packedCount = _items.where(_isItemDone).length;
-          _leftCount   = _items.where((i) => !_isItemDone(i)).length;
-          _allPacked   = _leftCount == 0;
+          // CHANGE #537: counters come from pack_mark_item's nav{} — the same
+          // authoritative is_done rule as pack_get_queue, so the optimistic
+          // patch can no longer disagree with the next full reload.
+          _applyNav(resMap['nav']);
           _marking     = false;
         });
         try {
@@ -11726,14 +11753,12 @@ class _PackingScreenState extends State<_PackingScreen>
     try {
       // #368 bug#1: pass p_qty:null so the 3-arg overload runs and actually clears
       // packed_qty (the 2-arg legacy overload left it stale).
-      await Supabase.instance.client.rpc('pack_mark_item',
+      final dynamic res = await Supabase.instance.client.rpc('pack_mark_item',
           params: {'p_order_item_id': itemId, 'p_packed': false, 'p_qty': null});
       if (!mounted) return;
       setState(() {
         _items[index] = {...item, 'packed': false, 'packed_qty': 0};
-        _packedCount = _items.where(_isItemDone).length;
-        _leftCount   = _items.where((i) => !_isItemDone(i)).length;
-        _allPacked = false;
+        _applyNav(_navOf(res));   // CHANGE #537: backend counters
         _marking = false;
       });
       try {
@@ -11820,9 +11845,7 @@ class _PackingScreenState extends State<_PackingScreen>
       if (!mounted) return;
       setState(() {
         _items[index] = {...item, 'packed': false, 'packed_qty': 0};
-        _packedCount = _items.where(_isItemDone).length;
-        _leftCount   = _items.where((i) => !_isItemDone(i)).length;
-        _allPacked = false;
+        _applyNav(_navOf(res));   // CHANGE #537: backend counters
         _marking = false;
       });
       RenderLog.write('c302_hold_ms', '2000');
@@ -12028,7 +12051,11 @@ class _PackingScreenState extends State<_PackingScreen>
           items: List<Map<String, dynamic>>.from(_items),
           bagStats: _bagStats,
           // CHANGE #532: backend-owned labels.no_bag for the unbagged group header.
-          noBagLabel: _queueLabel('no_bag')),
+          noBagLabel: _queueLabel('no_bag'),
+          // CHANGE #537: backend-owned group structure.
+          bagGroups: ((_queue?['bag_groups'] as List?) ?? const [])
+              .map((g) => Map<String, dynamic>.from(g as Map))
+              .toList()),
     );
   }
 
@@ -12703,8 +12730,12 @@ class _BagQuickViewSheet extends StatefulWidget {
   final List<Map<String, dynamic>> bagStats;
   // CHANGE #532: pack_get_queue's labels.no_bag — the unbagged group header.
   final String noBagLabel;
+  // CHANGE #537: pack_get_queue's bag_groups[] — render order, header copy and
+  // member ids for the grouped (unfiltered) view.
+  final List<Map<String, dynamic>> bagGroups;
   const _BagQuickViewSheet(
-      {required this.items, required this.bagStats, required this.noBagLabel});
+      {required this.items, required this.bagStats, required this.noBagLabel,
+       required this.bagGroups});
   @override
   State<_BagQuickViewSheet> createState() => _BagQuickViewSheetState();
 }
@@ -12861,13 +12892,14 @@ class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
     if (_selectedBag != null) {
       return items.map(_buildTableRow).toList();
     }
-    final grouped = <int?, List<Map<String, dynamic>>>{};
-    for (final item in items) {
-      final bn = (item['bag_no'] as num?)?.toInt();
-      grouped.putIfAbsent(bn, () => []).add(item);
-    }
-    // CHANGE #531: use the same backend done-predicate as every other surface
-    // (was raw item['packed'], which disagreed with the list sheet).
+    // CHANGE #537: the group structure is backend-owned — pack_get_queue's
+    // bag_groups[] gives the render order (bags ascending, unbagged last), the
+    // header copy, and each group's member rows. The client no longer buckets
+    // items[] into a Map or decides where the "No bag" section goes; it only
+    // looks each id up and renders.
+    final byId = <String, Map<String, dynamic>>{
+      for (final i in items) (i['order_item_id']?.toString() ?? ''): i,
+    };
     final checkedCount = items.where((i) => i['is_done'] == true).length;
     try {
       if (checkedCount > 0) {
@@ -12875,21 +12907,21 @@ class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
       }
     } catch (_) {}
     final List<Widget> rows = [];
-    for (final bn in [...bags, null]) {
-      final group = grouped[bn];
-      if (group == null || group.isEmpty) continue;
+    for (final g in widget.bagGroups) {
+      final ids = (g['order_item_ids'] as List?) ?? const [];
+      final members = ids
+          .map((id) => byId[id?.toString() ?? ''])
+          .whereType<Map<String, dynamic>>()
+          .toList();
+      if (members.isEmpty) continue;
       rows.add(Container(
         color: const Color(0xFFF5F6F8),
         padding: const EdgeInsets.fromLTRB(10, 4, 10, 4),
-        // CHANGE #532: backend-owned — bag_stats[].bag_label, else labels.no_bag.
-        child: Text(
-            bn != null
-                ? (_statFor(bn)?['bag_label']?.toString() ?? '')
-                : widget.noBagLabel,
+        child: Text(g['header_label']?.toString() ?? '',
             style: const TextStyle(
                 fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
       ));
-      rows.addAll(group.map(_buildTableRow));
+      rows.addAll(members.map(_buildTableRow));
     }
     return rows;
   }
@@ -12999,6 +13031,9 @@ class _DisputesScreenState extends State<_DisputesScreen> {
   // per-supplier header row reads this verbatim instead of aggregating
   // active/total counts from the flat disputes[] list client-side.
   Map<String, Map<String, dynamic>> _supplierGroups = {};
+  // CHANGE #537: fw_get_disputes.total_rows — the number of product rows across
+  // all supplier sections, summed server-side (was a client fold).
+  int _supplierProductRows = 0;
 
   // CHANGE #531: fw_get_disputes.supplier_products[] — the ENTIRE Disputes list
   // structure, pre-aggregated server-side: supplier sections (already ordered by
@@ -13103,6 +13138,8 @@ class _DisputesScreenState extends State<_DisputesScreen> {
         _unfillable = unfillable;
         _supplierGroups = supplierGroups;
         _supplierProducts = supplierProducts;
+        // CHANGE #537: backend-owned row total (fw_get_disputes.total_rows).
+        _supplierProductRows = (res['total_rows'] as num?)?.toInt() ?? 0;
         _loading = false;
       });
     } on DisputeException catch (e) {
@@ -13356,8 +13393,8 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     // CHANGE #531: grouping, row order and every summed qty now come from
     // fw_get_disputes.supplier_products[] — the client aggregation is deleted.
     final supplierGroups = _supplierProducts;
-    final _spRowCount = supplierGroups.fold<int>(
-        0, (s, g) => s + ((g['products'] as List?)?.length ?? 0));
+    // CHANGE #537: backend-owned fw_get_disputes.total_rows.
+    final _spRowCount = _supplierProductRows;
     RenderLog.write('c362_disp_group',
         'items=$_spRowCount;suppliers=${supplierGroups.length};no_ac_sections=y');
     // C363-F: item-wise Disputes list (one row per product, NO Active/Closed sections).

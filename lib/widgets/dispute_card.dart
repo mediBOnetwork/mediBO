@@ -302,7 +302,8 @@ class DisputeCard extends StatelessWidget {
       children: item.actions.asMap().entries.map((e) {
         final idx = e.key;
         final action = e.value;
-        final primary = idx == 0;
+        // CHANGE #531: backend-owned `primary` (was: idx == 0).
+        final primary = action.primary;
         return Padding(
           padding: EdgeInsets.only(bottom: idx < item.actions.length - 1 ? 8 : 0),
           child: primary

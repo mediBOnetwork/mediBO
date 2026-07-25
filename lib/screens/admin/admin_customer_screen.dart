@@ -367,6 +367,13 @@ class AdminCustomerScreen extends StatefulWidget {
   static void triggerFocus() =>
       _screenKey.currentState?._onScreenFocus();
 
+  /// Called by the Supplier Shop tab's map dropdown "Optimize route" badge —
+  /// same action the Route sub-tab's own optimize-all button triggers, not a
+  /// reimplementation. Returns false (no-op) if the Route sub-tab isn't
+  /// currently built (it's only mounted while that sub-tab is active) or its
+  /// plan isn't loaded yet — same early-return the button itself is subject to.
+  static bool triggerOptimizeAllRoutes() => _RoutesTab.triggerOptimizeAllRoutes();
+
   @override
   State<AdminCustomerScreen> createState() => _AdminCustomerScreenState();
 }
@@ -10140,14 +10147,28 @@ const _kVisitStatuses = <(String, String)>[
 ];
 
 class _RoutesTab extends StatefulWidget {
+  static final GlobalKey<_RoutesTabState> _routesKey = GlobalKey<_RoutesTabState>();
+
+  /// Cross-screen entry point (via AdminCustomerScreen.triggerOptimizeAllRoutes) —
+  /// the Supplier Shop tab's map dropdown "Optimize route" badge calls this
+  /// exact function, reusing the flow verbatim rather than reimplementing it.
+  /// Returns false when this sub-tab isn't currently mounted (only built
+  /// while the Route sub-tab is the active Customer-screen filter).
+  static bool triggerOptimizeAllRoutes() {
+    final state = _routesKey.currentState;
+    if (state == null) return false;
+    state._optimizeAllRoutesWithGoogle();
+    return true;
+  }
+
   final bool isDesktop;
   final ValueChanged<int> onZonesChanged;
   final VoidCallback onOpenWarehouseCard;
-  const _RoutesTab({
+  _RoutesTab({
     required this.isDesktop,
     required this.onZonesChanged,
     required this.onOpenWarehouseCard,
-  });
+  }) : super(key: _routesKey);
 
   @override
   State<_RoutesTab> createState() => _RoutesTabState();

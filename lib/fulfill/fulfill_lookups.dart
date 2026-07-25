@@ -85,6 +85,41 @@ class FulfillLookups {
     return _messages['default'];
   }
 
+  /// CHANGE #532: backend-owned copy for ANY thrown error or `{'error': code}`
+  /// RPC envelope. Pulls the backend's own code off the throwable when it
+  /// carries one and resolves it through fw_error_messages(); anything
+  /// unrecognised lands on the backend's `default` entry. Raw exception text
+  /// NEVER reaches a user — that was the "Error: <postgres text>" leak.
+  ///
+  /// Returns null only while the map has not loaded, so callers can render a
+  /// neutral state rather than a hardcoded fallback.
+  String? errorText(Object? e) => message(errorCode(e));
+
+  /// The backend error code carried by [e], or null when there is none.
+  String? errorCode(Object? e) {
+    if (e == null) return null;
+    if (e is String) return e;
+    if (e is Map) {
+      final c = e['error'] ?? e['code'];
+      if (c != null) return c.toString();
+      return null;
+    }
+    if (e is PostgrestException) {
+      // RAISE EXCEPTION 'some_code' surfaces as the message; SQLSTATE-mapped
+      // failures surface as .code. Prefer the message — that is where our own
+      // RPCs put their code — then fall back to the SQLSTATE.
+      final m = e.message.trim();
+      if (m.isNotEmpty && _messages.containsKey(m)) return m;
+      final c = e.code?.trim();
+      if (c != null && c.isNotEmpty && _messages.containsKey(c)) return c;
+      return null;
+    }
+    // Bare throwables: match only if the text IS a known code (never a prefix
+    // match — a raw sentence must fall through to `default`).
+    final s = e.toString().trim();
+    return _messages.containsKey(s) ? s : null;
+  }
+
   // ── ui labels (CHANGE #532) ───────────────────────────────────────────────
 
   /// Backend-owned copy for the handful of Pack labels whose COUNT is a

@@ -709,7 +709,7 @@ class _ChangeBagScannerState extends State<_ChangeBagScanner> {
       try { await _ctrl.start(); } catch (_) {}
     } catch (e) {
       if (mounted) {
-        setState(() { _busy = false; _detected = false; _error = 'Could not detach: $e'; });
+        setState(() { _busy = false; _detected = false; _error = FulfillLookups.instance.message('bag_detach_failed') ?? ''; });
         try { await _ctrl.start(); } catch (_) {}
       }
     }
@@ -750,7 +750,7 @@ class _ChangeBagScannerState extends State<_ChangeBagScanner> {
       if (mounted && Navigator.of(context).canPop()) Navigator.of(context).pop(bagData);
     } catch (e) {
       if (mounted) {
-        setState(() { _busy = false; _detected = false; _error = 'Could not attach: $e'; });
+        setState(() { _busy = false; _detected = false; _error = FulfillLookups.instance.message('bag_attach_failed') ?? ''; });
         try { await _ctrl.start(); } catch (_) {}
       }
     }
@@ -1583,7 +1583,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         widget.onSupplierCountChanged?.call(names.length);
       } catch (e) {
         if (!mounted) return;
-        setState(() { _loadingSuppliers = false; _error = e.toString(); });
+        setState(() { _loadingSuppliers = false; _error = FulfillLookups.instance.errorText(e) ?? ''; });
       }
       return;
     }
@@ -1651,7 +1651,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     } catch (e) {
       if (!mounted) return;
       RenderLog.write('78_collect_query_error', e.toString().substring(0, e.toString().length.clamp(0, 80)));
-      setState(() { _loadingSuppliers = false; _error = e.toString(); });
+      setState(() { _loadingSuppliers = false; _error = FulfillLookups.instance.errorText(e) ?? ''; });
     }
   }
 
@@ -1901,7 +1901,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       }
     } catch (e) {
       if (!mounted) return;
-      setState(() { _loadingBox = false; _error = e.toString(); });
+      setState(() { _loadingBox = false; _error = FulfillLookups.instance.errorText(e) ?? ''; });
     }
   }
 
@@ -1974,7 +1974,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         RenderLog.write('c339_wh_confirm_fail', 'error=${res['error']}');
         setState(() => _confirmingAll = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: ${res['error']}')));
+          SnackBar(content: Text(FulfillLookups.instance.errorText(res['error']) ?? '')));
         return;
       }
 
@@ -2004,7 +2004,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (mounted) {
         setState(() => _confirmingAll = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: ${e.toString().substring(0, e.toString().length.clamp(0, 80))}')),
+          SnackBar(content: Text(FulfillLookups.instance.errorText(e) ?? '')),
         );
       }
     }
@@ -2029,7 +2029,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Undo error: ${e.toString().substring(0, e.toString().length.clamp(0, 80))}')),
+          SnackBar(content: Text(FulfillLookups.instance.errorText(e) ?? '')),
         );
       }
     }
@@ -2201,7 +2201,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           RenderLog.write('c337_gate_notforwarded', 'supplier=${_selectedSupplier ?? ''}');
           _showSnack('Supplier not forwarded — count in warehouse instead');
         } else {
-          _showSnack('Error: $e');
+          _showSnack(FulfillLookups.instance.errorText(e) ?? '');
         }
       }
     }
@@ -2369,7 +2369,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (e is MicPermissionException) {
         try { RenderLog.write('c303_mic_result', 'denied'); } catch (_) {}
         setState(() { _voiceListening = false; _voiceInterim = ''; _voiceSupported = false; });
-        _showSnack('Mic access needed for voice — enable it in the browser site settings');
+        _showSnack(FulfillLookups.instance.message('mic_permission') ?? '');
       } else {
         setState(() { _voiceListening = false; _voiceInterim = ''; _voiceError = msg; });
         Future.delayed(const Duration(seconds: 3), () {
@@ -2900,7 +2900,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (session != null && newBagNo != null) await session.recordBagMap(newBagNo);
       await _reloadItemsFromDB();
     } catch (e) {
-      if (mounted) _showSnack('Could not attach bag: $e');
+      if (mounted) _showSnack(FulfillLookups.instance.message('bag_attach_failed') ?? '');
     }
   }
 
@@ -2925,7 +2925,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       RenderLog.write('c253_bag_detached', 'bag=$bagNo;supplier=$supplier');
       await _reloadItemsFromDB();
     } catch (e) {
-      if (mounted) _showSnack('Could not detach bag: $e');
+      if (mounted) _showSnack(FulfillLookups.instance.message('bag_detach_failed') ?? '');
     }
   }
 
@@ -3361,7 +3361,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (mounted) {
         final msg = e.toString();
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Undo error: ${msg.substring(0, msg.length.clamp(0, 80))}')),
+          SnackBar(content: Text(FulfillLookups.instance.errorText(msg) ?? '')),
         );
       }
     }
@@ -3442,7 +3442,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (mounted) {
         setState(() => _submittingCollect = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: ${e.toString().substring(0, e.toString().length.clamp(0, 80))}')),
+          SnackBar(content: Text(FulfillLookups.instance.errorText(e) ?? '')),
         );
       }
     }
@@ -3492,7 +3492,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       if (mounted) {
         setState(() => _submittingCollect = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: ${e.toString().substring(0, e.toString().length.clamp(0, 80))}')),
+          SnackBar(content: Text(FulfillLookups.instance.errorText(e) ?? '')),
         );
       }
     }
@@ -3577,9 +3577,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       _agentRecStarted = false;
       if (e is MicPermissionException) {
         try { RenderLog.write('c303_mic_result', 'denied'); } catch (_) {}
-        if (mounted) _showSnack('Mic access needed for voice — enable it in the browser site settings');
+        if (mounted) _showSnack(FulfillLookups.instance.message('mic_permission') ?? '');
       } else {
-        if (mounted) _showSnack('Mic error: $e');
+        if (mounted) _showSnack(FulfillLookups.instance.message('mic_error') ?? '');
       }
     }
     _agentBusy = false;
@@ -4105,7 +4105,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       return const Center(child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2));
     }
     if (_error != null && _suppliers.isEmpty) {
-      return Center(child: Text('Error: $_error',
+      return Center(child: Text(_error ?? '',
           style: const TextStyle(color: Color(0xFFDC2626))));
     }
 
@@ -6189,7 +6189,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
         _productTotals = productTotals;
       });
     } catch (e) {
-      if (mounted) setState(() => _error = e.toString());
+      if (mounted) setState(() => _error = FulfillLookups.instance.errorText(e) ?? '');
     }
   }
 
@@ -6686,7 +6686,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
         if (_error != null)
           Padding(
             padding: const EdgeInsets.all(14),
-            child: Text('Error: $_error', style: const TextStyle(fontSize: 12, color: Colors.red)),
+            child: Text(_error ?? '', style: const TextStyle(fontSize: 12, color: Colors.red)),
           )
         else if (mentions == null)
           const Padding(
@@ -7761,7 +7761,7 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
           const SnackBar(content: Text('Nothing to undo (already confirmed or re-sourced)')));
       } else if (err != null) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $err'), backgroundColor: const Color(0xFFDC2626)));
+          SnackBar(content: Text(FulfillLookups.instance.errorText(err) ?? ''), backgroundColor: const Color(0xFFDC2626)));
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Reverted')));
@@ -7771,7 +7771,7 @@ class _ProductReceiveSheetState extends State<_ProductReceiveSheet> {
       if (!mounted) return;
       setState(() => _undoing = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e'), backgroundColor: const Color(0xFFDC2626)));
+        SnackBar(content: Text(FulfillLookups.instance.errorText(e) ?? ''), backgroundColor: const Color(0xFFDC2626)));
     }
   }
 
@@ -8592,7 +8592,7 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
       }
     } catch (e) {
       if (!mounted) return;
-      if (!silent) setState(() { _error = e.toString(); _loading = false; });
+      if (!silent) setState(() { _error = FulfillLookups.instance.errorText(e) ?? ''; _loading = false; });
     }
   }
 
@@ -9288,7 +9288,7 @@ class _PackTabState extends State<_PackTab>
       }
     } catch (e) {
       if (!mounted) return;
-      setState(() { _error = e.toString(); _loading = false; });
+      setState(() { _error = FulfillLookups.instance.errorText(e) ?? ''; _loading = false; });
     }
   }
 
@@ -9585,9 +9585,9 @@ class _PackTabState extends State<_PackTab>
       _capsTimer?.cancel();
       if (e is MicPermissionException) {
         try { RenderLog.write('c303_mic_result', 'denied'); } catch (_) {}
-        if (mounted) _showPackSnack('Mic access needed for voice — enable it in the browser site settings');
+        if (mounted) _showPackSnack(FulfillLookups.instance.message('mic_permission') ?? '');
       } else {
-        if (mounted) _showPackSnack('Mic error: $e');
+        if (mounted) _showPackSnack(FulfillLookups.instance.message('mic_error') ?? '');
       }
     }
   }
@@ -9714,9 +9714,8 @@ class _PackTabState extends State<_PackTab>
       await _voiceService.start();
     } catch (e) {
       if (mounted) setState(() { _askListening = false; _askInterim = ''; });
-      if (mounted) _showPackSnack(e is MicPermissionException
-          ? 'Mic access needed — enable it in browser site settings'
-          : 'Mic error: $e');
+      if (mounted) _showPackSnack(FulfillLookups.instance.message(
+          e is MicPermissionException ? 'mic_permission' : 'mic_error') ?? '');
     }
   }
 
@@ -11525,7 +11524,7 @@ class _PackingScreenState extends State<_PackingScreen>
             'cust=${m['customer']};total=$total;bags=$bagCount;startIdx=${allDone ? "done" : startPage}');
       } catch (_) {}
     } catch (e) {
-      if (mounted) setState(() { _error = e.toString(); _loading = false; });
+      if (mounted) setState(() { _error = FulfillLookups.instance.errorText(e) ?? ''; _loading = false; });
     }
   }
 
@@ -11644,7 +11643,7 @@ class _PackingScreenState extends State<_PackingScreen>
         if (mounted) {
           setState(() => _marking = false);
           ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Error: $e'),
+              SnackBar(content: Text(FulfillLookups.instance.errorText(e) ?? ''),
                   duration: const Duration(seconds: 3)));
         }
         return;
@@ -11724,7 +11723,7 @@ class _PackingScreenState extends State<_PackingScreen>
       if (mounted) {
         setState(() => _marking = false);
         ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error: $e'),
+            SnackBar(content: Text(FulfillLookups.instance.errorText(e) ?? ''),
                 duration: const Duration(seconds: 3)));
       }
     }
@@ -11812,7 +11811,7 @@ class _PackingScreenState extends State<_PackingScreen>
       if (mounted) {
         setState(() => _marking = false);
         ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Undo error: $e'),
+            SnackBar(content: Text(FulfillLookups.instance.errorText(e) ?? ''),
                 duration: const Duration(seconds: 3)));
       }
       _holdProgressCtrl.reset();
@@ -13089,7 +13088,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
       setState(() { _error = e.message; _loading = false; });
     } catch (e) {
       if (!mounted) return;
-      setState(() { _error = e.toString().substring(0, e.toString().length.clamp(0, 120)); _loading = false; });
+      setState(() { _error = FulfillLookups.instance.errorText(e) ?? ''; _loading = false; });
     }
   }
 
@@ -13168,7 +13167,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
         return;
       }
       if (err != null) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $err')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(FulfillLookups.instance.errorText(err) ?? '')));
       } else {
         RenderLog.write('c349_resolved', 'code=${action.code}');
         RenderLog.write('c352_resolved', 'code=${action.code}');
@@ -13198,7 +13197,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(e.toString().substring(0, e.toString().length.clamp(0, 80)))));
+          content: Text(FulfillLookups.instance.errorText(e) ?? '')));
     } finally {
       if (mounted) {
         setState(() => _resolving.remove(item.disputeId));
@@ -13866,7 +13865,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(e.toString().substring(0, e.toString().length.clamp(0, 80)))));
+          content: Text(FulfillLookups.instance.errorText(e) ?? '')));
     }
   }
 }

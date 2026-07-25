@@ -388,16 +388,15 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
     // C362 point-8: item-wise — representative drives labels/actions; qty summed; the row
     // is Active if ANY underlying line is active.
     final item = agg.representative;
-    final isWrong    = item.kind == 'wrong_item';
-    final hasFewWrong = item.kind == 'few_wrong';
     final isActive   = agg.active;
     final hasImage   = (item.imageUrl ?? '').isNotEmpty;
     final isResponding = _responding[item.disputeId] == true;
 
     // Backend-owned (supplier_my_disputes): active_colors, kind_label/kind_colors —
-    // verbatim, drive the badge and kind tag below.
+    // verbatim, drive the badge and kind tag below. label is populated by
+    // construction, so there is no client-side Active/Inactive fallback.
     final activeColors = agg.activeColors;
-    final activeLabel = activeColors?['label'] ?? (isActive ? 'Active' : 'Inactive');
+    final activeLabel = activeColors?['label'] ?? '';
     final activeBg = _hexColor(activeColors?['bg'], const Color(0xFFF3F4F6));
     final activeFg = _hexColor(activeColors?['fg'], _kSub);
     final kindTagText = item.kindLabel;
@@ -441,7 +440,7 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
                             color: isActive ? _kText : _kSub, height: 1.3),
                         maxLines: 2, overflow: TextOverflow.ellipsis),
                     // B1b: wrong_product_name
-                    if ((isWrong || hasFewWrong) && (item.wrongProductName ?? '').isNotEmpty) ...[
+                    if ((item.wrongProductName ?? '').isNotEmpty) ...[
                       const SizedBox(height: 3),
                       Text('They say we sent: ${item.wrongProductName}',
                           style: const TextStyle(fontSize: 12, color: _kRed),

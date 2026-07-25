@@ -54,12 +54,13 @@ class DisputeCard extends StatelessWidget {
 
     final isActive = agg?.active ?? item.isActive;
     final hasImage  = (item.imageUrl ?? '').isNotEmpty;
-    final isWrong   = item.kind == 'wrong_item' || item.kind == 'few_wrong';
 
     // Backend-owned (supplier_my_disputes / get_dispute_form): active_colors,
     // kind_label/kind_colors — verbatim, drive the badge and kind tag below.
+    // active_colors.label is populated by construction (backend CASE has no
+    // NULL branch), so there is no client-side Active/Inactive fallback text.
     final activeColors = agg?.activeColors ?? item.activeColors;
-    final activeLabel = activeColors?['label'] ?? (isActive ? 'Active' : 'Inactive');
+    final activeLabel = activeColors?['label'] ?? '';
     final activeBg = _hexColor(activeColors?['bg'], const Color(0xFFF3F4F6));
     final activeFg = _hexColor(activeColors?['fg'], _kSub);
     final activeBorder = _hexColor(activeColors?['border'], Colors.transparent);
@@ -97,7 +98,7 @@ class DisputeCard extends StatelessWidget {
                       ),
                       maxLines: 2, overflow: TextOverflow.ellipsis,
                     ),
-                    if (isWrong && (item.wrongProductName ?? '').isNotEmpty) ...[
+                    if ((item.wrongProductName ?? '').isNotEmpty) ...[
                       const SizedBox(height: 3),
                       Text(
                         'They say we sent: ${item.wrongProductName}',

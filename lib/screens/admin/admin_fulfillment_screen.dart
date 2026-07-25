@@ -13,7 +13,6 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:convert';
 import '../../utils/render_log.dart';
-import '../../widgets/dispute_state.dart';
 import 'dispute/dispute_models.dart';
 import '../../fulfill/fulfill_view_logic.dart'; // C355: shared logic for both layouts
 // dispute_card.dart removed in #170 — Disputes tab rebuilt with accordion layout
@@ -1778,9 +1777,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           } catch (_) {}
         }
       }
+      // Backend-owned (fw_get_disputes): is_active, verbatim.
       final rawOpenCount = disputes.where((d) {
         final dm2 = d is Map ? Map<String, dynamic>.from(d) : <String, dynamic>{};
-        return disputeStateOf(dm2) != DisputeState.resolved;
+        return dm2['is_active'] == true;
       }).length;
       RenderLog.write('c132a_dispute_badge_count', '$rawOpenCount');
       RenderLog.write('c174_admin_open_predicate',
@@ -15337,11 +15337,11 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     // C362 point-7: item-wise row — the representative drives labels/actions; qty is summed
     // and the row is Active if ANY underlying line is active.
     final item = agg.representative;
-    final isWrong  = item.kind == 'wrong_item';
     final isActive = agg.active;
     // Backend-owned: fw_get_disputes()'s active_colors, verbatim — drives the
-    // Active/Inactive badge and both status chips below.
-    final activeLabel = agg.activeColors?['label'] ?? (isActive ? 'Active' : 'Inactive');
+    // Active/Inactive badge and both status chips below. label is populated
+    // by construction, so there is no client-side Active/Inactive fallback.
+    final activeLabel = agg.activeColors?['label'] ?? '';
     final activeBg = _hexColor(agg.activeColors?['bg'], const Color(0xFFF3F4F6));
     final activeFg = _hexColor(agg.activeColors?['fg'], _kSub);
 
@@ -15399,7 +15399,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                             maxLines: 1, overflow: TextOverflow.ellipsis);
                       }),
                     ],
-                    if ((isWrong || item.kind == 'few_wrong') && (item.wrongProductName ?? '').isNotEmpty) ...[
+                    if ((item.wrongProductName ?? '').isNotEmpty) ...[
                       const SizedBox(height: 1),
                       Text('They sent: ${item.wrongProductName}',
                           style: const TextStyle(fontSize: 11, color: Color(0xFFDC2626)),
@@ -15658,7 +15658,6 @@ class _DisputeActionSheetState extends State<_DisputeActionSheet> {
   @override
   Widget build(BuildContext context) {
     final item = widget.item;
-    final isWrong  = item.kind == 'wrong_item';
     // Backend-owned: fw_get_disputes()'s active_colors, verbatim.
     final activeBg = _hexColor(item.activeColors?['bg'], const Color(0xFFF3F4F6));
     final activeFg = _hexColor(item.activeColors?['fg'], _kSub);
@@ -15712,7 +15711,7 @@ class _DisputeActionSheetState extends State<_DisputeActionSheet> {
                   );
                 }),
               ]),
-              if ((isWrong || item.kind == 'few_wrong') && (item.wrongProductName ?? '').isNotEmpty) ...[
+              if ((item.wrongProductName ?? '').isNotEmpty) ...[
                 const SizedBox(height: 2),
                 Text('They sent: ${item.wrongProductName}',
                     style: const TextStyle(fontSize: 12, color: Color(0xFFDC2626)),

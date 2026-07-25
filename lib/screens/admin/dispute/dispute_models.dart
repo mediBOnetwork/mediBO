@@ -171,7 +171,10 @@ class DisputeItem {
   factory DisputeItem.fromJson(Map<String, dynamic> j) {
     final statusCode = (j['status'] ?? '').toString();
     final rawDisputeStatus = (j['dispute_status'] ?? '').toString();
-    final rawActive = j['active'];
+    // fw_get_disputes (admin surface) only emits `is_active`; supplier_my_disputes/
+    // get_dispute_form emit both `is_active` and `active`. Read is_active first so
+    // the admin surface doesn't silently fall through to the status string below.
+    final rawActive = j['is_active'] ?? j['active'];
     final isActive = rawActive is bool
         ? rawActive
         : rawDisputeStatus == 'active';

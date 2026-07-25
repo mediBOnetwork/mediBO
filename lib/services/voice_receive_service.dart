@@ -276,10 +276,9 @@ Future<void> recordVoiceBagBoundary({
 /// §6 of the continuous-voice-counting build spec: run once on stop (safe to re-run).
 /// Returns the finalize summary jsonb (persisted totals, bag_breakdown, unmatched_mentions,
 /// needs_bag_review) for the caller to surface to the admin.
-Future<Map<String, dynamic>> finalizeVoiceSession(String sessionKey, {String? dateYmd}) async {
+Future<Map<String, dynamic>> finalizeVoiceSession(String sessionKey) async {
   final res = await Supabase.instance.client.rpc('voice_finalize_session', params: {
     'p_session_key': sessionKey,
-    if (dateYmd != null) 'p_date': dateYmd,
   });
   final data = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
   if (data['error'] != null) {
@@ -306,10 +305,6 @@ Future<Map<String, dynamic>> finalizeVoiceSession(String sessionKey, {String? da
 class ContinuousVoiceSession {
   final String supplierName;
   final String stage; // 'warehouse' | 'shop'
-  // 'YYYY-MM-DD' — the Fulfill date being counted (FulfillDateScope.instance.date),
-  // forwarded to voice_finalize_session so counts save against the date the admin
-  // is actually viewing, not the server's "today".
-  final String dateYmd;
   final List<Map<String, dynamic>> Function() orderItemsProvider;
   final List<Map<String, dynamic>> Function()? expectedProvider;
   final void Function(Object error, StackTrace st)? onWindowError;
@@ -338,7 +333,6 @@ class ContinuousVoiceSession {
   ContinuousVoiceSession({
     required this.supplierName,
     required this.stage,
-    required this.dateYmd,
     required this.orderItemsProvider,
     this.expectedProvider,
     this.onWindowError,
@@ -438,7 +432,7 @@ class ContinuousVoiceSession {
     }
     _clock.stop();
     await Future.wait(List<Future<void>>.of(_inFlight));
-    return finalizeVoiceSession(sessionKey, dateYmd: dateYmd);
+    return finalizeVoiceSession(sessionKey);
   }
 
   /// Aborts the session without finalizing (e.g. the admin backs out mid-count). Any windows

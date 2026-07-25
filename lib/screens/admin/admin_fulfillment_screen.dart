@@ -11491,19 +11491,20 @@ class _PackingScreenState extends State<_PackingScreen>
       final items    = ((m['items'] as List?) ?? const [])
           .map((i) => Map<String, dynamic>.from(i as Map))
           .toList();
-      // #346: old flat fields gone; derive navigation counters from items[]
-      // #368: "done" = packed to bagged capacity (_isItemDone), NOT raw item['packed']
-      // (which requires packed_qty>=ordered and never flips for partially-bagged lines).
-      final total    = items.length;
-      final packed   = items.where(_isItemDone).length;
-      final left     = items.where((i) => !_isItemDone(i)).length;
-      // Backend-owned: pack_get_queue()'s bag_stats[].length — one entry per
-      // bag already computed server-side — instead of re-deriving the set of
-      // distinct bag numbers from items[] client-side.
-      final bagCount = (m['bag_stats'] as List? ?? const []).length;
-      final startIdx = items.indexWhere((i) => !_isItemDone(i));
-      final allDone  = startIdx == -1;
-      final startPage = allDone ? 0 : startIdx;
+      // CHANGE #533: the navigation counters are backend-owned. pack_get_queue's
+      // nav{} computes total/packed/left/bag_count and the first not-done index
+      // with the SAME is_done predicate over the SAME emitted order the client
+      // renders, so the counters and the start page can no longer drift from
+      // what the rows actually show. Read verbatim — never re-derive.
+      final nav = m['nav'] is Map
+          ? Map<String, dynamic>.from(m['nav'] as Map)
+          : const <String, dynamic>{};
+      final total     = (nav['total'] as num?)?.toInt() ?? 0;
+      final packed    = (nav['packed'] as num?)?.toInt() ?? 0;
+      final left      = (nav['left'] as num?)?.toInt() ?? 0;
+      final bagCount  = (nav['bag_count'] as num?)?.toInt() ?? 0;
+      final allDone   = nav['all_packed'] == true;
+      final startPage = (nav['start_index'] as num?)?.toInt() ?? 0;
       if (!mounted) return;
       _itemPageController?.dispose();
       _itemPageController = PageController(initialPage: startPage);

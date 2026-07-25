@@ -81,11 +81,20 @@ class ReportIssueSection extends StatefulWidget {
 class _ReportIssueSectionState extends State<ReportIssueSection> {
   bool _expanded = false;
   String? _selected;
-  int _qty = 1;
+  // C532: null until the backend hands us a per-kind default (fw_issue_qty_rules).
+  // There is deliberately no client seed value — the stepper renders its loading
+  // state instead of guessing a number.
+  int? _qty;
   final _nameCtrl = TextEditingController();
   String? _proofUrl;
   bool _uploading = false;
   bool _saving = false;
+
+  // C532: fw_issue_qty_rules(p_order_item_id) payload — the ONLY source of the
+  // qty reference, per-kind min/max and per-kind default. Fetched ONCE per
+  // order_item_id when the section first expands; never per render/keystroke.
+  Map<String, dynamic>? _qtyRules;
+  String? _rulesFor; // order_item_id the payload/in-flight fetch belongs to
 
   @override
   void initState() {
@@ -97,12 +106,14 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
     final ei = _cleanIssue(widget.existingIssue);
     if (ei != null) {
       _selected = ei;
-      _qty = widget.existingIssueQty ?? 1;
+      // Saved qty is a backend value; absent means "let the rules default fill it".
+      _qty = widget.existingIssueQty;
       if (widget.existingWrongName != null && widget.existingWrongName!.isNotEmpty) {
         _nameCtrl.text = widget.existingWrongName!;
       }
       _proofUrl = widget.existingProofUrl;
       _expanded = true;
+      _loadQtyRules();
     }
   }
 
@@ -120,7 +131,68 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
         FulfillLookups.instance.issueOption(_selected) == null) {
       _selected = null;
     }
+    // C532: the sheet can be re-pointed at another line in place — the cached
+    // qty rules belong to the OLD order_item_id, so drop them and refetch once.
+    if (old.orderItemId != widget.orderItemId) {
+      _qtyRules = null;
+      _rulesFor = null;
+      _qty = null;
+      if (_expanded) _loadQtyRules();
+    }
   }
+
+  // ── C532: backend qty rules ────────────────────────────────────────────────
+
+  /// Fetched ONCE per order_item_id (on first expand). Idempotent.
+  Future<void> _loadQtyRules() async {
+    final id = widget.orderItemId;
+    if (_rulesFor == id) return; // loaded or already in flight for this line
+    _rulesFor = id;
+    try {
+      final res = await Supabase.instance.client
+          .rpc('fw_issue_qty_rules', params: {'p_order_item_id': id});
+      if (!mounted || widget.orderItemId != id) return;
+      final map = res is Map ? Map<String, dynamic>.from(res) : null;
+      final err = map?['error']?.toString();
+      if (map == null || err != null) {
+        _rulesFor = null; // allow a retry on the next expand
+        setState(() {});
+        RenderLog.write('c532_qty_rules_err', 'code=${err ?? "shape"}');
+        _showErr(err); // C531: backend fw_error_messages copy only
+        return;
+      }
+      setState(() {
+        _qtyRules = map;
+        // Fill the stepper only if nothing (saved qty) is already in it.
+        if (_selected != null && _qty == null) _qty = _ruleInt(_selected, 'default');
+      });
+      RenderLog.write('c532_qty_rules',
+          'ref=${map['ref_qty']},label=${map['ref_label']}');
+    } catch (_) {
+      if (!mounted) return;
+      _rulesFor = null;
+      setState(() {});
+      RenderLog.write('c532_qty_rules_err', 'code=exception');
+      _showErr(null); // backend 'default' message
+    }
+  }
+
+  /// rules[kind] as returned: {min,max,default}. Null while unloaded/unknown.
+  Map<String, dynamic>? _ruleFor(String? kind) {
+    if (kind == null) return null;
+    final r = _qtyRules?['rules'];
+    if (r is! Map) return null;
+    final k = r[kind];
+    return k is Map ? Map<String, dynamic>.from(k) : null;
+  }
+
+  int? _ruleInt(String? kind, String field) {
+    final v = _ruleFor(kind)?[field];
+    return v is num ? v.toInt() : null;
+  }
+
+  /// Backend `ref_label` (`counted/ref_qty`), ready to render. Empty while unloaded.
+  String get _refLabel => _qtyRules?['ref_label']?.toString() ?? '';
 
   @override
   void dispose() {
@@ -134,20 +206,22 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
     return raw;
   }
 
-  // C360: stage reference for gating + qty math (falls back to ordered when unset).
-  int get _ref => widget.refQty ?? widget.orderedQty;
-
-  int get _maxQty {
-    final uncounted = _ref - widget.receivedQty;
-    return uncounted > 0 ? uncounted : (_ref > 0 ? _ref : 1);
-  }
+  // C532: _ref / _maxQty deleted — the reference qty and every per-kind bound
+  // now come from fw_issue_qty_rules (ref_qty / rules[kind].min|max|default).
 
   bool get _saveEnabled {
     if (_selected == null || _saving) return false;
     // C531: WHICH inputs a kind requires is backend-owned (fw_issue_options
     // needs_qty / needs_name). Only the pure keystroke checks live here.
     final lk = FulfillLookups.instance;
-    if (lk.needsQty(_selected) && _qty < 1) return false;
+    if (lk.needsQty(_selected)) {
+      // C532: bounds are the backend's; unloaded rules => not saveable yet.
+      final q = _qty;
+      final lo = _ruleInt(_selected, 'min');
+      final hi = _ruleInt(_selected, 'max');
+      if (q == null || lo == null || hi == null) return false;
+      if (q < lo || q > hi) return false;
+    }
     if (lk.needsName(_selected) && _nameCtrl.text.trim().isEmpty) return false;
     return true;
   }
@@ -235,7 +309,9 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
     if (!_saveEnabled) return;
     setState(() => _saving = true);
     final issue = _selected!;
-    final qty = _qty;
+    // C532: 0 when the kind takes no qty (backend rules[kind].default == 0) —
+    // the p_qty payload conditions below are unchanged.
+    final qty = _qty ?? 0;
     final name = _nameCtrl.text.trim();
     final proofUrl = _proofUrl;
     // C364: 'short' now flows through fw_set_line_issue with the entered disputed qty
@@ -374,7 +450,12 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
       width: double.infinity,
       height: 44,
       child: OutlinedButton.icon(
-        onPressed: () => setState(() => _expanded = true),
+        // C532: the qty rules are fetched ONCE here — when the section first
+        // expands for this order_item_id — not per render and not per keystroke.
+        onPressed: () {
+          setState(() => _expanded = true);
+          _loadQtyRules();
+        },
         icon: const Icon(Icons.flag_outlined, size: 16),
         label: Text(
             isEdit ? 'Change issue' : 'Report issue',
@@ -483,14 +564,10 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
       onTap: () => setState(() {
         if (_selected == value) return;
         _selected = value;
-        // C364/C365: pre-fill the "Disputed units" stepper. GAP (aggregate ref − received) for
-        // short/few_wrong/damaged; over-count (received − ref) for excess; FULL ordered_total for
-        // 'wrong' (whole product). A save without stepping matches the product balance point.
-        _qty = value == 'excess'
-            ? (widget.receivedQty - _ref).clamp(1, 9999)
-            : value == 'wrong'
-                ? (_ref > 0 ? _ref : 1)
-                : (_ref - widget.receivedQty).clamp(1, _ref > 0 ? _ref : 1);
+        // C532: the "Disputed units" pre-fill is fw_issue_qty_rules'
+        // rules[kind].default, verbatim. No client per-kind arithmetic. Null
+        // while the payload is still in flight -> the stepper shows loading.
+        _qty = _ruleInt(value, 'default');
       }),
       child: Container(
         margin: const EdgeInsets.only(bottom: 4),
@@ -529,36 +606,57 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
     final needsQty   = lk.needsQty(issue);
     final needsName  = lk.needsName(issue);
     final needsProof = lk.needsProof(issue);
-    // C365: cap = the aggregate gap (short/few_wrong/damaged); excess uncapped; wrong = full ordered.
-    final max = issue == 'excess' ? 9999 : issue == 'wrong' ? (_ref > 0 ? _ref : 1) : _maxQty;
+    // C532: every bound is fw_issue_qty_rules' rules[<kind>] — no client caps,
+    // no per-kind branching. Null => payload still in flight.
+    final min = _ruleInt(issue, 'min');
+    final max = _ruleInt(issue, 'max');
+    final qty = _qty;
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min,
         children: [
       if (needsQty) ...[
-        Builder(builder: (_) {
-          RenderLog.write('c364_qty_field', 'tab=${widget.tab ?? "?"},default=$_qty');
-          RenderLog.write('c364_qty_shown', 'where=popup,qty=$_qty');
-          // C365: qty field renders for this type; stepper max = the total gap.
-          RenderLog.write('c365_qty_alltypes', 'type=$issue');
-          RenderLog.write('c365_qty_max', 'tab=${widget.tab ?? "?"},max=$max');
-          return Text(
-            issue == 'excess'
-                ? 'Disputed units — how many?'
-                : 'Disputed units — how many?  (max $max)',
-            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText),
-          );
-        }),
-        const SizedBox(height: 6),
-        Row(children: [
-          _RisStepper(
-            value: _qty,
-            min: 1,
-            max: max,
-            onChanged: (v) => setState(() => _qty = v),
-          ),
-          const SizedBox(width: 8),
-          Text('units', style: const TextStyle(fontSize: 12, color: _kSub)),
-        ]),
+        if (min == null || max == null || qty == null)
+          // C532: rules not landed — loading state only, never a guessed number.
+          Builder(builder: (_) {
+            RenderLog.write('c532_qty_wait', 'type=$issue');
+            return const SizedBox(
+              height: 36,
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: SizedBox(width: 18, height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: _kAmber)),
+              ),
+            );
+          })
+        else ...[
+          Builder(builder: (_) {
+            RenderLog.write('c364_qty_field', 'tab=${widget.tab ?? "?"},default=$qty');
+            RenderLog.write('c364_qty_shown', 'where=popup,qty=$qty');
+            // C365: qty field renders for this type; C532: bounds are backend-owned.
+            RenderLog.write('c365_qty_alltypes', 'type=$issue');
+            RenderLog.write('c365_qty_max', 'tab=${widget.tab ?? "?"},max=$max');
+            return Text(
+              'Disputed units — how many?  (max $max)',
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kText),
+            );
+          }),
+          const SizedBox(height: 6),
+          Row(children: [
+            _RisStepper(
+              value: qty,
+              min: min,
+              max: max,
+              onChanged: (v) => setState(() => _qty = v),
+            ),
+            const SizedBox(width: 8),
+            const Text('units', style: TextStyle(fontSize: 12, color: _kSub)),
+            if (_refLabel.isNotEmpty) ...[
+              const SizedBox(width: 8),
+              // C532: ref_label ('<counted>/<ref_qty>') printed verbatim.
+              Text(_refLabel, style: const TextStyle(fontSize: 12, color: _kSub)),
+            ],
+          ]),
+        ],
         const SizedBox(height: 10),
       ],
       if (needsName) ...[

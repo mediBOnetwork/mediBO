@@ -21,12 +21,24 @@ class DisputeAction {
   final String code;
   final String label;
   final bool noteRequired;
-  const DisputeAction({required this.code, required this.label, this.noteRequired = false});
+
+  /// CHANGE #531: backend-owned. _dispute_actions_norm() stamps `primary` on
+  /// every action (the first/positive one), replacing the client's
+  /// "index 0 is primary" styling convention.
+  final bool primary;
+
+  const DisputeAction({
+    required this.code,
+    required this.label,
+    this.noteRequired = false,
+    this.primary = false,
+  });
 
   factory DisputeAction.fromJson(Map<String, dynamic> j) => DisputeAction(
         code: (j['code'] ?? '').toString(),
         label: (j['label'] ?? '').toString(),
         noteRequired: j['note_required'] == true,
+        primary: j['primary'] == true,
       );
 
   static List<DisputeAction> listFrom(dynamic v) {
@@ -376,17 +388,18 @@ List<AggregatedDispute> aggregateDisputesByProduct(List<DisputeItem> items) {
   return out;
 }
 
-/// Group aggregated rows by supplier (per-supplier header + dispute link).
-Map<String, List<AggregatedDispute>> groupAggregatedBySupplier(
-    List<AggregatedDispute> rows) {
-  final map = <String, List<AggregatedDispute>>{};
-  final order = <String>[];
-  for (final r in rows) {
-    if (!map.containsKey(r.supplier)) order.add(r.supplier);
-    map.putIfAbsent(r.supplier, () => []).add(r);
-  }
-  return {for (final s in order) s: map[s]!};
-}
+// CHANGE #531: groupAggregatedBySupplier() DELETED. The admin Disputes tab now
+// renders fw_get_disputes.supplier_products[], which arrives already grouped by
+// supplier and ordered (any_active DESC, supplier), with each products[] entry
+// ordered (is_active DESC, product_name) and carrying a server-composed
+// qty_line. Nothing client-side decides grouping or row order any more.
+//
+// aggregateDisputesByProduct() above is deliberately KEPT: it is still the only
+// aggregator for the SUPPLIER and PUBLIC dispute surfaces
+// (supplier_disputes_page.dart, supplier_disputes_screen.dart,
+// dispute_form_screen.dart), which are fed by supplier_my_disputes() /
+// get_dispute_form() — neither of which returns supplier_products[]. Deleting it
+// would break those three screens, which are outside this pass's scope.
 
 // ── Supplier disputes result wrapper (#189) ───────────────────────────────────
 

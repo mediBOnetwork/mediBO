@@ -2160,6 +2160,19 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         });
         if (!mounted) return;
         final resMap = (res is Map) ? res : <String, dynamic>{};
+        // CHANGE #531: set_item_receiving now returns {error:'<code>'} for the
+        // bag invariant instead of raising a check_violation, so there is no
+        // exception text left to substring-match.
+        if (resMap['error'] != null) {
+          final code = resMap['error'].toString();
+          setState(() => _recording = false);
+          if (code == 'bag_required') {
+            _showBagRequiredSheet(item?['product_name']?.toString() ?? 'this item');
+          } else {
+            _showSnack(FulfillLookups.instance.message(code) ?? '');
+          }
+          return;
+        }
         final returnedState = resMap['state']?.toString() ?? state;
         final returnedQty = resMap['received_qty'];
         setState(() {
@@ -12915,6 +12928,15 @@ class _DisputesScreenState extends State<_DisputesScreen> {
   // active/total counts from the flat disputes[] list client-side.
   Map<String, Map<String, dynamic>> _supplierGroups = {};
 
+  // CHANGE #531: fw_get_disputes.supplier_products[] — the ENTIRE Disputes list
+  // structure, pre-aggregated server-side: supplier sections (already ordered by
+  // any_active then name) each carrying products[] (ordered by is_active then
+  // name) with ready-to-render qty_line / kind_label / kind_colors /
+  // item_status_label / actions[] / line_ids[]. This replaces
+  // aggregateDisputesByProduct() + groupAggregatedBySupplier(), which decided
+  // grouping, row order, the Active badge and all three summed qty cells in Dart.
+  List<Map<String, dynamic>> _supplierProducts = const [];
+
   // CHANGE #444 — shared date scope
   int _olderOpen = 0;
   void _onDateScopeChanged() => _load();
@@ -12954,6 +12976,14 @@ class _DisputesScreenState extends State<_DisputesScreen> {
       if (!mounted) return;
       _olderOpen = (res['older_open'] as num?)?.toInt() ?? 0;
       final items = DisputeItem.listFromResponse(res);
+      // CHANGE #531: backend-owned Disputes list structure, verbatim.
+      final rawSprod = res['supplier_products'];
+      final supplierProducts = <Map<String, dynamic>>[];
+      if (rawSprod is List) {
+        for (final s in rawSprod) {
+          if (s is Map) supplierProducts.add(Map<String, dynamic>.from(s));
+        }
+      }
       final rawGroups = res['supplier_groups'];
       final supplierGroups = <String, Map<String, dynamic>>{};
       if (rawGroups is List) {
@@ -13000,6 +13030,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
         _disputes = items;
         _unfillable = unfillable;
         _supplierGroups = supplierGroups;
+        _supplierProducts = supplierProducts;
         _loading = false;
       });
     } on DisputeException catch (e) {
@@ -13266,14 +13297,16 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     final activeGroups = _groupBySupplier(activeDisputes);
     // C362 point-7: ITEM-WISE, no Active/Closed sections — aggregate ALL disputes by product,
     // grouped by supplier (one row per product; disputed qty summed; Active/Inactive badge).
-    final supplierGroups =
-        groupAggregatedBySupplier(aggregateDisputesByProduct(_disputes));
+    // CHANGE #531: grouping, row order and every summed qty now come from
+    // fw_get_disputes.supplier_products[] — the client aggregation is deleted.
+    final supplierGroups = _supplierProducts;
+    final _spRowCount = supplierGroups.fold<int>(
+        0, (s, g) => s + ((g['products'] as List?)?.length ?? 0));
     RenderLog.write('c362_disp_group',
-        'items=${supplierGroups.values.fold<int>(0, (s, l) => s + l.length)};'
-        'suppliers=${supplierGroups.length};no_ac_sections=y');
+        'items=$_spRowCount;suppliers=${supplierGroups.length};no_ac_sections=y');
     // C363-F: item-wise Disputes list (one row per product, NO Active/Closed sections).
-    RenderLog.write('c363_disp_group',
-        'items=${supplierGroups.values.fold<int>(0, (s, l) => s + l.length)}');
+    RenderLog.write('c363_disp_group', 'items=$_spRowCount');
+    RenderLog.write('c531_disp_backend_groups', 'suppliers=${supplierGroups.length};rows=$_spRowCount');
 
     // ── Render-log sentinels ────────────────────────────────────────────────
     RenderLog.write('c349_ready', 'a3=v2');
@@ -13312,8 +13345,8 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                 // C362 point-7: NO Active/Closed sections — one card per supplier (name
                 // header + dispute link), item-wise rows underneath (each row an
                 // Active=red / Inactive=green badge). Active + inactive rows live together.
-                for (final entry in supplierGroups.entries) ...[
-                  _buildDisputeSupplierCard(entry.key, entry.value),
+                for (final g in supplierGroups) ...[
+                  _buildDisputeSupplierCard(g),
                 ],
                 const SizedBox(height: 8),
               ],
@@ -13410,11 +13443,18 @@ class _DisputesScreenState extends State<_DisputesScreen> {
   }
 
   // ── #188: Unified supplier card — header always visible, body via _smoothReveal ─
-  Widget _buildDisputeSupplierCard(String supplier, List<AggregatedDispute> agg) {
+  // CHANGE #531: takes one fw_get_disputes.supplier_products[] group verbatim.
+  // {supplier, supplier_label, active_colors{bg,fg,border}, ord, products[]}
+  Widget _buildDisputeSupplierCard(Map<String, dynamic> g) {
+    final supplier = g['supplier']?.toString() ?? '';
+    final products = ((g['products'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
     final isOpen = _openSupplierKey == supplier;
-    // C362 point-7: rows are item-wise (aggregated by product); flat lines drive the
-    // dispute link / header / nudge / reminder (per-line payload fields).
-    final items = agg.expand((a) => a.lines).toList();
+    // Flat lines still drive the dispute LINK / nudge / reminder (per-line
+    // payload fields that are not part of the product aggregation).
+    final items = _disputes.where((d) => d.supplier == supplier).toList();
     final canonicalLink = _supplierLinkFromItems(items);
     final sendKey = _sendLinkKeys.putIfAbsent(supplier, () => GlobalKey());
 
@@ -13511,9 +13551,9 @@ class _DisputesScreenState extends State<_DisputesScreen> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
                 child: Column(children: [
-                  for (int i = 0; i < agg.length; i++) ...[
-                    _buildDisputeItemCard(agg[i]),
-                    if (i < agg.length - 1) const SizedBox(height: 8),
+                  for (int i = 0; i < products.length; i++) ...[
+                    _buildDisputeItemCard(products[i], g),
+                    if (i < products.length - 1) const SizedBox(height: 8),
                   ],
                 ]),
               ),
@@ -13525,30 +13565,41 @@ class _DisputesScreenState extends State<_DisputesScreen> {
   }
 
   // ── #192: Compact dispute card — thumbnail + info, NO inline buttons; tap → sheet ──
-  Widget _buildDisputeItemCard(AggregatedDispute agg) {
-    // C362 point-7: item-wise row — the representative drives labels/actions; qty is summed
-    // and the row is Active if ANY underlying line is active.
-    final item = agg.representative;
-    final isActive = agg.active;
-    // Backend-owned: fw_get_disputes()'s active_colors, verbatim — drives the
-    // Active/Inactive badge and both status chips below. label is populated
-    // by construction, so there is no client-side Active/Inactive fallback.
-    final activeLabel = agg.activeColors?['label'] ?? '';
-    final activeBg = _hexColor(agg.activeColors?['bg'], const Color(0xFFF3F4F6));
-    final activeFg = _hexColor(agg.activeColors?['fg'], _kSub);
+  // CHANGE #531: one row = one fw_get_disputes.supplier_products[].products[]
+  // entry, rendered verbatim. Grouping, ordering, the Active flag and all three
+  // qty numbers are decided server-side; nothing here re-derives them.
+  Widget _buildDisputeItemCard(Map<String, dynamic> p, Map<String, dynamic> g) {
+    // line_ids[] is backend-owned; the representative DisputeItem is looked up
+    // ONLY to drive the action sheet and the per-line chips (nudge/adj/unfillable).
+    final lineIds = ((p['line_ids'] as List?) ?? const [])
+        .map((e) => e.toString()).toSet();
+    DisputeItem? rep;
+    for (final d in _disputes) {
+      if (lineIds.contains(d.disputeId)) { rep = d; break; }
+    }
+    if (rep == null) return const SizedBox.shrink();
+    final item = rep;
 
-    // Meta line: packType / company / category (only the present ones)
+    final isActive = p['is_active'] == true;
+    // Backend-owned active_colors, verbatim — Active/Inactive badge + status chips.
+    final activeLabel = item.activeColors?['label'] ?? '';
+    final activeBg = _hexColor(item.activeColors?['bg'], const Color(0xFFF3F4F6));
+    final activeFg = _hexColor(item.activeColors?['fg'], _kSub);
+
+    // Meta line: pack_type / company / category now come from the product entry
+    // (fw_get_disputes returns all three per product).
     final metaParts = <String>[
-      if ((item.packType ?? '').isNotEmpty) item.packType!,
-      if ((item.company ?? '').isNotEmpty) item.company!,
-      if ((item.category ?? '').isNotEmpty) item.category!,
+      if ((p['pack_type']?.toString() ?? '').isNotEmpty) p['pack_type'].toString(),
+      if ((p['company']?.toString() ?? '').isNotEmpty) p['company'].toString(),
+      if ((p['category']?.toString() ?? '').isNotEmpty) p['category'].toString(),
     ];
     final metaLine = metaParts.join(' · ');
 
-    // Backend-owned: fw_get_disputes()'s kind_label/kind_colors, verbatim.
-    final kindTagText = item.kindLabel;
-    final kindTagBg = _hexColor(item.kindColors?['bg'], const Color(0xFFF1F5F9));
-    final kindTagFg = _hexColor(item.kindColors?['fg'], const Color(0xFF475569));
+    // Backend-owned kind_label/kind_colors from the product entry, verbatim.
+    final kindTagText = p['kind_label']?.toString() ?? '';
+    final kindColors = p['kind_colors'] as Map?;
+    final kindTagBg = _hexColor(kindColors?['bg']?.toString(), const Color(0xFFF1F5F9));
+    final kindTagFg = _hexColor(kindColors?['fg']?.toString(), const Color(0xFF475569));
 
     RenderLog.write('c192_dispute_card_rendered',
         'dispute=${item.disputeId};status=${item.statusCode}');
@@ -13556,7 +13607,9 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     RenderLog.write('c352_row', 'kind=${item.kind}');
 
     return InkWell(
-      onTap: () => _openDisputeActionSheet(item, groupIds: agg.allActiveDisputeIds),
+      // CHANGE #531: line_ids[] comes from the backend product group, so the
+      // sheet acts on exactly the lines the server merged into this row.
+      onTap: () => _openDisputeActionSheet(item, groupIds: lineIds.toList()),
       borderRadius: BorderRadius.circular(10),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -13577,7 +13630,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
               Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Expanded(
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(item.productName.isNotEmpty ? item.productName : '—',
+                    Text(p['product_name']?.toString() ?? '—',
                         style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
                             color: _kText, height: 1.3),
                         maxLines: 2, overflow: TextOverflow.ellipsis),
@@ -13623,11 +13676,12 @@ class _DisputesScreenState extends State<_DisputesScreen> {
               // (d) Quantities — C364: summed disputed qty per product ("Disputed: <n>").
               const SizedBox(height: 2),
               Builder(builder: (_) {
-                RenderLog.write('c364_qty_shown', 'where=disp_tab,qty=${agg.disputedQty.toInt()}');
+                // CHANGE #531: qty_line is composed server-side, already
+                // pluralised ("Ord 4 · Rec 1 · Disputed: 3 · 1 order").
+                RenderLog.write('c364_qty_shown',
+                    'where=disp_tab,qty_line=${p['qty_line'] ?? ''}');
                 return Text(
-                  'Ord ${agg.orderedQty.toInt()} · Rec ${agg.receivedQty.toInt()} · '
-                  'Disputed: ${agg.disputedQty.toInt()}'
-                  '${agg.lines.length > 1 ? ' · ${agg.lines.length} orders' : ''}',
+                  p['qty_line']?.toString() ?? '',
                   style: const TextStyle(fontSize: 11, color: _kSub),
                 );
               }),
@@ -13650,7 +13704,8 @@ class _DisputesScreenState extends State<_DisputesScreen> {
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
                       color: activeBg, borderRadius: BorderRadius.circular(20)),
-                  child: Text(item.itemStatusLabel,
+                  // CHANGE #531: product-group item_status_label, verbatim.
+                  child: Text(p['item_status_label']?.toString() ?? '',
                       style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
                           color: activeFg)),
                 ),
@@ -14023,7 +14078,8 @@ class _DisputeActionSheetState extends State<_DisputeActionSheet> {
               children: item.actions.asMap().entries.map((e) {
                 final idx = e.key;
                 final action = e.value;
-                final isPrimary = idx == 0;
+                // CHANGE #531: backend-owned `primary` (was: idx == 0).
+                final isPrimary = action.primary;
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 8),
                   child: isPrimary

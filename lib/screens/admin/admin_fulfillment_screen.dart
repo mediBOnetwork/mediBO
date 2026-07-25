@@ -11379,11 +11379,17 @@ class _PackingScreenState extends State<_PackingScreen>
   // packed_qty >= least(bagged,ordered) (== packable_qty), NOT ordered — so raw
   // item['packed'] (packed_qty>=ordered) would never flip true for a partially-bagged
   // line even after packing everything possible. Use this everywhere instead.
-  bool _isItemDone(Map<String, dynamic> item) {
-    final packableQty = (item['packable_qty'] as num?)?.toInt() ?? 0;
-    final packedQty   = (item['packed_qty'] as num?)?.toInt() ?? 0;
-    return packableQty > 0 && packedQty >= packableQty;
-  }
+  // CHANGE #531: backend-owned. pack_get_queue emits items[].is_done using the
+  // AUTHORITATIVE per-line rule (identical to the can_mark_ready predicate), so
+  // the two Pack tables can no longer disagree. Read verbatim — never re-derive.
+  //
+  // This also FIXES a real bug: the old client rule was
+  //   packable_qty > 0 && packed_qty >= packable_qty
+  // which ignored counting entirely, so a packed-but-uncounted line ticked as
+  // done in the list sheet while the bag quick-view (which read raw item['packed'])
+  // disagreed. The backend rule additionally requires pack_counted_qty to be
+  // non-null and >= packable_qty.
+  bool _isItemDone(Map<String, dynamic> item) => item['is_done'] == true;
 
   // #368: qty the Pack action will submit for this item — clamped to [1, packable_qty],
   // defaulting to packable_qty when the user hasn't touched the stepper.
@@ -11882,7 +11888,9 @@ class _PackingScreenState extends State<_PackingScreen>
               final packType = item['pack_type']?.toString() ?? '';
               final qty      = (item['ordered'] as num?)?.toInt() ?? (item['qty'] as num?)?.toInt() ?? 0;
               final isPacked = _isItemDone(item); // #368: done-predicate
-              final qtyLabel = packType.isNotEmpty ? '$qty $packType' : '$qty';
+              // CHANGE #531: backend-owned qty_label, verbatim (was re-derived
+              // from qty + pack_type here while :12807 already read it correctly).
+              final qtyLabel = item['qty_label']?.toString() ?? '';
               return Container(
                 decoration: const BoxDecoration(
                     border: Border(bottom: BorderSide(color: _kBorder))),
@@ -12193,7 +12201,8 @@ class _PackingScreenState extends State<_PackingScreen>
     final packType  = item['pack_type']?.toString() ?? '';
     final qty       = (item['ordered'] as num?)?.toInt() ?? (item['qty'] as num?)?.toInt() ?? 0;
     final bagNo     = (item['bag_no'] as num?)?.toInt() ?? 0;
-    final qtyLabel  = packType.isNotEmpty ? 'x$qty $packType' : 'x$qty';
+    // CHANGE #531: backend-owned qty_label, verbatim (was re-derived here).
+    final qtyLabel  = item['qty_label']?.toString() ?? '';
     final itemId    = item['order_item_id']?.toString() ?? '';
 
     var imgs = ((item['images'] as List?)?.cast<String>() ?? const <String>[])
@@ -12772,7 +12781,9 @@ class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
       final bn = (item['bag_no'] as num?)?.toInt();
       grouped.putIfAbsent(bn, () => []).add(item);
     }
-    final checkedCount = items.where((i) => i['packed'] == true).length;
+    // CHANGE #531: use the same backend done-predicate as every other surface
+    // (was raw item['packed'], which disagreed with the list sheet).
+    final checkedCount = items.where((i) => i['is_done'] == true).length;
     try {
       if (checkedCount > 0) {
         RenderLog.write('c292_bag_tick', 'checkedRows=$checkedCount');
@@ -12797,7 +12808,11 @@ class _BagQuickViewSheetState extends State<_BagQuickViewSheet> {
   // Backend-owned: pack_get_queue()'s qty_label, rendered verbatim.
   Widget _buildTableRow(Map<String, dynamic> item) {
     final name     = item['product_name']?.toString() ?? '—';
-    final isPacked = item['packed'] == true;
+    // CHANGE #531: the bag quick-view used raw item['packed'] while the list
+    // sheet used the done-predicate — the two tables of the SAME screen could
+    // tick differently for a packed-but-uncounted line. Both now read is_done
+    // verbatim (this state class has no access to _isItemDone).
+    final isPacked = item['is_done'] == true;
     final qtyLabel = item['qty_label']?.toString() ?? '';
 
     return Container(
@@ -12956,7 +12971,10 @@ class _DisputesScreenState extends State<_DisputesScreen> {
       }
       // fw_get_disputes() already returns items pre-sorted by (active-phase
       // desc, status-priority desc, created_at desc) — render as received.
-      final activeCount = items.where((d) => d.isActive).length;
+      // CHANGE #531: the Disputes tab badge count is backend-owned. fw_get_disputes
+      // has always returned active_count; the client was throwing it away and
+      // recomputing it with a client-side .where().length. Read it verbatim.
+      final activeCount = (res['active_count'] as num?)?.toInt() ?? 0;
       widget.onCountChanged(activeCount);
       // Load unfillable banner items (separate RPC — keep for existing banner)
       List<Map<String, dynamic>> unfillable = [];

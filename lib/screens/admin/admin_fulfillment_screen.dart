@@ -81,10 +81,12 @@ const _kCandidateBorder = Color(0xFFF59E0B);
 // One shared helper used by every voice counting surface (Shop, Warehouse, Pack).
 class _VoiceCaps {
   static int _remainingToday = 3 * 3600;
-  // Backend-owned (voice_usage_today): remaining_label, verbatim. Null until
-  // the first RPC response lands — remainingLabel() falls back to a manual
-  // format only for that brief pre-load window.
-  static String? _remainingLabel;
+  // Backend-owned: voice_usage_today.remaining_label AND (now) voice_clip_register
+  // .remaining_label both supply this verbatim, so no client formatting is ever
+  // needed. Initial value matches _remainingToday's own default (10800s = 3h 0m)
+  // for the brief pre-first-fetch window, computed once here rather than at
+  // runtime.
+  static String _remainingLabel = '3h 0m';
   static bool _lockedToday = false;
 
   // Call before starting any counting voice session.
@@ -100,7 +102,7 @@ class _VoiceCaps {
       final res = Map<String, dynamic>.from(raw);
       final remaining = (res['remaining_seconds'] as num?)?.toInt() ?? 0;
       _remainingToday = remaining;
-      _remainingLabel = res['remaining_label']?.toString();
+      _remainingLabel = res['remaining_label']?.toString() ?? _remainingLabel;
       RenderLog.write('c331_caps', 'remaining=${remaining}s');
       if (remaining <= 0) {
         _lockedToday = true;
@@ -139,34 +141,22 @@ class _VoiceCaps {
       final res = Map<String, dynamic>.from(raw);
       if (res['ok'] == true) {
         _remainingToday = (res['remaining_seconds'] as num?)?.toInt() ?? _remainingToday;
-        // voice_clip_register (unlike voice_usage_today) doesn't return a
-        // formatted remaining_label — invalidate the cached one so
-        // remainingLabel() falls back to a manual format until the next
-        // voice_usage_today poll refreshes it. BACKEND GAP if you want this
-        // RPC to also carry remaining_label.
-        _remainingLabel = null;
+        // Backend-owned: voice_clip_register now returns remaining_label
+        // verbatim (same as voice_usage_today), read directly.
+        _remainingLabel = res['remaining_label']?.toString() ?? _remainingLabel;
         RenderLog.write('c331_caps', 'clip_saved;remaining=${_remainingToday}s');
       } else if (res['error'] == 'daily_cap') {
         _lockedToday = true;
         _remainingToday = 0;
-        _remainingLabel = null;
+        _remainingLabel = res['remaining_label']?.toString() ?? _remainingLabel;
         onLocked();
       }
     } catch (_) {}
   }
 
-  // Backend-owned (voice_usage_today.remaining_label), verbatim. Falls back
-  // to a manual format only in the brief window after a clip save, before
-  // the next voice_usage_today poll refreshes the cached label (that RPC
-  // doesn't return a formatted label — see onClipSaved).
-  static String remainingLabel() {
-    final cached = _remainingLabel;
-    if (cached != null && cached.isNotEmpty) return '$cached left today';
-    if (_remainingToday <= 0) return '0m left today';
-    final h = _remainingToday ~/ 3600;
-    final m = (_remainingToday % 3600) ~/ 60;
-    return h > 0 ? '${h}h ${m}m left today' : '${m}m left today';
-  }
+  // Backend-owned: voice_usage_today.remaining_label / voice_clip_register
+  // .remaining_label, verbatim — no client-side seconds→text formatting.
+  static String remainingLabel() => '$_remainingLabel left today';
 
   // Backend-owned (voice_usage_today.used_label/.cap_label), verbatim.
   static void _showLimitSheet(BuildContext context, {String? usedLabel, String? capLabel}) {
@@ -6929,6 +6919,11 @@ const String _kC112CloseTap = 'c112_close_tap';
 
 class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   List<Map<String, dynamic>>? _mentions;
+  // Backend-owned (voice_mention_product_totals): product_id (as string) ->
+  // {counted_total, ordered_total, is_full, colors:{bg,fg}} — the "All view"
+  // grouped table's Total-column colour reads is_full/colors verbatim
+  // instead of computing ordered>0 && total>=ordered client-side.
+  Map<String, dynamic> _productTotals = {};
   String? _error;
   // #331: per-mention UUID in-flight set (prevents double-tap during RPC)
   final Set<String> _mentionLoading = {};
@@ -7017,19 +7012,31 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   // badge/popup mismatch this change fixes.
   Future<void> _fetchMentions() async {
     try {
-      final mentions = await fetchScopedVoiceMentions(
-        supplierName: widget.supplierName,
-        stage: widget.stage,
-        sessionKey: widget.activeSessionKey,
-      );
+      final results = await Future.wait<dynamic>([
+        fetchScopedVoiceMentions(
+          supplierName: widget.supplierName,
+          stage: widget.stage,
+          sessionKey: widget.activeSessionKey,
+        ),
+        Supabase.instance.client.rpc('voice_mention_product_totals', params: {
+          'p_supplier_name': widget.supplierName,
+          'p_stage': widget.stage,
+        }),
+      ]);
       if (!mounted) return;
+      final mentions = results[0] as List<Map<String, dynamic>>;
+      final rawTotals = results[1];
+      final productTotals = rawTotals is Map ? Map<String, dynamic>.from(rawTotals) : <String, dynamic>{};
       // CHANGE #456: clip count = distinct RECORDINGS (session groups), not distinct
       // chunk-window clip_paths — verifiable via curl/render-log for this change.
       final distinctClips = groupMentionsIntoClips(mentions).length;
       final distinctWindows = mentions.map((r) => r['clip_path']?.toString() ?? '').toSet().length;
       RenderLog.write('c119_popup_built',
           'clips=$distinctClips;windows=$distinctWindows;products=${_uniqueNames(mentions)};total_mentions=${mentions.length};retains_seq=y');
-      setState(() => _mentions = mentions);
+      setState(() {
+        _mentions = mentions;
+        _productTotals = productTotals;
+      });
     } catch (e) {
       if (mounted) setState(() => _error = e.toString());
     }
@@ -7265,19 +7272,22 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   }
 
   // #119/#331: group rows by matched_name; deleted mentions excluded from All-tab totals.
-  List<({String name, List<_QtyEntry> entries, int total, int ordered})>
+  List<({String name, int? productId, List<_QtyEntry> entries, int total, int ordered})>
       _groupMentions(List<Map<String, dynamic>> rows) {
     // #331: All tab excludes deleted mentions from totals
     final activeRows = rows.where((r) => r['status']?.toString() != 'deleted').toList();
     final nameOrder = <String>[];
     final byName = <String, List<_QtyEntry>>{};
+    final nameToProductId = <String, int>{};
     for (final r in activeRows) {
       // #134: guard against null/empty matched_name — never show a blank product cell
       // #334 B1: product_id==null → unmatched; exclude from counts but show amber in flat view
       final rawName = r['matched_name']?.toString() ?? '';
-      if (r['product_id'] == null) continue; // unmatched — shown separately in clip flat view only
+      final pid = (r['product_id'] as num?)?.toInt();
+      if (pid == null) continue; // unmatched — shown separately in clip flat view only
       final name = rawName.trim().isEmpty ? '(unnamed)' : rawName;
       if (!byName.containsKey(name)) nameOrder.add(name);
+      nameToProductId.putIfAbsent(name, () => pid);
       byName.putIfAbsent(name, () => []).add((
         id: r['id']?.toString() ?? '',
         qty: (r['qty'] as num?)?.toInt() ?? 0,
@@ -7296,7 +7306,8 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
     return nameOrder.map((name) {
       final entries = byName[name]!;
       final total = entries.fold(0, (s, e) => s + e.qty);
-      return (name: name, entries: entries, total: total, ordered: orderedMap[name] ?? 0);
+      return (name: name, productId: nameToProductId[name], entries: entries,
+          total: total, ordered: orderedMap[name] ?? 0);
     }).toList();
   }
 
@@ -7745,7 +7756,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   static const double _kBadgeClusterMaxW = 108.0;
 
   Widget _buildTable(
-      List<({String name, List<_QtyEntry> entries, int total, int ordered})> groups) {
+      List<({String name, int? productId, List<_QtyEntry> entries, int total, int ordered})> groups) {
     final playSeq = _playingSeq;
     // #343: All view is read-only aggregate — no action icons present
     RenderLog.write('c343_all_readonly', 'stage=${widget.stage};groups=${groups.length}');
@@ -7828,19 +7839,27 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
               ),
               // Small gap — badges and total are visually grouped together
               const SizedBox(width: _kBadgeToTotalGap),
-              // Total — fixed width, always visible, right-aligned
+              // Total — fixed width, always visible, right-aligned. Backend-owned
+              // (voice_mention_product_totals), verbatim — counted_total/
+              // ordered_total/is_full/colors instead of a client ordered>=total sum.
               SizedBox(
                 width: _kTotalColW,
                 child: Padding(
                   padding: const EdgeInsets.only(right: 10),
-                  child: Text(
-                    g.ordered > 0 ? '${g.total}/${g.ordered}' : '${g.total}',
-                    style: TextStyle(
-                      fontSize: 12, fontWeight: FontWeight.w700,
-                      color: g.ordered > 0 && g.total >= g.ordered ? _kGreen : _kText,
-                    ),
-                    textAlign: TextAlign.right,
-                  ),
+                  child: Builder(builder: (_) {
+                    final pt = _productTotals['${g.productId}'] as Map?;
+                    final counted = (pt?['counted_total'] as num?)?.toInt() ?? g.total;
+                    final ord = (pt?['ordered_total'] as num?)?.toInt() ?? g.ordered;
+                    final ptColors = pt?['colors'] as Map?;
+                    final color = ptColors != null
+                        ? _hexColor(ptColors['fg']?.toString(), _kText)
+                        : (g.ordered > 0 && g.total >= g.ordered ? _kGreen : _kText);
+                    return Text(
+                      ord > 0 ? '$counted/$ord' : '$counted',
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: color),
+                      textAlign: TextAlign.right,
+                    );
+                  }),
                 ),
               ),
             ],
@@ -12643,11 +12662,27 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
   late List<Map<String, dynamic>> _mentions =
       widget.mentions.map((m) => Map<String, dynamic>.from(m)).toList();
   final Set<String> _mentionLoading = {};
+  // Backend-owned (pack_mention_product_totals): product_id (as string) ->
+  // {counted_total, ordered_total, is_full, colors:{bg,fg}} — the "All view"
+  // grouped table's Total-column colour reads is_full/colors verbatim
+  // instead of computing ordered>0 && total>=ordered client-side.
+  Map<String, dynamic> _productTotals = {};
 
   @override
   void initState() {
     super.initState();
     RenderLog.write('c389_pack_popup_open', 'orderId:${widget.orderId}');
+    _fetchProductTotals();
+  }
+
+  Future<void> _fetchProductTotals() async {
+    try {
+      final raw = await Supabase.instance.client
+          .rpc('pack_mention_product_totals', params: {'p_order_id': widget.orderId});
+      if (mounted && raw is Map) {
+        setState(() => _productTotals = Map<String, dynamic>.from(raw));
+      }
+    } catch (_) {}
   }
 
   // #342: icon-tap handler for pack mentions (replaces #338 hold).
@@ -12682,6 +12717,7 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
           final rows = await fetchScopedPackMentions(
               orderId: widget.orderId, sessionKey: widget.sessionKey);
           if (mounted) setState(() => _mentions = rows);
+          _fetchProductTotals();
         } catch (_) {
           if (mounted) {
             setState(() {
@@ -12717,6 +12753,7 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
               final rows = await fetchScopedPackMentions(
                   orderId: widget.orderId, sessionKey: widget.sessionKey);
               if (mounted) setState(() => _mentions = rows);
+              _fetchProductTotals();
             } catch (_) {}
           } else {
             ScaffoldMessenger.of(context)
@@ -13078,7 +13115,6 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
                         itemCount: groups.length,
                         itemBuilder: (_, i) {
                           final g = groups[i];
-                          final full = g.ordered > 0 && g.total >= g.ordered;
                           return Container(
                             decoration: const BoxDecoration(
                                 border: Border(bottom: BorderSide(color: _kBorder))),
@@ -13126,17 +13162,27 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
                                   ),
                                 ),
                                 const SizedBox(width: _kBadgeToTotalGap),
+                                // Backend-owned (pack_mention_product_totals), verbatim —
+                                // counted_total/ordered_total/is_full/colors instead of a
+                                // client ordered>=total sum.
                                 SizedBox(
                                   width: _kTotalColW,
                                   child: Padding(
                                     padding: const EdgeInsets.only(right: 10),
-                                    child: Text(
-                                      g.ordered > 0 ? '${g.total}/${g.ordered}' : '${g.total}',
-                                      style: TextStyle(
-                                          fontSize: 12, fontWeight: FontWeight.w700,
-                                          color: full ? _kGreen : _kText),
-                                      textAlign: TextAlign.right,
-                                    ),
+                                    child: Builder(builder: (_) {
+                                      final pt = _productTotals['${g.pid}'] as Map?;
+                                      final counted = (pt?['counted_total'] as num?)?.toInt() ?? g.total;
+                                      final ord = (pt?['ordered_total'] as num?)?.toInt() ?? g.ordered;
+                                      final ptColors = pt?['colors'] as Map?;
+                                      final color = ptColors != null
+                                          ? _hexColor(ptColors['fg']?.toString(), _kText)
+                                          : (g.ordered > 0 && g.total >= g.ordered ? _kGreen : _kText);
+                                      return Text(
+                                        ord > 0 ? '$counted/$ord' : '$counted',
+                                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: color),
+                                        textAlign: TextAlign.right,
+                                      );
+                                    }),
                                   ),
                                 ),
                               ],

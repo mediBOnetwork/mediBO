@@ -48,6 +48,16 @@ Color _hexColor(String? hex, Color fallback) {
   return v == null ? fallback : Color(v);
 }
 
+// Parses a backend-supplied {bg,fg} colour map (e.g. get_voice_clip_mentions/
+// get_pack_clip_mentions' status_colors) into a plain Map<String,String>?.
+Map<String, String>? _bgFgColors(dynamic raw) {
+  if (raw is! Map) return null;
+  return {
+    'bg': raw['bg']?.toString() ?? '',
+    'fg': raw['fg']?.toString() ?? '',
+  };
+}
+
 // ── Color tokens ────────────────────────────────────────────────────────────
 const _kGreen        = Color(0xFF1B7A43);
 const _kBg           = Color(0xFFF5F6F8);
@@ -58,14 +68,7 @@ const _kSub          = Color(0xFF6B7280);
 
 const _kReceivedBg   = Color(0xFFE1F5EE);
 const _kReceivedFg   = Color(0xFF0F6E56);
-const _kShortBg      = Color(0xFFFAECE7);
-const _kShortFg      = Color(0xFF993C1D);
-const _kWrongBg      = Color(0xFFFBE9E7);
 const _kWrongFg      = Color(0xFFB42318);
-const _kNotComingBg  = Color(0xFFEFEEE9);
-const _kNotComingFg  = Color(0xFF5A5A57);
-const _kShippedBg    = Color(0xFFE6F1FB);
-const _kShippedFg    = Color(0xFF0C447C);
 const _kPendingBg    = Color(0xFFFEF3C7);
 const _kPendingFg    = Color(0xFF92400E);
 // C359: light-yellow tint for a dispute-candidate row (short/excess/flagged after
@@ -78,6 +81,10 @@ const _kCandidateBorder = Color(0xFFF59E0B);
 // One shared helper used by every voice counting surface (Shop, Warehouse, Pack).
 class _VoiceCaps {
   static int _remainingToday = 3 * 3600;
+  // Backend-owned (voice_usage_today): remaining_label, verbatim. Null until
+  // the first RPC response lands — remainingLabel() falls back to a manual
+  // format only for that brief pre-load window.
+  static String? _remainingLabel;
   static bool _lockedToday = false;
 
   // Call before starting any counting voice session.
@@ -93,13 +100,14 @@ class _VoiceCaps {
       final res = Map<String, dynamic>.from(raw);
       final remaining = (res['remaining_seconds'] as num?)?.toInt() ?? 0;
       _remainingToday = remaining;
+      _remainingLabel = res['remaining_label']?.toString();
       RenderLog.write('c331_caps', 'remaining=${remaining}s');
       if (remaining <= 0) {
         _lockedToday = true;
         if (context.mounted) {
           _showLimitSheet(context,
-              usedSecs: (res['used_seconds'] as num?)?.toInt() ?? 0,
-              capSecs: (res['daily_cap_seconds'] as num?)?.toInt() ?? 10800);
+              usedLabel: res['used_label']?.toString(),
+              capLabel: res['cap_label']?.toString());
         }
         return false;
       }
@@ -131,28 +139,39 @@ class _VoiceCaps {
       final res = Map<String, dynamic>.from(raw);
       if (res['ok'] == true) {
         _remainingToday = (res['remaining_seconds'] as num?)?.toInt() ?? _remainingToday;
+        // voice_clip_register (unlike voice_usage_today) doesn't return a
+        // formatted remaining_label — invalidate the cached one so
+        // remainingLabel() falls back to a manual format until the next
+        // voice_usage_today poll refreshes it. BACKEND GAP if you want this
+        // RPC to also carry remaining_label.
+        _remainingLabel = null;
         RenderLog.write('c331_caps', 'clip_saved;remaining=${_remainingToday}s');
       } else if (res['error'] == 'daily_cap') {
         _lockedToday = true;
         _remainingToday = 0;
+        _remainingLabel = null;
         onLocked();
       }
     } catch (_) {}
   }
 
-  // Formatted remaining time label for display near mic.
+  // Backend-owned (voice_usage_today.remaining_label), verbatim. Falls back
+  // to a manual format only in the brief window after a clip save, before
+  // the next voice_usage_today poll refreshes the cached label (that RPC
+  // doesn't return a formatted label — see onClipSaved).
   static String remainingLabel() {
+    final cached = _remainingLabel;
+    if (cached != null && cached.isNotEmpty) return '$cached left today';
     if (_remainingToday <= 0) return '0m left today';
     final h = _remainingToday ~/ 3600;
     final m = (_remainingToday % 3600) ~/ 60;
     return h > 0 ? '${h}h ${m}m left today' : '${m}m left today';
   }
 
-  static void _showLimitSheet(BuildContext context, {int? usedSecs, int? capSecs}) {
-    final used = usedSecs != null
-        ? '${usedSecs ~/ 3600}h ${(usedSecs % 3600) ~/ 60}m used'
-        : '';
-    final cap = capSecs != null ? '${capSecs ~/ 3600}h cap' : '3h cap';
+  // Backend-owned (voice_usage_today.used_label/.cap_label), verbatim.
+  static void _showLimitSheet(BuildContext context, {String? usedLabel, String? capLabel}) {
+    final used = (usedLabel != null && usedLabel.isNotEmpty) ? '$usedLabel used' : '';
+    final cap = (capLabel != null && capLabel.isNotEmpty) ? '$capLabel cap' : '3h cap';
     showModalBottomSheet<void>(
       context: context,
       builder: (ctx) => SafeArea(
@@ -1281,22 +1300,28 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     }
   }
 
-  // #338: small amber "voice X ≠ Y" chip when voice total disagrees with actual
+  // #338/gap-24: "voice X ≠ Y" chip — backend-owned (fw_count_source_audit's
+  // per-product mismatch_chip), read verbatim.
   Widget? _mismatchChip(int? productId) {
     if (productId == null) return null;
     final m = _auditMismatchMap['$productId'];
-    if (m == null || m['mismatch'] != true) return null;
+    final chip = m?['mismatch_chip'];
+    if (chip is! Map) return null;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
-        color: const Color(0xFFFEF3C7),
+        color: _hexColor(chip['bg']?.toString(), const Color(0xFFFEF3C7)),
         borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: const Color(0xFFF59E0B), width: 0.5),
+        border: Border.all(
+            color: _hexColor(chip['border']?.toString(), const Color(0xFFF59E0B)),
+            width: 0.5),
       ),
       child: Text(
-        'voice ${m['voice_total']} ≠ ${m['actual_total']}',
-        style: const TextStyle(
-            fontSize: 10, color: Color(0xFF92400E), fontWeight: FontWeight.w600),
+        chip['label']?.toString() ?? '',
+        style: TextStyle(
+            fontSize: 10,
+            color: _hexColor(chip['fg']?.toString(), const Color(0xFF92400E)),
+            fontWeight: FontWeight.w600),
       ),
     );
   }
@@ -6878,7 +6903,12 @@ class _CountedMentionsPopup extends StatefulWidget {
 
 // #119: per-mention entry retaining recording_seq + ord for pill coloring and reordering.
 // #331: id (uuid) and status ('counted'|'deleted'|'readded') added for delete/undo.
-typedef _QtyEntry = ({String id, int qty, int seq, int ord, String status});
+// gap-24: statusLabel/statusColors — backend-owned (get_voice_clip_mentions/
+// get_pack_clip_mentions), carried through for the "All view" grouped table.
+typedef _QtyEntry = ({
+  String id, int qty, int seq, int ord, String status,
+  String statusLabel, Map<String, String>? statusColors,
+});
 
 // #110/#111/#112 sentinels — must survive into compiled bundle for curl grep.
 // ignore: unused_field
@@ -7254,6 +7284,8 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
         seq: (r['recording_seq'] as num?)?.toInt() ?? 0,
         ord: (r['ord'] as num?)?.toInt() ?? 0,
         status: r['status']?.toString() ?? 'counted',
+        statusLabel: r['status_label']?.toString() ?? '',
+        statusColors: _bgFgColors(r['status_colors']),
       ));
     }
     final orderedMap = <String, int>{};
@@ -7667,16 +7699,12 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   // #331: long-press on each row → delete/re-add via voice_mention_set_status.
   // #344: delegates to shared _MentionClipTable (3-column Product|Qty spoken|Total)
   Widget _buildFlatList(String groupKey) {
+    // Backend-owned: get_voice_clip_mentions already orders by (recording_seq,
+    // ord); .where() is order-preserving, so the filtered sublist needs no
+    // re-sort.
     final rows = (_mentions ?? [])
         .where((r) => clipGroupKeyOf(r) == groupKey)
-        .toList()
-      ..sort((a, b) {
-        final seqCmp = ((a['recording_seq'] as num?)?.toInt() ?? 0)
-            .compareTo((b['recording_seq'] as num?)?.toInt() ?? 0);
-        return seqCmp != 0
-            ? seqCmp
-            : ((a['ord'] as num?)?.toInt() ?? 0).compareTo((b['ord'] as num?)?.toInt() ?? 0);
-      });
+        .toList();
 
     RenderLog.write('c120_flat_built', 'group=$groupKey;rows=${rows.length};ord_sorted=y');
     RenderLog.write('c342_row_icon', 'stage=${widget.stage};rows=${rows.length}');
@@ -7771,19 +7799,16 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
                     runSpacing: 4,
                     children: g.entries.map((e) {
                       final active = playSeq != null && e.seq == playSeq;
-                      final isReadded = e.status == 'readded';
-                      if (isReadded) {
-                        RenderLog.write('c344_all_qty_colour', 'status=readded;stage=${widget.stage}');
+                      // Backend-owned (get_voice_clip_mentions.status_colors), verbatim.
+                      final isNormal = e.status == 'counted' || e.status == 'active';
+                      if (!isNormal) {
+                        RenderLog.write('c344_all_qty_colour', 'status=${e.status};stage=${widget.stage}');
                       }
-                      final Color bg = active ? _kGreen
-                          : isReadded ? const Color(0xFFFEF3C7)
-                          : const Color(0xFFF5F6F8);
-                      final Color border = active ? _kGreen
-                          : isReadded ? const Color(0xFFF59E0B)
-                          : _kBorder;
-                      final Color fg = active ? Colors.white
-                          : isReadded ? const Color(0xFF92400E)
-                          : _kText;
+                      final backendBg = _hexColor(e.statusColors?['bg'], const Color(0xFFF5F6F8));
+                      final backendFg = _hexColor(e.statusColors?['fg'], _kText);
+                      final Color bg = active ? _kGreen : isNormal ? const Color(0xFFF5F6F8) : backendBg;
+                      final Color border = active ? _kGreen : isNormal ? _kBorder : backendFg;
+                      final Color fg = active ? Colors.white : isNormal ? _kText : backendFg;
                       return Container(
                         padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                         decoration: BoxDecoration(
@@ -7931,7 +7956,6 @@ class _MentionClipTable extends StatelessWidget {
           final qty = (r['qty'] as num?)?.toInt() ?? 0;
           final status = r['status']?.toString() ?? 'counted';
           final isDeleted = status == 'deleted';
-          final isReadded = status == 'readded';
           final isBusy = mentionLoading.contains(id);
           final isPlaying = playingSeq != null &&
               (r['recording_seq'] as num?)?.toInt() == playingSeq;
@@ -7940,28 +7964,34 @@ class _MentionClipTable extends StatelessWidget {
           final ordered = productOrdered[rawName] ?? 0;
           final full = ordered > 0 && prodTotal >= ordered;
 
-          // Whole-row tint — §3.1
-          Color? rowTint;
-          if (isUnmatched) {
-            rowTint = const Color(0x28F59E0B);
-          } else if (isDeleted) {
-            rowTint = const Color(0x17FF0000);
-            RenderLog.write('c344_row_colour', 'status=deleted;stage=$stage');
-          } else if (isReadded) {
-            rowTint = const Color(0x1AF59E0B);
-            RenderLog.write('c344_row_colour', 'status=readded;stage=$stage');
+          // Backend-owned (get_voice_clip_mentions/get_pack_clip_mentions):
+          // status_label/status_colors, read verbatim — replaces the prior
+          // isDeleted/isReadded-keyed colour+label maps below. isPlaying stays
+          // client-side (transient local playback state, not persisted data)
+          // and still overrides the backend colour while a clip is playing.
+          final statusLabel = r['status_label']?.toString() ?? status;
+          final rStatusColors = r['status_colors'];
+          final backendBg = _hexColor(
+              rStatusColors is Map ? rStatusColors['bg']?.toString() : null,
+              const Color(0xFFF5F6F8));
+          final backendFg = _hexColor(
+              rStatusColors is Map ? rStatusColors['fg']?.toString() : null, _kText);
+          // "Nothing to flag" baseline — no row tint/shadow/subtitle for these.
+          final isNormal = status == 'counted' || status == 'active';
+
+          // Whole-row tint — §3.1. isUnmatched has no backend status (product_id
+          // is null regardless of status), so it stays a local presence check.
+          final rowTint = isUnmatched ? const Color(0x28F59E0B)
+              : isNormal ? null
+              : backendBg.withValues(alpha: 0.35);
+          if (!isUnmatched && !isNormal) {
+            RenderLog.write('c344_row_colour', 'status=$status;stage=$stage');
           }
 
           // Qty chip colours
-          final Color chipBg = isDeleted ? const Color(0xFFFEE2E2)
-              : isReadded ? const Color(0xFFFEF3C7)
-              : isPlaying ? _kGreen : const Color(0xFFF5F6F8);
-          final Color chipBorder = isDeleted ? const Color(0xFFEF4444)
-              : isReadded ? const Color(0xFFF59E0B)
-              : isPlaying ? _kGreen : _kBorder;
-          final Color chipFg = isDeleted ? const Color(0xFF991B1B)
-              : isReadded ? const Color(0xFF92400E)
-              : isPlaying ? Colors.white : _kText;
+          final Color chipBg = isPlaying ? _kGreen : isNormal ? const Color(0xFFF5F6F8) : backendBg;
+          final Color chipBorder = isPlaying ? _kGreen : isNormal ? _kBorder : backendFg;
+          final Color chipFg = isPlaying ? Colors.white : isNormal ? _kText : backendFg;
 
           final pill = Container(
             padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
@@ -7986,11 +8016,9 @@ class _MentionClipTable extends StatelessWidget {
             decoration: BoxDecoration(
               color: rowTint,
               border: const Border(bottom: BorderSide(color: _kBorder)),
-              boxShadow: isDeleted
-                  ? const [BoxShadow(color: Color(0x1AFF0000), blurRadius: 3, offset: Offset(0, 1))]
-                  : isReadded
-                      ? const [BoxShadow(color: Color(0x1AF59E0B), blurRadius: 3, offset: Offset(0, 1))]
-                      : null,
+              boxShadow: (!isUnmatched && !isNormal)
+                  ? [BoxShadow(color: backendBg.withValues(alpha: 0.4), blurRadius: 3, offset: const Offset(0, 1))]
+                  : null,
             ),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.center,
@@ -8005,16 +8033,11 @@ class _MentionClipTable extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontSize: 12, fontWeight: FontWeight.w500,
-                            color: isDeleted ? const Color(0xFF991B1B)
-                                : isReadded ? const Color(0xFF92400E)
-                                : isPlaying ? _kGreen : _kText,
+                            color: isPlaying ? _kGreen : isNormal ? _kText : backendFg,
                           )),
-                      if (isDeleted)
-                        const Text('removed',
-                            style: TextStyle(fontSize: 10, color: Color(0xFF991B1B)))
-                      else if (isReadded)
-                        const Text('re-added',
-                            style: TextStyle(fontSize: 10, color: Color(0xFF92400E))),
+                      if (!isUnmatched && !isNormal)
+                        Text(statusLabel.toLowerCase(),
+                            style: TextStyle(fontSize: 10, color: backendFg)),
                     ],
                   ),
                 )),
@@ -12200,9 +12223,13 @@ class _PackTabState extends State<_PackTab>
     );
   }
 
-  // #368: neutral-warning "Not bagged" pill — informational only (blocks packing, not an error).
-  // Matches the muted warning palette (bg #FEF3C7 / text #92400E) from the design system.
-  Widget _buildNotBaggedChip() {
+  // #368/gap-24: "Not bagged" pill — backend-owned (pack_get_queue's per-item
+  // chips.not_bagged {label,bg,fg}), read verbatim. Null when the item is
+  // bagged, so callers no longer need their own `is_bagged` gate.
+  Widget? _buildNotBaggedChip(Map<String, dynamic> item) {
+    final chips = item['chips'];
+    final chip = chips is Map ? chips['not_bagged'] : null;
+    if (chip is! Map) return null;
     try { RenderLog.write('c368_notbagged', 'src=tile'); } catch (_) {}
     return Padding(
       padding: const EdgeInsets.only(top: 4),
@@ -12211,14 +12238,16 @@ class _PackTabState extends State<_PackTab>
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
           decoration: BoxDecoration(
-            color: const Color(0xFFFEF3C7),
+            color: _hexColor(chip['bg']?.toString(), const Color(0xFFFEF3C7)),
             borderRadius: BorderRadius.circular(20),
           ),
-          child: const Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(Icons.shopping_bag_outlined, size: 12, color: Color(0xFF92400E)),
-            SizedBox(width: 4),
-            Text('Not bagged',
-                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF92400E))),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(Icons.shopping_bag_outlined, size: 12,
+                color: _hexColor(chip['fg']?.toString(), const Color(0xFF92400E))),
+            const SizedBox(width: 4),
+            Text(chip['label']?.toString() ?? 'Not bagged',
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
+                    color: _hexColor(chip['fg']?.toString(), const Color(0xFF92400E)))),
           ]),
         ),
       ),
@@ -12234,8 +12263,6 @@ class _PackTabState extends State<_PackTab>
     final packedQty  = (item['packed_qty'] as num?)?.toInt() ?? 0;
     final countedQty = (item['counted_qty'] as num?)?.toInt();
     final ct         = countedQty ?? 0;
-    // #368: an item can only be packed if it is mapped to a bag.
-    final isBagged   = item['is_bagged'] == true;
 
     // CHANGE #438: order-aware bags for THIS item (from pack_item_bag_breakdown),
     // keyed by order_item_id. Falls back to the old shared-pool bags[]/bag_no
@@ -12323,7 +12350,7 @@ class _PackTabState extends State<_PackTab>
                 // dispatch-ready, so the chip is informational and blocks nothing.
                 _buildPackDisputeChip(item),
                 // #368: workflow note — an un-bagged line can't be packed yet.
-                if (!isBagged) _buildNotBaggedChip(),
+                _buildNotBaggedChip(item) ?? const SizedBox.shrink(),
                 const SizedBox(height: 5),
                 // Backend-owned: pack_get_queue()'s per-item chips (received/packed/
                 // counted), each {label, colors:{bg,fg,border}} — rendered verbatim.
@@ -12384,7 +12411,8 @@ class _PackTabState extends State<_PackTab>
       children: [
         _buildPackMasterRollup(rollupRows, ord),
         const SizedBox(height: 12),
-        _buildPackDispatchButton(orderId, dispatchReady, canMarkReady),
+        _buildPackDispatchButton(orderId, dispatchReady, canMarkReady,
+            qData?['dispatch_button_colors'] as Map?),
       ],
     );
   }
@@ -12428,7 +12456,10 @@ class _PackTabState extends State<_PackTab>
   // Dispatch button. Label is driven only by dispatch_ready (never by eligibility):
   //   dispatch_ready==false → "Mark fully packed" (disabled + helper text until eligible)
   //   dispatch_ready==true  → "Ready to dispatch" (undo — always enabled, unconditional RPC)
-  Widget _buildPackDispatchButton(String orderId, bool dispatchReady, bool canMarkReady) {
+  // Backend-owned (pack_get_queue's dispatch_button_colors, keyed off the same
+  // can_mark_ready this button is already gated on), read verbatim.
+  Widget _buildPackDispatchButton(
+      String orderId, bool dispatchReady, bool canMarkReady, Map? dispatchColors) {
     if (dispatchReady) {
       // ── GREEN: tap to undo (unconditional — never gated on eligibility) ───
       return GestureDetector(
@@ -12452,9 +12483,12 @@ class _PackTabState extends State<_PackTab>
       );
     }
 
-    final Color bg     = canMarkReady ? const Color(0xFFFEF3C7) : const Color(0xFFF9FAFB);
-    final Color fg     = canMarkReady ? const Color(0xFF92400E) : _kSub;
-    final Color border = canMarkReady ? const Color(0xFFD97706).withValues(alpha: 0.4) : _kBorder;
+    final Color bg     = _hexColor(dispatchColors?['bg']?.toString(),
+        canMarkReady ? const Color(0xFFFEF3C7) : const Color(0xFFF9FAFB));
+    final Color fg     = _hexColor(dispatchColors?['fg']?.toString(),
+        canMarkReady ? const Color(0xFF92400E) : _kSub);
+    final Color border = _hexColor(dispatchColors?['border']?.toString(),
+        canMarkReady ? const Color(0xFFD97706).withValues(alpha: 0.4) : _kBorder);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -12729,7 +12763,8 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
   // Qty sequence = one entry per mention (for the pill cluster).
   // #338: entries retain mention id + status for hold-to-delete; deleted
   // mentions are excluded from the group total (still shown struck-through).
-  List<({int? pid, String name, List<({String id, int qty, int seq, String status})> entries, int total, int ordered})>
+  List<({int? pid, String name, List<({String id, int qty, int seq, String status,
+      String statusLabel, Map<String, String>? statusColors})> entries, int total, int ordered})>
       _groupMentions(List<Map<String, dynamic>> rows) {
     final pidToName = <int, String>{};
     final nameToOrdered = <String, int>{};
@@ -12745,7 +12780,8 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
     }
     // key = product_id (as string) for known, '' for unknown
     final order = <String>[];
-    final byKey = <String, List<({String id, int qty, int seq, String status})>>{};
+    final byKey = <String, List<({String id, int qty, int seq, String status,
+        String statusLabel, Map<String, String>? statusColors})>>{};
     for (final r in rows) {
       final pid = (r['product_id'] as num?)?.toInt();
       final key = pid != null ? '$pid' : '';
@@ -12754,7 +12790,11 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
       final seq = (r['recording_seq'] as num?)?.toInt() ?? 0;
       final id = r['id']?.toString() ?? '';
       final status = r['status']?.toString() ?? 'counted';
-      byKey.putIfAbsent(key, () => []).add((id: id, qty: qty, seq: seq, status: status));
+      byKey.putIfAbsent(key, () => []).add((
+        id: id, qty: qty, seq: seq, status: status,
+        statusLabel: r['status_label']?.toString() ?? '',
+        statusColors: _bgFgColors(r['status_colors']),
+      ));
     }
     return order.map((key) {
       final entries = byKey[key]!;
@@ -13060,17 +13100,14 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
                                       spacing: 4, runSpacing: 4,
                                       children: g.entries.map((e) {
                                         final active = playSeq != null && e.seq == playSeq;
+                                        // Backend-owned (get_pack_clip_mentions.status_colors), verbatim.
                                         final isDeleted = e.status == 'deleted';
-                                        final isReadded = e.status == 'readded';
-                                        final Color bg = isDeleted ? const Color(0xFFFEE2E2)
-                                            : isReadded ? const Color(0xFFFEF3C7)
-                                            : active ? _kGreen : const Color(0xFFF5F6F8);
-                                        final Color borderC = isDeleted ? const Color(0xFFEF4444)
-                                            : isReadded ? const Color(0xFFF59E0B)
-                                            : active ? _kGreen : _kBorder;
-                                        final Color fg = isDeleted ? const Color(0xFF991B1B)
-                                            : isReadded ? const Color(0xFF92400E)
-                                            : active ? Colors.white : _kText;
+                                        final isNormal = e.status == 'counted' || e.status == 'active';
+                                        final backendBg = _hexColor(e.statusColors?['bg'], const Color(0xFFF5F6F8));
+                                        final backendFg = _hexColor(e.statusColors?['fg'], _kText);
+                                        final Color bg = active ? _kGreen : isNormal ? const Color(0xFFF5F6F8) : backendBg;
+                                        final Color borderC = active ? _kGreen : isNormal ? _kBorder : backendFg;
+                                        final Color fg = active ? Colors.white : isNormal ? _kText : backendFg;
                                         return Container(
                                           padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                                           decoration: BoxDecoration(

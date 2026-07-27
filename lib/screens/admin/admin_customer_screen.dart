@@ -10273,17 +10273,9 @@ class _SLeadsTabState extends State<_SLeadsTab> {
 // cum_label, band, verify_label, message, ...) already arrive complete.
 // ═════════════════════════════════════════════════════════════════════════
 
-/// C1 status radios — the 8 values record_visit accepts, in mockup order.
-const _kVisitStatuses = <(String, String)>[
-  ('interested', 'Interested'),
-  ('not_interested', 'Not interested'),
-  ('revisit', 'Revisit later'),
-  ('closed_today', 'Closed today'),
-  ('permanently_closed', 'Permanently closed'),
-  ('moved', 'Shop has moved'),
-  ('not_found', 'Not found here'),
-  ('visited', 'Just visited'),
-];
+// CHANGE #551: the hardcoded 8-outcome list is DELETED. The options, their
+// order and their labels all come from lead_checkin_sheet().outcome.options[],
+// and option.key is posted back to record_visit(p_status:) verbatim.
 
 class _RoutesTab extends StatefulWidget {
   static final GlobalKey<_RoutesTabState> _routesKey = GlobalKey<_RoutesTabState>();
@@ -12408,7 +12400,7 @@ class _RoutesTabState extends State<_RoutesTab> {
         case 'navigate':
           uri = card?['navigate_uri']?.toString();
           break;
-        case 'check_in':
+        case 'checkin':
           return () => _openCheckIn(s, onRefresh: () {
                 if (leadId != null) _refreshStopCard(leadId);
                 if (_planId != null) _loadPlan(_planId!);
@@ -12541,7 +12533,7 @@ class _RoutesTabState extends State<_RoutesTab> {
     'call': Icons.call,
     'whatsapp': Icons.chat,
     'navigate': Icons.navigation_outlined,
-    'check_in': Icons.check_circle,
+    'checkin': Icons.check_circle,
   };
 
   /// Compact action button. Disabled (greyed, not hidden) when the backend
@@ -12830,20 +12822,40 @@ class _CheckInSheet extends StatefulWidget {
 }
 
 class _CheckInSheetState extends State<_CheckInSheet> {
-  // ── CHANGE #550: import this shop as a customer, straight from the visit ──
-  bool _alreadyCustomer = true; // hide until lead_stop_card() says otherwise
+  // ── CHANGE #551: the WHOLE sheet is backend-owned ───────────────────────
+  // lead_checkin_sheet() supplies every label, the outcome options, the photo
+  // bucket, the button copy and the import-customer block. Nothing below is
+  // constructed in Dart.
+  Map<String, dynamic>? _sheet;
+  bool _sheetLoading = true;
   bool _prefilling = false;
 
-  Future<void> _loadAlreadyCustomer() async {
+  Map<String, dynamic> _obj(String key) {
+    final v = _sheet?[key];
+    return v is Map ? Map<String, dynamic>.from(v) : const {};
+  }
+
+  String _str2(Map<String, dynamic> m, String k) => m[k]?.toString() ?? '';
+
+  Future<void> _loadSheet() async {
     final leadId = widget.stop['lead_id'];
-    if (leadId == null) return;
+    if (leadId == null) {
+      if (mounted) setState(() => _sheetLoading = false);
+      return;
+    }
     try {
       final res = await Supabase.instance.client
-          .rpc('lead_stop_card', params: {'p_lead_id': leadId});
-      if (res is Map && mounted) {
-        setState(() => _alreadyCustomer = res['already_customer'] == true);
-      }
-    } catch (_) {/* stays hidden on failure */}
+          .rpc('lead_checkin_sheet', params: {'p_lead_id': leadId});
+      if (!mounted) return;
+      setState(() {
+        _sheet = res is Map ? Map<String, dynamic>.from(res) : null;
+        _sheetLoading = false;
+      });
+      RenderLog.write('c551_checkin_sheet',
+          'opts=${(_obj('outcome')['options'] as List?)?.length ?? 0}');
+    } catch (_) {
+      if (mounted) setState(() => _sheetLoading = false);
+    }
   }
 
   /// lead_customer_prefill() -> the SAME registration form used by Import
@@ -12864,7 +12876,7 @@ class _CheckInSheetState extends State<_CheckInSheet> {
         // e.g. already_a_customer — backend copy, verbatim.
         showToast(context, m['error'].toString(), isError: true);
         if (m['error'].toString() == 'already_a_customer') {
-          setState(() => _alreadyCustomer = true);
+          await _loadSheet(); // backend now reports show=false + already_label
         }
         return;
       }
@@ -12881,8 +12893,9 @@ class _CheckInSheetState extends State<_CheckInSheet> {
       final saved = await ImportCustomerSheet.open(context,
           prefill: customer, missing: missing);
       if (saved == true && mounted) {
-        // Flip already_customer so the button hides, and refresh the stop.
-        setState(() => _alreadyCustomer = true);
+        // Refetch the sheet so import_customer.show flips false and the button
+        // is replaced by the backend's already_label.
+        await _loadSheet();
         widget.onDone();
       }
     } catch (e) {
@@ -12910,7 +12923,7 @@ class _CheckInSheetState extends State<_CheckInSheet> {
   void initState() {
     super.initState();
     _captureGps();
-    _loadAlreadyCustomer(); // CHANGE #550
+    _loadSheet(); // CHANGE #551
   }
 
   @override
@@ -12992,7 +13005,10 @@ class _CheckInSheetState extends State<_CheckInSheet> {
         final rand = Random().nextInt(999999);
         final ext = (_photoMime ?? '').contains('png') ? 'png' : 'jpg';
         final path = '$leadId/${ts}_$rand.$ext';
-        await Supabase.instance.client.storage.from('lead-visit-photos').uploadBinary(
+        final bucket = _str2(_obj('photo'), 'bucket');
+        await Supabase.instance.client.storage
+            .from(bucket.isEmpty ? 'lead-visit-photos' : bucket)
+            .uploadBinary(
           path, _photoBytes!,
           fileOptions: FileOptions(contentType: _photoMime ?? 'image/jpeg', upsert: true),
         );
@@ -13058,8 +13074,63 @@ class _CheckInSheetState extends State<_CheckInSheet> {
                 decoration: BoxDecoration(color: const Color(0xFFE5E7EB), borderRadius: BorderRadius.circular(2)),
               ),
             ),
-            Text(widget.stop['name']?.toString() ?? '',
+            if (_sheetLoading) ...[
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 28),
+                child: Center(
+                    child: CircularProgressIndicator(
+                        color: Color(0xFF1B7A43), strokeWidth: 2)),
+              ),
+            ] else if (_sheet != null && _sheet!['can_check_in'] == false) ...[
+              // CHANGE #551: blocked — show the backend's reason, not the form.
+              Text(_str2(_sheet ?? const {}, 'title'),
+                  style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF111827))),
+              const SizedBox(height: 10),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFEF3C7),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(_str2(_sheet ?? const {}, 'blocked_reason'),
+                    style: const TextStyle(
+                        fontSize: 13, color: Color(0xFF92400E))),
+              ),
+              const SizedBox(height: 18),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 13),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8)),
+                  ),
+                  child: Text(_str2(
+                      _obj('buttons')['cancel'] is Map
+                          ? Map<String, dynamic>.from(
+                              _obj('buttons')['cancel'] as Map)
+                          : const {},
+                      'label')),
+                ),
+              ),
+            ] else ...[
+            Text(_str2(_sheet ?? const {}, 'title'),
                 style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+            if (_str2(_sheet ?? const {}, 'subtitle').isNotEmpty) ...[
+              const SizedBox(height: 2),
+              Text(_str2(_sheet ?? const {}, 'subtitle'),
+                  style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
+            ],
+            if (_str2(_obj('visit_history'), 'label').isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(_str2(_obj('visit_history'), 'label'),
+                  style: const TextStyle(fontSize: 11.5, color: Color(0xFF9CA3AF))),
+            ],
             const SizedBox(height: 14),
             const Divider(height: 1, color: Color(0xFFE5E7EB)),
             const SizedBox(height: 14),
@@ -13069,18 +13140,25 @@ class _CheckInSheetState extends State<_CheckInSheet> {
               const Icon(Icons.location_on, size: 18, color: Color(0xFF6B7280)),
               const SizedBox(width: 8),
               if (_locating)
-                const Row(children: [
-                  SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
-                  SizedBox(width: 8),
-                  Text('Getting your location…', style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+                Row(children: [
+                  const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+                  const SizedBox(width: 8),
+                  Text(_str2(_obj('gps'), 'waiting_label'),
+                      style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
                 ])
               else if (_locError != null)
                 Expanded(
-                  child: Text(_locError!, style: const TextStyle(fontSize: 13, color: Color(0xFFDC2626))),
+                  // Backend copy when it has one, else the platform's own error.
+                  child: Text(
+                      _str2(_obj('gps'), 'denied_label').isNotEmpty
+                          ? _str2(_obj('gps'), 'denied_label')
+                          : _locError!,
+                      style: const TextStyle(fontSize: 13, color: Color(0xFFDC2626))),
                 )
               else
-                const Text('GPS captured ✅',
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF065F46))),
+                Text(_str2(_obj('gps'), 'captured_label'),
+                    style: const TextStyle(
+                        fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF065F46))),
               if (_locError != null) ...[
                 const Spacer(),
                 TextButton(onPressed: _captureGps, child: const Text('Retry')),
@@ -13089,8 +13167,8 @@ class _CheckInSheetState extends State<_CheckInSheet> {
             const SizedBox(height: 14),
 
             // ── Photo ────────────────────────────────────────────────────
-            const Text('Photo proof helps verify the visit.',
-                style: TextStyle(fontSize: 11.5, color: Color(0xFF9CA3AF))),
+            Text(_str2(_obj('photo'), 'hint'),
+                style: const TextStyle(fontSize: 11.5, color: Color(0xFF9CA3AF))),
             const SizedBox(height: 6),
             Row(children: [
               OutlinedButton.icon(
@@ -13101,7 +13179,7 @@ class _CheckInSheetState extends State<_CheckInSheet> {
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                 ),
                 icon: const Icon(Icons.camera_alt_outlined, size: 16),
-                label: Text(_photoBytes == null ? 'Take photo of the shop' : 'Retake photo',
+                label: Text(_str2(_obj('photo'), 'label'),
                     style: const TextStyle(fontSize: 12.5)),
               ),
               if (_photoBytes != null) ...[
@@ -13115,8 +13193,10 @@ class _CheckInSheetState extends State<_CheckInSheet> {
             const SizedBox(height: 18),
 
             // ── Status ───────────────────────────────────────────────────
-            // CHANGE #550 — only when the shop is not already registered.
-            if (!_alreadyCustomer) ...[
+            // CHANGE #551 — driven by lead_checkin_sheet().import_customer.
+            // show=true -> the button (backend label + hint); show=false with
+            // an already_label -> that label instead.
+            if (_obj('import_customer')['show'] == true) ...[
               SizedBox(
                 width: double.infinity,
                 child: OutlinedButton.icon(
@@ -13128,7 +13208,7 @@ class _CheckInSheetState extends State<_CheckInSheet> {
                           child: CircularProgressIndicator(
                               strokeWidth: 2, color: Color(0xFF1B7A43)))
                       : const Icon(Icons.person_add_alt_1_outlined, size: 16),
-                  label: const Text('Import customer'),
+                  label: Text(_str2(_obj('import_customer'), 'label')),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: const Color(0xFF1B7A43),
                     side: const BorderSide(color: Color(0xFF1B7A43)),
@@ -13138,20 +13218,39 @@ class _CheckInSheetState extends State<_CheckInSheet> {
                   ),
                 ),
               ),
+              if (_str2(_obj('import_customer'), 'hint').isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text(_str2(_obj('import_customer'), 'hint'),
+                    style: const TextStyle(
+                        fontSize: 11.5, color: Color(0xFF9CA3AF))),
+              ],
+              const SizedBox(height: 18),
+            ] else if (_str2(_obj('import_customer'), 'already_label')
+                .isNotEmpty) ...[
+              Text(_str2(_obj('import_customer'), 'already_label'),
+                  style: const TextStyle(
+                      fontSize: 12, color: Color(0xFF6B7280))),
               const SizedBox(height: 18),
             ],
 
-            const Text('What happened?',
-                style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+            Text(_str2(_obj('outcome'), 'title'),
+                style: const TextStyle(
+                    fontSize: 12.5, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
             const SizedBox(height: 6),
-            ..._kVisitStatuses.map((entry) => _statusRadio(entry.$1, entry.$2, highlight: tooFar)),
+            // CHANGE #551: rendered in backend order; option.key is posted to
+            // record_visit(p_status:) verbatim.
+            ...(((_obj('outcome')['options'] as List?) ?? [])
+                .whereType<Map>()
+                .map((o) => _statusRadio(o['key']?.toString() ?? '',
+                    o['label']?.toString() ?? '',
+                    highlight: tooFar))),
             const SizedBox(height: 10),
 
             // ── Note ─────────────────────────────────────────────────────
             TextField(
               controller: _noteCtrl,
               decoration: InputDecoration(
-                labelText: 'Note (optional)',
+                labelText: _str2(_obj('note'), 'label'),
                 labelStyle: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
                 contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -13184,7 +13283,9 @@ class _CheckInSheetState extends State<_CheckInSheet> {
                     padding: const EdgeInsets.symmetric(vertical: 13),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                   ),
-                  child: const Text('Cancel'),
+                  child: Text(_str2(_obj('buttons')['cancel'] is Map
+                      ? Map<String, dynamic>.from(_obj('buttons')['cancel'] as Map)
+                      : const {}, 'label')),
                 ),
               ),
               const SizedBox(width: 12),
@@ -13201,10 +13302,18 @@ class _CheckInSheetState extends State<_CheckInSheet> {
                   child: _submitting
                       ? const SizedBox(width: 16, height: 16,
                           child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                      : const Text('Submit', style: TextStyle(fontWeight: FontWeight.w700)),
+                      : Text(
+                          _str2(
+                              _obj('buttons')['submit'] is Map
+                                  ? Map<String, dynamic>.from(
+                                      _obj('buttons')['submit'] as Map)
+                                  : const {},
+                              'label'),
+                          style: const TextStyle(fontWeight: FontWeight.w700)),
                 ),
               ),
             ]),
+            ],
           ]),
         ),
       ),

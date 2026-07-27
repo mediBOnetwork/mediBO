@@ -11,7 +11,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'product.dart';
 import '../data/medicine_repository.dart';
 import '../util.dart';
-import '../utils/ist_date.dart';
 import '../utils/order_code.dart';
 import '../utils/render_log.dart';
 
@@ -35,7 +34,9 @@ class CartLine {
 /// A placed purchase order, kept in memory for the Orders screen.
 class Order {
   final String number;
-  final DateTime placedAt;
+  /// CHANGE #548: RAW backend timestamp, or null until the server has
+  /// stamped it. The client never guesses a placed-at time.
+  final String? placedAt;
   final List<CartLine> lines;
   final double grandTotal;
   final double netPayable;
@@ -43,7 +44,7 @@ class Order {
 
   Order({
     required this.number,
-    required this.placedAt,
+    this.placedAt,
     required this.lines,
     required this.grandTotal,
     required this.netPayable,
@@ -463,7 +464,7 @@ class CartModel extends ChangeNotifier {
         final status = rawStatus[0].toUpperCase() + rawStatus.substring(1);
         loaded.add(Order(
           number: orderDisplayId(row),
-          placedAt: istFromDb(row['created_at'] as String),
+          placedAt: row['created_at']?.toString(),
           lines: lines,
           grandTotal: total,
           netPayable: total,
@@ -1000,8 +1001,9 @@ class CartModel extends ChangeNotifier {
     final orderLines =
         _lines.values.map((l) => CartLine(l.product, l.quantity)).toList();
     final order = Order(
-      number: orderDisplayId({'id': 'seq${_orderSeq++}', 'created_at': DateTime.now().toIso8601String()}),
-      placedAt: nowIst(),
+      number: orderDisplayId({'id': 'seq${_orderSeq++}'}),
+      // CHANGE #548: the SERVER stamps placed-at on echo. No client guess.
+      placedAt: null,
       lines: orderLines,
       grandTotal: grandTotal,
       netPayable: _computeNetPayable(orderLines),

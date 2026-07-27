@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import '../../../services/date_labels.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -32,13 +34,15 @@ class _WaMessageBubbleState extends State<WaMessageBubble> {
     }
   }
 
-  String _formatTime(DateTime? dt) {
-    if (dt == null) return '';
-    // CHANGE #374: dt is already IST wall-clock (WaMessage.receivedAt is
-    // converted at parse time) — do not re-offset here.
-    final t = DateFormat('h:mm a').format(dt).toLowerCase();
-    RenderLog.write('c248_bubble_time_12h', t);
-    return t;
+  // CHANGE #548: backend-formatted (ist_fmt 'time12'); only the lower-casing
+  // is done here, which is a case transform, not date formatting. Empty until
+  // the server has stamped the message — we never guess a time client-side.
+  String _formatTime(String? ts) {
+    final t = DateLabels.instance.label(ts, DateStyle.time12);
+    if (t == null) return '';
+    final low = t.toLowerCase();
+    RenderLog.write('c248_bubble_time_12h', low);
+    return low;
   }
 
   // CHANGE #485: full-screen viewer resolves its own URL from the backend by

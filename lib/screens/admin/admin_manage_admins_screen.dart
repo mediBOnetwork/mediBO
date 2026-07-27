@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+
+import '../../services/date_labels.dart';
+import '../../widgets/date_label_text.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:pharma_b2b/utils/ist_date.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 
 // Emails that can never be removed or demoted — matches DB-side lock list.
@@ -230,7 +232,6 @@ class _AdminManageAdminsScreenState extends State<AdminManageAdminsScreen> {
     final isSuper = row['is_super'] as bool? ?? false;
     final isLocked = row['is_locked'] as bool? ?? false;
     final isSelf = email == _myEmail;
-    final createdAt = _fmtDate(row['created_at']);
     final busy = _busy.contains(email);
     final canToggle = !isLocked && !isSelf && !busy;
     final canRemove = !isLocked && !isSelf && !busy;
@@ -257,7 +258,11 @@ class _AdminManageAdminsScreenState extends State<AdminManageAdminsScreen> {
         ])),
         _td(_RoleToggle(isSuper: isSuper, enabled: canToggle, busy: busy, onToggle: () => _setSuper(email, !isSuper))),
         _td(Text(row['added_by'] ?? '—', style: const TextStyle(fontSize: 13, color: Color(0xFF374151)))),
-        _td(Text(createdAt, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)))),
+        // CHANGE #548: backend-formatted, rendered verbatim.
+        _td(DateLabelText(
+            ts: row['created_at']?.toString(),
+            style: DateStyle.dayMonYear,
+            textStyle: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)))),
         TableCell(
           verticalAlignment: TableCellVerticalAlignment.middle,
           child: Padding(
@@ -377,8 +382,10 @@ class _AdminManageAdminsScreenState extends State<AdminManageAdminsScreen> {
                 const SizedBox(height: 4),
                 Text('Added by: ${row['added_by'] ?? '—'}',
                     style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
-                Text(_fmtDate(row['created_at']),
-                    style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
+                DateLabelText(
+                    ts: row['created_at']?.toString(),
+                    style: DateStyle.dayMonYear,
+                    textStyle: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
                 const SizedBox(height: 8),
                 _RoleToggle(isSuper: isSuper, enabled: canToggle, busy: busy, onToggle: () => _setSuper(email, !isSuper)),
               ],
@@ -409,17 +416,8 @@ class _AdminManageAdminsScreenState extends State<AdminManageAdminsScreen> {
     child: Center(child: Text(msg, style: const TextStyle(color: Color(0xFF6B7280), fontSize: 14))),
   );
 
-  String _fmtDate(dynamic raw) {
-    if (raw == null) return '—';
-    try {
-      final dt = istFromDb(raw.toString());
-      return '${dt.day} ${_months[dt.month - 1]} ${dt.year}';
-    } catch (_) {
-      return raw.toString();
-    }
-  }
-
-  static const _months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  // CHANGE #548: _fmtDate() and its hardcoded _months = ['Jan',...] array are
+  // DELETED. Month names and date layout are backend-owned (ist_fmt).
 }
 
 // ── Role Toggle ───────────────────────────────────────────────────────────────

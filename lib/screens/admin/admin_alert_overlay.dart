@@ -6,7 +6,7 @@ import 'dart:js_interop';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:pharma_b2b/utils/ist_date.dart';
+import 'package:pharma_b2b/services/date_labels.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 
 // ── External JS function declarations (web only) ─────────────────────────────
@@ -88,12 +88,11 @@ String _fmtVal(String col, dynamic v) {
   if (v is bool) return v ? 'Yes' : 'No';
   final s = v.toString().trim();
   if (s.isEmpty || s == 'null') return '—';
+  // CHANGE #548: the dd/MM/yyyy  HH:mm builder is DELETED. ist_fmt('dmy_hm2')
+  // owns this layout; until the label lands we render the em dash placeholder
+  // rather than a client-formatted stand-in.
   if (col.endsWith('_at') && s.length >= 10) {
-    try {
-      final dt = istFromDb(s);
-      return '${dt.day.toString().padLeft(2,'0')}/${dt.month.toString().padLeft(2,'0')}/${dt.year}  '
-             '${dt.hour.toString().padLeft(2,'0')}:${dt.minute.toString().padLeft(2,'0')}';
-    } catch (_) {}
+    return DateLabels.instance.label(s, DateStyle.dmyHm2) ?? '—';
   }
   return s;
 }
@@ -810,13 +809,9 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
     final queueLen  = _queue.length;
     // Round to nearest rupee with ₹ symbol
     final totalStr  = rawTotal != null ? _fmtRupee(rawTotal) : '';
-    final dateStr   = createdAt.length >= 10
-        ? () {
-            try {
-              final dt = istFromDb(createdAt);
-              return '${dt.day.toString().padLeft(2,'0')}/${dt.month.toString().padLeft(2,'0')}/${dt.year}';
-            } catch (_) { return ''; }
-          }()
+    // CHANGE #548: backend-formatted (ist_fmt 'dmy'), never built here.
+    final dateStr = createdAt.length >= 10
+        ? (DateLabels.instance.label(createdAt, DateStyle.dmy) ?? '')
         : '';
 
     return Container(

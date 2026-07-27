@@ -2,12 +2,13 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+
+import '../services/date_labels.dart';
 import 'package:http/http.dart' as http;
 import 'package:pharma_b2b/utils/toast.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../utils/download_bytes.dart';
-import '../utils/ist_date.dart';
 import '../utils/order_code.dart';
 import '../utils/render_log.dart';
 import '../widgets/animations.dart';
@@ -20,7 +21,8 @@ import '../widgets/cust_pay_panel.dart';
 class _DbOrder {
   final String id;
   final String number;  // payment_id (PO-YYMMDD-XXXX); falls back to '—'
-  final DateTime placedAt;
+  /// CHANGE #548: RAW backend timestamp, verbatim.
+  final String placedAt;
   final List<_DbLine> lines;
   final double total;
   final String status; // DB value capitalized: Pending / Confirmed / etc.
@@ -46,7 +48,7 @@ class _DbOrder {
     return _DbOrder(
       id: id,
       number: orderDisplayId(row),
-      placedAt: istFromDb(row['created_at'] as String),
+      placedAt: row['created_at']?.toString() ?? '',
       lines: items
           .map((item) => _DbLine.fromJson(item as Map<String, dynamic>))
           .toList(),
@@ -236,12 +238,9 @@ class _OrderCardState extends State<_OrderCard> {
     if (opening && tab != 2 && _panel == null && !_loading) _loadPanel();
   }
 
-  String _date(DateTime d) =>
-      '${d.day.toString().padLeft(2, '0')}/'
-      '${d.month.toString().padLeft(2, '0')}/'
-      '${d.year}  '
-      '${d.hour.toString().padLeft(2, '0')}:'
-      '${d.minute.toString().padLeft(2, '0')}';
+  // CHANGE #548: backend-formatted (ist_fmt 'dmy_hm2'); no Dart date math.
+  String _date(String ts) =>
+      DateLabels.instance.label(ts, DateStyle.dmyHm2) ?? '';
 
   Future<void> _loadPanel() async {
     setState(() {

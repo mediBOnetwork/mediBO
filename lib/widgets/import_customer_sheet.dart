@@ -19,7 +19,10 @@
 //                        here. The backend normalises and validates them.
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:async';
+import 'dart:convert';
 import 'dart:html' as html;
+
+import 'package:file_picker/file_picker.dart';
 
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -33,15 +36,33 @@ class ImportCustomerSheet extends StatefulWidget {
   /// customer-import 'extract' payload, or null for the manual path.
   final Map<String, dynamic>? extracted;
 
-  const ImportCustomerSheet({super.key, this.extracted});
+  /// CHANGE #550 — lead_customer_prefill().customer, for importing a customer
+  /// straight from a route visit. Everything stays editable.
+  final Map<String, dynamic>? prefill;
+
+  /// CHANGE #550 — lead_customer_prefill().missing[]: fields the lead could
+  /// not supply. Highlighted so the rep knows what to fill in.
+  final List<String> missing;
+
+  const ImportCustomerSheet({
+    super.key,
+    this.extracted,
+    this.prefill,
+    this.missing = const [],
+  });
 
   /// Returns true when a customer was imported (caller should refresh).
-  static Future<bool?> open(BuildContext context,
-          {Map<String, dynamic>? extracted}) =>
+  static Future<bool?> open(
+    BuildContext context, {
+    Map<String, dynamic>? extracted,
+    Map<String, dynamic>? prefill,
+    List<String> missing = const [],
+  }) =>
       showDialog<bool>(
         context: context,
         barrierDismissible: false,
-        builder: (_) => ImportCustomerSheet(extracted: extracted),
+        builder: (_) => ImportCustomerSheet(
+            extracted: extracted, prefill: prefill, missing: missing),
       );
 
   @override
@@ -95,6 +116,7 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
   bool _saving = false;
   bool _locating = false;
   bool _forwarding = false;
+  bool _scanning = false;
 
   /// Backend copy only — never a string composed in this file.
   String? _error;
@@ -104,6 +126,14 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
   void initState() {
     super.initState();
     _loadOptions();
+    // CHANGE #550: prefill first, then any extract merges on top of it.
+    final pre = widget.prefill;
+    if (pre != null) {
+      for (final k in _c.keys) {
+        _set(k, pre[k]);
+      }
+    }
+    _review.addAll(widget.missing);
     final e = widget.extracted;
     if (e != null) _applyExtract(e);
     RenderLog.write('c547_form_open',
@@ -261,6 +291,58 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
         _error = e is FunctionException
             ? _fnError(e)
             : (_c['store_location_link']!.text.isEmpty ? '$e' : null);
+      });
+    }
+  }
+
+  /// CHANGE #550 — photograph the licence / GST board from inside the form and
+  /// MERGE the extracted fields on top of what is already here. Same
+  /// customer-import 'extract' mode the Customers tab uses.
+  Future<void> _scanDocuments() async {
+    final picked = await FilePicker.pickFiles(
+      type: FileType.image,
+      allowMultiple: true,
+      withData: true,
+    );
+    if (picked == null || picked.files.isEmpty || !mounted) return;
+    final files = picked.files.where((f) => f.bytes != null).take(8).toList();
+    if (files.isEmpty) return;
+
+    setState(() {
+      _scanning = true;
+      _error = null;
+      _notice = null;
+    });
+    try {
+      final images = [for (final f in files) base64Encode(f.bytes!)];
+      final res = await Supabase.instance.client.functions.invoke(
+        'customer-import',
+        body: {
+          'mode': 'extract',
+          'images': images,
+          'mime_type': 'image/jpeg',
+        },
+      );
+      final data = res.data;
+      final m =
+          data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{};
+      if (!mounted) return;
+      if (m['error'] != null) {
+        setState(() {
+          _error = m['error'].toString();
+          _scanning = false;
+        });
+        return;
+      }
+      setState(() {
+        _applyExtract(m); // merges over the current values, all still editable
+        _scanning = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _scanning = false;
+        _error = e is FunctionException ? _fnError(e) : '$e';
       });
     }
   }
@@ -615,6 +697,32 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
                         style: const TextStyle(
                             fontSize: 13, color: Color(0xFF92400E))),
                   ),
+
+                // CHANGE #550 — the same two paths the Customers tab offers:
+                // fill it in by hand, or photograph the licence / GST board and
+                // let customer-import 'extract' merge those fields in.
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: OutlinedButton.icon(
+                    onPressed: _scanning ? null : _scanDocuments,
+                    icon: _scanning
+                        ? const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Color(0xFF1B7A43)))
+                        : const Icon(Icons.document_scanner_outlined, size: 16),
+                    label: const Text('Photograph licence / GST board'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFF1B7A43),
+                      side: const BorderSide(color: Color(0xFF1B7A43)),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 10),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8)),
+                    ),
+                  ),
+                ),
 
                 _section('Business'),
                 _field('pharmacy_name', 'Pharmacy name'),

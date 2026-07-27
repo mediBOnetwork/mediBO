@@ -24,7 +24,7 @@ import '../../services/voice_receive_service.dart';
 import '../../services/fulfill_realtime.dart'; // C353: single realtime channel
 import '../../services/admin_date_scope.dart'; // C545: the ONE admin date scope
 import '../../widgets/box_date_row.dart'; // C545: BoxDateOlderRow (the shared date chip is gone)
-import '../../utils/ist_date.dart'; // C444: IST date helpers
+import '../../services/date_labels.dart'; // C546: backend-owned date strings
 import '../../supabase_config.dart' show SupabaseConfig;
 import 'voice_receive.dart';
 import '../../widgets/pinned_footer_list.dart';
@@ -13045,12 +13045,19 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     RenderLog.write('c188_realtime_subscribed', 'disputes_tab_init');
     RenderLog.write('c354_ready', 'tab=disputes');
     AdminDateScope.instance.addListener(_onDateScopeChanged);
+    // CHANGE #546: repaint when backend date labels resolve.
+    DateLabels.instance.addListener(_onDateLabels);
     _load();
+  }
+
+  void _onDateLabels() {
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
     AdminDateScope.instance.removeListener(_onDateScopeChanged);
+    DateLabels.instance.removeListener(_onDateLabels);
     _DisputeContactPopover._entry?.remove();
     _DisputeContactPopover._entry = null;
     super.dispose();
@@ -13513,18 +13520,11 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     );
   }
 
-  // #349: relative time helper
-  String _relTime(String? isoStr) {
-    if (isoStr == null || isoStr.isEmpty) return '';
-    final dt = tryIstFromDb(isoStr);
-    if (dt == null) return '';
-    final now = nowIst();
-    final diff = now.difference(dt);
-    if (diff.inMinutes < 1) return 'just now';
-    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
-    if (diff.inHours < 24) return '${diff.inHours}h ago';
-    return '${diff.inDays}d ago';
-  }
+  // #349 relative time — CHANGE #546: the 'just now'/'Xm ago'/'Xh ago'/'Xd ago'
+  // ladder is DELETED from Dart. ist_fmt('relative') owns it; this returns ''
+  // until the label lands and the caller already renders nothing for ''.
+  String _relTime(String? isoStr) =>
+      DateLabels.instance.label(isoStr, DateStyle.relative) ?? '';
 
   // ── #188: Unified supplier card — header always visible, body via _smoothReveal ─
   // CHANGE #531: takes one fw_get_disputes.supplier_products[] group verbatim.

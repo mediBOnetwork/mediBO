@@ -10,7 +10,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
-import '../utils/ist_date.dart';
+import '../services/date_labels.dart';
+import 'date_label_text.dart';
 import '../utils/render_log.dart';
 import '../utils/safe_parse.dart';
 import '../utils/toast.dart';
@@ -36,16 +37,8 @@ const _kUpiPrompt =
     'paid_at = the date-time text exactly as shown. '
     'Use null for any field not visible.';
 
-String _fmtDt(DateTime dt) {
-  final dd  = dt.day.toString().padLeft(2, '0');
-  final mm  = dt.month.toString().padLeft(2, '0');
-  final yy  = (dt.year % 100).toString().padLeft(2, '0');
-  var h     = dt.hour % 12;
-  if (h == 0) h = 12;
-  final min = dt.minute.toString().padLeft(2, '0');
-  final ap  = dt.hour >= 12 ? 'PM' : 'AM';
-  return '$dd/$mm/$yy $h:$min $ap';
-}
+// CHANGE #546: _fmtDt() is DELETED — it hand-built the 12-hour clock and
+// AM/PM in Dart. That layout is backend-owned now (ist_fmt 'dmy2_time12').
 
 // ── Public widget ─────────────────────────────────────────────────────────────
 
@@ -382,10 +375,7 @@ class _SupPayPanelState extends State<SupPayPanel> {
     final kind   = p['kind'] as String? ?? '';
     final mode   = p['mode'] as String? ?? '';
     final note   = p['note'] as String?;
-    final at     = p['at'] != null
-        ? tryIstFromDb(p['at'] as String)
-        : null;
-    final atStr  = at != null ? _fmtDt(at) : '—';
+    final atRaw0 = p['at'] as String?;
 
     Color pillBg, pillFg;
     String pillLbl;
@@ -416,8 +406,11 @@ class _SupPayPanelState extends State<SupPayPanel> {
         ),
         const SizedBox(width: 8),
         Expanded(
-          child: Text('${_r(amount)} · $mode · $atStr',
-              style: const TextStyle(
+          child: DateLabelText(
+              ts: atRaw0,
+              style: DateStyle.dmy2Time12,
+              transform: (d) => '${_r(amount)} · $mode · $d',
+              textStyle: const TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w500,
                   color: Color(0xFF111827))),
@@ -962,7 +955,7 @@ class _C330PayCardState extends State<C330PayCard> {
     final app     = p['app']        as String?;
     final paidAt  = p['paid_at']    as String?;
     final atRaw   = p['at']         as String?;
-    final at      = atRaw != null ? tryIstFromDb(atRaw) : null;
+    final at      = atRaw;  // #546: raw backend timestamp, never parsed here
     final hasSnap = (p['screenshot_path'] as String? ?? '').isNotEmpty;
 
     Color kindBg, kindFg;
@@ -1074,9 +1067,11 @@ class _C330PayCardState extends State<C330PayCard> {
         ],
         if (at != null) ...[
           const SizedBox(height: 8),
-          Text(
-            'Recorded ${_fmtDt(at)}',
-            style:
+          DateLabelText(
+            ts: at,
+            style: DateStyle.dmy2Time12,
+            transform: (d) => 'Recorded $d',
+            textStyle:
                 const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
           ),
         ],

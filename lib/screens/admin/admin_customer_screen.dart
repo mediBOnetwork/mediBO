@@ -29,6 +29,7 @@ import '../../view_as_state.dart';
 import '../../widgets/bill_actions_row.dart'; // CHANGE #465
 import '../../widgets/bill_viewer.dart'; // CHANGE #465
 import '../../widgets/import_customer_sheet.dart'; // CHANGE #547
+import '../../widgets/native_signed_image.dart'; // CHANGE #550
 import '../../widgets/cash_payment_sheet.dart';
 import '../../widgets/fullscreen_image.dart';
 import '../../utils/bill_mime.dart'; // CHANGE #465
@@ -10343,7 +10344,15 @@ class _RoutesTabState extends State<_RoutesTab> {
   // ── CHANGE #463: Google Maps, per-route (route_map() has no overview mode) ─
   // Map/List toggle per route, default MAP (B1). Data is fetched lazily the
   // first time a route's map is shown, then cached until the plan reloads.
-  final Map<String, bool> _routeMapMode = {}; // routeId -> true=Map, false=List
+  // CHANGE #550: the Map/List toggle is gone; this is the selected stop-range
+  // window (0 = stops 1-10, 1 = 11-20, ...).
+  final Map<String, int> _routeStopWindow = {};
+
+  /// CHANGE #550 — lead_stop_card() payloads, keyed by lead_id. The card's
+  /// photo, labels, action buttons and URIs are ALL backend-owned; nothing is
+  /// constructed here.
+  final Map<String, Map<String, dynamic>> _stopCards = {};
+  final Set<String> _stopCardsInFlight = {};
   final Map<String, Map<String, dynamic>?> _routeMapData = {};
   final Map<String, bool> _routeMapLoading = {};
 
@@ -10606,7 +10615,7 @@ class _RoutesTabState extends State<_RoutesTab> {
       // expanded (their stop set may have changed via toggle/rebalance).
       _routeMapData.removeWhere((id, _) => !validIds.contains(id));
       _routeMapLoading.removeWhere((id, _) => !validIds.contains(id));
-      _routeMapMode.removeWhere((id, _) => !validIds.contains(id));
+      _routeStopWindow.removeWhere((id, _) => !validIds.contains(id));
       for (final id in _expandedRouteIds) {
         _loadRouteMap(id);
       }
@@ -10623,7 +10632,7 @@ class _RoutesTabState extends State<_RoutesTab> {
       _planError = null;
       _routeMapData.clear();
       _routeMapLoading.clear();
-      _routeMapMode.clear();
+      _routeStopWindow.clear();
     });
   }
 
@@ -11161,7 +11170,7 @@ class _RoutesTabState extends State<_RoutesTab> {
           _planId = null;
           _routeMapData.clear();
           _routeMapLoading.clear();
-          _routeMapMode.clear();
+          _routeStopWindow.clear();
         }
       });
     } catch (_) {
@@ -11945,35 +11954,53 @@ class _RoutesTabState extends State<_RoutesTab> {
     );
   }
 
-  // ── CHANGE #463 B1: Map/List toggle at the top of a route's detail view.
-  // Default = MAP. The existing stop LIST (B builderStopRow) stays, unchanged.
+  // ── CHANGE #550: the Map/List toggle is DELETED. Both are always visible,
+  // stacked: map on top, then the stop-range buttons, then the stop list.
   Widget _buildRouteDetail(String routeId, List<Map<String, dynamic>> stops) {
-    final isMap = _routeMapMode[routeId] ?? true; // default MAP
+    RenderLog.write('c550_route_stacked', 'stops=${stops.length}');
+    final visible = _stopsInWindow(routeId, stops);
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      SizedBox(
-        width: 140,
-        child: Row(children: [
-          Expanded(child: _segBtn('Map', isMap, () => setState(() => _routeMapMode[routeId] = true))),
-          const SizedBox(width: 6),
-          Expanded(child: _segBtn('List', !isMap, () => setState(() => _routeMapMode[routeId] = false))),
-        ]),
-      ),
-      // ── CHANGE #494: both per-route optimize buttons are Map-only — they
-      // re-anchor the polyline/order, which only means anything while the
-      // map is showing. Hidden entirely in List mode.
-      if (isMap) ...[
-        const SizedBox(height: 10),
-        _buildRouteOptimizeButtons(routeId),
-      ],
+      _buildRouteOptimizeButtons(routeId),
       const SizedBox(height: 10),
-      if (isMap)
-        _buildRouteMapView(routeId)
-      else
-        Column(children: stops.map((s) => Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: _builderStopRow(s),
-            )).toList()),
+      _buildRouteMapView(routeId),
+      const SizedBox(height: 10),
+      // Stop-range buttons sit directly under the map and scope the list.
+      _buildStopRangeButtons(routeId, stops.length),
+      const SizedBox(height: 10),
+      Column(
+          children: visible
+              .map((s) => Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: _builderStopRow(s),
+                  ))
+              .toList()),
     ]);
+  }
+
+  /// CHANGE #550 — Stops 1-10 / 11-20 / 21-25, sized to the real stop count.
+  /// Windows are 10 wide; the last one is clamped to the number of stops.
+  Widget _buildStopRangeButtons(String routeId, int total) {
+    if (total <= 10) return const SizedBox.shrink();
+    final windows = <List<int>>[];
+    for (var start = 1; start <= total; start += 10) {
+      windows.add([start, (start + 9) > total ? total : (start + 9)]);
+    }
+    final sel = _routeStopWindow[routeId] ?? 0;
+    return Wrap(spacing: 8, runSpacing: 8, children: [
+      for (var i = 0; i < windows.length; i++)
+        _segBtn('Stops ${windows[i][0]}-${windows[i][1]}', sel == i,
+            () => setState(() => _routeStopWindow[routeId] = i)),
+    ]);
+  }
+
+  List<Map<String, dynamic>> _stopsInWindow(
+      String routeId, List<Map<String, dynamic>> stops) {
+    if (stops.length <= 10) return stops;
+    final sel = _routeStopWindow[routeId] ?? 0;
+    final start = sel * 10;
+    if (start >= stops.length) return stops;
+    final end = (start + 10) > stops.length ? stops.length : start + 10;
+    return stops.sublist(start, end);
   }
 
   // ── CHANGE #494: two equal-size, ~46dp-tall optimize buttons, side by
@@ -12337,113 +12364,244 @@ class _RoutesTabState extends State<_RoutesTab> {
   // has branch_label/stale_label/pin_label/visit_label instead). Reuses
   // _openCheckIn / the SAME #446 check-in sheet — record_visit only needs
   // lead_id, which both shapes carry.
+  /// CHANGE #550 — redesigned stop card, driven by lead_stop_card().
+  ///
+  /// Layout: a large photo across the top with the score chip and the include
+  /// checkbox overlaid on it, then the pharmacy name and address, then ONE
+  /// compact row of actions built from the backend's actions[].
+  ///
+  /// Everything user-visible is backend-owned: photo_url, name, address,
+  /// score_label, each action's label/enabled flag, and the call / whatsapp /
+  /// navigate URIs. No URI is constructed in Dart.
   Widget _builderStopRow(Map<String, dynamic> s) {
     final stopId = s['stop_id'].toString();
+    final leadId = s['lead_id'];
     final included = s['included'] == true;
-    final photoUrl = s['photo_url']?.toString();
-    final size = widget.isDesktop ? 56.0 : 44.0;
+    final card = leadId == null ? null : _stopCards[leadId.toString()];
+    if (leadId != null && card == null) _loadStopCard(leadId);
+
+    final photoUrl = (card?['photo_url'] ?? s['photo_url'])?.toString();
+    final name = (card?['name'] ?? s['name'])?.toString() ?? '';
+    final address = (card?['address'] ?? s['area'])?.toString() ?? '';
+    final scoreLabel = (card?['score_label'] ?? s['score_label'])?.toString();
     final openLabel = s['open_label']?.toString();
-    final openOk = s['open_ok'] != false; // only false is a real SHUT; unknown/true are not
-    final waitLabel = s['wait_label']?.toString();
-    final callLink = s['call_link']?.toString();
-    final waLink = s['wa_link']?.toString();
-    final navLink = s['nav_link']?.toString();
     final shut = openLabel == 'SHUT on arrival';
-    RenderLog.write('c452_checkin_wired', 1); // Check-in button is built below
+    final photoH = widget.isDesktop ? 168.0 : 140.0;
+    RenderLog.write('c452_checkin_wired', 1);
+
+    // actions[] is backend-owned; disabled (never hidden) when enabled=false.
+    final actions = ((card?['actions'] as List?) ?? [])
+        .whereType<Map>()
+        .map((a) => Map<String, dynamic>.from(a))
+        .toList();
+
+    VoidCallback? tapFor(String key, bool enabled) {
+      if (!enabled) return null;
+      String? uri;
+      switch (key) {
+        case 'call':
+          uri = card?['call_uri']?.toString();
+          break;
+        case 'whatsapp':
+          uri = card?['whatsapp_uri']?.toString();
+          break;
+        case 'navigate':
+          uri = card?['navigate_uri']?.toString();
+          break;
+        case 'check_in':
+          return () => _openCheckIn(s, onRefresh: () {
+                if (leadId != null) _refreshStopCard(leadId);
+                if (_planId != null) _loadPlan(_planId!);
+              });
+      }
+      if (uri == null || uri.isEmpty) return null;
+      final u = uri;
+      return () => launchUrl(Uri.parse(u), mode: LaunchMode.externalApplication);
+    }
 
     return Container(
-      padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: shut ? const Color(0xFFFEF2F2) : const Color(0xFFF9FAFB),
-        borderRadius: BorderRadius.circular(10),
-        border: shut ? Border.all(color: const Color(0xFFFECACA)) : null,
+        color: shut ? const Color(0xFFFEF2F2) : Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+            color: shut ? const Color(0xFFFECACA) : const Color(0xFFE5E7EB)),
       ),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Checkbox(
-          value: included,
-          onChanged: (v) => _toggleStopIncluded(stopId, v == true),
-          activeColor: const Color(0xFF1B7A43),
-        ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // ── Photo with overlaid score chip + checkbox ─────────────────────
         SizedBox(
-          width: 20,
-          child: Text('${s['seq'] ?? ''}',
-              style: const TextStyle(
-                  fontSize: 13.5, fontWeight: FontWeight.w800, color: Color(0xFF9CA3AF))),
-        ),
-        const SizedBox(width: 6),
-        _routePhoto(photoUrl, size),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 8, runSpacing: 4, children: [
-              Text(s['name']?.toString() ?? '',
-                  style: const TextStyle(
-                      fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-              if (s['score_label'] != null)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                      color: const Color(0xFFF3F4F6), borderRadius: BorderRadius.circular(4)),
-                  child: Text(s['score_label'].toString(),
-                      style: const TextStyle(
-                          fontSize: 10.5, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
+          height: photoH,
+          width: double.infinity,
+          child: Stack(fit: StackFit.expand, children: [
+            if (photoUrl != null && photoUrl.isNotEmpty)
+              NativeSignedImage(url: photoUrl, cacheKey: photoUrl)
+            else
+              // Neutral placeholder of the SAME height so cards stay uniform.
+              Container(
+                color: const Color(0xFFF3F4F6),
+                child: const Center(
+                  child: Icon(Icons.storefront_outlined,
+                      size: 34, color: Color(0xFF9CA3AF)),
                 ),
-              _bandChip(s['band']?.toString()),
-            ]),
-            if (s['area'] != null && s['area'].toString().isNotEmpty) ...[
-              const SizedBox(height: 3),
-              Text(s['area'].toString(), style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
-            ],
-            if (s['eta_label'] != null || openLabel != null) ...[
-              const SizedBox(height: 3),
-              Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 6, runSpacing: 2, children: [
-                if (s['eta_label'] != null) ...[
-                  const Icon(Icons.schedule, size: 12, color: Color(0xFF9CA3AF)),
-                  const SizedBox(width: 2),
-                  Text(s['eta_label'].toString(),
-                      style: const TextStyle(fontSize: 11.5, color: Color(0xFF374151))),
-                ],
-                if (openLabel != null)
-                  Text(openLabel,
-                      style: TextStyle(
-                          fontSize: 11.5, fontWeight: FontWeight.w600,
-                          // Unknown is grey, never red — unknown is not closed.
-                          color: !openOk
-                              ? const Color(0xFFDC2626)
-                              : openLabel == 'Open on arrival'
-                                  ? const Color(0xFF065F46)
-                                  : const Color(0xFF9CA3AF))),
-              ]),
-            ],
-            if (waitLabel != null) ...[
+              ),
+            Positioned(
+              top: 6,
+              left: 6,
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.92),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Checkbox(
+                  value: included,
+                  onChanged: (v) => _toggleStopIncluded(stopId, v == true),
+                  activeColor: const Color(0xFF1B7A43),
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  visualDensity: VisualDensity.compact,
+                ),
+              ),
+            ),
+            if (scoreLabel != null && scoreLabel.isNotEmpty)
+              Positioned(
+                top: 8,
+                right: 8,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.62),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(scoreLabel,
+                      style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white)),
+                ),
+              ),
+            if (s['seq'] != null)
+              Positioned(
+                bottom: 8,
+                left: 8,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.62),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text('${s['seq']}',
+                      style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                          color: Colors.white)),
+                ),
+              ),
+          ]),
+        ),
+
+        // ── Name / address ────────────────────────────────────────────────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(name,
+                style: const TextStyle(
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF111827))),
+            if (address.isNotEmpty) ...[
               const SizedBox(height: 2),
-              Text(waitLabel, style: const TextStyle(fontSize: 11.5, color: Color(0xFFD97706))),
+              Text(address,
+                  style: const TextStyle(
+                      fontSize: 12, color: Color(0xFF6B7280))),
             ],
-            const SizedBox(height: 8),
-            Wrap(spacing: 8, runSpacing: 8, children: [
-              if (callLink != null)
-                _stopActionBtn(Icons.call, 'Call', () => launchUrl(Uri.parse(callLink))),
-              if (waLink != null)
-                _stopActionBtn(Icons.chat, 'WhatsApp',
-                    () => launchUrl(Uri.parse(waLink), mode: LaunchMode.externalApplication)),
-              if (navLink != null)
-                _stopActionBtn(Icons.navigation_outlined, 'Navigate',
-                    () => launchUrl(Uri.parse(navLink), mode: LaunchMode.externalApplication)),
-              _stopActionBtn(Icons.check_circle, 'Check in',
-                  () => _openCheckIn(s, onRefresh: () { if (_planId != null) _loadPlan(_planId!); }),
-                  filled: true),
-            ]),
-            if (s['leg_label'] != null || s['cum_label'] != null) ...[
-              const SizedBox(height: 6),
-              Text(
-                [s['leg_label'], s['cum_label']].where((v) => v != null).join(' · '),
-                style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
+          ]),
+        ),
+
+        // ── ONE compact action row, from actions[] ───────────────────────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(8, 8, 8, 10),
+          child: Row(children: [
+            for (final a in actions) ...[
+              Expanded(
+                child: _stopActionCompact(
+                  a['key']?.toString() ?? '',
+                  a['label']?.toString() ?? '',
+                  tapFor(a['key']?.toString() ?? '', a['enabled'] != false),
+                ),
               ),
             ],
           ]),
         ),
       ]),
     );
+  }
+
+  static const Map<String, IconData> _stopActionIcons = {
+    'call': Icons.call,
+    'whatsapp': Icons.chat,
+    'navigate': Icons.navigation_outlined,
+    'check_in': Icons.check_circle,
+  };
+
+  /// Compact action button. Disabled (greyed, not hidden) when the backend
+  /// says enabled=false, or when it supplied no URI for that action.
+  Widget _stopActionCompact(String key, String label, VoidCallback? onTap) {
+    final on = onTap != null;
+    final green = const Color(0xFF1B7A43);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+          decoration: BoxDecoration(
+            color: on ? const Color(0xFFECFDF5) : const Color(0xFFF3F4F6),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+                color: on ? const Color(0xFFBBDDC8) : const Color(0xFFE5E7EB)),
+          ),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Icon(_stopActionIcons[key] ?? Icons.circle_outlined,
+                size: 16, color: on ? green : const Color(0xFF9CA3AF)),
+            const SizedBox(height: 3),
+            Text(label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w600,
+                    color: on ? green : const Color(0xFF9CA3AF))),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  /// lead_stop_card() fetch + cache. One call per lead, on first render.
+  Future<void> _loadStopCard(dynamic leadId) async {
+    final key = leadId.toString();
+    if (_stopCards.containsKey(key) || _stopCardsInFlight.contains(key)) return;
+    _stopCardsInFlight.add(key);
+    try {
+      final res = await Supabase.instance.client
+          .rpc('lead_stop_card', params: {'p_lead_id': leadId});
+      if (res is Map && mounted) {
+        setState(() => _stopCards[key] = Map<String, dynamic>.from(res));
+        RenderLog.write('c550_stop_card', 'lead=$key');
+      }
+    } catch (_) {
+      // Card falls back to the stop row's own fields until a later rebuild.
+    } finally {
+      _stopCardsInFlight.remove(key);
+    }
+  }
+
+  /// Force a refetch — used after an import so already_customer flips.
+  Future<void> _refreshStopCard(dynamic leadId) async {
+    _stopCards.remove(leadId.toString());
+    await _loadStopCard(leadId);
   }
 
   // ── B6 + C: stop card (#445/#446 my_route() shape) — unchanged, used by
@@ -12672,6 +12830,68 @@ class _CheckInSheet extends StatefulWidget {
 }
 
 class _CheckInSheetState extends State<_CheckInSheet> {
+  // ── CHANGE #550: import this shop as a customer, straight from the visit ──
+  bool _alreadyCustomer = true; // hide until lead_stop_card() says otherwise
+  bool _prefilling = false;
+
+  Future<void> _loadAlreadyCustomer() async {
+    final leadId = widget.stop['lead_id'];
+    if (leadId == null) return;
+    try {
+      final res = await Supabase.instance.client
+          .rpc('lead_stop_card', params: {'p_lead_id': leadId});
+      if (res is Map && mounted) {
+        setState(() => _alreadyCustomer = res['already_customer'] == true);
+      }
+    } catch (_) {/* stays hidden on failure */}
+  }
+
+  /// lead_customer_prefill() -> the SAME registration form used by Import
+  /// Customer, pre-filled and fully editable. Saving goes through edge
+  /// customer-import mode 'import' (inside the sheet), never the RPC directly.
+  Future<void> _importCustomer() async {
+    final leadId = widget.stop['lead_id'];
+    if (leadId == null) return;
+    setState(() => _prefilling = true);
+    try {
+      final res = await Supabase.instance.client
+          .rpc('lead_customer_prefill', params: {'p_lead_id': leadId});
+      final m = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      if (!mounted) return;
+      setState(() => _prefilling = false);
+
+      if (m['error'] != null) {
+        // e.g. already_a_customer — backend copy, verbatim.
+        showToast(context, m['error'].toString(), isError: true);
+        if (m['error'].toString() == 'already_a_customer') {
+          setState(() => _alreadyCustomer = true);
+        }
+        return;
+      }
+
+      final note = m['note']?.toString();
+      if (note != null && note.isNotEmpty) showToast(context, note);
+
+      final customer = m['customer'] is Map
+          ? Map<String, dynamic>.from(m['customer'] as Map)
+          : <String, dynamic>{};
+      final missing = (m['missing'] as List?)?.map((e) => e.toString()).toList() ??
+          const <String>[];
+
+      final saved = await ImportCustomerSheet.open(context,
+          prefill: customer, missing: missing);
+      if (saved == true && mounted) {
+        // Flip already_customer so the button hides, and refresh the stop.
+        setState(() => _alreadyCustomer = true);
+        widget.onDone();
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _prefilling = false);
+      showToast(context, '$e', isError: true);
+    }
+  }
+
   bool _locating = true;
   String? _locError;
   double? _lat;
@@ -12690,6 +12910,7 @@ class _CheckInSheetState extends State<_CheckInSheet> {
   void initState() {
     super.initState();
     _captureGps();
+    _loadAlreadyCustomer(); // CHANGE #550
   }
 
   @override
@@ -12894,6 +13115,32 @@ class _CheckInSheetState extends State<_CheckInSheet> {
             const SizedBox(height: 18),
 
             // ── Status ───────────────────────────────────────────────────
+            // CHANGE #550 — only when the shop is not already registered.
+            if (!_alreadyCustomer) ...[
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: _prefilling ? null : _importCustomer,
+                  icon: _prefilling
+                      ? const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Color(0xFF1B7A43)))
+                      : const Icon(Icons.person_add_alt_1_outlined, size: 16),
+                  label: const Text('Import customer'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFF1B7A43),
+                    side: const BorderSide(color: Color(0xFF1B7A43)),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8)),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 18),
+            ],
+
             const Text('What happened?',
                 style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
             const SizedBox(height: 6),

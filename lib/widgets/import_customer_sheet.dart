@@ -82,8 +82,19 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
   /// Fields the backend flagged as low-confidence or dropped during extract.
   final Set<String> _review = {};
 
+  // ── CHANGE #549: the form's SHAPE is backend-owned ──────────────────────
+  // customer_form_options() decides which fields are hidden, which are
+  // required, which are single-select, and what each dropdown's choices are.
+  // Nothing here is hardcoded.
+  Set<String> _hidden = {};
+  Set<String> _required = {};
+  Set<String> _singleSelect = {};
+  Map<String, List<String>> _choices = {};
+  bool _optionsLoaded = false;
+
   bool _saving = false;
   bool _locating = false;
+  bool _forwarding = false;
 
   /// Backend copy only — never a string composed in this file.
   String? _error;
@@ -92,6 +103,7 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
   @override
   void initState() {
     super.initState();
+    _loadOptions();
     final e = widget.extracted;
     if (e != null) _applyExtract(e);
     RenderLog.write('c547_form_open',
@@ -104,6 +116,34 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
       ctl.dispose();
     }
     super.dispose();
+  }
+
+  Future<void> _loadOptions() async {
+    try {
+      final res = await Supabase.instance.client.rpc('customer_form_options');
+      if (res is! Map || !mounted) return;
+      final m = Map<String, dynamic>.from(res);
+      Set<String> setOf(dynamic v) => v is List
+          ? v.map((e) => e.toString()).toSet()
+          : <String>{};
+      List<String> listOf(dynamic v) => v is List
+          ? v.map((e) => e.toString()).toList()
+          : <String>[];
+      setState(() {
+        _hidden = setOf(m['hidden_fields']);
+        _required = setOf(m['required_fields']);
+        _singleSelect = setOf(m['single_select']);
+        _choices = {
+          for (final k in _singleSelect) k: listOf(m[k]),
+        };
+        _optionsLoaded = true;
+      });
+      RenderLog.write('c549_form_options',
+          'hidden=${_hidden.length};required=${_required.length};'
+          'single=${_singleSelect.length}');
+    } catch (_) {
+      // No hardcoded fallback: without options the dropdowns stay empty.
+    }
   }
 
   void _set(String key, dynamic v) {
@@ -186,6 +226,8 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
 
       // 'partial' -> coordinates + map link only; address stays blank.
       final status = m['status']?.toString();
+      // CHANGE #549: range_zone is filled from the location response too, and
+      // stays editable like every other auto-filled field.
       for (final k in const [
         'address',
         'city',
@@ -195,6 +237,7 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
         'latitude',
         'longitude',
         'store_location_link',
+        'range_zone',
       ]) {
         _set(k, m[k]);
       }
@@ -222,6 +265,66 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
     }
   }
 
+  /// CHANGE #549 — "Fill coordinates": derive coordinates from the address
+  /// fields already typed in, via customer-import mode 'forward'.
+  Future<void> _fillCoordinates() async {
+    setState(() {
+      _forwarding = true;
+      _error = null;
+      _notice = null;
+    });
+    try {
+      final res = await Supabase.instance.client.functions.invoke(
+        'customer-import',
+        body: {
+          'mode': 'forward',
+          'address': _c['address']!.text.trim(),
+          'city': _c['city']!.text.trim(),
+          'district': _c['district']!.text.trim(),
+          'state': _c['state']!.text.trim(),
+          'pincode': _c['pincode']!.text.trim(),
+        },
+      );
+      final data = res.data;
+      final m =
+          data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{};
+
+      if (m['error'] != null) {
+        setState(() {
+          _error = m['error'].toString();
+          _forwarding = false;
+        });
+        return;
+      }
+
+      for (final k in const [
+        'latitude',
+        'longitude',
+        'store_location_link',
+        'range_zone',
+      ]) {
+        _set(k, m[k]);
+      }
+
+      final status = m['status']?.toString();
+      RenderLog.write('c549_forward', 'status=${status ?? ''}');
+      setState(() {
+        _forwarding = false;
+        // 'not_found' (and any other) note is backend copy, verbatim.
+        final note = m['note'] ?? m['message'] ?? m['notes'];
+        if (note != null && note.toString().isNotEmpty) {
+          _notice = note.toString();
+        }
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _forwarding = false;
+        _error = e is FunctionException ? _fnError(e) : '$e';
+      });
+    }
+  }
+
   /// Pulls the backend's own {"error": "..."} out of a FunctionException.
   String _fnError(FunctionException e) {
     final d = e.details;
@@ -241,8 +344,11 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
     try {
       // Straight pass-through: no client-side formatting or validation. Empty
       // fields are omitted so the backend applies its own defaults.
+      // CHANGE #549: hidden fields are NEVER sent — customer_code is generated
+      // by the backend (same logic as supplier codes) and address_local is gone.
       final customer = <String, dynamic>{};
       _c.forEach((k, v) {
+        if (_hidden.contains(k)) return;
         final s = v.text.trim();
         if (s.isNotEmpty) customer[k] = s;
       });
@@ -286,7 +392,14 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
 
   // ── UI ────────────────────────────────────────────────────────────────────
 
-  Widget _field(String key, String label, {bool required = false, int maxLines = 1}) {
+  /// CHANGE #549: renders nothing for a backend-hidden field, marks required
+  /// from required_fields, and renders a single-select dropdown when the
+  /// backend lists the field in single_select.
+  Widget _field(String key, String label, {int maxLines = 1}) {
+    if (_hidden.contains(key)) return const SizedBox.shrink();
+    if (_singleSelect.contains(key)) return _dropdown(key, label);
+
+    final required = _required.contains(key);
     final flagged = _review.contains(key);
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
@@ -342,6 +455,81 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
     );
   }
 
+  /// Single-select built from customer_form_options()'s own list. The current
+  /// value is kept in the same controller as every other field, so submission
+  /// and auto-fill (e.g. range_zone from the location response) work unchanged.
+  Widget _dropdown(String key, String label) {
+    final required = _required.contains(key);
+    final flagged = _review.contains(key);
+    final opts = _choices[key] ?? const <String>[];
+    final cur = _c[key]!.text.trim();
+    // An auto-filled value the backend didn't list still shows, so nothing is
+    // silently dropped — the admin can re-pick from the list.
+    final items = <String>[
+      if (cur.isNotEmpty && !opts.contains(cur)) cur,
+      ...opts,
+    ];
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Text(required ? '$label *' : label,
+              style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xFF374151))),
+          if (flagged) ...[
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFEF3C7),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: const Text('Check this',
+                  style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                      color: Color(0xFF92400E))),
+            ),
+          ],
+        ]),
+        const SizedBox(height: 6),
+        DropdownButtonFormField<String>(
+          initialValue: cur.isEmpty ? null : cur,
+          isExpanded: true,
+          decoration: InputDecoration(
+            isDense: true,
+            filled: true,
+            fillColor: const Color(0xFFF5F6F8),
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide(
+                  color: flagged
+                      ? const Color(0xFFFCD34D)
+                      : const Color(0xFFE5E7EB)),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: const BorderSide(color: Color(0xFF1B7A43)),
+            ),
+            border:
+                OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+          ),
+          items: [
+            for (final o in items)
+              DropdownMenuItem<String>(value: o, child: Text(o)),
+          ],
+          // Still fully editable — re-picking simply overwrites the value.
+          onChanged: (v) => setState(() => _c[key]!.text = v ?? ''),
+        ),
+      ]),
+    );
+  }
+
   Widget _section(String title) => Padding(
         padding: const EdgeInsets.only(top: 8, bottom: 12),
         child: Text(title.toUpperCase(),
@@ -384,7 +572,18 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
           const Divider(height: 1, color: Color(0xFFE5E7EB)),
 
           Expanded(
-            child: SingleChildScrollView(
+            child: !_optionsLoaded
+                // CHANGE #549: the form's shape (hidden / required / dropdown
+                // choices) is backend-owned, so nothing renders until
+                // customer_form_options() has landed.
+                ? const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(32),
+                      child: CircularProgressIndicator(
+                          color: Color(0xFF1B7A43), strokeWidth: 2.5),
+                    ),
+                  )
+                : SingleChildScrollView(
               padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 if (_notice != null) ...[
@@ -418,34 +617,34 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
                   ),
 
                 _section('Business'),
-                _field('pharmacy_name', 'Pharmacy name', required: true),
+                _field('pharmacy_name', 'Pharmacy name'),
                 _field('customer_name', 'Customer name'),
                 _field('store_type', 'Store type'),
-                _field('customer_code', 'Customer code'),
 
                 _section('Contact'),
-                _field('phone', 'Phone', required: true),
+                _field('phone', 'Phone'),
                 _field('whatsapp_no', 'WhatsApp number'),
                 _field('other_contact_no', 'Other contact number'),
                 _field('email', 'Email'),
 
-                Row(children: [
-                  Expanded(child: _section('Address')),
-                  if (_locating)
-                    const Padding(
-                      padding: EdgeInsets.only(bottom: 4),
-                      child: SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Color(0xFF1B7A43)),
-                      ),
-                    )
-                  else
+                _section('Address'),
+                // CHANGE #549 — two backend-driven location actions.
+                //  • Fetch current location : device GPS -> mode 'geocode'
+                //  • Fill coordinates       : typed address -> mode 'forward'
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Wrap(spacing: 8, runSpacing: 8, children: [
                     OutlinedButton.icon(
-                      onPressed: _fetchLocation,
-                      icon: const Icon(Icons.my_location, size: 16),
-                      label: const Text('Fetch location'),
+                      onPressed:
+                          (_locating || _forwarding) ? null : _fetchLocation,
+                      icon: _locating
+                          ? const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Color(0xFF1B7A43)))
+                          : const Icon(Icons.my_location, size: 16),
+                      label: const Text('Fetch current location'),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: const Color(0xFF1B7A43),
                         side: const BorderSide(color: Color(0xFF1B7A43)),
@@ -456,26 +655,47 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
                         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
                     ),
-                ]),
-                _field('address', 'Address', required: true, maxLines: 2),
-                _field('address_local', 'Address (local language)', maxLines: 2),
+                    OutlinedButton.icon(
+                      onPressed:
+                          (_locating || _forwarding) ? null : _fillCoordinates,
+                      icon: _forwarding
+                          ? const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Color(0xFF1B7A43)))
+                          : const Icon(Icons.place_outlined, size: 16),
+                      label: const Text('Fill coordinates'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFF1B7A43),
+                        side: const BorderSide(color: Color(0xFF1B7A43)),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 8),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8)),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                    ),
+                  ]),
+                ),
+                _field('address', 'Address', maxLines: 2),
                 if (isNarrow) ...[
-                  _field('city', 'City', required: true),
+                  _field('city', 'City'),
                   _field('district', 'District'),
                 ] else
                   Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Expanded(child: _field('city', 'City', required: true)),
+                    Expanded(child: _field('city', 'City')),
                     const SizedBox(width: 12),
                     Expanded(child: _field('district', 'District')),
                   ]),
                 if (isNarrow) ...[
                   _field('state', 'State'),
-                  _field('pincode', 'Pincode', required: true),
+                  _field('pincode', 'Pincode'),
                 ] else
                   Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Expanded(child: _field('state', 'State')),
                     const SizedBox(width: 12),
-                    Expanded(child: _field('pincode', 'Pincode', required: true)),
+                    Expanded(child: _field('pincode', 'Pincode')),
                   ]),
                 if (isNarrow) ...[
                   _field('latitude', 'Latitude'),

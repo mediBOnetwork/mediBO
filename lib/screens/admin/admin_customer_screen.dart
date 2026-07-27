@@ -8130,14 +8130,71 @@ class _LeadTypeOption {
   final String uiType;
   final String label;
   final int sortOrder;
+
+  /// CHANGE #552 — needed to resolve a category-tree selection back to the
+  /// ui_types lead_scrape_start() still speaks. See _resolveUiTypes().
+  final List<String> googleTypes;
+
   const _LeadTypeOption(
-      {required this.uiType, required this.label, required this.sortOrder});
+      {required this.uiType,
+      required this.label,
+      required this.sortOrder,
+      this.googleTypes = const []});
 
   factory _LeadTypeOption.fromMap(Map<String, dynamic> m) => _LeadTypeOption(
         uiType: m['ui_type'] as String? ?? '',
         label: m['label'] as String? ?? '',
         sortOrder: (m['sort_order'] as num?)?.toInt() ?? 0,
+        googleTypes:
+            ((m['google_types'] as List?) ?? const []).map((e) => e.toString()).toList(),
       );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CHANGE #552 — ONE lead taxonomy, owned by lead_categories and served by
+// lead_category_tree(p_use). Both the scrape form ('scrape') and the route
+// builder ('route') render their chips from this — no Dart-side chip list,
+// label, order or key survives anywhere.
+// ═══════════════════════════════════════════════════════════════════════════
+
+class _LeadCategoryNode {
+  final String key;
+  final String label;
+  final List<String> googleTypes;
+  final List<_LeadCategoryNode> sub;
+
+  const _LeadCategoryNode({
+    required this.key,
+    required this.label,
+    required this.googleTypes,
+    required this.sub,
+  });
+
+  factory _LeadCategoryNode.fromMap(Map<String, dynamic> m) => _LeadCategoryNode(
+        key: m['key']?.toString() ?? '',
+        label: m['label']?.toString() ?? '',
+        googleTypes:
+            ((m['google_types'] as List?) ?? const []).map((e) => e.toString()).toList(),
+        sub: ((m['sub'] as List?) ?? const [])
+            .whereType<Map>()
+            .map((e) => _LeadCategoryNode.fromMap(Map<String, dynamic>.from(e)))
+            .toList(),
+      );
+
+  /// Every google type this branch can contribute — its own plus its subs'.
+  Set<String> get allGoogleTypes =>
+      {...googleTypes, for (final s in sub) ...s.googleTypes};
+}
+
+List<_LeadCategoryNode> _parseCategoryTree(dynamic raw) => (raw as List? ?? const [])
+    .whereType<Map>()
+    .map((e) => _LeadCategoryNode.fromMap(Map<String, dynamic>.from(e)))
+    .toList();
+
+Future<List<_LeadCategoryNode>> _fetchCategoryTree(String use) async {
+  final res = await Supabase.instance.client
+      .rpc('lead_category_tree', params: {'p_use': use});
+  return _parseCategoryTree(res);
 }
 
 const Map<String, String> _sLeadClassLabels = {
@@ -8158,15 +8215,6 @@ const List<String> _sLeadClassOrder = [
   'other',
 ];
 
-const Map<String, Color> _sLeadClassColors = {
-  'medical_store': Color(0xFF16A34A),
-  'wholesaler': Color(0xFF2563EB),
-  'chain': Color(0xFF6B7280),
-  'clinic': Color(0xFFD97706),
-  'alt_med': Color(0xFF7C3AED),
-  'other': Color(0xFF6B7280),
-};
-
 const List<String> _sLeadActiveStatuses = ['planning', 'running', 'paused_budget'];
 
 class _SLeadsTab extends StatefulWidget {
@@ -8179,15 +8227,73 @@ class _SLeadsTab extends StatefulWidget {
 }
 
 class _SLeadsTabState extends State<_SLeadsTab> {
-  // ── Scrape form ────────────────────────────────────────────────────────
-  String _level = 'city';
+  // ── Scrape form (CHANGE #552 — every option comes from
+  //    scrape_form_options(); nothing below is a hardcoded list) ──────────
+  Map<String, dynamic> _form = const {};
+  List<_LeadCategoryNode> _cats = const [];
+  String _mode = '';
+  String _level = '';
+  String? _sourceRunId;
+  final Set<String> _include = {};
+  final Set<String> _exclude = {};
+  final Set<String> _expandedCats = {};
   final TextEditingController _nameCtrl = TextEditingController();
   List<_LeadTypeOption> _typeOptions = [];
-  final Set<String> _selectedTypes = {'medical'};
-  final TextEditingController _budgetCtrl = TextEditingController(text: '800');
+  final TextEditingController _budgetCtrl = TextEditingController();
   bool _starting = false;
   String? _formError;
   Map<String, dynamic>? _monthUsage;
+
+  List<Map<String, dynamic>> _mapList(dynamic raw) => (raw as List? ?? const [])
+      .whereType<Map>()
+      .map((e) => Map<String, dynamic>.from(e))
+      .toList();
+
+  List<Map<String, dynamic>> get _modes => _mapList(_form['modes']);
+  List<Map<String, dynamic>> get _levels => _mapList(_form['levels']);
+  List<Map<String, dynamic>> get _sources => _mapList(_form['sources']);
+  List<Map<String, dynamic>> get _resultActions => _mapList(_form['result_actions']);
+  Map<String, dynamic> get _selection => _form['selection'] is Map
+      ? Map<String, dynamic>.from(_form['selection'] as Map)
+      : const {};
+  Map<String, dynamic> get _maxCalls => _form['max_calls'] is Map
+      ? Map<String, dynamic>.from(_form['max_calls'] as Map)
+      : const {};
+
+  /// Applies the form payload: options, plus the backend's own defaults for
+  /// mode / level / max calls. Never invents a fallback value in Dart.
+  void _applyFormOptions(Map<String, dynamic> f) {
+    _form = f;
+    _cats = _parseCategoryTree(f['categories']);
+    if (_mode.isEmpty && _modes.isNotEmpty) _mode = _modes.first['key']?.toString() ?? '';
+    if (_level.isEmpty && _levels.isNotEmpty) _level = _levels.first['key']?.toString() ?? '';
+    if (_budgetCtrl.text.isEmpty) {
+      final d = _maxCalls['default'];
+      if (d != null) _budgetCtrl.text = d.toString();
+    }
+    final quota = f['quota'];
+    if (quota is Map) _monthUsage = Map<String, dynamic>.from(quota);
+  }
+
+  // ── Saved scrapes (scrape_runs_list) ───────────────────────────────────
+  List<Map<String, dynamic>> _runs = [];
+  final Set<String> _expandedRuns = {};
+  final Set<String> _runBusy = {};
+
+  // ── Result selection (scrape_results_bulk needs a run scope) ───────────
+  /// null = the whole Scraped-leads list (get_scraped_leads). Non-null = one
+  /// run's own results, listed from scrape_run_export().leads so that
+  /// "Keep selected" means "keep these, drop the rest OF THIS RUN".
+  String? _resultsRunId;
+  List<Map<String, dynamic>> _runLeads = [];
+  bool _runLeadsLoading = false;
+  final Set<int> _selectedLeadIds = {};
+  bool _bulkBusy = false;
+
+  // ── CHANGE #552 — scrape_lead_card() cache, one call per lead ──────────
+  final Map<int, Map<String, dynamic>> _leadCards = {};
+  final Set<int> _leadCardsInFlight = {};
+  final Set<int> _leadCardsFailed = {};
 
   // ── Active run / progress ─────────────────────────────────────────────
   String? _activeRunId;
@@ -8220,7 +8326,6 @@ class _SLeadsTabState extends State<_SLeadsTab> {
   final Set<int> _detailLoading = {};
 
   // ── Past runs / enrichment ───────────────────────────────────────────
-  List<Map<String, dynamic>> _pastRuns = [];
   Map<String, dynamic>? _enrichStatus;
 
   bool _initialLoading = true;
@@ -8294,8 +8399,11 @@ class _SLeadsTabState extends State<_SLeadsTab> {
       final results = await Future.wait<dynamic>([
         client.from('lead_type_map').select().eq('active', true).order('sort_order'),
         client.rpc('lead_leads_summary', params: {'p_city': null}),
-        client.rpc('lead_scrape_month_usage'),
-        client.rpc('lead_scrape_runs_list', params: {'p_limit': 10}),
+        // CHANGE #552 — one call now carries the title, modes, levels, the
+        // category tree, the include/exclude labels, the saved-run sources,
+        // the max-calls bounds, the quota and the submit/result labels.
+        client.rpc('scrape_form_options'),
+        client.rpc('scrape_runs_list', params: {'p_limit': 50}),
         client.rpc('lead_enrich_status', params: {'p_run_id': null}),
         // CHANGE #447 — warehouse (hub) card
         client.rpc('lead_get_hub'),
@@ -8305,7 +8413,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
           .map((e) => _LeadTypeOption.fromMap(Map<String, dynamic>.from(e as Map)))
           .toList();
       final summary = Map<String, dynamic>.from(results[1] as Map);
-      final usage = Map<String, dynamic>.from(results[2] as Map);
+      final form = Map<String, dynamic>.from(results[2] as Map);
       final runs = (results[3] as List)
           .map((e) => Map<String, dynamic>.from(e as Map))
           .toList();
@@ -8314,25 +8422,24 @@ class _SLeadsTabState extends State<_SLeadsTab> {
 
       RenderLog.write('c443_types_loaded', types.length);
       RenderLog.write('c443_summary_total', (summary['total'] as num?)?.toInt() ?? 0);
-      RenderLog.write('c443_month_used', (usage['used'] as num?)?.toInt() ?? 0);
       RenderLog.write('c443_enriched', (enrichStatus['enriched'] as num?)?.toInt() ?? 0);
       RenderLog.write('c443_runs_rows', runs.length);
-      RenderLog.write(
-          'c443_runs_types',
-          runs.isNotEmpty
-              ? _labelsForUiTypes(runs.first['ui_types'], options: types).join(', ')
-              : '');
+      RenderLog.write('c552_form_modes', (form['modes'] as List?)?.length ?? 0);
+      RenderLog.write('c552_categories', (form['categories'] as List?)?.length ?? 0);
+      RenderLog.write('c552_sources', (form['sources'] as List?)?.length ?? 0);
+      RenderLog.write('c552_runs', runs.length);
 
       if (!mounted) return;
       setState(() {
         _typeOptions = types;
         _summary = summary;
-        _monthUsage = usage;
-        _pastRuns = runs;
+        _applyFormOptions(form);
+        _runs = runs;
         _enrichStatus = enrichStatus;
         _initialLoading = false;
         _applyHubMap(hub);
       });
+      RenderLog.write('c552_month_used', (_monthUsage?['used'] as num?)?.toInt() ?? 0);
       widget.onTotalChanged((summary['total'] as num?)?.toInt() ?? 0);
       RenderLog.write('c444_hub_name', _hubNameCtrl.text);
       RenderLog.write('c444_hub_lat', '$_hubLat');
@@ -8348,7 +8455,11 @@ class _SLeadsTabState extends State<_SLeadsTab> {
       if (active.isNotEmpty) {
         _activeRunId = active['run_id']?.toString();
         _activeRunLevel = active['level'] as String?;
-        _activeRunTypeLabels = _labelsForUiTypes(active['ui_types']);
+        // CHANGE #552 — scrape_runs_list() ships the joined label itself.
+        _activeRunTypeLabels = [
+          if ((active['types_label']?.toString() ?? '').isNotEmpty)
+            active['types_label'].toString()
+        ];
         _refreshStatus();
         _startPolling();
         if (_activeRunId != null) _subscribeToRun(_activeRunId!);
@@ -8675,34 +8786,25 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     }
   }
 
-  List<String> _labelsForUiTypes(dynamic uiTypes, {List<_LeadTypeOption>? options}) {
-    if (uiTypes is! List) return [];
-    final opts = options ?? _typeOptions;
-    return uiTypes.map((t) {
-      final key = t.toString();
-      final match = opts.where((o) => o.uiType == key);
-      return match.isNotEmpty ? match.first.label : key;
-    }).toList();
-  }
-
   Future<void> _refreshSummaryAndUsage() async {
     try {
       final client = Supabase.instance.client;
       final results = await Future.wait<dynamic>([
         client.rpc('lead_leads_summary', params: {'p_city': null}),
-        client.rpc('lead_scrape_month_usage'),
+        // CHANGE #552 — the quota now rides along with the form options, so a
+        // refresh re-reads the whole option set (sources[] grows after a run).
+        client.rpc('scrape_form_options'),
         client.rpc('lead_enrich_status', params: {'p_run_id': null}),
       ]);
       final summary = Map<String, dynamic>.from(results[0] as Map);
-      final usage = Map<String, dynamic>.from(results[1] as Map);
+      final form = Map<String, dynamic>.from(results[1] as Map);
       final enrichStatus = Map<String, dynamic>.from(results[2] as Map);
       RenderLog.write('c443_summary_total', (summary['total'] as num?)?.toInt() ?? 0);
-      RenderLog.write('c443_month_used', (usage['used'] as num?)?.toInt() ?? 0);
       RenderLog.write('c443_enriched', (enrichStatus['enriched'] as num?)?.toInt() ?? 0);
       if (!mounted) return;
       setState(() {
         _summary = summary;
-        _monthUsage = usage;
+        _applyFormOptions(form);
         _enrichStatus = enrichStatus;
       });
       widget.onTotalChanged((summary['total'] as num?)?.toInt() ?? 0);
@@ -8712,14 +8814,13 @@ class _SLeadsTabState extends State<_SLeadsTab> {
   Future<void> _loadPastRuns() async {
     try {
       final res = await Supabase.instance.client
-          .rpc('lead_scrape_runs_list', params: {'p_limit': 10}) as List;
+          .rpc('scrape_runs_list', params: {'p_limit': 50}) as List;
       final runs = res.map((e) => Map<String, dynamic>.from(e as Map)).toList();
       RenderLog.write('c443_runs_rows', runs.length);
-      RenderLog.write('c443_runs_types',
-          runs.isNotEmpty ? _labelsForUiTypes(runs.first['ui_types']).join(', ') : '');
+      RenderLog.write('c552_runs', runs.length);
       if (!mounted) return;
       setState(() {
-        _pastRuns = runs;
+        _runs = runs;
       });
     } catch (_) {}
   }
@@ -8805,12 +8906,67 @@ class _SLeadsTabState extends State<_SLeadsTab> {
 
   // ── Scrape control ────────────────────────────────────────────────────
 
-  bool get _canScrape =>
-      _selectedTypes.isNotEmpty &&
-      _nameCtrl.text.trim().isNotEmpty &&
-      (int.tryParse(_budgetCtrl.text.trim()) ?? 0) >= 1 &&
-      !_starting &&
-      _activeRunId == null;
+  bool get _isRescrape => _mode == 'rescrape';
+
+  /// The saved run chosen as a re-scrape source, matched back into
+  /// scrape_runs_list() so its city/level/types can be replayed.
+  Map<String, dynamic>? get _sourceRun {
+    if (_sourceRunId == null) return null;
+    for (final r in _runs) {
+      if (r['run_id']?.toString() == _sourceRunId) return r;
+    }
+    return null;
+  }
+
+  /// Effective include set: picking a top category implies all of its subs
+  /// UNLESS specific subs of that category were chosen.
+  Set<String> _effectiveGoogleTypes(Set<String> keys) {
+    final out = <String>{};
+    for (final c in _cats) {
+      final chosenSubs = c.sub.where((s) => keys.contains(s.key)).toList();
+      if (chosenSubs.isNotEmpty) {
+        for (final s in chosenSubs) {
+          out.addAll(s.googleTypes.isEmpty ? c.googleTypes : s.googleTypes);
+        }
+      } else if (keys.contains(c.key)) {
+        out.addAll(c.allGoogleTypes);
+      }
+    }
+    return out;
+  }
+
+  /// CHANGE #552 — the deployed lead_scrape_start() still takes p_ui_types
+  /// only; it has no include/exclude parameters. So the tray selection is
+  /// resolved here, through the backend's own google_types, into the ui_types
+  /// that RPC understands: include contributes types, exclude takes them away.
+  /// Nothing is keyed off a hardcoded category name.
+  List<String> _resolveUiTypes() {
+    final include = _effectiveGoogleTypes(_include);
+    final exclude = _effectiveGoogleTypes(_exclude);
+    final wanted = include.difference(exclude);
+    if (wanted.isEmpty) return const [];
+    return _typeOptions
+        .where((o) => o.googleTypes.any(wanted.contains))
+        .map((o) => o.uiType)
+        .toList();
+  }
+
+  int? get _budgetValue {
+    final n = int.tryParse(_budgetCtrl.text.trim());
+    if (n == null) return null;
+    final min = (_maxCalls['min'] as num?)?.toInt();
+    final max = (_maxCalls['max'] as num?)?.toInt();
+    if (min != null && n < min) return null;
+    if (max != null && n > max) return null;
+    return n;
+  }
+
+  bool get _canScrape {
+    if (_starting || _activeRunId != null) return false;
+    if (_budgetValue == null) return false;
+    if (_isRescrape) return _sourceRun != null;
+    return _include.isNotEmpty && _nameCtrl.text.trim().isNotEmpty;
+  }
 
   String _friendlyError(String msg) {
     if (msg.contains('a_scrape_is_already_running')) {
@@ -8825,9 +8981,20 @@ class _SLeadsTabState extends State<_SLeadsTab> {
   }
 
   Future<void> _startScrape() async {
-    final types = _selectedTypes.toList();
-    final name = _nameCtrl.text.trim();
-    final budget = int.tryParse(_budgetCtrl.text.trim()) ?? 800;
+    final src = _isRescrape ? _sourceRun : null;
+
+    // Re-scrape replays the saved run's own area; a fresh scrape uses the
+    // typed City/District. Categories chosen in the trays always win — a
+    // re-scrape with no tray selection falls back to that run's own types.
+    final name = src != null ? (src['city']?.toString() ?? '') : _nameCtrl.text.trim();
+    final level = src != null ? (src['level']?.toString() ?? _level) : _level;
+    var types = _resolveUiTypes();
+    if (types.isEmpty && src != null) {
+      types = ((src['types'] as List?) ?? const []).map((e) => e.toString()).toList();
+    }
+    final budget = _budgetValue;
+    if (budget == null) return;
+
     setState(() {
       _starting = true;
       _formError = null;
@@ -8835,7 +9002,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     try {
       final runId = await Supabase.instance.client.rpc('lead_scrape_start', params: {
         'p_name': name,
-        'p_level': _level,
+        'p_level': level,
         'p_ui_types': types,
         'p_cell_km': null,
         'p_max_calls': budget,
@@ -8844,7 +9011,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
       final id = runId?.toString();
       setState(() {
         _activeRunId = id;
-        _activeRunLevel = _level;
+        _activeRunLevel = level;
         _activeRunTypeLabels =
             _typeOptions.where((o) => types.contains(o.uiType)).map((o) => o.label).toList();
         _starting = false;
@@ -9294,6 +9461,9 @@ class _SLeadsTabState extends State<_SLeadsTab> {
   // ── B2: Scrape form ────────────────────────────────────────────────────
 
   Widget _buildScrapeForm() {
+    final modeHint = _modes
+        .firstWhere((m) => m['key']?.toString() == _mode, orElse: () => const {})['hint']
+        ?.toString();
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
@@ -9304,29 +9474,71 @@ class _SLeadsTabState extends State<_SLeadsTab> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Scrape new leads',
-              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+          Text(_form['title']?.toString() ?? '',
+              style: const TextStyle(
+                  fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+          const SizedBox(height: 12),
+
+          // ── Mode: fresh scrape vs re-scrape a saved run ──────────────────
+          _modeSelector(),
+          if (modeHint != null && modeHint.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(modeHint,
+                style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
+          ],
           const SizedBox(height: 14),
-          widget.isDesktop
-              ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  SizedBox(width: 220, child: _levelToggle()),
-                  const SizedBox(width: 12),
-                  Expanded(child: _nameField()),
-                  const SizedBox(width: 12),
-                  SizedBox(width: 180, child: _budgetField()),
-                ])
-              : Column(children: [
-                  _levelToggle(),
-                  const SizedBox(height: 10),
-                  _nameField(),
-                  const SizedBox(height: 10),
-                  _budgetField(),
-                ]),
+
+          // Re-scrape replaces City/District + Name with the saved-run picker.
+          if (_isRescrape)
+            widget.isDesktop
+                ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Expanded(child: _sourceDropdown()),
+                    const SizedBox(width: 12),
+                    SizedBox(width: 180, child: _budgetField()),
+                  ])
+                : Column(children: [
+                    _sourceDropdown(),
+                    const SizedBox(height: 10),
+                    _budgetField(),
+                  ])
+          else
+            widget.isDesktop
+                ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    SizedBox(width: 220, child: _levelToggle()),
+                    const SizedBox(width: 12),
+                    Expanded(child: _nameField()),
+                    const SizedBox(width: 12),
+                    SizedBox(width: 180, child: _budgetField()),
+                  ])
+                : Column(children: [
+                    _levelToggle(),
+                    const SizedBox(height: 10),
+                    _nameField(),
+                    const SizedBox(height: 10),
+                    _budgetField(),
+                  ]),
+          const SizedBox(height: 16),
+
+          // ── Include / Exclude category trays ─────────────────────────────
+          _categoryTray(
+            _selection['include_label']?.toString() ?? '',
+            _include,
+            _exclude,
+            const Color(0xFF1B7A43),
+          ),
           const SizedBox(height: 14),
-          const Text('Store types',
-              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6B7280))),
-          const SizedBox(height: 8),
-          _storeTypeChips(),
+          _categoryTray(
+            _selection['exclude_label']?.toString() ?? '',
+            _exclude,
+            _include,
+            const Color(0xFFB42318),
+          ),
+          if ((_selection['hint']?.toString() ?? '').isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(_selection['hint'].toString(),
+                style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
+          ],
+
           const SizedBox(height: 14),
           _costStrip(),
           if (_formError != null) ...[
@@ -9350,7 +9562,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
                       width: 14, height: 14,
                       child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                   : const Icon(Icons.travel_explore, size: 17),
-              label: Text(_starting ? 'Starting…' : 'Scrap',
+              label: Text(_form['submit_label']?.toString() ?? '',
                   style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700)),
             ),
           ),
@@ -9359,11 +9571,144 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     );
   }
 
-  Widget _levelToggle() {
+  Widget _modeSelector() {
+    final modes = _modes;
+    if (modes.isEmpty) return const SizedBox.shrink();
     return Row(children: [
-      Expanded(child: _segBtn('City', _level == 'city', () => setState(() => _level = 'city'))),
-      const SizedBox(width: 8),
-      Expanded(child: _segBtn('District', _level == 'district', () => setState(() => _level = 'district'))),
+      for (int i = 0; i < modes.length; i++) ...[
+        if (i > 0) const SizedBox(width: 8),
+        Expanded(
+          child: _segBtn(
+            modes[i]['label']?.toString() ?? '',
+            _mode == modes[i]['key']?.toString(),
+            () => setState(() {
+              _mode = modes[i]['key']?.toString() ?? '';
+              _formError = null;
+            }),
+          ),
+        ),
+      ],
+    ]);
+  }
+
+  Widget _sourceDropdown() {
+    final sources = _sources;
+    return InputDecorator(
+      decoration: InputDecoration(
+        labelText: _modes
+            .firstWhere((m) => m['key']?.toString() == 'rescrape', orElse: () => const {})['label']
+            ?.toString(),
+        labelStyle: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        isDense: true,
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          isExpanded: true,
+          value: _sourceRunId,
+          items: sources
+              .map((s) => DropdownMenuItem<String>(
+                    value: s['run_id']?.toString(),
+                    child: Text(s['label']?.toString() ?? '',
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 12.5)),
+                  ))
+              .toList(),
+          onChanged: (v) => setState(() {
+            _sourceRunId = v;
+            _formError = null;
+          }),
+        ),
+      ),
+    );
+  }
+
+  /// One include/exclude tray. [selected] is the set this tray writes to and
+  /// [opposite] is the other tray — a key can only sit in one of them.
+  Widget _categoryTray(
+      String title, Set<String> selected, Set<String> opposite, Color accent) {
+    void toggle(String key, bool on) {
+      setState(() {
+        if (on) {
+          selected.add(key);
+          opposite.remove(key);
+        } else {
+          selected.remove(key);
+        }
+      });
+    }
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(title,
+          style: const TextStyle(
+              fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF6B7280))),
+      const SizedBox(height: 8),
+      for (final c in _cats) ...[
+        Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+          _catChip(c.label, selected.contains(c.key), accent,
+              (v) => toggle(c.key, v)),
+          if (c.sub.isNotEmpty)
+            IconButton(
+              onPressed: () => setState(() {
+                final id = '$title|${c.key}';
+                if (!_expandedCats.remove(id)) _expandedCats.add(id);
+              }),
+              iconSize: 18,
+              visualDensity: VisualDensity.compact,
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              constraints: const BoxConstraints(),
+              icon: Icon(
+                  _expandedCats.contains('$title|${c.key}')
+                      ? Icons.expand_less
+                      : Icons.expand_more,
+                  color: const Color(0xFF9CA3AF)),
+            ),
+        ]),
+        if (c.sub.isNotEmpty && _expandedCats.contains('$title|${c.key}'))
+          Padding(
+            padding: const EdgeInsets.only(left: 18, top: 2, bottom: 6),
+            child: Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: c.sub
+                  .map((s) => _catChip(s.label, selected.contains(s.key), accent,
+                      (v) => toggle(s.key, v)))
+                  .toList(),
+            ),
+          ),
+      ],
+    ]);
+  }
+
+  Widget _catChip(String label, bool sel, Color accent, ValueChanged<bool> onSel) {
+    return FilterChip(
+      label: Text(label, style: const TextStyle(fontSize: 11)),
+      selected: sel,
+      onSelected: onSel,
+      selectedColor: accent.withValues(alpha: 0.12),
+      checkmarkColor: accent,
+      backgroundColor: const Color(0xFFF3F4F6),
+      side: BorderSide(color: sel ? accent : const Color(0xFFD1D5DB)),
+      labelStyle: TextStyle(color: sel ? accent : const Color(0xFF374151)),
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      visualDensity: VisualDensity.compact,
+    );
+  }
+
+  Widget _levelToggle() {
+    final levels = _levels;
+    return Row(children: [
+      for (int i = 0; i < levels.length; i++) ...[
+        if (i > 0) const SizedBox(width: 8),
+        Expanded(
+          child: _segBtn(
+            levels[i]['label']?.toString() ?? '',
+            _level == levels[i]['key']?.toString(),
+            () => setState(() => _level = levels[i]['key']?.toString() ?? ''),
+          ),
+        ),
+      ],
     ]);
   }
 
@@ -9387,12 +9732,15 @@ class _SLeadsTabState extends State<_SLeadsTab> {
   }
 
   Widget _nameField() {
+    // Label follows the chosen level (City / District) — both come from the RPC.
+    final levelLabel = _levels
+        .firstWhere((l) => l['key']?.toString() == _level, orElse: () => const {})['label']
+        ?.toString();
     return TextField(
       controller: _nameCtrl,
       onChanged: (_) => setState(() {}),
       decoration: InputDecoration(
-        labelText: 'Name',
-        hintText: 'Raipur',
+        labelText: levelLabel,
         labelStyle: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
         contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -9403,13 +9751,20 @@ class _SLeadsTabState extends State<_SLeadsTab> {
   }
 
   Widget _budgetField() {
+    final min = (_maxCalls['min'] as num?)?.toInt();
+    final max = (_maxCalls['max'] as num?)?.toInt();
     return TextField(
       controller: _budgetCtrl,
       onChanged: (_) => setState(() {}),
       keyboardType: TextInputType.number,
       inputFormatters: [FilteringTextInputFormatter.digitsOnly],
       decoration: InputDecoration(
-        labelText: 'Max API calls',
+        labelText: _maxCalls['label']?.toString(),
+        helperText: (min != null && max != null) ? '$min–$max' : null,
+        helperStyle: const TextStyle(fontSize: 10.5, color: Color(0xFF9CA3AF)),
+        errorText: (_budgetCtrl.text.isNotEmpty && _budgetValue == null && min != null && max != null)
+            ? '$min–$max'
+            : null,
         labelStyle: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
         contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -9419,36 +9774,14 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     );
   }
 
-  Widget _storeTypeChips() {
-    final sorted = [..._typeOptions]..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
-    final chips = sorted.map((o) {
-      final sel = _selectedTypes.contains(o.uiType);
-      return FilterChip(
-        label: Text(o.label, style: const TextStyle(fontSize: 11)),
-        selected: sel,
-        onSelected: (v) {
-          setState(() {
-            if (v) {
-              _selectedTypes.add(o.uiType);
-            } else {
-              _selectedTypes.remove(o.uiType);
-            }
-          });
-        },
-        selectedColor: const Color(0xFFDCFCE7),
-        checkmarkColor: const Color(0xFF1B7A43),
-        backgroundColor: const Color(0xFFF3F4F6),
-        side: BorderSide(color: sel ? const Color(0xFF1B7A43) : const Color(0xFFD1D5DB)),
-        labelStyle: TextStyle(color: sel ? const Color(0xFF1B7A43) : const Color(0xFF374151)),
-      );
-    }).toList();
-    return Wrap(spacing: 6, runSpacing: 6, children: chips);
-  }
-
+  /// Quota line — every number (including the over-quota cost) comes from
+  /// scrape_form_options().quota, not from a rate hardcoded here.
   Widget _costStrip() {
     final used = (_monthUsage?['used'] as num?)?.toInt() ?? 0;
-    final freeLimit = (_monthUsage?['free_limit'] as num?)?.toInt() ?? 1000;
+    final freeLimit = (_monthUsage?['free_limit'] as num?)?.toInt() ?? 0;
     final remaining = (_monthUsage?['remaining'] as num?)?.toInt() ?? 0;
+    final over = (_monthUsage?['over'] as num?)?.toInt() ?? 0;
+    final cost = _monthUsage?['est_cost_inr'];
     final resetsOn = _monthUsage?['resets_on']?.toString() ?? '';
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -9459,13 +9792,14 @@ class _SLeadsTabState extends State<_SLeadsTab> {
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text(
-          'Google free calls: $used / $freeLimit used this month · $remaining left · resets $resetsOn',
+          '$used / $freeLimit used this month · $remaining left · resets $resetsOn',
           style: const TextStyle(fontSize: 12, color: Color(0xFF4B5563)),
         ),
-        if (remaining <= 0) ...[
+        if (over > 0 && cost != null) ...[
           const SizedBox(height: 4),
-          const Text('Past free tier — approx ₹3 per call.',
-              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFFDC2626))),
+          Text('$over over the free tier · ₹$cost',
+              style: const TextStyle(
+                  fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFFDC2626))),
         ],
       ]),
     );
@@ -9565,28 +9899,176 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         [];
     final total = (_summary?['total'] as num?)?.toInt() ?? 0;
 
+    final runMode = _resultsRunId != null;
+    final rows = runMode ? _runLeads : _rows;
+    final loading = runMode ? _runLeadsLoading : _rowsLoading;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text('Scraped leads',
             style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
         const SizedBox(height: 12),
-        _buildFilterBar(byClass, cities, total),
-        const SizedBox(height: 14),
-        if (_rowsLoading && _rows.isEmpty)
+        _resultScopeBar(),
+        const SizedBox(height: 12),
+        // Filters only drive get_scraped_leads; a run's own result set is
+        // whatever that run produced, so they are hidden in run mode.
+        if (!runMode) ...[
+          _buildFilterBar(byClass, cities, total),
+          const SizedBox(height: 14),
+        ] else ...[
+          _selectionBar(rows),
+          const SizedBox(height: 14),
+        ],
+        if (loading && rows.isEmpty)
           const Padding(
             padding: EdgeInsets.only(top: 40),
             child: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2)),
           )
-        else if (_rows.isEmpty)
-          _ssvEmptyStateLocal('0 leads match these filters')
+        else if (rows.isEmpty)
+          _ssvEmptyStateLocal(runMode
+              ? 'This run has no leads left.'
+              : '0 leads match these filters')
         else ...[
-          ..._rows.map((r) => _buildLeadRow(r)),
-          const SizedBox(height: 12),
-          _buildPagination(),
+          _leadCardGrid(rows, selectable: runMode),
+          if (!runMode) ...[
+            const SizedBox(height: 12),
+            _buildPagination(),
+          ],
         ],
       ],
     );
+  }
+
+  /// CHANGE #552 — scrape_results_bulk() is scoped to ONE run, so Keep/Remove
+  /// only make sense while a saved run is the active scope. Picking a run
+  /// lists that run's own leads (from scrape_run_export().leads) so that
+  /// "Keep selected" can honestly mean "drop the rest of this run".
+  Widget _resultScopeBar() {
+    return Wrap(spacing: 12, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+      DropdownButton<String?>(
+        value: _resultsRunId,
+        underline: const SizedBox.shrink(),
+        hint: const Text('All leads', style: TextStyle(fontSize: 12.5)),
+        items: [
+          const DropdownMenuItem<String?>(
+              value: null, child: Text('All leads', style: TextStyle(fontSize: 12.5))),
+          ..._runs.map((r) => DropdownMenuItem<String?>(
+                value: r['run_id']?.toString(),
+                child: Text(
+                    '${r['city'] ?? ''} · ${_fmtRunDate(r['created_at']?.toString())} · '
+                    '${(r['lead_count'] as num?)?.toInt() ?? 0}',
+                    style: const TextStyle(fontSize: 12.5)),
+              )),
+        ],
+        onChanged: (v) => _selectResultsRun(v),
+      ),
+    ]);
+  }
+
+  Widget _selectionBar(List<Map<String, dynamic>> rows) {
+    final ids = rows.map((r) => (r['id'] as num?)?.toInt()).whereType<int>().toSet();
+    final allSelected = ids.isNotEmpty && _selectedLeadIds.containsAll(ids);
+    return Wrap(spacing: 12, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+      Row(mainAxisSize: MainAxisSize.min, children: [
+        Checkbox(
+          value: allSelected,
+          tristate: false,
+          onChanged: (v) => setState(() {
+            if (v == true) {
+              _selectedLeadIds.addAll(ids);
+            } else {
+              _selectedLeadIds.removeAll(ids);
+            }
+          }),
+          activeColor: const Color(0xFF1B7A43),
+          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          visualDensity: VisualDensity.compact,
+        ),
+        Text('Select all (${_selectedLeadIds.length}/${ids.length})',
+            style: const TextStyle(fontSize: 12.5, color: Color(0xFF374151))),
+      ]),
+      // Both buttons, their labels and their action keys come from
+      // scrape_form_options().result_actions[].
+      for (final a in _resultActions)
+        OutlinedButton(
+          onPressed: (_bulkBusy || _selectedLeadIds.isEmpty)
+              ? null
+              : () => _runBulkAction(a['key']?.toString() ?? ''),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: const Color(0xFF1B7A43),
+            side: const BorderSide(color: Color(0xFF1B7A43)),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            visualDensity: VisualDensity.compact,
+          ),
+          child: Text(a['label']?.toString() ?? '',
+              style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+        ),
+      if (_bulkBusy)
+        const SizedBox(
+            width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+    ]);
+  }
+
+  Future<void> _selectResultsRun(String? runId) async {
+    setState(() {
+      _resultsRunId = runId;
+      _selectedLeadIds.clear();
+      _runLeads = [];
+      _runLeadsLoading = runId != null;
+    });
+    if (runId == null) return;
+    try {
+      final res = await Supabase.instance.client
+          .rpc('scrape_run_export', params: {'p_run_id': runId});
+      final m = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      final leads = _mapList(m['leads']);
+      RenderLog.write('c552_run_leads', leads.length);
+      if (!mounted) return;
+      setState(() {
+        _runLeads = leads;
+        _runLeadsLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _runLeadsLoading = false);
+      showToast(context, '$e', isError: true);
+    }
+  }
+
+  Future<void> _runBulkAction(String actionKey) async {
+    final runId = _resultsRunId;
+    if (runId == null || actionKey.isEmpty || _selectedLeadIds.isEmpty) return;
+    setState(() => _bulkBusy = true);
+    try {
+      final res = await Supabase.instance.client.rpc('scrape_results_bulk', params: {
+        'p_run_id': runId,
+        'p_action': actionKey,
+        'p_lead_ids': _selectedLeadIds.toList(),
+      });
+      final m = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      if (!mounted) return;
+      setState(() => _bulkBusy = false);
+      // Backend copy, verbatim — it is the only place that knows how many
+      // rows were protected because they are already customers/visited.
+      final msg = (m['message'] ?? m['error'])?.toString();
+      if (msg != null && msg.isNotEmpty) {
+        showToast(context, msg, isError: m['error'] != null);
+      }
+      if (m['error'] == null) {
+        _selectedLeadIds.clear();
+        _leadCards.clear();
+        _leadCardsFailed.clear();
+        await _selectResultsRun(runId);
+        await _loadPastRuns();
+        await _loadRows(reset: true);
+        await _refreshSummaryAndUsage();
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _bulkBusy = false);
+      showToast(context, '$e', isError: true);
+    }
   }
 
   Widget _ssvEmptyStateLocal(String message) {
@@ -9712,149 +10194,221 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     }
   }
 
-  static const List<String> _sLeadWeekdayNames = [
-    'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday',
-  ];
 
-  String _todayHoursLine(List<String> hours) {
-    if (hours.isEmpty) return '';
-    // CHANGE #548: today's weekday name comes from ist_fmt('weekday'), not a
-    // client array indexed by a locally-computed weekday.
-    final todayName =
-        DateLabels.instance.label(AdminDateScope.instance.todayYmd, DateStyle.weekday);
-    if (todayName == null || todayName.isEmpty) return '';
-    final match = hours.firstWhere((h) => h.startsWith(todayName), orElse: () => '');
-    if (match.isEmpty) return '';
-    final idx = match.indexOf(':');
-    return idx == -1 ? match : match.substring(idx + 1).trim();
-  }
+  // ═══════════════════════════════════════════════════════════════════════
+  // CHANGE #552 — redesigned Scraped-leads card, driven by scrape_lead_card()
+  // and laid out like the route stop card: one big photo across the top with
+  // the score chip overlaid, then name / type / rating / open / address /
+  // phone / review, then ONE compact action row built from actions[].
+  //
+  // Every label, colour pair and URI below arrives complete from the RPC.
+  // Nothing is composed, formatted or constructed in Dart.
+  // ═══════════════════════════════════════════════════════════════════════
 
-  String _leadLocationLine(Map<String, dynamic> r) {
-    final area = r['area']?.toString().trim();
-    final locality = r['locality']?.toString().trim();
-    final pincode = r['pincode']?.toString().trim();
-    final parts = <String>[];
-    if (area != null && area.isNotEmpty) parts.add(area);
-    if (locality != null && locality.isNotEmpty && locality != area) parts.add(locality);
-    var line = parts.join(', ');
-    if (pincode != null && pincode.isNotEmpty) {
-      line = line.isEmpty ? pincode : '$line · $pincode';
+  Widget _leadCardGrid(List<Map<String, dynamic>> rows, {required bool selectable}) {
+    if (!widget.isDesktop) {
+      return Column(
+        children: rows
+            .map((r) => Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: _scrapeLeadCard(r, selectable: selectable),
+                ))
+            .toList(),
+      );
     }
-    if (line.isEmpty) {
-      line = r['short_address']?.toString() ?? r['address']?.toString() ?? '';
+    return Wrap(
+      spacing: 12,
+      runSpacing: 12,
+      children: rows
+          .map((r) => SizedBox(
+              width: 320, child: _scrapeLeadCard(r, selectable: selectable)))
+          .toList(),
+    );
+  }
+
+  static const Map<String, IconData> _scrapeActionIcons = {
+    'call': Icons.call,
+    'whatsapp': Icons.chat,
+    'map': Icons.map_outlined,
+    'directions': Icons.directions_outlined,
+    'website': Icons.language,
+    'email': Icons.email_outlined,
+    'import': Icons.person_add_alt_1_outlined,
+  };
+
+  /// scrape_lead_card() fetch + cache. One call per lead, on first render.
+  ///
+  /// Capped at [_leadCardConcurrency] in flight: a full page is 100 rows and
+  /// firing 100 RPCs at once is pointless. Each completion setStates, which
+  /// rebuilds and starts the next few — so the queue drains itself. The error
+  /// path setStates too, otherwise a failure would stall that pump.
+  static const int _leadCardConcurrency = 8;
+
+  Future<void> _loadLeadCard(int id) async {
+    if (_leadCards.containsKey(id) ||
+        _leadCardsInFlight.contains(id) ||
+        _leadCardsFailed.contains(id) ||
+        _leadCardsInFlight.length >= _leadCardConcurrency) return;
+    _leadCardsInFlight.add(id);
+    Map<String, dynamic>? card;
+    try {
+      final res = await Supabase.instance.client
+          .rpc('scrape_lead_card', params: {'p_lead_id': id});
+      if (res is Map) {
+        card = Map<String, dynamic>.from(res);
+        RenderLog.write('c552_lead_card', 'lead=$id');
+      }
+    } catch (_) {
+      // Falls back to the list row's own fields. Remembered as failed so the
+      // rebuild this setState triggers does not retry it in a hot loop.
     }
-    return line;
+    _leadCardsInFlight.remove(id);
+    if (!mounted) return;
+    setState(() {
+      if (card != null) {
+        _leadCards[id] = card;
+      } else {
+        _leadCardsFailed.add(id);
+      }
+    });
   }
 
-  bool _isOldReview(String? age) {
-    if (age == null) return false;
-    final m = RegExp(r'(\d+)\s+years?\s+ago').firstMatch(age);
-    if (m == null) return false;
-    final n = int.tryParse(m.group(1) ?? '');
-    return n != null && n >= 5;
+  Future<void> _refreshLeadCard(int id) async {
+    _leadCards.remove(id);
+    _leadCardsFailed.remove(id);
+    await _loadLeadCard(id);
   }
 
-  Widget _leadThumb(String? url, int photoCount, double size) {
-    return SizedBox(
-      width: size,
-      height: size,
-      child: Stack(children: [
-        ClipRRect(
-          borderRadius: BorderRadius.circular(8),
-          child: (url == null || url.isEmpty)
-              ? Container(
-                  color: const Color(0xFFF3F4F6),
-                  alignment: Alignment.center,
-                  child: Icon(Icons.storefront_outlined, size: size * 0.45, color: const Color(0xFFD1D5DB)),
-                )
-              : Image.network(
-                  url,
-                  width: size,
-                  height: size,
-                  fit: BoxFit.cover,
-                  gaplessPlayback: true,
-                  cacheWidth: (size * 2).toInt(),
-                  loadingBuilder: (_, child, prog) => prog == null
-                      ? child
-                      : Container(
-                          color: const Color(0xFFF3F4F6),
-                          alignment: Alignment.center,
-                          child: const SizedBox(
-                              width: 16, height: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFD1D5DB))),
-                        ),
-                  errorBuilder: (_, __, ___) => Container(
-                    color: const Color(0xFFF3F4F6),
-                    alignment: Alignment.center,
-                    child: Icon(Icons.storefront_outlined, size: size * 0.45, color: const Color(0xFFD1D5DB)),
+  Color _colorFromHex(String? hex, Color fallback) {
+    if (hex == null || hex.isEmpty) return fallback;
+    final v = hex.replaceFirst('#', '');
+    final n = int.tryParse(v, radix: 16);
+    if (n == null) return fallback;
+    return Color(v.length <= 6 ? (0xFF000000 | n) : n);
+  }
+
+  Widget _scrapeLeadCard(Map<String, dynamic> r, {required bool selectable}) {
+    final id = (r['id'] as num?)?.toInt();
+    if (id != null) _loadLeadCard(id);
+    final card = id == null ? null : _leadCards[id];
+
+    final photoUrl = (card?['photo_url'] ?? r['photo_url'])?.toString();
+    final name = (card?['name'] ?? r['name'])?.toString() ?? '';
+    final typeLabel = (card?['type_label'] ?? r['type_label'])?.toString();
+    final ratingLabel = card?['rating_label']?.toString();
+    final openLabel = card?['open_label']?.toString();
+    final openColors = card?['open_colors'] is Map
+        ? Map<String, dynamic>.from(card!['open_colors'] as Map)
+        : const <String, dynamic>{};
+    final hoursLabel = card?['hours_label']?.toString();
+    final address = (card?['address'] ?? r['short_address'] ?? r['address'])?.toString();
+    final phoneDisplay = card?['phone_display']?.toString();
+    final scoreLabel = card?['score_label']?.toString();
+    final reviewLabel = card?['review_label']?.toString();
+    final reviewStale = card?['review_stale'] == true;
+    final alreadyCustomer = card?['already_customer'] == true;
+    final disabledReason = card?['disabled_reason'] is Map
+        ? Map<String, dynamic>.from(card!['disabled_reason'] as Map)
+        : const <String, dynamic>{};
+    final actions = _mapList(card?['actions']);
+    final photoH = widget.isDesktop ? 168.0 : 140.0;
+    final expanded = id != null && _expandedIds.contains(id);
+    final selected = id != null && _selectedLeadIds.contains(id);
+
+    VoidCallback? tapFor(String key, bool enabled) {
+      if (!enabled) return null;
+      if (key == 'import') {
+        return id == null ? null : () => _importCustomerFromLead(id);
+      }
+      final uri = card?['${key}_uri']?.toString();
+      if (uri == null || uri.isEmpty) return null;
+      return () => launchUrl(Uri.parse(uri), mode: LaunchMode.externalApplication);
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+            color: selected ? const Color(0xFF1B7A43) : const Color(0xFFE5E7EB),
+            width: selected ? 1.5 : 1),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // ── Photo, with the score chip (and selection box) overlaid ────────
+        SizedBox(
+          height: photoH,
+          width: double.infinity,
+          child: Stack(fit: StackFit.expand, children: [
+            if (photoUrl != null && photoUrl.isNotEmpty)
+              NativeSignedImage(url: photoUrl, cacheKey: photoUrl)
+            else
+              // Neutral placeholder of the SAME height so cards stay uniform.
+              Container(
+                color: const Color(0xFFF3F4F6),
+                child: const Center(
+                  child: Icon(Icons.storefront_outlined, size: 34, color: Color(0xFF9CA3AF)),
+                ),
+              ),
+            if (selectable && id != null)
+              Positioned(
+                top: 6,
+                left: 6,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.92),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Checkbox(
+                    value: selected,
+                    onChanged: (v) => setState(() {
+                      if (v == true) {
+                        _selectedLeadIds.add(id);
+                      } else {
+                        _selectedLeadIds.remove(id);
+                      }
+                    }),
+                    activeColor: const Color(0xFF1B7A43),
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
                   ),
                 ),
+              ),
+            if (scoreLabel != null && scoreLabel.isNotEmpty)
+              Positioned(
+                top: 8,
+                right: 8,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.62),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(scoreLabel,
+                      style: const TextStyle(
+                          fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white)),
+                ),
+              ),
+            if (alreadyCustomer)
+              Positioned(
+                bottom: 8,
+                left: 8,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0F6E56).withValues(alpha: 0.92),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(disabledReason['import']?.toString() ?? '',
+                      style: const TextStyle(
+                          fontSize: 10.5, fontWeight: FontWeight.w700, color: Colors.white)),
+                ),
+              ),
+          ]),
         ),
-        if (photoCount > 1)
-          Positioned(
-            right: 2, bottom: 2,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-              decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(6)),
-              child: Text('+${photoCount - 1}',
-                  style: const TextStyle(fontSize: 9, color: Colors.white, fontWeight: FontWeight.w700)),
-            ),
-          ),
-      ]),
-    );
-  }
 
-  Widget _actionLink(IconData icon, String label, Color color, VoidCallback onTap) {
-    return InkWell(
-      onTap: onTap,
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(icon, size: 13, color: color),
-        const SizedBox(width: 4),
-        Text(label, style: TextStyle(fontSize: 12, color: color, fontWeight: FontWeight.w600)),
-      ]),
-    );
-  }
-
-  Widget _buildLeadRow(Map<String, dynamic> r) {
-    final id = (r['id'] as num?)?.toInt();
-    final name = r['name']?.toString() ?? '';
-    final phone = r['phone']?.toString();
-    final emails = (r['emails'] as List?) ?? [];
-    final email = emails.isNotEmpty ? emails.first.toString() : null;
-    final website = r['website']?.toString();
-    final leadClass = r['lead_class']?.toString() ?? 'other';
-    final typeLabel = r['type_label']?.toString();
-    final rating = (r['rating'] as num?)?.toDouble();
-    final userRatings = (r['user_ratings'] as num?)?.toInt();
-    final openNow = r['open_now'] as bool?;
-    final mapsUri = r['maps_uri']?.toString();
-    final directionsUri = (r['maps_directions_uri']?.toString().isNotEmpty ?? false)
-        ? r['maps_directions_uri'].toString()
-        : mapsUri;
-    final businessStatus = r['business_status']?.toString();
-    final isClosed = businessStatus != null && businessStatus != 'OPERATIONAL';
-    final color = _sLeadClassColors[leadClass] ?? const Color(0xFF6B7280);
-    final photoUrl = r['photo_url']?.toString();
-    final photoCount = (r['photo_count'] as num?)?.toInt() ?? 0;
-    final hours = ((r['hours_text'] as List?) ?? []).map((e) => e.toString()).toList();
-    final todayHours = _todayHoursLine(hours);
-    final locationLine = _leadLocationLine(r);
-    final lastReviewAge = r['last_review_age']?.toString();
-    final oldReview = _isOldReview(lastReviewAge);
-    final thumbSize = widget.isDesktop ? 64.0 : 48.0;
-    final expanded = id != null && _expandedIds.contains(id);
-
-    return Opacity(
-      opacity: isClosed ? 0.5 : 1.0,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: const Color(0xFFE5E7EB)),
-        ),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(10),
+        // ── Name, type, rating, open, address, phone, review ──────────────
+        InkWell(
           onTap: id == null
               ? null
               : () {
@@ -9865,106 +10419,181 @@ class _SLeadsTabState extends State<_SLeadsTab> {
                       _expandedIds.add(id);
                     }
                   });
-                  if (!expanded && !_leadDetailCache.containsKey(id) && !_detailLoading.contains(id)) {
+                  if (!expanded &&
+                      !_leadDetailCache.containsKey(id) &&
+                      !_detailLoading.contains(id)) {
                     _fetchLeadDetail(id);
                   }
                 },
           child: Padding(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                _leadThumb(photoUrl, photoCount, thumbSize),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 8, runSpacing: 4, children: [
-                      Text(name,
-                          style: TextStyle(
-                              fontSize: 13.5, fontWeight: FontWeight.w700, color: const Color(0xFF111827),
-                              decoration: isClosed ? TextDecoration.lineThrough : null)),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: color.withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: color.withValues(alpha: 0.3)),
-                        ),
-                        child: Text(_sLeadClassLabels[leadClass] ?? leadClass,
-                            style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w600, color: color)),
-                      ),
-                    ]),
-                    const SizedBox(height: 4),
-                    Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 8, runSpacing: 4, children: [
-                      if (rating != null)
-                        Text('★ $rating${userRatings != null ? ' ($userRatings)' : ''}',
-                            style: const TextStyle(fontSize: 11.5, color: Color(0xFFD97706))),
-                      if (typeLabel != null && typeLabel.isNotEmpty)
-                        Text(typeLabel, style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
-                      if (openNow != null)
-                        Row(mainAxisSize: MainAxisSize.min, children: [
-                          Container(
-                            width: 6, height: 6,
-                            decoration: BoxDecoration(
-                                color: openNow ? const Color(0xFF16A34A) : const Color(0xFF9CA3AF),
-                                shape: BoxShape.circle),
-                          ),
-                          const SizedBox(width: 4),
-                          Text(openNow ? 'Open now' : 'Closed',
-                              style: TextStyle(
-                                  fontSize: 11.5, fontWeight: FontWeight.w600,
-                                  color: openNow ? const Color(0xFF16A34A) : const Color(0xFF6B7280))),
-                        ]),
-                    ]),
-                    if (locationLine.isNotEmpty) ...[
-                      const SizedBox(height: 4),
-                      Text(locationLine,
-                          maxLines: 1, overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
-                    ],
-                    const SizedBox(height: 6),
-                    Wrap(spacing: 14, runSpacing: 4, children: [
-                      if (phone != null && phone.isNotEmpty)
-                        _actionLink(Icons.call_outlined, phone, const Color(0xFF1B7A43),
-                            () => launchUrl(Uri.parse('tel:$phone'))),
-                      if (email != null && email.isNotEmpty)
-                        _actionLink(Icons.email_outlined, 'Email', const Color(0xFF7C3AED),
-                            () => launchUrl(Uri.parse('mailto:$email'))),
-                      if (website != null && website.isNotEmpty)
-                        _actionLink(Icons.language, 'Website', const Color(0xFF2563EB),
-                            () => launchUrl(Uri.parse(website), mode: LaunchMode.externalApplication)),
-                      if (mapsUri != null && mapsUri.isNotEmpty)
-                        _actionLink(Icons.map_outlined, 'Map', const Color(0xFF2563EB),
-                            () => launchUrl(Uri.parse(mapsUri), mode: LaunchMode.externalApplication)),
-                      if (directionsUri != null && directionsUri.isNotEmpty)
-                        _actionLink(Icons.directions_outlined, 'Directions', const Color(0xFF2563EB),
-                            () => launchUrl(Uri.parse(directionsUri), mode: LaunchMode.externalApplication)),
-                    ]),
-                    if (todayHours.isNotEmpty || (lastReviewAge != null && lastReviewAge.isNotEmpty)) ...[
-                      const SizedBox(height: 6),
-                      Wrap(spacing: 14, runSpacing: 4, children: [
-                        if (todayHours.isNotEmpty)
-                          Row(mainAxisSize: MainAxisSize.min, children: [
-                            const Icon(Icons.access_time, size: 12, color: Color(0xFF6B7280)),
-                            const SizedBox(width: 4),
-                            Text(todayHours, style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
-                          ]),
-                        if (lastReviewAge != null && lastReviewAge.isNotEmpty)
-                          Text('Last review: $lastReviewAge',
-                              style: TextStyle(
-                                  fontSize: 11.5,
-                                  fontWeight: oldReview ? FontWeight.w600 : FontWeight.normal,
-                                  color: oldReview ? const Color(0xFFD97706) : const Color(0xFF9CA3AF))),
-                      ]),
-                    ],
-                  ]),
-                ),
+              Text(name,
+                  style: const TextStyle(
+                      fontSize: 14.5, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+              const SizedBox(height: 6),
+              Wrap(spacing: 6, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                if (typeLabel != null && typeLabel.isNotEmpty)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF3F4F6),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(typeLabel,
+                        style: const TextStyle(
+                            fontSize: 10.5, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+                  ),
+                if (ratingLabel != null && ratingLabel.isNotEmpty)
+                  Text(ratingLabel,
+                      style: const TextStyle(fontSize: 11.5, color: Color(0xFFD97706))),
+                if (openLabel != null && openLabel.isNotEmpty)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: _colorFromHex(openColors['bg']?.toString(), const Color(0xFFF3F4F6)),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(openLabel,
+                        style: TextStyle(
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w700,
+                            color: _colorFromHex(
+                                openColors['fg']?.toString(), const Color(0xFF6B7280)))),
+                  ),
               ]),
-              if (expanded) _buildLeadExpandPanel(r, id),
+              if (hoursLabel != null && hoursLabel.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text(hoursLabel,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
+              ],
+              if (address != null && address.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text(address,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+              ],
+              if (phoneDisplay != null && phoneDisplay.isNotEmpty) ...[
+                const SizedBox(height: 2),
+                Text(phoneDisplay,
+                    style: const TextStyle(
+                        fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+              ],
+              if (reviewLabel != null && reviewLabel.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text(reviewLabel,
+                    style: TextStyle(
+                        fontSize: 11.5,
+                        fontWeight: reviewStale ? FontWeight.w700 : FontWeight.normal,
+                        color: reviewStale ? const Color(0xFFB42318) : const Color(0xFF9CA3AF))),
+              ],
             ]),
           ),
         ),
+
+        // ── ONE compact action row, from actions[] ────────────────────────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(6, 8, 6, 8),
+          child: Row(children: [
+            for (final a in actions)
+              Expanded(
+                child: _scrapeActionCompact(
+                  a['key']?.toString() ?? '',
+                  a['label']?.toString() ?? '',
+                  tapFor(a['key']?.toString() ?? '', a['enabled'] != false),
+                  disabledReason[a['key']?.toString()]?.toString(),
+                ),
+              ),
+          ]),
+        ),
+
+        if (expanded)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+            child: _buildLeadExpandPanel(r, id),
+          ),
+      ]),
+    );
+  }
+
+  /// Disabled rather than hidden. Tapping a disabled action surfaces the
+  /// backend's disabled_reason for that key instead of doing nothing.
+  Widget _scrapeActionCompact(
+      String key, String label, VoidCallback? onTap, String? disabledReason) {
+    final on = onTap != null;
+    const green = Color(0xFF1B7A43);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      child: InkWell(
+        onTap: on
+            ? onTap
+            : (disabledReason != null && disabledReason.isNotEmpty)
+                ? () => showToast(context, disabledReason)
+                : null,
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 2),
+          decoration: BoxDecoration(
+            color: on ? const Color(0xFFECFDF5) : const Color(0xFFF3F4F6),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: on ? const Color(0xFFBBDDC8) : const Color(0xFFE5E7EB)),
+          ),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Icon(_scrapeActionIcons[key] ?? Icons.circle_outlined,
+                size: 15, color: on ? green : const Color(0xFF9CA3AF)),
+            const SizedBox(height: 2),
+            Text(label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    fontSize: 9.5,
+                    fontWeight: FontWeight.w600,
+                    color: on ? green : const Color(0xFF9CA3AF))),
+          ]),
+        ),
       ),
     );
+  }
+
+  /// lead_customer_prefill() -> the SAME registration form Import Customer
+  /// uses, pre-filled and fully editable. Saving goes through edge
+  /// customer-import mode 'import' inside the sheet, never an RPC directly.
+  Future<void> _importCustomerFromLead(int leadId) async {
+    try {
+      final res = await Supabase.instance.client
+          .rpc('lead_customer_prefill', params: {'p_lead_id': leadId});
+      final m = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      if (!mounted) return;
+
+      if (m['error'] != null) {
+        showToast(context, (m['hint'] ?? m['error']).toString(), isError: true);
+        await _refreshLeadCard(leadId);
+        return;
+      }
+
+      final note = m['note']?.toString();
+      if (note != null && note.isNotEmpty) showToast(context, note);
+
+      final customer =
+          m['customer'] is Map ? Map<String, dynamic>.from(m['customer'] as Map) : <String, dynamic>{};
+      final missing =
+          (m['missing'] as List?)?.map((e) => e.toString()).toList() ?? const <String>[];
+
+      final saved =
+          await ImportCustomerSheet.open(context, prefill: customer, missing: missing);
+      if (saved == true && mounted) {
+        await _refreshLeadCard(leadId);
+        await _loadRows(reset: true);
+        await _refreshSummaryAndUsage();
+      }
+    } catch (e) {
+      if (!mounted) return;
+      showToast(context, '$e', isError: true);
+    }
   }
 
   Widget _miniChip(String label) => Container(
@@ -10146,7 +10775,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         Row(children: [
           const Icon(Icons.history, size: 16, color: Color(0xFF6B7280)),
           const SizedBox(width: 8),
-          Text('Past runs (${_pastRuns.length})',
+          Text('Saved scrapes (${_runs.length})',
               style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
         ]),
         const SizedBox(height: 10),
@@ -10160,101 +10789,257 @@ class _SLeadsTabState extends State<_SLeadsTab> {
           ),
         ),
         const SizedBox(height: 14),
-        if (_pastRuns.isEmpty)
+        if (_runs.isEmpty)
           const Padding(
             padding: EdgeInsets.symmetric(vertical: 20),
             child: Text('No scrapes yet.', style: TextStyle(fontSize: 12.5, color: Color(0xFF9CA3AF))),
           )
-        else if (widget.isDesktop)
-          _buildRunsTable()
         else
-          Column(children: _pastRuns.map((r) => _buildRunCard(r)).toList()),
+          Column(children: _runs.map(_buildRunCard).toList()),
       ]),
     );
   }
 
-  Widget _buildRunsTable() {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: DataTable(
-        headingRowColor: const WidgetStatePropertyAll(Color(0xFFF3F4F6)),
-        headingTextStyle: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700, color: Color(0xFF374151)),
-        dataTextStyle: const TextStyle(fontSize: 12, color: Color(0xFF374151)),
-        columnSpacing: 24,
-        columns: const [
-          DataColumn(label: Text('CITY')),
-          DataColumn(label: Text('LEVEL')),
-          DataColumn(label: Text('TYPES')),
-          DataColumn(label: Text('STATUS')),
-          DataColumn(label: Text('CELLS')),
-          DataColumn(label: Text('CALLS')),
-          DataColumn(label: Text('LEADS')),
-          DataColumn(label: Text('DATE')),
-        ],
-        rows: _pastRuns.map((r) {
-          final types = _labelsForUiTypes(r['ui_types']).join(', ');
-          return DataRow(cells: [
-            DataCell(Text(r['city']?.toString() ?? '')),
-            DataCell(Text(r['level']?.toString() ?? '')),
-            DataCell(Text(types)),
-            DataCell(_runStatusChip(r['status']?.toString() ?? '')),
-            DataCell(Text(
-                '${(r['cells_done'] as num?)?.toInt() ?? 0}/${(r['cells_total'] as num?)?.toInt() ?? 0}')),
-            DataCell(Text(
-                '${(r['api_calls'] as num?)?.toInt() ?? 0}/${(r['max_calls'] as num?)?.toInt() ?? 0}')),
-            DataCell(Text('${(r['leads_new'] as num?)?.toInt() ?? 0}')),
-            DataCell(Text(_fmtRunDate(r['created_at']?.toString()))),
-          ]);
-        }).toList(),
-      ),
-    );
-  }
-
+  /// CHANGE #552 — one card per saved run, entirely from scrape_runs_list():
+  /// city, date, the status chip (colours included), types_label and
+  /// summary_label. Expanding shows breakdown[] as a small table.
   Widget _buildRunCard(Map<String, dynamic> r) {
-    final types = _labelsForUiTypes(r['ui_types']).join(', ');
+    final runId = r['run_id']?.toString() ?? '';
+    final expanded = _expandedRuns.contains(runId);
+    final busy = _runBusy.contains(runId);
+    final breakdown = _mapList(r['breakdown']);
+    final typesLabel = r['types_label']?.toString() ?? '';
+    final summaryLabel = r['summary_label']?.toString() ?? '';
+    final error = r['error']?.toString();
+
     return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(color: const Color(0xFFF9FAFB), borderRadius: BorderRadius.circular(8)),
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF9FAFB),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Expanded(
-            child: Text('${r['city'] ?? ''} · ${r['level'] ?? ''} · $types',
-                style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
-          ),
-          _runStatusChip(r['status']?.toString() ?? ''),
-        ]),
-        const SizedBox(height: 6),
-        Wrap(spacing: 12, runSpacing: 4, children: [
-          Text('Cells: ${(r['cells_done'] as num?)?.toInt() ?? 0}/${(r['cells_total'] as num?)?.toInt() ?? 0}',
-              style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
-          Text('Calls: ${(r['api_calls'] as num?)?.toInt() ?? 0}/${(r['max_calls'] as num?)?.toInt() ?? 0}',
-              style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
-          Text('Leads: ${(r['leads_new'] as num?)?.toInt() ?? 0}',
-              style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
-          Text(_fmtRunDate(r['created_at']?.toString()), style: const TextStyle(fontSize: 11.5, color: Color(0xFF9CA3AF))),
-        ]),
+        InkWell(
+          onTap: () => setState(() {
+            if (!_expandedRuns.remove(runId)) _expandedRuns.add(runId);
+          }),
+          borderRadius: BorderRadius.circular(8),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Expanded(
+                child: Text(
+                    '${r['city'] ?? ''} · ${_fmtRunDate(r['created_at']?.toString())}',
+                    style: const TextStyle(
+                        fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+              ),
+              _runStatusChip(r),
+              Icon(expanded ? Icons.expand_less : Icons.expand_more,
+                  size: 18, color: const Color(0xFF9CA3AF)),
+            ]),
+            if (typesLabel.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(typesLabel,
+                  style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
+            ],
+            if (summaryLabel.isNotEmpty) ...[
+              const SizedBox(height: 2),
+              Text(summaryLabel,
+                  style: const TextStyle(fontSize: 12, color: Color(0xFF4B5563))),
+            ],
+            if (error != null && error.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(error, style: const TextStyle(fontSize: 11.5, color: Color(0xFFB42318))),
+            ],
+          ]),
+        ),
+        if (expanded) ...[
+          const SizedBox(height: 10),
+          if (breakdown.isNotEmpty) _runBreakdownTable(breakdown),
+          const SizedBox(height: 10),
+          Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+            _runActionButton('Save file', Icons.download_outlined,
+                busy ? null : () => _exportRun(r, share: false)),
+            _runActionButton('Share', Icons.ios_share,
+                busy ? null : () => _exportRun(r, share: true)),
+            _runActionButton('Delete', Icons.delete_outline,
+                busy || r['can_delete'] == false ? null : () => _deleteRun(r),
+                danger: true),
+            if (busy)
+              const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+          ]),
+        ],
       ]),
     );
   }
 
-  Widget _runStatusChip(String status) {
-    Color color;
-    switch (status) {
-      case 'done': color = const Color(0xFF16A34A); break;
-      case 'running': color = const Color(0xFF2563EB); break;
-      case 'paused_budget': color = const Color(0xFFD97706); break;
-      case 'error': color = const Color(0xFFDC2626); break;
-      default: color = const Color(0xFF6B7280);
-    }
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withValues(alpha: 0.3)),
+  Widget _runBreakdownTable(List<Map<String, dynamic>> breakdown) {
+    const head = TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: Color(0xFF6B7280));
+    const cell = TextStyle(fontSize: 11.5, color: Color(0xFF374151));
+    return Table(
+      columnWidths: const {
+        0: FlexColumnWidth(2.2),
+        1: FlexColumnWidth(1),
+        2: FlexColumnWidth(1.2),
+        3: FlexColumnWidth(1.2),
+      },
+      border: TableBorder(
+          horizontalInside: BorderSide(color: const Color(0xFFE5E7EB).withValues(alpha: 0.8))),
+      children: [
+        const TableRow(children: [
+          Padding(padding: EdgeInsets.symmetric(vertical: 4), child: Text('TYPE', style: head)),
+          Padding(padding: EdgeInsets.symmetric(vertical: 4), child: Text('COUNT', style: head)),
+          Padding(padding: EdgeInsets.symmetric(vertical: 4), child: Text('PHONE', style: head)),
+          Padding(padding: EdgeInsets.symmetric(vertical: 4), child: Text('PHOTO', style: head)),
+        ]),
+        ...breakdown.map((b) => TableRow(children: [
+              Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Text(b['type']?.toString() ?? '',
+                      maxLines: 1, overflow: TextOverflow.ellipsis, style: cell)),
+              Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Text('${b['count'] ?? 0}', style: cell)),
+              Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Text('${b['with_phone'] ?? 0}', style: cell)),
+              Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Text('${b['with_photo'] ?? 0}', style: cell)),
+            ])),
+      ],
+    );
+  }
+
+  Widget _runActionButton(String label, IconData icon, VoidCallback? onTap,
+      {bool danger = false}) {
+    final color = danger ? const Color(0xFFB42318) : const Color(0xFF1B7A43);
+    return OutlinedButton.icon(
+      onPressed: onTap,
+      style: OutlinedButton.styleFrom(
+        foregroundColor: color,
+        side: BorderSide(color: onTap == null ? const Color(0xFFD1D5DB) : color),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        visualDensity: VisualDensity.compact,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       ),
-      child: Text(status, style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: color)),
+      icon: Icon(icon, size: 15),
+      label: Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+    );
+  }
+
+  /// scrape_run_export() builds the whole JSON payload AND names the file.
+  /// Dart only writes those bytes out — it never assembles the export.
+  Future<void> _exportRun(Map<String, dynamic> r, {required bool share}) async {
+    final runId = r['run_id']?.toString();
+    if (runId == null) return;
+    setState(() => _runBusy.add(runId));
+    try {
+      final res = await Supabase.instance.client
+          .rpc('scrape_run_export', params: {'p_run_id': runId});
+      final m = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      final filename = m['filename']?.toString() ?? '$runId.json';
+      final bytes = utf8.encode(jsonEncode(m));
+      RenderLog.write('c552_export', filename);
+      if (!mounted) return;
+      setState(() => _runBusy.remove(runId));
+      if (share) {
+        final ok = await shareBytes(bytes, filename, 'application/json');
+        // null = this browser has no Web Share for files -> save instead.
+        if (ok == null) downloadBytes(bytes, filename, 'application/json');
+      } else {
+        downloadBytes(bytes, filename, 'application/json');
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _runBusy.remove(runId));
+      showToast(context, '$e', isError: true);
+    }
+  }
+
+  /// Confirm first, then show scrape_run_delete()'s own message — it is the
+  /// only thing that knows how many leads were protected.
+  Future<void> _deleteRun(Map<String, dynamic> r) async {
+    final runId = r['run_id']?.toString();
+    if (runId == null) return;
+    var withLeads = false;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dCtx) => StatefulBuilder(
+        builder: (dCtx, setDlg) => AlertDialog(
+          title: const Text('Delete this scrape?'),
+          content: Column(mainAxisSize: MainAxisSize.min, children: [
+            Text('${r['city'] ?? ''} · ${_fmtRunDate(r['created_at']?.toString())}',
+                style: const TextStyle(fontSize: 13)),
+            const SizedBox(height: 8),
+            CheckboxListTile(
+              value: withLeads,
+              onChanged: (v) => setDlg(() => withLeads = v == true),
+              controlAffinity: ListTileControlAffinity.leading,
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              activeColor: const Color(0xFF1B7A43),
+              title: Text('Also delete its ${(r['lead_count'] as num?)?.toInt() ?? 0} leads',
+                  style: const TextStyle(fontSize: 13)),
+            ),
+          ]),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dCtx, false), child: const Text('Cancel')),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: const Color(0xFFB42318)),
+              onPressed: () => Navigator.pop(dCtx, true),
+              child: const Text('Delete'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (ok != true) return;
+
+    setState(() => _runBusy.add(runId));
+    try {
+      final res = await Supabase.instance.client.rpc('scrape_run_delete',
+          params: {'p_run_id': runId, 'p_with_leads': withLeads});
+      final m = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+      if (!mounted) return;
+      setState(() {
+        _runBusy.remove(runId);
+        _expandedRuns.remove(runId);
+        if (_resultsRunId == runId) {
+          _resultsRunId = null;
+          _runLeads = [];
+          _selectedLeadIds.clear();
+        }
+      });
+      final msg = (m['message'] ?? m['error'])?.toString();
+      if (msg != null && msg.isNotEmpty) {
+        showToast(context, msg, isError: m['error'] != null);
+      }
+      await _loadPastRuns();
+      await _refreshSummaryAndUsage();
+      await _loadRows(reset: true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _runBusy.remove(runId));
+      showToast(context, '$e', isError: true);
+    }
+  }
+
+  /// Status chip — label AND colours come from scrape_runs_list().status_colors.
+  Widget _runStatusChip(Map<String, dynamic> r) {
+    final status = r['status']?.toString() ?? '';
+    final colors = r['status_colors'] is Map
+        ? Map<String, dynamic>.from(r['status_colors'] as Map)
+        : const <String, dynamic>{};
+    final bg = _colorFromHex(colors['bg']?.toString(), const Color(0xFFF3F4F6));
+    final fg = _colorFromHex(colors['fg']?.toString(), const Color(0xFF6B7280));
+    return Container(
+      margin: const EdgeInsets.only(right: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
+      child: Text(status,
+          style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: fg)),
     );
   }
 
@@ -10316,7 +11101,19 @@ class _RoutesTabState extends State<_RoutesTab> {
 
   // ── B1: filter bar — the ONLY inputs that drive the count + build ────────
   String _city = 'Raipur';
-  Set<String> _classes = {'medical_store'};
+
+  /// CHANGE #552 — the Store-type chips are no longer a Dart list. They come
+  /// from lead_category_tree('route'), the SAME taxonomy the scrape form uses.
+  List<_LeadCategoryNode> _routeCats = const [];
+  final Set<String> _expandedRouteCats = {};
+
+  /// lead_class values that actually exist in scraped_leads, read from
+  /// lead_leads_summary().by_class. Needed because the route RPCs still filter
+  /// on scraped_leads.lead_class while the chips now speak category keys —
+  /// see _classesForSelection().
+  List<String> _leadClassValues = const [];
+
+  Set<String> _classes = {};
   Set<String> _visitFilter = {'fresh'};
   int? _dow; // null = today
   int _startMin = 600; // 10:00
@@ -10374,14 +11171,48 @@ class _RoutesTabState extends State<_RoutesTab> {
   bool _visitsLoading = false;
   Map<String, dynamic>? _visitsReport;
 
-  static const List<(String, String)> _classOptions = [
-    ('medical_store', 'Pharmacy'),
-    ('hospital', 'Hospital'),
-    ('clinic', 'Clinic'),
-    ('lab', 'Diagnostic Lab'),
-    ('chain', 'Chain'),
-    ('wholesaler', 'Wholesaler'),
-  ];
+  /// Resolves the selected category keys into the lead_class values the route
+  /// RPCs (route_lead_count / route_plan_build) still filter on.
+  ///
+  /// CHANGE #552 note: lead_categories is the new source of truth for the
+  /// taxonomy, but scraped_leads.lead_class was never migrated onto those
+  /// keys and no route RPC accepts category keys yet. So a key is matched
+  /// against the lead_class values the backend reports as actually present —
+  /// exactly ('clinic' -> 'clinic') or as a prefix ('medical' ->
+  /// 'medical_store'). No class name is written in Dart. Once the route RPCs
+  /// take p_categories this whole function goes away.
+  Widget _routeCatChip(String label, String key) {
+    final sel = _classes.contains(key);
+    return FilterChip(
+      label: Text(label, style: const TextStyle(fontSize: 11.5)),
+      selected: sel,
+      onSelected: (v) {
+        setState(() {
+          if (v) { _classes.add(key); } else { _classes.remove(key); }
+        });
+        _onFilterChanged();
+      },
+      selectedColor: const Color(0xFFDCFCE7),
+      checkmarkColor: const Color(0xFF1B7A43),
+      backgroundColor: const Color(0xFFF3F4F6),
+      side: BorderSide(color: sel ? const Color(0xFF1B7A43) : const Color(0xFFD1D5DB)),
+      labelStyle: TextStyle(color: sel ? const Color(0xFF1B7A43) : const Color(0xFF374151)),
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      visualDensity: VisualDensity.compact,
+    );
+  }
+
+  List<String> _classesForSelection() {
+    final out = <String>{};
+    for (final k in _classes) {
+      for (final v in _leadClassValues) {
+        if (v == k || v.startsWith('${k}_')) out.add(v);
+      }
+      out.add(k); // harmless if unmatched; lets a migrated backend work as-is
+    }
+    return out.toList();
+  }
+
   static const List<(int?, String)> _dowOptions = [
     (null, 'Today'), (0, 'Sunday'), (1, 'Monday'), (2, 'Tuesday'),
     (3, 'Wednesday'), (4, 'Thursday'), (5, 'Friday'), (6, 'Saturday'),
@@ -10482,9 +11313,38 @@ class _RoutesTabState extends State<_RoutesTab> {
     }
   }
 
+  /// CHANGE #552 — chips + their lead_class mapping, both backend-sourced.
+  /// Best-effort: a failure here leaves the chip row empty rather than
+  /// falling back to a hardcoded list.
+  Future<void> _loadRouteTaxonomy() async {
+    try {
+      final client = Supabase.instance.client;
+      final res = await Future.wait<dynamic>([
+        _fetchCategoryTree('route'),
+        client.rpc('lead_leads_summary', params: {'p_city': null}),
+      ]);
+      final cats = res[0] as List<_LeadCategoryNode>;
+      final summary = Map<String, dynamic>.from(res[1] as Map);
+      final classes = ((summary['by_class'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => e['class']?.toString() ?? '')
+          .where((e) => e.isNotEmpty)
+          .toList();
+      RenderLog.write('c552_route_cats', cats.length);
+      if (!mounted) return;
+      setState(() {
+        _routeCats = cats;
+        _leadClassValues = classes;
+        // Default selection is the backend's first category, not a Dart key.
+        if (_classes.isEmpty && cats.isNotEmpty) _classes = {cats.first.key};
+      });
+    } catch (_) {}
+  }
+
   Future<void> _loadScreen() async {
     setState(() { _loading = true; _loadError = null; });
     try {
+      await _loadRouteTaxonomy();
       final myRoute = Map<String, dynamic>.from(
           await Supabase.instance.client.rpc('my_route') as Map);
       if (!mounted) return;
@@ -10539,7 +11399,7 @@ class _RoutesTabState extends State<_RoutesTab> {
     try {
       final res = await Supabase.instance.client.rpc('route_lead_count', params: {
         'p_city': _city,
-        'p_classes': _classes.toList(),
+        'p_classes': _classesForSelection(),
         'p_visit': _visitFilter.toList(),
         'p_min_score': 1,
       });
@@ -10559,7 +11419,7 @@ class _RoutesTabState extends State<_RoutesTab> {
     try {
       final planId = await Supabase.instance.client.rpc('route_plan_build', params: {
         'p_city': _city,
-        'p_classes': _classes.toList(),
+        'p_classes': _classesForSelection(),
         'p_visit': _visitFilter.toList(),
         'p_k': k,
         'p_min_score': 1,
@@ -11521,24 +12381,39 @@ class _RoutesTabState extends State<_RoutesTab> {
         const Text('Store type',
             style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6B7280))),
         const SizedBox(height: 8),
-        Wrap(spacing: 6, runSpacing: 6, children: _classOptions.map((o) {
-          final sel = _classes.contains(o.$1);
-          return FilterChip(
-            label: Text(o.$2, style: const TextStyle(fontSize: 11.5)),
-            selected: sel,
-            onSelected: (v) {
-              setState(() {
-                if (v) { _classes.add(o.$1); } else { _classes.remove(o.$1); }
-              });
-              _onFilterChanged();
-            },
-            selectedColor: const Color(0xFFDCFCE7),
-            checkmarkColor: const Color(0xFF1B7A43),
-            backgroundColor: const Color(0xFFF3F4F6),
-            side: BorderSide(color: sel ? const Color(0xFF1B7A43) : const Color(0xFFD1D5DB)),
-            labelStyle: TextStyle(color: sel ? const Color(0xFF1B7A43) : const Color(0xFF374151)),
-          );
-        }).toList()),
+        // CHANGE #552 — chips from lead_category_tree('route'). A top category
+        // with sub-categories expands to show them, exactly like the scrape form.
+        Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          for (final c in _routeCats) ...[
+            Row(children: [
+              _routeCatChip(c.label, c.key),
+              if (c.sub.isNotEmpty)
+                IconButton(
+                  onPressed: () => setState(() {
+                    if (!_expandedRouteCats.remove(c.key)) _expandedRouteCats.add(c.key);
+                  }),
+                  iconSize: 18,
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  constraints: const BoxConstraints(),
+                  icon: Icon(
+                      _expandedRouteCats.contains(c.key)
+                          ? Icons.expand_less
+                          : Icons.expand_more,
+                      color: const Color(0xFF9CA3AF)),
+                ),
+            ]),
+            if (c.sub.isNotEmpty && _expandedRouteCats.contains(c.key))
+              Padding(
+                padding: const EdgeInsets.only(left: 18, top: 2, bottom: 6),
+                child: Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: c.sub.map((s) => _routeCatChip(s.label, s.key)).toList(),
+                ),
+              ),
+          ],
+        ]),
         const SizedBox(height: 12),
         const Text('Visit filter',
             style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6B7280))),

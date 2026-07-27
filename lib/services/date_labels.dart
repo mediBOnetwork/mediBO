@@ -1,8 +1,8 @@
-// CHANGE #546 — the client's ONLY route to a date string.
+// CHANGE #548 — the client's ONLY route to a date string.
 //
 // mediBO does no date work in Dart: no formatting, no timezone conversion, no
 // "today" computation, no relative-time math, no Today/Yesterday decision. All
-// of it lives in Postgres (ist_fmt / ist_labels, see the #546 migration). This
+// of it lives in Postgres (ist_fmt / ist_labels, see the #548 migration). This
 // service is the transport: hand it the raw timestamp a row already carries plus
 // the style you need, and it returns the backend's ready-to-render string.
 //
@@ -50,8 +50,20 @@ class DateStyle {
   /// Today / Yesterday / 26 Jul 2026
   static const daySep = 'day_sep';
 
+  /// 15:45
+  static const time24 = 'time24';
+
+  /// Monday .. Sunday
+  static const weekday = 'weekday';
+
+  /// WhatsApp tile: today -> HH:mm, this year -> "5 Jul", older -> "5 Jul 24"
+  static const waTile = 'wa_tile';
+
+  /// 5 Jul, 3:45 PM
+  static const dayMonTime12 = 'day_mon_time12';
+
   /// Styles whose output depends on the current time.
-  static const _timeSensitive = {relative, daySep};
+  static const _timeSensitive = {relative, daySep, waTile, weekday};
 }
 
 class DateLabels {
@@ -131,7 +143,7 @@ class DateLabels {
           n++;
         });
         if (n > 0) {
-          RenderLog.write('c546_date_labels', 'resolved=$n');
+          RenderLog.write('c548_date_labels', 'resolved=$n');
           _notify();
         }
       }

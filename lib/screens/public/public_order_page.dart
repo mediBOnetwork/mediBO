@@ -149,7 +149,7 @@ class _PublicOrderPageState extends State<PublicOrderPage> {
     );
   }
 
-  // CHANGE #546: backend-formatted (ist_fmt 'dmy'); no Dart date math.
+  // CHANGE #548: backend-formatted (ist_fmt 'dmy'); no Dart date math.
   String _formatDate(String iso) =>
       DateLabels.instance.label(iso, DateStyle.dmy) ?? '';
 }

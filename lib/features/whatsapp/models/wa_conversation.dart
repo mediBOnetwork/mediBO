@@ -1,4 +1,3 @@
-import '../../../utils/ist_date.dart';
 
 class WaConversation {
   final String senderPhone;
@@ -7,7 +6,8 @@ class WaConversation {
   final String? label;
   final String? linkedSupplier;
   final int total;
-  final DateTime? lastAt;
+  /// CHANGE #548: RAW backend timestamp, verbatim.
+  final String? lastAt;
   final String lastText;
   final int unread;
 
@@ -59,9 +59,10 @@ class WaConversation {
     return int.tryParse('${v ?? ''}') ?? 0;
   }
 
-  static DateTime? _asDate(dynamic v) {
+  static String? _asDate(dynamic v) {
     if (v == null) return null;
-    return tryIstFromDb(v.toString());
+    final s = v.toString();
+    return s.isEmpty ? null : s;
   }
 
   /// Resolved display name. Priority: resolved business/customer name >

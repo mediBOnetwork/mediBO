@@ -20,12 +20,10 @@ import '../../models/order_hours_model.dart';
 import '../../order_hours_state.dart';
 import '../../services/match_status_service.dart';
 import '../../services/spn_options.dart';
-import '../../utils/ist_date.dart';
 import '../../utils/render_log.dart';
 import '../../utils/safe_parse.dart';
-import '../../utils/ist_date.dart'; // CHANGE #444
 import '../../services/admin_date_scope.dart'; // CHANGE #545
-import '../../services/date_labels.dart'; // CHANGE #546
+import '../../services/date_labels.dart'; // CHANGE #548
 import '../../widgets/code_field.dart';
 import '../../widgets/fullscreen_image.dart';
 import '../../widgets/inquiry_v12.dart';
@@ -69,7 +67,8 @@ class _PendingRow {
   final String? paymentTerm;
   final String? city;
   final String? state;
-  final DateTime? createdAt;
+  /// CHANGE #548: RAW backend timestamp, verbatim.
+  final String? createdAt;
 
   const _PendingRow({
     required this.id,
@@ -94,7 +93,7 @@ class _PendingRow {
     paymentTerm:  m['payment_term']  as String?,
     city:         m['city']          as String?,
     state:        m['state']         as String?,
-    createdAt:    m['created_at'] != null ? DateTime.tryParse(m['created_at'] as String) : null,
+    createdAt:    m['created_at']?.toString(),
   );
 }
 
@@ -104,7 +103,8 @@ class _OrderRow {
   final String? description;
   final double? totalAmount;
   final String status;
-  final DateTime? createdAt;
+  /// CHANGE #548: RAW backend timestamp, verbatim.
+  final String? createdAt;
   final List<Map<String, dynamic>> items;
   final String? orderCode;
   // CHANGE #492 (Orders tab): backend-owned Send button state from
@@ -130,7 +130,7 @@ class _OrderRow {
     description:  m['description']  as String?,
     totalAmount:  (m['total_amount'] as num?)?.toDouble(),
     status:       m['status'] as String? ?? 'pending',
-    createdAt:    m['created_at'] != null ? DateTime.tryParse(m['created_at'] as String) : null,
+    createdAt:    m['created_at']?.toString(),
     items:        (m['items'] as List<dynamic>?)
                       ?.map((e) => Map<String, dynamic>.from(e as Map))
                       .toList() ?? [],
@@ -1987,11 +1987,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           final supplierName = e.key;
           final data = e.value;
           final status = data['status'] as String? ?? 'pending';
-          final expiresAt = data['expires_at'] != null
-              ? DateTime.tryParse(data['expires_at'] as String)
-              : null;
+          final expiresAt = data['expires_at']?.toString();
           final link = _inquiryShortLinkFromOverview(supplierName);
-          final expStr = expiresAt != null ? _formatExpIST(expiresAt) : '';
+          final expStr = _formatExpIST(expiresAt);
           return Container(
             margin: const EdgeInsets.only(bottom: 8),
             padding: const EdgeInsets.all(10),
@@ -3146,7 +3144,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     final curCount   = (ov['current_count'] as num?)?.toInt() ?? 0;
     final nxtCount   = (ov['next_count'] as num?)?.toInt() ?? 0;
     final formStatus = ov['form_status'] as String?;
-    final expiresAt  = ov['expires_at'] != null ? DateTime.tryParse(ov['expires_at'] as String) : null;
+    final expiresAt  = ov['expires_at']?.toString();
     final inquiryCode = (ov['inquiry_code'] as String? ?? '').trim();
     final canSend = ov['can_send'] as bool? ?? true; // CHANGE #466
     // CHANGE #493 (C1-C4): backend-owned {state,label,tone} — never derived
@@ -3759,13 +3757,12 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   }
 
   // ── Timer helper: converts UTC DateTime to IST and formats as 12-hour AM/PM ─
-  String _formatExpIST(DateTime utc) {
-    final ist = toIst(utc);
-    final h = ist.hour % 12 == 0 ? 12 : ist.hour % 12;
-    final m = ist.minute.toString().padLeft(2, '0');
-    final ampm = ist.hour >= 12 ? 'PM' : 'AM';
-    RenderLog.write('timer_12h_ist', '${ist.hour}:${ist.minute}->$h:$m $ampm');
-    return 'Exp $h:$m $ampm';
+  // CHANGE #548: backend-formatted (ist_fmt 'time12'); 'Exp ' is static copy.
+  String _formatExpIST(String? ts) {
+    final t = DateLabels.instance.label(ts, DateStyle.time12);
+    if (t == null) return '';
+    RenderLog.write('timer_12h_ist', t);
+    return 'Exp $t';
   }
 
   // ── Inquiry link helpers ──────────────────────────────────────────────────
@@ -4792,7 +4789,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   Widget _desktopOrderRow(_OrderRow row) {
     final dateStr = row.createdAt != null
-        ? dmy(toIst(row.createdAt!))
+        ? (DateLabels.instance.label(row.createdAt, DateStyle.dmy) ?? '')
         : '—';
     final isExpanded = _expandedOrderId == row.id;
     final currentItems = _currentItemsFor(row); // CHANGE #277
@@ -4865,7 +4862,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   Widget _mobileOrderCard(_OrderRow row) {
     final dateStr = row.createdAt != null
-        ? dmy(toIst(row.createdAt!))
+        ? (DateLabels.instance.label(row.createdAt, DateStyle.dmy) ?? '')
         : '';
     final isExpanded = _expandedOrderId == row.id;
     final currentItems = _currentItemsFor(row); // CHANGE #277
@@ -5518,7 +5515,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     return s == 'null' ? '' : s;
   }
 
-  // CHANGE #546: backend-formatted (ist_fmt 'dmy_hm2'); no Dart date math.
+  // CHANGE #548: backend-formatted (ist_fmt 'dmy_hm2'); no Dart date math.
   static String _fmtTs(dynamic v) {
     final s = _str(v);
     if (s.isEmpty) return '';
@@ -12680,7 +12677,7 @@ class _BillTabState extends State<_BillTab> {
     final ext         = fileName.toLowerCase().split('.').last;
     final isPdf       = ext == 'pdf';
     final receivedRaw = widget.bill['received_at'] as String?;
-    // CHANGE #546: backend-formatted, never parsed client-side.
+    // CHANGE #548: backend-formatted, never parsed client-side.
     final receivedStr =
         DateLabels.instance.label(receivedRaw, DateStyle.dmy) ?? '—';
 
@@ -12973,7 +12970,7 @@ class _C328PayRow extends StatelessWidget {
     final mode   = payment['mode'] as String? ?? '';
     final note   = payment['note'] as String?;
     final atRaw  = payment['at'] as String?;
-    final at     = atRaw != null ? tryIstFromDb(atRaw) : null;
+    final at     = atRaw;  // #548: raw backend timestamp
     final atStr  = at != null ? _fmtP(at) : '—';
 
     return Padding(
@@ -12987,13 +12984,7 @@ class _C328PayRow extends StatelessWidget {
     );
   }
 
-  String _fmtP(DateTime dt) {
-    final dd = dt.day.toString().padLeft(2,'0');
-    final mm = dt.month.toString().padLeft(2,'0');
-    final yy = (dt.year % 100).toString().padLeft(2,'0');
-    var h = dt.hour % 12; if (h == 0) h = 12;
-    final min = dt.minute.toString().padLeft(2,'0');
-    final ap = dt.hour >= 12 ? 'PM' : 'AM';
-    return '$dd/$mm/$yy $h:$min $ap';
-  }
+  // CHANGE #548: backend-formatted (ist_fmt 'dmy2_time12').
+  String _fmtP(String? ts) =>
+      DateLabels.instance.label(ts, DateStyle.dmy2Time12) ?? '';
 }

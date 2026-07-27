@@ -13045,7 +13045,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     RenderLog.write('c188_realtime_subscribed', 'disputes_tab_init');
     RenderLog.write('c354_ready', 'tab=disputes');
     AdminDateScope.instance.addListener(_onDateScopeChanged);
-    // CHANGE #546: repaint when backend date labels resolve.
+    // CHANGE #548: repaint when backend date labels resolve.
     DateLabels.instance.addListener(_onDateLabels);
     _load();
   }
@@ -13520,7 +13520,7 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     );
   }
 
-  // #349 relative time — CHANGE #546: the 'just now'/'Xm ago'/'Xh ago'/'Xd ago'
+  // #349 relative time — CHANGE #548: the 'just now'/'Xm ago'/'Xh ago'/'Xd ago'
   // ladder is DELETED from Dart. ist_fmt('relative') owns it; this returns ''
   // until the label lands and the caller already renders nothing for ''.
   String _relTime(String? isoStr) =>

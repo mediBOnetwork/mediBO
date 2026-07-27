@@ -20,8 +20,8 @@ import '../../util.dart';
 import '../../utils/download_bytes.dart'; // CHANGE #463
 import '../../utils/order_code.dart';
 import '../../utils/render_log.dart';
-import '../../utils/ist_date.dart'; // CHANGE #444
 import '../../services/admin_date_scope.dart'; // CHANGE #545
+import '../../services/date_labels.dart'; // CHANGE #548
 import '../../widgets/route_google_map_panel.dart'; // CHANGE #463
 import '../bulk_upload_screen.dart';
 import '../../services/payment_claims_service.dart';
@@ -3591,8 +3591,13 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   static String _fmtTs(dynamic v) {
     final s = _str(v);
     if (s.isEmpty) return '';
+    return DateLabels.instance.label(s, DateStyle.dmyHm2) ?? '';
+  }
+
+  static String _fmtTsUnused(dynamic v) {
+    final s = _str(v);
     try {
-      final dt = istFromDb(s);
+      final dt = DateTime.parse(s);
       return '${dt.day.toString().padLeft(2, '0')}/'
              '${dt.month.toString().padLeft(2, '0')}/'
              '${dt.year}  '
@@ -7224,22 +7229,14 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
         ]),
       );
 
+  // CHANGE #548: backend-formatted (ist_fmt 'dmy2_time12'); only the
+  // lower-casing of AM/PM happens here, which is a case transform.
   String _fmtDate(String raw) {
-    try {
-      final dt = istFromDb(raw);
-      final dd = dt.day.toString().padLeft(2, '0');
-      final mm = dt.month.toString().padLeft(2, '0');
-      final yy = (dt.year % 100).toString().padLeft(2, '0');
-      int h = dt.hour;
-      final ampm = h >= 12 ? 'pm' : 'am';
-      h = h % 12; if (h == 0) h = 12;
-      final min = dt.minute.toString().padLeft(2, '0');
-      final stamp = '$dd/$mm/$yy $h:$min $ampm';
-      RenderLog.write('c246_received_compact', stamp);
-      return stamp;
-    } catch (_) {
-      return raw.length > 16 ? raw.substring(0, 16) : raw;
-    }
+    final t = DateLabels.instance.label(raw, DateStyle.dmy2Time12);
+    if (t == null) return '';
+    final stamp = t.toLowerCase();
+    RenderLog.write('c246_received_compact', stamp);
+    return stamp;
   }
 }
 
@@ -8245,7 +8242,8 @@ class _SLeadsTabState extends State<_SLeadsTab> {
   double? _hubLat;
   double? _hubLng;
   String? _hubMapsLink;
-  DateTime? _hubUpdatedAt;
+  /// CHANGE #548: RAW backend timestamp, verbatim.
+  String? _hubUpdatedAt;
   Map<String, int> _hubCounts = {
     'core': 0, 'extended': 0, 'marginal': 0, 'out_of_range': 0,
   };
@@ -8378,7 +8376,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     _hubLat = (h['lat'] as num?)?.toDouble();
     _hubLng = (h['lng'] as num?)?.toDouble();
     _hubMapsLink = h['maps_link']?.toString();
-    _hubUpdatedAt = DateTime.tryParse(h['updated_at']?.toString() ?? '');
+    _hubUpdatedAt = h['updated_at']?.toString();
     final coreKm = h['core_km'];
     final extKm = h['ext_km'];
     final margKm = h['marg_km'];
@@ -8408,12 +8406,9 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     }
   }
 
-  String _fmtUpdatedAt(DateTime? utc) {
-    if (utc == null) return '—';
-    final ist = toIst(utc);
-    String p2(int v) => v.toString().padLeft(2, '0');
-    return '${p2(ist.day)}/${p2(ist.month)}/${ist.year} ${p2(ist.hour)}:${p2(ist.minute)}';
-  }
+  // CHANGE #548: backend-formatted (ist_fmt 'dmy_hm').
+  String _fmtUpdatedAt(String? ts) =>
+      DateLabels.instance.label(ts, DateStyle.dmyHm) ?? '—';
 
   // Core < Extended < Marginal, all > 0. Buttons read this live via setState
   // on the radii controllers so an invalid ladder can never be submitted.
@@ -9722,7 +9717,11 @@ class _SLeadsTabState extends State<_SLeadsTab> {
 
   String _todayHoursLine(List<String> hours) {
     if (hours.isEmpty) return '';
-    final todayName = _sLeadWeekdayNames[nowIst().weekday - 1];
+    // CHANGE #548: today's weekday name comes from ist_fmt('weekday'), not a
+    // client array indexed by a locally-computed weekday.
+    final todayName =
+        DateLabels.instance.label(AdminDateScope.instance.todayYmd, DateStyle.weekday);
+    if (todayName == null || todayName.isEmpty) return '';
     final match = hours.firstWhere((h) => h.startsWith(todayName), orElse: () => '');
     if (match.isEmpty) return '';
     final idx = match.indexOf(':');
@@ -10258,15 +10257,9 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     );
   }
 
-  String _fmtRunDate(String? iso) {
-    if (iso == null || iso.length < 10) return '';
-    try {
-      final d = istFromDb(iso);
-      return '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
-    } catch (_) {
-      return iso.substring(0, 10);
-    }
-  }
+  // CHANGE #548: backend-formatted (ist_fmt 'dmy').
+  String _fmtRunDate(String? iso) =>
+      DateLabels.instance.label(iso, DateStyle.dmy) ?? '';
 }
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -10448,11 +10441,9 @@ class _RoutesTabState extends State<_RoutesTab> {
     } catch (_) {}
   }
 
-  String _planWhenLabel(DateTime createdAt) {
-    final ist = toIst(createdAt);
-    String p2(int n) => n.toString().padLeft(2, '0');
-    return '${p2(ist.day)}/${p2(ist.month)}/${p2(ist.year % 100)} ${p2(ist.hour)}:${p2(ist.minute)}';
-  }
+  // CHANGE #548: backend-formatted (ist_fmt 'dmy2_hm').
+  String _planWhenLabel(String? createdAt) =>
+      DateLabels.instance.label(createdAt, DateStyle.dmy2Hm) ?? '';
 
   void _onPlanRealtimeChange(PostgresChangePayload payload) {
     if (_pastPlans == null || !mounted) return;
@@ -10477,13 +10468,13 @@ class _RoutesTabState extends State<_RoutesTab> {
       final k = (row['k'] as num?)?.toInt() ?? 0;
       final totalLeads = (row['total_leads'] as num?)?.toInt() ?? 0;
       final classes = ((row['classes'] as List?) ?? []).join(', ');
-      final createdAt = DateTime.tryParse(row['created_at']?.toString() ?? '');
+      final createdAt = row['created_at']?.toString();
       final item = <String, dynamic>{
         'plan_id': planId,
         'city': city,
         'title': '$city · ${k}R · $totalLeads leads',
         'types': classes,
-        'when_label': createdAt != null ? _planWhenLabel(createdAt) : '',
+        'when_label': _planWhenLabel(createdAt),
         'status': row['status']?.toString() ?? 'queued',
       };
       setState(() => _pastPlans = [item, ..._pastPlans!]);
@@ -13033,7 +13024,11 @@ class _AssignRouteDialog extends StatefulWidget {
 class _AssignRouteDialogState extends State<_AssignRouteDialog> {
   late List<Map<String, dynamic>> _workers;
   String? _workerId;
-  DateTime _forDate = todayIst();
+  // CHANGE #548: the schedulable dates come from route_plan_date_options()
+  // (yesterday .. +60d, each with its own backend label). The client no longer
+  // computes "today", bounds, or the p_for_date string.
+  List<Map<String, dynamic>> _dateOptions = const [];
+  String? _forDate; // 'YYYY-MM-DD', backend value verbatim
   bool _submitting = false;
   String? _error;
 
@@ -13041,6 +13036,28 @@ class _AssignRouteDialogState extends State<_AssignRouteDialog> {
   void initState() {
     super.initState();
     _workers = widget.initialWorkers;
+    _loadDateOptions();
+  }
+
+  Future<void> _loadDateOptions() async {
+    try {
+      final res =
+          await Supabase.instance.client.rpc('route_plan_date_options');
+      final list = (res as List?) ?? [];
+      final opts = list
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+      if (!mounted) return;
+      setState(() {
+        _dateOptions = opts;
+        _forDate ??= (opts.firstWhere((o) => o['is_today'] == true,
+                orElse: () => opts.isNotEmpty ? opts.first : <String, dynamic>{})['date'])
+            ?.toString();
+      });
+    } catch (_) {
+      // No client-side fallback: without options the picker stays empty.
+    }
   }
 
   Future<void> _addWorker() async {
@@ -13093,22 +13110,6 @@ class _AssignRouteDialogState extends State<_AssignRouteDialog> {
     }
   }
 
-  Future<void> _pickDate() async {
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: _forDate,
-      firstDate: todayIst().subtract(const Duration(days: 1)),
-      lastDate: todayIst().add(const Duration(days: 60)),
-      builder: (context, child) => Theme(
-        data: Theme.of(context).copyWith(
-          colorScheme: const ColorScheme.light(primary: Color(0xFF1B7A43)),
-        ),
-        child: child!,
-      ),
-    );
-    if (picked != null) setState(() => _forDate = picked);
-  }
-
   Future<void> _submit() async {
     if (_workerId == null) { setState(() => _error = 'Pick a worker.'); return; }
     setState(() { _submitting = true; _error = null; });
@@ -13116,8 +13117,8 @@ class _AssignRouteDialogState extends State<_AssignRouteDialog> {
       final res = await Supabase.instance.client.rpc('route_plan_assign', params: {
         'p_route_id': widget.route['route_id'],
         'p_worker_id': _workerId,
-        'p_for_date':
-            '${_forDate.year.toString().padLeft(4, '0')}-${_forDate.month.toString().padLeft(2, '0')}-${_forDate.day.toString().padLeft(2, '0')}',
+        // Backend's own date value, passed straight back.
+        'p_for_date': _forDate,
       });
       final data = Map<String, dynamic>.from(res as Map);
       if (!mounted) return;
@@ -13164,13 +13165,21 @@ class _AssignRouteDialogState extends State<_AssignRouteDialog> {
             ),
           ]),
           const SizedBox(height: 12),
-          InkWell(
-            onTap: _pickDate,
-            child: InputDecorator(
-              decoration: const InputDecoration(labelText: 'Date', border: OutlineInputBorder(), isDense: true),
-              child: Text(
-                  '${_forDate.day.toString().padLeft(2, '0')}/${_forDate.month.toString().padLeft(2, '0')}/${_forDate.year}'),
-            ),
+          // CHANGE #548: pick from the backend's own dates; each row prints
+          // that option's own label, verbatim.
+          DropdownButtonFormField<String>(
+            initialValue: _forDate,
+            isExpanded: true,
+            decoration: const InputDecoration(
+                labelText: 'Date', border: OutlineInputBorder(), isDense: true),
+            items: [
+              for (final o in _dateOptions)
+                DropdownMenuItem<String>(
+                  value: o['date']?.toString(),
+                  child: Text(o['label']?.toString() ?? ''),
+                ),
+            ],
+            onChanged: (v) => setState(() => _forDate = v),
           ),
           if (_error != null) ...[
             const SizedBox(height: 10),

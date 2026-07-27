@@ -88,7 +88,7 @@ String _fmtVal(String col, dynamic v) {
   if (v is bool) return v ? 'Yes' : 'No';
   final s = v.toString().trim();
   if (s.isEmpty || s == 'null') return '—';
-  // CHANGE #546: the dd/MM/yyyy  HH:mm builder is DELETED. ist_fmt('dmy_hm2')
+  // CHANGE #548: the dd/MM/yyyy  HH:mm builder is DELETED. ist_fmt('dmy_hm2')
   // owns this layout; until the label lands we render the em dash placeholder
   // rather than a client-formatted stand-in.
   if (col.endsWith('_at') && s.length >= 10) {
@@ -809,7 +809,7 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
     final queueLen  = _queue.length;
     // Round to nearest rupee with ₹ symbol
     final totalStr  = rawTotal != null ? _fmtRupee(rawTotal) : '';
-    // CHANGE #546: backend-formatted (ist_fmt 'dmy'), never built here.
+    // CHANGE #548: backend-formatted (ist_fmt 'dmy'), never built here.
     final dateStr = createdAt.length >= 10
         ? (DateLabels.instance.label(createdAt, DateStyle.dmy) ?? '')
         : '';

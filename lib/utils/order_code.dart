@@ -4,7 +4,7 @@ bool _loggedOnce = false;
 
 /// Canonical order id for display — the server's order_code, verbatim.
 ///
-/// CHANGE #546: the old client-side fallback (which rebuilt a CPO code from
+/// CHANGE #548: the old client-side fallback (which rebuilt a CPO code from
 /// created_at using DDMMYY date math in Dart) is DELETED. Order codes are
 /// backend-owned; a row without one renders empty rather than having the
 /// client invent a date-derived id that could disagree with the server's.

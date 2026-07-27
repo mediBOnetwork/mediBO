@@ -1,4 +1,3 @@
-import '../../../utils/ist_date.dart';
 
 class WaMessage {
   final String id;
@@ -9,7 +8,9 @@ class WaMessage {
   final String? filePath;
   final String? mimeType;
   final String? routedTo;
-  final DateTime? receivedAt;
+  /// CHANGE #548: the RAW backend timestamp, verbatim. Never parsed here —
+  /// DateLabels resolves it to a backend-formatted string at render time.
+  final String? receivedAt;
   // CHANGE #208: rich message fields.
   final String? fileName;
   final double? latitude;
@@ -55,7 +56,7 @@ class WaMessage {
       filePath: j['file_path']?.toString(),
       mimeType: j['mime_type']?.toString(),
       routedTo: j['routed_to']?.toString(),
-      receivedAt: _asDate(j['received_at']),
+      receivedAt: _asRaw(j['received_at']),
       fileName: j['file_name']?.toString(),
       latitude: _asDouble(j['latitude']),
       longitude: _asDouble(j['longitude']),
@@ -94,9 +95,10 @@ class WaMessage {
         t == 'audio' || t == 'voice' || t == 'video' || t == 'sticker');
   }
 
-  static DateTime? _asDate(dynamic v) {
+  static String? _asRaw(dynamic v) {
     if (v == null) return null;
-    return tryIstFromDb(v.toString());
+    final s = v.toString();
+    return s.isEmpty ? null : s;
   }
 
   bool get isOut => direction == 'out';

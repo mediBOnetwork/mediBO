@@ -1,9 +1,10 @@
 import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+
+import '../../../services/date_labels.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
-import 'package:pharma_b2b/utils/ist_date.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../data/wa_repository.dart';
@@ -136,6 +137,7 @@ class _WaChatScreenState extends State<WaChatScreen>
       merged.sort((a, b) {
         final at = a.receivedAt;
         final bt = b.receivedAt;
+        // Raw ISO-8601 sorts correctly as plain strings — no parsing needed.
         if (at == null || bt == null) return 0;
         return at.compareTo(bt);
       });
@@ -258,7 +260,9 @@ class _WaChatScreenState extends State<WaChatScreen>
         direction: 'out',
         msgType: 'text',
         text: text,
-        receivedAt: nowIst(),
+        // CHANGE #548: the SERVER stamps the time on echo. No client guess —
+        // the bubble simply shows no time until the server responds.
+        receivedAt: null,
       );
       if (mounted) {
         setState(() {
@@ -473,7 +477,9 @@ class _WaChatScreenState extends State<WaChatScreen>
         filePath: res['media_path']?.toString(),
         mimeType: mime,
         fileName: fileName,
-        receivedAt: nowIst(),
+        // CHANGE #548: the SERVER stamps the time on echo. No client guess —
+        // the bubble simply shows no time until the server responds.
+        receivedAt: null,
       ));
     } catch (e) {
       _handleSendError(e);
@@ -591,7 +597,9 @@ class _WaChatScreenState extends State<WaChatScreen>
         locationName: nameC.text.trim().isNotEmpty ? nameC.text.trim() : null,
         locationAddress:
             addrC.text.trim().isNotEmpty ? addrC.text.trim() : null,
-        receivedAt: nowIst(),
+        // CHANGE #548: the SERVER stamps the time on echo. No client guess —
+        // the bubble simply shows no time until the server responds.
+        receivedAt: null,
       ));
     } catch (e) {
       _handleSendError(e);
@@ -656,7 +664,9 @@ class _WaChatScreenState extends State<WaChatScreen>
         msgType: 'contacts',
         contactName: name,
         contactPhone: digits,
-        receivedAt: nowIst(),
+        // CHANGE #548: the SERVER stamps the time on echo. No client guess —
+        // the bubble simply shows no time until the server responds.
+        receivedAt: null,
       ));
     } catch (e) {
       _handleSendError(e);
@@ -748,24 +758,18 @@ class _WaChatScreenState extends State<WaChatScreen>
   }
 
   // CHANGE #208: WhatsApp-style day separators.
-  bool _isNewDay(DateTime? prev, DateTime? cur) {
-    if (cur == null) return false;
-    if (prev == null) return true;
-    return prev.year != cur.year ||
-        prev.month != cur.month ||
-        prev.day != cur.day;
+  // CHANGE #548: groups on the DATE PART of the raw ISO string. A substring
+  // comparison, not date math — nothing is parsed or formatted here.
+  bool _isNewDay(String? prev, String? cur) {
+    if (cur == null || cur.length < 10) return false;
+    if (prev == null || prev.length < 10) return true;
+    return prev.substring(0, 10) != cur.substring(0, 10);
   }
 
-  String _dayLabel(DateTime? dt) {
-    if (dt == null) return '';
-    final now = nowIst();
-    final today = DateTime(now.year, now.month, now.day);
-    final day = DateTime(dt.year, dt.month, dt.day);
-    final diff = today.difference(day).inDays;
-    if (diff == 0) return 'Today';
-    if (diff == 1) return 'Yesterday';
-    return DateFormat('d MMM yyyy').format(dt);
-  }
+  // CHANGE #548: Today / Yesterday / "26 Jul 2026" all come from
+  // ist_fmt('day_sep'). The client no longer decides which one applies.
+  String _dayLabel(String? ts) =>
+      DateLabels.instance.label(ts, DateStyle.daySep) ?? '';
 
   String _senderTypeLabel(String type) {
     switch (type) {

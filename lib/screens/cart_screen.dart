@@ -5,7 +5,6 @@ import 'package:pharma_b2b/utils/toast.dart';
 import '../app_state.dart';
 import '../order_hours_state.dart';
 import '../inquiry_lock_state.dart';
-import '../utils/ist_date.dart';
 import '../utils/order_code.dart';
 import 'bulk_upload_screen.dart';
 import '../utils/render_log.dart';
@@ -152,7 +151,7 @@ class _CartScreenState extends State<CartScreen> {
           showToast(context, 'Customer id missing for ViewAs order', isError: true);
           return;
         }
-        final orderNumber = _generateOrderNumber();
+        final orderNumber = await _generateOrderNumber();
         // CHANGE #324: build items from ONLY the checked (admin-added) rows.
         final checkedLines = cart.lines
             .where((l) => _viewAsChecked.contains(l.product.id))
@@ -332,7 +331,7 @@ class _CartScreenState extends State<CartScreen> {
 
     // Capture totals before checkout clears the cart
     final netPayable = cart.netPayable;
-    final orderNumber = _generateOrderNumber();
+    final orderNumber = await _generateOrderNumber();
     final address = [
       profile?.address ?? '',
       profile?.city ?? '',
@@ -414,13 +413,12 @@ class _CartScreenState extends State<CartScreen> {
     }
   }
 
-  static String _generateOrderNumber() {
-    final now = nowIst();
-    final d = '${(now.year % 100).toString().padLeft(2, '0')}'
-              '${now.month.toString().padLeft(2, '0')}'
-              '${now.day.toString().padLeft(2, '0')}';
-    final s = (now.millisecondsSinceEpoch % 10000).toString().padLeft(4, '0');
-    return 'PO-$d-$s';
+  // CHANGE #548: the order number is stamped by the SERVER (next_order_number),
+  // never derived from the device clock — a client-guessed number could
+  // disagree with the stored record.
+  static Future<String> _generateOrderNumber() async {
+    final res = await Supabase.instance.client.rpc('next_order_number');
+    return res?.toString() ?? '';
   }
 
   void _showOrderGate({

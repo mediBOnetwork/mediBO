@@ -258,7 +258,7 @@ class _AdminManageAdminsScreenState extends State<AdminManageAdminsScreen> {
         ])),
         _td(_RoleToggle(isSuper: isSuper, enabled: canToggle, busy: busy, onToggle: () => _setSuper(email, !isSuper))),
         _td(Text(row['added_by'] ?? '—', style: const TextStyle(fontSize: 13, color: Color(0xFF374151)))),
-        // CHANGE #546: backend-formatted, rendered verbatim.
+        // CHANGE #548: backend-formatted, rendered verbatim.
         _td(DateLabelText(
             ts: row['created_at']?.toString(),
             style: DateStyle.dayMonYear,
@@ -416,7 +416,7 @@ class _AdminManageAdminsScreenState extends State<AdminManageAdminsScreen> {
     child: Center(child: Text(msg, style: const TextStyle(color: Color(0xFF6B7280), fontSize: 14))),
   );
 
-  // CHANGE #546: _fmtDate() and its hardcoded _months = ['Jan',...] array are
+  // CHANGE #548: _fmtDate() and its hardcoded _months = ['Jan',...] array are
   // DELETED. Month names and date layout are backend-owned (ist_fmt).
 }
 

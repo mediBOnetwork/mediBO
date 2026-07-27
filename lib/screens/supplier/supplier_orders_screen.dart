@@ -1,10 +1,11 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+
+import '../../services/date_labels.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../utils/bill_mime.dart';
 import '../../utils/download_bytes.dart';
-import '../../utils/ist_date.dart';
 import '../../utils/render_log.dart';
 import '../../utils/toast.dart';
 import '../../widgets/bill_actions_row.dart' show BillActionButton;
@@ -446,9 +447,8 @@ class _OrderCardState extends State<_OrderCard> {
     final orderCode = (widget.order['order_code'] as String?)?.trim() ?? '';
     final totalAmount = (widget.order['total_amount'] as num?)?.toDouble();
     final itemCount = (widget.order['item_count'] as num?)?.toInt() ?? 0;
-    final createdAt = widget.order['created_at'] != null
-        ? tryIstFromDb(widget.order['created_at'] as String)
-        : null;
+    // CHANGE #548: raw backend timestamp, rendered via ist_fmt.
+    final createdAt = widget.order['created_at']?.toString();
     final items = (widget.order['items'] as List<dynamic>? ?? [])
         .map((e) => Map<String, dynamic>.from(e as Map))
         .toList();
@@ -872,13 +872,10 @@ class _OrderCardState extends State<_OrderCard> {
     );
   }
 
-  String _formatDate(DateTime dt) {
-    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    var h = dt.hour % 12;
-    if (h == 0) h = 12;
-    final ampm = dt.hour >= 12 ? 'PM' : 'AM';
-    final m = dt.minute.toString().padLeft(2, '0');
-    return '${dt.day} ${months[dt.month - 1]}, $h:$m $ampm';
+  // CHANGE #548: backend-formatted (ist_fmt 'day_mon_time12'); the hardcoded
+  // months array and 12-hour math are deleted.
+  String _formatDate(String? ts) {
+    return DateLabels.instance.label(ts, DateStyle.dayMonTime12) ?? '';
   }
 }
 

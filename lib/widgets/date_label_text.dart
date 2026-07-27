@@ -1,4 +1,4 @@
-// CHANGE #546 — renders a backend-formatted date string and nothing else.
+// CHANGE #548 — renders a backend-formatted date string and nothing else.
 //
 // This is the ONLY widget in mediBO that puts a date on screen. It holds a raw
 // timestamp (exactly as the row carried it) plus a style token, asks

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
+
+import '../../../services/date_labels.dart';
 import 'package:intl/intl.dart';
-import 'package:pharma_b2b/utils/ist_date.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 import '../models/wa_conversation.dart';
 
@@ -14,15 +15,10 @@ class WaConversationTile extends StatelessWidget {
     required this.onTap,
   });
 
-  String _formatTime(DateTime? dt) {
-    if (dt == null) return '';
-    final now = nowIst();
-    final today = DateTime(now.year, now.month, now.day);
-    final msgDay = DateTime(dt.year, dt.month, dt.day);
-    if (msgDay == today) return DateFormat('HH:mm').format(dt);
-    if (dt.year == now.year) return DateFormat('d MMM').format(dt);
-    return DateFormat('d MMM yy').format(dt);
-  }
+  // CHANGE #548: today -> HH:mm, this year -> "5 Jul", older -> "5 Jul 24".
+  // All three now come from ist_fmt('wa_tile'); no Dart date math or DateFormat.
+  String _formatTime(String? ts) =>
+      DateLabels.instance.label(ts, DateStyle.waTile) ?? '';
 
   Color _avatarColor(String senderType) {
     switch (senderType) {

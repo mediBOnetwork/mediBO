@@ -28,6 +28,7 @@ import '../../services/payment_claims_service.dart';
 import '../../view_as_state.dart';
 import '../../widgets/bill_actions_row.dart'; // CHANGE #465
 import '../../widgets/bill_viewer.dart'; // CHANGE #465
+import '../../widgets/import_customer_sheet.dart'; // CHANGE #547
 import '../../widgets/cash_payment_sheet.dart';
 import '../../widgets/fullscreen_image.dart';
 import '../../utils/bill_mime.dart'; // CHANGE #465
@@ -385,6 +386,148 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   void _onDateScopeChanged() {
     if (!mounted) return;
     _load(showSpinner: false);
+  }
+
+  // ── CHANGE #547: Import Customer ─────────────────────────────────────────
+  // Anchor for the popup menu. Deliberately a menu AT THE BUTTON, not the
+  // centred dialog the Import Supplier popover uses.
+  final GlobalKey _importCustomerKey = GlobalKey();
+  bool _extracting = false;
+
+  Future<void> _openImportCustomerMenu() async {
+    final box =
+        _importCustomerKey.currentContext?.findRenderObject() as RenderBox?;
+    final overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox?;
+    if (box == null || overlay == null) return;
+    final origin = box.localToGlobal(Offset.zero, ancestor: overlay);
+    RenderLog.write('c547_menu_open', 'true');
+
+    final choice = await showMenu<String>(
+      context: context,
+      color: Colors.white,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      position: RelativeRect.fromLTRB(
+        origin.dx,
+        origin.dy + box.size.height + 4,
+        (overlay.size.width - origin.dx - box.size.width)
+            .clamp(0.0, overlay.size.width),
+        0,
+      ),
+      items: const [
+        PopupMenuItem<String>(
+          value: 'manual',
+          child: Row(children: [
+            Icon(Icons.edit_outlined, size: 18, color: Color(0xFF6B7280)),
+            SizedBox(width: 10),
+            Text('Import Manually', style: TextStyle(fontSize: 14)),
+          ]),
+        ),
+        PopupMenuItem<String>(
+          value: 'file',
+          child: Row(children: [
+            Icon(Icons.photo_library_outlined, size: 18, color: Color(0xFF6B7280)),
+            SizedBox(width: 10),
+            Text('Import by File', style: TextStyle(fontSize: 14)),
+          ]),
+        ),
+      ],
+    );
+    if (!mounted || choice == null) return;
+
+    if (choice == 'manual') {
+      final saved = await ImportCustomerSheet.open(context);
+      if (saved == true && mounted) _load(showSpinner: false);
+    } else {
+      await _importCustomerByFile();
+    }
+  }
+
+  /// Multi-select photos, ALL belonging to ONE customer -> customer-import
+  /// 'extract' -> the same registration form, pre-filled and fully editable.
+  Future<void> _importCustomerByFile() async {
+    final picked = await FilePicker.pickFiles(
+      type: FileType.image,
+      allowMultiple: true,
+      withData: true,
+    );
+    if (picked == null || picked.files.isEmpty || !mounted) return;
+
+    // The edge function accepts at most 8 images per customer.
+    final files = picked.files.where((f) => f.bytes != null).take(8).toList();
+    if (files.isEmpty) return;
+
+    setState(() => _extracting = true);
+    try {
+      final images = [for (final f in files) base64Encode(f.bytes!)];
+      RenderLog.write('c547_extract_send', 'images=${images.length}');
+
+      final res = await Supabase.instance.client.functions.invoke(
+        'customer-import',
+        body: {
+          'mode': 'extract',
+          'images': images,
+          'mime_type': 'image/jpeg',
+        },
+      );
+      final data = res.data;
+      final m =
+          data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{};
+      if (!mounted) return;
+      setState(() => _extracting = false);
+
+      if (m['error'] != null) {
+        // Backend copy, verbatim.
+        showToast(context, m['error'].toString(), isError: true);
+        return;
+      }
+
+      final saved = await ImportCustomerSheet.open(context, extracted: m);
+      if (saved == true && mounted) _load(showSpinner: false);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _extracting = false);
+      final msg = e is FunctionException
+          ? ((e.details is Map && (e.details as Map)['error'] != null)
+              ? (e.details as Map)['error'].toString()
+              : (e.details?.toString() ?? e.reasonPhrase ?? '$e'))
+          : '$e';
+      showToast(context, msg, isError: true);
+    }
+  }
+
+  Widget _buildImportCustomerButton() {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 20),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: SizedBox(
+          width: 220,
+          child: ElevatedButton.icon(
+            key: _importCustomerKey,
+            onPressed: _extracting ? null : _openImportCustomerMenu,
+            icon: _extracting
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.white))
+                : const Icon(Icons.upload_file_outlined, size: 18),
+            label: const Text('Import Customer'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF1B7A43),
+              foregroundColor: Colors.white,
+              textStyle:
+                  const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape:
+                  RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              elevation: 0,
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   List<_CustRow>     _orderRows    = [];
@@ -1506,9 +1649,12 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     // Approved customers view
     if (_isApprovedView) {
       RenderLog.write('c367_wa_removed', 'tab:customers');
+      RenderLog.write('c547_import_customer_btn', 'true');
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // CHANGE #547 — Import Customer, mirroring Import Supplier's styling.
+          _buildImportCustomerButton(),
           if (_approvedRows.isEmpty)
             _ssvEmptyState('0 approved customers')
           else ...[

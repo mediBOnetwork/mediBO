@@ -41,6 +41,9 @@ class AdminDateScope {
   bool _isToday = true;
   bool _isFuture = false;
   List<Map<String, dynamic>> _options = const [];
+  List<Map<String, dynamic>> _calendar = const [];
+  String? _minDate;
+  String? _maxDate;
 
   bool _loaded = false;
   bool _inFlight = false;
@@ -68,6 +71,17 @@ class AdminDateScope {
 
   /// [{date, label, is_selected}] — distinct real order dates, newest first.
   List<Map<String, dynamic>> get options => _options;
+
+  /// CHANGE #546 — the 60-day calendar the Dashboard picker renders, newest
+  /// first. Each entry: {date, label, is_today, is_selected, has_orders,
+  /// badge, badge_colors:{bg,fg}, customer_orders, supplier_orders}.
+  /// Every one of those is rendered verbatim — the client never counts orders
+  /// and never formats a date.
+  List<Map<String, dynamic>> get calendar => _calendar;
+
+  /// Selectable bounds, 'YYYY-MM-DD'. Anything outside is not tappable.
+  String? get minDate => _minDate;
+  String? get maxDate => _maxDate;
 
   /// False until admin_date_scope_state() has landed once.
   bool get isLoaded => _loaded;
@@ -137,19 +151,22 @@ class AdminDateScope {
     _isToday = m['is_today'] == true;
     _isFuture = m['is_future'] == true;
 
-    final raw = m['options'];
-    _options = raw is List
-        ? raw
-            .whereType<Map>()
-            .map((e) => Map<String, dynamic>.from(e))
-            .toList()
+    List<Map<String, dynamic>> listOf(dynamic v) => v is List
+        ? v.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList()
         : const <Map<String, dynamic>>[];
+
+    _options = listOf(m['options']);
+    _calendar = listOf(m['calendar']);
+    _minDate = m['min_date']?.toString();
+    _maxDate = m['max_date']?.toString();
 
     final first = !_loaded;
     _loaded = true;
     if (first) {
       RenderLog.write('c545_date_scope_loaded',
           'date=${_date ?? ''};options=${_options.length}');
+      RenderLog.write('c546_calendar_loaded',
+          'days=${_calendar.length};min=${_minDate ?? ''};max=${_maxDate ?? ''}');
     }
     if (notifyAlways || first || prevDate != _date) _notify();
   }

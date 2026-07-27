@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
+import 'package:pharma_b2b/widgets/admin_date_picker.dart';
 import 'package:pharma_b2b/widgets/order_hours_card.dart';
 import 'package:pharma_b2b/widgets/notifications_card.dart';
 
@@ -172,6 +173,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  // CHANGE #545 — THE admin date filter. One picker, here,
+                  // directly above ORDER HOURS; every date-scoped tab follows
+                  // it via AdminDateScope. No tab has one of its own.
+                  const AdminDatePicker(),
                   const OrderHoursCard(),
                   const NotificationsCard(),
                   _sectionLabel('Action Required'),

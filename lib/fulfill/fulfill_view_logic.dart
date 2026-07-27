@@ -12,7 +12,6 @@
 // PURE logic only — no widgets. Emits c355_shared so we can prove a layout used it.
 
 import '../screens/admin/dispute/dispute_models.dart';
-import '../utils/ist_date.dart';
 import '../utils/render_log.dart';
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -22,21 +21,24 @@ import '../utils/render_log.dart';
 // the (huge, Supabase-backed) admin_fulfillment_screen widget tree.
 // ════════════════════════════════════════════════════════════════════════════
 
-/// The exact params map every fw_get_state call must send. p_date is NEVER
-/// omitted — relying on the server default was the #471 bug (it made the box
-/// ignore the selected Fulfill date and show the wrong day's items).
-/// p_include_older is deliberately NOT sent: fw_get_state (like every other
-/// Fulfill RPC) is strict single-date now — the date picker is the only
-/// intended way to view another date, and the RPC ignores this param anyway.
+/// The exact params map every fw_get_state call must send.
+///
+/// CHANGE #545 — p_date is now ALWAYS OMITTED, inverting #471. The date lives
+/// server-side (admin_date_scope, set by the ONE Dashboard picker) and
+/// fw_get_state defaults p_date to admin_active_date(), so omitting the key is
+/// what makes the box follow the picker. The key must be ABSENT, never
+/// present-with-null: an explicit null reads as "all dates".
+///
+/// p_include_older is likewise not sent: fw_get_state (like every other Fulfill
+/// RPC) is strict single-date — the Dashboard picker is the only way to view
+/// another date, and the RPC ignores this param anyway.
 Map<String, dynamic> fwGetStateParams({
   required String supplierName,
   required String stage,
-  required DateTime date,
 }) =>
     {
       'p_supplier_name': supplierName,
       'p_stage': stage,
-      'p_date': ymd(date),
     };
 
 /// Backend-owned progress fields for the box header. Renders progress.label

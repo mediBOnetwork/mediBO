@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 
 import '../../features/whatsapp/ui/wa_home_screen.dart';
+import '../../services/admin_date_scope.dart';
 import '../../services/fcm_service.dart';
 import '../../theme.dart';
 import '../../user_state.dart';
@@ -61,7 +62,7 @@ class AdminShell extends StatefulWidget {
   State<AdminShell> createState() => _AdminShellState();
 }
 
-class _AdminShellState extends State<AdminShell> {
+class _AdminShellState extends State<AdminShell> with WidgetsBindingObserver {
   int _index = 0;
   _AdminView _view = _AdminView.dashboard;
   int _pendingBillsCount = 0;
@@ -69,6 +70,11 @@ class _AdminShellState extends State<AdminShell> {
   @override
   void initState() {
     super.initState();
+    // CHANGE #545 — ONE app-wide subscription to `admin_date_scope`. Starting it
+    // at the admin root (rather than per screen) is what makes every tab follow
+    // the Dashboard picker instantly, including tabs mounted later.
+    WidgetsBinding.instance.addObserver(this);
+    AdminDateScope.instance.start();
     if (widget.initialSection != null) {
       _view = _AdminView.section;
       _index = widget.initialSection!;
@@ -77,6 +83,22 @@ class _AdminShellState extends State<AdminShell> {
     _initFcm();
     RenderLog.write('c204_wa_section_shown', 1);
     _checkSuperAdmin();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  // CHANGE #545 — a backgrounded tab must never come back stale: re-read the
+  // scope on resume/focus. If the date moved (another device, or a midnight
+  // rollover changing what "Today" resolves to) every listener refetches.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && mounted) {
+      AdminDateScope.instance.refresh();
+    }
   }
 
   Future<void> _checkSuperAdmin() async {

@@ -306,7 +306,7 @@ Future<Map<String, dynamic>> finalizeVoiceSession(String sessionKey, {String? da
 class ContinuousVoiceSession {
   final String supplierName;
   final String stage; // 'warehouse' | 'shop'
-  // 'YYYY-MM-DD' — the Fulfill date being counted (FulfillDateScope.instance.date),
+  // 'YYYY-MM-DD' — the date being counted (AdminDateScope.instance.dateYmd),
   // forwarded to voice_finalize_session so counts save against the date the admin
   // is actually viewing, not the server's "today".
   final String dateYmd;

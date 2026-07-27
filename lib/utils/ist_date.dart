@@ -18,16 +18,18 @@ DateTime todayIst() {
   return DateTime(n.year, n.month, n.day);
 }
 
-bool isSameDay(DateTime a, DateTime b) =>
-    a.year == b.year && a.month == b.month && a.day == b.day;
+// CHANGE #545 — isSameDay() and ymd() are DELETED, both now callerless.
+//   • isSameDay's only callers were the per-tab date chips asking "is the
+//     selected date today?" — a question the backend answers now
+//     (admin_date_scope_state().is_today).
+//   • ymd() built the 'YYYY-MM-DD' string for p_date. The date-scoped read RPCs
+//     no longer take one, and the few RPCs that still do (ist_day_bounds,
+//     fw_supplier_modes, the bag/voice WRITE RPCs) are handed
+//     AdminDateScope.instance.dateYmd — already a backend string, never derived
+//     from a client DateTime.
 
-/// 'YYYY-MM-DD' — for RPC `p_date` params.
-String ymd(DateTime d) =>
-    '${d.year.toString().padLeft(4, '0')}-'
-    '${d.month.toString().padLeft(2, '0')}-'
-    '${d.day.toString().padLeft(2, '0')}';
-
-/// 'DD/MM/YYYY' — for chip labels.
+/// 'DD/MM/YYYY' — for formatting a timestamp READ from a row (e.g. a supplier
+/// lead's created_at). Never used to build or label the admin date scope.
 String dmy(DateTime d) =>
     '${d.day.toString().padLeft(2, '0')}/'
     '${d.month.toString().padLeft(2, '0')}/'

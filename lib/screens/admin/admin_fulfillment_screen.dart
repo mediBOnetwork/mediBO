@@ -22,8 +22,8 @@ import '../../utils/tts.dart';
 import '../../user_state.dart';
 import '../../services/voice_receive_service.dart';
 import '../../services/fulfill_realtime.dart'; // C353: single realtime channel
-import '../../services/fulfill_date_scope.dart'; // C444: shared date+includeOlder scope
-import '../../widgets/date_scope_chip.dart'; // C444: shared DateScopeChip + OlderOpenPill
+import '../../services/admin_date_scope.dart'; // C545: the ONE admin date scope
+import '../../widgets/box_date_row.dart'; // C545: BoxDateOlderRow (the shared date chip is gone)
 import '../../utils/ist_date.dart'; // C444: IST date helpers
 import '../../supabase_config.dart' show SupabaseConfig;
 import 'voice_receive.dart';
@@ -997,7 +997,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Map<String, dynamic>? _boxProgress;
   String? _boxDateLabel;
   Map<String, dynamic>? _boxOlder;
-  // Local per-box toggle (NOT the shared FulfillDateScope.includeOlder — this
+  // Local per-box toggle (there is no shared include-older flag any more — this
   // control refetches only the open supplier's box). Reset OFF on every
   // supplier-open and every date change (see _onDateScopeChanged).
   bool _boxIncludeOlder = false;
@@ -1293,7 +1293,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   @override
   void initState() {
     super.initState();
-    FulfillDateScope.instance.addListener(_onDateScopeChanged);
+    AdminDateScope.instance.addListener(_onDateScopeChanged);
     _loadSettings();
     _loadSuppliers();
     _initVoice();
@@ -1325,7 +1325,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   @override
   void dispose() {
     FulfillRealtime.instance.removeListener(_onVoiceMentionsRealtime);
-    FulfillDateScope.instance.removeListener(_onDateScopeChanged);
+    AdminDateScope.instance.removeListener(_onDateScopeChanged);
     _listScrollCtrl.dispose();
     _agentBubbleEntry?.remove();
     _agentBubbleEntry = null;
@@ -1487,15 +1487,16 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       // place when the new data arrives, so the tab never flashes/reloads.
       if (!_loadingSuppliers && _suppliers.isEmpty) setState(() => _loadingSuppliers = true);
       try {
-        final scope = FulfillDateScope.instance;
-        // p_include_older not sent — fw_list_arrivals is strict single-date now.
-        final res = await Supabase.instance.client.rpc('fw_list_arrivals', params: {
-          'p_date': ymd(scope.date),
-        }).timeout(const Duration(seconds: 15)) as Map;
+        // CHANGE #545: p_date OMITTED (defaults to admin_active_date(), the one
+        // Dashboard picker's date) — never sent as an explicit null, which
+        // would read as "all dates". p_include_older not sent either:
+        // fw_list_arrivals is strict single-date.
+        final res = await Supabase.instance.client
+            .rpc('fw_list_arrivals')
+            .timeout(const Duration(seconds: 15)) as Map;
         if (!mounted) return;
         _olderOpen = (res['older_open'] as num?)?.toInt() ?? 0;
         RenderLog.write('c444_older_open', '$_olderOpen');
-        RenderLog.write('c444_include_older', '${scope.includeOlder}');
         // CHANGE #473: Warehouse only shows suppliers whose Shop counting has
         // already been confirmed (forwarded==true) — use the backend's
         // pre-filtered list instead of the full Supplier-Shop suppliers array,
@@ -1503,7 +1504,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         final c473Shop = (res['count'] as num?)?.toInt() ?? 0;
         final c473Warehouse = (res['warehouse_count'] as num?)?.toInt() ?? 0;
         RenderLog.write('c473_fw_sync',
-            'date=${ymd(scope.date)} shop=$c473Shop warehouse=$c473Warehouse');
+            'date=${AdminDateScope.instance.dateYmd ?? ''} shop=$c473Shop warehouse=$c473Warehouse');
         final rawList = (res['warehouse_suppliers'] as List? ?? []);
         // Backend-owned dots: fw_list_arrivals() now returns per supplier
         // dot_packed/dot_method/dot_submit = {state, fill, border} (fill/border
@@ -1592,21 +1593,20 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       // the shared Fulfill date, instead of an undated direct supplier_orders
       // query. This is what makes Shop show 0 suppliers on a date with no open
       // work instead of every pending/sent supplier regardless of when placed.
-      final scope = FulfillDateScope.instance;
-      // p_include_older not sent — fw_list_arrivals is strict single-date now.
-      final res = await Supabase.instance.client.rpc('fw_list_arrivals', params: {
-        'p_date': ymd(scope.date),
-      }).timeout(const Duration(seconds: 15)) as Map;
+      // CHANGE #545: p_date OMITTED (defaults to admin_active_date()); never an
+      // explicit null. p_include_older not sent — strict single-date.
+      final res = await Supabase.instance.client
+          .rpc('fw_list_arrivals')
+          .timeout(const Duration(seconds: 15)) as Map;
       if (!mounted) return;
       _olderOpen = (res['older_open'] as num?)?.toInt() ?? 0;
       RenderLog.write('c444_older_open', '$_olderOpen');
-      RenderLog.write('c444_include_older', '${scope.includeOlder}');
       // CHANGE #473: Supplier Shop stays unfiltered — every supplier with
       // items today, regardless of forwarded status.
       final c473Shop = (res['count'] as num?)?.toInt() ?? 0;
       final c473Warehouse = (res['warehouse_count'] as num?)?.toInt() ?? 0;
       RenderLog.write('c473_fw_sync',
-          'date=${ymd(scope.date)} shop=$c473Shop warehouse=$c473Warehouse');
+          'date=${AdminDateScope.instance.dateYmd ?? ''} shop=$c473Shop warehouse=$c473Warehouse');
       final rawList = (res['suppliers'] as List? ?? []);
       final seen = <String>{};
       final names = <String>[];
@@ -1657,9 +1657,14 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Future<void> _loadCollectModes() async {
     if (widget.arrivals || !mounted) return;
     try {
-      final res = await Supabase.instance.client.rpc('fw_supplier_modes', params: {
-        'p_date': ymd(FulfillDateScope.instance.date),
-      }).timeout(const Duration(seconds: 15)) as Map;
+      // CHANGE #545: fw_supplier_modes is NOT one of the twelve date-scoped read
+      // RPCs — its p_date still defaults to NULL (= server today), and it has a
+      // zero-arg overload, so the key must stay. It gets the central date's own
+      // backend string.
+      final modesYmd = AdminDateScope.instance.dateYmd;
+      final res = await Supabase.instance.client.rpc('fw_supplier_modes',
+              params: {if (modesYmd != null) 'p_date': modesYmd})
+          .timeout(const Duration(seconds: 15)) as Map;
       if (!mounted) return;
       final modes = (res['modes'] as Map? ?? {});
       final map = <String, String?>{};
@@ -1681,9 +1686,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Future<void> _loadDisputes() async {
     if (!mounted) return;
     try {
-      final res = await Supabase.instance.client.rpc('fw_get_disputes', params: {
-        'p_date': ymd(FulfillDateScope.instance.date),
-      }).timeout(const Duration(seconds: 15)) as Map;
+      // CHANGE #545: p_date OMITTED — defaults to admin_active_date().
+      final res = await Supabase.instance.client
+          .rpc('fw_get_disputes')
+          .timeout(const Duration(seconds: 15)) as Map;
       if (!mounted) return;
       final disputes = (res['disputes'] as List? ?? []);
       // Keep legacy map for fulfill_item_sheet.dart compat
@@ -1747,12 +1753,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       try {
         // #160: shape-tolerant parse — fw_get_state returns jsonb object; guard against
         // PostgREST wrapping it in [{fw_get_state: value}] on older versions.
-        // CHANGE #471: p_date ALWAYS sent — the shared FulfillDateScope.date.
-        // p_include_older is not sent — fw_get_state is strict single-date now.
+        // CHANGE #545: p_date is OMITTED — fw_get_state defaults it to
+        // admin_active_date(), the one Dashboard picker's date. p_include_older
+        // is not sent either — fw_get_state is strict single-date.
         final dynamic _rawState = await Supabase.instance.client.rpc('fw_get_state',
             params: fwGetStateParams(
               supplierName: supplier, stage: 'arrivals',
-              date: FulfillDateScope.instance.date,
             )).timeout(const Duration(seconds: 15));
         if (!mounted) return;
         Map<String, dynamic> stateRes;
@@ -1838,11 +1844,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
     try {
       // #333: fw_get_state('collect') returns items WITH shop_qty and top-level stage
-      // CHANGE #471: p_date ALWAYS sent; p_include_older not sent (strict single-date).
+      // CHANGE #545: p_date OMITTED (server default = admin_active_date());
+      // p_include_older not sent (strict single-date).
       final dynamic _rawCollect = await Supabase.instance.client.rpc('fw_get_state',
           params: fwGetStateParams(
             supplierName: supplier, stage: 'collect',
-            date: FulfillDateScope.instance.date,
           )).timeout(const Duration(seconds: 15));
       if (!mounted) return;
       Map<String, dynamic> collectState;
@@ -1906,11 +1912,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // #156: Check if this supplier's arrivals are confirmed/locked via fw_get_state.
   Future<void> _checkArrivalsLocked(String supplier) async {
     try {
-      // CHANGE #471: p_date ALWAYS sent; p_include_older not sent (strict single-date).
+      // CHANGE #545: p_date OMITTED (server default = admin_active_date());
+      // p_include_older not sent (strict single-date).
       final dynamic _rawLock = await Supabase.instance.client.rpc('fw_get_state',
           params: fwGetStateParams(
             supplierName: supplier, stage: 'arrivals',
-            date: FulfillDateScope.instance.date,
           )).timeout(const Duration(seconds: 15));
       if (!mounted) return;
       Map<String, dynamic> res;
@@ -2103,7 +2109,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           'p_note': note ?? 'tap:$state',
           // CHANGE #535: write against the SELECTED Fulfill date, not the
           // server's today — same source the tab loads its data with.
-          'p_date': ymd(FulfillDateScope.instance.date),
+          if (AdminDateScope.instance.dateYmd != null)
+            'p_date': AdminDateScope.instance.dateYmd,
         });
         final res = _normRpc(rawCount);
         if (!mounted) return;
@@ -2132,7 +2139,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           'p_product_id': productId,
           'p_qty': setQty,
           'p_note': note ?? 'tap:$state',
-          'p_date': ymd(FulfillDateScope.instance.date),
+          if (AdminDateScope.instance.dateYmd != null)
+            'p_date': AdminDateScope.instance.dateYmd,
         });
         final res2 = rawVoice is Map ? Map<String, dynamic>.from(rawVoice) : <String, dynamic>{};
         if (!mounted) return;
@@ -2336,7 +2344,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final session = ContinuousVoiceSession(
       supplierName: supplier332,
       stage: stage,
-      dateYmd: ymd(FulfillDateScope.instance.date),
+      dateYmd: AdminDateScope.instance.dateYmd ?? '',
       orderItemsProvider: () => _items,
       expectedProvider: _buildExpectedList,
       onWindowError: (e, st) {
@@ -2598,11 +2606,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     // #127 BUG1 FIX: Arrivals reload uses fw_get_state directly (no get_receiving_box).
     if (widget.arrivals) {
       try {
-        // CHANGE #471: p_date ALWAYS sent; p_include_older not sent (strict single-date).
+        // CHANGE #545: p_date OMITTED (server default = admin_active_date());
+      // p_include_older not sent (strict single-date).
         final dynamic _rawReload = await Supabase.instance.client.rpc('fw_get_state',
             params: fwGetStateParams(
               supplierName: supplier, stage: 'arrivals',
-              date: FulfillDateScope.instance.date,
             )).timeout(const Duration(seconds: 15));
         if (!mounted) return;
         Map<String, dynamic> stateRes;
@@ -2667,11 +2675,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     }
     try {
       // #333: fw_get_state('collect') returns items WITH shop_qty and top-level stage
-      // CHANGE #471: p_date ALWAYS sent; p_include_older not sent (strict single-date).
+      // CHANGE #545: p_date OMITTED (server default = admin_active_date());
+      // p_include_older not sent (strict single-date).
       final dynamic _rawReloadCollect = await Supabase.instance.client.rpc('fw_get_state',
           params: fwGetStateParams(
             supplierName: supplier, stage: 'collect',
-            date: FulfillDateScope.instance.date,
           )).timeout(const Duration(seconds: 15));
       if (!mounted) return;
       Map<String, dynamic> reloadState;
@@ -3723,7 +3731,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           'p_note': 'voice-agent #253',
           // CHANGE #535: selected Fulfill date (matches the set_voice_received
           // sibling below, which already passed it).
-          'p_date': ymd(FulfillDateScope.instance.date),
+          if (AdminDateScope.instance.dateYmd != null)
+            'p_date': AdminDateScope.instance.dateYmd,
         });
         res = _normRpc(rawAgent);
       } else {
@@ -3732,7 +3741,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           'p_product_id': (action['product_id'] as num).toInt(),
           'p_qty': (action['qty'] as num).toDouble(),
           'p_note': 'voice-agent #85',
-          'p_date': ymd(FulfillDateScope.instance.date),
+          if (AdminDateScope.instance.dateYmd != null)
+            'p_date': AdminDateScope.instance.dateYmd,
         });
         res = rawAgent is Map ? Map<String, dynamic>.from(rawAgent) : {};
       }
@@ -4657,7 +4667,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             'p_qty': qty,
             'p_note': 'got_all #258',
             // CHANGE #535: selected Fulfill date.
-            'p_date': ymd(FulfillDateScope.instance.date),
+            if (AdminDateScope.instance.dateYmd != null)
+            'p_date': AdminDateScope.instance.dateYmd,
           });
           final res = _normRpc(raw);
           if (res['error'] != null) return _bagCountError(res);
@@ -4674,7 +4685,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             // CHANGE #535: clear the SELECTED date's rows — uniqueness is now
             // (supplier, product, bag_no, order_date), so omitting this cleared
             // today's row instead of the one on screen.
-            'p_date': ymd(FulfillDateScope.instance.date),
+            if (AdminDateScope.instance.dateYmd != null)
+            'p_date': AdminDateScope.instance.dateYmd,
           });
         } catch (_) {}
         _reloadItemsFromDB();
@@ -5677,7 +5689,8 @@ Future<List<Map<String, dynamic>>> fetchScopedVoiceMentions({
         'p_supplier_name': supplierName,
         'p_stage': stage,
         'p_session_key': sessionKey,
-        'p_date': ymd(FulfillDateScope.instance.date),
+        if (AdminDateScope.instance.dateYmd != null)
+            'p_date': AdminDateScope.instance.dateYmd,
       }) as List;
   return rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
 }
@@ -5913,7 +5926,7 @@ class _FinalizeReviewDialogState extends State<_FinalizeReviewDialog> {
       // single source of truth and must always be passed.
       final refreshed = await finalizeVoiceSession(
         widget.sessionKey,
-        dateYmd: ymd(FulfillDateScope.instance.date),
+        dateYmd: AdminDateScope.instance.dateYmd ?? '',
       );
       final newReview = (refreshed['needs_bag_review'] as List?) ?? const [];
       RenderLog.write('c457_assign_bag', 'mention=$mentionId;bag=$bagNo;remaining=${newReview.length}');
@@ -6424,7 +6437,8 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
         'p_product_id': productId,
         'p_qty': mentionQty.toDouble(),
         'p_note': 'voice: tap-fix to $productName',
-        'p_date': ymd(FulfillDateScope.instance.date),
+        if (AdminDateScope.instance.dateYmd != null)
+            'p_date': AdminDateScope.instance.dateYmd,
       });
 
       if (mounted) {
@@ -8280,10 +8294,9 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
   }
   final _arrivalsKey = GlobalKey<_ArrivalsScreenState>();
 
-  // CHANGE #444 — shared date-scope chip: rebuild the header (for the "Today ·"
-  // label and isToday styling) whenever the shared scope changes. Each of the
-  // 5 tab widgets listens to FulfillDateScope independently for its own
-  // refetch, so this listener only needs to repaint the chip itself.
+  // CHANGE #545 — repaint the header when the central admin date moves. Each of
+  // the 5 tab widgets listens to AdminDateScope independently for its own
+  // refetch, so this listener only needs to rebuild this shell.
   void _onDateScopeChanged() {
     if (mounted) setState(() {});
   }
@@ -8298,10 +8311,10 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    FulfillDateScope.instance.addListener(_onDateScopeChanged);
+    AdminDateScope.instance.addListener(_onDateScopeChanged);
     // CHANGE #531: one fetch per session for fw_error_messages()+fw_issue_options(),
     // plus fw_date_label() for the selected date (refetched by FulfillLookups'
-    // own FulfillDateScope listener). Never fetched per render.
+    // own AdminDateScope listener). Never fetched per render.
     FulfillLookups.instance.addListener(_onLookupsChanged);
     FulfillLookups.instance.ensureLoaded();
     _subscribeRealtime();
@@ -8336,10 +8349,11 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
         _scheduleDisputeReload();
         _arrivalsKey.currentState?.refresh();
       }
-      // CHANGE #444 B5 — midnight rollover: if the user was viewing "today"
-      // and the real day has moved on since, advance the selection and
-      // refetch (recomputeToday() notifies all 5 tabs; no-op otherwise).
-      FulfillDateScope.instance.recomputeToday();
+      // CHANGE #545 — re-read the central date on resume/focus, so a
+      // backgrounded tab is never stale and a midnight rollover (which changes
+      // what "Today" resolves to server-side) still advances the view. refresh()
+      // notifies every listener only when the date actually moved.
+      AdminDateScope.instance.refresh();
     }
   }
 
@@ -8349,7 +8363,7 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
     _collectDebounce?.cancel();
     _disputeDebounce?.cancel();
     FulfillRealtime.instance.removeListener(_onRealtimeChange);
-    FulfillDateScope.instance.removeListener(_onDateScopeChanged);
+    AdminDateScope.instance.removeListener(_onDateScopeChanged);
     FulfillLookups.instance.removeListener(_onLookupsChanged);
     super.dispose();
   }
@@ -8382,23 +8396,9 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
         color: _kCard,
         padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          // CHANGE #444 — shared date-scope chip, above the tab bar, right-aligned.
-          // One date/includeOlder pair for the whole Fulfill screen (all 5 tabs).
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              Builder(builder: (context) {
-                final scope = FulfillDateScope.instance;
-                RenderLog.write('c444_chip_label',
-                    FulfillLookups.instance.dateChipLabel ?? '');
-                return DateScopeChip(
-                  selected: scope.date,
-                  isToday: scope.isToday,
-                  onChanged: (d) => FulfillDateScope.instance.setDate(d),
-                );
-              }),
-            ],
-          ),
+          // CHANGE #545 — the Fulfill header date chip is DELETED. All five
+          // tabs (Supplier Shop, Warehouse, Bag, Pack, Disputes) follow the ONE
+          // admin date picker on the Dashboard, above the ORDER HOURS card.
           const SizedBox(height: 8),
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
@@ -8564,13 +8564,13 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
     RenderLog.write('c285_bag_no_chip', 'rendered=false');
     RenderLog.write('c286_no_inner_strip', 'strip=removed');
     RenderLog.write('c286_no_received_footer', 'footer=removed');
-    FulfillDateScope.instance.addListener(_onDateScopeChanged);
+    AdminDateScope.instance.addListener(_onDateScopeChanged);
     _load();
   }
 
   @override
   void dispose() {
-    FulfillDateScope.instance.removeListener(_onDateScopeChanged);
+    AdminDateScope.instance.removeListener(_onDateScopeChanged);
     _scroll.dispose();
     _searchCtrl.dispose();
     _searchDebounce?.cancel();
@@ -8581,11 +8581,11 @@ class _BagTabState extends State<_BagTab> with AutomaticKeepAliveClientMixin {
     if (!mounted) return;
     if (!silent) setState(() { _loading = true; _error = null; });
     try {
-      final scope = FulfillDateScope.instance;
-      // p_include_older not sent — fw_list_bags is strict single-date now.
-      final data = await Supabase.instance.client.rpc('fw_list_bags', params: {
-        'p_date': ymd(scope.date),
-      }).timeout(const Duration(seconds: 15)) as Map;
+      // CHANGE #545: p_date OMITTED (defaults to admin_active_date()); never an
+      // explicit null. p_include_older not sent — strict single-date.
+      final data = await Supabase.instance.client
+          .rpc('fw_list_bags')
+          .timeout(const Duration(seconds: 15)) as Map;
       if (!mounted) return;
       final bags = (data['bags'] as List? ?? [])
           .map((r) => Map<String, dynamic>.from(r as Map))
@@ -9230,7 +9230,7 @@ class _PackTabState extends State<_PackTab>
     super.initState();
     RenderLog.write('c278_pack_tab_mounted', 1);
     RenderLog.write('c354_ready', 'tab=pack');
-    FulfillDateScope.instance.addListener(_onDateScopeChanged);
+    AdminDateScope.instance.addListener(_onDateScopeChanged);
     _load();
     _loadDisputeIndex();
   }
@@ -9257,7 +9257,7 @@ class _PackTabState extends State<_PackTab>
 
   @override
   void dispose() {
-    FulfillDateScope.instance.removeListener(_onDateScopeChanged);
+    AdminDateScope.instance.removeListener(_onDateScopeChanged);
     // CHANGE #454: don't leave a session dangling if the tab is torn down mid-count.
     _packVoiceSession?.cancel().ignore();
     _scroll.dispose();
@@ -9277,15 +9277,14 @@ class _PackTabState extends State<_PackTab>
     if (!mounted) return;
     if (!silent) setState(() { _loading = true; _error = null; });
     try {
-      // pack_list_orders(p_date) — per-order dot/pack_button/can_mark_ready are
+      // pack_list_orders() — per-order dot/pack_button/can_mark_ready are
       // backend-owned now (verbatim, see _buildPackingButton and
-      // _buildPackDispatchButton). Strict single-date by design — the date
-      // picker (FulfillDateScope) is the only way to view another date; no
-      // include-older support, so p_include_older is not sent.
-      final scope = FulfillDateScope.instance;
-      final res = await Supabase.instance.client.rpc('pack_list_orders', params: {
-        'p_date': ymd(scope.date),
-      }).timeout(const Duration(seconds: 15)) as Map;
+      // _buildPackDispatchButton). Strict single-date by design.
+      // CHANGE #545: p_date OMITTED (defaults to admin_active_date(), the one
+      // Dashboard picker's date); p_include_older not sent.
+      final res = await Supabase.instance.client
+          .rpc('pack_list_orders')
+          .timeout(const Duration(seconds: 15)) as Map;
       if (!mounted) return;
       final orders = (res['orders'] as List? ?? [])
           .map((r) => Map<String, dynamic>.from(r as Map))
@@ -13045,13 +13044,13 @@ class _DisputesScreenState extends State<_DisputesScreen> {
     super.initState();
     RenderLog.write('c188_realtime_subscribed', 'disputes_tab_init');
     RenderLog.write('c354_ready', 'tab=disputes');
-    FulfillDateScope.instance.addListener(_onDateScopeChanged);
+    AdminDateScope.instance.addListener(_onDateScopeChanged);
     _load();
   }
 
   @override
   void dispose() {
-    FulfillDateScope.instance.removeListener(_onDateScopeChanged);
+    AdminDateScope.instance.removeListener(_onDateScopeChanged);
     _DisputeContactPopover._entry?.remove();
     _DisputeContactPopover._entry = null;
     super.dispose();
@@ -13067,11 +13066,11 @@ class _DisputesScreenState extends State<_DisputesScreen> {
       setState(() => _error = null);
     }
     try {
-      final scope = FulfillDateScope.instance;
-      // p_include_older not sent — fw_get_disputes is strict single-date now.
-      final res = await Supabase.instance.client.rpc('fw_get_disputes', params: {
-        'p_date': ymd(scope.date),
-      }).timeout(const Duration(seconds: 15)) as Map;
+      // CHANGE #545: p_date OMITTED (defaults to admin_active_date()); never an
+      // explicit null. p_include_older not sent — strict single-date.
+      final res = await Supabase.instance.client
+          .rpc('fw_get_disputes')
+          .timeout(const Duration(seconds: 15)) as Map;
       if (!mounted) return;
       _olderOpen = (res['older_open'] as num?)?.toInt() ?? 0;
       final items = DisputeItem.listFromResponse(res);

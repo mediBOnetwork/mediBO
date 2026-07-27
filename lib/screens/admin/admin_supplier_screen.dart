@@ -24,7 +24,7 @@ import '../../utils/ist_date.dart';
 import '../../utils/render_log.dart';
 import '../../utils/safe_parse.dart';
 import '../../utils/ist_date.dart'; // CHANGE #444
-import '../../widgets/date_scope_chip.dart'; // CHANGE #444
+import '../../services/admin_date_scope.dart'; // CHANGE #545
 import '../../widgets/code_field.dart';
 import '../../widgets/fullscreen_image.dart';
 import '../../widgets/inquiry_v12.dart';
@@ -342,10 +342,10 @@ class _InquiryLockSwitch extends StatelessWidget {
 }
 
 class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
-  // CHANGE #444 — Supplier Orders date scope. Own chip, default today, no pill.
-  DateTime _ordersDate = todayIst();
-  void _onOrdersDateChanged(DateTime d) {
-    setState(() => _ordersDate = d);
+  // CHANGE #545 — Supplier Orders no longer owns a date. The ONE Dashboard
+  // picker sets it server-side; this listener just refetches when it moves.
+  void _onDateScopeChanged() {
+    if (!mounted) return;
     _load(showSpinner: false);
   }
 
@@ -497,6 +497,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     _matchService = MatchStatusService();
     _matchServiceListener = () { if (mounted) setState(() {}); };
     _matchService.statuses.addListener(_matchServiceListener!);
+    // CHANGE #545 — follow the central admin date.
+    AdminDateScope.instance.addListener(_onDateScopeChanged);
+    AdminDateScope.instance.ensureLoaded();
     _load();
     _loadAllocationMode();
     _subscribeRealtime();
@@ -518,6 +521,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   void _onScreenFocus() {
     if (!mounted) return;
+    // CHANGE #545 — re-read the central date on focus so a backgrounded tab is
+    // never stale; if it moved, the listener fires its own refetch.
+    AdminDateScope.instance.refresh();
     _autoLoad(key: _filter.name, force: true);
     RenderLog.write('screen_autoload_on_focus', 'suppliers');
   }
@@ -536,6 +542,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   @override
   void dispose() {
+    AdminDateScope.instance.removeListener(_onDateScopeChanged);
     if (_matchServiceListener != null) {
       _matchService.statuses.removeListener(_matchServiceListener!);
     }
@@ -734,8 +741,14 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       // CHANGE #444 — Supplier Orders is date-scoped to when the order was
       // PLACED (supplier_orders.created_at in Asia/Kolkata). ist_day_bounds
       // does the IST-aware UTC conversion server-side.
-      final bounds =
-          await client.rpc('ist_day_bounds', params: {'p_date': ymd(_ordersDate)}) as Map;
+      //
+      // CHANGE #545 — ist_day_bounds is a pure date→UTC-range helper, not a
+      // date-scoped read RPC, so it does NOT default to admin_active_date().
+      // It gets the central date's own backend string; omitting it would pin
+      // this tab to the server's today.
+      final scopeYmd = AdminDateScope.instance.dateYmd;
+      final bounds = await client.rpc('ist_day_bounds',
+          params: {if (scopeYmd != null) 'p_date': scopeYmd}) as Map;
       final ordersStartUtc = bounds['start_utc'] as String;
       final ordersEndUtc   = bounds['end_utc'] as String;
       final results = await Future.wait<dynamic>([
@@ -762,7 +775,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         // an ADDITIONAL fetch alongside the existing supplier_orders table
         // query rather than replacing it, so items/View Bill/View Payment
         // stay on the untouched pipeline.
-        client.rpc('admin_supplier_orders', params: {'p_date': ymd(_ordersDate)})
+        // CHANGE #545: p_date OMITTED — it defaults to admin_active_date(), the
+        // date the one Dashboard picker set. Never send it as an explicit null.
+        client.rpc('admin_supplier_orders')
             .catchError((_) => <String, dynamic>{}),
       ]);
 
@@ -1206,19 +1221,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                   ),
                 );
               }),
-            ] else if (_filter == _SupFilter.orders) ...[
-              const SizedBox(width: 8),
-              Builder(builder: (context) {
-                RenderLog.write('c444_sup_chip_label',
-                    isSameDay(_ordersDate, todayIst())
-                        ? 'Today · ${dmy(_ordersDate)}'
-                        : dmy(_ordersDate));
-                return DateScopeChip(
-                  selected: _ordersDate,
-                  isToday: isSameDay(_ordersDate, todayIst()),
-                  onChanged: _onOrdersDateChanged,
-                );
-              }),
+            // CHANGE #545 — the Supplier Orders date chip is DELETED. The one
+            // admin date picker lives on the Dashboard, above ORDER HOURS.
             ] else if (_filter == _SupFilter.inquiry) ...[
               const SizedBox(width: 4),
               // Meta toggle
@@ -1398,21 +1402,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
               ),
             ),
           ));
-          items.add(const PopupMenuDivider());
-          // CHANGE #444 — date scope, mobile overflow-menu path.
-          items.add(PopupMenuItem<String>(
-            value: 'pick_order_date',
-            child: Row(children: [
-              const Icon(Icons.calendar_today_outlined, size: 16, color: Color(0xFF6B7280)),
-              const SizedBox(width: 10),
-              Text(
-                isSameDay(_ordersDate, todayIst())
-                    ? 'Today · ${dmy(_ordersDate)}'
-                    : dmy(_ordersDate),
-                style: const TextStyle(fontSize: 14),
-              ),
-            ]),
-          ));
+          // CHANGE #545 — the 'pick_order_date' entry (the AutoFlow menu's
+          // mobile date picker) is DELETED along with every other per-tab
+          // picker. The one admin date picker lives on the Dashboard.
           items.add(const PopupMenuDivider());
         } else if (_filter == _SupFilter.suppliers) {
           // CHANGE #252: sort options only; Refresh removed (realtime handles sync)
@@ -1458,21 +1450,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         } else if (v == 'map_companies') {
           Navigator.of(context).push(
               MaterialPageRoute(builder: (_) => const UnmappedCompaniesScreen()));
-        } else if (v == 'pick_order_date') {
-          showDatePicker(
-            context: context,
-            initialDate: _ordersDate,
-            firstDate: DateTime(2024),
-            lastDate: todayIst(),
-            builder: (context, child) => Theme(
-              data: Theme.of(context).copyWith(
-                colorScheme: const ColorScheme.light(primary: Color(0xFF1B7A43)),
-              ),
-              child: child!,
-            ),
-          ).then((picked) {
-            if (picked != null) _onOrdersDateChanged(DateTime(picked.year, picked.month, picked.day));
-          });
         }
       },
     );
@@ -2492,8 +2469,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       // CHANGE #444 — keep this targeted reloader on the same date scope as
       // _load(), else it would silently reset Supplier Orders to unfiltered
       // (all-time) data after any inquiry-answer action.
-      final bounds =
-          await client.rpc('ist_day_bounds', params: {'p_date': ymd(_ordersDate)}) as Map;
+      // CHANGE #545 — same central date; see _load() for why ist_day_bounds
+      // still takes an explicit p_date.
+      final scopeYmd = AdminDateScope.instance.dateYmd;
+      final bounds = await client.rpc('ist_day_bounds',
+          params: {if (scopeYmd != null) 'p_date': scopeYmd}) as Map;
       final ordersStartUtc = bounds['start_utc'] as String;
       final ordersEndUtc   = bounds['end_utc'] as String;
       final results = await Future.wait<dynamic>([
@@ -2571,8 +2551,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   // avoids re-running the full _load() Future.wait for a one-field change.
   Future<void> _refetchOrderSendButtons() async {
     try {
-      final res = await Supabase.instance.client
-          .rpc('admin_supplier_orders', params: {'p_date': ymd(_ordersDate)});
+      // CHANGE #545: p_date OMITTED — defaults to admin_active_date().
+      final res =
+          await Supabase.instance.client.rpc('admin_supplier_orders');
       final byId = _parseSendButtonMap(res);
       if (!mounted) return;
       setState(() {

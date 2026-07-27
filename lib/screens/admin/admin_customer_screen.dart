@@ -21,7 +21,7 @@ import '../../utils/download_bytes.dart'; // CHANGE #463
 import '../../utils/order_code.dart';
 import '../../utils/render_log.dart';
 import '../../utils/ist_date.dart'; // CHANGE #444
-import '../../widgets/date_scope_chip.dart'; // CHANGE #444
+import '../../services/admin_date_scope.dart'; // CHANGE #545
 import '../../widgets/route_google_map_panel.dart'; // CHANGE #463
 import '../bulk_upload_screen.dart';
 import '../../services/payment_claims_service.dart';
@@ -379,11 +379,11 @@ class AdminCustomerScreen extends StatefulWidget {
 }
 
 class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
-  // CHANGE #444 — Customer Orders date scope. Own chip, default today, no
-  // "older open" pill (an order list is a record of a day, not a work queue).
-  DateTime _ordersDate = todayIst();
-  void _onOrdersDateChanged(DateTime d) {
-    setState(() => _ordersDate = d);
+  // CHANGE #545 — Customer Orders no longer owns a date. The ONE Dashboard
+  // picker sets it server-side; this listener just refetches when it moves
+  // (fired by AdminDateScope's realtime subscription or an explicit select).
+  void _onDateScopeChanged() {
+    if (!mounted) return;
     _load(showSpinner: false);
   }
 
@@ -437,6 +437,9 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   @override
   void initState() {
     super.initState();
+    // CHANGE #545 — follow the central admin date.
+    AdminDateScope.instance.addListener(_onDateScopeChanged);
+    AdminDateScope.instance.ensureLoaded();
     _load();
     _subscribeRealtime();
     _loadSLeadsTotal();
@@ -453,6 +456,9 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
 
   void _onScreenFocus() {
     if (!mounted) return;
+    // CHANGE #545 — re-read the central date on focus so a backgrounded tab is
+    // never stale; if it moved, the listener fires its own refetch.
+    AdminDateScope.instance.refresh();
     _autoLoad(key: _filter.name, force: true);
     RenderLog.write('screen_autoload_on_focus', 'customers');
   }
@@ -491,6 +497,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
 
   @override
   void dispose() {
+    AdminDateScope.instance.removeListener(_onDateScopeChanged);
     _debounce?.cancel();
     for (final ch in _realtimeChannels) {
       ch.unsubscribe();
@@ -541,8 +548,15 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       // PLACED (orders.created_at in Asia/Kolkata). ist_day_bounds does the
       // IST-aware UTC conversion server-side — never hand-roll this in Dart,
       // IST is UTC+5:30 and naive local-day math flips the day near midnight.
-      final bounds =
-          await client.rpc('ist_day_bounds', params: {'p_date': ymd(_ordersDate)}) as Map;
+      //
+      // CHANGE #545 — ist_day_bounds is a pure date→UTC-range helper, NOT one of
+      // the date-scoped read RPCs, so it does not default to admin_active_date():
+      // omitting p_date here would pin this tab to the server's today. It gets
+      // the central date's own 'YYYY-MM-DD' string, verbatim from the backend —
+      // still zero client-side date formatting.
+      final scopeYmd = AdminDateScope.instance.dateYmd;
+      final bounds = await client.rpc('ist_day_bounds',
+          params: {if (scopeYmd != null) 'p_date': scopeYmd}) as Map;
       final ordersStartUtc = bounds['start_utc'] as String;
       final ordersEndUtc   = bounds['end_utc'] as String;
       final results = await Future.wait<dynamic>([
@@ -1631,23 +1645,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
               ]),
             ),
           ),
-          // CHANGE #444 — Customer Orders' own date-scope chip, no pill.
-          if (_filter == _CustFilter.customerOrders) ...[
-            const SizedBox(width: 8),
-            Builder(builder: (context) {
-              // Distinct key from the Fulfill screen's c444_chip_label — both
-              // screens can be mounted in the same render-log session.
-              RenderLog.write('c444_cust_chip_label',
-                  isSameDay(_ordersDate, todayIst())
-                      ? 'Today · ${dmy(_ordersDate)}'
-                      : dmy(_ordersDate));
-              return DateScopeChip(
-                selected: _ordersDate,
-                isToday: isSameDay(_ordersDate, todayIst()),
-                onChanged: _onOrdersDateChanged,
-              );
-            }),
-          ],
+          // CHANGE #545 — the Customer Orders date chip is DELETED. The one
+          // admin date picker lives on the Dashboard, above ORDER HOURS.
         ]);
       }),
     );

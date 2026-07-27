@@ -20,8 +20,6 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../screens/admin/admin_customer_screen.dart' show AdminCustomerScreen;
-import '../services/fulfill_date_scope.dart';
-import '../utils/ist_date.dart' show ymd;
 import '../utils/toast.dart';
 
 // Parses a backend-supplied "#RRGGBB" (or "RRGGBB") hex colour string.
@@ -73,8 +71,10 @@ class _SupplierMapGroupsPanelState extends State<SupplierMapGroupsPanel> {
   Future<void> _load() async {
     setState(() => _loading = true);
     try {
+      // CHANGE #545: p_date OMITTED — map_supplier_groups defaults it to
+      // admin_active_date(), the one Dashboard picker's date. Never send it as
+      // an explicit null. Every other param is unchanged.
       final res = await Supabase.instance.client.rpc('map_supplier_groups', params: {
-        'p_date': ymd(FulfillDateScope.instance.date),
         'p_badge': _selectedBadge,
         'p_chip_key': _selectedChipKey,
         'p_chip_complex': _selectedChipComplex,

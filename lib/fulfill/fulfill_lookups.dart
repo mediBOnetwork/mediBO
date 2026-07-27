@@ -9,8 +9,13 @@
 //
 // Fetch policy (deliberate — do NOT fetch per render):
 //   • fw_issue_options() + fw_error_messages() : ONCE per session. Static.
-//   • fw_date_label(p_date)                    : once per selected date, driven
-//     by FulfillDateScope's existing listener.
+//   • fw_date_label()                          : once per selected date, driven
+//     by AdminDateScope's listener.
+//
+// CHANGE #545 — fw_date_label() is called with NO p_date. Like every other
+// date-scoped read RPC it defaults to admin_active_date(), i.e. the ONE date the
+// Dashboard picker set. Passing a date from Dart would re-introduce exactly the
+// per-screen date state this change removes.
 //
 // While a payload has not landed, the getters return null / empty. Callers MUST
 // render their existing empty/loading state — there is no hardcoded fallback
@@ -19,14 +24,13 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../services/fulfill_date_scope.dart';
-import '../utils/ist_date.dart';
+import '../services/admin_date_scope.dart';
 import '../utils/render_log.dart';
 
 class FulfillLookups {
   FulfillLookups._() {
-    // Refetch the date label whenever the shared Fulfill date changes.
-    FulfillDateScope.instance.addListener(_onDateChanged);
+    // Refetch the date label whenever the central admin date changes.
+    AdminDateScope.instance.addListener(_onDateChanged);
   }
   static final FulfillLookups instance = FulfillLookups._();
 
@@ -36,10 +40,8 @@ class FulfillLookups {
   Map<String, String> _uiLabels = const {};
   Map<String, int> _uiColors = const {};
 
-  /// fw_date_label payloads keyed by 'YYYY-MM-DD'. Keyed (rather than a single
-  /// slot) because DateScopeChip is also used by admin_customer_screen and
-  /// admin_supplier_screen, whose own date is NOT synced to FulfillDateScope —
-  /// a single-slot cache made those chips render a placeholder forever.
+  /// fw_date_label payloads keyed by the 'YYYY-MM-DD' AdminDateScope reported.
+  /// Labels are immutable per date, so a previously-visited date stays valid.
   final Map<String, Map<String, dynamic>> _dateLabels = {};
   final Set<String> _dateInFlight = {};
 
@@ -60,21 +62,11 @@ class FulfillLookups {
   /// True once fw_error_messages() + fw_issue_options() have landed.
   bool get ready => _staticLoaded;
 
-  /// True once fw_date_label() for the CURRENTLY selected Fulfill date landed.
-  bool get dateReady => _dateLabels.containsKey(ymd(FulfillDateScope.instance.date));
-
-  /// Payload for ANY date. Returns null and kicks off a fetch if not cached, so
-  /// a caller with its own date (customer/supplier screens) still resolves.
-  Map<String, dynamic>? labelsFor(DateTime d) {
-    final key = ymd(d);
-    final hit = _dateLabels[key];
-    if (hit == null) _loadDateFor(key);
-    return hit;
+  /// True once fw_date_label() for the CURRENTLY selected admin date landed.
+  bool get dateReady {
+    final key = AdminDateScope.instance.dateYmd;
+    return key != null && _dateLabels.containsKey(key);
   }
-
-  String? dateChipLabelFor(DateTime d) => labelsFor(d)?['chip_label']?.toString();
-  String? dateRelativeFor(DateTime d)  => labelsFor(d)?['relative']?.toString();
-  String? dateLabelFor(DateTime d)     => labelsFor(d)?['label']?.toString();
 
   // ── error messages ────────────────────────────────────────────────────────
 
@@ -192,8 +184,10 @@ class FulfillLookups {
   // ── date label ────────────────────────────────────────────────────────────
   // {date,label,short,long,weekday,is_today,relative}
 
-  Map<String, dynamic>? get _scopeLabels =>
-      _dateLabels[ymd(FulfillDateScope.instance.date)];
+  Map<String, dynamic>? get _scopeLabels {
+    final key = AdminDateScope.instance.dateYmd;
+    return key == null ? null : _dateLabels[key];
+  }
 
   String? get dateLabel    => _scopeLabels?['label']?.toString();
   String? get dateShort    => _scopeLabels?['short']?.toString();
@@ -281,18 +275,22 @@ class FulfillLookups {
     }
   }
 
-  Future<void> _loadDate() => _loadDateFor(ymd(FulfillDateScope.instance.date));
-
-  Future<void> _loadDateFor(String key) async {
+  /// CHANGE #545 — no p_date. fw_date_label() defaults to admin_active_date(),
+  /// so this always describes exactly the date the tabs are showing. The
+  /// response's own `date` is the cache key, so the client never derives one.
+  Future<void> _loadDate() async {
+    final key = AdminDateScope.instance.dateYmd;
+    if (key == null) return; // scope not loaded yet; the listener re-fires.
     if (_dateLabels.containsKey(key) || _dateInFlight.contains(key)) return;
     _dateInFlight.add(key);
     try {
-      final res = await Supabase.instance.client
-          .rpc('fw_date_label', params: {'p_date': key});
+      final res = await Supabase.instance.client.rpc('fw_date_label');
       if (res is Map) {
-        _dateLabels[key] = Map<String, dynamic>.from(res);
+        final m = Map<String, dynamic>.from(res);
+        final resolved = m['date']?.toString() ?? key;
+        _dateLabels[resolved] = m;
         RenderLog.write('c531_date_label',
-            'date=$key;label=${_dateLabels[key]?['label'] ?? ''}');
+            'date=$resolved;label=${m['label'] ?? ''}');
         _notify();
       }
     } catch (_) {

@@ -25,6 +25,7 @@ import '../../utils/render_log.dart';
 import '../../utils/safe_parse.dart';
 import '../../utils/ist_date.dart'; // CHANGE #444
 import '../../services/admin_date_scope.dart'; // CHANGE #545
+import '../../services/date_labels.dart'; // CHANGE #546
 import '../../widgets/code_field.dart';
 import '../../widgets/fullscreen_image.dart';
 import '../../widgets/inquiry_v12.dart';
@@ -5517,14 +5518,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     return s == 'null' ? '' : s;
   }
 
+  // CHANGE #546: backend-formatted (ist_fmt 'dmy_hm2'); no Dart date math.
   static String _fmtTs(dynamic v) {
     final s = _str(v);
     if (s.isEmpty) return '';
-    try {
-      final dt = istFromDb(s);
-      return '${dt.day.toString().padLeft(2,'0')}/${dt.month.toString().padLeft(2,'0')}/${dt.year}  '
-             '${dt.hour.toString().padLeft(2,'0')}:${dt.minute.toString().padLeft(2,'0')}';
-    } catch (_) { return s; }
+    return DateLabels.instance.label(s, DateStyle.dmyHm2) ?? '';
   }
 
   Widget _buildDetails(Map<String, dynamic> rawData, {required double lpad, required double rpad}) {
@@ -12682,8 +12680,9 @@ class _BillTabState extends State<_BillTab> {
     final ext         = fileName.toLowerCase().split('.').last;
     final isPdf       = ext == 'pdf';
     final receivedRaw = widget.bill['received_at'] as String?;
-    final receivedAt  = receivedRaw != null ? tryIstFromDb(receivedRaw) : null;
-    final receivedStr = receivedAt != null ? _fmtD(receivedAt) : '—';
+    // CHANGE #546: backend-formatted, never parsed client-side.
+    final receivedStr =
+        DateLabels.instance.label(receivedRaw, DateStyle.dmy) ?? '—';
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       // (1) Import button

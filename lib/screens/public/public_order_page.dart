@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../../utils/ist_date.dart';
+import '../../services/date_labels.dart';
 import '../../utils/render_log.dart';
 import '../../widgets/order_item_card.dart';
 
@@ -149,12 +149,7 @@ class _PublicOrderPageState extends State<PublicOrderPage> {
     );
   }
 
-  String _formatDate(String iso) {
-    try {
-      final dt = istFromDb(iso);
-      return '${dt.day.toString().padLeft(2,'0')}/${dt.month.toString().padLeft(2,'0')}/${dt.year}';
-    } catch (_) {
-      return iso;
-    }
-  }
+  // CHANGE #546: backend-formatted (ist_fmt 'dmy'); no Dart date math.
+  String _formatDate(String iso) =>
+      DateLabels.instance.label(iso, DateStyle.dmy) ?? '';
 }

@@ -83,16 +83,18 @@ class SupabaseLoginApi implements LoginApi {
         nonce: rawNonce,
       );
 
-  /// CHANGE #556: one tap from the button to signed in, without ever leaving
+  /// CHANGE #557: one tap from the button to signed in, without ever leaving
   /// the app.
   ///
   /// Escalation, most in-app first:
-  ///   1. One Tap (FedCM) — a half-screen sheet listing the device's signed-in
-  ///      Google accounts, rendered in-page. No navigation at all.
-  ///   2. Our own half-screen sheet hosting the GIS button — opens Google in a
+  ///   1. navigator.credentials.get() with mediation:'required' — the browser's
+  ///      own chooser, listing EVERY Google account signed in on the device,
+  ///      drawn over the page. Not subject to One Tap's dismissal cooldown.
+  ///   2. GIS One Tap — same in-page sheet, but Google may suppress it.
+  ///   3. Our own half-screen sheet hosting the GIS button — opens Google in a
   ///      popup that closes itself, so an installed PWA is never navigated away.
-  ///   3. Full-page OAuth redirect — the last resort only, because in a PWA it
-  ///      shows browser chrome. Reached only if both in-app paths failed.
+  ///   4. Full-page OAuth redirect — the last resort only, because in a PWA it
+  ///      shows browser chrome. Reached only if every in-app path failed.
   ///
   /// A deliberate dismissal at any level stops the escalation: the user said no.
   @override
@@ -101,41 +103,60 @@ class SupabaseLoginApi implements LoginApi {
     required String sheetSubtitle,
     required String otherAccount,
   }) async {
-    // 1 — One Tap. Called first with no awaits before it so the tap's user
-    // activation is still live; without it Chrome refuses to show the sheet.
+    // 1 — CHANGE #557: ask the browser directly for a FedCM credential with
+    // mediation:'required'. This lists EVERY Google account signed in on the
+    // device in one chooser and ignores One Tap's dismissal cooldown, which
+    // the #556 render-log showed was suppressing the sheet
+    // (prewarm=ready, one_tap=unavailable). No awaits before it — mode:'active'
+    // needs the tap's user activation.
     try {
-      final (:idToken, :rawNonce) = await gisPromptOneTap();
-      _log('c556_path', 'one_tap');
+      final (:idToken, :rawNonce) = await fedcmChooseAccount();
+      _log('c557_path', 'fedcm_chooser');
       await _finishIdToken(idToken, rawNonce);
-      _log('c556_session', 'established');
+      _log('c557_session', 'established');
       return;
     } on GisOneTapCancelled {
-      _log('c556_path', 'one_tap_cancelled');
+      // The user closed the chooser — do not cascade into a popup.
+      _log('c557_path', 'fedcm_cancelled');
       return;
     } on GisOneTapUnavailable {
-      _log('c556_one_tap', 'unavailable');
+      _log('c557_fedcm', lastGisError());
     }
 
-    // 2 — our own half-screen sheet with the GIS button (popup ux_mode).
+    // 2 — GIS One Tap, same in-page sheet but subject to Google's suppression.
+    try {
+      final (:idToken, :rawNonce) = await gisPromptOneTap();
+      _log('c557_path', 'one_tap');
+      await _finishIdToken(idToken, rawNonce);
+      _log('c557_session', 'established');
+      return;
+    } on GisOneTapCancelled {
+      _log('c557_path', 'one_tap_cancelled');
+      return;
+    } on GisOneTapUnavailable {
+      _log('c557_one_tap', 'unavailable');
+    }
+
+    // 3 — our own half-screen sheet with the GIS button (popup ux_mode).
     try {
       final (:idToken, :rawNonce) = await gisSheetSignIn(
         title: sheetTitle,
         subtitle: sheetSubtitle,
         cancelLabel: otherAccount,
       );
-      _log('c556_path', 'sheet_button');
+      _log('c557_path', 'sheet_button');
       await _finishIdToken(idToken, rawNonce);
-      _log('c556_session', 'established');
+      _log('c557_session', 'established');
       return;
     } on GisOneTapCancelled {
-      _log('c556_path', 'sheet_cancelled');
+      _log('c557_path', 'sheet_cancelled');
       return;
     } on GisOneTapUnavailable {
-      _log('c556_sheet', 'unavailable');
+      _log('c557_sheet', 'unavailable');
     }
 
-    // 3 — last resort. Records whether this cost an installed PWA its chrome.
-    _log('c556_path',
+    // 4 — last resort. Records whether this cost an installed PWA its chrome.
+    _log('c557_path',
         isStandalonePwa() ? 'oauth_redirect_in_pwa' : 'oauth_redirect');
     await oauthFallback();
   }
@@ -167,13 +188,13 @@ class _LoginScreenState extends State<LoginScreen> {
     // a failure here just means the escalation starts one step lower.
     unawaited(gisPrewarm().then((ok) {
       try {
-        RenderLog.write('c556_prewarm', ok ? 'ready' : 'failed');
+        RenderLog.write('c557_prewarm', ok ? 'ready' : 'failed');
       } catch (_) {}
     }));
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       try {
-        RenderLog.write('c556_login_rendered', true);
+        RenderLog.write('c557_login_rendered', true);
       } catch (_) {}
       // Already signed in (e.g. returning to /login with a live session).
       try {

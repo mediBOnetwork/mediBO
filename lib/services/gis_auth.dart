@@ -121,6 +121,23 @@ String _sha256Hex(List<int> message) {
   return h.map((v) => v.toRadixString(16).padLeft(8, '0')).join();
 }
 
+@JS('mediboFedcmGet')
+external JSPromise<JSString?> _mediboFedcmGet(
+    JSString clientId, JSString hashedNonce);
+
+@JS('mediboLastGisError')
+external JSString _mediboLastGisErrorJs();
+
+/// Why the last Google attempt failed, for render-log diagnosis only.
+/// Never shown to a user.
+String lastGisError() {
+  try {
+    return _mediboLastGisErrorJs().toDart;
+  } catch (_) {
+    return '';
+  }
+}
+
 @JS('mediboGisPrewarm')
 external JSPromise<JSString?> _mediboGisPrewarm(
     JSString clientId, JSString hashedNonce);
@@ -191,9 +208,35 @@ Never _rethrowAsGis(Object e) {
   throw const GisOneTapUnavailable();
 }
 
-/// Google One Tap (FedCM): renders as a half-screen sheet listing the device's
-/// signed-in Google accounts, entirely in-page — no navigation, so an installed
-/// PWA never shows browser chrome.
+/// CHANGE #557: the browser's own FedCM account chooser, asked for directly
+/// with `mediation: 'required'`.
+///
+/// This is the one path that shows EVERY Google account signed in on the
+/// device in a single list, always presents the chooser rather than
+/// auto-selecting, and is not subject to One Tap's dismissal cooldown — which
+/// the #556 render-log proved was suppressing the sheet. The browser draws the
+/// chooser over the page, so an installed PWA is never navigated away.
+///
+/// MUST be called straight from the tap handler: `mode: 'active'` requires
+/// transient user activation.
+Future<({String idToken, String rawNonce})> fedcmChooseAccount() async {
+  _warmPair ??= _generateNoncePair();
+  try {
+    final r = await _mediboFedcmGet(
+      _kGisClientId.toJS,
+      _warmPair!.hashedNonce.toJS,
+    ).toDart;
+    return _wrap(r?.toDart);
+  } on GisOneTapUnavailable {
+    rethrow;
+  } catch (e) {
+    _rethrowAsGis(e);
+  }
+}
+
+/// Google One Tap (FedCM) via GIS. Kept as a second chance behind
+/// [fedcmChooseAccount] — same in-page sheet, but subject to One Tap's own
+/// suppression.
 ///
 /// MUST be called directly from the tap handler with no awaits in between, or
 /// the user activation is lost and the sheet will not display.

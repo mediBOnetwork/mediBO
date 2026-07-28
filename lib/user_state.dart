@@ -488,11 +488,14 @@ class AuthNotifier extends ChangeNotifier {
     try { RenderLog.write('c399_input_type', isCoarsePointer() ? 'touch' : 'mouse'); } catch (_) {}
     try { RenderLog.write('c399_google_auth_launch', 'fired'); } catch (_) {}
     try { RenderLog.writeNow('c559_entry', 'home_shell'); } catch (_) {}
-    try { RenderLog.writeNow('c565_origin', currentOrigin()); } catch (_) {}
+    try { RenderLog.writeNow('c566_origin', currentOrigin()); } catch (_) {}
 
     final outcome = await runGoogleSignIn(
       clearGState: clearGoogleStateCookie,
       oneTap: gisPromptOneTap,
+      // Copy stays empty — home_shell has no backend strings for this sheet,
+      // and it hides any element whose label is empty rather than inventing one.
+      popup: () => gisPopupSignIn(title: '', subtitle: '', cancelLabel: ''),
       finish: (idToken, rawNonce) =>
           Supabase.instance.client.auth.signInWithIdToken(
         provider: OAuthProvider.google,

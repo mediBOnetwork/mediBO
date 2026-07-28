@@ -1,6 +1,6 @@
-// CHANGE #565 — the one focused test the spec asks for:
-// tapping Continue with Google clears g_state and THEN calls prompt(), and no
-// other Google mechanism is reachable from the flow.
+// CHANGE #566 — the one focused test the spec asks for:
+// on a skipped moment the popup path runs; g_state is cleared before prompt();
+// and no OAuth / FedCM parameter exists in the flow at all.
 //
 // runGoogleSignIn is deliberately platform-free so this runs on the VM with the
 // attempts injected — no browser, no JS interop, no Supabase.
@@ -25,6 +25,7 @@ void main() {
         order.add('prompt');
         return (idToken: 'jwt-abc', rawNonce: 'raw-123');
       },
+      popup: () async => fail('popup must not run when One Tap succeeds'),
       finish: (idToken, rawNonce) async {
         order.add('signInWithIdToken');
         sentToken = idToken;
@@ -40,8 +41,8 @@ void main() {
     expect(sentToken, 'jwt-abc');
     // Supabase must receive the RAW nonce, not the hashed one.
     expect(sentNonce, 'raw-123');
-    expect(logged['c565_gstate'], 'cleared');
-    expect(logged['c565_result'], 'credential');
+    expect(logged['c566_gstate'], 'cleared');
+    expect(logged['c566_path'], 'onetap');
 
     // There is no popup, no FedCM and no OAuth parameter in the signature at
     // all — those paths are unreachable by construction, not by convention.
@@ -57,12 +58,13 @@ void main() {
         prompted = true;
         return (idToken: 'jwt', rawNonce: 'raw');
       },
+      popup: () async => fail('popup must not run when One Tap succeeds'),
       finish: (_, __) async {},
       log: (k, v) => logged[k] = v,
     );
 
     expect(prompted, isTrue);
-    expect(logged['c565_gstate'], 'absent');
+    expect(logged['c566_gstate'], 'absent');
   });
 
   test('dismissal: stay put, no message, nothing else opened', () async {
@@ -71,26 +73,52 @@ void main() {
     final outcome = await runGoogleSignIn(
       clearGState: () => 'cleared',
       oneTap: () async => throw const GisOneTapCancelled(),
+      popup: () async => fail('a deliberate close must NOT open the popup'),
       finish: (_, __) async => fail('must not sign in after a dismissal'),
       log: (k, v) => logged[k] = v,
     );
 
     expect(outcome, GoogleOutcome.closed);
-    expect(logged['c565_result'], 'none');
+    expect(logged['c566_path'], 'none');
   });
 
-  test('still suppressed after clearing g_state -> inline message only',
+  test('skipped moment (cooldown) -> the popup path runs and signs in',
       () async {
+    var popupCalls = 0;
+    String? sentToken;
+    String? sentNonce;
     final logged = <String, String>{};
 
     final outcome = await runGoogleSignIn(
       clearGState: () => 'cleared',
+      // isSkippedMoment => the JS bridge rejects as suppressed.
       oneTap: () async => throw const GisOneTapSuppressed(),
-      finish: (_, __) async => fail('nothing to finish'),
+      popup: () async {
+        popupCalls++;
+        return (idToken: 'jwt-popup', rawNonce: 'raw-999');
+      },
+      finish: (idToken, rawNonce) async {
+        sentToken = idToken;
+        sentNonce = rawNonce;
+      },
       log: (k, v) => logged[k] = v,
     );
 
+    expect(popupCalls, 1, reason: 'a skipped moment must invoke the popup');
+    expect(outcome, GoogleOutcome.signedIn);
+    expect(sentToken, 'jwt-popup');
+    // Supabase must receive the RAW nonce, not the hashed one.
+    expect(sentNonce, 'raw-999');
+    expect(logged['c566_path'], 'popup');
+  });
+
+  test('both suppressed -> inline message only, nothing navigates', () async {
+    final outcome = await runGoogleSignIn(
+      clearGState: () => 'cleared',
+      oneTap: () async => throw const GisOneTapSuppressed(),
+      popup: () async => throw const GisOneTapSuppressed(),
+      finish: (_, __) async => fail('nothing to finish'),
+    );
     expect(outcome, GoogleOutcome.suppressed);
-    expect(logged['c565_result'], 'none');
   });
 }

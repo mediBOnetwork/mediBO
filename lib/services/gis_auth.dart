@@ -235,6 +235,38 @@ Future<({String idToken, String rawNonce})> gisPromptOneTap() async {
   }
 }
 
+@JS('mediboGisPopup')
+external JSPromise<JSString?> _mediboGisPopup(
+    JSString title, JSString subtitle, JSString cancelLabel);
+
+/// CHANGE #566: the FALLBACK — GIS's own button, rendered into a hidden
+/// container and clicked programmatically, opening the "Choose an account to
+/// continue to mediBO" chooser in a popup (ux_mode:'popup', never 'redirect')
+/// that closes itself and hands the credential back to this document.
+///
+/// Not subject to the One Tap cooldown, so this branch always has a chooser.
+///
+/// If the synthetic click cannot reach GIS's cross-origin button iframe, the
+/// container is revealed after ~1.2 s so the user can tap the real button —
+/// the path that signed in on build c9ac1105. It is never a dead end.
+Future<({String idToken, String rawNonce})> gisPopupSignIn({
+  required String title,
+  required String subtitle,
+  required String cancelLabel,
+}) async {
+  try {
+    final r =
+        await _mediboGisPopup(title.toJS, subtitle.toJS, cancelLabel.toJS).toDart;
+    return _wrap(r?.toDart);
+  } on GisOneTapSuppressed {
+    rethrow;
+  } on GisOneTapUnavailable {
+    rethrow;
+  } catch (e) {
+    _rethrowAsGis(e);
+  }
+}
+
 @JS('mediboClearGState')
 external JSString _mediboClearGStateJs();
 

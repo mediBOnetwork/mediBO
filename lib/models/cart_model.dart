@@ -233,7 +233,13 @@ class CartModel extends ChangeNotifier {
     final client = Supabase.instance.client;
     _authSub = client.auth.onAuthStateChange.listen(_onAuthState);
     final uid = client.auth.currentUser?.id;
-    if (uid != null) _subscribeToCartRealtime(uid);
+    if (uid != null) {
+      // CHANGE #566 — a session recovered by Supabase.initialize is already the
+      // account this boot's cart_state() will read, so the initialSession event
+      // must not be mistaken for a fresh login and re-clear the cart.
+      _authedUid = uid;
+      _subscribeToCartRealtime(uid);
+    }
     // Guest id must be known BEFORE the first cart_state(), or a logged-out
     // visitor's existing server cart would read back empty.
     _loadGuestUid().then((_) => refresh());
@@ -242,21 +248,17 @@ class CartModel extends ChangeNotifier {
     refreshCartMode();
   }
 
+  /// CHANGE #566 — the account the displayed cart belongs to, and the in-flight
+  /// adoption of it. Together they make the sign-in refetch idempotent, so the
+  /// auth event and [syncSignedInCart] can race without fetching twice.
+  String? _authedUid;
+  Future<void>? _signInAdoption;
+
   Future<void> _onAuthState(AuthState state) async {
     final event = state.event;
-    if (event == AuthChangeEvent.signedIn) {
-      // CHANGE #556 rule 3 + #559 rule 4 — clear the cart VIEW before refetch,
-      // so no line from the previous account can survive an account switch.
-      _adoptCart(const <String, dynamic>{});
-      _adminRemovedLines.clear();
-      final uid = Supabase.instance.client.auth.currentUser?.id;
-      if (uid != null) _subscribeToCartRealtime(uid);
-      // CHANGE #559 + #556: hand the guest cart to the account BEFORE anything
-      // reads it, so what the customer built while logged out survives login.
-      await _claimGuestCart();
-      await refreshCartMode(); // role may have just changed (e.g. admin login)
-      await refresh();
-    } else if (event == AuthChangeEvent.signedOut) {
+    if (event == AuthChangeEvent.signedOut) {
+      _authedUid = null;
+      _signInAdoption = null;
       _cartChannel?.unsubscribe();
       _cartChannel = null;
       _viewAsUserId = null;
@@ -267,7 +269,60 @@ class CartModel extends ChangeNotifier {
       // Back to browsing as a guest — show whatever that guest cart holds.
       await _loadGuestUid();
       await refresh();
+      return;
     }
+
+    // CHANGE #566 — a sign-in is "the session's account is not the one on
+    // screen", NOT the signedIn constant alone. `setSession(refreshToken)` —
+    // the WhatsApp OTP path — resolves through the token-refresh branch of
+    // gotrue and emits tokenRefreshed, so a signedIn-only test left the cart,
+    // the badge, the "N items" pill and the delivery bar empty after a number
+    // login until the cart screen was opened by hand. Testing the account
+    // instead covers every login method, current and future, whichever event
+    // constant the SDK happens to pick for it.
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    final isSignIn = event == AuthChangeEvent.signedIn || (uid != null && uid != _authedUid);
+    if (!isSignIn) return;
+    // An explicit signedIn always re-runs: signing in again as the same account
+    // still has a guest cart to claim.
+    await _syncSignedIn(uid, force: event == AuthChangeEvent.signedIn);
+  }
+
+  /// Runs — or joins — the one sign-in adoption for [uid].
+  Future<void> _syncSignedIn(String? uid, {required bool force}) {
+    final pending = _signInAdoption;
+    if (!force && pending != null && uid == _authedUid) return pending;
+    _authedUid = uid;
+    final run = _adoptSignedInAccount(uid);
+    _signInAdoption = run;
+    return run;
+  }
+
+  Future<void> _adoptSignedInAccount(String? uid) async {
+    // CHANGE #556 rule 3 + #559 rule 4 — clear the cart VIEW before refetch,
+    // so no line from the previous account can survive an account switch.
+    _adoptCart(const <String, dynamic>{});
+    _adminRemovedLines.clear();
+    if (uid != null) _subscribeToCartRealtime(uid);
+    // CHANGE #559 + #556: hand the guest cart to the account BEFORE anything
+    // reads it, so what the customer built while logged out survives login.
+    await _claimGuestCart();
+    await refreshCartMode(); // role may have just changed (e.g. admin login)
+    await refresh();
+  }
+
+  /// CHANGE #566 — completes once `cart_state()` for the CURRENT session has
+  /// been fetched and adopted, so the badge, the "N items" pill and the
+  /// delivery bar are already right the moment the caller navigates. The login
+  /// screen awaits this before pushing home_route. It is ordering, not a second
+  /// source of truth: [_onAuthState] runs the very same work unprompted, and
+  /// whichever gets there first is the one that runs.
+  Future<void> syncSignedInCart() {
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    // No session yet — never run the sign-in adoption (it would claim the guest
+    // cart onto nobody). A plain re-read is the most that is correct here.
+    if (uid == null) return refresh();
+    return _syncSignedIn(uid, force: false);
   }
 
   void _subscribeToCartRealtime(String uid) {

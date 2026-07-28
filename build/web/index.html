@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta name="build-commit" content="eb4b834d">
+  <meta name="build-commit" content="37e3eeec">
   <!-- CHANGE #238: SW permanently disabled. Unregister ALL SWs + wipe all caches on every load.
        No sessionStorage guard — runs unconditionally so even users whose old SW served this
        HTML from cache will have SWs cleared on the very next in-SW-controlled load.
@@ -138,10 +138,10 @@
        On every load, fetches /version.json (no-cache). If the live commit differs
        from the build-stamped commit below, does ONE hard reload so the PWA gets the
        newest bundle instead of staying on a stale cached build.
-       eb4b834d is replaced with the actual short commit hash by deploy.sh. -->
+       37e3eeec is replaced with the actual short commit hash by deploy.sh. -->
   <script>
     (function () {
-      var _builtCommit = 'eb4b834d';
+      var _builtCommit = '37e3eeec';
       var _sessionKey  = 'c220_pwa_reloaded';
       function _rlWrite(key, val) {
         try {
@@ -159,7 +159,7 @@
           // Already reloaded once this session — skip to prevent loop.
           if (sessionStorage.getItem(_sessionKey)) return;
           // Skip if placeholder was not stamped (local dev / test build).
-          if (_builtCommit === 'eb4b834d') return;
+          if (_builtCommit === '37e3eeec') return;
           fetch('/version.json?_t=' + Date.now(), { cache: 'no-store' })
             .then(function (r) { return r.json(); })
             .then(function (data) {
@@ -175,7 +175,7 @@
       });
       // Wire confirmation — written once regardless of outcome.
       window.addEventListener('DOMContentLoaded', function () {
-        if (_builtCommit !== 'eb4b834d') {
+        if (_builtCommit !== '37e3eeec') {
           _rlWrite('c220_pwa_check_wired', 1);
         }
       });
@@ -384,7 +384,14 @@
         }
       } catch (e) {}
 
-      // ── 7. Is GIS loaded at all, and what does it get asked to do? ────────
+      // ── 7. GIS tripwire ───────────────────────────────────────────────────
+      // CHANGE #561 removed the GIS library, so the expected result here is now
+      // c559_gis=absent-after-20s. This block stays as a permanent tripwire: if
+      // anything ever re-introduces GIS, c559_gis flips back to `loaded` and the
+      // wrappers name whichever method got called. It only READS
+      // window.google.accounts.id to detect it — it never calls into GIS.
+      // (The Maps JS API also defines window.google, but not .accounts, so it
+      // cannot trip this.)
       var gisWrapped = false;
       function wrapGis() {
         if (gisWrapped) return true;
@@ -449,11 +456,15 @@
   <title>mediBO</title>
   <script src="https://www.google.com/recaptcha/api.js" async defer></script>
 
-  <!-- Google Identity Services — ID-token flow for signInWithIdToken.
-       CHANGE #559: onload/onerror report whether this script executed at all. -->
-  <script src="https://accounts.google.com/gsi/client" async defer
-          onload="try{window.mediboNote&&window.mediboNote('c559_gis_script','onload',true)}catch(e){}"
-          onerror="try{window.mediboNote&&window.mediboNote('c559_gis_script','onerror',true)}catch(e){}"></script>
+  <!-- CHANGE #561: the Google Identity Services library (accounts.google.com/gsi/client)
+       is GONE — deliberately, permanently, not commented out.
+       It was the last component able to build its own accounts.google.com URL and
+       send the browser there without Supabase, which is exactly what the auth log
+       showed: zero /authorize requests on every failed attempt. #560's
+       instrumentation confirmed it was still loading and executing (c559_gis=loaded,
+       c559_gis_script=onload).
+       FedCM is a NATIVE browser API — navigator.credentials.get() needs no library.
+       Do not re-add this tag. -->
 
   <!-- CHANGE #463 — Google Maps JS API for the Route tab map. Browser key
        "medibo-web-maps", restricted to medibo.in/*.pages.dev + Maps JS API
@@ -741,7 +752,7 @@
     })();
   </script>
 
-  <script src="flutter_bootstrap.js?v=eb4b834d" async></script>
+  <script src="flutter_bootstrap.js?v=37e3eeec" async></script>
   <script>
     var recaptchaResolve = null;
     var recaptchaWidgetId = null;
@@ -861,94 +872,32 @@
   </script>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       GOOGLE IDENTITY SERVICES (GIS) BRIDGE — CHANGE #310c
-       Always uses renderButton() — never prompt()/FedCM.
-       prompt() is unreliable on mobile: its notification callback may not fire
-       after FedCM dismissal, leaving the JS promise hanging and _busy stuck true.
-       renderButton() always shows a tappable Google button; callback fires reliably.
-       Overlay: backdrop-click + Cancel button + 90s auto-cancel (can never get stuck).
-       GIS load timeout: 3s → rejects → Dart falls through to OAuth redirect.
-       CHANGE #399: dismiss handlers ignore clicks in the first 400ms after the
-       overlay opens, to swallow the touch-originated ghost click that was
-       instantly closing this overlay on touch devices (see showOverlay() below).
-       ═══════════════════════════════════════════════════════════════════════ -->
+       GOOGLE SIGN-IN BRIDGE — CHANGE #561 (FedCM only, no library)
 
-  <!-- CHANGE #556: this is now a HALF-SCREEN BOTTOM SHEET, not a centre modal.
-       In an installed PWA a centre popup still reads as a browser dialog; a
-       bottom sheet matches the native Google account picker. All copy is set
-       from Dart (backend strings) via mediboGisSheet(), never hardcoded here. -->
-  <style>
-    @keyframes mediboSheetUp {
-      from { transform: translateY(100%); }
-      to   { transform: translateY(0); }
-    }
-    #gis-rb-panel { animation: mediboSheetUp 260ms cubic-bezier(.22,.61,.36,1); }
-    @media (prefers-reduced-motion: reduce) {
-      #gis-rb-panel { animation: none; }
-    }
-  </style>
-  <div id="gis-rb-overlay"
-       style="display:none;position:fixed;inset:0;z-index:99998;
-              align-items:flex-end;justify-content:center;
-              background:rgba(0,0,0,0.45);">
-    <div id="gis-rb-panel"
-         style="background:#fff;border-radius:22px 22px 0 0;
-                padding:10px 24px calc(28px + env(safe-area-inset-bottom));
-                display:flex;flex-direction:column;align-items:center;gap:14px;
-                box-shadow:0 -8px 40px rgba(0,0,0,0.22);
-                width:100%;max-width:520px;min-height:50vh;box-sizing:border-box;">
-      <div style="width:40px;height:4px;border-radius:2px;background:#E5E7EB;margin:2px 0 10px;"></div>
-      <p id="gis-rb-title"
-         style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-                font-size:19px;font-weight:700;color:#111827;text-align:center;"></p>
-      <p id="gis-rb-subtitle"
-         style="margin:-6px 0 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-                font-size:14px;color:#6B7280;text-align:center;"></p>
-      <div id="gis-rb-container"
-           style="min-height:44px;width:100%;display:flex;justify-content:center;
-                  align-items:center;margin-top:10px;">
-      </div>
-      <button id="gis-rb-cancel"
-              style="background:none;border:none;color:#6B7280;cursor:pointer;
-                     font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-                     font-size:14px;padding:10px 24px;border-radius:8px;margin-top:auto;">
-      </button>
-    </div>
-  </div>
+       The Google Identity Services library is GONE. Everything it used to
+       provide here — initialize(), prompt(), renderButton(), the half-screen
+       sheet that hosted its button — has been deleted, because GIS builds its
+       own accounts.google.com URL and navigates the browser there WITHOUT ever
+       calling Supabase. That is why the Supabase auth log recorded zero
+       /authorize requests on every failed attempt, and why Google answered
+       "Access blocked: response_type missing": the URL was never Supabase's.
 
-  <!-- ═══════════════════════════════════════════════════════════════════════
-       GOOGLE IDENTITY SERVICES BRIDGE — CHANGE #556
-       Rewritten so an installed PWA never has to leave the app to sign in.
+       Exactly two paths remain, and only the second one may leave the page:
 
-       mediboGisPrewarm(clientId, hashedNonce)  -> loads GIS + initialize() ONCE
-       mediboGisPromptNow()                     -> One Tap sheet, SYNCHRONOUS
-       mediboGisSheet(title, subtitle, cancel)  -> our own half-screen sheet
-       mediboIsStandalone()                     -> true when installed as a PWA
-       mediboGisSignIn(clientId, hashedNonce)   -> legacy entry (home_shell)
+         1. navigator.credentials.get({identity:{...}, mediation:'required'})
+            — the browser's OWN FedCM chooser. A native browser API: it needs
+            no library, draws over the page, lists every signed-in Google
+            account, and returns an id_token that goes to Supabase via
+            signInWithIdToken.
+         2. supabase.auth.signInWithOAuth(google) — on FedCM throw/unsupported.
+            Goes through Supabase's /authorize, which builds the complete URL.
 
-       WHY PREWARM: google.accounts.id.prompt() needs the caller's transient
-       user activation. Previously the tap went tap -> Dart -> JS -> *poll for
-       the GIS library* -> initialize() -> prompt(), and every one of those
-       async hops threw the activation away, so Chrome refused to display the
-       sheet and we silently fell back to a full-page OAuth redirect — which in
-       a PWA opens browser chrome. Now the library is loaded and initialize()d
-       during screen mount, so the tap path is a single synchronous prompt().
-
-       NOTE: with use_fedcm_for_prompt:true the PromptMomentNotification
-       methods isDisplayed/isNotDisplayed/getNotDisplayedReason/isSkippedMoment
-       are NOT supported and THROW, so every probe is individually guarded.
-       CHANGE #310c's warning still stands — the notification callback may never
-       fire after a FedCM dismissal — so prompt() also carries a hard timeout
-       and can never leave the caller's button spinning.
+       mediboFedcmGet(clientId, hashedNonce) -> Promise<idToken>
+       mediboLastGisError()                  -> why the last attempt failed
+       mediboIsStandalone()                  -> true when installed as a PWA
        ═══════════════════════════════════════════════════════════════════════ -->
   <script>
     (function () {
-      var _ready       = false;   // initialize() has run
-      var _initFailed  = false;
-      var _pending     = null;    // {resolve, reject} awaiting a credential
-      var _clientId    = null;
-      var _hashedNonce = null;
-
       window.mediboIsStandalone = function () {
         try {
           if (window.navigator && window.navigator.standalone === true) return true;
@@ -959,26 +908,17 @@
         } catch (e) { return false; }
       };
 
-      function gisReady() {
-        return !!(window.google && window.google.accounts && window.google.accounts.id);
-      }
-
-      // ── CHANGE #557: the browser's native FedCM account chooser ────────────
-      // google.accounts.id.prompt() carries Google's OWN suppression: once a
-      // user has dismissed One Tap a few times it stops displaying, and there
-      // is no way to clear that from the page. CHANGE #556 shipped and the
-      // render-log confirmed exactly that — prewarm=ready, one_tap=unavailable.
+      // ── The browser's native FedCM account chooser ─────────────────────────
+      // mediation:'required' always shows the chooser (never auto-selects) and
+      // lists EVERY Google account signed in on the device. The chooser is
+      // drawn by the browser over the page, so an installed PWA is never
+      // navigated anywhere.
       //
-      // navigator.credentials.get() with mediation:'required' asks the browser
-      // directly instead of going through One Tap. It ALWAYS shows the account
-      // chooser (never auto-selects), it lists EVERY Google account signed in
-      // on the device, and it is not subject to the One Tap cooldown. The
-      // chooser is drawn by the browser over the page, so an installed PWA is
-      // never navigated anywhere.
-      //
-      // mode:'active' (Chrome 132+) is the gesture-driven modal chooser. On
-      // older Chrome the member is simply ignored (unknown dictionary members
-      // are dropped per WebIDL), leaving the passive sheet — still correct.
+      // mode:'active' (Chrome 132+) is the gesture-driven modal chooser, so this
+      // MUST be called straight from the tap handler — it needs the tap's
+      // transient user activation. On older Chrome the member is simply ignored
+      // (unknown dictionary members are dropped per WebIDL), leaving the passive
+      // sheet — still correct.
       window.mediboFedcmError = '';
 
       window.mediboFedcmGet = function (clientId, hashedNonce) {
@@ -1029,7 +969,7 @@
             var name = (err && err.name) ? err.name : String(err);
             var msg  = (err && err.message) ? err.message : '';
             window.mediboFedcmError = name + (msg ? ':' + msg : '');
-            // The user closing the chooser must NOT cascade into a popup.
+            // The user closing the chooser must NOT cascade into anything else.
             if (name === 'AbortError' || name === 'NetworkError' ||
                 name === 'IdentityCredentialError') {
               reject('cancelled');
@@ -1042,202 +982,8 @@
 
       window.mediboLastGisError = function () {
         try {
-          return String(window.mediboFedcmError || '') +
-                 '|' + String(window.mediboGisMoment || '');
+          return String(window.mediboFedcmError || '');
         } catch (e) { return ''; }
-      };
-
-      function deliver(resp) {
-        var p = _pending;
-        _pending = null;
-        if (!p) return;
-        if (resp && resp.credential) p.resolve(resp.credential);
-        else p.reject('fallback');
-      }
-
-      // ── Prewarm: load GIS and initialize() once, well before any tap ───────
-      window.mediboGisPrewarm = function (clientId, hashedNonce) {
-        return new Promise(function (resolve) {
-          if (_ready && _clientId === clientId && _hashedNonce === hashedNonce) {
-            resolve('ready');
-            return;
-          }
-          _clientId = clientId;
-          _hashedNonce = hashedNonce;
-          var attempts = 0;
-          function poll() {
-            if (!gisReady()) {
-              if (++attempts > 40) { _initFailed = true; resolve('no-library'); return; }
-              setTimeout(poll, 150);
-              return;
-            }
-            try {
-              google.accounts.id.initialize({
-                client_id: clientId,
-                nonce: hashedNonce,
-                callback: deliver,
-                use_fedcm_for_prompt: true,
-                itp_support: true,
-                context: 'signin',
-                auto_select: false,
-                cancel_on_tap_outside: true,
-              });
-              _ready = true;
-              _initFailed = false;
-              resolve('ready');
-            } catch (e) {
-              _initFailed = true;
-              resolve('init-error');
-            }
-          }
-          poll();
-        });
-      };
-
-      // ── One Tap: called SYNCHRONOUSLY from the tap handler ────────────────
-      window.mediboGisPromptNow = function () {
-        return new Promise(function (resolve, reject) {
-          var settled = false;
-          var timer = null;
-
-          function settle(fn, val) {
-            if (settled) return;
-            settled = true;
-            if (timer) { clearTimeout(timer); timer = null; }
-            if (_pending && _pending.tag === tag) _pending = null;
-            fn(val);
-          }
-          var tag = Math.random();
-
-          if (!_ready || _initFailed || !gisReady()) { reject('fallback'); return; }
-
-          _pending = {
-            tag: tag,
-            resolve: function (c) { settle(resolve, c); },
-            reject: function (r) { settle(reject, r); },
-          };
-
-          function probe(n, name) {
-            try { return !!(n[name] && n[name]()); } catch (e) { return false; }
-          }
-
-          try {
-            google.accounts.id.prompt(function (n) {
-              if (settled || !n) return;
-              if (probe(n, 'isNotDisplayed') || probe(n, 'isSkippedMoment')) {
-                try { window.mediboGisMoment = 'not-displayed'; } catch (e) {}
-                settle(reject, 'fallback');
-                return;
-              }
-              if (probe(n, 'isDismissedMoment')) {
-                var reason = '';
-                try { reason = n.getDismissedReason ? n.getDismissedReason() : ''; } catch (e) {}
-                try { window.mediboGisMoment = 'dismissed:' + reason; } catch (e) {}
-                // The credential arrives through the initialize() callback.
-                if (reason === 'credential_returned') return;
-                settle(reject, 'cancelled');
-              }
-            });
-          } catch (e) {
-            settle(reject, 'fallback');
-            return;
-          }
-
-          // CHANGE #310c: the moment callback can go silent after a FedCM
-          // dismissal — never let that hang the caller.
-          timer = setTimeout(function () { settle(reject, 'fallback'); }, 90000);
-        });
-      };
-
-      // ── Our own half-screen sheet, hosting the GIS button ─────────────────
-      // Used only when One Tap could not be displayed. ux_mode stays 'popup'
-      // (the GIS default) so an installed PWA is never navigated away: the
-      // popup closes itself and the credential lands back in this document.
-      function showSheet(title, subtitle, cancelLabel, onCancel) {
-        var ov  = document.getElementById('gis-rb-overlay');
-        var ctr = document.getElementById('gis-rb-container');
-        var btn = document.getElementById('gis-rb-cancel');
-        var ttl = document.getElementById('gis-rb-title');
-        var sub = document.getElementById('gis-rb-subtitle');
-        if (!ov || !ctr || !btn) return false;
-
-        if (ttl) { ttl.textContent = title || ''; ttl.style.display = title ? '' : 'none'; }
-        if (sub) { sub.textContent = subtitle || ''; sub.style.display = subtitle ? '' : 'none'; }
-        btn.textContent = cancelLabel || '';
-        btn.style.display = cancelLabel ? '' : 'none';
-
-        ctr.innerHTML = '';
-        try {
-          google.accounts.id.renderButton(ctr, {
-            type: 'standard', shape: 'pill', theme: 'outline',
-            text: 'continue_with', size: 'large', logo_alignment: 'left', width: 280,
-          });
-        } catch (e) { return false; }
-
-        ov.style.display = 'flex';
-        // CHANGE #399: swallow the touch-originated ghost click that lands on
-        // the freshly-shown backdrop a few hundred ms after the opening tap.
-        var openedAt = Date.now();
-        var GRACE_MS = 400;
-        btn.onclick = function () {
-          if (Date.now() - openedAt < GRACE_MS) return;
-          onCancel();
-        };
-        ov.onclick = function (ev) {
-          if (Date.now() - openedAt < GRACE_MS) return;
-          if (ev.target === ov) onCancel();
-        };
-        return true;
-      }
-
-      function hideSheet() {
-        var ov = document.getElementById('gis-rb-overlay');
-        if (ov) { ov.style.display = 'none'; ov.onclick = null; }
-        var btn = document.getElementById('gis-rb-cancel');
-        if (btn) btn.onclick = null;
-      }
-
-      window.mediboGisSheet = function (title, subtitle, cancelLabel) {
-        return new Promise(function (resolve, reject) {
-          var settled = false;
-          var timer = null;
-          var tag = Math.random();
-
-          function settle(fn, val) {
-            if (settled) return;
-            settled = true;
-            if (timer) { clearTimeout(timer); timer = null; }
-            if (_pending && _pending.tag === tag) _pending = null;
-            hideSheet();
-            fn(val);
-          }
-
-          if (!_ready || !gisReady()) { reject('fallback'); return; }
-
-          _pending = {
-            tag: tag,
-            resolve: function (c) { settle(resolve, c); },
-            reject: function (r) { settle(reject, r); },
-          };
-
-          if (!showSheet(title, subtitle, cancelLabel, function () {
-            settle(reject, 'cancelled');
-          })) {
-            _pending = null;
-            reject('fallback');
-            return;
-          }
-
-          timer = setTimeout(function () { settle(reject, 'cancelled'); }, 90000);
-        });
-      };
-
-      // ── Legacy entry point, still used by home_shell ───────────────────────
-      window.mediboGisSignIn = function (clientId, hashedNonce) {
-        return window.mediboGisPrewarm(clientId, hashedNonce).then(function (st) {
-          if (st !== 'ready') throw 'gis-load-timeout';
-          return window.mediboGisSheet('', '', '');
-        });
       };
     })();
   </script>

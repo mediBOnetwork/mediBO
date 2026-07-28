@@ -13,6 +13,8 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../app_state.dart';
+import '../../models/cart_model.dart';
 import '../../services/gis_auth.dart';
 import 'google_flow.dart';
 import '../../user_state.dart';
@@ -138,6 +140,18 @@ class _LoginScreenState extends State<LoginScreen> {
   StreamSubscription<AuthState>? _authSub;
   bool _navigated = false;
 
+  /// CHANGE #566 — resolved here, not inside the async landing step, so the
+  /// cart is still reachable after the widget starts tearing down.
+  CartModel? _cart;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    try {
+      _cart = AppState.of(context);
+    } catch (_) {}
+  }
+
   @override
   void initState() {
     super.initState();
@@ -201,6 +215,32 @@ class _LoginScreenState extends State<LoginScreen> {
     try {
       RenderLog.write('c554_home_route', route);
     } catch (_) {}
+    unawaited(_landOn(route));
+  }
+
+  /// CHANGE #566 — every login path reaches here after setSession and after
+  /// my_session() has returned, so this is the one place where the cart can be
+  /// loaded before home paints. Google navigates and re-boots the app, so boot
+  /// fetched cart_state() for it; the WhatsApp OTP path sets the session in
+  /// place with no reload, so without this the badge and the delivery bar
+  /// landed empty until the cart screen was opened by hand.
+  Future<void> _landOn(String route) async {
+    final cart = _cart;
+    if (cart != null) {
+      try {
+        // Bounded: a slow or failed cart_state() must never strand the user on
+        // /login. The auth listener in CartModel refetches regardless.
+        await cart
+            .syncSignedInCart()
+            .timeout(const Duration(milliseconds: 2500));
+        RenderLog.write('c566_cart_before_home', cart.badge ?? '');
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    _navigate(route);
+  }
+
+  void _navigate(String route) {
     try {
       Navigator.of(context).pushNamedAndRemoveUntil(route, (r) => false);
     } catch (_) {

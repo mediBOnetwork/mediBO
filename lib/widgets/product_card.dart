@@ -23,7 +23,7 @@ class ProductCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final style = categoryStyle(product.category);
     final cart = AppState.of(context);
-    final discountPct = cartDiscountPercent(cart.mrpTotal).round();
+    final discountPct = cart.discountPct.round(); // #559: server-decided
 
     return RepaintBoundary(
       child: HoverLift(
@@ -127,7 +127,7 @@ class _PriceRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cart = AppState.of(context);
-    final discPct = cartDiscountPercent(cart.mrpTotal);
+    final discPct = cart.discountPct; // #559: server-decided
     final salePrice = product.mrp * (1 - discPct / 100);
 
     return Row(
@@ -257,8 +257,11 @@ class _CartControlState extends State<_CartControl>
     //   if (!mounted) return;
     //   if (!UserState.read(context).isAuthenticated) return;
     // }
+    // CHANGE #559: ignore taps while this product's write is in flight.
+    final cart = AppState.of(context);
+    if (cart.isPending(widget.product.id)) return;
     _popCtrl.forward(from: 0);
-    AppState.of(context).add(widget.product);
+    cart.add(widget.product);
     MedicineRepository().incrementSalesCount(widget.product.id);
   }
 
@@ -1138,7 +1141,9 @@ class _QuantityStepperState extends State<_QuantityStepper> {
               MouseRegion(
                 cursor: SystemMouseCursors.click,
                 child: GestureDetector(
-                  onTap: () => cart.decrement(widget.product),
+                  onTap: cart.isPending(widget.product.id)
+                      ? null
+                      : () => cart.decrement(widget.product),
                   child: const SizedBox(
                     width: 44,
                     child: Center(
@@ -1213,7 +1218,9 @@ class _QuantityStepperState extends State<_QuantityStepper> {
               MouseRegion(
                 cursor: SystemMouseCursors.click,
                 child: GestureDetector(
-                  onTap: () => cart.increment(widget.product),
+                  onTap: cart.isPending(widget.product.id)
+                      ? null
+                      : () => cart.increment(widget.product),
                   child: const SizedBox(
                     width: 44,
                     child: Center(
@@ -1244,7 +1251,9 @@ class _QuantityStepperState extends State<_QuantityStepper> {
                   cursor: SystemMouseCursors.click,
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
-                    onTap: () => cart.decrement(widget.product),
+                    onTap: cart.isPending(widget.product.id)
+                      ? null
+                      : () => cart.decrement(widget.product),
                     child: const SizedBox.expand(),
                   ),
                 ),
@@ -1264,7 +1273,9 @@ class _QuantityStepperState extends State<_QuantityStepper> {
                   cursor: SystemMouseCursors.click,
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
-                    onTap: () => cart.increment(widget.product),
+                    onTap: cart.isPending(widget.product.id)
+                      ? null
+                      : () => cart.increment(widget.product),
                     child: const SizedBox.expand(),
                   ),
                 ),

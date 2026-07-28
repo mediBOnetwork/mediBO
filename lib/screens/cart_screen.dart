@@ -1021,7 +1021,7 @@ class _CartItemCard extends StatelessWidget {
     // CHANGE #553 — the line's availability is whatever cart_availability()
     // said about this product_id. Nothing here re-derives it.
     final av = availability;
-    final discPct = cartDiscountPercent(cart.mrpTotal);
+    final discPct = cart.discountPct; // #559: server-decided
     final salePrice = p.mrp * (1 - discPct / 100);
 
     // Parse scheme "X+Y" for free-qty calculation
@@ -1546,7 +1546,9 @@ class _CartStepperState extends State<_CartStepper> {
                     cursor: SystemMouseCursors.click,
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
-                      onTap: () => widget.cart.decrement(widget.product),
+                      onTap: widget.cart.isPending(widget.product.id)
+                          ? null
+                          : () => widget.cart.decrement(widget.product),
                     ),
                   ),
                 ),
@@ -1559,7 +1561,9 @@ class _CartStepperState extends State<_CartStepper> {
                     cursor: SystemMouseCursors.click,
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
-                      onTap: () => widget.cart.increment(widget.product),
+                      onTap: widget.cart.isPending(widget.product.id)
+                          ? null
+                          : () => widget.cart.increment(widget.product),
                     ),
                   ),
                 ),
@@ -1665,7 +1669,7 @@ class _RemovedItemCard extends StatelessWidget {
         if (line.cartItemId != null) ...[
           const SizedBox(width: 8),
           GestureDetector(
-            onTap: () => cart.hardDeleteRemovedItem(line.cartItemId!),
+            onTap: () => cart.hardDeleteRemovedItem(line.product.id),
             child: Container(
               width: 22,
               height: 22,
@@ -1693,10 +1697,12 @@ class _BillingBreakdownSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final discPct = cartDiscountPercent(cart.mrpTotal);
-    final discAmt = cart.mrpTotal * discPct / 100;
+    // CHANGE #559: percentage, discount and delivery fee all come from
+    // cart_state() — no tier threshold is evaluated in Dart.
+    final discPct = cart.discountPct;
+    final discAmt = cart.discountAmount;
     final netTaxable = cart.mrpTotal - discAmt;
-    final deliveryFee = cartDeliveryFee(cart.mrpTotal);
+    final deliveryFee = cart.deliveryFee;
     final gstAmt = cart.netPayable - deliveryFee - netTaxable;
 
     return Container(
@@ -1985,7 +1991,7 @@ class _GstBillView extends StatelessWidget {
 
     // MRP total — single source of truth for discount tier (matches cart bar)
     final totalMrp = cart.mrpTotal;
-    final discPct = cartDiscountPercent(totalMrp);
+    final discPct = cart.discountPct; // #559: server-decided
 
     // Group lines by GST rate, ascending
     final Map<int, List<CartLine>> groups = {};
@@ -2004,7 +2010,7 @@ class _GstBillView extends StatelessWidget {
       final taxable = net - disc;
       finalPayables[rate] = taxable + taxable * rate / 100;
     }
-    final deliveryFee = cartDeliveryFee(totalMrp);
+    final deliveryFee = cart.deliveryFee; // #559: server-decided
     // Use the shared CartModel getter as the single source of truth
     final grandTotal = cart.netPayable;
 
@@ -2616,8 +2622,8 @@ class _OrderSummaryPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final discPct = cartDiscountPercent(cart.mrpTotal);
-    final deliveryFee = cartDeliveryFee(cart.mrpTotal);
+    final discPct = cart.discountPct; // #559: server-decided
+    final deliveryFee = cart.deliveryFee; // #559: server-decided
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -2649,7 +2655,7 @@ class _OrderSummaryPanel extends StatelessWidget {
           _row('Net Total', rupees(cart.mrpTotal)),
           _row(
             'Discount (${discPct.toStringAsFixed(0)}%)',
-            '− ${rupees(cart.mrpTotal * discPct / 100)}',
+            '− ${rupees(cart.discountAmount)}',
             valueColor: const Color(0xFF16A34A),
           ),
           _row(
@@ -2946,17 +2952,18 @@ class _EmptyCart extends StatelessWidget {
                 size: 48, color: Color(0xFF9CA3AF)),
           ),
           const SizedBox(height: 20),
-          const Text(
-            'Your cart is empty',
-            style: TextStyle(
+          // CHANGE #559: empty-state copy is whatever cart_state() returned.
+          Text(
+            AppState.of(context).emptyTitle,
+            style: const TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.w700,
                 color: Color(0xFF111827)),
           ),
           const SizedBox(height: 8),
-          const Text(
-            'Add products from the catalog to start an order.',
-            style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
+          Text(
+            AppState.of(context).emptyNote,
+            style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
           ),
         ],
       ),

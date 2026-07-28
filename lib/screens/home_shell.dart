@@ -1679,7 +1679,6 @@ class _CartPanelContentState extends State<_CartPanelContent> {
   Widget build(BuildContext context) {
     final cart = AppState.of(context);
     final mq = MediaQuery.of(context);
-    final itemCount = cart.distinctItems;
 
     return SafeArea(
       child: Column(
@@ -2810,12 +2809,6 @@ class _StickyCartBar extends StatefulWidget {
 
 class _StickyCartBarState extends State<_StickyCartBar>
     with TickerProviderStateMixin {
-  static const _tierFreeDelivery = 999.0;
-  static const _tier3pct = 2999.0;
-  static const _tier5pct = 6999.0;
-  static const _tier6pct = 8999.0;
-  static const _tier7pct = 18999.0;
-
   late final AnimationController _slideCtrl;
   late final Animation<Offset> _slideAnim;
   late final AnimationController _pulseCtrl;
@@ -2875,46 +2868,38 @@ class _StickyCartBarState extends State<_StickyCartBar>
   @override
   Widget build(BuildContext context) {
     final cart = AppState.of(context);
-    final total = cart.mrpTotal;
     final uniqueItems = cart.distinctItems;
 
-    final double progress;
+    // CHANGE #559: the whole five-tier ladder is decided by cart_state() from
+    // app_settings.cart_tiers — which tier is current, which is next, how far
+    // away it is and the progress toward it. No threshold, percentage or
+    // rupee gap is computed here. Same three widget shapes as before.
+    final progress = cart.tierProgress;
     final Widget leftContent;
 
-    if (total >= _tier7pct) {
-      progress = 1.0;
-      leftContent = const Text(
-        '🎉 7% discount unlocked! (maximum)',
+    if (cart.tierMaxed) {
+      leftContent = Text(
+        '🎉 ${cart.tierLabel} unlocked! (maximum)',
         maxLines: 1,
         softWrap: false,
         overflow: TextOverflow.clip,
-        style: TextStyle(
+        style: const TextStyle(
           color: Colors.white,
           fontSize: 12,
           fontWeight: FontWeight.w700,
         ),
       );
-    } else if (total >= _tier6pct) {
-      progress = (total - _tier6pct) / (_tier7pct - _tier6pct);
-      final remaining = (_tier7pct - total).ceil();
-      leftContent = _UnlockedTierText(unlockedLabel: '6%', nextPct: 7, remaining: remaining);
-    } else if (total >= _tier5pct) {
-      progress = (total - _tier5pct) / (_tier6pct - _tier5pct);
-      final remaining = (_tier6pct - total).ceil();
-      leftContent = _UnlockedTierText(unlockedLabel: '5%', nextPct: 6, remaining: remaining);
-    } else if (total >= _tier3pct) {
-      progress = (total - _tier3pct) / (_tier5pct - _tier3pct);
-      final remaining = (_tier5pct - total).ceil();
-      leftContent = _UnlockedTierText(unlockedLabel: '3%', nextPct: 5, remaining: remaining);
-    } else if (total >= _tierFreeDelivery) {
-      progress = (total - _tierFreeDelivery) / (_tier3pct - _tierFreeDelivery);
-      final remaining = (_tier3pct - total).ceil();
-      leftContent = _UnlockedTierText(unlockedLabel: 'FREE delivery', nextPct: 3, remaining: remaining);
+    } else if (cart.tierCurrent != null) {
+      leftContent = _UnlockedTierText(
+        unlockedLabel: cart.tierLabel ?? '',
+        nextPct: cart.tierNextPct,
+        remaining: cart.tierGap.ceil(),
+      );
     } else {
-      progress = total > 0 ? total / _tierFreeDelivery : 0.0;
-      final remaining = (_tierFreeDelivery - total).ceil();
       leftContent = _DiscountText(
-          amount: '₹$remaining', suffix: ' more for FREE delivery');
+        amount: '₹${cart.tierGap.ceil()}',
+        suffix: ' more for ${cart.tierNextLabel ?? ''}',
+      );
     }
 
     return SlideTransition(
@@ -3146,12 +3131,6 @@ class _WebDiscountBar extends StatefulWidget {
 
 class _WebDiscountBarState extends State<_WebDiscountBar>
     with SingleTickerProviderStateMixin {
-  static const _tierFreeDelivery = 999.0;
-  static const _tier3pct = 2999.0;
-  static const _tier5pct = 6999.0;
-  static const _tier6pct = 8999.0;
-  static const _tier7pct = 18999.0;
-
   late final AnimationController _slideCtrl;
   late final Animation<Offset> _slideAnim;
   bool _wasVisible = false;
@@ -3190,48 +3169,42 @@ class _WebDiscountBarState extends State<_WebDiscountBar>
   @override
   Widget build(BuildContext context) {
     final cart = AppState.of(context);
-    final total = cart.mrpTotal;
     final uniqueItems = cart.distinctItems;
 
     if (uniqueItems == 0 && !_slideCtrl.isAnimating) {
       return const SizedBox.shrink();
     }
 
-    final double progress;
+    // CHANGE #559: the whole five-tier ladder is decided by cart_state() from
+    // app_settings.cart_tiers — which tier is current, which is next, how far
+    // away it is and the progress toward it. No threshold, percentage or
+    // rupee gap is computed here. Same three widget shapes as before.
+    final progress = cart.tierProgress;
     final Widget leftContent;
 
-    if (total >= _tier7pct) {
-      progress = 1.0;
-      leftContent = const Text(
-        '🎉 7% discount unlocked! (maximum)',
-        style: TextStyle(
-            color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700),
+    if (cart.tierMaxed) {
+      leftContent = Text(
+        '🎉 ${cart.tierLabel} unlocked! (maximum)',
+        maxLines: 1,
+        softWrap: false,
+        overflow: TextOverflow.clip,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+        ),
       );
-    } else if (total >= _tier6pct) {
-      progress = (total - _tier6pct) / (_tier7pct - _tier6pct);
-      final remaining = (_tier7pct - total).ceil();
-      leftContent =
-          _UnlockedTierText(unlockedLabel: '6%', nextPct: 7, remaining: remaining);
-    } else if (total >= _tier5pct) {
-      progress = (total - _tier5pct) / (_tier6pct - _tier5pct);
-      final remaining = (_tier6pct - total).ceil();
-      leftContent =
-          _UnlockedTierText(unlockedLabel: '5%', nextPct: 6, remaining: remaining);
-    } else if (total >= _tier3pct) {
-      progress = (total - _tier3pct) / (_tier5pct - _tier3pct);
-      final remaining = (_tier5pct - total).ceil();
-      leftContent =
-          _UnlockedTierText(unlockedLabel: '3%', nextPct: 5, remaining: remaining);
-    } else if (total >= _tierFreeDelivery) {
-      progress = (total - _tierFreeDelivery) / (_tier3pct - _tierFreeDelivery);
-      final remaining = (_tier3pct - total).ceil();
+    } else if (cart.tierCurrent != null) {
       leftContent = _UnlockedTierText(
-          unlockedLabel: 'FREE delivery', nextPct: 3, remaining: remaining);
+        unlockedLabel: cart.tierLabel ?? '',
+        nextPct: cart.tierNextPct,
+        remaining: cart.tierGap.ceil(),
+      );
     } else {
-      progress = total > 0 ? total / _tierFreeDelivery : 0.0;
-      final remaining = (_tierFreeDelivery - total).ceil();
-      leftContent =
-          _DiscountText(amount: '₹$remaining', suffix: ' more for FREE delivery');
+      leftContent = _DiscountText(
+        amount: '₹${cart.tierGap.ceil()}',
+        suffix: ' more for ${cart.tierNextLabel ?? ''}',
+      );
     }
 
     return SlideTransition(

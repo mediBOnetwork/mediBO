@@ -23,7 +23,7 @@ class ProductCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final style = categoryStyle(product.category);
     final cart = AppState.of(context);
-    final discountPct = cartDiscountPercent(cart.mrpTotal).round();
+    final discountPct = cart.discountPct.round(); // #559: server-decided
 
     return RepaintBoundary(
       child: HoverLift(
@@ -127,7 +127,7 @@ class _PriceRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cart = AppState.of(context);
-    final discPct = cartDiscountPercent(cart.mrpTotal);
+    final discPct = cart.discountPct; // #559: server-decided
     final salePrice = product.mrp * (1 - discPct / 100);
 
     return Row(

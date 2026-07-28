@@ -1,11 +1,12 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'product.dart';
 import '../data/medicine_repository.dart';
-import '../util.dart';
 import '../utils/order_code.dart';
 import '../utils/render_log.dart';
 
@@ -63,7 +64,9 @@ class Order {
 ///     each return the new cart; that response is adopted verbatim.
 ///   * There is no optimistic update and no local quantity map — the displayed
 ///     quantity is always the quantity the server last reported.
-///   * Nothing is persisted client-side. No localStorage, no SharedPreferences.
+///   * No cart is persisted client-side. The ONLY thing stored locally is the
+///     guest UUID — an identity token, not a cart — so a logged-out visitor's
+///     server-side cart can be found again and claimed on login.
 class CartModel extends ChangeNotifier {
   /// Test seam: the RPC transport. Production goes straight to Supabase; a
   /// widget test can substitute a recorder to assert which RPC was called with
@@ -76,6 +79,55 @@ class CartModel extends ChangeNotifier {
     final t = rpcTransport;
     if (t != null) return t(fn, params);
     return Supabase.instance.client.rpc(fn, params: params);
+  }
+
+  /// Stable per-browser guest id, passed as `p_guest_uid` to all three cart
+  /// RPCs while `auth.uid()` is null. Not a cart — just who the server should
+  /// file this anonymous cart under. Persisted with shared_preferences (never
+  /// dart:html: DEFENSIVE IMPORT RULE).
+  static const _guestUidKey = 'medibo_guest_uid';
+  String? _guestUid;
+
+  /// True when a real Supabase session exists. Safe before Supabase.initialize
+  /// (and under the test transport), where it reports logged-out.
+  bool get _isSignedIn {
+    try {
+      return Supabase.instance.client.auth.currentUser != null;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Non-null only while logged out — the value to send as `p_guest_uid`.
+  String? get _guestParam => _isSignedIn ? null : _guestUid;
+
+  Future<String> _ensureGuestUid() async {
+    final existing = _guestUid;
+    if (existing != null) return existing;
+    final prefs = await SharedPreferences.getInstance();
+    var uid = prefs.getString(_guestUidKey);
+    if (uid == null || uid.isEmpty) {
+      uid = _generateUuid();
+      await prefs.setString(_guestUidKey, uid);
+    }
+    _guestUid = uid;
+    return uid;
+  }
+
+  Future<void> _loadGuestUid() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _guestUid = prefs.getString(_guestUidKey);
+    } catch (_) {}
+  }
+
+  static String _generateUuid() {
+    final rnd = Random.secure();
+    final bytes = List<int>.generate(16, (_) => rnd.nextInt(256));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    final h = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    return '${h.substring(0, 8)}-${h.substring(8, 12)}-${h.substring(12, 16)}-${h.substring(16, 20)}-${h.substring(20)}';
   }
 
   /// The raw `cart_state()` payload — the single source of truth for the cart.
@@ -182,7 +234,9 @@ class CartModel extends ChangeNotifier {
     _authSub = client.auth.onAuthStateChange.listen(_onAuthState);
     final uid = client.auth.currentUser?.id;
     if (uid != null) _subscribeToCartRealtime(uid);
-    refresh();
+    // Guest id must be known BEFORE the first cart_state(), or a logged-out
+    // visitor's existing server cart would read back empty.
+    _loadGuestUid().then((_) => refresh());
     // CHANGE #454 B1 — once per app/storefront boot (CartModel is the shared
     // singleton behind AppState, so this covers every screen).
     refreshCartMode();
@@ -197,6 +251,9 @@ class CartModel extends ChangeNotifier {
       _adminRemovedLines.clear();
       final uid = Supabase.instance.client.auth.currentUser?.id;
       if (uid != null) _subscribeToCartRealtime(uid);
+      // CHANGE #559 + #556: hand the guest cart to the account BEFORE anything
+      // reads it, so what the customer built while logged out survives login.
+      await _claimGuestCart();
       await refreshCartMode(); // role may have just changed (e.g. admin login)
       await refresh();
     } else if (event == AuthChangeEvent.signedOut) {
@@ -207,6 +264,9 @@ class CartModel extends ChangeNotifier {
       _adminRemovedLines.clear();
       _orders.clear();
       notifyListeners();
+      // Back to browsing as a guest — show whatever that guest cart holds.
+      await _loadGuestUid();
+      await refresh();
     }
   }
 
@@ -243,7 +303,7 @@ class CartModel extends ChangeNotifier {
     final gen = ++_loadGen;
     RenderLog.write(kC410ImpersonationPersist, 'gen:$gen;viewAs:$_viewAsUserId');
     try {
-      final res = await _rpc('cart_state');
+      final res = await _rpc('cart_state', {'p_guest_uid': _guestParam});
       if (gen != _loadGen) return; // a newer read superseded this one
       if (res is! Map) return;
       await _hydrateAndAdopt(Map<String, dynamic>.from(res), gen);
@@ -321,7 +381,8 @@ class CartModel extends ChangeNotifier {
           manufacturer: (row['manufacturer'] as String?) ?? '',
           packSize: (row['pack_size'] as String?) ?? '',
           category: (aux?['category'] as String?) ?? 'Other',
-          gstPercent: (aux?['gst_percent'] as num?)?.toDouble() ?? 12.0,
+          // CHANGE #559: gst_percent is returned per line by cart_state().
+          gstPercent: (row['gst_percent'] as num?)?.toDouble() ?? 12.0,
           buyable: _buyableById[pid],
         ),
         (row['quantity'] as num?)?.toInt() ?? 0,
@@ -436,9 +497,13 @@ class CartModel extends ChangeNotifier {
       RenderLog.write(_c408ActingAsCart, 'write:set:customer_uid:$_viewAsUserId');
     }
     try {
+      // A logged-out add needs a guest id to file the row under; mint one on
+      // first write rather than for every idle visitor.
+      final guest = _isSignedIn ? null : await _ensureGuestUid();
       final res = await _rpc('cart_set_item', {
         'p_product_id': productId,
         'p_quantity': quantity,
+        'p_guest_uid': guest,
       });
       await _applyWriteResult(res);
     } catch (e) {
@@ -470,6 +535,25 @@ class CartModel extends ChangeNotifier {
     }
   }
 
+  /// CHANGE #559 rule 2 / #556: move the logged-out cart onto the account that
+  /// just signed in. Runs before my_session()-driven navigation reads the cart.
+  Future<void> _claimGuestCart() async {
+    final guest = _guestUid;
+    if (guest == null) return;
+    try {
+      final res = await _rpc('claim_guest_cart', {'p_guest_uid': guest});
+      final moved = (res is Map) ? (res['moved'] as num?)?.toInt() ?? 0 : 0;
+      RenderLog.write('c559_guest_cart_claimed', 'moved:$moved');
+    } catch (_) {}
+    // The guest id has served its purpose; a stale one must never be sent
+    // again or a later logout would resurrect an already-claimed cart.
+    _guestUid = null;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_guestUidKey);
+    } catch (_) {}
+  }
+
   // ── Computed getters ──────────────────────────────────────────────────────
 
   // CHANGE #559: the cart list is exactly what cart_state() returned, plus the
@@ -497,12 +581,48 @@ class CartModel extends ChangeNotifier {
   String? get ctaLabel => _cart['cta_label']?.toString();
   String get emptyTitle => _cart['empty_title']?.toString() ?? '';
   String get emptyNote => _cart['empty_note']?.toString() ?? '';
-  String? get deliveryNote => _cart['delivery_note']?.toString();
-  double get deliveryProgress =>
-      (_cart['delivery_progress'] as num?)?.toDouble() ?? 0.0;
-  double get deliveryGap => (_cart['delivery_gap'] as num?)?.toDouble() ?? 0.0;
-  double get deliveryThreshold =>
-      (_cart['delivery_threshold'] as num?)?.toDouble() ?? 0.0;
+  // ── Discount-tier ladder (CHANGE #559) ────────────────────────────────────
+  // The five tiers, which tier is current, which is next, how far away it is
+  // and the progress toward it are ALL decided by cart_state() from
+  // app_settings.cart_tiers. No threshold or percentage is hardcoded in Dart.
+
+  /// The tier reached, or null below the first one. Keys: label, min_mrp,
+  /// discount_pct, free_delivery.
+  Map<String, dynamic>? get tierCurrent => _asMap(_cart['tier_current']);
+
+  /// The next tier up, or null once the top tier is reached.
+  Map<String, dynamic>? get tierNext => _asMap(_cart['tier_next']);
+
+  /// Label of the tier reached, e.g. "FREE delivery", "3% off".
+  String? get tierLabel => _cart['tier_label']?.toString();
+
+  /// Label of the next tier up, e.g. "3% off".
+  String? get tierNextLabel => tierNext?['label']?.toString();
+
+  /// Discount percent the next tier unlocks.
+  int get tierNextPct => (tierNext?['discount_pct'] as num?)?.toInt() ?? 0;
+
+  /// Rupees of MRP still needed to reach the next tier.
+  double get tierGap => (_cart['tier_gap'] as num?)?.toDouble() ?? 0.0;
+
+  /// Progress across the CURRENT tier band, 0..1. Already 1 at the top tier.
+  double get tierProgress =>
+      (_cart['tier_progress'] as num?)?.toDouble() ?? 0.0;
+
+  /// One-line tier sentence, e.g. "Add ₹727.24 more for 3% off".
+  String? get tierNote => _cart['tier_note']?.toString();
+
+  /// True once the top tier is reached — nothing further to unlock.
+  bool get tierMaxed => tierNext == null && tierCurrent != null;
+
+  // ── Money, all computed server-side ───────────────────────────────────────
+  double get discountPct => (_cart['discount_pct'] as num?)?.toDouble() ?? 0.0;
+  double get discountAmount =>
+      (_cart['discount_amount'] as num?)?.toDouble() ?? 0.0;
+  double get deliveryFee => (_cart['delivery_fee'] as num?)?.toDouble() ?? 0.0;
+
+  static Map<String, dynamic>? _asMap(dynamic v) =>
+      v is Map ? Map<String, dynamic>.from(v) : null;
 
   /// Distinct products, straight from the server. Sample items are transient
   /// and counted alongside so the badge matches what the list shows.
@@ -521,31 +641,15 @@ class CartModel extends ChangeNotifier {
   double get totalGst => lines.fold(0.0, (s, l) => s + l.lineGst);
   double get grandTotal => subtotal + totalGst;
 
-  /// Sum of MRP × qty over the SERVER's lines. Drives the discount tiers and
-  /// the GST bill, neither of which cart_state() returns.
+  /// Total MRP as the SERVER computed it. Drives the tier ladder.
   double get mrpTotal =>
-      lines.fold(0.0, (s, l) => s + l.product.mrp * l.quantity);
+      ((_cart['mrp_total'] as num?)?.toDouble() ?? 0.0) +
+      _sampleLines.values.fold(0.0, (s, l) => s + l.product.mrp * l.quantity);
 
-  /// GST-categorized net payable — the single billing source used by both the
-  /// cart bar and the View Bill.
-  double get netPayable => _computeNetPayable(lines);
-
-  static double _computeNetPayable(List<CartLine> lines) {
-    if (lines.isEmpty) return 0.0;
-    final mrpSum = lines.fold(0.0, (s, l) => s + l.product.mrp * l.quantity);
-    final discPct = cartDiscountPercent(mrpSum);
-    final Map<int, double> groupMrp = {};
-    for (final l in lines) {
-      final rate = l.product.gstPercent.toInt();
-      groupMrp[rate] = (groupMrp[rate] ?? 0) + l.product.mrp * l.quantity;
-    }
-    double total = 0.0;
-    for (final entry in groupMrp.entries) {
-      final taxable = entry.value * (1 - discPct / 100);
-      total += taxable * (1 + entry.key / 100);
-    }
-    return total + cartDeliveryFee(mrpSum);
-  }
+  /// Net payable, straight from cart_state() — discount and delivery fee are
+  /// applied server-side. Sample items are transient and never billed, so the
+  /// server figure stands alone.
+  double get netPayable => (_cart['net_payable'] as num?)?.toDouble() ?? 0.0;
 
   bool get hasSampleItems => _sampleLines.isNotEmpty;
   int get sampleCountdown => _sampleCountdown;
@@ -601,7 +705,7 @@ class CartModel extends ChangeNotifier {
     _sampleCountdown = 15;
     _sampleLines.clear();
     try {
-      final res = await _rpc('cart_clear');
+      final res = await _rpc('cart_clear', {'p_guest_uid': _guestParam});
       await _applyWriteResult(res);
     } catch (_) {
       await refresh();
@@ -646,13 +750,14 @@ class CartModel extends ChangeNotifier {
     _sampleCountdown = 15;
     final orderLines =
         lines.map((l) => CartLine(l.product, l.quantity)).toList();
+    // Snapshot the SERVER's figures before cart_clear() empties them.
     final order = Order(
       number: orderDisplayId({'id': 'seq${_orderSeq++}'}),
       // CHANGE #548: the SERVER stamps placed-at on echo. No client guess.
       placedAt: null,
       lines: orderLines,
       grandTotal: grandTotal,
-      netPayable: _computeNetPayable(orderLines),
+      netPayable: netPayable,
     );
     _orders.add(order);
     _sampleLines.clear();

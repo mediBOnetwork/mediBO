@@ -488,13 +488,13 @@ class AuthNotifier extends ChangeNotifier {
   // produced NO /authorize request at all, while every succeeding attempt
   // showed /authorize or grant_type=id_token.
   //
-  // CHANGE #561: the GIS library itself is now deleted from web/index.html, so
-  // no code path can build a Google URL any more. FedCM below is a native
-  // browser API and needs no library.
+  // CHANGE #562: only One Tap's prompt() is restored — renderButton (the GIS
+  // button that built its own accounts.google.com URL) stays deleted.
   //
-  // Attempt A is now the browser's own FedCM chooser (navigator.credentials.get),
-  // which is drawn over the page and never navigates anywhere, and its id_token
-  // goes to Supabase via signInWithIdToken.
+  // CHANGE #562: Attempt A is GIS One Tap again — Google's own sheet, drawn
+  // over the page, feeding signInWithIdToken. FedCM (navigator.credentials.get)
+  // is removed entirely: it produced zero successful logins, while One Tap
+  // produced four (grant_type=id_token in the auth log).
   // Attempt B is supabase.auth.signInWithOAuth — the ONLY thing allowed to send
   // the browser to Google, and it does so through Supabase's /authorize.
   Future<void> signInWithGoogle() async {
@@ -509,14 +509,15 @@ class AuthNotifier extends ChangeNotifier {
     try { RenderLog.writeNow('c559_entry', 'home_shell'); } catch (_) {}
     try { RenderLog.writeNow('c559_path', 'unknown'); } catch (_) {}
 
-    // ── Attempt A: the browser's native FedCM chooser (no navigation) ───────
-    // Unchanged in appearance: same navigator.credentials.get() chooser, same
-    // client ID, same nonce pair as CHANGE #557.
+    // ── Attempt A: GIS One Tap (no navigation) ─────────────────────────────
+    // Google draws the sheet itself and lists the device's signed-in accounts;
+    // its id_token goes straight to Supabase via signInWithIdToken. This is the
+    // only Google mechanism that has ever produced a successful login here.
     try {
       RenderLog.write('c310_method', 'gis_idtoken');
-      final (:idToken, :rawNonce) = await fedcmChooseAccount();
-      RenderLog.write('c558_path', 'fedcm_chooser');
-      RenderLog.writeNow('c559_path', 'fedcm_chooser');
+      final (:idToken, :rawNonce) = await gisPromptOneTap();
+      RenderLog.write('c562_path', 'one_tap');
+      RenderLog.writeNow('c559_path', 'one_tap');
       RenderLog.write('c310_gis_loaded', 'true');
       RenderLog.write('c310_idtoken', 'got');
       await Supabase.instance.client.auth.signInWithIdToken(
@@ -529,18 +530,15 @@ class AuthNotifier extends ChangeNotifier {
       RenderLog.write('c308_session', 'established');
       return; // success — done
     } on GisOneTapCancelled {
-      // The user closed the chooser — that is a decision, not a failure. Do NOT
-      // escalate to a redirect; just re-enable the button.
-      RenderLog.write('c558_path', 'fedcm_cancelled');
-      RenderLog.writeNow('c559_path', 'fedcm_cancelled');
+      // Dismissed. Per the CHANGE #562 spec this falls through to the OAuth
+      // redirect below rather than dead-ending the button.
+      RenderLog.write('c562_path', 'one_tap_cancelled');
+      RenderLog.writeNow('c559_path', 'one_tap_cancelled');
       RenderLog.write('c310_idtoken', 'none');
-      rethrow;
     } on GisOneTapUnavailable {
-      // FedCM genuinely unavailable (old browser, no IdentityCredential) →
-      // fall through to the Supabase OAuth redirect below.
-      RenderLog.write('c558_fedcm', lastGisError());
-      RenderLog.writeNow('c559_path', 'fedcm_error');
-      RenderLog.writeNow('c559_fedcm_err', lastGisError());
+      RenderLog.write('c562_one_tap', lastGisError());
+      RenderLog.writeNow('c559_path', 'one_tap_unavailable');
+      RenderLog.writeNow('c562_moment', lastGisError());
       RenderLog.write('c310_gis_loaded', 'false');
       RenderLog.write('c310_idtoken', 'none');
     }
@@ -551,7 +549,7 @@ class AuthNotifier extends ChangeNotifier {
     RenderLog.write('c310_method', 'oauth_redirect');
     RenderLog.write('c308_login_method', 'oauth_redirect');
     RenderLog.write('c308_opened_external', 'true');
-    RenderLog.write('c558_path', 'supabase_oauth');
+    RenderLog.write('c562_path', 'supabase_oauth');
     RenderLog.writeNow('c559_path', 'oauth_called');
     await Supabase.instance.client.auth.signInWithOAuth(
       OAuthProvider.google,

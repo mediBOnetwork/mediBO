@@ -118,10 +118,6 @@ String _sha256Hex(List<int> message) {
   return h.map((v) => v.toRadixString(16).padLeft(8, '0')).join();
 }
 
-@JS('mediboFedcmGet')
-external JSPromise<JSString?> _mediboFedcmGet(
-    JSString clientId, JSString hashedNonce);
-
 @JS('mediboLastGisError')
 external JSString _mediboLastGisErrorJs();
 
@@ -134,6 +130,13 @@ String lastGisError() {
     return '';
   }
 }
+
+@JS('mediboGisPrewarm')
+external JSPromise<JSString?> _mediboGisPrewarm(
+    JSString clientId, JSString hashedNonce);
+
+@JS('mediboGisPromptNow')
+external JSPromise<JSString?> _mediboGisPromptNow();
 
 @JS('mediboIsStandalone')
 external bool _mediboIsStandaloneJs();
@@ -179,29 +182,41 @@ Never _rethrowAsGis(Object e) {
   throw const GisOneTapUnavailable();
 }
 
-/// The browser's own FedCM account chooser, asked for directly with
-/// `mediation: 'required'`.
+/// CHANGE #562: load GIS and run `initialize()` up front, so the later tap can
+/// call `prompt()` synchronously and keep its transient user activation —
+/// without which Chrome silently refuses to display the One Tap sheet.
 ///
-/// CHANGE #561: this is now the ONLY in-app Google path. It is a NATIVE browser
-/// API and needs no Google library — the GIS script, One Tap and the GIS button
-/// sheet are all gone, because GIS built its own accounts.google.com URL and
-/// navigated there without ever calling Supabase.
-///
-/// It shows EVERY Google account signed in on the device in a single list,
-/// always presents the chooser rather than auto-selecting, and the browser
-/// draws it over the page, so an installed PWA is never navigated away.
-///
-/// The only fallback below this is supabase.auth.signInWithOAuth.
-///
-/// MUST be called straight from the tap handler: `mode: 'active'` requires
-/// transient user activation.
-Future<({String idToken, String rawNonce})> fedcmChooseAccount() async {
+/// Safe to call repeatedly; returns true once the library is initialised.
+Future<bool> gisPrewarm() async {
   _warmPair ??= _generateNoncePair();
   try {
-    final r = await _mediboFedcmGet(
+    final r = await _mediboGisPrewarm(
       _kGisClientId.toJS,
       _warmPair!.hashedNonce.toJS,
     ).toDart;
+    return r?.toDart == 'ready';
+  } catch (_) {
+    return false;
+  }
+}
+
+/// CHANGE #562: Google One Tap via GIS — restored as the ONLY in-app Google
+/// path, because it is the only one that has ever worked here: the Supabase
+/// auth log holds four successful grant_type=id_token logins, all from this
+/// path on the pre-#557 build, and none since FedCM replaced it.
+///
+/// Google draws the sheet itself and it lists the device's signed-in accounts;
+/// nothing of ours is rendered, so no layout is involved.
+///
+/// MUST be called directly from the tap handler with no awaits in between, or
+/// the user activation is lost and the sheet will not display.
+///
+/// Throws [GisOneTapCancelled] when the user dismissed it, or
+/// [GisOneTapUnavailable] when it could not be shown — the caller falls back to
+/// supabase.auth.signInWithOAuth in both cases.
+Future<({String idToken, String rawNonce})> gisPromptOneTap() async {
+  try {
+    final r = await _mediboGisPromptNow().toDart;
     return _wrap(r?.toDart);
   } on GisOneTapUnavailable {
     rethrow;

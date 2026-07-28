@@ -235,36 +235,25 @@ Future<({String idToken, String rawNonce})> gisPromptOneTap() async {
   }
 }
 
-@JS('mediboGisSheet')
-external JSPromise<JSString?> _mediboGisSheet(
-    JSString title, JSString subtitle, JSString cancelLabel);
+@JS('mediboClearGState')
+external JSString _mediboClearGStateJs();
 
-/// CHANGE #564: the FALLBACK — our own half-screen sheet hosting the GIS
-/// button, restored from the pre-#557 commit where the render-log proved it
-/// works (c556_path=sheet_button then c556_session=established).
+/// CHANGE #565: delete GIS's first-party dismissal-cooldown cookie (g_state) on
+/// every domain/path variant, immediately before prompt().
 ///
-/// The button opens Google's chooser in a popup (ux_mode:'popup', never
-/// 'redirect') which closes itself and hands the credential back to this
-/// document, so an installed PWA is never navigated away. Crucially it is NOT
-/// subject to One Tap's cooldown, so this branch always has a working chooser.
+/// GIS counts One Tap dismissals in that cookie and eventually stops displaying
+/// the sheet — build c9ac1105 recorded c565's predecessor
+/// c564_moment=skipped:unknown_reason, which was exactly this. The cookie is
+/// first-party on our own domain, so we are free to clear it.
 ///
-/// All copy comes from the caller (backend strings); pass empty strings to hide
-/// an element rather than inventing text here.
-Future<({String idToken, String rawNonce})> gisSheetSignIn({
-  required String title,
-  required String subtitle,
-  required String cancelLabel,
-}) async {
+/// Returns 'cleared' if a g_state cookie was present, 'absent' otherwise.
+/// Lives here rather than in Dart because document.cookie would mean importing
+/// dart:html into the widget tree, which the project forbids.
+String clearGoogleStateCookie() {
   try {
-    final r =
-        await _mediboGisSheet(title.toJS, subtitle.toJS, cancelLabel.toJS).toDart;
-    return _wrap(r?.toDart);
-  } on GisOneTapSuppressed {
-    rethrow;
-  } on GisOneTapUnavailable {
-    rethrow;
-  } catch (e) {
-    _rethrowAsGis(e);
+    return _mediboClearGStateJs().toDart;
+  } catch (_) {
+    return 'absent';
   }
 }
 

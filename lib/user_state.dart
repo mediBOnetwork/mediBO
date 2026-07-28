@@ -478,8 +478,8 @@ class AuthNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// CHANGE #564: the home_shell entry point, on the same escalation as the
-  /// login screen — One Tap, then the GIS button popup, then nothing. No browser path: the
+  /// CHANGE #565: the home_shell entry point, on the same single path as the
+  /// login screen — the GIS One Tap sheet only. No browser path: the
   /// full-page chooser opened in a Custom Tab and the session never reached the
   /// app. Dismissed/suppressed rethrow so the caller just re-enables its button.
   Future<void> signInWithGoogle() async {
@@ -488,14 +488,11 @@ class AuthNotifier extends ChangeNotifier {
     try { RenderLog.write('c399_input_type', isCoarsePointer() ? 'touch' : 'mouse'); } catch (_) {}
     try { RenderLog.write('c399_google_auth_launch', 'fired'); } catch (_) {}
     try { RenderLog.writeNow('c559_entry', 'home_shell'); } catch (_) {}
-    try { RenderLog.writeNow('c564_origin', currentOrigin()); } catch (_) {}
+    try { RenderLog.writeNow('c565_origin', currentOrigin()); } catch (_) {}
 
     final outcome = await runGoogleSignIn(
+      clearGState: clearGoogleStateCookie,
       oneTap: gisPromptOneTap,
-      // CHANGE #564: the popup is the cooldown-proof fallback. Copy stays
-      // empty here — home_shell has no backend strings for this sheet, and the
-      // sheet hides any element whose label is empty rather than inventing one.
-      popup: () => gisSheetSignIn(title: '', subtitle: '', cancelLabel: ''),
       finish: (idToken, rawNonce) =>
           Supabase.instance.client.auth.signInWithIdToken(
         provider: OAuthProvider.google,

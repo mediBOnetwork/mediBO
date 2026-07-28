@@ -1,95 +1,96 @@
-// CHANGE #564 — the one focused test the spec asks for:
-// when prompt() reports a skipped moment, the popup path is invoked, and no
-// browser/OAuth path is reachable from the Google flow.
+// CHANGE #565 — the one focused test the spec asks for:
+// tapping Continue with Google clears g_state and THEN calls prompt(), and no
+// other Google mechanism is reachable from the flow.
 //
-// runGoogleSignIn is deliberately platform-free so this runs on the VM with both
+// runGoogleSignIn is deliberately platform-free so this runs on the VM with the
 // attempts injected — no browser, no JS interop, no Supabase.
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pharma_b2b/screens/auth/google_flow.dart';
 
 void main() {
-  test('One Tap skipped (cooldown) -> the popup path runs; nothing navigates',
+  test('g_state is cleared BEFORE prompt(), and the raw nonce reaches Supabase',
       () async {
-    var oneTapCalls = 0;
-    var popupCalls = 0;
+    final order = <String>[];
     String? sentToken;
     String? sentNonce;
     final logged = <String, String>{};
 
     final outcome = await runGoogleSignIn(
-      oneTap: () async {
-        oneTapCalls++;
-        // isSkippedMoment => the JS bridge rejects as suppressed.
-        throw const GisOneTapSuppressed();
+      clearGState: () {
+        order.add('clear');
+        return 'cleared';
       },
-      popup: () async {
-        popupCalls++;
-        return (idToken: 'jwt-popup', rawNonce: 'raw-999');
+      oneTap: () async {
+        order.add('prompt');
+        return (idToken: 'jwt-abc', rawNonce: 'raw-123');
       },
       finish: (idToken, rawNonce) async {
+        order.add('signInWithIdToken');
         sentToken = idToken;
         sentNonce = rawNonce;
       },
       log: (k, v) => logged[k] = v,
     );
 
-    expect(oneTapCalls, 1, reason: 'One Tap is the primary path');
-    expect(popupCalls, 1, reason: 'a skipped moment must invoke the popup');
+    // The ordering is the whole point: the cooldown cookie must be gone before
+    // GIS is asked to display the sheet.
+    expect(order, ['clear', 'prompt', 'signInWithIdToken']);
     expect(outcome, GoogleOutcome.signedIn);
-    expect(sentToken, 'jwt-popup');
+    expect(sentToken, 'jwt-abc');
     // Supabase must receive the RAW nonce, not the hashed one.
-    expect(sentNonce, 'raw-999');
-    expect(logged['c564_path'], 'popup');
-    // There is no OAuth/browser callback in the signature at all — the browser
-    // path is unreachable by construction, not by convention.
+    expect(sentNonce, 'raw-123');
+    expect(logged['c565_gstate'], 'cleared');
+    expect(logged['c565_result'], 'credential');
+
+    // There is no popup, no FedCM and no OAuth parameter in the signature at
+    // all — those paths are unreachable by construction, not by convention.
   });
 
-  test('One Tap succeeds -> the popup is never opened', () async {
-    var popupCalls = 0;
+  test('g_state absent is reported as such, sheet still prompted', () async {
     final logged = <String, String>{};
+    var prompted = false;
 
-    final outcome = await runGoogleSignIn(
-      oneTap: () async => (idToken: 'jwt-abc', rawNonce: 'raw-123'),
-      popup: () async {
-        popupCalls++;
-        throw const GisOneTapUnavailable();
+    await runGoogleSignIn(
+      clearGState: () => 'absent',
+      oneTap: () async {
+        prompted = true;
+        return (idToken: 'jwt', rawNonce: 'raw');
       },
       finish: (_, __) async {},
       log: (k, v) => logged[k] = v,
     );
 
-    expect(outcome, GoogleOutcome.signedIn);
-    expect(popupCalls, 0);
-    expect(logged['c564_path'], 'onetap');
+    expect(prompted, isTrue);
+    expect(logged['c565_gstate'], 'absent');
   });
 
-  test('user closes the sheet -> stop; no popup, no message', () async {
-    var popupCalls = 0;
+  test('dismissal: stay put, no message, nothing else opened', () async {
     final logged = <String, String>{};
 
     final outcome = await runGoogleSignIn(
+      clearGState: () => 'cleared',
       oneTap: () async => throw const GisOneTapCancelled(),
-      popup: () async {
-        popupCalls++;
-        throw const GisOneTapUnavailable();
-      },
       finish: (_, __) async => fail('must not sign in after a dismissal'),
       log: (k, v) => logged[k] = v,
     );
 
     expect(outcome, GoogleOutcome.closed);
-    expect(popupCalls, 0,
-        reason: 'a deliberate close must not open the popup');
-    expect(logged['c564_path'], 'none');
+    expect(logged['c565_result'], 'none');
   });
 
-  test('both unavailable -> suppressed, still no navigation', () async {
+  test('still suppressed after clearing g_state -> inline message only',
+      () async {
+    final logged = <String, String>{};
+
     final outcome = await runGoogleSignIn(
+      clearGState: () => 'cleared',
       oneTap: () async => throw const GisOneTapSuppressed(),
-      popup: () async => throw const GisOneTapSuppressed(),
       finish: (_, __) async => fail('nothing to finish'),
+      log: (k, v) => logged[k] = v,
     );
+
     expect(outcome, GoogleOutcome.suppressed);
+    expect(logged['c565_result'], 'none');
   });
 }

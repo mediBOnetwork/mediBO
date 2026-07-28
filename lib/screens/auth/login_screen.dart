@@ -22,24 +22,16 @@ import 'login_view.dart';
 /// Supabase-backed implementation of the CHANGE #554/#555 login contract.
 class SupabaseLoginApi implements LoginApi {
   /// CHANGE #564: no oauthFallback. The browser path is gone entirely — nothing
-  /// in the Google path may navigate away from the document. [fedcm] and
+  /// in the Google path may navigate away from the document. [oneTap] and
   /// [oneTap] are injectable purely so the escalation can be unit-tested.
   SupabaseLoginApi({
     Future<GoogleCredential> Function()? oneTap,
-    Future<GoogleCredential> Function({
-      required String title,
-      required String subtitle,
-      required String cancelLabel,
-    })? popup,
+    String Function()? clearGState,
   })  : _oneTap = oneTap ?? gisPromptOneTap,
-        _popup = popup ?? gisSheetSignIn;
+        _clearGState = clearGState ?? clearGoogleStateCookie;
 
   final Future<GoogleCredential> Function() _oneTap;
-  final Future<GoogleCredential> Function({
-    required String title,
-    required String subtitle,
-    required String cancelLabel,
-  }) _popup;
+  final String Function() _clearGState;
 
   SupabaseClient get _c => Supabase.instance.client;
 
@@ -108,13 +100,12 @@ class SupabaseLoginApi implements LoginApi {
         nonce: rawNonce,
       );
 
-  /// CHANGE #564: One Tap first, the GIS button popup second, nothing third.
+  /// CHANGE #565: the GIS One Tap sheet, and nothing else.
   ///
-  /// There is no browser path and no FedCM. signInWithOAuth is gone from the
-  /// Google path, as are the "choose in your browser" link and its note: the
-  /// full-page chooser opened in a Chrome Custom Tab, so Supabase wrote the
-  /// session into that tab's storage and the PWA stayed signed out even though
-  /// /callback returned 302 on a real Google login.
+  /// No FedCM, no GIS button popup, no signInWithOAuth — the Google button can
+  /// no longer open any chooser other than the One Tap sheet, and cannot
+  /// navigate the document away. g_state is cleared before every prompt() so a
+  /// cancel never suppresses the next attempt.
   @override
   Future<GoogleOutcome> googleSignIn({
     required String sheetTitle,
@@ -122,14 +113,10 @@ class SupabaseLoginApi implements LoginApi {
     required String otherAccount,
   }) async {
     _logNow('c559_entry', 'login_screen');
-    _logNow('c564_origin', currentOrigin());
+    _logNow('c565_origin', currentOrigin());
     return runGoogleSignIn(
+      clearGState: _clearGState,
       oneTap: _oneTap,
-      popup: () => _popup(
-        title: sheetTitle,
-        subtitle: sheetSubtitle,
-        cancelLabel: otherAccount,
-      ),
       finish: _finishIdToken,
       log: _logNow,
     );

@@ -9,16 +9,16 @@
 // drawn by the browser (FedCM) or by Google (One Tap), never by us, and the
 // full-page accounts.google.com chooser must never appear.
 //
-// Order (CHANGE #564):
-//   1. GIS One Tap prompt(). Proven: four grant_type=id_token logins.
-//   2. The GIS button popup, when One Tap is suppressed by Google's cooldown.
-//      Proven in #556 (c556_path=sheet_button -> c556_session=established) and
-//      NOT subject to that cooldown, so this branch always has a chooser.
-//   3. Nothing. The caller shows an inline message, and stays put.
+// CHANGE #565: there is exactly ONE chooser now — the GIS One Tap sheet
+// ("Sign in to medibo.in with google.com"). Everything else is gone:
+//   * the FedCM chooser ("Sign in with google.com") ended in "Access blocked:
+//     response_type missing" and never once succeeded
+//   * the GIS button popup ("Choose an account to continue to mediBO") worked
+//     but is not wanted
+//   * signInWithOAuth opened a Custom Tab whose session the PWA could not read
 //
-// FedCM is gone: it failed on every single attempt across #557, #558, #560,
-// #561 and #564 — the last one rejected:NetworkError on https://www.medibo.in
-// with both origins authorized.
+// Before each prompt() the caller clears GIS's first-party g_state cookie, so a
+// dismissal never accumulates into the cooldown that used to suppress the sheet.
 
 /// One Tap or FedCM could not be shown at all (library missing, unclassifiable
 /// moment).
@@ -58,14 +58,15 @@ enum GoogleOutcome {
 /// verified and must not change.
 typedef GoogleCredential = ({String idToken, String rawNonce});
 
-/// Runs the escalation. [oneTap] and [popup] are injected so this is testable
-/// without a browser; [finish] is signInWithIdToken.
+/// Runs the One Tap flow. [clearGState] and [oneTap] are injected so the
+/// ordering — cookie cleared BEFORE prompt() — is testable without a browser;
+/// [finish] is signInWithIdToken.
 ///
 /// Never returns a navigation of any kind — the only outcomes are the three in
 /// [GoogleOutcome].
 Future<GoogleOutcome> runGoogleSignIn({
+  required String Function() clearGState,
   required Future<GoogleCredential> Function() oneTap,
-  required Future<GoogleCredential> Function() popup,
   required Future<void> Function(String idToken, String rawNonce) finish,
   void Function(String key, String value)? log,
 }) async {
@@ -73,39 +74,25 @@ Future<GoogleOutcome> runGoogleSignIn({
     if (log != null) log(k, v);
   }
 
-  // ── 1. One Tap: the primary path ─────────────────────────────────────────
+  // Cancel-proofing: kill the cooldown cookie FIRST, every single time.
+  note('c565_gstate', clearGState());
+
   try {
     final cred = await oneTap();
-    note('c564_path', 'onetap');
+    note('c565_result', 'credential');
     await finish(cred.idToken, cred.rawNonce);
-    note('c564_signed_in', 'onetap');
+    note('c565_signed_in', 'onetap');
     return GoogleOutcome.signedIn;
   } on GisOneTapCancelled {
     // A deliberate close is an answer. No message, no popup, no navigation.
-    note('c564_path', 'none');
+    note('c565_result', 'none');
     return GoogleOutcome.closed;
   } on GisOneTapSuppressed {
-    // The cooldown. Fall straight through to the popup, which the cooldown
-    // does not apply to.
-  } on GisOneTapUnavailable {
-    // Same treatment: the popup is the branch that always has a chooser.
-  }
-
-  // ── 2. The GIS button popup ──────────────────────────────────────────────
-  try {
-    final cred = await popup();
-    note('c564_path', 'popup');
-    await finish(cred.idToken, cred.rawNonce);
-    note('c564_signed_in', 'popup');
-    return GoogleOutcome.signedIn;
-  } on GisOneTapCancelled {
-    note('c564_path', 'none');
-    return GoogleOutcome.closed;
-  } on GisOneTapSuppressed {
-    note('c564_path', 'none');
+    // Still suppressed even with g_state cleared: inline message only.
+    note('c565_result', 'none');
     return GoogleOutcome.suppressed;
   } on GisOneTapUnavailable {
-    note('c564_path', 'none');
+    note('c565_result', 'none');
     return GoogleOutcome.suppressed;
   }
 }

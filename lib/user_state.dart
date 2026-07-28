@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'models/user_profile.dart';
+import 'screens/auth/google_flow.dart';
 import 'services/gis_auth.dart';
 import 'services/fulfill_realtime.dart'; // C355: app-level realtime auth + subscription
 import 'utils/render_log.dart';
@@ -477,118 +478,42 @@ class AuthNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
-  // CHANGE #558: Two-attempt Google sign-in, with every direct-to-Google
-  // navigation removed.
-  //
-  // WHY: Attempt A used to render the GIS button, which lets the GIS library
-  // take the browser to accounts.google.com on its own. That URL is built by
-  // GIS, not by Supabase — it never hits /authorize, and when GIS omits
-  // response_type from it Google answers "Access blocked: response_type
-  // missing". The Supabase auth log proved exactly this: the failing attempt
-  // produced NO /authorize request at all, while every succeeding attempt
-  // showed /authorize or grant_type=id_token.
-  //
-  // CHANGE #562: only One Tap's prompt() is restored — renderButton (the GIS
-  // button that built its own accounts.google.com URL) stays deleted.
-  //
-  // CHANGE #562: Attempt A is GIS One Tap again — Google's own sheet, drawn
-  // over the page, feeding signInWithIdToken. FedCM (navigator.credentials.get)
-  // is removed entirely: it produced zero successful logins, while One Tap
-  // produced four (grant_type=id_token in the auth log).
-  // Attempt B is supabase.auth.signInWithOAuth — the ONLY thing allowed to send
-  // the browser to Google, and it does so through Supabase's /authorize.
+  /// CHANGE #564: the home_shell entry point, on the same escalation as the
+  /// login screen — FedCM, then One Tap, then nothing. No browser path: the
+  /// full-page chooser opened in a Custom Tab and the session never reached the
+  /// app. Dismissed/suppressed rethrow so the caller just re-enables its button.
   Future<void> signInWithGoogle() async {
     // CHANGE #399: log input type + launch marker synchronously, before any
     // await, so the tap-to-launch chain has no async gap.
     try { RenderLog.write('c399_input_type', isCoarsePointer() ? 'touch' : 'mouse'); } catch (_) {}
     try { RenderLog.write('c399_google_auth_launch', 'fired'); } catch (_) {}
-
-    // CHANGE #559: instrumentation only — this is the OTHER Google entry point
-    // (the home_shell sign-in sheet), so the render-log has to say which one
-    // ran. Flushed immediately: these branches can end in the browser leaving.
     try { RenderLog.writeNow('c559_entry', 'home_shell'); } catch (_) {}
-    try { RenderLog.writeNow('c559_path', 'unknown'); } catch (_) {}
+    try { RenderLog.writeNow('c564_origin', currentOrigin()); } catch (_) {}
 
-    // ── GIS One Tap (no navigation, ever) ──────────────────────────────────
-    // Google draws the sheet itself and lists the device's signed-in accounts;
-    // its id_token goes straight to Supabase via signInWithIdToken.
-    //
-    // CHANGE #563: this method NEVER falls through to signInWithOAuth. A
-    // dismissal or a suppressed sheet rethrows, so the caller just re-enables
-    // its button — the full-page accounts.google.com chooser must appear ONLY
-    // from a deliberate tap on the login screen's browser link.
-    try {
-      RenderLog.write('c310_method', 'gis_idtoken');
-      final (:idToken, :rawNonce) = await gisPromptOneTap();
-      RenderLog.write('c562_path', 'one_tap');
-      RenderLog.writeNow('c559_path', 'one_tap');
-      RenderLog.write('c310_gis_loaded', 'true');
-      RenderLog.write('c310_idtoken', 'got');
-      await Supabase.instance.client.auth.signInWithIdToken(
+    final outcome = await runGoogleSignIn(
+      fedcm: fedcmChooseAccount,
+      oneTap: gisPromptOneTap,
+      finish: (idToken, rawNonce) =>
+          Supabase.instance.client.auth.signInWithIdToken(
         provider: OAuthProvider.google,
         idToken: idToken,
         nonce: rawNonce,
-      );
+      ),
+      fedcmError: lastFedcmError,
+      log: (k, v) {
+        try { RenderLog.writeNow(k, v); } catch (_) {}
+      },
+    );
+
+    if (outcome == GoogleOutcome.signedIn) {
       RenderLog.write('c310_session', 'established');
       RenderLog.write('c308_login_method', 'gis_idtoken');
       RenderLog.write('c308_session', 'established');
-      return; // success — done
-    } on GisOneTapCancelled {
-      RenderLog.write('c563_path', 'one_tap_closed');
-      RenderLog.writeNow('c559_path', 'one_tap_closed');
-      RenderLog.write('c310_idtoken', 'none');
-      rethrow;
-    } on GisOneTapSuppressed {
-      RenderLog.write('c563_path', 'one_tap_suppressed');
-      RenderLog.writeNow('c559_path', 'one_tap_suppressed');
-      RenderLog.writeNow('c563_moment', lastGisError());
-      RenderLog.write('c310_idtoken', 'none');
-      rethrow;
-    } on GisOneTapUnavailable {
-      RenderLog.write('c563_path', 'one_tap_unavailable');
-      RenderLog.writeNow('c559_path', 'one_tap_unavailable');
-      RenderLog.write('c310_gis_loaded', 'false');
-      RenderLog.write('c310_idtoken', 'none');
-      rethrow;
+      return;
     }
-  }
-
-  /// CHANGE #555: the OAuth PKCE redirect on its own, unchanged from Attempt B
-  /// of [signInWithGoogle]. Used as the mandatory fallback when the One Tap
-  /// bottom sheet cannot be shown, so the Google button never does nothing.
-  /// CHANGE #564 (FIX A): the OAuth redirect, kept inside THIS window.
-  ///
-  /// It used to call signInWithOAuth, which hands the URL to url_launcher_web →
-  /// window.open(url, '_self', 'noopener,noreferrer'). On an installed Android
-  /// PWA that opens a Chrome Custom Tab: Supabase completes the flow and stores
-  /// the session in that tab, so /callback returned 302 with a successful Google
-  /// login (20:36:44 and 20:38:40 UTC) while the PWA stayed signed out.
-  ///
-  /// getOAuthSignInUrl builds the same Supabase /authorize URL and persists the
-  /// PKCE code verifier exactly as signInWithOAuth does — it just does not
-  /// launch anything, so we can navigate the current window ourselves.
-  ///
-  /// Reached ONLY from a deliberate tap on the browser link (CHANGE #563).
-  Future<void> signInWithGoogleOAuth() async {
-    RenderLog.write('c555_method', 'oauth_redirect');
-    RenderLog.writeNow('c564_oauth', 'building_url');
-
-    // Return to the origin the app is actually on. If that origin is not in
-    // Supabase's allow-list it falls back to the project's Site URL, i.e. the
-    // behaviour we already had — so this can only ever help.
-    final origin = currentOrigin();
-    final redirect = origin.isNotEmpty ? origin : 'https://medibo.in';
-
-    final res = await Supabase.instance.client.auth.getOAuthSignInUrl(
-      provider: OAuthProvider.google,
-      redirectTo: redirect,
-    );
-    RenderLog.writeNow('c564_redirect_to', redirect);
-
-    // Same window. No launchUrl, no window.open, no Custom Tab.
-    final ok = assignLocation(res.url);
-    RenderLog.writeNow('c564_oauth', ok ? 'location_assigned' : 'assign_failed');
-    RenderLog.write('c555_session', 'redirect_initiated');
+    // Nothing was signed in and nothing navigated. Tell the caller so its
+    // button re-enables; home_shell already treats this as noise, not an error.
+    throw const GisOneTapCancelled();
   }
 
   Future<void> signOut() async {

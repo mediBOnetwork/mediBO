@@ -78,9 +78,6 @@ class _StubApi implements LoginApi {
   }) async =>
       throw StateError('not called in this test');
 
-  @override
-  Future<void> googleBrowserSignIn() async =>
-      throw StateError('not called in this test');
 }
 
 void main() {

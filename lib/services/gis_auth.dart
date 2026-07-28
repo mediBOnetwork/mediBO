@@ -2,6 +2,8 @@ import 'dart:js_interop';
 import 'dart:math';
 import 'dart:convert';
 
+import '../screens/auth/google_flow.dart';
+
 const _kGisClientId =
     '565577322247-9ls2ocm01sjilq2sb17r5afm6se9jfr4.apps.googleusercontent.com';
 
@@ -118,6 +120,36 @@ String _sha256Hex(List<int> message) {
   return h.map((v) => v.toRadixString(16).padLeft(8, '0')).join();
 }
 
+@JS('mediboFedcmGet')
+external JSPromise<JSString?> _mediboFedcmGet(
+    JSString clientId, JSString hashedNonce);
+
+@JS('mediboLastFedcmError')
+external JSString _mediboLastFedcmErrorJs();
+
+/// Why the last FedCM attempt failed — the DOMException name, 'unsupported',
+/// 'timeout' or 'empty-credential'. Render-log only, never shown to a user.
+String lastFedcmError() {
+  try {
+    return _mediboLastFedcmErrorJs().toDart;
+  } catch (_) {
+    return '';
+  }
+}
+
+@JS('mediboOrigin')
+external JSString _mediboOriginJs();
+
+/// The origin the app is running on — www vs apex. Read-only; logged as
+/// c564_origin so a failure can be tied to the origin it happened on.
+String currentOrigin() {
+  try {
+    return _mediboOriginJs().toDart;
+  } catch (_) {
+    return '';
+  }
+}
+
 @JS('mediboLastGisError')
 external JSString _mediboLastGisErrorJs();
 
@@ -150,27 +182,6 @@ bool isStandalonePwa() {
   } catch (_) {
     return false;
   }
-}
-
-/// One Tap could not be shown at all (library missing, or a moment we could not
-/// classify).
-class GisOneTapUnavailable implements Exception {
-  const GisOneTapUnavailable();
-}
-
-/// CHANGE #563: Google refused to display the sheet — cooldown after an earlier
-/// dismissal, no Google session on the device, or a FedCM refusal.
-///
-/// This must NEVER trigger a navigation. The caller shows the backend's
-/// `google_unavailable_note` and reveals the `google_browser_label` link; only a
-/// deliberate tap on that link may open the full-page browser chooser.
-class GisOneTapSuppressed implements Exception {
-  const GisOneTapSuppressed();
-}
-
-/// The user deliberately dismissed the chooser — do not fall back.
-class GisOneTapCancelled implements Exception {
-  const GisOneTapCancelled();
 }
 
 /// The nonce pair for the current sign-in attempt. The hashed half goes to
@@ -254,34 +265,31 @@ bool gisDisableAutoSelect() {
   }
 }
 
-@JS('mediboAssignLocation')
-external bool _mediboAssignLocationJs(JSString url);
-
-/// CHANGE #564 (FIX A): navigate the CURRENT window to [url].
+/// CHANGE #564: the PRIMARY path — the browser's own FedCM chooser.
 ///
-/// The Google OAuth URL must never go through url_launcher / window.open. On an
-/// installed Android PWA those hand the URL to a Chrome Custom Tab, and the
-/// session Supabase creates lands in that tab's storage — /callback returns 302
-/// with a real login while the PWA stays signed out. location.assign() keeps the
-/// flow in this window, so the callback returns to the storage the app reads.
-bool assignLocation(String url) {
+/// mediation:'required' forces the chooser every time and never auto-selects,
+/// and FedCM is not subject to One Tap's cooldown, so a dismissal never
+/// suppresses the next attempt. The browser draws it over the page, so it
+/// cannot navigate anywhere.
+///
+/// MUST be called straight from the tap handler: mode:'active' requires
+/// transient user activation.
+///
+/// Nonce mapping (verified, do not change): Google gets the HASHED nonce,
+/// Supabase gets the RAW one.
+Future<({String idToken, String rawNonce})> fedcmChooseAccount() async {
+  _warmPair ??= _generateNoncePair();
   try {
-    return _mediboAssignLocationJs(url.toJS);
-  } catch (_) {
-    return false;
-  }
-}
-
-@JS('mediboOrigin')
-external JSString _mediboOriginJs();
-
-/// The origin the app is actually running on. Used as the OAuth redirect target
-/// so the callback returns to the SAME origin — a session stored on medibo.in
-/// is invisible to a PWA running on www.medibo.in.
-String currentOrigin() {
-  try {
-    return _mediboOriginJs().toDart;
-  } catch (_) {
-    return '';
+    final r = await _mediboFedcmGet(
+      _kGisClientId.toJS,
+      _warmPair!.hashedNonce.toJS,
+    ).toDart;
+    return _wrap(r?.toDart);
+  } on GisOneTapSuppressed {
+    rethrow;
+  } on GisOneTapUnavailable {
+    rethrow;
+  } catch (e) {
+    _rethrowAsGis(e);
   }
 }

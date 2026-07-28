@@ -22,6 +22,10 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'google_flow.dart';
+
+export 'google_flow.dart' show GoogleOutcome;
+
 /// The backend contract this screen renders. One method per RPC.
 abstract class LoginApi {
   /// rpc login_screen_config()
@@ -48,33 +52,14 @@ abstract class LoginApi {
   /// Google One Tap. The labels are passed through so no Google copy is ever
   /// invented client-side.
   ///
-  /// CHANGE #563: returns what actually happened. Neither [GoogleOutcome.closed]
-  /// nor [GoogleOutcome.suppressed] may navigate anywhere — only
-  /// [googleBrowserSignIn] is allowed to open the full-page chooser.
+  /// CHANGE #564: returns what actually happened. NOTHING here may navigate —
+  /// there is no browser path at all any more.
   Future<GoogleOutcome> googleSignIn({
     required String sheetTitle,
     required String sheetSubtitle,
     required String otherAccount,
   });
 
-  /// CHANGE #563: supabase.auth.signInWithOAuth — the full-page browser
-  /// chooser. Reached ONLY from a deliberate tap on the google_browser_label
-  /// link, never automatically.
-  Future<void> googleBrowserSignIn();
-}
-
-/// CHANGE #563: what a One Tap attempt actually did.
-enum GoogleOutcome {
-  /// Signed in — the caller resolves home.
-  signedIn,
-
-  /// The user closed the sheet. Stay on the login screen, re-enable the button,
-  /// show nothing new.
-  closed,
-
-  /// Google refused to display the sheet (cooldown, no Google session, FedCM
-  /// refusal). Show the note and reveal the browser-chooser link.
-  suppressed,
 }
 
 /// Which part of the progressive WhatsApp flow is on screen.
@@ -124,9 +109,6 @@ class _LoginViewState extends State<LoginView> {
 
   bool _googleBusy = false;
 
-  /// CHANGE #563: true once Google has refused to show the sheet, which reveals
-  /// the note + browser-chooser link. Nothing else about the screen changes.
-  bool _googleSuppressed = false;
   bool _sending = false;
   bool _verifying = false;
   bool _codeError = false;
@@ -220,26 +202,16 @@ class _LoginViewState extends State<LoginView> {
           // CHANGE #563: the user said no. Stay put, button re-enables below.
           break;
         case GoogleOutcome.suppressed:
-          // CHANGE #563: Google would not show the sheet. Reveal the note and
-          // the link — never open the full-page chooser on our own.
-          setState(() => _googleSuppressed = true);
+          // CHANGE #564: neither sheet could be shown. Inline message only, and
+          // only if the backend supplies one — never a hardcoded string, and
+          // never a navigation.
+          final note = _cfg?['google_unavailable_note'];
+          if (note is String && note.isNotEmpty) {
+            setState(() => _message = note);
+          }
       }
     } catch (_) {
       // Keep whatever the backend last said; never invent error copy.
-    } finally {
-      if (mounted) setState(() => _googleBusy = false);
-    }
-  }
-
-  /// CHANGE #563: the ONLY path to the full-page accounts.google.com chooser,
-  /// and it takes a deliberate tap on the google_browser_label link.
-  Future<void> _googleBrowser() async {
-    if (_googleBusy) return;
-    setState(() => _googleBusy = true);
-    try {
-      await widget.api.googleBrowserSignIn();
-    } catch (_) {
-      // Backend copy only.
     } finally {
       if (mounted) setState(() => _googleBusy = false);
     }
@@ -621,40 +593,6 @@ class _LoginViewState extends State<LoginView> {
             onPressed: _google,
             busy: _googleBusy,
           ),
-          // CHANGE #563: the ONLY new UI. Hidden until Google refuses to show
-          // the sheet, so first paint is pixel-identical to #562.
-          if (_googleSuppressed) ...[
-            const SizedBox(height: 12),
-            Text(
-              _s('google_unavailable_note'),
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w400,
-                color: _muted,
-                height: 1.35,
-              ),
-            ),
-            const SizedBox(height: 8),
-            GestureDetector(
-              onTap: _googleBusy ? null : _googleBrowser,
-              behavior: HitTestBehavior.opaque,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                child: Text(
-                  _s('google_browser_label'),
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: _green,
-                    decoration: TextDecoration.underline,
-                    decorationColor: _green,
-                  ),
-                ),
-              ),
-            ),
-          ],
           const SizedBox(height: 18),
           _footer(),
           if (_message != null) ...[

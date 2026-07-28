@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:html' as html;
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -66,6 +67,44 @@ class RenderLog {
     _scheduleSupabaseFlush(_log['build'] as String?);
   }
 
+  /// CHANGE #559: write and flush IMMEDIATELY, with no debounce.
+  ///
+  /// The normal 800 ms debounce is fine for render counts, but useless for
+  /// anything logged on a code path that is about to navigate the browser away
+  /// — the page is gone long before the timer fires. Use this for every key
+  /// that has to survive leaving the app.
+  static void writeNow(String key, dynamic value) {
+    _log[key] = value;
+    _writeToDOM();
+    _debounce?.cancel();
+    _flushToSupabase(_log['build'] as String?);
+  }
+
+  /// CHANGE #559: absorb the notes written by the pre-Flutter JS instrumentation
+  /// in web/index.html (window.open / navigate / unload hooks), which stores
+  /// them under `medibo_nav_log`. The JS pushes them to Supabase itself with a
+  /// keepalive fetch; this is the belt-and-braces path for the case where that
+  /// request was dropped — the keys then land on the next page load.
+  static void adoptJsNotes() {
+    try {
+      final raw = html.window.localStorage['medibo_nav_log'];
+      if (raw == null || raw.isEmpty) return;
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return;
+      var added = false;
+      decoded.forEach((k, v) {
+        final key = k.toString();
+        if (_log[key] == v) return;
+        _log[key] = v;
+        added = true;
+      });
+      if (added) {
+        _writeToDOM();
+        _scheduleSupabaseFlush(_log['build'] as String?);
+      }
+    } catch (_) {}
+  }
+
   // ── Internal ──────────────────────────────────────────────────────────────
 
   static void _writeToDOM() {
@@ -81,14 +120,22 @@ class RenderLog {
     _debounce = Timer(const Duration(milliseconds: 800), () => _flushToSupabase(buildHash));
   }
 
+  // CHANGE #559: flush through the render_log_note RPC instead of a direct
+  // table upsert.
+  //
+  // WHY: render_log's RLS grants writes to `authenticated` only. On the login
+  // screen the user is by definition signed OUT, so every diagnostic written
+  // there was silently rejected and the render-log showed nothing — which is
+  // exactly why the Google sign-in path has been impossible to observe.
+  // render_log_note is SECURITY DEFINER, granted to anon, and MERGES the keys
+  // it is given rather than replacing the row, so a signed-out writer can never
+  // wipe what a signed-in one recorded.
   static void _flushToSupabase(String? buildHash) {
     try {
       final data = Map<String, dynamic>.from(_log)..remove('build');
-      Supabase.instance.client.from('render_log').upsert({
-        'id': 'singleton',
-        'build_hash': buildHash ?? 'unknown',
-        'data': data,
-        'updated_at': DateTime.now().toIso8601String(),
+      Supabase.instance.client.rpc('render_log_note', params: {
+        'p_build': buildHash ?? '',
+        'p_data': data,
       }).then((_) {}).catchError((_) {});
     } catch (_) {}
   }

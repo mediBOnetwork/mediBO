@@ -99,6 +99,10 @@ void main() {
     } catch (_) {
       RenderLog.setBuildHash('unknown');
     }
+    // CHANGE #559: pick up anything the pre-Flutter JS instrumentation recorded
+    // before/while the page left for Google, in case its keepalive write was
+    // dropped. Safe no-op when there is nothing stored.
+    RenderLog.adoptJsNotes();
     // CHANGE #432: restored ORIGINAL 1080x1080 logo, resize-only (no trim/reshape/gloss).
     RenderLog.write('c432_logo', 'icons=v4;resize_only');
     // #108 static build properties (flat list, responsive popup)

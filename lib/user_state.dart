@@ -499,6 +499,12 @@ class AuthNotifier extends ChangeNotifier {
     try { RenderLog.write('c399_input_type', isCoarsePointer() ? 'touch' : 'mouse'); } catch (_) {}
     try { RenderLog.write('c399_google_auth_launch', 'fired'); } catch (_) {}
 
+    // CHANGE #559: instrumentation only — this is the OTHER Google entry point
+    // (the home_shell sign-in sheet), so the render-log has to say which one
+    // ran. Flushed immediately: these branches can end in the browser leaving.
+    try { RenderLog.writeNow('c559_entry', 'home_shell'); } catch (_) {}
+    try { RenderLog.writeNow('c559_path', 'unknown'); } catch (_) {}
+
     // ── Attempt A: the browser's native FedCM chooser (no navigation) ───────
     // Unchanged in appearance: same navigator.credentials.get() chooser, same
     // client ID, same nonce pair as CHANGE #557.
@@ -506,6 +512,7 @@ class AuthNotifier extends ChangeNotifier {
       RenderLog.write('c310_method', 'gis_idtoken');
       final (:idToken, :rawNonce) = await fedcmChooseAccount();
       RenderLog.write('c558_path', 'fedcm_chooser');
+      RenderLog.writeNow('c559_path', 'fedcm_chooser');
       RenderLog.write('c310_gis_loaded', 'true');
       RenderLog.write('c310_idtoken', 'got');
       await Supabase.instance.client.auth.signInWithIdToken(
@@ -521,12 +528,15 @@ class AuthNotifier extends ChangeNotifier {
       // The user closed the chooser — that is a decision, not a failure. Do NOT
       // escalate to a redirect; just re-enable the button.
       RenderLog.write('c558_path', 'fedcm_cancelled');
+      RenderLog.writeNow('c559_path', 'fedcm_cancelled');
       RenderLog.write('c310_idtoken', 'none');
       rethrow;
     } on GisOneTapUnavailable {
       // FedCM genuinely unavailable (old browser, no IdentityCredential) →
       // fall through to the Supabase OAuth redirect below.
       RenderLog.write('c558_fedcm', lastGisError());
+      RenderLog.writeNow('c559_path', 'fedcm_error');
+      RenderLog.writeNow('c559_fedcm_err', lastGisError());
       RenderLog.write('c310_gis_loaded', 'false');
       RenderLog.write('c310_idtoken', 'none');
     }
@@ -538,11 +548,13 @@ class AuthNotifier extends ChangeNotifier {
     RenderLog.write('c308_login_method', 'oauth_redirect');
     RenderLog.write('c308_opened_external', 'true');
     RenderLog.write('c558_path', 'supabase_oauth');
+    RenderLog.writeNow('c559_path', 'oauth_called');
     await Supabase.instance.client.auth.signInWithOAuth(
       OAuthProvider.google,
       redirectTo: 'https://medibo.in',
     );
     RenderLog.write('c310_session', 'redirect_initiated');
+    RenderLog.writeNow('c559_oauth', 'returned_without_navigating');
   }
 
   /// CHANGE #555: the OAuth PKCE redirect on its own, unchanged from Attempt B
@@ -550,11 +562,15 @@ class AuthNotifier extends ChangeNotifier {
   /// bottom sheet cannot be shown, so the Google button never does nothing.
   Future<void> signInWithGoogleOAuth() async {
     RenderLog.write('c555_method', 'oauth_redirect');
+    // CHANGE #559: proves signInWithOAuth was actually entered — the window.open
+    // hook in index.html then records the URL it hands to the browser.
+    RenderLog.writeNow('c559_oauth', 'signInWithOAuth_entered');
     await Supabase.instance.client.auth.signInWithOAuth(
       OAuthProvider.google,
       redirectTo: 'https://medibo.in',
     );
     RenderLog.write('c555_session', 'redirect_initiated');
+    RenderLog.writeNow('c559_oauth', 'signInWithOAuth_returned');
   }
 
   Future<void> signOut() async {

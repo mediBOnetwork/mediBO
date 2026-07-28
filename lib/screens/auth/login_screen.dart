@@ -76,6 +76,15 @@ class SupabaseLoginApi implements LoginApi {
     } catch (_) {}
   }
 
+  /// CHANGE #559: flushed immediately — these keys mark branches that may be
+  /// the last thing that runs before the browser leaves the app, so a debounced
+  /// write would never reach Supabase.
+  void _logNow(String k, String v) {
+    try {
+      RenderLog.writeNow(k, v);
+    } catch (_) {}
+  }
+
   Future<void> _finishIdToken(String idToken, String rawNonce) =>
       _c.auth.signInWithIdToken(
         provider: OAuthProvider.google,
@@ -109,29 +118,41 @@ class SupabaseLoginApi implements LoginApi {
     // the #556 render-log showed was suppressing the sheet
     // (prewarm=ready, one_tap=unavailable). No awaits before it — mode:'active'
     // needs the tap's user activation.
+    // CHANGE #559: instrumentation only — records WHICH branch actually ran,
+    // flushed immediately so it survives the browser leaving the page.
+    _logNow('c559_entry', 'login_screen');
+    _logNow('c559_path', 'unknown');
     try {
       final (:idToken, :rawNonce) = await fedcmChooseAccount();
       _log('c557_path', 'fedcm_chooser');
+      _logNow('c559_path', 'fedcm_chooser');
       await _finishIdToken(idToken, rawNonce);
       _log('c557_session', 'established');
+      _logNow('c559_path', 'fedcm_chooser_signed_in');
       return;
     } on GisOneTapCancelled {
       // The user closed the chooser — do not cascade into a popup.
       _log('c557_path', 'fedcm_cancelled');
+      _logNow('c559_path', 'fedcm_cancelled');
       return;
     } on GisOneTapUnavailable {
       _log('c557_fedcm', lastGisError());
+      _logNow('c559_path', 'fedcm_error');
+      _logNow('c559_fedcm_err', lastGisError());
     }
 
     // 2 — GIS One Tap, same in-page sheet but subject to Google's suppression.
     try {
       final (:idToken, :rawNonce) = await gisPromptOneTap();
       _log('c557_path', 'one_tap');
+      _logNow('c559_path', 'one_tap');
       await _finishIdToken(idToken, rawNonce);
       _log('c557_session', 'established');
+      _logNow('c559_path', 'one_tap_signed_in');
       return;
     } on GisOneTapCancelled {
       _log('c557_path', 'one_tap_cancelled');
+      _logNow('c559_path', 'one_tap_cancelled');
       return;
     } on GisOneTapUnavailable {
       _log('c557_one_tap', 'unavailable');
@@ -151,7 +172,10 @@ class SupabaseLoginApi implements LoginApi {
     // now the only step permitted to navigate the browser off the page.
     _log('c558_path',
         isStandalonePwa() ? 'supabase_oauth_in_pwa' : 'supabase_oauth');
+    // CHANGE #559: last line before anything is allowed to leave the app.
+    _logNow('c559_path', 'oauth_called');
     await oauthFallback();
+    _logNow('c559_oauth', 'returned_without_navigating');
   }
 }
 

@@ -301,6 +301,11 @@ class CartModel extends ChangeNotifier {
 
   static const kC410ImpersonationPersist = 'c410_impersonation_persist';
 
+  /// CHANGE #553 — public re-read of the server cart. Used by the cart screen
+  /// after `cart_strip_unavailable()` has deleted rows server-side, so the
+  /// list reflects what the database now holds rather than a local guess.
+  Future<void> reloadFromServer() => _loadFromSupabase();
+
   Future<void> _loadFromSupabase([String? overrideUid]) async {
     final gen = ++_loadGen;
     RenderLog.write(kC410ImpersonationPersist, 'gen:$gen;viewAs:$_viewAsUserId');

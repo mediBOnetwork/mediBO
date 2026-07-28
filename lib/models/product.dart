@@ -1,5 +1,105 @@
 // Domain models for the B2B pharmacy ordering platform.
 
+/// CHANGE #553 — the backend's own rendered availability verdict for one row.
+///
+/// Every field here is produced by `storefront_cta()` in Postgres and arrives
+/// ready to paint: the label, the two colours and the enabled/disabled
+/// decision. The client NEVER derives any of them — no supplier_count
+/// comparison, no threshold, no colour constant, no hardcoded string. Add a
+/// rule here and the storefront stops agreeing with the database.
+///
+/// Carried by the three storefront RPCs (`storefront_page`,
+/// `storefront_search_page`, `storefront_product`) and by `cart_availability`.
+class Availability {
+  /// Button text, e.g. "Add to cart" / "Unavailable". Print verbatim.
+  final String ctaLabel;
+
+  /// Whether the row may be added to the cart. Drives enabled/disabled.
+  final bool canAdd;
+
+  /// Whether the backend considers the product available at all.
+  final bool isAvailable;
+
+  /// True when the viewer is an approved customer (real availability shown).
+  /// False for unapproved / anonymous / incognito — everything looks available.
+  final bool gated;
+
+  /// True when the backend could not resolve the product. Deliberately still
+  /// addable — never block on something that could not be checked.
+  final bool unresolved;
+
+  /// Explanation shown when [canAdd] is false. Null when there is nothing to say.
+  final String? note;
+
+  /// Background / foreground as ARGB ints, parsed from the `#RRGGBB` the
+  /// backend sends. Null when the row carried no colours — the caller then
+  /// keeps its default styling rather than inventing one.
+  final int? bg;
+  final int? fg;
+
+  const Availability({
+    required this.ctaLabel,
+    required this.canAdd,
+    required this.isAvailable,
+    this.gated = false,
+    this.unresolved = false,
+    this.note,
+    this.bg,
+    this.fg,
+  });
+
+  /// Parses the `availability` object attached to every storefront/cart row.
+  /// Returns null when the row carried none (a legacy/fallback path that never
+  /// went through the storefront RPCs) — callers keep their existing styling
+  /// for that case rather than fabricating a verdict.
+  static Availability? fromMap(Object? raw) {
+    if (raw is! Map) return null;
+    final m = Map<String, dynamic>.from(raw);
+    final label = m['cta_label']?.toString();
+    if (label == null || label.isEmpty) return null;
+    final colors = m['colors'];
+    final c = colors is Map ? Map<String, dynamic>.from(colors) : const {};
+    final noteRaw = m['note']?.toString().trim();
+    return Availability(
+      ctaLabel: label,
+      canAdd: m['can_add'] == true,
+      isAvailable: m['is_available'] == true,
+      gated: m['gated'] == true,
+      unresolved: m['unresolved'] == true,
+      note: (noteRaw == null || noteRaw.isEmpty) ? null : noteRaw,
+      bg: _argb(c['bg']),
+      fg: _argb(c['fg']),
+    );
+  }
+
+  /// "#1B7A43" → 0xFF1B7A43. Null for anything unparseable.
+  static int? _argb(Object? hex) {
+    final s = hex?.toString().replaceAll('#', '').trim() ?? '';
+    if (s.length == 6) {
+      final v = int.tryParse(s, radix: 16);
+      return v == null ? null : 0xFF000000 | v;
+    }
+    if (s.length == 8) return int.tryParse(s, radix: 16);
+    return null;
+  }
+
+  Map<String, dynamic> toJson() => {
+        'cta_label': ctaLabel,
+        'can_add': canAdd,
+        'is_available': isAvailable,
+        'gated': gated,
+        'unresolved': unresolved,
+        if (note != null) 'note': note,
+        'colors': {
+          if (bg != null) 'bg': _hex(bg!),
+          if (fg != null) 'fg': _hex(fg!),
+        },
+      };
+
+  static String _hex(int argb) =>
+      '#${(argb & 0xFFFFFF).toRadixString(16).padLeft(6, '0').toUpperCase()}';
+}
+
 /// A pharmaceutical product sold to business buyers (pharmacies, clinics).
 ///
 /// Field names stay in the app's domain vocabulary; [Product.fromMap] maps
@@ -65,6 +165,11 @@ class Product {
   final String? supplierLabel;
   final int? supplierCount;
 
+  /// CHANGE #553 — the backend's rendered availability verdict for this row.
+  /// Non-null for anything fetched through the storefront RPCs; null on the
+  /// legacy/fallback paths that do not carry one.
+  final Availability? availability;
+
   const Product({
     required this.id,
     required this.name,
@@ -87,7 +192,35 @@ class Product {
     this.scheme = '',
     this.supplierLabel,
     this.supplierCount,
+    this.availability,
   });
+
+  /// Returns a copy carrying [availability] — used to graft a cart line's
+  /// backend verdict (from `cart_availability`) onto the stored product.
+  Product withAvailability(Availability? a) => Product(
+        id: id,
+        name: name,
+        genericName: genericName,
+        manufacturer: manufacturer,
+        category: category,
+        therapeuticClass: therapeuticClass,
+        imageUrl: imageUrl,
+        imageUrls: imageUrls,
+        packSize: packSize,
+        mrp: mrp,
+        b2bPrice: b2bPrice,
+        gstPercent: gstPercent,
+        moq: moq,
+        stock: stock,
+        buyable: buyable,
+        schedule: schedule,
+        requiresPrescription: requiresPrescription,
+        discount: discount,
+        scheme: scheme,
+        supplierLabel: supplierLabel,
+        supplierCount: supplierCount,
+        availability: a,
+      );
 
   /// Builds a [Product] from a `MEDICINE` row returned by Supabase.
   factory Product.fromMap(Map<String, dynamic> map) {
@@ -143,6 +276,8 @@ class Product {
           ? (map['supplier_label'] as String).trim()
           : null,
       supplierCount: (map['supplier_count'] as num?)?.toInt(),
+      // CHANGE #553 — present on every storefront RPC row, absent elsewhere.
+      availability: Availability.fromMap(map['availability']),
     );
   }
 
@@ -168,6 +303,7 @@ class Product {
         'scheme': scheme,
         'supplierLabel': supplierLabel,
         'supplierCount': supplierCount,
+        'availability': availability?.toJson(),
       };
 
   factory Product.fromJson(Map<String, dynamic> map) {
@@ -196,6 +332,7 @@ class Product {
       scheme: (map['scheme'] as String?) ?? '',
       supplierLabel: map['supplierLabel'] as String?,
       supplierCount: (map['supplierCount'] as num?)?.toInt(),
+      availability: Availability.fromMap(map['availability']),
     );
   }
 

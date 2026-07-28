@@ -30,6 +30,94 @@ class CartScreen extends StatefulWidget {
 class _CartScreenState extends State<CartScreen> {
   bool _orderInProgress = false;
 
+  // ── CHANGE #553 — cart availability, straight from cart_availability() ─────
+  // Every string and colour below is rendered by the backend. The client
+  // decides nothing: it shows blocking_label when there is one, blocks Place
+  // Order while it is there, and shows unresolved_note as a quiet note that
+  // deliberately does NOT block (those are lines the backend could not check
+  // and kept on purpose).
+  final Map<String, Availability> _lineAvailability = {};
+  String? _blockingLabel;
+  String? _unresolvedNote;
+  bool _stripping = false;
+
+  /// Product-id signature of the cart the last availability fetch covered —
+  /// a change means the cart moved and the verdicts need re-reading.
+  String? _availSignature;
+
+  static String _signatureOf(List<CartLine> lines) {
+    final ids = lines.map((l) => l.product.id).toList()..sort();
+    return ids.join(',');
+  }
+
+  Future<void> _refreshAvailability(List<CartLine> lines) async {
+    final signature = _signatureOf(lines);
+    _availSignature = signature;
+    if (lines.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _lineAvailability.clear();
+        _blockingLabel = null;
+        _unresolvedNote = null;
+      });
+      return;
+    }
+    try {
+      final res = await Supabase.instance.client.rpc('cart_availability');
+      if (!mounted || _availSignature != signature) return;
+      final m = Map<String, dynamic>.from(res as Map);
+      final items = (m['items'] as List?) ?? const [];
+      final next = <String, Availability>{};
+      for (final raw in items) {
+        final row = Map<String, dynamic>.from(raw as Map);
+        final id = row['product_id']?.toString();
+        final av = Availability.fromMap(row['availability']);
+        if (id != null && av != null) next[id] = av;
+      }
+      RenderLog.write('c553_cart_avail',
+          'gated=${m['gated']};unavailable=${m['unavailable_count']};unresolved=${m['unresolved_count']}');
+      setState(() {
+        _lineAvailability
+          ..clear()
+          ..addAll(next);
+        _blockingLabel = m['blocking_label']?.toString();
+        _unresolvedNote = m['unresolved_note']?.toString();
+      });
+    } catch (_) {
+      // Fail open: a failed check never invents a block.
+      if (!mounted || _availSignature != signature) return;
+      setState(() {
+        _lineAvailability.clear();
+        _blockingLabel = null;
+        _unresolvedNote = null;
+      });
+    }
+  }
+
+  /// Removes the unavailable lines server-side, then re-reads both the cart
+  /// and the verdicts. The backend's own message is shown verbatim.
+  Future<void> _stripUnavailable(CartModel cart) async {
+    if (_stripping) return;
+    setState(() => _stripping = true);
+    try {
+      // No arguments — the RPC cleans the signed-in user's own cart.
+      final res = await Supabase.instance.client.rpc('cart_strip_unavailable');
+      final m = Map<String, dynamic>.from(res as Map);
+      final message = m['message']?.toString();
+      RenderLog.write('c553_strip', 'removed=${m['removed_count']};kept=${m['unresolved_kept']}');
+      await cart.reloadFromServer();
+      if (!mounted) return;
+      _availSignature = null;
+      await _refreshAvailability(cart.lines);
+      if (!mounted) return;
+      if (message != null && message.isNotEmpty) showToast(context, message);
+    } catch (e) {
+      if (mounted) showToast(context, 'Could not update the cart — try again', isError: true);
+    } finally {
+      if (mounted) setState(() => _stripping = false);
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -308,16 +396,13 @@ class _CartScreenState extends State<CartScreen> {
       return;
     }
 
-    // #102: block order if any cart line is unavailable (no supplier).
-    final unavailableLines = cart.lines.where((l) => !l.product.isBuyable).toList();
-    if (unavailableLines.isNotEmpty) {
-      RenderLog.write('change_102_order_blocked', '1');
-      final names = unavailableLines.map((l) => l.product.name).join(', ');
-      if (mounted) {
-        showToast(context,
-            'Remove unavailable item(s) before ordering: $names',
-            isError: true);
-      }
+    // CHANGE #553 — ordering is blocked by the backend's blocking_label and
+    // nothing else. No local supplier comparison, no locally-worded message:
+    // cart_availability() decides, and its own label is what the buyer reads.
+    final blockingLabel = _blockingLabel;
+    if (blockingLabel != null) {
+      RenderLog.write('c553_order_blocked', blockingLabel);
+      if (mounted) showToast(context, blockingLabel, isError: true);
       return;
     }
 
@@ -474,6 +559,17 @@ class _CartScreenState extends State<CartScreen> {
   Widget build(BuildContext context) {
     final cart = AppState.of(context);
 
+    // CHANGE #553 — re-read cart_availability() whenever the set of products
+    // in the cart changes (first load, add, remove, strip). _refreshAvailability
+    // claims the signature immediately, so this fires once per real change.
+    if (_signatureOf(cart.lines) != _availSignature) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final lines = cart.lines;
+        if (_signatureOf(lines) != _availSignature) _refreshAvailability(lines);
+      });
+    }
+
     if (cart.lines.isEmpty) {
       return const _EmptyCart();
     }
@@ -502,6 +598,19 @@ class _CartScreenState extends State<CartScreen> {
 
     final banner = cart.hasSampleItems ? _SampleBanner(cart: cart) : null;
 
+    // CHANGE #553 — blocking_label blocks ordering; unresolved_note never does.
+    final blocking = _blockingLabel;
+    final availBanner = blocking == null
+        ? null
+        : _AvailabilityBanner(
+            label: blocking,
+            busy: _stripping,
+            onStrip: () => _stripUnavailable(cart),
+          );
+    final unresolvedNote =
+        _unresolvedNote == null ? null : _UnresolvedNote(note: _unresolvedNote!);
+    final blocked = blocking != null;
+
     return LayoutBuilder(
       builder: (context, constraints) {
         final wide = constraints.maxWidth >= 600;
@@ -511,6 +620,8 @@ class _CartScreenState extends State<CartScreen> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               if (banner != null) banner,
+              ?availBanner,
+              ?unresolvedNote,
               Expanded(
                 child: Center(
                   child: ConstrainedBox(
@@ -527,6 +638,7 @@ class _CartScreenState extends State<CartScreen> {
                               externalSearchQuery: widget.externalSearchQuery,
                               viewAsChecked: cart.isViewAs ? _viewAsChecked : null,
                               onViewAsToggle: cart.isViewAs ? _toggleViewAsChecked : null,
+                              lineAvailability: _lineAvailability,
                             ),
                           ),
                           const SizedBox(width: 16),
@@ -536,6 +648,7 @@ class _CartScreenState extends State<CartScreen> {
                               cart: cart,
                               onPlaceOrder: _placeOrder,
                               selectedTotal: selectedTotal,
+                              availabilityBlocked: blocked,
                             ),
                           ),
                         ],
@@ -552,6 +665,8 @@ class _CartScreenState extends State<CartScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             if (banner != null) banner,
+            ?availBanner,
+            ?unresolvedNote,
             Expanded(
               child: _ItemList(
                 cart: cart,
@@ -559,16 +674,99 @@ class _CartScreenState extends State<CartScreen> {
                 showBreakdown: true,
                 viewAsChecked: cart.isViewAs ? _viewAsChecked : null,
                 onViewAsToggle: cart.isViewAs ? _toggleViewAsChecked : null,
+                lineAvailability: _lineAvailability,
               ),
             ),
             _CheckoutBar(
               cart: cart,
               onPlaceOrder: _placeOrder,
               selectedTotal: selectedTotal,
+              availabilityBlocked: blocked,
             ),
           ],
         );
       },
+    );
+  }
+}
+
+// ─── CHANGE #553 — availability banner + unresolved note ─────────────────────
+
+/// Shows `cart_availability().blocking_label` verbatim and offers the one
+/// action that clears it: `cart_strip_unavailable()`. While this is on screen
+/// Place Order is blocked. The wording is the backend's, not ours.
+class _AvailabilityBanner extends StatelessWidget {
+  final String label;
+  final bool busy;
+  final VoidCallback onStrip;
+  const _AvailabilityBanner({
+    required this.label,
+    required this.busy,
+    required this.onStrip,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    RenderLog.write('c553_blocking_label', label);
+    return Container(
+      width: double.infinity,
+      color: const Color(0xFFFEF2F2),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Row(
+        children: [
+          const Icon(Icons.error_outline, size: 18, color: Color(0xFFB91C1C)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              label,
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFFB91C1C),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          FilledButton(
+            onPressed: busy ? null : onStrip,
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFB91C1C),
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              textStyle: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
+            ),
+            child: busy
+                ? const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.white),
+                  )
+                : const Text('Remove unavailable items'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// `unresolved_note` — items the backend could not verify and deliberately
+/// kept. Quiet, grey, and never a blocker.
+class _UnresolvedNote extends StatelessWidget {
+  final String note;
+  const _UnresolvedNote({required this.note});
+
+  @override
+  Widget build(BuildContext context) {
+    RenderLog.write('c553_unresolved_note', note);
+    return Container(
+      width: double.infinity,
+      color: const Color(0xFFF9FAFB),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Text(
+        note,
+        style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280)),
+      ),
     );
   }
 }
@@ -665,12 +863,17 @@ class _ItemList extends StatefulWidget {
   // CHANGE #324: ViewAs checkbox state — null means not ViewAs (show X button).
   final Set<String>? viewAsChecked;
   final void Function(String productId)? onViewAsToggle;
+
+  /// CHANGE #553 — product_id → the backend's verdict for that cart line,
+  /// from cart_availability(). Empty until the first fetch answers.
+  final Map<String, Availability> lineAvailability;
   const _ItemList({
     required this.cart,
     this.externalSearchQuery,
     this.showBreakdown = false,
     this.viewAsChecked,
     this.onViewAsToggle,
+    this.lineAvailability = const {},
   });
 
   @override
@@ -759,6 +962,7 @@ class _ItemListState extends State<_ItemList> {
               onViewAsToggle: widget.onViewAsToggle != null
                   ? () => widget.onViewAsToggle!(line.product.id)
                   : null,
+              availability: widget.lineAvailability[line.product.id],
             ),
           );
         }
@@ -799,19 +1003,24 @@ class _CartItemCard extends StatelessWidget {
   // CHANGE #324: ViewAs checkbox — null = normal mode (show X remove button).
   final bool? viewAsChecked;
   final VoidCallback? onViewAsToggle;
+
+  /// CHANGE #553 — this line's verdict from cart_availability(). Null until
+  /// the fetch answers, or when the RPC failed (fail open — no local guess).
+  final Availability? availability;
   const _CartItemCard({
     required this.line,
     required this.cart,
     this.viewAsChecked,
     this.onViewAsToggle,
+    this.availability,
   });
 
   @override
   Widget build(BuildContext context) {
     final p = line.product;
-    // #401: cart line availability uses the same Product.isBuyable helper
-    // (buyable==true only) as the product card — status/scrapping ignored.
-    RenderLog.write('c401_avail_helper_unified', p.isBuyable ? 'buyable' : 'unavailable');
+    // CHANGE #553 — the line's availability is whatever cart_availability()
+    // said about this product_id. Nothing here re-derives it.
+    final av = availability;
     final discPct = cartDiscountPercent(cart.mrpTotal);
     final salePrice = p.mrp * (1 - discPct / 100);
 
@@ -940,6 +1149,28 @@ class _CartItemCard extends StatelessWidget {
                           color: Color(0xFF9CA3AF),
                         ),
                       ),
+                      // CHANGE #553 — the backend's verdict for this line,
+                      // printed in the backend's own label and colours. Shown
+                      // only when it says the line cannot be ordered.
+                      if (av != null && !av.canAdd) ...[
+                        const SizedBox(height: 4),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: av.bg == null ? null : Color(av.bg!),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            av.note ?? av.ctaLabel,
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: av.fg == null ? null : Color(av.fg!),
+                            ),
+                          ),
+                        ),
+                      ],
                       if (line.isSample) ...[
                         const SizedBox(height: 3),
                         Container(
@@ -1563,7 +1794,15 @@ class _CheckoutBar extends StatelessWidget {
   final VoidCallback onPlaceOrder;
   // CHANGE #324: when ViewAs, show selected-items total instead of full cart total.
   final double? selectedTotal;
-  const _CheckoutBar({required this.cart, required this.onPlaceOrder, this.selectedTotal});
+
+  /// CHANGE #553 — true while cart_availability() reports a blocking_label.
+  final bool availabilityBlocked;
+  const _CheckoutBar({
+    required this.cart,
+    required this.onPlaceOrder,
+    this.selectedTotal,
+    this.availabilityBlocked = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1626,7 +1865,10 @@ class _CheckoutBar extends StatelessWidget {
                   final inquiryLocked = cart.isViewAs && InquiryLockState.of(ctx).locked;
                   final gateMsg = _orderGateMessage(
                       auth, viewAsNotifier, orderHoursClosed ? orderHours.buttonLabel : null);
-                  final blocked = gateMsg != null || inquiryLocked;
+                  // CHANGE #553 — an availability block greys Place Order
+                  // exactly like the existing order gates; the tap then
+                  // surfaces the backend's blocking_label.
+                  final blocked = gateMsg != null || inquiryLocked || availabilityBlocked;
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
@@ -2362,7 +2604,15 @@ class _OrderSummaryPanel extends StatelessWidget {
   final VoidCallback onPlaceOrder;
   // CHANGE #324: when ViewAs, show selected-items total instead of full cart total.
   final double? selectedTotal;
-  const _OrderSummaryPanel({required this.cart, required this.onPlaceOrder, this.selectedTotal});
+
+  /// CHANGE #553 — true while cart_availability() reports a blocking_label.
+  final bool availabilityBlocked;
+  const _OrderSummaryPanel({
+    required this.cart,
+    required this.onPlaceOrder,
+    this.selectedTotal,
+    this.availabilityBlocked = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -2440,7 +2690,8 @@ class _OrderSummaryPanel extends StatelessWidget {
             final inquiryLocked = cart.isViewAs && InquiryLockState.of(ctx).locked;
             final gateMsg = _orderGateMessage(
                 auth, ViewAsState.of(ctx), orderHoursClosed ? orderHours.buttonLabel : null);
-            final blocked = gateMsg != null || inquiryLocked;
+            // CHANGE #553 — availability block greys Place Order too.
+            final blocked = gateMsg != null || inquiryLocked || availabilityBlocked;
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [

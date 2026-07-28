@@ -267,9 +267,12 @@ class _CartControlState extends State<_CartControl>
     final cart = AppState.of(context);
     final qty = cart.quantityOf(widget.product.id);
 
-    RenderLog.write('change_102_buyable_read', '1');
     RenderLog.write('change_103_no_dim', '1');
-    if (!widget.product.isBuyable) RenderLog.write('change_102_unavailable_ui', '1');
+    // CHANGE #553 — the button is decided entirely by the backend's verdict.
+    final av = widget.product.availability;
+    if (av != null) {
+      RenderLog.write('c553_cta', '${av.ctaLabel}|add=${av.canAdd}|gated=${av.gated}');
+    }
 
     // CHANGE #454 B1/B2 — cart.showCart comes from CartModel.refreshCartMode()
     // (cart_mode() RPC), fetched once and re-fetched on View-As enter/exit.
@@ -304,56 +307,122 @@ class _CartControlState extends State<_CartControl>
               )
             : ScaleTransition(
                 scale: _popAnim,
-                child: widget.product.isBuyable
-                    ? PressEffect(
-                        key: const ValueKey('add'),
-                        child: SizedBox.expand(
-                          child: FilledButton.icon(
-                            style: FilledButton.styleFrom(
-                              backgroundColor: const Color(0xFF1B7A43),
-                              foregroundColor: Colors.white,
-                              shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(8)),
-                              padding:
-                                  const EdgeInsets.symmetric(horizontal: 12),
-                              textStyle: const TextStyle(
-                                  fontWeight: FontWeight.w500, fontSize: 14),
-                              elevation: 0,
-                              splashFactory: NoSplash.splashFactory,
-                              shadowColor: Colors.transparent,
-                            ).copyWith(
-                              overlayColor: const WidgetStatePropertyAll(
-                                  Colors.transparent),
-                            ),
-                            onPressed: _addToCart,
-                            icon: const Icon(Icons.add, size: 16),
-                            label: const Text('Add to cart'),
-                          ),
-                        ),
-                      )
-                    : SizedBox.expand(
-                        key: const ValueKey('unavailable'),
-                        child: FilledButton(
-                          style: FilledButton.styleFrom(
-                            backgroundColor: const Color(0xFFF3F4F6),
-                            foregroundColor: const Color(0xFF9CA3AF),
-                            disabledBackgroundColor: const Color(0xFFF3F4F6),
-                            disabledForegroundColor: const Color(0xFF9CA3AF),
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8)),
-                            padding:
-                                const EdgeInsets.symmetric(horizontal: 12),
-                            textStyle: const TextStyle(
-                                fontWeight: FontWeight.w500, fontSize: 14),
-                            elevation: 0,
-                            splashFactory: NoSplash.splashFactory,
-                            shadowColor: Colors.transparent,
-                          ),
-                          onPressed: null,
-                          child: const Text('Unavailable'),
-                        ),
-                      ),
+                child: AvailabilityButton(
+                  availability: av,
+                  onAdd: _addToCart,
+                ),
               ),
+      ),
+    );
+  }
+}
+
+/// CHANGE #553 — the one place the storefront paints an add-to-cart button.
+///
+/// Everything visible comes from the backend's [Availability] verdict: the
+/// label, both colours and whether the button works. There is no threshold,
+/// no supplier-count comparison and no hardcoded availability string here —
+/// change the wording or the colours in Postgres and this widget follows.
+///
+/// When [availability] is null the row came from an outage fallback that
+/// carries no verdict; the button then keeps the app's normal green
+/// add-to-cart styling rather than inventing an availability decision.
+class AvailabilityButton extends StatelessWidget {
+  final Availability? availability;
+  final VoidCallback onAdd;
+  const AvailabilityButton({
+    super.key,
+    required this.availability,
+    required this.onAdd,
+  });
+
+  static const _radius = 8.0;
+  static const _textStyle =
+      TextStyle(fontWeight: FontWeight.w500, fontSize: 14);
+
+  @override
+  Widget build(BuildContext context) {
+    final av = availability;
+
+    // No verdict (outage fallback): the pre-#553 green add-to-cart, unchanged.
+    if (av == null) {
+      return PressEffect(
+        key: const ValueKey('add'),
+        child: SizedBox.expand(
+          child: FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF1B7A43),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(_radius)),
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              textStyle: _textStyle,
+              elevation: 0,
+              splashFactory: NoSplash.splashFactory,
+              shadowColor: Colors.transparent,
+            ).copyWith(
+              overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+            ),
+            onPressed: onAdd,
+            icon: const Icon(Icons.add, size: 16),
+            label: const Text('Add to cart'),
+          ),
+        ),
+      );
+    }
+
+    final bg = av.bg == null ? null : Color(av.bg!);
+    final fg = av.fg == null ? null : Color(av.fg!);
+    final style = FilledButton.styleFrom(
+      backgroundColor: bg,
+      foregroundColor: fg,
+      disabledBackgroundColor: bg,
+      disabledForegroundColor: fg,
+      shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(_radius)),
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      textStyle: _textStyle,
+      elevation: 0,
+      splashFactory: NoSplash.splashFactory,
+      shadowColor: Colors.transparent,
+    );
+
+    if (av.canAdd) {
+      return PressEffect(
+        key: const ValueKey('add'),
+        child: SizedBox.expand(
+          child: FilledButton.icon(
+            style: style.copyWith(
+              overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+            ),
+            onPressed: onAdd,
+            icon: const Icon(Icons.add, size: 16),
+            label: Text(av.ctaLabel),
+          ),
+        ),
+      );
+    }
+
+    // Disabled: the button does nothing, but tapping it surfaces the backend's
+    // own explanation. IgnorePointer keeps the FilledButton inert so the tap
+    // reaches the GestureDetector wrapping it.
+    return GestureDetector(
+      key: const ValueKey('cta-disabled'),
+      behavior: HitTestBehavior.opaque,
+      onTap: av.note == null
+          ? null
+          : () {
+              RenderLog.write('c553_note_shown', av.note!);
+              showToast(context, av.note!, isError: true);
+            },
+      child: IgnorePointer(
+        child: SizedBox.expand(
+          child: FilledButton(
+            style: style,
+            onPressed: null,
+            child: Text(av.ctaLabel),
+          ),
+        ),
       ),
     );
   }
@@ -371,27 +440,31 @@ class _CartModeChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final label = product.supplierLabel;
+    final av = product.availability;
 
-    // B4b — supplier_label null AND not buyable: keep the EXISTING grey
-    // "Unavailable" state, byte-for-byte identical to the cart path's.
-    if (label == null && !product.isBuyable) {
-      return SizedBox.expand(
-        key: const ValueKey('unavailable'),
-        child: FilledButton(
-          style: FilledButton.styleFrom(
-            backgroundColor: const Color(0xFFF3F4F6),
-            foregroundColor: const Color(0xFF9CA3AF),
-            disabledBackgroundColor: const Color(0xFFF3F4F6),
-            disabledForegroundColor: const Color(0xFF9CA3AF),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            textStyle: const TextStyle(fontWeight: FontWeight.w500, fontSize: 14),
-            elevation: 0,
-            splashFactory: NoSplash.splashFactory,
-            shadowColor: Colors.transparent,
+    // B4b — supplier_label null AND the backend says this row cannot be added:
+    // show the backend's OWN label and colours. CHANGE #553 replaced the
+    // hardcoded grey "Unavailable" that used to live here.
+    if (label == null && av != null && !av.canAdd) {
+      return IgnorePointer(
+        key: const ValueKey('cta-disabled'),
+        child: SizedBox.expand(
+          child: FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: av.bg == null ? null : Color(av.bg!),
+              foregroundColor: av.fg == null ? null : Color(av.fg!),
+              disabledBackgroundColor: av.bg == null ? null : Color(av.bg!),
+              disabledForegroundColor: av.fg == null ? null : Color(av.fg!),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              textStyle: const TextStyle(fontWeight: FontWeight.w500, fontSize: 14),
+              elevation: 0,
+              splashFactory: NoSplash.splashFactory,
+              shadowColor: Colors.transparent,
+            ),
+            onPressed: null,
+            child: Text(av.ctaLabel),
           ),
-          onPressed: null,
-          child: const Text('Unavailable'),
         ),
       );
     }

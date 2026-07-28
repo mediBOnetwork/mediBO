@@ -535,6 +535,18 @@ class AuthNotifier extends ChangeNotifier {
     RenderLog.write('c310_session', 'redirect_initiated');
   }
 
+  /// CHANGE #555: the OAuth PKCE redirect on its own, unchanged from Attempt B
+  /// of [signInWithGoogle]. Used as the mandatory fallback when the One Tap
+  /// bottom sheet cannot be shown, so the Google button never does nothing.
+  Future<void> signInWithGoogleOAuth() async {
+    RenderLog.write('c555_method', 'oauth_redirect');
+    await Supabase.instance.client.auth.signInWithOAuth(
+      OAuthProvider.google,
+      redirectTo: 'https://medibo.in',
+    );
+    RenderLog.write('c555_session', 'redirect_initiated');
+  }
+
   Future<void> signOut() async {
     _explicitSignOut = true;
     RenderLog.write('auth54_signout', 'scope=local; reason=manual_logout');

@@ -724,6 +724,108 @@
   </script>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
+       CHANGE #555 — Google One Tap (FedCM) bottom sheet.
+       mediboGisOneTap(clientId, hashedNonce) -> Promise<credential>
+
+       google.accounts.id.prompt() renders natively as a BOTTOM SHEET on mobile
+       web and already lists the device's signed-in Google accounts, so this is
+       one tap from "Continue with Google" to signed in. The app cannot read
+       those accounts itself — this is the only way to list them.
+
+       Rejects with:
+         'fallback'  — sheet could not be shown (no Google session, FedCM
+                       blocked, unsupported browser, library missing). The
+                       caller must silently run the existing OAuth flow.
+         'cancelled' — the user dismissed the sheet on purpose. Do nothing.
+
+       NOTE: with use_fedcm_for_prompt:true the PromptMomentNotification
+       methods isDisplayed/isNotDisplayed/getNotDisplayedReason/isSkippedMoment
+       are NOT supported and THROW. Every probe below is individually guarded
+       so an exception can never swallow the fallback.
+       ═══════════════════════════════════════════════════════════════════════ -->
+  <script>
+    (function () {
+      window.mediboGisOneTap = function (clientId, hashedNonce) {
+        return new Promise(function (resolve, reject) {
+          var settled = false;
+          var timer = null;
+
+          function settle(fn, val) {
+            if (settled) return;
+            settled = true;
+            if (timer) { clearTimeout(timer); timer = null; }
+            fn(val);
+          }
+
+          function probe(n, name) {
+            try { return !!(n[name] && n[name]()); } catch (e) { return false; }
+          }
+
+          var attempts = 0;
+          function poll() {
+            if (settled) return;
+            if (!(window.google && window.google.accounts && window.google.accounts.id)) {
+              if (++attempts > 15) settle(reject, 'fallback');
+              else setTimeout(poll, 200);
+              return;
+            }
+
+            // Reset the GIS singleton so a previously-cancelled attempt cannot
+            // poison this one (same reasoning as CHANGE #311).
+            try { google.accounts.id.cancel(); } catch (e) {}
+            try { google.accounts.id.disableAutoSelect(); } catch (e) {}
+
+            try {
+              google.accounts.id.initialize({
+                client_id: clientId,
+                nonce: hashedNonce,
+                callback: function (resp) {
+                  if (resp && resp.credential) settle(resolve, resp.credential);
+                  else settle(reject, 'fallback');
+                },
+                use_fedcm_for_prompt: true,
+                auto_select: false,
+                cancel_on_tap_outside: true,
+              });
+            } catch (e) {
+              settle(reject, 'fallback');
+              return;
+            }
+
+            try {
+              google.accounts.id.prompt(function (n) {
+                if (settled || !n) return;
+                // Not shown at all -> fall back to OAuth.
+                if (probe(n, 'isNotDisplayed') || probe(n, 'isSkippedMoment')) {
+                  settle(reject, 'fallback');
+                  return;
+                }
+                if (probe(n, 'isDismissedMoment')) {
+                  var reason = '';
+                  try {
+                    reason = n.getDismissedReason ? n.getDismissedReason() : '';
+                  } catch (e) {}
+                  // The credential arrives via the callback above.
+                  if (reason === 'credential_returned') return;
+                  settle(reject, 'cancelled');
+                }
+              });
+            } catch (e) {
+              settle(reject, 'fallback');
+              return;
+            }
+
+            // Safety net: never leave the caller's button spinning forever.
+            timer = setTimeout(function () { settle(reject, 'fallback'); }, 120000);
+          }
+
+          poll();
+        });
+      };
+    })();
+  </script>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
        VOICE RECEIVE — Web Speech API bridge
        mediboVoiceSupported : bool
        mediboVoiceStart(onInterim, onFinal, onError) — push-to-talk listen

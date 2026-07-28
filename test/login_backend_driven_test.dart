@@ -1,10 +1,11 @@
-// CHANGE #554 — login screen is 100% backend-driven.
+// CHANGE #555 — login screen is 100% backend-driven, and progressive.
 //
 // Given a stubbed login_screen_config, the screen must:
-//   • render both buttons using google_label / whatsapp_label
+//   • render both buttons using whatsapp_label / google_label
 //   • render NO password field and NO forgot-password link (show_password and
 //     show_forgot_password are false)
-//   • keep the OTP row (input + verify button) disabled until a send succeeds
+//   • show NEITHER the number field NOR the code boxes before the WhatsApp
+//     button is tapped — nothing disabled is visible on first paint
 //
 // The whole backend contract is injected through LoginApi, so this test makes
 // no network call and needs no Supabase instance.
@@ -17,13 +18,25 @@ import 'package:pharma_b2b/screens/auth/login_view.dart';
 const _config = <String, dynamic>{
   'brand': 'mediBO',
   'tagline': 'B2B pharma fulfilment',
-  'google_label': 'Login with Google',
-  'whatsapp_label': 'Login with WhatsApp',
-  'number_hint': 'WhatsApp number',
+  'google_label': 'Continue with Google',
+  'google_sheet_title': 'Choose an account',
+  'google_sheet_subtitle': 'to continue to mediBO',
+  'google_other_account': 'Use another account',
+  'whatsapp_label': 'Continue on WhatsApp',
+  'number_section_label': 'WhatsApp number',
+  'number_hint': '00000 00000',
   'number_prefix': '+91',
-  'send_label': 'Send OTP',
+  'send_label': 'Send code',
+  'sending_label': 'Sending on WhatsApp',
+  'code_section_label': 'Code from WhatsApp',
+  'code_digits': 6,
   'otp_hint': '6-digit code',
+  'code_idle_note': 'Enter the code to continue',
   'verify_label': 'Validate',
+  'resend_label': 'Resend',
+  'resend_seconds': 30,
+  'sent_to_prefix': 'to',
+  'footer_note': 'No password — we only send a login code',
   'show_password': false,
   'show_forgot_password': false,
 };
@@ -64,7 +77,7 @@ class _StubApi implements LoginApi {
 
 void main() {
   testWidgets(
-      'renders backend labels, no password/forgot UI, OTP row disabled before send',
+      'first paint: both buttons from config, no password/forgot UI, no number field, no code boxes',
       (tester) async {
     await tester.pumpWidget(MaterialApp(
       home: Scaffold(
@@ -73,39 +86,34 @@ void main() {
     ));
     await tester.pumpAndSettle();
 
-    // Both buttons come from the config, verbatim.
-    expect(find.text('Login with Google'), findsOneWidget);
-    expect(find.text('Login with WhatsApp'), findsOneWidget);
+    // Both actions come from the config, verbatim.
+    expect(find.text('Continue on WhatsApp'), findsOneWidget);
+    expect(find.text('Continue with Google'), findsOneWidget);
+    expect(find.text('No password — we only send a login code'), findsOneWidget);
 
     // show_password:false / show_forgot_password:false — nothing is built.
     expect(find.byWidgetPredicate((w) => w is TextField && w.obscureText),
         findsNothing);
-    expect(find.textContaining('assword'), findsNothing);
     expect(find.textContaining('orgot'), findsNothing);
 
-    // Open the inline WhatsApp dropdown — no new route is pushed.
-    await tester.tap(find.text('Login with WhatsApp'));
+    // Nothing disabled is visible on first paint: no number field, no code
+    // boxes, no Send / Validate buttons — not even greyed out.
+    expect(find.byType(TextField), findsNothing);
+    expect(find.text('+91'), findsNothing);
+    expect(find.text('Send code'), findsNothing);
+    expect(find.text('Validate'), findsNothing);
+    expect(find.text('Resend'), findsNothing);
+
+    // Tapping WhatsApp reveals the number step — and only the number step.
+    await tester.tap(find.text('Continue on WhatsApp'));
     await tester.pumpAndSettle();
 
-    // Row 1 is rendered from the config.
-    expect(find.text('+91'), findsOneWidget);
     expect(find.text('WhatsApp number'), findsOneWidget);
-    expect(find.text('Send OTP'), findsOneWidget);
-
-    // Row 2 exists but is disabled: no send has succeeded yet.
-    final otpField = tester.widget<TextField>(
-      find.byWidgetPredicate(
-        (w) => w is TextField && w.decoration?.hintText == '6-digit code',
-      ),
-    );
-    expect(otpField.enabled, isFalse);
-
-    final verifyBtn = tester.widget<FilledButton>(
-      find.ancestor(
-        of: find.text('Validate'),
-        matching: find.byType(FilledButton),
-      ),
-    );
-    expect(verifyBtn.onPressed, isNull);
+    expect(find.text('+91'), findsOneWidget);
+    expect(find.text('Send code'), findsOneWidget);
+    // Exactly one field: the number. The six code boxes stay unbuilt until a
+    // send actually succeeds.
+    expect(find.byType(TextField), findsOneWidget);
+    expect(find.text('Validate'), findsNothing);
   });
 }

@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta name="build-commit" content="3ab8aebe">
+  <meta name="build-commit" content="569a9707">
   <!-- CHANGE #238: SW permanently disabled. Unregister ALL SWs + wipe all caches on every load.
        No sessionStorage guard — runs unconditionally so even users whose old SW served this
        HTML from cache will have SWs cleared on the very next in-SW-controlled load.
@@ -138,10 +138,10 @@
        On every load, fetches /version.json (no-cache). If the live commit differs
        from the build-stamped commit below, does ONE hard reload so the PWA gets the
        newest bundle instead of staying on a stale cached build.
-       3ab8aebe is replaced with the actual short commit hash by deploy.sh. -->
+       569a9707 is replaced with the actual short commit hash by deploy.sh. -->
   <script>
     (function () {
-      var _builtCommit = '3ab8aebe';
+      var _builtCommit = '569a9707';
       var _sessionKey  = 'c220_pwa_reloaded';
       function _rlWrite(key, val) {
         try {
@@ -159,7 +159,7 @@
           // Already reloaded once this session — skip to prevent loop.
           if (sessionStorage.getItem(_sessionKey)) return;
           // Skip if placeholder was not stamped (local dev / test build).
-          if (_builtCommit === '3ab8aebe') return;
+          if (_builtCommit === '569a9707') return;
           fetch('/version.json?_t=' + Date.now(), { cache: 'no-store' })
             .then(function (r) { return r.json(); })
             .then(function (data) {
@@ -175,7 +175,7 @@
       });
       // Wire confirmation — written once regardless of outcome.
       window.addEventListener('DOMContentLoaded', function () {
-        if (_builtCommit !== '3ab8aebe') {
+        if (_builtCommit !== '569a9707') {
           _rlWrite('c220_pwa_check_wired', 1);
         }
       });
@@ -751,7 +751,7 @@
     })();
   </script>
 
-  <script src="flutter_bootstrap.js?v=3ab8aebe" async></script>
+  <script src="flutter_bootstrap.js?v=569a9707" async></script>
   <script>
     var recaptchaResolve = null;
     var recaptchaWidgetId = null;
@@ -870,56 +870,6 @@
     };
   </script>
 
-  <!-- CHANGE #566: host for the GIS button popup fallback.
-       It starts INVISIBLE (opacity:0, pointer-events:none) rather than
-       display:none, because renderButton needs a laid-out box to draw into.
-       The programmatic click happens while it is invisible, so nothing is shown
-       to the user. It is only made visible if that click does not produce a
-       credential — see mediboGisPopup(). Until then the login screen is
-       pixel-identical. -->
-  <style>
-    @keyframes mediboSheetUp {
-      from { transform: translateY(100%); }
-      to   { transform: translateY(0); }
-    }
-    #gis-rb-overlay.mb-shown #gis-rb-panel {
-      animation: mediboSheetUp 260ms cubic-bezier(.22,.61,.36,1);
-    }
-    @media (prefers-reduced-motion: reduce) {
-      #gis-rb-overlay.mb-shown #gis-rb-panel { animation: none; }
-    }
-    #gis-rb-overlay {
-      position: fixed; inset: 0; z-index: 99998;
-      display: flex; align-items: flex-end; justify-content: center;
-      background: rgba(0,0,0,0.45);
-      opacity: 0; pointer-events: none; visibility: hidden;
-    }
-    #gis-rb-overlay.mb-shown { opacity: 1; pointer-events: auto; visibility: visible; }
-  </style>
-  <div id="gis-rb-overlay" aria-hidden="true">
-    <div id="gis-rb-panel"
-         style="background:#fff;border-radius:22px 22px 0 0;
-                padding:10px 24px calc(28px + env(safe-area-inset-bottom));
-                display:flex;flex-direction:column;align-items:center;gap:14px;
-                box-shadow:0 -8px 40px rgba(0,0,0,0.22);
-                width:100%;max-width:520px;min-height:50vh;box-sizing:border-box;">
-      <div style="width:40px;height:4px;border-radius:2px;background:#E5E7EB;margin:2px 0 10px;"></div>
-      <p id="gis-rb-title"
-         style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-                font-size:19px;font-weight:700;color:#111827;text-align:center;"></p>
-      <p id="gis-rb-subtitle"
-         style="margin:-6px 0 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-                font-size:14px;color:#6B7280;text-align:center;"></p>
-      <div id="gis-rb-container"
-           style="min-height:44px;width:100%;display:flex;justify-content:center;
-                  align-items:center;margin-top:10px;"></div>
-      <button id="gis-rb-cancel"
-              style="background:none;border:none;color:#6B7280;cursor:pointer;
-                     font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-                     font-size:14px;padding:10px 24px;border-radius:8px;margin-top:auto;"></button>
-    </div>
-  </div>
-
   <!-- ═══════════════════════════════════════════════════════════════════════
        GOOGLE SIGN-IN BRIDGE — CHANGE #562 (GIS One Tap, restored)
 
@@ -935,7 +885,8 @@
        This is a straight mechanism swap. FedCM is gone; One Tap is back.
 
        mediboGisPrewarm(clientId, hashedNonce)  -> loads GIS + initialize() ONCE
-       mediboGisPromptNow()                     -> One Tap sheet, SYNCHRONOUS
+       mediboGisOneTap(clientId, hashedNonce)   -> the ONLY entry point:
+                                                   reset + initialize + prompt
        mediboLastGisError()                     -> why the last attempt failed
        mediboIsStandalone()                     -> true when installed as a PWA
 
@@ -1052,132 +1003,202 @@
         try { return String(window.location.origin || ''); } catch (e) { return ''; }
       };
 
-      // ── CHANGE #566: FALLBACK — the GIS button popup ──────────────────────
-      // renderButton draws Google's button, and ux_mode:'popup' (set in
-      // initialize) makes it open the "Choose an account to continue to mediBO"
-      // chooser in a popup that closes itself and hands the credential back to
-      // this document. It is NOT subject to the One Tap cooldown, so this
-      // branch always has a working chooser.
-      function clickRenderedButton(ctr) {
-        var targets = [];
+      // ── CHANGE #565: kill GIS's dismissal cooldown ────────────────────────
+      // GIS records One Tap dismissals in a FIRST-PARTY cookie named g_state on
+      // our own domain, and after a few cancels it stops displaying the sheet
+      // entirely (build c9ac1105 recorded c564_moment=skipped:unknown_reason —
+      // that was this). Because the cookie is first-party we can simply delete
+      // it, on every domain/path variant, immediately before each prompt().
+      //
+      // Returns 'cleared' when a g_state cookie was present, 'absent' otherwise.
+      window.mediboClearGState = function () {
+        var had = false;
         try {
-          targets.push(ctr.querySelector('div[role="button"]'));
-          targets.push(ctr.querySelector('[role="button"]'));
-          targets.push(ctr.querySelector('button'));
-          targets.push(ctr.firstElementChild);
+          had = document.cookie.indexOf('g_state=') >= 0;
         } catch (e) {}
-        var clicked = false;
-        for (var i = 0; i < targets.length; i++) {
-          var t = targets[i];
-          if (!t) continue;
-          try {
-            ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']
-              .forEach(function (type) {
-                var Ctor = (type.indexOf('pointer') === 0 && window.PointerEvent)
-                  ? PointerEvent : MouseEvent;
-                t.dispatchEvent(new Ctor(type, {
-                  bubbles: true, cancelable: true, view: window,
-                }));
-              });
-            if (typeof t.click === 'function') t.click();
-            clicked = true;
-            break;
-          } catch (e) {}
-        }
-        return clicked;
-      }
+        try {
+          var host = '';
+          try { host = window.location.hostname || ''; } catch (e) {}
+          var domains = ['', '.medibo.in', 'medibo.in', 'www.medibo.in'];
+          if (host && domains.indexOf(host) < 0) {
+            domains.push(host);
+            domains.push('.' + host);
+          }
+          var paths = ['/', ''];
+          for (var i = 0; i < domains.length; i++) {
+            for (var j = 0; j < paths.length; j++) {
+              var c = 'g_state=; expires=Thu, 01 Jan 1970 00:00:01 GMT';
+              if (paths[j]) c += '; path=' + paths[j];
+              if (domains[i]) c += '; domain=' + domains[i];
+              try { document.cookie = c; } catch (e) {}
+            }
+          }
+        } catch (e) {}
+        return had ? 'cleared' : 'absent';
+      };
 
-      window.mediboGisPopup = function (title, subtitle, cancelLabel) {
+      // ── CHANGE #563: called on logout, so the next sign-in always shows the
+      // chooser instead of silently reusing the last account. ───────────────
+      window.mediboGisDisableAutoSelect = function () {
+        try {
+          if (!gisReady()) return false;
+          google.accounts.id.disableAutoSelect();
+          return true;
+        } catch (e) { return false; }
+      };
+
+      // ── CHANGE #567: the ONLY Google entry point ──────────────────────────
+      // Every tap runs the full reset before prompt(), because clearing the
+      // g_state cookie alone does not clear GIS's in-memory suppression:
+      //   a. log document.cookie                       -> c567_cookie_before
+      //   b. delete g_state on every domain/path variant
+      //   c. log document.cookie again                 -> c567_cookie_after
+      //   d. disableAutoSelect()
+      //   e. initialize() again with a FRESH nonce (resets in-memory state)
+      //   f. prompt()
+      // The caller supplies a fresh hashed nonce per attempt and keeps the
+      // matching raw nonce for Supabase.
+      window.mediboGisOneTap = function (clientId, hashedNonce) {
         return new Promise(function (resolve, reject) {
           var settled = false;
           var timer = null;
-          var revealTimer = null;
           var tag = Math.random();
 
-          function note(v) {
-            try { window.mediboNote && window.mediboNote('c566_popup', v, true); } catch (e) {}
-          }
-          function hide() {
-            var ov = document.getElementById('gis-rb-overlay');
-            if (ov) { ov.className = ''; ov.onclick = null; }
-            var b = document.getElementById('gis-rb-cancel');
-            if (b) b.onclick = null;
-          }
           function settle(fn, val) {
             if (settled) return;
             settled = true;
-            if (timer) clearTimeout(timer);
-            if (revealTimer) clearTimeout(revealTimer);
+            if (timer) { clearTimeout(timer); timer = null; }
             if (_pending && _pending.tag === tag) _pending = null;
-            hide();
             fn(val);
           }
-
-          if (!_ready || !gisReady()) { note('blocked'); reject('suppressed'); return; }
-
-          var ov  = document.getElementById('gis-rb-overlay');
-          var ctr = document.getElementById('gis-rb-container');
-          var btn = document.getElementById('gis-rb-cancel');
-          var ttl = document.getElementById('gis-rb-title');
-          var sub = document.getElementById('gis-rb-subtitle');
-          if (!ov || !ctr || !btn) { note('blocked'); reject('suppressed'); return; }
-
-          if (ttl) { ttl.textContent = title || ''; ttl.style.display = title ? '' : 'none'; }
-          if (sub) { sub.textContent = subtitle || ''; sub.style.display = subtitle ? '' : 'none'; }
-          btn.textContent = cancelLabel || '';
-          btn.style.display = cancelLabel ? '' : 'none';
-
-          _pending = {
-            tag: tag,
-            resolve: function (c) { note('credential'); settle(resolve, c); },
-            reject: function (r) { settle(reject, r); },
-          };
-
-          ctr.innerHTML = '';
-          try {
-            google.accounts.id.renderButton(ctr, {
-              type: 'standard', shape: 'pill', theme: 'outline',
-              text: 'continue_with', size: 'large', logo_alignment: 'left', width: 280,
-            });
-          } catch (e) {
-            _pending = null;
-            note('error:renderButton:' + ((e && e.message) || e));
-            reject('suppressed');
-            return;
+          function note(k, v) {
+            try { window.mediboNote && window.mediboNote(k, v, true); } catch (e) {}
+          }
+          function moment(v) {
+            try { window.mediboGisMoment = v; } catch (e) {}
+            note('c567_moment', v);
+          }
+          function probe(n, name) {
+            try { return !!(n[name] && n[name]()); } catch (e) { return false; }
+          }
+          function reason(n, name) {
+            try { return (n[name] ? String(n[name]()) : '') || ''; } catch (e) { return ''; }
           }
 
-          // The button is laid out but invisible. Try the programmatic click.
-          note('opened');
-          setTimeout(function () {
-            if (settled) return;
-            var clicked = false;
-            try { clicked = clickRenderedButton(ctr); } catch (e) {
-              note('error:click:' + ((e && e.message) || e));
-            }
-            // GIS renders its button inside a cross-origin iframe
-            // (accounts.google.com/gsi/button), so a synthetic click in this
-            // document usually cannot reach the handler inside it. If no
-            // credential arrives shortly, reveal the sheet so the user can tap
-            // the real button — the path that signed in successfully on build
-            // c9ac1105 (c564_popup=credential). Never a dead end.
-            revealTimer = setTimeout(function () {
-              if (settled) return;
-              ov.className = 'mb-shown';
-              ov.setAttribute('aria-hidden', 'false');
-              note(clicked ? 'shown_after_click_ignored' : 'shown_click_unavailable');
-              var openedAt = Date.now();
-              btn.onclick = function () {
-                if (Date.now() - openedAt < 400) return;
-                settle(reject, 'cancelled');
-              };
-              ov.onclick = function (ev) {
-                if (Date.now() - openedAt < 400) return;
-                if (ev.target === ov) settle(reject, 'cancelled');
-              };
-            }, 1200);
-          }, 250);
+          // The tap can beat the async GIS script; wait for it rather than fail.
+          var waited = 0;
+          function whenReady(go) {
+            if (gisReady()) { go(true); return; }
+            if (waited >= 4000) { go(false); return; }
+            waited += 200;
+            setTimeout(function () { whenReady(go); }, 200);
+          }
 
-          timer = setTimeout(function () { settle(reject, 'cancelled'); }, 90000);
+          whenReady(function (ready) {
+            if (settled) return;
+            if (!ready) {
+              moment('library_not_ready');
+              settle(reject, 'suppressed');
+              return;
+            }
+
+            // (a)
+            try { note('c567_cookie_before', String(document.cookie || '').slice(0, 200)); } catch (e) {}
+
+            // (b)
+            var had = false;
+            try { had = String(document.cookie || '').indexOf('g_state=') >= 0; } catch (e) {}
+            try {
+              var domains = ['', 'medibo.in', '.medibo.in', 'www.medibo.in', '.www.medibo.in'];
+              var host = '';
+              try { host = window.location.hostname || ''; } catch (e) {}
+              if (host && domains.indexOf(host) < 0) { domains.push(host); domains.push('.' + host); }
+              var paths = ['/', ''];
+              for (var i = 0; i < domains.length; i++) {
+                for (var j = 0; j < paths.length; j++) {
+                  var c = 'g_state=; Max-Age=0; expires=Thu, 01 Jan 1970 00:00:01 GMT';
+                  if (paths[j]) c += '; path=' + paths[j];
+                  if (domains[i]) c += '; domain=' + domains[i];
+                  try { document.cookie = c; } catch (e) {}
+                }
+              }
+            } catch (e) {}
+
+            // (c)
+            try { note('c567_cookie_after', String(document.cookie || '').slice(0, 200)); } catch (e) {}
+            note('c567_gstate', had ? 'cleared' : 'absent');
+
+            // (d)
+            try { google.accounts.id.disableAutoSelect(); } catch (e) {}
+
+            // (e) — re-initialize with the fresh nonce; this is what clears the
+            // in-memory suppression the cookie delete cannot reach.
+            try {
+              google.accounts.id.initialize({
+                client_id: clientId,
+                nonce: hashedNonce,
+                callback: deliver,
+                use_fedcm_for_prompt: true,
+                itp_support: true,
+                context: 'signin',
+                auto_select: false,
+                cancel_on_tap_outside: false,
+              });
+              _ready = true;
+              _initFailed = false;
+              _clientId = clientId;
+              _hashedNonce = hashedNonce;
+            } catch (e) {
+              moment('init_threw');
+              settle(reject, 'suppressed');
+              return;
+            }
+
+            _pending = {
+              tag: tag,
+              resolve: function (c) { settle(resolve, c); },
+              reject: function (r) { settle(reject, r); },
+            };
+
+            // (f)
+            try {
+              google.accounts.id.prompt(function (n) {
+                if (settled || !n) return;
+                if (probe(n, 'isNotDisplayed')) {
+                  moment('not_displayed:' + (reason(n, 'getNotDisplayedReason') || 'unknown'));
+                  settle(reject, 'suppressed');
+                  return;
+                }
+                if (probe(n, 'isSkippedMoment')) {
+                  moment('skipped:' + (reason(n, 'getSkippedReason') || 'unknown'));
+                  settle(reject, 'suppressed');
+                  return;
+                }
+                if (probe(n, 'isDisplayed') || probe(n, 'isDisplayMoment')) {
+                  moment('displayed');
+                  return; // sheet is up — wait for a credential or a dismissal
+                }
+                if (probe(n, 'isDismissedMoment')) {
+                  var r = reason(n, 'getDismissedReason') || 'unknown';
+                  moment('dismissed:' + r);
+                  if (r === 'credential_returned') return;
+                  settle(reject, 'cancelled');
+                }
+              });
+            } catch (e) {
+              moment('prompt_threw');
+              settle(reject, 'suppressed');
+              return;
+            }
+
+            // The moment callback can go silent after a FedCM dismissal — never
+            // hang the caller. A silent callback is 'suppressed', not a
+            // navigation: there is nothing left to fall back to.
+            timer = setTimeout(function () {
+              moment('no_moment_timeout');
+              settle(reject, 'suppressed');
+            }, 90000);
+          });
         });
       };
 
@@ -1225,107 +1246,6 @@
         } catch (e) { return false; }
       };
 
-      // ── One Tap: called SYNCHRONOUSLY from the tap handler ────────────────
-      window.mediboGisPromptNow = function () {
-        return new Promise(function (resolve, reject) {
-          var settled = false;
-          var timer = null;
-
-          function settle(fn, val) {
-            if (settled) return;
-            settled = true;
-            if (timer) { clearTimeout(timer); timer = null; }
-            if (_pending && _pending.tag === tag) _pending = null;
-            fn(val);
-          }
-          var tag = Math.random();
-
-          // CHANGE #564: the tap can arrive before the async GIS script has
-          // loaded — build e262a1be recorded exactly that
-          // (c564_moment=library_not_ready, so One Tap never ran). Give the
-          // library a bounded moment to turn up instead of failing outright.
-          var waited = 0;
-          function whenReady(go) {
-            if (_ready && !_initFailed && gisReady()) { go(true); return; }
-            if (waited >= 4000) { go(false); return; }
-            waited += 200;
-            setTimeout(function () { whenReady(go); }, 200);
-          }
-
-          _pending = {
-            tag: tag,
-            resolve: function (c) { settle(resolve, c); },
-            reject: function (r) { settle(reject, r); },
-          };
-
-          function probe(n, name) {
-            try { return !!(n[name] && n[name]()); } catch (e) { return false; }
-          }
-          function reason(n, name) {
-            try { return (n[name] ? String(n[name]()) : '') || ''; } catch (e) { return ''; }
-          }
-          function moment(v) {
-            try { window.mediboGisMoment = v; } catch (e) {}
-            try { window.mediboNote && window.mediboNote('c566_moment', v, true); } catch (e) {}
-          }
-
-          whenReady(function (ready) {
-            if (settled) return;
-            if (!ready) {
-              moment('library_not_ready');
-              settle(reject, 'suppressed');
-              return;
-            }
-            // CHANGE #565: last thing before prompt(), with no async hop in
-            // between, so the cooldown cookie can never be in play.
-            try { window.mediboClearGState && window.mediboClearGState(); } catch (e) {}
-            try {
-            google.accounts.id.prompt(function (n) {
-              if (settled || !n) return;
-
-              // CHANGE #563: suppressed by Google (cooldown, no session, FedCM
-              // refusal). This must NOT navigate anywhere — the caller shows an
-              // inline note and a link, and only a deliberate tap on that link
-              // may open the browser chooser.
-              if (probe(n, 'isNotDisplayed')) {
-                moment('not_displayed:' + (reason(n, 'getNotDisplayedReason') || 'unknown'));
-                settle(reject, 'suppressed');
-                return;
-              }
-              if (probe(n, 'isSkippedMoment')) {
-                moment('skipped:' + (reason(n, 'getSkippedReason') || 'unknown'));
-                settle(reject, 'suppressed');
-                return;
-              }
-              if (probe(n, 'isDisplayed') || probe(n, 'isDisplayMoment')) {
-                moment('displayed');
-                return; // the sheet is up; wait for the credential or a dismissal
-              }
-              if (probe(n, 'isDismissedMoment')) {
-                var r = reason(n, 'getDismissedReason') || 'unknown';
-                moment('dismissed:' + r);
-                // The credential arrives through the initialize() callback.
-                if (r === 'credential_returned') return;
-                // A deliberate close is an answer, not a failure: the caller
-                // stays on the login screen and re-enables the button.
-                settle(reject, 'cancelled');
-              }
-            });
-            } catch (e) {
-              moment('prompt_threw');
-              settle(reject, 'suppressed');
-            }
-          });
-
-          // CHANGE #310c: the moment callback can go silent after a FedCM
-          // dismissal — never let that hang the caller. CHANGE #563: a silent
-          // callback resolves to 'suppressed', not a navigation.
-          timer = setTimeout(function () {
-            try { window.mediboNote && window.mediboNote('c566_moment', 'no_moment_timeout', true); } catch (e) {}
-            settle(reject, 'suppressed');
-          }, 90000);
-        });
-      };
     })();
   </script>
 

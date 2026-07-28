@@ -120,23 +120,6 @@ String _sha256Hex(List<int> message) {
   return h.map((v) => v.toRadixString(16).padLeft(8, '0')).join();
 }
 
-@JS('mediboFedcmGet')
-external JSPromise<JSString?> _mediboFedcmGet(
-    JSString clientId, JSString hashedNonce);
-
-@JS('mediboLastFedcmError')
-external JSString _mediboLastFedcmErrorJs();
-
-/// Why the last FedCM attempt failed — the DOMException name, 'unsupported',
-/// 'timeout' or 'empty-credential'. Render-log only, never shown to a user.
-String lastFedcmError() {
-  try {
-    return _mediboLastFedcmErrorJs().toDart;
-  } catch (_) {
-    return '';
-  }
-}
-
 @JS('mediboOrigin')
 external JSString _mediboOriginJs();
 
@@ -252,6 +235,39 @@ Future<({String idToken, String rawNonce})> gisPromptOneTap() async {
   }
 }
 
+@JS('mediboGisSheet')
+external JSPromise<JSString?> _mediboGisSheet(
+    JSString title, JSString subtitle, JSString cancelLabel);
+
+/// CHANGE #564: the FALLBACK — our own half-screen sheet hosting the GIS
+/// button, restored from the pre-#557 commit where the render-log proved it
+/// works (c556_path=sheet_button then c556_session=established).
+///
+/// The button opens Google's chooser in a popup (ux_mode:'popup', never
+/// 'redirect') which closes itself and hands the credential back to this
+/// document, so an installed PWA is never navigated away. Crucially it is NOT
+/// subject to One Tap's cooldown, so this branch always has a working chooser.
+///
+/// All copy comes from the caller (backend strings); pass empty strings to hide
+/// an element rather than inventing text here.
+Future<({String idToken, String rawNonce})> gisSheetSignIn({
+  required String title,
+  required String subtitle,
+  required String cancelLabel,
+}) async {
+  try {
+    final r =
+        await _mediboGisSheet(title.toJS, subtitle.toJS, cancelLabel.toJS).toDart;
+    return _wrap(r?.toDart);
+  } on GisOneTapSuppressed {
+    rethrow;
+  } on GisOneTapUnavailable {
+    rethrow;
+  } catch (e) {
+    _rethrowAsGis(e);
+  }
+}
+
 @JS('mediboGisDisableAutoSelect')
 external bool _mediboGisDisableAutoSelectJs();
 
@@ -265,31 +281,3 @@ bool gisDisableAutoSelect() {
   }
 }
 
-/// CHANGE #564: the PRIMARY path — the browser's own FedCM chooser.
-///
-/// mediation:'required' forces the chooser every time and never auto-selects,
-/// and FedCM is not subject to One Tap's cooldown, so a dismissal never
-/// suppresses the next attempt. The browser draws it over the page, so it
-/// cannot navigate anywhere.
-///
-/// MUST be called straight from the tap handler: mode:'active' requires
-/// transient user activation.
-///
-/// Nonce mapping (verified, do not change): Google gets the HASHED nonce,
-/// Supabase gets the RAW one.
-Future<({String idToken, String rawNonce})> fedcmChooseAccount() async {
-  _warmPair ??= _generateNoncePair();
-  try {
-    final r = await _mediboFedcmGet(
-      _kGisClientId.toJS,
-      _warmPair!.hashedNonce.toJS,
-    ).toDart;
-    return _wrap(r?.toDart);
-  } on GisOneTapSuppressed {
-    rethrow;
-  } on GisOneTapUnavailable {
-    rethrow;
-  } catch (e) {
-    _rethrowAsGis(e);
-  }
-}

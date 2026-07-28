@@ -25,13 +25,21 @@ class SupabaseLoginApi implements LoginApi {
   /// in the Google path may navigate away from the document. [fedcm] and
   /// [oneTap] are injectable purely so the escalation can be unit-tested.
   SupabaseLoginApi({
-    Future<GoogleCredential> Function()? fedcm,
     Future<GoogleCredential> Function()? oneTap,
-  })  : _fedcm = fedcm ?? fedcmChooseAccount,
-        _oneTap = oneTap ?? gisPromptOneTap;
+    Future<GoogleCredential> Function({
+      required String title,
+      required String subtitle,
+      required String cancelLabel,
+    })? popup,
+  })  : _oneTap = oneTap ?? gisPromptOneTap,
+        _popup = popup ?? gisSheetSignIn;
 
-  final Future<GoogleCredential> Function() _fedcm;
   final Future<GoogleCredential> Function() _oneTap;
+  final Future<GoogleCredential> Function({
+    required String title,
+    required String subtitle,
+    required String cancelLabel,
+  }) _popup;
 
   SupabaseClient get _c => Supabase.instance.client;
 
@@ -100,13 +108,13 @@ class SupabaseLoginApi implements LoginApi {
         nonce: rawNonce,
       );
 
-  /// CHANGE #564: FedCM first, One Tap second, nothing third.
+  /// CHANGE #564: One Tap first, the GIS button popup second, nothing third.
   ///
-  /// There is no browser path. signInWithOAuth is gone from the Google path, as
-  /// are the "choose in your browser" link and its note: the full-page chooser
-  /// opened in a Chrome Custom Tab, so Supabase wrote the session into that
-  /// tab's storage and the PWA stayed signed out even though /callback returned
-  /// 302 on a real Google login.
+  /// There is no browser path and no FedCM. signInWithOAuth is gone from the
+  /// Google path, as are the "choose in your browser" link and its note: the
+  /// full-page chooser opened in a Chrome Custom Tab, so Supabase wrote the
+  /// session into that tab's storage and the PWA stayed signed out even though
+  /// /callback returned 302 on a real Google login.
   @override
   Future<GoogleOutcome> googleSignIn({
     required String sheetTitle,
@@ -116,10 +124,13 @@ class SupabaseLoginApi implements LoginApi {
     _logNow('c559_entry', 'login_screen');
     _logNow('c564_origin', currentOrigin());
     return runGoogleSignIn(
-      fedcm: _fedcm,
       oneTap: _oneTap,
+      popup: () => _popup(
+        title: sheetTitle,
+        subtitle: sheetSubtitle,
+        cancelLabel: otherAccount,
+      ),
       finish: _finishIdToken,
-      fedcmError: lastFedcmError,
       log: _logNow,
     );
   }

@@ -479,7 +479,7 @@ class AuthNotifier extends ChangeNotifier {
   }
 
   /// CHANGE #564: the home_shell entry point, on the same escalation as the
-  /// login screen — FedCM, then One Tap, then nothing. No browser path: the
+  /// login screen — One Tap, then the GIS button popup, then nothing. No browser path: the
   /// full-page chooser opened in a Custom Tab and the session never reached the
   /// app. Dismissed/suppressed rethrow so the caller just re-enables its button.
   Future<void> signInWithGoogle() async {
@@ -491,15 +491,17 @@ class AuthNotifier extends ChangeNotifier {
     try { RenderLog.writeNow('c564_origin', currentOrigin()); } catch (_) {}
 
     final outcome = await runGoogleSignIn(
-      fedcm: fedcmChooseAccount,
       oneTap: gisPromptOneTap,
+      // CHANGE #564: the popup is the cooldown-proof fallback. Copy stays
+      // empty here — home_shell has no backend strings for this sheet, and the
+      // sheet hides any element whose label is empty rather than inventing one.
+      popup: () => gisSheetSignIn(title: '', subtitle: '', cancelLabel: ''),
       finish: (idToken, rawNonce) =>
           Supabase.instance.client.auth.signInWithIdToken(
         provider: OAuthProvider.google,
         idToken: idToken,
         nonce: rawNonce,
       ),
-      fedcmError: lastFedcmError,
       log: (k, v) {
         try { RenderLog.writeNow(k, v); } catch (_) {}
       },

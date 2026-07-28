@@ -9,11 +9,16 @@
 // drawn by the browser (FedCM) or by Google (One Tap), never by us, and the
 // full-page accounts.google.com chooser must never appear.
 //
-// Order:
-//   1. FedCM — navigator.credentials.get with mediation:'required'. Not subject
-//      to One Tap's cooldown, so it shows the chooser every time.
-//   2. GIS One Tap prompt() — only if FedCM threw or is unsupported.
+// Order (CHANGE #564):
+//   1. GIS One Tap prompt(). Proven: four grant_type=id_token logins.
+//   2. The GIS button popup, when One Tap is suppressed by Google's cooldown.
+//      Proven in #556 (c556_path=sheet_button -> c556_session=established) and
+//      NOT subject to that cooldown, so this branch always has a chooser.
 //   3. Nothing. The caller shows an inline message, and stays put.
+//
+// FedCM is gone: it failed on every single attempt across #557, #558, #560,
+// #561 and #564 — the last one rejected:NetworkError on https://www.medibo.in
+// with both origins authorized.
 
 /// One Tap or FedCM could not be shown at all (library missing, unclassifiable
 /// moment).
@@ -53,47 +58,45 @@ enum GoogleOutcome {
 /// verified and must not change.
 typedef GoogleCredential = ({String idToken, String rawNonce});
 
-/// Runs the escalation. [fedcm] and [oneTap] are injected so this is testable
+/// Runs the escalation. [oneTap] and [popup] are injected so this is testable
 /// without a browser; [finish] is signInWithIdToken.
 ///
 /// Never returns a navigation of any kind — the only outcomes are the three in
 /// [GoogleOutcome].
 Future<GoogleOutcome> runGoogleSignIn({
-  required Future<GoogleCredential> Function() fedcm,
   required Future<GoogleCredential> Function() oneTap,
+  required Future<GoogleCredential> Function() popup,
   required Future<void> Function(String idToken, String rawNonce) finish,
-  String Function()? fedcmError,
   void Function(String key, String value)? log,
 }) async {
   void note(String k, String v) {
     if (log != null) log(k, v);
   }
 
-  // ── 1. FedCM: the primary path ───────────────────────────────────────────
-  try {
-    final cred = await fedcm();
-    note('c564_fedcm', 'resolved');
-    note('c564_path', 'fedcm');
-    await finish(cred.idToken, cred.rawNonce);
-    note('c564_signed_in', 'fedcm');
-    return GoogleOutcome.signedIn;
-  } on GisOneTapCancelled {
-    // Deliberate close. Do not cascade into a second sheet.
-    note('c564_fedcm', 'rejected:AbortError');
-    note('c564_path', 'none');
-    return GoogleOutcome.closed;
-  } on GisOneTapSuppressed {
-    note('c564_fedcm', 'rejected:${fedcmError?.call() ?? 'suppressed'}');
-  } on GisOneTapUnavailable {
-    note('c564_fedcm', 'rejected:${fedcmError?.call() ?? 'unavailable'}');
-  }
-
-  // ── 2. GIS One Tap: only because FedCM threw or is unsupported ───────────
+  // ── 1. One Tap: the primary path ─────────────────────────────────────────
   try {
     final cred = await oneTap();
     note('c564_path', 'onetap');
     await finish(cred.idToken, cred.rawNonce);
     note('c564_signed_in', 'onetap');
+    return GoogleOutcome.signedIn;
+  } on GisOneTapCancelled {
+    // A deliberate close is an answer. No message, no popup, no navigation.
+    note('c564_path', 'none');
+    return GoogleOutcome.closed;
+  } on GisOneTapSuppressed {
+    // The cooldown. Fall straight through to the popup, which the cooldown
+    // does not apply to.
+  } on GisOneTapUnavailable {
+    // Same treatment: the popup is the branch that always has a chooser.
+  }
+
+  // ── 2. The GIS button popup ──────────────────────────────────────────────
+  try {
+    final cred = await popup();
+    note('c564_path', 'popup');
+    await finish(cred.idToken, cred.rawNonce);
+    note('c564_signed_in', 'popup');
     return GoogleOutcome.signedIn;
   } on GisOneTapCancelled {
     note('c564_path', 'none');

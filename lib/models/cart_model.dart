@@ -195,6 +195,28 @@ class CartModel extends ChangeNotifier {
 
   // ── Guest UUID helpers ────────────────────────────────────────────────────
 
+  /// CHANGE #558 RULE 5 — the guest uid the app already uses for
+  /// delete_guest_cart, read by AuthNotifier so it can be claimed on sign-in.
+  String? get guestUid => _getGuestUid();
+
+  /// CHANGE #558 RULE 3 — drop every scrap of the previous account's cart.
+  /// Registered as a reset hook by main.dart and fired on every auth change.
+  /// Deliberately does NOT touch the guest uid: the sign-in path claims that
+  /// cart before this runs, and a signed-out visitor keeps their guest cart.
+  void hardReset() {
+    _loadGen++; // any in-flight load belongs to the old account — drop it
+    _viewAsUserId = null;
+    _lines.clear();
+    _adminRemovedLines.clear();
+    _orders.clear();
+    _cartChannel?.unsubscribe();
+    _cartChannel = null;
+    showCart = true;
+    cartModeBanner = null;
+    _recomputeTotals();
+    notifyListeners();
+  }
+
   String? _getGuestUid() {
     try {
       final v = html.window.localStorage[_guestUidKey];

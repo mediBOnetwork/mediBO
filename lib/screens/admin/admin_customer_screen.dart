@@ -15,6 +15,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 
+import '../../user_state.dart';
 import '../../config/api_keys.dart';
 import '../../util.dart';
 import '../../utils/download_bytes.dart'; // CHANGE #463
@@ -1298,9 +1299,12 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       ),
     );
     if (confirm != true) return;
+    if (!mounted) return;
+    // CHANGE #558 — from the one session, not the Supabase user.
+    final sessionEmail = UserState.read(context).loginEmail;
+    final adminEmail = sessionEmail.isEmpty ? 'admin' : sessionEmail;
     try {
       final client    = Supabase.instance.client;
-      final adminEmail = client.auth.currentUser?.email ?? 'admin';
       // Part A-3: mark deleted with full snapshot
       await client.from('pharmacy_profiles').update({
         'is_deleted':       true,

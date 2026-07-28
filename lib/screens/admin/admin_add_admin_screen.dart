@@ -60,8 +60,8 @@ class _AdminAddAdminScreenState extends State<AdminAddAdminScreen> {
       _success = null;
     });
     try {
-      final addedBy =
-          Supabase.instance.client.auth.currentUser?.email ?? '';
+      // CHANGE #558 — from the one session, not the Supabase user.
+      final addedBy = UserState.read(context).loginEmail;
       await Supabase.instance.client.from('admins').insert({
         'email': email,
         'added_by': addedBy,

@@ -82,7 +82,7 @@ class _AdminShellState extends State<AdminShell> with WidgetsBindingObserver {
     _loadPendingCount();
     _initFcm();
     RenderLog.write('c204_wa_section_shown', 1);
-    _checkSuperAdmin();
+    _logSuperAdmin();
   }
 
   @override
@@ -101,13 +101,13 @@ class _AdminShellState extends State<AdminShell> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _checkSuperAdmin() async {
-    try {
-      final isSuper = (await Supabase.instance.client.rpc('am_i_super')) == true;
+  // CHANGE #558 — read the one session instead of asking am_i_super() again.
+  void _logSuperAdmin() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final isSuper = UserState.read(context).isSuperAdmin;
       RenderLog.write(isSuper ? 'c208_is_super_true' : 'c208_is_super_false', 1);
-    } catch (_) {
-      RenderLog.write('c208_is_super_false', 1);
-    }
+    });
   }
 
   void _initFcm() {

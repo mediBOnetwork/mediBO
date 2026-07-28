@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../app_state.dart';
 import '../data/medicine_repository.dart';
+import '../models/app_session.dart';
 import '../models/cart_model.dart';
 import '../theme.dart';
 import '../url_sync.dart';
@@ -76,9 +77,9 @@ class _HomeShellState extends State<HomeShell> {
   // Desktop scroll state (header shadow only — fires setState at most twice per visit)
   bool _desktopScrolled = false;
 
-  // CHANGE #209 — authoritative super-admin gate via am_i_super() RPC
-  bool _amISuper = false;
-  bool _amISuperChecked = false;
+  // CHANGE #558 — super-admin comes from the one session (my_session().role),
+  // not from a second am_i_super() RPC cached in this widget. A cached role
+  // flag is exactly what let a previous session's account leak through.
 
   // Desktop sidebar: populated once storefront loads its CatalogMeta
   CatalogMeta? _desktopMeta;
@@ -141,27 +142,9 @@ class _HomeShellState extends State<HomeShell> {
     });
   }
 
-  Future<void> _checkAmISuper() async {
-    try {
-      final r = await Supabase.instance.client.rpc('am_i_super');
-      final isSuper = r == true;
-      if (mounted) {
-        setState(() => _amISuper = isSuper);
-        RenderLog.write(isSuper ? 'c209_amisuper_true' : 'c209_amisuper_false', 1);
-      }
-    } catch (_) {
-      if (mounted) RenderLog.write('c209_amisuper_false', 1);
-    }
-  }
-
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final authForSuper = UserState.of(context);
-    if (authForSuper.isAdmin && !_amISuperChecked) {
-      _amISuperChecked = true;
-      _checkAmISuper();
-    }
     final viewAs = ViewAsState.of(context);
     final key = viewAs.isActive
         ? '${viewAs.role!.name}:${viewAs.identity!.id}'
@@ -352,13 +335,13 @@ class _HomeShellState extends State<HomeShell> {
             MaterialPageRoute(builder: (_) => const WaHomeScreen()));
         break;
       case 'manage_admins':
-        if (_amISuper) {
+        if (UserState.read(context).isSuperAdmin) {
           Navigator.push(context,
               MaterialPageRoute(builder: (_) => const AdminManageAdminsScreen()));
         }
         break;
       case 'payment_upi':
-        if (_amISuper) {
+        if (UserState.read(context).isSuperAdmin) {
           Navigator.push(context,
               MaterialPageRoute(builder: (_) => const AdminUpiScreen()));
         }
@@ -498,48 +481,62 @@ class _HomeShellState extends State<HomeShell> {
       RenderLog.write('view_as_active', 'customer:${viewAs.identity!.id}');
     }
 
-    // CHANGE #308: while role is resolving after sign-in, show a brief spinner
-    // instead of flashing the customer "Not Registered" profile for admins/suppliers.
-    if (auth.profileLoading && !viewAs.isActive) {
-      return const Scaffold(
-        backgroundColor: Color(0xFFF5F6F8),
-        body: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43))),
-      );
-    }
+    // ─── CHANGE #558 RULE 6 — the ONE surface decision ──────────────────────
+    // Admin surfaces render only when the session says is_admin. Customer
+    // surfaces render only when is_admin is false, or when acting-as is set.
+    // No other place in the app is allowed to make this call: everything below
+    // switches on `surface`, never on a role flag of its own.
+    final surface = auth.surfaceFor(actingAsCustomer: isCustomerViewAs);
+    RenderLog.write('c558_surface', surface.name);
 
-    // Supplier: completely separate shell — takes priority after admin check
-    if (!auth.isAdmin && auth.isSupplier) {
-      return const SupplierShell();
-    }
+    switch (surface) {
+      case AccountSurface.unresolved:
+        // RULE 2/RULE 4 — session not resolved, or resolved for a different
+        // auth user. Neutral loading state only; never a guess.
+        return const Scaffold(
+          backgroundColor: Color(0xFFF5F6F8),
+          body: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43))),
+        );
 
-    // Pending-approval supplier: show a waiting screen
-    if (!auth.isAdmin && !auth.isSupplier && auth.supplierStatus == 'pending_approval') {
-      return Scaffold(
-        backgroundColor: const Color(0xFFF5F6F8),
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(32),
-            child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-              const Icon(Icons.hourglass_empty, size: 56, color: Color(0xFF9CA3AF)),
-              const SizedBox(height: 16),
-              Text('Welcome, ${auth.supplierName ?? 'Supplier'}',
-                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-              const SizedBox(height: 8),
-              const Text('Your supplier account is pending admin approval.',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 14, color: Color(0xFF6B7280))),
-              const SizedBox(height: 24),
-              OutlinedButton(
-                onPressed: () => UserState.read(context).signOut(),
-                style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF1B7A43),
-                  side: const BorderSide(color: Color(0xFF1B7A43))),
-                child: const Text('Sign Out'),
-              ),
-            ]),
+      case AccountSurface.supplier:
+        return const SupplierShell();
+
+      case AccountSurface.pendingSupplier:
+        return Scaffold(
+          backgroundColor: const Color(0xFFF5F6F8),
+          body: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(32),
+              child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                const Icon(Icons.hourglass_empty, size: 56, color: Color(0xFF9CA3AF)),
+                const SizedBox(height: 16),
+                Text('Welcome, ${auth.supplierName ?? auth.displayName}',
+                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+                const SizedBox(height: 8),
+                const Text('Your supplier account is pending admin approval.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 14, color: Color(0xFF6B7280))),
+                const SizedBox(height: 24),
+                OutlinedButton(
+                  onPressed: () => UserState.read(context).signOut(),
+                  style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF1B7A43),
+                    side: const BorderSide(color: Color(0xFF1B7A43))),
+                  child: const Text('Sign Out'),
+                ),
+              ]),
+            ),
           ),
-        ),
-      );
+        );
+
+      case AccountSurface.admin:
+      case AccountSurface.customer:
+        break; // both are laid out by the shell below
     }
+
+    // `surface` is the only input to the chrome below — admin nav, admin pages
+    // and the admin alert overlay all key off it, and nothing re-derives the
+    // role from anywhere else.
+    final showAdminSurfaces = surface == AccountSurface.admin;
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -594,9 +591,6 @@ class _HomeShellState extends State<HomeShell> {
           AdminFulfillmentScreen(),
         ];
 
-        final isAdmin = UserState.of(context).isAdmin;
-        // Customer ViewAs: force customer shell (header + nav), never admin chrome
-        final effectiveAdmin = isCustomerViewAs ? false : isAdmin;
         if (isCustomerViewAs) {
           RenderLog.write('view_as_shell', 'customer:${isDesktop ? "desktop" : "mobile"}');
         }
@@ -604,8 +598,8 @@ class _HomeShellState extends State<HomeShell> {
         // Wrap admin layouts in AdminAlertOverlay so realtime channels +
         // FCM handler are alive as long as the admin shell is on screen.
         final shell = isDesktop
-            ? _buildDesktop(pages, onLogoTap, effectiveAdmin)
-            : _buildMobile(pages, onLogoTap, effectiveAdmin);
+            ? _buildDesktop(pages, onLogoTap, showAdminSurfaces)
+            : _buildMobile(pages, onLogoTap, showAdminSurfaces);
         if (isCustomerViewAs) {
           return Column(children: [
             _ViewAsBanner(
@@ -619,7 +613,7 @@ class _HomeShellState extends State<HomeShell> {
             Expanded(child: shell),
           ]);
         }
-        if (!isAdmin) return shell;
+        if (!showAdminSurfaces) return shell;
         return AdminAlertOverlay(
           onOrderTap: () => _handleAdminNav('customers'),
           child: shell,
@@ -670,7 +664,7 @@ class _HomeShellState extends State<HomeShell> {
                   onLogoTap: onLogoTap,
                   logoTooltip: '',
                   onAdminNav: isAdmin ? _handleAdminNav : null,
-                  isSuperAdmin: isAdmin ? _amISuper : false,
+                  isSuperAdmin: isAdmin && UserState.of(context).isSuperAdmin,
                 ),
                 // CHANGE #455 B1 — the persistent order-hours banner that
                 // used to sit here (and in the desktop header below) is
@@ -766,7 +760,7 @@ class _HomeShellState extends State<HomeShell> {
                     'dashboard', 'whatsapp', 'customers', 'suppliers', 'fulfillment'
                   ][i]),
                   onAdminNav: _handleAdminNav,
-                  isSuperAdmin: _amISuper,
+                  isSuperAdmin: UserState.of(context).isSuperAdmin,
                 )
               else
                 _DesktopHeader(

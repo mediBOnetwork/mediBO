@@ -115,6 +115,17 @@ class MedicineRepository {
   /// Set to true when the last [fetchPage] call was served from cache.
   static bool lastCallWasCacheHit = false;
 
+  /// CHANGE #558 RULE 3 — the browse/suggest caches carry per-account results
+  /// (the `gated` verdict and buyable filtering differ by who is asking), so
+  /// they must not survive an auth change. Registered as a reset hook by
+  /// main.dart. The catalog metadata caches are account-independent and stay.
+  static void clearAccountScopedCaches() {
+    _resultCache.clear();
+    _suggestCache.clear();
+    lastCallWasCacheHit = false;
+    browseRpcError = null;
+  }
+
   /// Set to the error string when browse_medicines RPC fails (for diagnostics).
   static String? browseRpcError;
   static set _browseRpcError(String? v) => browseRpcError = v;

@@ -24,7 +24,22 @@ class CatalogMeta {
 
 /// Result of a page fetch. [exactCount] is the total filtered row count from
 /// the same query (buyable paths only); null for search/non-buyable paths.
-typedef FetchPageResult = ({List<Product> items, int? exactCount});
+///
+/// CHANGE #553 — [showingLabel] and [emptyLabel] are rendered SERVER-SIDE by
+/// `storefront_page` / `storefront_search_page`. Print them verbatim; never
+/// rebuild a counter from the client's own list length (that was the old
+/// "Showing 0 of 32133" bug). Both are null on the outage fallback paths.
+typedef FetchPageResult = ({
+  List<Product> items,
+  int? exactCount,
+  String? showingLabel,
+  String? emptyLabel,
+  bool gated,
+});
+
+/// CHANGE #553 — one product plus the backend's availability verdict, as
+/// returned by `storefront_product`. [status] is 'ok' or 'not_found'.
+typedef StorefrontProduct = ({String status, bool gated, Product? item});
 
 // ─── Session-scoped in-memory caches (cleared on app restart) ────────────────
 // Keyed by "$term|$category|$offset[|buyable]". Cap at 50 entries per cache.
@@ -297,10 +312,46 @@ class MedicineRepository {
         .toList(growable: false);
   }
 
+  /// CHANGE #553 — parses one storefront RPC envelope (`storefront_page` /
+  /// `storefront_search_page`). Both return a single jsonb object whose
+  /// `items` are full product rows, each carrying its own `availability`
+  /// verdict. Labels are taken as-is; nothing here inspects supplier counts.
+  FetchPageResult _parseEnvelope(Object? raw) {
+    final env = Map<String, dynamic>.from(raw as Map);
+    final items = ((env['items'] as List?) ?? const [])
+        .map((r) => Product.fromMap(Map<String, dynamic>.from(r as Map)))
+        .toList(growable: false);
+    return (
+      items: items,
+      exactCount: (env['total'] as num?)?.toInt(),
+      showingLabel: env['showing_label']?.toString(),
+      emptyLabel: env['empty_label']?.toString(),
+      gated: env['gated'] == true,
+    );
+  }
+
+  /// CHANGE #553 — one product with its backend availability verdict, via
+  /// `storefront_product`. Returns status 'not_found' when the id is unknown.
+  Future<StorefrontProduct> fetchProductById(String productId) async {
+    final id = int.tryParse(productId);
+    if (id == null) return (status: 'not_found', gated: false, item: null);
+    final res = await _rpc('storefront_product', params: {'p_product_id': id});
+    final env = Map<String, dynamic>.from(res as Map);
+    final item = env['item'];
+    return (
+      status: env['status']?.toString() ?? 'not_found',
+      gated: env['gated'] == true,
+      item: item is Map
+          ? Product.fromMap(Map<String, dynamic>.from(item))
+          : null,
+    );
+  }
+
   /// Loads one page of medicines, optionally filtered by [category] and [query].
   ///
-  /// Search path (query non-empty): `search_medicines_priority` RPC applies
-  /// trigram fuzzy matching + category filter when set.
+  /// CHANGE #553 — search goes through `storefront_search_page` and browse
+  /// through `storefront_page`. Both wrap the older RPCs server-side and add
+  /// the per-row `availability` verdict plus the rendered counter labels.
   ///
   /// Browse path (no query): `fetch_medicines_by_category_priority` RPC uses
   /// idx_medicine_sales_count index → ~0.12 ms.
@@ -332,9 +383,13 @@ class MedicineRepository {
     final term = query.replaceAll(RegExp(r'[,()*%_]'), ' ').trim();
 
     // Buyable-only cache uses a distinct key to avoid poisoning the all-items cache.
+    // CHANGE #553: the viewer is part of the key — availability verdicts are
+    // per-viewer (approved customers see real availability, everyone else sees
+    // a full shop), so a cached page must never leak across a login/logout.
+    final viewer = _client.auth.currentUser?.id ?? 'anon';
     final cacheKey = onlyBuyable && term.isEmpty
-        ? '${term.toLowerCase()}|$category|$offset|buyable'
-        : '${term.toLowerCase()}|$category|$offset';
+        ? '$viewer|${term.toLowerCase()}|$category|$offset|buyable'
+        : '$viewer|${term.toLowerCase()}|$category|$offset';
     final cached = _resultCache[cacheKey];
     if (cached != null) {
       lastCallWasCacheHit = true;
@@ -343,52 +398,55 @@ class MedicineRepository {
     lastCallWasCacheHit = false;
 
     if (term.isNotEmpty) {
-      // ── Search: fuzzy priority RPC — returns ALL items incl. unavailable ────
-      List<Product> items;
+      // ── Search: storefront_search_page — ALL items incl. unavailable, each
+      // carrying its own availability verdict plus the rendered counter. ──────
+      FetchPageResult result;
       try {
-        final rows = await _rpc('search_medicines_priority', params: {
+        final env = await _rpc('storefront_search_page', params: {
           'search_term': term,
           'category_filter': category,
           'page_offset': offset,
           'page_limit': limit,
         });
-        items = (rows as List)
-            .map((r) => Product.fromMap(r as Map<String, dynamic>))
-            .toList(growable: false);
+        result = _parseEnvelope(env);
       } catch (_) {
-        items = await _fetchKeysetFallback(
+        // Outage path only — keyset rows carry no verdict, so callers keep
+        // their default styling rather than inventing one.
+        final items = await _fetchKeysetFallback(
           category: category,
           afterId: afterId,
           limit: limit,
           search: term,
         );
+        result = (
+          items: items,
+          exactCount: null,
+          showingLabel: null,
+          emptyLabel: null,
+          gated: false,
+        );
       }
-      final result = (items: items, exactCount: null);
       _cacheSet(_resultCache, cacheKey, result);
       return result;
     }
 
-    // ── Browse path: get_storefront_feed (precomputed, image-only, fast) ────────
-    // Used for BOTH home "Best Sellers" (All) and category pages.
-    // CHANGE #441: the "Showing X of N" label reads from the all-categories
-    // count cache (fetchAllCategoryCounts) instead of a per-switch RPC.
+    // ── Browse path: storefront_page — wraps get_storefront_feed server-side
+    // and adds each row's availability verdict, the rendered "Showing X of N"
+    // label and the category total. Used for BOTH home "Best Sellers" (All)
+    // and category pages.
     if (onlyBuyable) {
       try {
-        final rows = await _rpc('get_storefront_feed', params: {
+        final env = await _rpc('storefront_page', params: {
           'category_filter': category,
           'page_offset': offset,
           'page_limit': limit,
         });
-        final items = (rows as List)
-            .map((r) => Product.fromMap(r as Map<String, dynamic>))
-            .toList(growable: false);
-        final result = (items: items, exactCount: null);
+        final result = _parseEnvelope(env);
         _cacheSet(_resultCache, cacheKey, result);
         return result;
       } catch (e) {
-        // get_storefront_feed failed — fall back to the keyset RPC. It has
-        // no exact-count facility, so exactCount is null here (same as the
-        // primary RPC path above).
+        // storefront_page failed — fall back to the keyset RPC. It carries
+        // neither a counter label nor an availability verdict.
         _browseRpcError = '${category}:${e.toString().substring(0, e.toString().length.clamp(0, 80))}';
         final items = await _fetchKeysetFallback(
           category: category,
@@ -396,7 +454,13 @@ class MedicineRepository {
           limit: limit,
           buyable: true,
         );
-        final result = (items: items, exactCount: null);
+        final result = (
+          items: items,
+          exactCount: null,
+          showingLabel: null,
+          emptyLabel: null,
+          gated: false,
+        );
         _cacheSet(_resultCache, cacheKey, result);
         return result;
       }
@@ -421,7 +485,13 @@ class MedicineRepository {
         buyable: false,
       );
     }
-    final result = (items: items, exactCount: null);
+    final result = (
+      items: items,
+      exactCount: null,
+      showingLabel: null,
+      emptyLabel: null,
+      gated: false,
+    );
     _cacheSet(_resultCache, cacheKey, result);
     return result;
   }

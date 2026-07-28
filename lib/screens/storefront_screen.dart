@@ -106,6 +106,15 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   // Buyable-only category total from get_storefront_count (real total, not capped at 200).
   int? _buyableCategoryTotal;
 
+  // CHANGE #553 — the counter and the no-results line are RENDERED BY THE
+  // BACKEND (storefront_page.showing_label / storefront_search_page's
+  // showing_label + empty_label) and printed verbatim. The client never counts
+  // its own list to build them — doing that produced the old
+  // "Showing 0 of 32133". Null only on the outage fallback, which prints
+  // nothing rather than a number it made up.
+  String? _showingLabel;
+  String? _emptyLabel;
+
   // CHANGE #441: every category's buyable count, fetched once at storefront
   // load via get_all_storefront_counts and read on every category switch —
   // keys are uppercased category names plus 'ALL'.
@@ -312,6 +321,8 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       _pageNetworkError = false;
       _suggestions = [];
       _buyableCategoryTotal = null;
+      _showingLabel = null;
+      _emptyLabel = null;
     });
     try {
       final pageResult = await widget.repo.fetchPage(
@@ -387,10 +398,11 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         final anyNonBuyable = page.any((p) => p.buyable != true) ? 'y' : 'n';
         RenderLog.write('c109_search_untouched',
             'term=$term;rows=${page.length};includes_no_image=$anyNoImage;includes_non_buyable=$anyNonBuyable');
-        // CHANGE #407: confirms search still renders unavailable rows (greyed,
-        // add-to-cart disabled via ProductCard.isBuyable) rather than hiding
-        // them — no buyable filter exists on this path (kept identical on web
-        // and mobile since both share this widget).
+        // CHANGE #407: confirms search still renders unavailable rows rather
+        // than hiding them — no buyable filter exists on this path (kept
+        // identical on web and mobile since both share this widget).
+        // CHANGE #553: the disabled state now comes from the row's own
+        // availability verdict, not from a client-side buyable check.
         if (kIsWeb && anyNonBuyable == 'y') {
           RenderLog.write('c407_web_search_shows_unavailable',
               'term=$term;rows=${page.length}');
@@ -417,10 +429,15 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
               'category=${widget.category};loadedCount=${page.length}');
         }
       }
+      // CHANGE #553 — take the backend's rendered labels as-is.
+      RenderLog.write('c553_showing_label', pageResult.showingLabel ?? '');
+      RenderLog.write('c553_gated', pageResult.gated ? '1' : '0');
       setState(() {
         _items
           ..clear()
           ..addAll(page);
+        _showingLabel = pageResult.showingLabel;
+        _emptyLabel = pageResult.emptyLabel;
         _loadingFirst = false;
         _reachedEnd = page.length < MedicineRepository.pageSize;
         _feedEnded = ended;
@@ -492,6 +509,10 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       }
       setState(() {
         _items.addAll(page);
+        // CHANGE #553 — a page past the end carries no label; keep the last
+        // one the backend actually sent rather than blanking the counter.
+        if (pageResult.showingLabel != null) _showingLabel = pageResult.showingLabel;
+        if (pageResult.emptyLabel != null) _emptyLabel = pageResult.emptyLabel;
         _loadingMore = false;
         _reachedEnd = page.length < MedicineRepository.pageSize;
         _feedEnded = ended;
@@ -581,6 +602,8 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
               child: _ProductsSection(
                 items: _items,
                 categoryTotal: _categoryTotal(),
+                showingLabel: _showingLabel,
+                emptyLabel: _emptyLabel,
                 query: widget.query,
                 category: widget.category,
                 loadingFirst: _loadingFirst,
@@ -1173,6 +1196,11 @@ class _CategoryTile extends StatelessWidget {
 class _ProductsSection extends StatelessWidget {
   final List<Product> items;
   final int categoryTotal;
+
+  /// CHANGE #553 — backend-rendered counter and no-results line. Printed
+  /// verbatim; never derived from [items].length.
+  final String? showingLabel;
+  final String? emptyLabel;
   final String query;
   final String category;
   final bool loadingFirst;
@@ -1190,6 +1218,8 @@ class _ProductsSection extends StatelessWidget {
   const _ProductsSection({
     required this.items,
     required this.categoryTotal,
+    required this.showingLabel,
+    required this.emptyLabel,
     required this.query,
     required this.category,
     required this.loadingFirst,
@@ -1206,28 +1236,15 @@ class _ProductsSection extends StatelessWidget {
     required this.onLoadMore,
   });
 
+  /// CHANGE #553 — the counter is whatever the backend rendered. The client
+  /// no longer counts its own list, no longer knows the category total and no
+  /// longer phrases anything: `storefront_page` and `storefront_search_page`
+  /// both ship a finished `showing_label`. Empty string on the outage
+  /// fallback — printing nothing beats printing an invented number.
   String _buildSubtitle() {
-    final q = query.trim();
-    if (q.isEmpty) {
-      final catSuffix =
-          category != 'All' ? ' in ${prettyCategory(category)}' : '';
-      // totalN is the cached category count (CHANGE #441) — never capped at 200.
-      final n = totalN > 0 ? totalN : categoryTotal;
-      RenderLog.write('c112_count_label',
-          'category=$category;X=${items.length};N=$n');
-      return 'Showing ${items.length} of $n products$catSuffix';
-    }
-    // At the 200-item cap for search
-    if (reachedEnd && items.length >= 200) {
-      return 'Showing ${items.length} results for “$q” — try a more specific term';
-    }
-    // All results fit within the first page
-    if (reachedEnd) {
-      final n = items.length;
-      return '$n result${n == 1 ? '' : 's'} found for “$q”';
-    }
-    // Loading or more available
-    return 'Showing ${items.length}+ results for “$q”';
+    final label = showingLabel ?? '';
+    RenderLog.write('c553_count_label', 'category=$category;label=$label');
+    return label;
   }
 
   @override
@@ -1239,14 +1256,17 @@ class _ProductsSection extends StatelessWidget {
     // CHANGE #454 D — chip/cart counts, aggregated here (once per grid build)
     // rather than per-card, since RenderLog.write overwrites: a per-card write
     // would only ever report the LAST card, not a true count. cart.showCart is
-    // the one flag every card in this list shares; buyable already governs
-    // both the old "Unavailable" state and the new chip/cart split identically.
+    // the one flag every card in this list shares; the backend's availability
+    // verdict governs the disabled state and the chip/cart split identically.
     final cart = AppState.of(context);
     if (items.isNotEmpty) {
-      final buyableCount = items.where((p) => p.isBuyable).length;
-      RenderLog.write('c454_carts', cart.showCart ? buyableCount : 0);
-      RenderLog.write('c454_chips', cart.showCart ? 0 : buyableCount);
+      // CHANGE #553 — count from the backend's verdict, not from a local
+      // supplier_count comparison.
+      final addable = items.where((p) => p.availability?.canAdd ?? true).length;
+      RenderLog.write('c454_carts', cart.showCart ? addable : 0);
+      RenderLog.write('c454_chips', cart.showCart ? 0 : addable);
       RenderLog.write('c454_sample_label', items.first.supplierLabel ?? '');
+      RenderLog.write('c553_grid_addable', '$addable/${items.length}');
     }
 
     return Column(
@@ -1414,7 +1434,15 @@ class _ProductsSection extends StatelessWidget {
         onRetry: onRetry,
       );
     }
-    if (items.isEmpty) return _EmptyResults(query: query, suggestions: suggestions, onSuggestionTap: onSuggestionTap);
+    // CHANGE #553 — when the backend sent an empty_label, print it verbatim.
+    if (items.isEmpty) {
+      return _EmptyResults(
+        query: query,
+        suggestions: suggestions,
+        onSuggestionTap: onSuggestionTap,
+        backendLabel: emptyLabel,
+      );
+    }
     return LayoutBuilder(
       builder: (context, c) {
         final count = c.maxWidth >= 900 ? 4 : c.maxWidth >= 600 ? 3 : 2;
@@ -1454,18 +1482,23 @@ class _EmptyResults extends StatelessWidget {
   final List<String> suggestions;
   final ValueChanged<String> onSuggestionTap;
   final String? overrideLabel;
+
+  /// CHANGE #553 — `empty_label`, rendered by storefront_search_page.
+  final String? backendLabel;
   final VoidCallback? onRetry;
   const _EmptyResults({
     this.query = '',
     this.suggestions = const [],
     required this.onSuggestionTap,
     this.overrideLabel,
+    this.backendLabel,
     this.onRetry,
   });
 
   @override
   Widget build(BuildContext context) {
     final label = overrideLabel ??
+        backendLabel ??
         (query.trim().isNotEmpty
             ? 'No medicines found for "${query.trim()}"'
             : 'No products match your search.');

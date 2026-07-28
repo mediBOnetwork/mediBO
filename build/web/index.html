@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta name="build-commit" content="a6c2d965">
+  <meta name="build-commit" content="fdae0c0e">
   <!-- CHANGE #238: SW permanently disabled. Unregister ALL SWs + wipe all caches on every load.
        No sessionStorage guard — runs unconditionally so even users whose old SW served this
        HTML from cache will have SWs cleared on the very next in-SW-controlled load.
@@ -138,10 +138,10 @@
        On every load, fetches /version.json (no-cache). If the live commit differs
        from the build-stamped commit below, does ONE hard reload so the PWA gets the
        newest bundle instead of staying on a stale cached build.
-       a6c2d965 is replaced with the actual short commit hash by deploy.sh. -->
+       fdae0c0e is replaced with the actual short commit hash by deploy.sh. -->
   <script>
     (function () {
-      var _builtCommit = 'a6c2d965';
+      var _builtCommit = 'fdae0c0e';
       var _sessionKey  = 'c220_pwa_reloaded';
       function _rlWrite(key, val) {
         try {
@@ -159,7 +159,7 @@
           // Already reloaded once this session — skip to prevent loop.
           if (sessionStorage.getItem(_sessionKey)) return;
           // Skip if placeholder was not stamped (local dev / test build).
-          if (_builtCommit === 'a6c2d965') return;
+          if (_builtCommit === 'fdae0c0e') return;
           fetch('/version.json?_t=' + Date.now(), { cache: 'no-store' })
             .then(function (r) { return r.json(); })
             .then(function (data) {
@@ -175,7 +175,7 @@
       });
       // Wire confirmation — written once regardless of outcome.
       window.addEventListener('DOMContentLoaded', function () {
-        if (_builtCommit !== 'a6c2d965') {
+        if (_builtCommit !== 'fdae0c0e') {
           _rlWrite('c220_pwa_check_wired', 1);
         }
       });
@@ -474,7 +474,7 @@
     })();
   </script>
 
-  <script src="flutter_bootstrap.js?v=a6c2d965" async></script>
+  <script src="flutter_bootstrap.js?v=fdae0c0e" async></script>
   <script>
     var recaptchaResolve = null;
     var recaptchaWidgetId = null;
@@ -606,147 +606,145 @@
        instantly closing this overlay on touch devices (see showOverlay() below).
        ═══════════════════════════════════════════════════════════════════════ -->
 
+  <!-- CHANGE #556: this is now a HALF-SCREEN BOTTOM SHEET, not a centre modal.
+       In an installed PWA a centre popup still reads as a browser dialog; a
+       bottom sheet matches the native Google account picker. All copy is set
+       from Dart (backend strings) via mediboGisSheet(), never hardcoded here. -->
+  <style>
+    @keyframes mediboSheetUp {
+      from { transform: translateY(100%); }
+      to   { transform: translateY(0); }
+    }
+    #gis-rb-panel { animation: mediboSheetUp 260ms cubic-bezier(.22,.61,.36,1); }
+    @media (prefers-reduced-motion: reduce) {
+      #gis-rb-panel { animation: none; }
+    }
+  </style>
   <div id="gis-rb-overlay"
        style="display:none;position:fixed;inset:0;z-index:99998;
-              align-items:center;justify-content:center;
-              background:rgba(0,0,0,0.5);">
-    <div style="background:#fff;border-radius:16px;padding:28px 24px 20px;
-                display:flex;flex-direction:column;align-items:center;gap:18px;
-                box-shadow:0 8px 40px rgba(0,0,0,0.25);min-width:280px;max-width:320px;width:88%;">
-      <p style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-                font-size:16px;font-weight:600;color:#111827;text-align:center;">
-        Sign in with Google
-      </p>
+              align-items:flex-end;justify-content:center;
+              background:rgba(0,0,0,0.45);">
+    <div id="gis-rb-panel"
+         style="background:#fff;border-radius:22px 22px 0 0;
+                padding:10px 24px calc(28px + env(safe-area-inset-bottom));
+                display:flex;flex-direction:column;align-items:center;gap:14px;
+                box-shadow:0 -8px 40px rgba(0,0,0,0.22);
+                width:100%;max-width:520px;min-height:50vh;box-sizing:border-box;">
+      <div style="width:40px;height:4px;border-radius:2px;background:#E5E7EB;margin:2px 0 10px;"></div>
+      <p id="gis-rb-title"
+         style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+                font-size:19px;font-weight:700;color:#111827;text-align:center;"></p>
+      <p id="gis-rb-subtitle"
+         style="margin:-6px 0 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+                font-size:14px;color:#6B7280;text-align:center;"></p>
       <div id="gis-rb-container"
-           style="min-height:44px;width:100%;display:flex;justify-content:center;align-items:center;">
+           style="min-height:44px;width:100%;display:flex;justify-content:center;
+                  align-items:center;margin-top:10px;">
       </div>
       <button id="gis-rb-cancel"
               style="background:none;border:none;color:#6B7280;cursor:pointer;
                      font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-                     font-size:14px;padding:8px 24px;border-radius:8px;">
-        Cancel
+                     font-size:14px;padding:10px 24px;border-radius:8px;margin-top:auto;">
       </button>
     </div>
   </div>
 
-  <script>
-    (function () {
-      window.mediboGisSignIn = function (clientId, hashedNonce) {
-        return new Promise(function (resolve, reject) {
-          var settled  = false;
-          var autoTimer = null;
-
-          function settle(fn, val) {
-            if (settled) return;
-            settled = true;
-            if (autoTimer) { clearTimeout(autoTimer); autoTimer = null; }
-            var ov = document.getElementById('gis-rb-overlay');
-            if (ov) {
-              ov.style.display = 'none';
-              ov.onclick = null;
-            }
-            var cancelBtn = document.getElementById('gis-rb-cancel');
-            if (cancelBtn) cancelBtn.onclick = null;
-            fn(val);
-          }
-
-          function showOverlay() {
-            var ov  = document.getElementById('gis-rb-overlay');
-            var ctr = document.getElementById('gis-rb-container');
-            var btn = document.getElementById('gis-rb-cancel');
-            if (!ov || !ctr || !btn) { settle(reject, 'overlay-missing'); return; }
-
-            ctr.innerHTML = '';
-            try {
-              google.accounts.id.renderButton(ctr, {
-                type: 'standard', shape: 'rectangular', theme: 'outline',
-                text: 'signin_with', size: 'large', logo_alignment: 'left', width: 240,
-              });
-            } catch (e) {
-              settle(reject, 'renderButton-err:' + (e && e.message ? e.message : String(e)));
-              return;
-            }
-
-            ov.style.display    = 'flex';
-            // CHANGE #399: touch devices fire a synthesized trailing "click" a few
-            // hundred ms after the touchend that opened this overlay. That ghost
-            // click lands on the freshly-shown backdrop (same screen coordinates as
-            // the app's "Continue" button) and used to instantly dismiss the overlay
-            // we just opened — the reported "blink". Ignore dismiss clicks that
-            // arrive within GRACE_MS of showing the overlay; a real cancel tap
-            // always comes well after that.
-            var openedAt = Date.now();
-            var GRACE_MS = 400;
-            btn.onclick = function () {
-              if (Date.now() - openedAt < GRACE_MS) return;
-              settle(reject, 'user-cancelled');
-            };
-            ov.onclick = function (ev) {
-              if (Date.now() - openedAt < GRACE_MS) return;
-              if (ev.target === ov) settle(reject, 'user-cancelled');
-            };
-            autoTimer = setTimeout(function () { settle(reject, 'overlay-timeout'); }, 90000);
-          }
-
-          // Poll for GIS library with 3-second timeout
-          var attempts = 0;
-          function poll() {
-            if (settled) return;
-            if (window.google && window.google.accounts && window.google.accounts.id) {
-              // CHANGE #311: reset GIS singleton state before each attempt so a
-              // previously-cancelled flow can't poison the next one.
-              try { google.accounts.id.cancel(); } catch (e2) {}
-              try { google.accounts.id.disableAutoSelect(); } catch (e2) {}
-              try {
-                google.accounts.id.initialize({
-                  client_id: clientId,
-                  nonce:     hashedNonce,
-                  callback:  function (resp) { settle(resolve, resp.credential); },
-                  auto_select: false,
-                });
-              } catch (e) {
-                settle(reject, 'gis-init-err:' + (e && e.message ? e.message : String(e)));
-                return;
-              }
-              showOverlay();
-            } else {
-              if (++attempts > 15) {
-                settle(reject, 'gis-load-timeout');
-              } else {
-                setTimeout(poll, 200);
-              }
-            }
-          }
-
-          poll();
-        });
-      };
-    })();
-  </script>
-
   <!-- ═══════════════════════════════════════════════════════════════════════
-       CHANGE #555 — Google One Tap (FedCM) bottom sheet.
-       mediboGisOneTap(clientId, hashedNonce) -> Promise<credential>
+       GOOGLE IDENTITY SERVICES BRIDGE — CHANGE #556
+       Rewritten so an installed PWA never has to leave the app to sign in.
 
-       google.accounts.id.prompt() renders natively as a BOTTOM SHEET on mobile
-       web and already lists the device's signed-in Google accounts, so this is
-       one tap from "Continue with Google" to signed in. The app cannot read
-       those accounts itself — this is the only way to list them.
+       mediboGisPrewarm(clientId, hashedNonce)  -> loads GIS + initialize() ONCE
+       mediboGisPromptNow()                     -> One Tap sheet, SYNCHRONOUS
+       mediboGisSheet(title, subtitle, cancel)  -> our own half-screen sheet
+       mediboIsStandalone()                     -> true when installed as a PWA
+       mediboGisSignIn(clientId, hashedNonce)   -> legacy entry (home_shell)
 
-       Rejects with:
-         'fallback'  — sheet could not be shown (no Google session, FedCM
-                       blocked, unsupported browser, library missing). The
-                       caller must silently run the existing OAuth flow.
-         'cancelled' — the user dismissed the sheet on purpose. Do nothing.
+       WHY PREWARM: google.accounts.id.prompt() needs the caller's transient
+       user activation. Previously the tap went tap -> Dart -> JS -> *poll for
+       the GIS library* -> initialize() -> prompt(), and every one of those
+       async hops threw the activation away, so Chrome refused to display the
+       sheet and we silently fell back to a full-page OAuth redirect — which in
+       a PWA opens browser chrome. Now the library is loaded and initialize()d
+       during screen mount, so the tap path is a single synchronous prompt().
 
        NOTE: with use_fedcm_for_prompt:true the PromptMomentNotification
        methods isDisplayed/isNotDisplayed/getNotDisplayedReason/isSkippedMoment
-       are NOT supported and THROW. Every probe below is individually guarded
-       so an exception can never swallow the fallback.
+       are NOT supported and THROW, so every probe is individually guarded.
+       CHANGE #310c's warning still stands — the notification callback may never
+       fire after a FedCM dismissal — so prompt() also carries a hard timeout
+       and can never leave the caller's button spinning.
        ═══════════════════════════════════════════════════════════════════════ -->
   <script>
     (function () {
-      window.mediboGisOneTap = function (clientId, hashedNonce) {
+      var _ready       = false;   // initialize() has run
+      var _initFailed  = false;
+      var _pending     = null;    // {resolve, reject} awaiting a credential
+      var _clientId    = null;
+      var _hashedNonce = null;
+
+      window.mediboIsStandalone = function () {
+        try {
+          if (window.navigator && window.navigator.standalone === true) return true;
+          return !!(window.matchMedia &&
+            (window.matchMedia('(display-mode: standalone)').matches ||
+             window.matchMedia('(display-mode: fullscreen)').matches ||
+             window.matchMedia('(display-mode: minimal-ui)').matches));
+        } catch (e) { return false; }
+      };
+
+      function gisReady() {
+        return !!(window.google && window.google.accounts && window.google.accounts.id);
+      }
+
+      function deliver(resp) {
+        var p = _pending;
+        _pending = null;
+        if (!p) return;
+        if (resp && resp.credential) p.resolve(resp.credential);
+        else p.reject('fallback');
+      }
+
+      // ── Prewarm: load GIS and initialize() once, well before any tap ───────
+      window.mediboGisPrewarm = function (clientId, hashedNonce) {
+        return new Promise(function (resolve) {
+          if (_ready && _clientId === clientId && _hashedNonce === hashedNonce) {
+            resolve('ready');
+            return;
+          }
+          _clientId = clientId;
+          _hashedNonce = hashedNonce;
+          var attempts = 0;
+          function poll() {
+            if (!gisReady()) {
+              if (++attempts > 40) { _initFailed = true; resolve('no-library'); return; }
+              setTimeout(poll, 150);
+              return;
+            }
+            try {
+              google.accounts.id.initialize({
+                client_id: clientId,
+                nonce: hashedNonce,
+                callback: deliver,
+                use_fedcm_for_prompt: true,
+                itp_support: true,
+                context: 'signin',
+                auto_select: false,
+                cancel_on_tap_outside: true,
+              });
+              _ready = true;
+              _initFailed = false;
+              resolve('ready');
+            } catch (e) {
+              _initFailed = true;
+              resolve('init-error');
+            }
+          }
+          poll();
+        });
+      };
+
+      // ── One Tap: called SYNCHRONOUSLY from the tap handler ────────────────
+      window.mediboGisPromptNow = function () {
         return new Promise(function (resolve, reject) {
           var settled = false;
           var timer = null;
@@ -755,72 +753,139 @@
             if (settled) return;
             settled = true;
             if (timer) { clearTimeout(timer); timer = null; }
+            if (_pending && _pending.tag === tag) _pending = null;
             fn(val);
           }
+          var tag = Math.random();
+
+          if (!_ready || _initFailed || !gisReady()) { reject('fallback'); return; }
+
+          _pending = {
+            tag: tag,
+            resolve: function (c) { settle(resolve, c); },
+            reject: function (r) { settle(reject, r); },
+          };
 
           function probe(n, name) {
             try { return !!(n[name] && n[name]()); } catch (e) { return false; }
           }
 
-          var attempts = 0;
-          function poll() {
-            if (settled) return;
-            if (!(window.google && window.google.accounts && window.google.accounts.id)) {
-              if (++attempts > 15) settle(reject, 'fallback');
-              else setTimeout(poll, 200);
-              return;
-            }
-
-            // Reset the GIS singleton so a previously-cancelled attempt cannot
-            // poison this one (same reasoning as CHANGE #311).
-            try { google.accounts.id.cancel(); } catch (e) {}
-            try { google.accounts.id.disableAutoSelect(); } catch (e) {}
-
-            try {
-              google.accounts.id.initialize({
-                client_id: clientId,
-                nonce: hashedNonce,
-                callback: function (resp) {
-                  if (resp && resp.credential) settle(resolve, resp.credential);
-                  else settle(reject, 'fallback');
-                },
-                use_fedcm_for_prompt: true,
-                auto_select: false,
-                cancel_on_tap_outside: true,
-              });
-            } catch (e) {
-              settle(reject, 'fallback');
-              return;
-            }
-
-            try {
-              google.accounts.id.prompt(function (n) {
-                if (settled || !n) return;
-                // Not shown at all -> fall back to OAuth.
-                if (probe(n, 'isNotDisplayed') || probe(n, 'isSkippedMoment')) {
-                  settle(reject, 'fallback');
-                  return;
-                }
-                if (probe(n, 'isDismissedMoment')) {
-                  var reason = '';
-                  try {
-                    reason = n.getDismissedReason ? n.getDismissedReason() : '';
-                  } catch (e) {}
-                  // The credential arrives via the callback above.
-                  if (reason === 'credential_returned') return;
-                  settle(reject, 'cancelled');
-                }
-              });
-            } catch (e) {
-              settle(reject, 'fallback');
-              return;
-            }
-
-            // Safety net: never leave the caller's button spinning forever.
-            timer = setTimeout(function () { settle(reject, 'fallback'); }, 120000);
+          try {
+            google.accounts.id.prompt(function (n) {
+              if (settled || !n) return;
+              if (probe(n, 'isNotDisplayed') || probe(n, 'isSkippedMoment')) {
+                try { window.mediboGisMoment = 'not-displayed'; } catch (e) {}
+                settle(reject, 'fallback');
+                return;
+              }
+              if (probe(n, 'isDismissedMoment')) {
+                var reason = '';
+                try { reason = n.getDismissedReason ? n.getDismissedReason() : ''; } catch (e) {}
+                try { window.mediboGisMoment = 'dismissed:' + reason; } catch (e) {}
+                // The credential arrives through the initialize() callback.
+                if (reason === 'credential_returned') return;
+                settle(reject, 'cancelled');
+              }
+            });
+          } catch (e) {
+            settle(reject, 'fallback');
+            return;
           }
 
-          poll();
+          // CHANGE #310c: the moment callback can go silent after a FedCM
+          // dismissal — never let that hang the caller.
+          timer = setTimeout(function () { settle(reject, 'fallback'); }, 90000);
+        });
+      };
+
+      // ── Our own half-screen sheet, hosting the GIS button ─────────────────
+      // Used only when One Tap could not be displayed. ux_mode stays 'popup'
+      // (the GIS default) so an installed PWA is never navigated away: the
+      // popup closes itself and the credential lands back in this document.
+      function showSheet(title, subtitle, cancelLabel, onCancel) {
+        var ov  = document.getElementById('gis-rb-overlay');
+        var ctr = document.getElementById('gis-rb-container');
+        var btn = document.getElementById('gis-rb-cancel');
+        var ttl = document.getElementById('gis-rb-title');
+        var sub = document.getElementById('gis-rb-subtitle');
+        if (!ov || !ctr || !btn) return false;
+
+        if (ttl) { ttl.textContent = title || ''; ttl.style.display = title ? '' : 'none'; }
+        if (sub) { sub.textContent = subtitle || ''; sub.style.display = subtitle ? '' : 'none'; }
+        btn.textContent = cancelLabel || '';
+        btn.style.display = cancelLabel ? '' : 'none';
+
+        ctr.innerHTML = '';
+        try {
+          google.accounts.id.renderButton(ctr, {
+            type: 'standard', shape: 'pill', theme: 'outline',
+            text: 'continue_with', size: 'large', logo_alignment: 'left', width: 280,
+          });
+        } catch (e) { return false; }
+
+        ov.style.display = 'flex';
+        // CHANGE #399: swallow the touch-originated ghost click that lands on
+        // the freshly-shown backdrop a few hundred ms after the opening tap.
+        var openedAt = Date.now();
+        var GRACE_MS = 400;
+        btn.onclick = function () {
+          if (Date.now() - openedAt < GRACE_MS) return;
+          onCancel();
+        };
+        ov.onclick = function (ev) {
+          if (Date.now() - openedAt < GRACE_MS) return;
+          if (ev.target === ov) onCancel();
+        };
+        return true;
+      }
+
+      function hideSheet() {
+        var ov = document.getElementById('gis-rb-overlay');
+        if (ov) { ov.style.display = 'none'; ov.onclick = null; }
+        var btn = document.getElementById('gis-rb-cancel');
+        if (btn) btn.onclick = null;
+      }
+
+      window.mediboGisSheet = function (title, subtitle, cancelLabel) {
+        return new Promise(function (resolve, reject) {
+          var settled = false;
+          var timer = null;
+          var tag = Math.random();
+
+          function settle(fn, val) {
+            if (settled) return;
+            settled = true;
+            if (timer) { clearTimeout(timer); timer = null; }
+            if (_pending && _pending.tag === tag) _pending = null;
+            hideSheet();
+            fn(val);
+          }
+
+          if (!_ready || !gisReady()) { reject('fallback'); return; }
+
+          _pending = {
+            tag: tag,
+            resolve: function (c) { settle(resolve, c); },
+            reject: function (r) { settle(reject, r); },
+          };
+
+          if (!showSheet(title, subtitle, cancelLabel, function () {
+            settle(reject, 'cancelled');
+          })) {
+            _pending = null;
+            reject('fallback');
+            return;
+          }
+
+          timer = setTimeout(function () { settle(reject, 'cancelled'); }, 90000);
+        });
+      };
+
+      // ── Legacy entry point, still used by home_shell ───────────────────────
+      window.mediboGisSignIn = function (clientId, hashedNonce) {
+        return window.mediboGisPrewarm(clientId, hashedNonce).then(function (st) {
+          if (st !== 'ready') throw 'gis-load-timeout';
+          return window.mediboGisSheet('', '', '');
         });
       };
     })();

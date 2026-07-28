@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta name="build-commit" content="37e3eeec">
+  <meta name="build-commit" content="1fec57ab">
   <!-- CHANGE #238: SW permanently disabled. Unregister ALL SWs + wipe all caches on every load.
        No sessionStorage guard — runs unconditionally so even users whose old SW served this
        HTML from cache will have SWs cleared on the very next in-SW-controlled load.
@@ -138,10 +138,10 @@
        On every load, fetches /version.json (no-cache). If the live commit differs
        from the build-stamped commit below, does ONE hard reload so the PWA gets the
        newest bundle instead of staying on a stale cached build.
-       37e3eeec is replaced with the actual short commit hash by deploy.sh. -->
+       1fec57ab is replaced with the actual short commit hash by deploy.sh. -->
   <script>
     (function () {
-      var _builtCommit = '37e3eeec';
+      var _builtCommit = '1fec57ab';
       var _sessionKey  = 'c220_pwa_reloaded';
       function _rlWrite(key, val) {
         try {
@@ -159,7 +159,7 @@
           // Already reloaded once this session — skip to prevent loop.
           if (sessionStorage.getItem(_sessionKey)) return;
           // Skip if placeholder was not stamped (local dev / test build).
-          if (_builtCommit === '37e3eeec') return;
+          if (_builtCommit === '1fec57ab') return;
           fetch('/version.json?_t=' + Date.now(), { cache: 'no-store' })
             .then(function (r) { return r.json(); })
             .then(function (data) {
@@ -175,7 +175,7 @@
       });
       // Wire confirmation — written once regardless of outcome.
       window.addEventListener('DOMContentLoaded', function () {
-        if (_builtCommit !== '37e3eeec') {
+        if (_builtCommit !== '1fec57ab') {
           _rlWrite('c220_pwa_check_wired', 1);
         }
       });
@@ -456,15 +456,14 @@
   <title>mediBO</title>
   <script src="https://www.google.com/recaptcha/api.js" async defer></script>
 
-  <!-- CHANGE #561: the Google Identity Services library (accounts.google.com/gsi/client)
-       is GONE — deliberately, permanently, not commented out.
-       It was the last component able to build its own accounts.google.com URL and
-       send the browser there without Supabase, which is exactly what the auth log
-       showed: zero /authorize requests on every failed attempt. #560's
-       instrumentation confirmed it was still loading and executing (c559_gis=loaded,
-       c559_gis_script=onload).
-       FedCM is a NATIVE browser API — navigator.credentials.get() needs no library.
-       Do not re-add this tag. -->
+  <!-- Google Identity Services — ID-token flow for signInWithIdToken.
+       CHANGE #562: restored. GIS One Tap is the only Google mechanism that has
+       ever produced a successful login here (4x grant_type=id_token in the auth
+       log); FedCM never has. #560 instrumentation: onload/onerror report whether
+       this script executed at all. -->
+  <script src="https://accounts.google.com/gsi/client" async defer
+          onload="try{window.mediboNote&&window.mediboNote('c559_gis_script','onload',true)}catch(e){}"
+          onerror="try{window.mediboNote&&window.mediboNote('c559_gis_script','onerror',true)}catch(e){}"></script>
 
   <!-- CHANGE #463 — Google Maps JS API for the Route tab map. Browser key
        "medibo-web-maps", restricted to medibo.in/*.pages.dev + Maps JS API
@@ -752,7 +751,7 @@
     })();
   </script>
 
-  <script src="flutter_bootstrap.js?v=37e3eeec" async></script>
+  <script src="flutter_bootstrap.js?v=1fec57ab" async></script>
   <script>
     var recaptchaResolve = null;
     var recaptchaWidgetId = null;
@@ -872,32 +871,54 @@
   </script>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       GOOGLE SIGN-IN BRIDGE — CHANGE #561 (FedCM only, no library)
+       GOOGLE SIGN-IN BRIDGE — CHANGE #562 (GIS One Tap, restored)
 
-       The Google Identity Services library is GONE. Everything it used to
-       provide here — initialize(), prompt(), renderButton(), the half-screen
-       sheet that hosted its button — has been deleted, because GIS builds its
-       own accounts.google.com URL and navigates the browser there WITHOUT ever
-       calling Supabase. That is why the Supabase auth log recorded zero
-       /authorize requests on every failed attempt, and why Google answered
-       "Access blocked: response_type missing": the URL was never Supabase's.
+       WHY THIS IS BACK: the Supabase auth log holds exactly four successful
+       Google logins, all grant_type=id_token, all on the pre-#557 build that
+       used GIS One Tap. Since #557 replaced it with FedCM there has not been a
+       single successful Google login — navigator.credentials.get has never
+       worked on this deployment. #561's instrumentation showed the last attempt
+       leaving the page with no c559_url at all: the FedCM call was still
+       in flight (c559_fedcm=get(...), never resolved/rejected) when browser-
+       drawn UI took the page to accounts.google.com.
 
-       Exactly two paths remain, and only the second one may leave the page:
+       This is a straight mechanism swap. FedCM is gone; One Tap is back.
 
-         1. navigator.credentials.get({identity:{...}, mediation:'required'})
-            — the browser's OWN FedCM chooser. A native browser API: it needs
-            no library, draws over the page, lists every signed-in Google
-            account, and returns an id_token that goes to Supabase via
-            signInWithIdToken.
-         2. supabase.auth.signInWithOAuth(google) — on FedCM throw/unsupported.
-            Goes through Supabase's /authorize, which builds the complete URL.
+       mediboGisPrewarm(clientId, hashedNonce)  -> loads GIS + initialize() ONCE
+       mediboGisPromptNow()                     -> One Tap sheet, SYNCHRONOUS
+       mediboLastGisError()                     -> why the last attempt failed
+       mediboIsStandalone()                     -> true when installed as a PWA
 
-       mediboFedcmGet(clientId, hashedNonce) -> Promise<idToken>
-       mediboLastGisError()                  -> why the last attempt failed
-       mediboIsStandalone()                  -> true when installed as a PWA
+       WHY PREWARM: google.accounts.id.prompt() needs the caller's transient
+       user activation. Without prewarm the tap path is tap -> Dart -> JS ->
+       *poll for the GIS library* -> initialize() -> prompt(), and every async
+       hop throws the activation away, so Chrome refuses to display the sheet.
+       The library is loaded and initialize()d during screen mount instead, so
+       the tap path is a single synchronous prompt().
+
+       NOT RESTORED, DELIBERATELY: google.accounts.id.renderButton() and the
+       #gis-rb-overlay sheet that hosted it. That button is what hands control
+       to GIS to build its own accounts.google.com URL — the URL that never hits
+       Supabase's /authorize and that Google rejects with "response_type
+       missing". It also added DOM. One Tap draws its own sheet; nothing here
+       renders any markup of ours. On One Tap unavailable/dismissed the caller
+       falls back to supabase.auth.signInWithOAuth.
+
+       NOTE: with use_fedcm_for_prompt:true the PromptMomentNotification methods
+       isDisplayed/isNotDisplayed/getNotDisplayedReason/isSkippedMoment are NOT
+       supported and THROW, so every probe is individually guarded. CHANGE
+       #310c's warning still stands — the notification callback may never fire
+       after a FedCM dismissal — so prompt() also carries a hard timeout and can
+       never leave the caller's button spinning.
        ═══════════════════════════════════════════════════════════════════════ -->
   <script>
     (function () {
+      var _ready       = false;   // initialize() has run
+      var _initFailed  = false;
+      var _pending     = null;    // {resolve, reject} awaiting a credential
+      var _clientId    = null;
+      var _hashedNonce = null;
+
       window.mediboIsStandalone = function () {
         try {
           if (window.navigator && window.navigator.standalone === true) return true;
@@ -908,82 +929,116 @@
         } catch (e) { return false; }
       };
 
-      // ── The browser's native FedCM account chooser ─────────────────────────
-      // mediation:'required' always shows the chooser (never auto-selects) and
-      // lists EVERY Google account signed in on the device. The chooser is
-      // drawn by the browser over the page, so an installed PWA is never
-      // navigated anywhere.
-      //
-      // mode:'active' (Chrome 132+) is the gesture-driven modal chooser, so this
-      // MUST be called straight from the tap handler — it needs the tap's
-      // transient user activation. On older Chrome the member is simply ignored
-      // (unknown dictionary members are dropped per WebIDL), leaving the passive
-      // sheet — still correct.
-      window.mediboFedcmError = '';
-
-      window.mediboFedcmGet = function (clientId, hashedNonce) {
-        return new Promise(function (resolve, reject) {
-          var supported = false;
-          try {
-            supported = !!(window.IdentityCredential &&
-                           navigator.credentials && navigator.credentials.get);
-          } catch (e) { supported = false; }
-          if (!supported) {
-            window.mediboFedcmError = 'unsupported';
-            reject('fallback');
-            return;
-          }
-
-          var opts = {
-            identity: {
-              context: 'signin',
-              mode: 'active',
-              providers: [{
-                configURL: 'https://accounts.google.com/gsi/fedcm.json',
-                clientId: clientId,
-                nonce: hashedNonce,
-              }],
-            },
-            mediation: 'required',
-          };
-
-          var done = false;
-          var timer = setTimeout(function () {
-            if (done) return;
-            done = true;
-            window.mediboFedcmError = 'timeout';
-            reject('fallback');
-          }, 120000);
-
-          navigator.credentials.get(opts).then(function (cred) {
-            if (done) return;
-            done = true;
-            clearTimeout(timer);
-            var t = cred && (cred.token || cred.id_token);
-            if (t) { window.mediboFedcmError = ''; resolve(t); }
-            else { window.mediboFedcmError = 'empty-credential'; reject('fallback'); }
-          }).catch(function (err) {
-            if (done) return;
-            done = true;
-            clearTimeout(timer);
-            var name = (err && err.name) ? err.name : String(err);
-            var msg  = (err && err.message) ? err.message : '';
-            window.mediboFedcmError = name + (msg ? ':' + msg : '');
-            // The user closing the chooser must NOT cascade into anything else.
-            if (name === 'AbortError' || name === 'NetworkError' ||
-                name === 'IdentityCredentialError') {
-              reject('cancelled');
-            } else {
-              reject('fallback');
-            }
-          });
-        });
-      };
+      function gisReady() {
+        return !!(window.google && window.google.accounts && window.google.accounts.id);
+      }
 
       window.mediboLastGisError = function () {
         try {
-          return String(window.mediboFedcmError || '');
+          return String(window.mediboGisMoment || '');
         } catch (e) { return ''; }
+      };
+
+      function deliver(resp) {
+        var p = _pending;
+        _pending = null;
+        if (!p) return;
+        if (resp && resp.credential) p.resolve(resp.credential);
+        else p.reject('fallback');
+      }
+
+      // ── Prewarm: load GIS and initialize() once, well before any tap ───────
+      window.mediboGisPrewarm = function (clientId, hashedNonce) {
+        return new Promise(function (resolve) {
+          if (_ready && _clientId === clientId && _hashedNonce === hashedNonce) {
+            resolve('ready');
+            return;
+          }
+          _clientId = clientId;
+          _hashedNonce = hashedNonce;
+          var attempts = 0;
+          function poll() {
+            if (!gisReady()) {
+              if (++attempts > 40) { _initFailed = true; resolve('no-library'); return; }
+              setTimeout(poll, 150);
+              return;
+            }
+            try {
+              google.accounts.id.initialize({
+                client_id: clientId,
+                nonce: hashedNonce,
+                callback: deliver,
+                use_fedcm_for_prompt: true,
+                itp_support: true,
+                context: 'signin',
+                auto_select: false,
+                cancel_on_tap_outside: true,
+              });
+              _ready = true;
+              _initFailed = false;
+              resolve('ready');
+            } catch (e) {
+              _initFailed = true;
+              resolve('init-error');
+            }
+          }
+          poll();
+        });
+      };
+
+      // ── One Tap: called SYNCHRONOUSLY from the tap handler ────────────────
+      window.mediboGisPromptNow = function () {
+        return new Promise(function (resolve, reject) {
+          var settled = false;
+          var timer = null;
+
+          function settle(fn, val) {
+            if (settled) return;
+            settled = true;
+            if (timer) { clearTimeout(timer); timer = null; }
+            if (_pending && _pending.tag === tag) _pending = null;
+            fn(val);
+          }
+          var tag = Math.random();
+
+          if (!_ready || _initFailed || !gisReady()) { reject('fallback'); return; }
+
+          _pending = {
+            tag: tag,
+            resolve: function (c) { settle(resolve, c); },
+            reject: function (r) { settle(reject, r); },
+          };
+
+          function probe(n, name) {
+            try { return !!(n[name] && n[name]()); } catch (e) { return false; }
+          }
+
+          try {
+            google.accounts.id.prompt(function (n) {
+              if (settled || !n) return;
+              if (probe(n, 'isNotDisplayed') || probe(n, 'isSkippedMoment')) {
+                try { window.mediboGisMoment = 'not-displayed'; } catch (e) {}
+                settle(reject, 'fallback');
+                return;
+              }
+              if (probe(n, 'isDismissedMoment')) {
+                var reason = '';
+                try { reason = n.getDismissedReason ? n.getDismissedReason() : ''; } catch (e) {}
+                try { window.mediboGisMoment = 'dismissed:' + reason; } catch (e) {}
+                // The credential arrives through the initialize() callback.
+                if (reason === 'credential_returned') return;
+                settle(reject, 'cancelled');
+              }
+            });
+          } catch (e) {
+            settle(reject, 'fallback');
+            return;
+          }
+
+          // CHANGE #310c: the moment callback can go silent after a FedCM
+          // dismissal — never let that hang the caller.
+          timer = setTimeout(function () { settle(reject, 'fallback'); }, 90000);
+        });
       };
     })();
   </script>

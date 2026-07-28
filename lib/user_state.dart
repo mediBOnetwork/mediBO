@@ -480,13 +480,17 @@ class AuthNotifier extends ChangeNotifier {
   // CHANGE #558: Two-attempt Google sign-in, with every direct-to-Google
   // navigation removed.
   //
-  // WHY: Attempt A used to be gisSignInWithNonce(), which renders the GIS
-  // button (google.accounts.id.renderButton) and lets the GIS library take the
-  // browser to accounts.google.com on its own. That URL is built by GIS, not by
-  // Supabase — it never hits /authorize, and when GIS omits response_type from
-  // it Google answers "Access blocked: response_type missing". The Supabase auth
-  // log proved exactly this: the failing attempt produced NO /authorize request
-  // at all, while every succeeding attempt showed /authorize or grant_type=id_token.
+  // WHY: Attempt A used to render the GIS button, which lets the GIS library
+  // take the browser to accounts.google.com on its own. That URL is built by
+  // GIS, not by Supabase — it never hits /authorize, and when GIS omits
+  // response_type from it Google answers "Access blocked: response_type
+  // missing". The Supabase auth log proved exactly this: the failing attempt
+  // produced NO /authorize request at all, while every succeeding attempt
+  // showed /authorize or grant_type=id_token.
+  //
+  // CHANGE #561: the GIS library itself is now deleted from web/index.html, so
+  // no code path can build a Google URL any more. FedCM below is a native
+  // browser API and needs no library.
   //
   // Attempt A is now the browser's own FedCM chooser (navigator.credentials.get),
   // which is drawn over the page and never navigates anywhere, and its id_token

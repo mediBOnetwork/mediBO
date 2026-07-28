@@ -24,9 +24,6 @@ bool isCoarsePointer() {
   try { return _mediboIsCoarsePointerJs(); } catch (_) { return false; }
 }
 
-@JS('mediboGisSignIn')
-external JSPromise<JSString?> _mediboGisSignIn(JSString clientId, JSString hashedNonce);
-
 /// Nonce pair: raw bytes (base64url, passed to Supabase signInWithIdToken) and
 /// SHA-256 hex hash (passed to GIS initialize so it embeds it in the JWT nonce claim).
 ({String rawNonce, String hashedNonce}) _generateNoncePair() {
@@ -138,17 +135,6 @@ String lastGisError() {
   }
 }
 
-@JS('mediboGisPrewarm')
-external JSPromise<JSString?> _mediboGisPrewarm(
-    JSString clientId, JSString hashedNonce);
-
-@JS('mediboGisPromptNow')
-external JSPromise<JSString?> _mediboGisPromptNow();
-
-@JS('mediboGisSheet')
-external JSPromise<JSString?> _mediboGisSheet(
-    JSString title, JSString subtitle, JSString cancelLabel);
-
 @JS('mediboIsStandalone')
 external bool _mediboIsStandaloneJs();
 
@@ -163,38 +149,23 @@ bool isStandalonePwa() {
   }
 }
 
-/// CHANGE #555: the sheet could not be shown — try the next option.
+/// The FedCM chooser could not be shown — fall through to the Supabase OAuth
+/// redirect. (Named for the One Tap sheet it originally described; kept so the
+/// call sites read the same after CHANGE #561 removed GIS.)
 class GisOneTapUnavailable implements Exception {
   const GisOneTapUnavailable();
 }
 
-/// The user deliberately dismissed the sheet — do not fall back.
+/// The user deliberately dismissed the chooser — do not fall back.
 class GisOneTapCancelled implements Exception {
   const GisOneTapCancelled();
 }
 
-/// The nonce pair for the currently pre-warmed GIS instance. `initialize()`
-/// embeds the hashed half in the JWT, so the raw half must survive until the
-/// credential comes back and is handed to Supabase.
+/// The nonce pair for the current sign-in attempt. The hashed half goes to
+/// Google (embedded in the JWT's nonce claim), the raw half to Supabase, which
+/// re-hashes it to verify — so the raw half must survive until the credential
+/// comes back.
 ({String rawNonce, String hashedNonce})? _warmPair;
-
-/// CHANGE #556: load GIS and run `initialize()` up front, so the later tap can
-/// call `prompt()` synchronously and keep its transient user activation —
-/// without which Chrome silently refuses to display the One Tap sheet.
-///
-/// Safe to call repeatedly; returns true once the library is initialised.
-Future<bool> gisPrewarm() async {
-  _warmPair ??= _generateNoncePair();
-  try {
-    final r = await _mediboGisPrewarm(
-      _kGisClientId.toJS,
-      _warmPair!.hashedNonce.toJS,
-    ).toDart;
-    return r?.toDart == 'ready';
-  } catch (_) {
-    return false;
-  }
-}
 
 ({String idToken, String rawNonce}) _wrap(String? token) {
   if (token == null || token.isEmpty) throw const GisOneTapUnavailable();
@@ -208,14 +179,19 @@ Never _rethrowAsGis(Object e) {
   throw const GisOneTapUnavailable();
 }
 
-/// CHANGE #557: the browser's own FedCM account chooser, asked for directly
-/// with `mediation: 'required'`.
+/// The browser's own FedCM account chooser, asked for directly with
+/// `mediation: 'required'`.
 ///
-/// This is the one path that shows EVERY Google account signed in on the
-/// device in a single list, always presents the chooser rather than
-/// auto-selecting, and is not subject to One Tap's dismissal cooldown — which
-/// the #556 render-log proved was suppressing the sheet. The browser draws the
-/// chooser over the page, so an installed PWA is never navigated away.
+/// CHANGE #561: this is now the ONLY in-app Google path. It is a NATIVE browser
+/// API and needs no Google library — the GIS script, One Tap and the GIS button
+/// sheet are all gone, because GIS built its own accounts.google.com URL and
+/// navigated there without ever calling Supabase.
+///
+/// It shows EVERY Google account signed in on the device in a single list,
+/// always presents the chooser rather than auto-selecting, and the browser
+/// draws it over the page, so an installed PWA is never navigated away.
+///
+/// The only fallback below this is supabase.auth.signInWithOAuth.
 ///
 /// MUST be called straight from the tap handler: `mode: 'active'` requires
 /// transient user activation.
@@ -232,60 +208,4 @@ Future<({String idToken, String rawNonce})> fedcmChooseAccount() async {
   } catch (e) {
     _rethrowAsGis(e);
   }
-}
-
-/// Google One Tap (FedCM) via GIS. Kept as a second chance behind
-/// [fedcmChooseAccount] — same in-page sheet, but subject to One Tap's own
-/// suppression.
-///
-/// MUST be called directly from the tap handler with no awaits in between, or
-/// the user activation is lost and the sheet will not display.
-Future<({String idToken, String rawNonce})> gisPromptOneTap() async {
-  try {
-    final r = await _mediboGisPromptNow().toDart;
-    return _wrap(r?.toDart);
-  } on GisOneTapUnavailable {
-    rethrow;
-  } catch (e) {
-    _rethrowAsGis(e);
-  }
-}
-
-/// Our own half-screen bottom sheet hosting the GIS button, used when One Tap
-/// itself could not be displayed. Still keeps an installed PWA in place: the
-/// GIS button opens Google in a popup that closes itself, rather than
-/// navigating the app away.
-///
-/// All copy comes from the caller (backend strings); pass empty strings to hide
-/// an element rather than inventing text here.
-Future<({String idToken, String rawNonce})> gisSheetSignIn({
-  required String title,
-  required String subtitle,
-  required String cancelLabel,
-}) async {
-  try {
-    final r =
-        await _mediboGisSheet(title.toJS, subtitle.toJS, cancelLabel.toJS).toDart;
-    return _wrap(r?.toDart);
-  } on GisOneTapUnavailable {
-    rethrow;
-  } catch (e) {
-    _rethrowAsGis(e);
-  }
-}
-
-/// Opens the GIS modal.
-/// Returns `(idToken, rawNonce)` on success, or throws on cancel/timeout.
-/// Correct mapping:
-///   hashedNonce → GIS initialize (embedded in JWT nonce claim by Google)
-///   rawNonce    → Supabase signInWithIdToken(nonce:)   (Supabase re-hashes to verify)
-Future<({String idToken, String rawNonce})> gisSignInWithNonce() async {
-  final pair = _generateNoncePair();
-  final result = await _mediboGisSignIn(
-    _kGisClientId.toJS,
-    pair.hashedNonce.toJS,
-  ).toDart;
-  final token = result?.toDart;
-  if (token == null || token.isEmpty) throw Exception('GIS sign-in cancelled or failed');
-  return (idToken: token, rawNonce: pair.rawNonce);
 }

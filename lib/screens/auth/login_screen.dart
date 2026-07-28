@@ -95,29 +95,29 @@ class SupabaseLoginApi implements LoginApi {
   /// CHANGE #557: one tap from the button to signed in, without ever leaving
   /// the app.
   ///
-  /// Escalation, most in-app first:
+  /// CHANGE #561: exactly TWO paths, and only the second may leave the page.
   ///   1. navigator.credentials.get() with mediation:'required' — the browser's
   ///      own chooser, listing EVERY Google account signed in on the device,
-  ///      drawn over the page. Not subject to One Tap's dismissal cooldown.
-  ///   2. GIS One Tap — same in-page sheet, but Google may suppress it.
-  ///   3. Our own half-screen sheet hosting the GIS button — opens Google in a
-  ///      popup that closes itself, so an installed PWA is never navigated away.
-  ///   4. Full-page OAuth redirect — the last resort only, because in a PWA it
-  ///      shows browser chrome. Reached only if every in-app path failed.
+  ///      drawn over the page. A native browser API; no Google library.
+  ///   2. supabase.auth.signInWithOAuth — on FedCM throw/unsupported. Goes
+  ///      through Supabase's /authorize, which builds the complete URL.
   ///
-  /// A deliberate dismissal at any level stops the escalation: the user said no.
+  /// The GIS One Tap step and the GIS-button sheet that used to sit between
+  /// them are GONE: GIS built its own accounts.google.com URL and navigated
+  /// there without ever calling Supabase, which is why the auth log showed zero
+  /// /authorize requests.
+  ///
+  /// A deliberate dismissal stops the escalation: the user said no.
   @override
   Future<void> googleSignIn({
     required String sheetTitle,
     required String sheetSubtitle,
     required String otherAccount,
   }) async {
-    // 1 — CHANGE #557: ask the browser directly for a FedCM credential with
+    // 1 — ask the browser directly for a FedCM credential with
     // mediation:'required'. This lists EVERY Google account signed in on the
-    // device in one chooser and ignores One Tap's dismissal cooldown, which
-    // the #556 render-log showed was suppressing the sheet
-    // (prewarm=ready, one_tap=unavailable). No awaits before it — mode:'active'
-    // needs the tap's user activation.
+    // device in one chooser. No awaits before it — mode:'active' needs the
+    // tap's user activation.
     // CHANGE #559: instrumentation only — records WHICH branch actually ran,
     // flushed immediately so it survives the browser leaving the page.
     _logNow('c559_entry', 'login_screen');
@@ -141,35 +141,18 @@ class SupabaseLoginApi implements LoginApi {
       _logNow('c559_fedcm_err', lastGisError());
     }
 
-    // 2 — GIS One Tap, same in-page sheet but subject to Google's suppression.
-    try {
-      final (:idToken, :rawNonce) = await gisPromptOneTap();
-      _log('c557_path', 'one_tap');
-      _logNow('c559_path', 'one_tap');
-      await _finishIdToken(idToken, rawNonce);
-      _log('c557_session', 'established');
-      _logNow('c559_path', 'one_tap_signed_in');
-      return;
-    } on GisOneTapCancelled {
-      _log('c557_path', 'one_tap_cancelled');
-      _logNow('c559_path', 'one_tap_cancelled');
-      return;
-    } on GisOneTapUnavailable {
-      _log('c557_one_tap', 'unavailable');
-    }
-
-    // 3 — CHANGE #558: supabase.auth.signInWithOAuth.
+    // 2 — supabase.auth.signInWithOAuth.
     //
-    // This step used to be gisSheetSignIn() — our own sheet hosting the GIS
-    // button. That button hands control to the GIS library, which builds its
-    // own accounts.google.com URL and sends the browser there WITHOUT ever
-    // calling Supabase. The Supabase auth log proved it: the failing attempt
-    // produced no /authorize request at all, and Google rejected the
-    // GIS-built URL with "Access blocked: response_type missing".
+    // CHANGE #561: the two GIS steps that used to sit here — One Tap, then our
+    // own sheet hosting the GIS button — are gone. Both handed control to the
+    // GIS library, which builds its own accounts.google.com URL and sends the
+    // browser there WITHOUT ever calling Supabase. The Supabase auth log proved
+    // it: the failing attempt produced no /authorize request at all, and Google
+    // rejected the GIS-built URL with "Access blocked: response_type missing".
     //
     // signInWithOAuth goes to Supabase's /authorize, which builds a complete,
     // correct URL (response_type included) and then redirects to Google. It is
-    // now the only step permitted to navigate the browser off the page.
+    // the ONLY step permitted to navigate the browser off the page.
     _log('c558_path',
         isStandalonePwa() ? 'supabase_oauth_in_pwa' : 'supabase_oauth');
     // CHANGE #559: last line before anything is allowed to leave the app.
@@ -200,14 +183,9 @@ class _LoginScreenState extends State<LoginScreen> {
       oauthFallback: () => UserState.read(context).signInWithGoogleOAuth(),
     );
 
-    // CHANGE #556: load + initialize GIS now, so the later tap can call
-    // prompt() synchronously and keep its user activation. Fire-and-forget:
-    // a failure here just means the escalation starts one step lower.
-    unawaited(gisPrewarm().then((ok) {
-      try {
-        RenderLog.write('c557_prewarm', ok ? 'ready' : 'failed');
-      } catch (_) {}
-    }));
+    // CHANGE #561: the GIS prewarm that used to run here is gone with the
+    // library. FedCM is a native browser API — navigator.credentials.get()
+    // needs nothing loaded or initialised ahead of the tap.
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       try {

@@ -556,17 +556,39 @@ class AuthNotifier extends ChangeNotifier {
   /// CHANGE #555: the OAuth PKCE redirect on its own, unchanged from Attempt B
   /// of [signInWithGoogle]. Used as the mandatory fallback when the One Tap
   /// bottom sheet cannot be shown, so the Google button never does nothing.
+  /// CHANGE #564 (FIX A): the OAuth redirect, kept inside THIS window.
+  ///
+  /// It used to call signInWithOAuth, which hands the URL to url_launcher_web →
+  /// window.open(url, '_self', 'noopener,noreferrer'). On an installed Android
+  /// PWA that opens a Chrome Custom Tab: Supabase completes the flow and stores
+  /// the session in that tab, so /callback returned 302 with a successful Google
+  /// login (20:36:44 and 20:38:40 UTC) while the PWA stayed signed out.
+  ///
+  /// getOAuthSignInUrl builds the same Supabase /authorize URL and persists the
+  /// PKCE code verifier exactly as signInWithOAuth does — it just does not
+  /// launch anything, so we can navigate the current window ourselves.
+  ///
+  /// Reached ONLY from a deliberate tap on the browser link (CHANGE #563).
   Future<void> signInWithGoogleOAuth() async {
     RenderLog.write('c555_method', 'oauth_redirect');
-    // CHANGE #559: proves signInWithOAuth was actually entered — the window.open
-    // hook in index.html then records the URL it hands to the browser.
-    RenderLog.writeNow('c559_oauth', 'signInWithOAuth_entered');
-    await Supabase.instance.client.auth.signInWithOAuth(
-      OAuthProvider.google,
-      redirectTo: 'https://medibo.in',
+    RenderLog.writeNow('c564_oauth', 'building_url');
+
+    // Return to the origin the app is actually on. If that origin is not in
+    // Supabase's allow-list it falls back to the project's Site URL, i.e. the
+    // behaviour we already had — so this can only ever help.
+    final origin = currentOrigin();
+    final redirect = origin.isNotEmpty ? origin : 'https://medibo.in';
+
+    final res = await Supabase.instance.client.auth.getOAuthSignInUrl(
+      provider: OAuthProvider.google,
+      redirectTo: redirect,
     );
+    RenderLog.writeNow('c564_redirect_to', redirect);
+
+    // Same window. No launchUrl, no window.open, no Custom Tab.
+    final ok = assignLocation(res.url);
+    RenderLog.writeNow('c564_oauth', ok ? 'location_assigned' : 'assign_failed');
     RenderLog.write('c555_session', 'redirect_initiated');
-    RenderLog.writeNow('c559_oauth', 'signInWithOAuth_returned');
   }
 
   Future<void> signOut() async {

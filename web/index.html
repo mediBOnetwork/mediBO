@@ -990,6 +990,37 @@
         });
       };
 
+      // ── CHANGE #564 (FIX A): navigate the CURRENT window ──────────────────
+      // The OAuth URL must NOT go through url_launcher / window.open. On an
+      // installed Android PWA, window.open(url,'_self','noopener,noreferrer') —
+      // which is exactly what url_launcher_web does — hands the URL to a Chrome
+      // Custom Tab. Supabase then completes the flow and stores the session in
+      // THAT tab's storage, so /callback returns 302 with a real Google login
+      // (20:36:44 and 20:38:40 UTC) while the PWA stays signed out.
+      //
+      // location.assign() keeps the flow in this window, so the callback comes
+      // back into the same origin and storage the app reads.
+      window.mediboAssignLocation = function (url) {
+        try {
+          window.mediboNote &&
+            window.mediboNote('c563_oauth_url', String(url).slice(0, 600), true);
+        } catch (e) {}
+        try {
+          window.location.assign(String(url));
+          return true;
+        } catch (e) {
+          try { window.location.href = String(url); return true; } catch (e2) {}
+          return false;
+        }
+      };
+
+      // The origin the app is actually running on, so the OAuth callback
+      // returns to the SAME origin — a session stored on medibo.in is
+      // invisible to a PWA running on www.medibo.in.
+      window.mediboOrigin = function () {
+        try { return String(window.location.origin || ''); } catch (e) { return ''; }
+      };
+
       // ── CHANGE #563: called on logout, so the next sign-in always shows the
       // chooser instead of silently reusing the last account. ───────────────
       window.mediboGisDisableAutoSelect = function () {

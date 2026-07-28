@@ -253,3 +253,35 @@ bool gisDisableAutoSelect() {
     return false;
   }
 }
+
+@JS('mediboAssignLocation')
+external bool _mediboAssignLocationJs(JSString url);
+
+/// CHANGE #564 (FIX A): navigate the CURRENT window to [url].
+///
+/// The Google OAuth URL must never go through url_launcher / window.open. On an
+/// installed Android PWA those hand the URL to a Chrome Custom Tab, and the
+/// session Supabase creates lands in that tab's storage — /callback returns 302
+/// with a real login while the PWA stays signed out. location.assign() keeps the
+/// flow in this window, so the callback returns to the storage the app reads.
+bool assignLocation(String url) {
+  try {
+    return _mediboAssignLocationJs(url.toJS);
+  } catch (_) {
+    return false;
+  }
+}
+
+@JS('mediboOrigin')
+external JSString _mediboOriginJs();
+
+/// The origin the app is actually running on. Used as the OAuth redirect target
+/// so the callback returns to the SAME origin — a session stored on medibo.in
+/// is invisible to a PWA running on www.medibo.in.
+String currentOrigin() {
+  try {
+    return _mediboOriginJs().toDart;
+  } catch (_) {
+    return '';
+  }
+}

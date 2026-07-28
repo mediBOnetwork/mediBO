@@ -28,23 +28,9 @@ class SupabaseLoginApi implements LoginApi {
   /// [oneTap] are injectable purely so the escalation can be unit-tested.
   SupabaseLoginApi({
     Future<GoogleCredential> Function()? oneTap,
-    Future<GoogleCredential> Function({
-      required String title,
-      required String subtitle,
-      required String cancelLabel,
-    })? popup,
-    String Function()? clearGState,
-  })  : _oneTap = oneTap ?? gisPromptOneTap,
-        _popup = popup ?? gisPopupSignIn,
-        _clearGState = clearGState ?? clearGoogleStateCookie;
+  }) : _oneTap = oneTap ?? gisPromptOneTap;
 
   final Future<GoogleCredential> Function() _oneTap;
-  final Future<GoogleCredential> Function({
-    required String title,
-    required String subtitle,
-    required String cancelLabel,
-  }) _popup;
-  final String Function() _clearGState;
 
   SupabaseClient get _c => Supabase.instance.client;
 
@@ -113,7 +99,7 @@ class SupabaseLoginApi implements LoginApi {
         nonce: rawNonce,
       );
 
-  /// CHANGE #565: the GIS One Tap sheet, and nothing else.
+  /// CHANGE #567: the GIS One Tap sheet, and nothing else, ever.
   ///
   /// No FedCM, no GIS button popup, no signInWithOAuth — the Google button can
   /// no longer open any chooser other than the One Tap sheet, and cannot
@@ -126,15 +112,9 @@ class SupabaseLoginApi implements LoginApi {
     required String otherAccount,
   }) async {
     _logNow('c559_entry', 'login_screen');
-    _logNow('c566_origin', currentOrigin());
+    _logNow('c567_origin', currentOrigin());
     return runGoogleSignIn(
-      clearGState: _clearGState,
       oneTap: _oneTap,
-      popup: () => _popup(
-        title: sheetTitle,
-        subtitle: sheetSubtitle,
-        cancelLabel: otherAccount,
-      ),
       finish: _finishIdToken,
       log: _logNow,
     );

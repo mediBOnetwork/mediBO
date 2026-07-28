@@ -150,8 +150,9 @@ String lastGisError() {
 external JSPromise<JSString?> _mediboGisPrewarm(
     JSString clientId, JSString hashedNonce);
 
-@JS('mediboGisPromptNow')
-external JSPromise<JSString?> _mediboGisPromptNow();
+@JS('mediboGisOneTap')
+external JSPromise<JSString?> _mediboGisOneTap(
+    JSString clientId, JSString hashedNonce);
 
 @JS('mediboIsStandalone')
 external bool _mediboIsStandaloneJs();
@@ -207,85 +208,39 @@ Future<bool> gisPrewarm() async {
   }
 }
 
-/// CHANGE #562: Google One Tap via GIS — restored as the ONLY in-app Google
-/// path, because it is the only one that has ever worked here: the Supabase
-/// auth log holds four successful grant_type=id_token logins, all from this
-/// path on the pre-#557 build, and none since FedCM replaced it.
+/// CHANGE #567: the ONE and ONLY Google entry point.
 ///
-/// Google draws the sheet itself and it lists the device's signed-in accounts;
-/// nothing of ours is rendered, so no layout is involved.
+/// Each attempt mints a FRESH nonce pair and hands the hashed half to the JS
+/// bridge, which — before every prompt() — logs document.cookie, deletes the
+/// g_state cooldown cookie on every domain/path variant, logs it again, calls
+/// disableAutoSelect(), re-runs initialize() with that fresh nonce (which is
+/// what resets GIS's in-memory suppression; deleting the cookie alone does not)
+/// and only then calls prompt().
 ///
-/// MUST be called directly from the tap handler with no awaits in between, or
-/// the user activation is lost and the sheet will not display.
+/// Google receives the HASHED nonce, Supabase the RAW one — the raw half is
+/// carried back with the credential here, so a retry with a new nonce can never
+/// be paired with the wrong one.
 ///
-/// CHANGE #563: throws [GisOneTapCancelled] when the user closed the sheet —
-/// the caller stays put and re-enables the button — or [GisOneTapSuppressed]
-/// when Google refused to display it, which reveals the browser-chooser link.
-/// Neither outcome may navigate on its own.
+/// Throws [GisOneTapCancelled] when the user closed the sheet — stop, that is an
+/// answer — or [GisOneTapSuppressed] when Google refused to display it. There is
+/// no fallback of any kind: neither may navigate or open another chooser.
 Future<({String idToken, String rawNonce})> gisPromptOneTap() async {
+  final pair = _generateNoncePair();
+  _warmPair = pair;
   try {
-    final r = await _mediboGisPromptNow().toDart;
-    return _wrap(r?.toDart);
+    final r = await _mediboGisOneTap(
+      _kGisClientId.toJS,
+      pair.hashedNonce.toJS,
+    ).toDart;
+    final token = r?.toDart;
+    if (token == null || token.isEmpty) throw const GisOneTapSuppressed();
+    return (idToken: token, rawNonce: pair.rawNonce);
   } on GisOneTapSuppressed {
     rethrow;
   } on GisOneTapUnavailable {
     rethrow;
   } catch (e) {
     _rethrowAsGis(e);
-  }
-}
-
-@JS('mediboGisPopup')
-external JSPromise<JSString?> _mediboGisPopup(
-    JSString title, JSString subtitle, JSString cancelLabel);
-
-/// CHANGE #566: the FALLBACK — GIS's own button, rendered into a hidden
-/// container and clicked programmatically, opening the "Choose an account to
-/// continue to mediBO" chooser in a popup (ux_mode:'popup', never 'redirect')
-/// that closes itself and hands the credential back to this document.
-///
-/// Not subject to the One Tap cooldown, so this branch always has a chooser.
-///
-/// If the synthetic click cannot reach GIS's cross-origin button iframe, the
-/// container is revealed after ~1.2 s so the user can tap the real button —
-/// the path that signed in on build c9ac1105. It is never a dead end.
-Future<({String idToken, String rawNonce})> gisPopupSignIn({
-  required String title,
-  required String subtitle,
-  required String cancelLabel,
-}) async {
-  try {
-    final r =
-        await _mediboGisPopup(title.toJS, subtitle.toJS, cancelLabel.toJS).toDart;
-    return _wrap(r?.toDart);
-  } on GisOneTapSuppressed {
-    rethrow;
-  } on GisOneTapUnavailable {
-    rethrow;
-  } catch (e) {
-    _rethrowAsGis(e);
-  }
-}
-
-@JS('mediboClearGState')
-external JSString _mediboClearGStateJs();
-
-/// CHANGE #565: delete GIS's first-party dismissal-cooldown cookie (g_state) on
-/// every domain/path variant, immediately before prompt().
-///
-/// GIS counts One Tap dismissals in that cookie and eventually stops displaying
-/// the sheet — build c9ac1105 recorded c565's predecessor
-/// c564_moment=skipped:unknown_reason, which was exactly this. The cookie is
-/// first-party on our own domain, so we are free to clear it.
-///
-/// Returns 'cleared' if a g_state cookie was present, 'absent' otherwise.
-/// Lives here rather than in Dart because document.cookie would mean importing
-/// dart:html into the widget tree, which the project forbids.
-String clearGoogleStateCookie() {
-  try {
-    return _mediboClearGStateJs().toDart;
-  } catch (_) {
-    return 'absent';
   }
 }
 

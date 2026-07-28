@@ -9,12 +9,12 @@
 // drawn by the browser (FedCM) or by Google (One Tap), never by us, and the
 // full-page accounts.google.com chooser must never appear.
 //
-// CHANGE #566: two in-app choosers, no browser path — the GIS One Tap sheet
+// CHANGE #567: ONE chooser, no fallback of any kind — the GIS One Tap sheet
 // ("Sign in to medibo.in with google.com"). Everything else is gone:
 //   * the FedCM chooser ("Sign in with google.com") ended in "Access blocked:
 //     response_type missing" and never once succeeded
-//   * the GIS button popup ("Choose an account to continue to mediBO") is the
-//     FALLBACK: it is not subject to the One Tap cooldown
+//   * the GIS button popup ("Choose an account to continue to mediBO") worked
+//     but is removed: One Tap only, every time
 //   * signInWithOAuth opened a Custom Tab whose session the PWA could not read
 //
 // Before each prompt() the caller clears GIS's first-party g_state cookie, so a
@@ -65,51 +65,47 @@ typedef GoogleCredential = ({String idToken, String rawNonce});
 /// Never returns a navigation of any kind — the only outcomes are the three in
 /// [GoogleOutcome].
 Future<GoogleOutcome> runGoogleSignIn({
-  required String Function() clearGState,
   required Future<GoogleCredential> Function() oneTap,
-  required Future<GoogleCredential> Function() popup,
   required Future<void> Function(String idToken, String rawNonce) finish,
+  Future<void> Function(Duration)? delay,
   void Function(String key, String value)? log,
 }) async {
   void note(String k, String v) {
     if (log != null) log(k, v);
   }
 
-  // Cancel-proofing: kill the cooldown cookie FIRST, every single time.
-  note('c566_gstate', clearGState());
+  final wait = delay ?? Future<void>.delayed;
 
-  // ── 1. The One Tap sheet ─────────────────────────────────────────────────
-  try {
-    final cred = await oneTap();
-    note('c566_path', 'onetap');
-    await finish(cred.idToken, cred.rawNonce);
-    note('c566_signed_in', 'onetap');
-    return GoogleOutcome.signedIn;
-  } on GisOneTapCancelled {
-    // A deliberate close is an answer. No popup, no message, no navigation.
-    note('c566_path', 'none');
-    return GoogleOutcome.closed;
-  } on GisOneTapSuppressed {
-    // The cooldown. The popup is not subject to it — fall straight through.
-  } on GisOneTapUnavailable {
-    // Same treatment.
+  // Two attempts, and nothing else. Each one runs the full reset — cookie
+  // delete, disableAutoSelect, re-initialize with a fresh nonce — inside the JS
+  // bridge before prompt(). If the second is also refused we stop: no popup, no
+  // browser page, no other chooser.
+  for (var attempt = 1; attempt <= 2; attempt++) {
+    note('c567_attempt', '$attempt');
+    try {
+      final cred = await oneTap();
+      note('c567_result', 'credential');
+      await finish(cred.idToken, cred.rawNonce);
+      note('c567_signed_in', 'onetap');
+      return GoogleOutcome.signedIn;
+    } on GisOneTapCancelled {
+      // The user closed the sheet. Stay put, re-enable the button, show nothing.
+      note('c567_result', 'none');
+      return GoogleOutcome.closed;
+    } on GisOneTapSuppressed {
+      if (attempt == 1) {
+        await wait(const Duration(milliseconds: 400));
+        continue;
+      }
+    } on GisOneTapUnavailable {
+      if (attempt == 1) {
+        await wait(const Duration(milliseconds: 400));
+        continue;
+      }
+    }
+    break;
   }
 
-  // ── 2. The GIS button popup ──────────────────────────────────────────────
-  try {
-    final cred = await popup();
-    note('c566_path', 'popup');
-    await finish(cred.idToken, cred.rawNonce);
-    note('c566_signed_in', 'popup');
-    return GoogleOutcome.signedIn;
-  } on GisOneTapCancelled {
-    note('c566_path', 'none');
-    return GoogleOutcome.closed;
-  } on GisOneTapSuppressed {
-    note('c566_path', 'none');
-    return GoogleOutcome.suppressed;
-  } on GisOneTapUnavailable {
-    note('c566_path', 'none');
-    return GoogleOutcome.suppressed;
-  }
+  note('c567_result', 'none');
+  return GoogleOutcome.suppressed;
 }

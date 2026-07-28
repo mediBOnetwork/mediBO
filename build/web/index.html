@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta name="build-commit" content="1fec57ab">
+  <meta name="build-commit" content="4f77cf8f">
   <!-- CHANGE #238: SW permanently disabled. Unregister ALL SWs + wipe all caches on every load.
        No sessionStorage guard — runs unconditionally so even users whose old SW served this
        HTML from cache will have SWs cleared on the very next in-SW-controlled load.
@@ -138,10 +138,10 @@
        On every load, fetches /version.json (no-cache). If the live commit differs
        from the build-stamped commit below, does ONE hard reload so the PWA gets the
        newest bundle instead of staying on a stale cached build.
-       1fec57ab is replaced with the actual short commit hash by deploy.sh. -->
+       4f77cf8f is replaced with the actual short commit hash by deploy.sh. -->
   <script>
     (function () {
-      var _builtCommit = '1fec57ab';
+      var _builtCommit = '4f77cf8f';
       var _sessionKey  = 'c220_pwa_reloaded';
       function _rlWrite(key, val) {
         try {
@@ -159,7 +159,7 @@
           // Already reloaded once this session — skip to prevent loop.
           if (sessionStorage.getItem(_sessionKey)) return;
           // Skip if placeholder was not stamped (local dev / test build).
-          if (_builtCommit === '1fec57ab') return;
+          if (_builtCommit === '4f77cf8f') return;
           fetch('/version.json?_t=' + Date.now(), { cache: 'no-store' })
             .then(function (r) { return r.json(); })
             .then(function (data) {
@@ -175,7 +175,7 @@
       });
       // Wire confirmation — written once regardless of outcome.
       window.addEventListener('DOMContentLoaded', function () {
-        if (_builtCommit !== '1fec57ab') {
+        if (_builtCommit !== '4f77cf8f') {
           _rlWrite('c220_pwa_check_wired', 1);
         }
       });
@@ -751,7 +751,7 @@
     })();
   </script>
 
-  <script src="flutter_bootstrap.js?v=1fec57ab" async></script>
+  <script src="flutter_bootstrap.js?v=4f77cf8f" async></script>
   <script>
     var recaptchaResolve = null;
     var recaptchaWidgetId = null;
@@ -944,7 +944,8 @@
         _pending = null;
         if (!p) return;
         if (resp && resp.credential) p.resolve(resp.credential);
-        else p.reject('fallback');
+        // CHANGE #563: an empty callback must not navigate either.
+        else p.reject('suppressed');
       }
 
       // ── Prewarm: load GIS and initialize() once, well before any tap ───────
@@ -964,6 +965,10 @@
               return;
             }
             try {
+              // CHANGE #563: cancel_on_tap_outside MUST stay false. With it
+              // true, a tap anywhere outside the sheet counts as a dismissal
+              // and feeds Google's exponential cooldown, after which prompt()
+              // stops displaying entirely.
               google.accounts.id.initialize({
                 client_id: clientId,
                 nonce: hashedNonce,
@@ -972,7 +977,7 @@
                 itp_support: true,
                 context: 'signin',
                 auto_select: false,
-                cancel_on_tap_outside: true,
+                cancel_on_tap_outside: false,
               });
               _ready = true;
               _initFailed = false;
@@ -984,6 +989,16 @@
           }
           poll();
         });
+      };
+
+      // ── CHANGE #563: called on logout, so the next sign-in always shows the
+      // chooser instead of silently reusing the last account. ───────────────
+      window.mediboGisDisableAutoSelect = function () {
+        try {
+          if (!gisReady()) return false;
+          google.accounts.id.disableAutoSelect();
+          return true;
+        } catch (e) { return false; }
       };
 
       // ── One Tap: called SYNCHRONOUSLY from the tap handler ────────────────
@@ -1001,7 +1016,13 @@
           }
           var tag = Math.random();
 
-          if (!_ready || _initFailed || !gisReady()) { reject('fallback'); return; }
+          // CHANGE #563: never 'fallback' — a missing library must not send
+          // the browser to Google on its own either.
+          if (!_ready || _initFailed || !gisReady()) {
+            try { window.mediboNote && window.mediboNote('c563_moment', 'library_not_ready', true); } catch (e) {}
+            reject('suppressed');
+            return;
+          }
 
           _pending = {
             tag: tag,
@@ -1012,32 +1033,59 @@
           function probe(n, name) {
             try { return !!(n[name] && n[name]()); } catch (e) { return false; }
           }
+          function reason(n, name) {
+            try { return (n[name] ? String(n[name]()) : '') || ''; } catch (e) { return ''; }
+          }
+          function moment(v) {
+            try { window.mediboGisMoment = v; } catch (e) {}
+            try { window.mediboNote && window.mediboNote('c563_moment', v, true); } catch (e) {}
+          }
 
           try {
             google.accounts.id.prompt(function (n) {
               if (settled || !n) return;
-              if (probe(n, 'isNotDisplayed') || probe(n, 'isSkippedMoment')) {
-                try { window.mediboGisMoment = 'not-displayed'; } catch (e) {}
-                settle(reject, 'fallback');
+
+              // CHANGE #563: suppressed by Google (cooldown, no session, FedCM
+              // refusal). This must NOT navigate anywhere — the caller shows an
+              // inline note and a link, and only a deliberate tap on that link
+              // may open the browser chooser.
+              if (probe(n, 'isNotDisplayed')) {
+                moment('not_displayed:' + (reason(n, 'getNotDisplayedReason') || 'unknown'));
+                settle(reject, 'suppressed');
                 return;
               }
+              if (probe(n, 'isSkippedMoment')) {
+                moment('skipped:' + (reason(n, 'getSkippedReason') || 'unknown'));
+                settle(reject, 'suppressed');
+                return;
+              }
+              if (probe(n, 'isDisplayed') || probe(n, 'isDisplayMoment')) {
+                moment('displayed');
+                return; // the sheet is up; wait for the credential or a dismissal
+              }
               if (probe(n, 'isDismissedMoment')) {
-                var reason = '';
-                try { reason = n.getDismissedReason ? n.getDismissedReason() : ''; } catch (e) {}
-                try { window.mediboGisMoment = 'dismissed:' + reason; } catch (e) {}
+                var r = reason(n, 'getDismissedReason') || 'unknown';
+                moment('dismissed:' + r);
                 // The credential arrives through the initialize() callback.
-                if (reason === 'credential_returned') return;
+                if (r === 'credential_returned') return;
+                // A deliberate close is an answer, not a failure: the caller
+                // stays on the login screen and re-enables the button.
                 settle(reject, 'cancelled');
               }
             });
           } catch (e) {
-            settle(reject, 'fallback');
+            moment('prompt_threw');
+            settle(reject, 'suppressed');
             return;
           }
 
           // CHANGE #310c: the moment callback can go silent after a FedCM
-          // dismissal — never let that hang the caller.
-          timer = setTimeout(function () { settle(reject, 'fallback'); }, 90000);
+          // dismissal — never let that hang the caller. CHANGE #563: a silent
+          // callback resolves to 'suppressed', not a navigation.
+          timer = setTimeout(function () {
+            try { window.mediboNote && window.mediboNote('c563_moment', 'no_moment_timeout', true); } catch (e) {}
+            settle(reject, 'suppressed');
+          }, 90000);
         });
       };
     })();

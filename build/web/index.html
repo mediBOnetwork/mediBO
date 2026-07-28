@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta name="build-commit" content="a3e689a3">
+  <meta name="build-commit" content="e262a1be">
   <!-- CHANGE #238: SW permanently disabled. Unregister ALL SWs + wipe all caches on every load.
        No sessionStorage guard — runs unconditionally so even users whose old SW served this
        HTML from cache will have SWs cleared on the very next in-SW-controlled load.
@@ -138,10 +138,10 @@
        On every load, fetches /version.json (no-cache). If the live commit differs
        from the build-stamped commit below, does ONE hard reload so the PWA gets the
        newest bundle instead of staying on a stale cached build.
-       a3e689a3 is replaced with the actual short commit hash by deploy.sh. -->
+       e262a1be is replaced with the actual short commit hash by deploy.sh. -->
   <script>
     (function () {
-      var _builtCommit = 'a3e689a3';
+      var _builtCommit = 'e262a1be';
       var _sessionKey  = 'c220_pwa_reloaded';
       function _rlWrite(key, val) {
         try {
@@ -159,7 +159,7 @@
           // Already reloaded once this session — skip to prevent loop.
           if (sessionStorage.getItem(_sessionKey)) return;
           // Skip if placeholder was not stamped (local dev / test build).
-          if (_builtCommit === 'a3e689a3') return;
+          if (_builtCommit === 'e262a1be') return;
           fetch('/version.json?_t=' + Date.now(), { cache: 'no-store' })
             .then(function (r) { return r.json(); })
             .then(function (data) {
@@ -175,7 +175,7 @@
       });
       // Wire confirmation — written once regardless of outcome.
       window.addEventListener('DOMContentLoaded', function () {
-        if (_builtCommit !== 'a3e689a3') {
+        if (_builtCommit !== 'e262a1be') {
           _rlWrite('c220_pwa_check_wired', 1);
         }
       });
@@ -751,7 +751,7 @@
     })();
   </script>
 
-  <script src="flutter_bootstrap.js?v=a3e689a3" async></script>
+  <script src="flutter_bootstrap.js?v=e262a1be" async></script>
   <script>
     var recaptchaResolve = null;
     var recaptchaWidgetId = null;
@@ -991,35 +991,79 @@
         });
       };
 
-      // ── CHANGE #564 (FIX A): navigate the CURRENT window ──────────────────
-      // The OAuth URL must NOT go through url_launcher / window.open. On an
-      // installed Android PWA, window.open(url,'_self','noopener,noreferrer') —
-      // which is exactly what url_launcher_web does — hands the URL to a Chrome
-      // Custom Tab. Supabase then completes the flow and stores the session in
-      // THAT tab's storage, so /callback returns 302 with a real Google login
-      // (20:36:44 and 20:38:40 UTC) while the PWA stays signed out.
-      //
-      // location.assign() keeps the flow in this window, so the callback comes
-      // back into the same origin and storage the app reads.
-      window.mediboAssignLocation = function (url) {
-        try {
-          window.mediboNote &&
-            window.mediboNote('c563_oauth_url', String(url).slice(0, 600), true);
-        } catch (e) {}
-        try {
-          window.location.assign(String(url));
-          return true;
-        } catch (e) {
-          try { window.location.href = String(url); return true; } catch (e2) {}
-          return false;
-        }
-      };
-
-      // The origin the app is actually running on, so the OAuth callback
-      // returns to the SAME origin — a session stored on medibo.in is
-      // invisible to a PWA running on www.medibo.in.
+      // CHANGE #564: read-only. Reports which origin the app is running on
+      // (www vs apex) for the render-log. It cannot navigate.
       window.mediboOrigin = function () {
         try { return String(window.location.origin || ''); } catch (e) { return ''; }
+      };
+
+      // ── CHANGE #564: PRIMARY PATH — the browser's own FedCM chooser ───────
+      // Not subject to One Tap's cooldown, always shows the chooser
+      // (mediation:'required' never auto-selects), lists every Google account
+      // on the device, and is drawn by the browser OVER the page — it cannot
+      // navigate anywhere, which is the whole point.
+      //
+      // mode:'active' (Chrome 132+) is the gesture-driven modal chooser, so
+      // this MUST be called straight from the tap handler. On older Chrome the
+      // member is dropped per WebIDL, leaving the passive sheet — still fine.
+      window.mediboFedcmError = '';
+
+      window.mediboFedcmGet = function (clientId, hashedNonce) {
+        return new Promise(function (resolve, reject) {
+          var supported = false;
+          try {
+            supported = !!(window.IdentityCredential &&
+                           navigator.credentials && navigator.credentials.get);
+          } catch (e) { supported = false; }
+          if (!supported) {
+            window.mediboFedcmError = 'unsupported';
+            reject('fallback');
+            return;
+          }
+
+          var opts = {
+            identity: {
+              context: 'signin',
+              mode: 'active',
+              providers: [{
+                configURL: 'https://accounts.google.com/gsi/fedcm.json',
+                clientId: clientId,
+                nonce: hashedNonce,
+              }],
+            },
+            mediation: 'required',
+          };
+
+          var done = false;
+          var timer = setTimeout(function () {
+            if (done) return;
+            done = true;
+            window.mediboFedcmError = 'timeout';
+            reject('fallback');
+          }, 120000);
+
+          navigator.credentials.get(opts).then(function (cred) {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            var t = cred && (cred.token || cred.id_token);
+            if (t) { window.mediboFedcmError = ''; resolve(t); }
+            else { window.mediboFedcmError = 'empty-credential'; reject('fallback'); }
+          }).catch(function (err) {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            var name = (err && err.name) ? err.name : String(err);
+            window.mediboFedcmError = name;
+            // A deliberate close is an answer — do not cascade to One Tap.
+            if (name === 'AbortError') reject('cancelled');
+            else reject('fallback');
+          });
+        });
+      };
+
+      window.mediboLastFedcmError = function () {
+        try { return String(window.mediboFedcmError || ''); } catch (e) { return ''; }
       };
 
       // ── CHANGE #563: called on logout, so the next sign-in always shows the
@@ -1050,7 +1094,7 @@
           // CHANGE #563: never 'fallback' — a missing library must not send
           // the browser to Google on its own either.
           if (!_ready || _initFailed || !gisReady()) {
-            try { window.mediboNote && window.mediboNote('c563_moment', 'library_not_ready', true); } catch (e) {}
+            try { window.mediboNote && window.mediboNote('c564_moment', 'library_not_ready', true); } catch (e) {}
             reject('suppressed');
             return;
           }
@@ -1069,7 +1113,7 @@
           }
           function moment(v) {
             try { window.mediboGisMoment = v; } catch (e) {}
-            try { window.mediboNote && window.mediboNote('c563_moment', v, true); } catch (e) {}
+            try { window.mediboNote && window.mediboNote('c564_moment', v, true); } catch (e) {}
           }
 
           try {
@@ -1114,7 +1158,7 @@
           // dismissal — never let that hang the caller. CHANGE #563: a silent
           // callback resolves to 'suppressed', not a navigation.
           timer = setTimeout(function () {
-            try { window.mediboNote && window.mediboNote('c563_moment', 'no_moment_timeout', true); } catch (e) {}
+            try { window.mediboNote && window.mediboNote('c564_moment', 'no_moment_timeout', true); } catch (e) {}
             settle(reject, 'suppressed');
           }, 90000);
         });

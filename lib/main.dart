@@ -10,6 +10,7 @@ import 'package:flutter_web_plugins/url_strategy.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'app_state.dart';
+import 'data/medicine_repository.dart';
 import 'order_hours_state.dart';
 import 'inquiry_lock_state.dart';
 import 'url_sync_web.dart' show captureInitialPath;
@@ -208,11 +209,41 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
   final InquiryLockModel _inquiryLock = InquiryLockModel();
   bool _viewAsRestored = false;
 
+  /// CHANGE #558 — the app's one navigator, so a sign-out can land on /login
+  /// from the notifier without a BuildContext.
+  static final GlobalKey<NavigatorState> navigatorKey =
+      GlobalKey<NavigatorState>();
+
   @override
   void initState() {
     super.initState();
     _viewAs.addListener(_onViewAsChanged);
     _auth.addListener(_onAuthChanged);
+
+    // ─── CHANGE #558 RULE 3 — everything holding account data clears here ───
+    // This is the only place the resets are registered; AuthNotifier fires
+    // them all on signedIn / signedOut / userUpdated / user-changed refresh.
+    _auth.addResetHook(() {
+      _cart.hardReset();
+      // Server-derived globals: re-read under the new identity rather than
+      // keeping the previous account's answer.
+      _orderHours.refresh();
+      _inquiryLock.refresh();
+      _viewAs.exit();
+      _viewAsRestored = false;
+      MedicineRepository.clearAccountScopedCaches();
+    });
+
+    // RULE 5 — the guest uid the cart already keeps for delete_guest_cart.
+    _auth.guestUidProvider = () => _cart.guestUid;
+
+    // RULE 3 — after a sign-out has cleared everything, land on /login.
+    _auth.onSignedOutNavigate = () {
+      try {
+        navigatorKey.currentState
+            ?.pushNamedAndRemoveUntil('/login', (r) => false);
+      } catch (_) {}
+    };
   }
 
   // ─── ViewAs persistence (shared_preferences only — never dart:html) ─────────
@@ -337,6 +368,7 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
             orderHours: _orderHours,
             child: MaterialApp(
             title: 'mediBO',
+            navigatorKey: navigatorKey,
             debugShowCheckedModeBanner: false,
             scaffoldMessengerKey: VersionWatcher.instance.messengerKey,
             theme: buildTheme(),
@@ -409,6 +441,17 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
               builder: (_) => _AppRoot(auth: _auth),
             ),
             routes: {
+              // CHANGE #558 — the routes login_role_config can hand back as
+              // home_route. They all resolve to the same root: the session,
+              // not the route name, decides which surface renders. This is a
+              // list of legal destinations, not a role->route map.
+              '/store':        (_) => _AppRoot(auth: _auth),
+              '/dashboard':    (_) => _AppRoot(auth: _auth),
+              '/supplier':     (_) => _AppRoot(auth: _auth),
+              '/company':      (_) => _AppRoot(auth: _auth),
+              '/mr':           (_) => _AppRoot(auth: _auth),
+              '/delivery':     (_) => _AppRoot(auth: _auth),
+              '/route':        (_) => _AppRoot(auth: _auth),
               '/login':        (_) => const LoginScreen(),
               '/register':     (_) => const LoginScreen(),
               '/about-app':    (_) => const AboutScreen(),
@@ -428,8 +471,17 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
   }
 }
 
-/// Root widget: shows splash during auth init, then the main shell.
-/// Has a 5-second hard timeout so a stalled auth check never blocks first paint.
+/// Root widget: the one gate between an unresolved session and any screen that
+/// shows account data.
+///
+/// CHANGE #558 RULE 2 — nothing renders until my_session() has resolved. No
+/// default screen, no last screen, no admin-or-customer guess.
+/// CHANGE #558 RULE 4 — before rendering, the session's auth_user_id is
+/// compared against the SDK's current user; a mismatch re-fetches instead.
+///
+/// Keeps the boot-resilience contract: a StatefulWidget with a hard 5-second
+/// timeout. On timeout it shows a neutral recovery screen rather than guessing
+/// an account — a wrong guess is exactly the bug this change exists to kill.
 class _AppRoot extends StatefulWidget {
   final AuthNotifier auth;
   const _AppRoot({required this.auth});
@@ -446,10 +498,10 @@ class _AppRootState extends State<_AppRoot> {
   @override
   void initState() {
     super.initState();
-    // Hard 5-second timeout: if auth never resolves, render HomeShell anyway.
-    // A feature crash in auth init MUST NOT leave users on an infinite spinner.
+    // Hard 5-second timeout: a stalled session resolve MUST NOT leave the user
+    // on an infinite spinner.
     _bootTimer = Timer(const Duration(seconds: 5), () {
-      if (mounted && widget.auth.loading) {
+      if (mounted && !widget.auth.sessionMatchesAuthUser) {
         try { RenderLog.write('boot_status', 'timeout_fallback'); } catch (_) {}
         setState(() => _timedOut = true);
       }
@@ -462,14 +514,31 @@ class _AppRootState extends State<_AppRoot> {
     super.dispose();
   }
 
+  void _retry() {
+    setState(() => _timedOut = false);
+    _bootTimer?.cancel();
+    _bootTimer = Timer(const Duration(seconds: 5), () {
+      if (mounted && !widget.auth.sessionMatchesAuthUser) {
+        setState(() => _timedOut = true);
+      }
+    });
+    widget.auth.refreshSession();
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
       listenable: widget.auth,
       builder: (context, _) {
-        if (widget.auth.loading && !_timedOut) {
+        // RULE 4 — the mismatch guard runs before anything renders. It logs to
+        // the console, discards the stale session and re-fetches.
+        widget.auth.ensureSessionMatchesAuthUser();
+
+        if (!widget.auth.sessionMatchesAuthUser) {
+          if (_timedOut) return _SessionStalledScreen(onRetry: _retry);
           return const _SplashScreen();
         }
+        if (_timedOut) _timedOut = false;
         // Write boot_status=painted exactly once — this is the render-log proof
         // that the app successfully rendered its first content screen.
         if (!_didWriteBootSuccess) {
@@ -495,6 +564,8 @@ class _AppRootState extends State<_AppRoot> {
             try { RenderLog.write('c245_orders_query_patched', '0'); } catch (_) {}
             try { RenderLog.write('c398_footer_on_home', '1'); } catch (_) {}
             try { RenderLog.write('c398_footer_off_splash', '1'); } catch (_) {}
+            try { RenderLog.write('c558_boot_ok', 'true'); } catch (_) {}
+            try { RenderLog.write('c558_render_gate', 'session_resolved'); } catch (_) {}
             try {
               await VersionWatcher.instance.init();
               VersionWatcher.instance.start();
@@ -503,6 +574,60 @@ class _AppRootState extends State<_AppRoot> {
         }
         return HomeShell();
       },
+    );
+  }
+}
+
+/// CHANGE #558 — shown only when the session has not resolved within the boot
+/// timeout. Account-neutral by design: rendering a guessed account here is the
+/// exact failure this change removes.
+class _SessionStalledScreen extends StatelessWidget {
+  const _SessionStalledScreen({required this.onRetry});
+
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF5F6F8),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.cloud_off, size: 48, color: Color(0xFF9CA3AF)),
+              const SizedBox(height: 16),
+              const Text(
+                'Still signing you in',
+                style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF111827)),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Checking your account is taking longer than usual.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 14, color: Color(0xFF6B7280)),
+              ),
+              const SizedBox(height: 24),
+              SizedBox(
+                height: 44,
+                child: FilledButton(
+                  onPressed: onRetry,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF1B7A43),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
+                  ),
+                  child: const Text('Try again'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

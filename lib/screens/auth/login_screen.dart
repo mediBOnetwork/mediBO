@@ -20,10 +20,14 @@ import 'login_view.dart';
 
 /// Supabase-backed implementation of the CHANGE #554/#555 login contract.
 class SupabaseLoginApi implements LoginApi {
-  SupabaseLoginApi({required this.oauthFallback});
+  SupabaseLoginApi({required this.oauthFallback, required this.auth});
 
   /// The existing OAuth PKCE redirect, used when One Tap cannot be shown.
   final Future<void> Function() oauthFallback;
+
+  /// CHANGE #558 — the one session holder. This screen does not keep a session
+  /// of its own and never calls my_session() behind the notifier's back.
+  final AuthNotifier auth;
 
   SupabaseClient get _c => Supabase.instance.client;
 
@@ -67,8 +71,28 @@ class SupabaseLoginApi implements LoginApi {
   Future<void> setSession(String refreshToken) =>
       _c.auth.setSession(refreshToken);
 
+  /// CHANGE #558 — resolves through [AuthNotifier], so the guest-cart claim
+  /// (RULE 5) and the hard reset (RULE 3) have both already run, and the whole
+  /// app ends up looking at the same session object.
   @override
-  Future<Map<String, dynamic>> session() async => _asMap(await _c.rpc('my_session'));
+  Future<Map<String, dynamic>> session() async {
+    await auth.refreshSession();
+    final s = auth.session;
+    if (s == null || !s.signedIn || !auth.sessionMatchesAuthUser) {
+      return const <String, dynamic>{'signed_in': false};
+    }
+    return <String, dynamic>{
+      'signed_in': true,
+      'auth_user_id': s.authUserId,
+      'login_email': s.loginEmail,
+      'role': s.role,
+      'is_admin': s.isAdmin,
+      'display_name': s.displayName,
+      'home_route': s.homeRoute,
+      'home_label': s.homeLabel,
+      'message': s.message,
+    };
+  }
 
   void _log(String k, String v) {
     try {
@@ -172,16 +196,13 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   static const _green = Color(0xFF1B5E20);
 
-  late final SupabaseLoginApi _api;
-  StreamSubscription<AuthState>? _authSub;
+  SupabaseLoginApi? _api;
+  AuthNotifier? _auth;
   bool _navigated = false;
 
   @override
   void initState() {
     super.initState();
-    _api = SupabaseLoginApi(
-      oauthFallback: () => UserState.read(context).signInWithGoogleOAuth(),
-    );
 
     // CHANGE #556: load + initialize GIS now, so the later tap can call
     // prompt() synchronously and keep its user activation. Fire-and-forget:
@@ -196,43 +217,40 @@ class _LoginScreenState extends State<LoginScreen> {
       try {
         RenderLog.write('c557_login_rendered', true);
       } catch (_) {}
-      // Already signed in (e.g. returning to /login with a live session).
-      try {
-        if (mounted && Supabase.instance.client.auth.currentUser != null) {
-          _resolveHome();
-        }
-      } catch (_) {}
+      if (!mounted) return;
+      // CHANGE #558 — bind to the one session holder. Every landing decision
+      // (fresh sign-in, WhatsApp setSession, OAuth redirect completing on a
+      // page load, or simply arriving here with a live session) is driven by
+      // that notifier resolving, never by this screen guessing.
+      final auth = UserState.read(context);
+      _auth = auth;
+      _api = SupabaseLoginApi(
+        oauthFallback: auth.signInWithGoogleOAuth,
+        auth: auth,
+      );
+      auth.addListener(_onSessionChanged);
+      setState(() {}); // _api is now available to LoginView
+      _onSessionChanged();
     });
+  }
 
-    // The OAuth PKCE redirect path completes on a fresh page load, so the
-    // signedIn event — not the awaited call — is what lands the user. Also
-    // covers setSession from the WhatsApp flow.
-    try {
-      _authSub = Supabase.instance.client.auth.onAuthStateChange.listen((s) {
-        if (s.event == AuthChangeEvent.signedIn && mounted) _resolveHome();
-      });
-    } catch (_) {}
+  /// Lands the user as soon as — and only when — the session has resolved for
+  /// the auth user the SDK currently holds.
+  void _onSessionChanged() {
+    if (!mounted || _navigated) return;
+    final auth = _auth;
+    if (auth == null) return;
+    final s = auth.session;
+    if (s == null || !s.signedIn) return;
+    if (!auth.sessionMatchesAuthUser) return; // RULE 4
+    if (s.homeRoute.isEmpty) return;
+    _goTo(s.homeRoute); // RULE 2 — home_route only
   }
 
   @override
   void dispose() {
-    _authSub?.cancel();
+    _auth?.removeListener(_onSessionChanged);
     super.dispose();
-  }
-
-  /// Asks the backend where this user belongs, then goes there.
-  Future<void> _resolveHome() async {
-    if (_navigated) return;
-    try {
-      final s = await _api.session();
-      if (!mounted) return;
-      if (s['signed_in'] != true) return;
-      final route = s['home_route'] as String?;
-      if (route == null || route.isEmpty) return;
-      _goTo(route);
-    } catch (_) {
-      // No local error copy — the view keeps showing the last backend message.
-    }
   }
 
   void _goTo(String route) {
@@ -253,6 +271,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final api = _api;
     return Scaffold(
       backgroundColor: Colors.white,
       body: SafeArea(
@@ -261,7 +280,15 @@ class _LoginScreenState extends State<LoginScreen> {
             // LoginView owns its own full-height layout (wash band + thumb-reach
             // actions) and its own scrolling, so it must not be boxed here.
             // It goes first so the route back button paints above it.
-            Positioned.fill(child: LoginView(api: _api, onHome: _goTo)),
+            // Neutral until the session holder is bound — never a default
+            // screen and never a guess (CHANGE #558 RULE 2).
+            if (api == null)
+              const Center(
+                child: CircularProgressIndicator(
+                    color: _green, strokeWidth: 3),
+              )
+            else
+              Positioned.fill(child: LoginView(api: api, onHome: _goTo)),
             Positioned(
               top: 8,
               left: 8,

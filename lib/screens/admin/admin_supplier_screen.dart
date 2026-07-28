@@ -16,6 +16,7 @@ import 'package:xml/xml.dart' as xmlp;
 
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../user_state.dart';
 import '../../models/order_hours_model.dart';
 import '../../order_hours_state.dart';
 import '../../services/match_status_service.dart';
@@ -940,7 +941,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   Future<void> _deleteSupplier(_SupRow row) async {
     try {
       final client = Supabase.instance.client;
-      final adminEmail = client.auth.currentUser?.email ?? 'admin';
+      // CHANGE #558 — from the one session, not the Supabase user.
+      final sessionEmail = UserState.read(context).loginEmail;
+      final adminEmail = sessionEmail.isEmpty ? 'admin' : sessionEmail;
       await client.from('supplier_profiles').update({
         'is_deleted':       true,
         'deleted_at':       DateTime.now().toUtc().toIso8601String(),

@@ -4,6 +4,7 @@ import '../../services/date_labels.dart';
 import '../../widgets/date_label_text.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:pharma_b2b/utils/toast.dart';
+import '../../user_state.dart';
 
 // Emails that can never be removed or demoted — matches DB-side lock list.
 const _kLockedEmails = {'masteromprakashsahu@gmail.com', 'medibonetwork@gmail.com'};
@@ -25,8 +26,9 @@ class _AdminManageAdminsScreenState extends State<AdminManageAdminsScreen> {
   // Tracks in-progress operations keyed by email.
   final Set<String> _busy = {};
 
-  String get _myEmail =>
-      (Supabase.instance.client.auth.currentUser?.email ?? '').toLowerCase();
+  // CHANGE #558 — the acting admin's identity comes from the one session
+  // (my_session().login_email), never off the Supabase user.
+  String get _myEmail => UserState.read(context).loginEmail.toLowerCase();
 
   @override
   void initState() {

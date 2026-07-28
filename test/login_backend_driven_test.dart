@@ -71,7 +71,11 @@ class _StubApi implements LoginApi {
       throw StateError('not called in this test');
 
   @override
-  Future<void> googleSignIn() async =>
+  Future<void> googleSignIn({
+    required String sheetTitle,
+    required String sheetSubtitle,
+    required String otherAccount,
+  }) async =>
       throw StateError('not called in this test');
 }
 

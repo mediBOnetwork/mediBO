@@ -45,8 +45,13 @@ abstract class LoginApi {
   /// rpc my_session()
   Future<Map<String, dynamic>> session();
 
-  /// Google One Tap bottom sheet, falling back to the existing OAuth flow.
-  Future<void> googleSignIn();
+  /// Google One Tap half-screen sheet. The labels are passed through for the
+  /// in-app fallback sheet, so no Google copy is ever invented client-side.
+  Future<void> googleSignIn({
+    required String sheetTitle,
+    required String sheetSubtitle,
+    required String otherAccount,
+  });
 }
 
 /// Which part of the progressive WhatsApp flow is on screen.
@@ -173,7 +178,13 @@ class _LoginViewState extends State<LoginView> {
     if (_googleBusy) return;
     setState(() => _googleBusy = true);
     try {
-      await widget.api.googleSignIn();
+      // No await before this call — the One Tap sheet only displays while the
+      // tap's user activation is still live.
+      await widget.api.googleSignIn(
+        sheetTitle: _s('google_sheet_title'),
+        sheetSubtitle: _s('google_sheet_subtitle'),
+        otherAccount: _s('google_other_account'),
+      );
       if (!mounted) return;
       await _goHome();
     } catch (_) {

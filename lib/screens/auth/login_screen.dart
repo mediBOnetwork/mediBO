@@ -70,40 +70,74 @@ class SupabaseLoginApi implements LoginApi {
   @override
   Future<Map<String, dynamic>> session() async => _asMap(await _c.rpc('my_session'));
 
-  /// CHANGE #555: one tap from the button to signed in.
-  ///
-  /// google.accounts.id.prompt() renders as a bottom sheet on mobile web
-  /// listing the device's signed-in Google accounts. Picking one returns a JWT
-  /// credential, which goes straight to signInWithIdToken. If the sheet cannot
-  /// be shown — no Google session, FedCM blocked, unsupported browser — we
-  /// silently fall back to the existing OAuth redirect, so the button always
-  /// does something.
-  @override
-  Future<void> googleSignIn() async {
+  void _log(String k, String v) {
     try {
-      final (:idToken, :rawNonce) = await gisOneTapWithNonce();
-      try {
-        RenderLog.write('c555_method', 'one_tap');
-      } catch (_) {}
-      await _c.auth.signInWithIdToken(
+      RenderLog.write(k, v);
+    } catch (_) {}
+  }
+
+  Future<void> _finishIdToken(String idToken, String rawNonce) =>
+      _c.auth.signInWithIdToken(
         provider: OAuthProvider.google,
         idToken: idToken,
         nonce: rawNonce,
       );
-      try {
-        RenderLog.write('c555_session', 'established');
-      } catch (_) {}
+
+  /// CHANGE #556: one tap from the button to signed in, without ever leaving
+  /// the app.
+  ///
+  /// Escalation, most in-app first:
+  ///   1. One Tap (FedCM) — a half-screen sheet listing the device's signed-in
+  ///      Google accounts, rendered in-page. No navigation at all.
+  ///   2. Our own half-screen sheet hosting the GIS button — opens Google in a
+  ///      popup that closes itself, so an installed PWA is never navigated away.
+  ///   3. Full-page OAuth redirect — the last resort only, because in a PWA it
+  ///      shows browser chrome. Reached only if both in-app paths failed.
+  ///
+  /// A deliberate dismissal at any level stops the escalation: the user said no.
+  @override
+  Future<void> googleSignIn({
+    required String sheetTitle,
+    required String sheetSubtitle,
+    required String otherAccount,
+  }) async {
+    // 1 — One Tap. Called first with no awaits before it so the tap's user
+    // activation is still live; without it Chrome refuses to show the sheet.
+    try {
+      final (:idToken, :rawNonce) = await gisPromptOneTap();
+      _log('c556_path', 'one_tap');
+      await _finishIdToken(idToken, rawNonce);
+      _log('c556_session', 'established');
+      return;
     } on GisOneTapCancelled {
-      // The user closed the sheet on purpose — leave them on the screen.
-      try {
-        RenderLog.write('c555_one_tap', 'cancelled');
-      } catch (_) {}
+      _log('c556_path', 'one_tap_cancelled');
+      return;
     } on GisOneTapUnavailable {
-      try {
-        RenderLog.write('c555_one_tap', 'unavailable_fallback');
-      } catch (_) {}
-      await oauthFallback();
+      _log('c556_one_tap', 'unavailable');
     }
+
+    // 2 — our own half-screen sheet with the GIS button (popup ux_mode).
+    try {
+      final (:idToken, :rawNonce) = await gisSheetSignIn(
+        title: sheetTitle,
+        subtitle: sheetSubtitle,
+        cancelLabel: otherAccount,
+      );
+      _log('c556_path', 'sheet_button');
+      await _finishIdToken(idToken, rawNonce);
+      _log('c556_session', 'established');
+      return;
+    } on GisOneTapCancelled {
+      _log('c556_path', 'sheet_cancelled');
+      return;
+    } on GisOneTapUnavailable {
+      _log('c556_sheet', 'unavailable');
+    }
+
+    // 3 — last resort. Records whether this cost an installed PWA its chrome.
+    _log('c556_path',
+        isStandalonePwa() ? 'oauth_redirect_in_pwa' : 'oauth_redirect');
+    await oauthFallback();
   }
 }
 
@@ -128,9 +162,18 @@ class _LoginScreenState extends State<LoginScreen> {
       oauthFallback: () => UserState.read(context).signInWithGoogleOAuth(),
     );
 
+    // CHANGE #556: load + initialize GIS now, so the later tap can call
+    // prompt() synchronously and keep its user activation. Fire-and-forget:
+    // a failure here just means the escalation starts one step lower.
+    unawaited(gisPrewarm().then((ok) {
+      try {
+        RenderLog.write('c556_prewarm', ok ? 'ready' : 'failed');
+      } catch (_) {}
+    }));
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       try {
-        RenderLog.write('c555_login_rendered', true);
+        RenderLog.write('c556_login_rendered', true);
       } catch (_) {}
       // Already signed in (e.g. returning to /login with a live session).
       try {

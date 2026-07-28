@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta name="build-commit" content="18e9ee2f">
+  <meta name="build-commit" content="eb4b834d">
   <!-- CHANGE #238: SW permanently disabled. Unregister ALL SWs + wipe all caches on every load.
        No sessionStorage guard — runs unconditionally so even users whose old SW served this
        HTML from cache will have SWs cleared on the very next in-SW-controlled load.
@@ -138,10 +138,10 @@
        On every load, fetches /version.json (no-cache). If the live commit differs
        from the build-stamped commit below, does ONE hard reload so the PWA gets the
        newest bundle instead of staying on a stale cached build.
-       18e9ee2f is replaced with the actual short commit hash by deploy.sh. -->
+       eb4b834d is replaced with the actual short commit hash by deploy.sh. -->
   <script>
     (function () {
-      var _builtCommit = '18e9ee2f';
+      var _builtCommit = 'eb4b834d';
       var _sessionKey  = 'c220_pwa_reloaded';
       function _rlWrite(key, val) {
         try {
@@ -159,7 +159,7 @@
           // Already reloaded once this session — skip to prevent loop.
           if (sessionStorage.getItem(_sessionKey)) return;
           // Skip if placeholder was not stamped (local dev / test build).
-          if (_builtCommit === '18e9ee2f') return;
+          if (_builtCommit === 'eb4b834d') return;
           fetch('/version.json?_t=' + Date.now(), { cache: 'no-store' })
             .then(function (r) { return r.json(); })
             .then(function (data) {
@@ -175,18 +175,285 @@
       });
       // Wire confirmation — written once regardless of outcome.
       window.addEventListener('DOMContentLoaded', function () {
-        if (_builtCommit !== '18e9ee2f') {
+        if (_builtCommit !== 'eb4b834d') {
           _rlWrite('c220_pwa_check_wired', 1);
         }
       });
     })();
   </script>
 
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       CHANGE #559 — NAVIGATION INSTRUMENTATION (diagnostic only, changes nothing)
+       Loaded before recaptcha/GIS/Maps and before Flutter, so every hook is in
+       place before any of them can move the browser.
+
+       The question it answers: the Supabase auth log shows ZERO /authorize
+       requests during a failed "Continue with Google", so something is sending
+       the browser to accounts.google.com WITHOUT going through Supabase. This
+       records the exact URL of every navigation the page can see:
+
+         window.open(...)                  -> url_launcher_web uses this for
+                                              supabase.auth.signInWithOAuth
+                                              (window.open(url,'_self')), and
+                                              GIS uses it for its popup
+         Navigation API 'navigate'         -> location.href / assign / replace /
+                                              link clicks / form submits.
+                                              location.* is [Unforgeable] and
+                                              CANNOT be monkey-patched, so this
+                                              is the only way to see an href
+                                              assignment
+         document click (capture)          -> anchors, incl. programmatic
+                                              a.click()
+         form submit (event + .submit())   -> self-posting forms
+         pagehide / beforeunload           -> the page left WITHOUT any of the
+                                              above firing => the navigation
+                                              came from browser-drawn UI (FedCM)
+                                              or from inside a cross-origin GIS
+                                              iframe
+
+       Everything is written to the render-log key c559_url via the
+       render_log_note RPC with keepalive:true, so the write survives the very
+       navigation it is reporting.
+       ═══════════════════════════════════════════════════════════════════════ -->
+  <script>
+    (function () {
+      var SUPA = 'https://swojhmarmaijkshsbeih.supabase.co';
+      var ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN3b2pobWFybWFpamtzaHNiZWloIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk5Nzc2NjAsImV4cCI6MjA5NTU1MzY2MH0.KREJQV_VLVwZqHmDA96qt-Bi0naUkuSPo4uyLyur7xQ';
+      var LSKEY = 'medibo_nav_log';
+      var log = {};
+      var flushTimer = null;
+
+      function buildHash() {
+        try {
+          var m = document.querySelector('meta[name="build-commit"]');
+          if (m && m.content) return m.content;
+        } catch (e) {}
+        return '';
+      }
+
+      // Mirror into localStorage + the hidden render-log node so the evidence
+      // survives even if the network write is lost.
+      function mirror() {
+        try { window.localStorage.setItem(LSKEY, JSON.stringify(log)); } catch (e) {}
+        try {
+          var el = document.getElementById('medibo-render-log');
+          if (el) {
+            var cur = {};
+            try { cur = JSON.parse(el.getAttribute('data-log') || '{}'); } catch (_) {}
+            for (var k in log) cur[k] = log[k];
+            el.setAttribute('data-log', JSON.stringify(cur));
+          }
+        } catch (e) {}
+      }
+
+      // keepalive:true — the request completes even though the page is being
+      // navigated away. Without it the URL we are chasing would never be
+      // recorded, because recording it is the last thing this page ever does.
+      // render_log_note MERGES keys (SECURITY DEFINER), so it works while
+      // signed out — render_log's own RLS only allows `authenticated` writes,
+      // which is why login-screen diagnostics have always come back empty.
+      function push() {
+        try {
+          fetch(SUPA + '/rest/v1/rpc/render_log_note', {
+            method: 'POST',
+            keepalive: true,
+            headers: {
+              'apikey': ANON,
+              'Authorization': 'Bearer ' + ANON,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ p_build: buildHash(), p_data: log }),
+          }).catch(function () {});
+        } catch (e) {}
+      }
+
+      function note(k, v, urgent) {
+        try { log[k] = String(v).slice(0, 900); } catch (e) { return; }
+        mirror();
+        if (urgent) { push(); return; }
+        try {
+          if (flushTimer) clearTimeout(flushTimer);
+          flushTimer = setTimeout(push, 700);
+        } catch (e) { push(); }
+      }
+
+      window.mediboNote = note;
+      window.mediboNoteFlush = push;
+
+      var urls = [];
+      function record(kind, url, extra) {
+        var line = kind + ' ' + (url || '(none)') + (extra ? ' [' + extra + ']' : '');
+        urls.push(line);
+        if (urls.length > 4) urls.shift();
+        note('c559_url', line, true);
+        note('c559_url_all', urls.join(' ;; '), true);
+      }
+
+      // ── 1. window.open ────────────────────────────────────────────────────
+      try {
+        var _open = window.open;
+        window.open = function (u, n) {
+          try { record('window.open', String(u), String(n || '')); } catch (e) {}
+          return _open.apply(window, arguments);
+        };
+      } catch (e) {}
+
+      // ── 2. Navigation API (location.href / assign / replace / links) ──────
+      try {
+        if (window.navigation && window.navigation.addEventListener) {
+          note('c559_navapi', 'yes');
+          window.navigation.addEventListener('navigate', function (ev) {
+            try {
+              var d = ev.destination ? ev.destination.url : '';
+              // Ignore Flutter's own in-app route pushes (#/... on our origin).
+              if (d && d.indexOf(location.origin) === 0) return;
+              record('navigate', d);
+            } catch (e) {}
+          });
+        } else {
+          note('c559_navapi', 'no');
+        }
+      } catch (e) {}
+
+      // ── 3. Anchor clicks, including programmatic a.click() ────────────────
+      try {
+        document.addEventListener('click', function (ev) {
+          try {
+            var n = ev.target;
+            var hops = 0;
+            while (n && n !== document && hops++ < 20) {
+              if (n.tagName === 'A' && n.href) {
+                record('a.click', n.href, n.target || '');
+                return;
+              }
+              n = n.parentNode;
+            }
+          } catch (e) {}
+        }, true);
+      } catch (e) {}
+
+      // ── 4. Form submits ───────────────────────────────────────────────────
+      try {
+        document.addEventListener('submit', function (ev) {
+          try { record('form submit', (ev.target && ev.target.action) || ''); } catch (e) {}
+        }, true);
+        var _submit = HTMLFormElement.prototype.submit;
+        HTMLFormElement.prototype.submit = function () {
+          try { record('form.submit()', this.action || ''); } catch (e) {}
+          return _submit.apply(this, arguments);
+        };
+      } catch (e) {}
+
+      // ── 5. The page left anyway ───────────────────────────────────────────
+      // If c559_unload fires with no c559_url, the navigation did NOT come from
+      // this document: it came from browser-drawn FedCM UI or from inside a
+      // cross-origin GIS iframe. That is itself the answer.
+      try {
+        window.addEventListener('pagehide', function () {
+          note('c559_unload', 'pagehide from ' + location.href, true);
+        }, true);
+        window.addEventListener('beforeunload', function () {
+          note('c559_unload', 'beforeunload from ' + location.href, true);
+        }, true);
+        document.addEventListener('visibilitychange', function () {
+          note('c559_vis', document.visibilityState + '@' +
+            Math.round((window.performance && performance.now()) || 0) + 'ms');
+        }, true);
+      } catch (e) {}
+
+      // ── 6. FedCM — is the browser's own chooser taking over? ──────────────
+      try {
+        if (navigator.credentials && navigator.credentials.get) {
+          var _credGet = navigator.credentials.get.bind(navigator.credentials);
+          navigator.credentials.get = function (opts) {
+            var cfg = '';
+            try { cfg = opts.identity.providers[0].configURL; } catch (e) {}
+            note('c559_fedcm', 'get(' + cfg + ')', true);
+            var p = _credGet(opts);
+            try {
+              p.then(function (c) {
+                note('c559_fedcm', 'resolved:' +
+                  (c ? ((c.token || c.id_token) ? 'token' : 'no-token') : 'null'), true);
+              }, function (e) {
+                note('c559_fedcm', 'rejected:' + ((e && e.name) || e) + ':' +
+                  ((e && e.message) || ''), true);
+              });
+            } catch (e) {}
+            return p;
+          };
+        }
+      } catch (e) {}
+
+      // ── 7. Is GIS loaded at all, and what does it get asked to do? ────────
+      var gisWrapped = false;
+      function wrapGis() {
+        if (gisWrapped) return true;
+        if (!(window.google && window.google.accounts && window.google.accounts.id)) return false;
+        gisWrapped = true;
+        note('c559_gis', 'loaded', true);
+        var id = window.google.accounts.id;
+        ['initialize', 'prompt', 'renderButton'].forEach(function (fn) {
+          try {
+            var orig = id[fn];
+            if (typeof orig !== 'function') return;
+            id[fn] = function () {
+              try {
+                note('c559_gis_' + fn, 'called@' +
+                  Math.round((window.performance && performance.now()) || 0) + 'ms', true);
+                if (fn === 'renderButton') note('c559_path_js', 'gis_button', true);
+              } catch (e) {}
+              return orig.apply(id, arguments);
+            };
+          } catch (e) {}
+        });
+        return true;
+      }
+      var gisTries = 0;
+      (function pollGis() {
+        try {
+          if (wrapGis()) return;
+          if (++gisTries > 100) { note('c559_gis', 'absent-after-20s'); return; }
+          setTimeout(pollGis, 200);
+        } catch (e) {}
+      })();
+
+      // ── 8. GIS iframes — proves GIS activity even inside a cross-origin frame
+      try {
+        var frames = 0;
+        new MutationObserver(function (recs) {
+          try {
+            for (var i = 0; i < recs.length; i++) {
+              var added = recs[i].addedNodes;
+              for (var j = 0; j < added.length; j++) {
+                var n = added[j];
+                if (!n || n.tagName !== 'IFRAME') continue;
+                var src = n.src || '';
+                if (src.indexOf('accounts.google.com') < 0) continue;
+                frames++;
+                note('c559_gis_iframe', 'n=' + frames + ' ' + src.slice(0, 260));
+              }
+            }
+          } catch (e) {}
+        }).observe(document.documentElement, { childList: true, subtree: true });
+      } catch (e) {}
+
+      // ── 9. Where did this page load from / return to? ─────────────────────
+      try {
+        note('c559_boot', location.href.slice(0, 400) +
+          ' std=' + (!!(window.matchMedia &&
+            window.matchMedia('(display-mode: standalone)').matches)));
+      } catch (e) {}
+    })();
+  </script>
+
   <title>mediBO</title>
   <script src="https://www.google.com/recaptcha/api.js" async defer></script>
 
-  <!-- Google Identity Services — ID-token flow for signInWithIdToken -->
-  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <!-- Google Identity Services — ID-token flow for signInWithIdToken.
+       CHANGE #559: onload/onerror report whether this script executed at all. -->
+  <script src="https://accounts.google.com/gsi/client" async defer
+          onload="try{window.mediboNote&&window.mediboNote('c559_gis_script','onload',true)}catch(e){}"
+          onerror="try{window.mediboNote&&window.mediboNote('c559_gis_script','onerror',true)}catch(e){}"></script>
 
   <!-- CHANGE #463 — Google Maps JS API for the Route tab map. Browser key
        "medibo-web-maps", restricted to medibo.in/*.pages.dev + Maps JS API
@@ -474,7 +741,7 @@
     })();
   </script>
 
-  <script src="flutter_bootstrap.js?v=18e9ee2f" async></script>
+  <script src="flutter_bootstrap.js?v=eb4b834d" async></script>
   <script>
     var recaptchaResolve = null;
     var recaptchaWidgetId = null;

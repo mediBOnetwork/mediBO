@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta name="build-commit" content="fdae0c0e">
+  <meta name="build-commit" content="51122607">
   <!-- CHANGE #238: SW permanently disabled. Unregister ALL SWs + wipe all caches on every load.
        No sessionStorage guard — runs unconditionally so even users whose old SW served this
        HTML from cache will have SWs cleared on the very next in-SW-controlled load.
@@ -138,10 +138,10 @@
        On every load, fetches /version.json (no-cache). If the live commit differs
        from the build-stamped commit below, does ONE hard reload so the PWA gets the
        newest bundle instead of staying on a stale cached build.
-       fdae0c0e is replaced with the actual short commit hash by deploy.sh. -->
+       51122607 is replaced with the actual short commit hash by deploy.sh. -->
   <script>
     (function () {
-      var _builtCommit = 'fdae0c0e';
+      var _builtCommit = '51122607';
       var _sessionKey  = 'c220_pwa_reloaded';
       function _rlWrite(key, val) {
         try {
@@ -159,7 +159,7 @@
           // Already reloaded once this session — skip to prevent loop.
           if (sessionStorage.getItem(_sessionKey)) return;
           // Skip if placeholder was not stamped (local dev / test build).
-          if (_builtCommit === 'fdae0c0e') return;
+          if (_builtCommit === '51122607') return;
           fetch('/version.json?_t=' + Date.now(), { cache: 'no-store' })
             .then(function (r) { return r.json(); })
             .then(function (data) {
@@ -175,7 +175,7 @@
       });
       // Wire confirmation — written once regardless of outcome.
       window.addEventListener('DOMContentLoaded', function () {
-        if (_builtCommit !== 'fdae0c0e') {
+        if (_builtCommit !== '51122607') {
           _rlWrite('c220_pwa_check_wired', 1);
         }
       });
@@ -474,7 +474,7 @@
     })();
   </script>
 
-  <script src="flutter_bootstrap.js?v=fdae0c0e" async></script>
+  <script src="flutter_bootstrap.js?v=51122607" async></script>
   <script>
     var recaptchaResolve = null;
     var recaptchaWidgetId = null;
@@ -695,6 +695,90 @@
       function gisReady() {
         return !!(window.google && window.google.accounts && window.google.accounts.id);
       }
+
+      // ── CHANGE #557: the browser's native FedCM account chooser ────────────
+      // google.accounts.id.prompt() carries Google's OWN suppression: once a
+      // user has dismissed One Tap a few times it stops displaying, and there
+      // is no way to clear that from the page. CHANGE #556 shipped and the
+      // render-log confirmed exactly that — prewarm=ready, one_tap=unavailable.
+      //
+      // navigator.credentials.get() with mediation:'required' asks the browser
+      // directly instead of going through One Tap. It ALWAYS shows the account
+      // chooser (never auto-selects), it lists EVERY Google account signed in
+      // on the device, and it is not subject to the One Tap cooldown. The
+      // chooser is drawn by the browser over the page, so an installed PWA is
+      // never navigated anywhere.
+      //
+      // mode:'active' (Chrome 132+) is the gesture-driven modal chooser. On
+      // older Chrome the member is simply ignored (unknown dictionary members
+      // are dropped per WebIDL), leaving the passive sheet — still correct.
+      window.mediboFedcmError = '';
+
+      window.mediboFedcmGet = function (clientId, hashedNonce) {
+        return new Promise(function (resolve, reject) {
+          var supported = false;
+          try {
+            supported = !!(window.IdentityCredential &&
+                           navigator.credentials && navigator.credentials.get);
+          } catch (e) { supported = false; }
+          if (!supported) {
+            window.mediboFedcmError = 'unsupported';
+            reject('fallback');
+            return;
+          }
+
+          var opts = {
+            identity: {
+              context: 'signin',
+              mode: 'active',
+              providers: [{
+                configURL: 'https://accounts.google.com/gsi/fedcm.json',
+                clientId: clientId,
+                nonce: hashedNonce,
+              }],
+            },
+            mediation: 'required',
+          };
+
+          var done = false;
+          var timer = setTimeout(function () {
+            if (done) return;
+            done = true;
+            window.mediboFedcmError = 'timeout';
+            reject('fallback');
+          }, 120000);
+
+          navigator.credentials.get(opts).then(function (cred) {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            var t = cred && (cred.token || cred.id_token);
+            if (t) { window.mediboFedcmError = ''; resolve(t); }
+            else { window.mediboFedcmError = 'empty-credential'; reject('fallback'); }
+          }).catch(function (err) {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            var name = (err && err.name) ? err.name : String(err);
+            var msg  = (err && err.message) ? err.message : '';
+            window.mediboFedcmError = name + (msg ? ':' + msg : '');
+            // The user closing the chooser must NOT cascade into a popup.
+            if (name === 'AbortError' || name === 'NetworkError' ||
+                name === 'IdentityCredentialError') {
+              reject('cancelled');
+            } else {
+              reject('fallback');
+            }
+          });
+        });
+      };
+
+      window.mediboLastGisError = function () {
+        try {
+          return String(window.mediboFedcmError || '') +
+                 '|' + String(window.mediboGisMoment || '');
+        } catch (e) { return ''; }
+      };
 
       function deliver(resp) {
         var p = _pending;

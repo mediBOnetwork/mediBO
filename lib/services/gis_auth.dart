@@ -121,6 +121,41 @@ String _sha256Hex(List<int> message) {
   return h.map((v) => v.toRadixString(16).padLeft(8, '0')).join();
 }
 
+@JS('mediboGisOneTap')
+external JSPromise<JSString?> _mediboGisOneTap(
+    JSString clientId, JSString hashedNonce);
+
+/// CHANGE #555: thrown by [gisOneTapWithNonce] to tell the caller what to do.
+class GisOneTapUnavailable implements Exception {
+  const GisOneTapUnavailable();
+}
+
+/// The user deliberately dismissed the One Tap sheet — do not fall back.
+class GisOneTapCancelled implements Exception {
+  const GisOneTapCancelled();
+}
+
+/// CHANGE #555: Google One Tap (FedCM), which renders as a bottom sheet on
+/// mobile web listing the device's signed-in accounts.
+///
+/// Throws [GisOneTapUnavailable] when the sheet could not be shown — the caller
+/// must then run the existing OAuth flow — or [GisOneTapCancelled] when the
+/// user dismissed it on purpose.
+Future<({String idToken, String rawNonce})> gisOneTapWithNonce() async {
+  final pair = _generateNoncePair();
+  String? token;
+  try {
+    final result =
+        await _mediboGisOneTap(_kGisClientId.toJS, pair.hashedNonce.toJS).toDart;
+    token = result?.toDart;
+  } catch (e) {
+    if (e.toString().contains('cancelled')) throw const GisOneTapCancelled();
+    throw const GisOneTapUnavailable();
+  }
+  if (token == null || token.isEmpty) throw const GisOneTapUnavailable();
+  return (idToken: token, rawNonce: pair.rawNonce);
+}
+
 /// Opens the GIS modal.
 /// Returns `(idToken, rawNonce)` on success, or throws on cancel/timeout.
 /// Correct mapping:

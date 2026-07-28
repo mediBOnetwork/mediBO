@@ -1,10 +1,10 @@
-// CHANGE #554 — login screen wrapper.
+// CHANGE #554/#555 — login screen wrapper.
 //
 // All UI and flow live in login_view.dart, which is platform-free and takes the
 // backend contract through [LoginApi]. This file is the only place that knows
-// about Supabase: it supplies the real RPC/edge-function calls, keeps the
-// existing Google OAuth entry point unchanged, and performs the navigation to
-// the backend's home_route.
+// about Supabase: it supplies the real RPC/edge-function calls, drives the
+// Google One Tap bottom sheet (falling back to the existing OAuth flow), and
+// performs the navigation to the backend's home_route.
 
 import 'dart:async';
 import 'dart:convert';
@@ -13,17 +13,17 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../services/gis_auth.dart';
 import '../../user_state.dart';
 import '../../utils/render_log.dart';
 import 'login_view.dart';
 
-/// Supabase-backed implementation of the CHANGE #554 login contract.
+/// Supabase-backed implementation of the CHANGE #554/#555 login contract.
 class SupabaseLoginApi implements LoginApi {
-  SupabaseLoginApi({required this.googleSignInImpl});
+  SupabaseLoginApi({required this.oauthFallback});
 
-  /// The existing Google OAuth call — passed in so this class never reaches
-  /// into the widget tree, and so the OAuth flow itself stays untouched.
-  final Future<void> Function() googleSignInImpl;
+  /// The existing OAuth PKCE redirect, used when One Tap cannot be shown.
+  final Future<void> Function() oauthFallback;
 
   SupabaseClient get _c => Supabase.instance.client;
 
@@ -70,8 +70,41 @@ class SupabaseLoginApi implements LoginApi {
   @override
   Future<Map<String, dynamic>> session() async => _asMap(await _c.rpc('my_session'));
 
+  /// CHANGE #555: one tap from the button to signed in.
+  ///
+  /// google.accounts.id.prompt() renders as a bottom sheet on mobile web
+  /// listing the device's signed-in Google accounts. Picking one returns a JWT
+  /// credential, which goes straight to signInWithIdToken. If the sheet cannot
+  /// be shown — no Google session, FedCM blocked, unsupported browser — we
+  /// silently fall back to the existing OAuth redirect, so the button always
+  /// does something.
   @override
-  Future<void> googleSignIn() => googleSignInImpl();
+  Future<void> googleSignIn() async {
+    try {
+      final (:idToken, :rawNonce) = await gisOneTapWithNonce();
+      try {
+        RenderLog.write('c555_method', 'one_tap');
+      } catch (_) {}
+      await _c.auth.signInWithIdToken(
+        provider: OAuthProvider.google,
+        idToken: idToken,
+        nonce: rawNonce,
+      );
+      try {
+        RenderLog.write('c555_session', 'established');
+      } catch (_) {}
+    } on GisOneTapCancelled {
+      // The user closed the sheet on purpose — leave them on the screen.
+      try {
+        RenderLog.write('c555_one_tap', 'cancelled');
+      } catch (_) {}
+    } on GisOneTapUnavailable {
+      try {
+        RenderLog.write('c555_one_tap', 'unavailable_fallback');
+      } catch (_) {}
+      await oauthFallback();
+    }
+  }
 }
 
 class LoginScreen extends StatefulWidget {
@@ -92,12 +125,12 @@ class _LoginScreenState extends State<LoginScreen> {
   void initState() {
     super.initState();
     _api = SupabaseLoginApi(
-      googleSignInImpl: () => UserState.read(context).signInWithGoogle(),
+      oauthFallback: () => UserState.read(context).signInWithGoogleOAuth(),
     );
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       try {
-        RenderLog.write('c554_login_rendered', true);
+        RenderLog.write('c555_login_rendered', true);
       } catch (_) {}
       // Already signed in (e.g. returning to /login with a live session).
       try {
@@ -161,6 +194,10 @@ class _LoginScreenState extends State<LoginScreen> {
       body: SafeArea(
         child: Stack(
           children: [
+            // LoginView owns its own full-height layout (wash band + thumb-reach
+            // actions) and its own scrolling, so it must not be boxed here.
+            // It goes first so the route back button paints above it.
+            Positioned.fill(child: LoginView(api: _api, onHome: _goTo)),
             Positioned(
               top: 8,
               left: 8,
@@ -171,16 +208,6 @@ class _LoginScreenState extends State<LoginScreen> {
                   if (Navigator.canPop(context)) Navigator.pop(context);
                 },
                 tooltip: 'Back',
-              ),
-            ),
-            Center(
-              child: SingleChildScrollView(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 28, vertical: 40),
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 420),
-                  child: LoginView(api: _api, onHome: _goTo),
-                ),
               ),
             ),
           ],

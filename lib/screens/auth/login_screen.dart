@@ -113,16 +113,19 @@ class SupabaseLoginApi implements LoginApi {
   /// let GIS build its own accounts.google.com URL, and it added DOM. Nothing
   /// here renders any markup — the login screen layout is untouched.
   @override
-  Future<void> googleSignIn({
+  Future<GoogleOutcome> googleSignIn({
     required String sheetTitle,
     required String sheetSubtitle,
     required String otherAccount,
   }) async {
-    // 1 — GIS One Tap. Called with no awaits before it so the tap's user
-    // activation is still live; without it Chrome refuses to show the sheet.
-    // The library was already loaded and initialize()d at screen mount.
-    // CHANGE #559: instrumentation only — records WHICH branch actually ran,
-    // flushed immediately so it survives the browser leaving the page.
+    // GIS One Tap. Called with no awaits before it so the tap's user activation
+    // is still live; without it Chrome refuses to show the sheet. The library
+    // was already loaded and initialize()d at screen mount.
+    //
+    // CHANGE #563: this method NEVER navigates. A dismissal or a suppressed
+    // sheet returns an outcome and the view decides what to show; only
+    // [googleBrowserSignIn], behind a deliberate tap, may open the full-page
+    // chooser.
     _logNow('c559_entry', 'login_screen');
     _logNow('c559_path', 'unknown');
     try {
@@ -132,28 +135,32 @@ class SupabaseLoginApi implements LoginApi {
       await _finishIdToken(idToken, rawNonce);
       _log('c562_session', 'established');
       _logNow('c559_path', 'one_tap_signed_in');
-      return;
+      return GoogleOutcome.signedIn;
     } on GisOneTapCancelled {
-      // Dismissed. Per the CHANGE #562 spec this still falls through to
-      // signInWithOAuth rather than dead-ending the button.
-      _log('c562_path', 'one_tap_cancelled');
-      _logNow('c559_path', 'one_tap_cancelled');
-      _logNow('c562_moment', lastGisError());
+      // The user closed the sheet. That is an answer: stay on the login screen.
+      _log('c563_path', 'one_tap_closed');
+      _logNow('c559_path', 'one_tap_closed');
+      return GoogleOutcome.closed;
+    } on GisOneTapSuppressed {
+      // Google would not display it — cooldown, no Google session, or a FedCM
+      // refusal. Reveal the note + link instead of going anywhere.
+      _log('c563_path', 'one_tap_suppressed');
+      _logNow('c559_path', 'one_tap_suppressed');
+      return GoogleOutcome.suppressed;
     } on GisOneTapUnavailable {
-      _log('c562_one_tap', 'unavailable');
+      _log('c563_path', 'one_tap_unavailable');
       _logNow('c559_path', 'one_tap_unavailable');
-      _logNow('c562_moment', lastGisError());
+      return GoogleOutcome.suppressed;
     }
+  }
 
-    // 2 — supabase.auth.signInWithOAuth, reached when One Tap was unavailable
-    // or dismissed.
-    //
-    // signInWithOAuth goes to Supabase's /authorize, which builds a complete,
-    // correct URL (response_type included) and then redirects to Google. It is
-    // the ONLY step permitted to navigate the browser off the page.
-    _log('c558_path',
-        isStandalonePwa() ? 'supabase_oauth_in_pwa' : 'supabase_oauth');
-    // CHANGE #559: last line before anything is allowed to leave the app.
+  /// CHANGE #563: the deliberate browser-chooser tap, and the only place in the
+  /// login flow that is allowed to leave the page. signInWithOAuth goes through
+  /// Supabase's /authorize, which builds the complete URL including
+  /// response_type.
+  @override
+  Future<void> googleBrowserSignIn() async {
+    _logNow('c563_path', 'browser_link_tapped');
     _logNow('c559_path', 'oauth_called');
     await oauthFallback();
     _logNow('c559_oauth', 'returned_without_navigating');

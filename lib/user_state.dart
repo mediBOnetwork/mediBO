@@ -509,10 +509,14 @@ class AuthNotifier extends ChangeNotifier {
     try { RenderLog.writeNow('c559_entry', 'home_shell'); } catch (_) {}
     try { RenderLog.writeNow('c559_path', 'unknown'); } catch (_) {}
 
-    // ── Attempt A: GIS One Tap (no navigation) ─────────────────────────────
+    // ── GIS One Tap (no navigation, ever) ──────────────────────────────────
     // Google draws the sheet itself and lists the device's signed-in accounts;
-    // its id_token goes straight to Supabase via signInWithIdToken. This is the
-    // only Google mechanism that has ever produced a successful login here.
+    // its id_token goes straight to Supabase via signInWithIdToken.
+    //
+    // CHANGE #563: this method NEVER falls through to signInWithOAuth. A
+    // dismissal or a suppressed sheet rethrows, so the caller just re-enables
+    // its button — the full-page accounts.google.com chooser must appear ONLY
+    // from a deliberate tap on the login screen's browser link.
     try {
       RenderLog.write('c310_method', 'gis_idtoken');
       final (:idToken, :rawNonce) = await gisPromptOneTap();
@@ -530,33 +534,23 @@ class AuthNotifier extends ChangeNotifier {
       RenderLog.write('c308_session', 'established');
       return; // success — done
     } on GisOneTapCancelled {
-      // Dismissed. Per the CHANGE #562 spec this falls through to the OAuth
-      // redirect below rather than dead-ending the button.
-      RenderLog.write('c562_path', 'one_tap_cancelled');
-      RenderLog.writeNow('c559_path', 'one_tap_cancelled');
+      RenderLog.write('c563_path', 'one_tap_closed');
+      RenderLog.writeNow('c559_path', 'one_tap_closed');
       RenderLog.write('c310_idtoken', 'none');
+      rethrow;
+    } on GisOneTapSuppressed {
+      RenderLog.write('c563_path', 'one_tap_suppressed');
+      RenderLog.writeNow('c559_path', 'one_tap_suppressed');
+      RenderLog.writeNow('c563_moment', lastGisError());
+      RenderLog.write('c310_idtoken', 'none');
+      rethrow;
     } on GisOneTapUnavailable {
-      RenderLog.write('c562_one_tap', lastGisError());
+      RenderLog.write('c563_path', 'one_tap_unavailable');
       RenderLog.writeNow('c559_path', 'one_tap_unavailable');
-      RenderLog.writeNow('c562_moment', lastGisError());
       RenderLog.write('c310_gis_loaded', 'false');
       RenderLog.write('c310_idtoken', 'none');
+      rethrow;
     }
-
-    // ── Attempt B: Supabase OAuth PKCE redirect ────────────────────────────
-    // The ONLY path that may navigate to Google, and it goes through Supabase's
-    // /authorize — which builds a complete URL including response_type.
-    RenderLog.write('c310_method', 'oauth_redirect');
-    RenderLog.write('c308_login_method', 'oauth_redirect');
-    RenderLog.write('c308_opened_external', 'true');
-    RenderLog.write('c562_path', 'supabase_oauth');
-    RenderLog.writeNow('c559_path', 'oauth_called');
-    await Supabase.instance.client.auth.signInWithOAuth(
-      OAuthProvider.google,
-      redirectTo: 'https://medibo.in',
-    );
-    RenderLog.write('c310_session', 'redirect_initiated');
-    RenderLog.writeNow('c559_oauth', 'returned_without_navigating');
   }
 
   /// CHANGE #555: the OAuth PKCE redirect on its own, unchanged from Attempt B
@@ -577,6 +571,11 @@ class AuthNotifier extends ChangeNotifier {
 
   Future<void> signOut() async {
     _explicitSignOut = true;
+    // CHANGE #563: forget the auto-selected account, so the next sign-in always
+    // shows the chooser instead of silently reusing the last one.
+    try {
+      RenderLog.write('c563_disable_auto', gisDisableAutoSelect() ? 'ok' : 'no_gis');
+    } catch (_) {}
     RenderLog.write('auth54_signout', 'scope=local; reason=manual_logout');
     await Supabase.instance.client.auth.signOut(scope: SignOutScope.local);
   }

@@ -152,11 +152,20 @@ bool isStandalonePwa() {
   }
 }
 
-/// The FedCM chooser could not be shown — fall through to the Supabase OAuth
-/// redirect. (Named for the One Tap sheet it originally described; kept so the
-/// call sites read the same after CHANGE #561 removed GIS.)
+/// One Tap could not be shown at all (library missing, or a moment we could not
+/// classify).
 class GisOneTapUnavailable implements Exception {
   const GisOneTapUnavailable();
+}
+
+/// CHANGE #563: Google refused to display the sheet — cooldown after an earlier
+/// dismissal, no Google session on the device, or a FedCM refusal.
+///
+/// This must NEVER trigger a navigation. The caller shows the backend's
+/// `google_unavailable_note` and reveals the `google_browser_label` link; only a
+/// deliberate tap on that link may open the full-page browser chooser.
+class GisOneTapSuppressed implements Exception {
+  const GisOneTapSuppressed();
 }
 
 /// The user deliberately dismissed the chooser — do not fall back.
@@ -171,14 +180,18 @@ class GisOneTapCancelled implements Exception {
 ({String rawNonce, String hashedNonce})? _warmPair;
 
 ({String idToken, String rawNonce}) _wrap(String? token) {
-  if (token == null || token.isEmpty) throw const GisOneTapUnavailable();
+  if (token == null || token.isEmpty) throw const GisOneTapSuppressed();
   final raw = _warmPair?.rawNonce;
-  if (raw == null) throw const GisOneTapUnavailable();
+  if (raw == null) throw const GisOneTapSuppressed();
   return (idToken: token, rawNonce: raw);
 }
 
 Never _rethrowAsGis(Object e) {
-  if (e.toString().contains('cancelled')) throw const GisOneTapCancelled();
+  final s = e.toString();
+  if (s.contains('cancelled')) throw const GisOneTapCancelled();
+  // CHANGE #563: everything the JS bridge cannot turn into a credential now
+  // arrives as 'suppressed' — nothing here may cause a navigation.
+  if (s.contains('suppressed')) throw const GisOneTapSuppressed();
   throw const GisOneTapUnavailable();
 }
 
@@ -211,16 +224,32 @@ Future<bool> gisPrewarm() async {
 /// MUST be called directly from the tap handler with no awaits in between, or
 /// the user activation is lost and the sheet will not display.
 ///
-/// Throws [GisOneTapCancelled] when the user dismissed it, or
-/// [GisOneTapUnavailable] when it could not be shown — the caller falls back to
-/// supabase.auth.signInWithOAuth in both cases.
+/// CHANGE #563: throws [GisOneTapCancelled] when the user closed the sheet —
+/// the caller stays put and re-enables the button — or [GisOneTapSuppressed]
+/// when Google refused to display it, which reveals the browser-chooser link.
+/// Neither outcome may navigate on its own.
 Future<({String idToken, String rawNonce})> gisPromptOneTap() async {
   try {
     final r = await _mediboGisPromptNow().toDart;
     return _wrap(r?.toDart);
+  } on GisOneTapSuppressed {
+    rethrow;
   } on GisOneTapUnavailable {
     rethrow;
   } catch (e) {
     _rethrowAsGis(e);
+  }
+}
+
+@JS('mediboGisDisableAutoSelect')
+external bool _mediboGisDisableAutoSelectJs();
+
+/// CHANGE #563: called on logout so the next sign-in always shows the chooser
+/// rather than silently reusing the last account.
+bool gisDisableAutoSelect() {
+  try {
+    return _mediboGisDisableAutoSelectJs();
+  } catch (_) {
+    return false;
   }
 }

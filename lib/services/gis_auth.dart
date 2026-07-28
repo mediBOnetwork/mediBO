@@ -244,6 +244,45 @@ Future<({String idToken, String rawNonce})> gisPromptOneTap() async {
   }
 }
 
+@JS('mediboGisPopup')
+external JSPromise<JSString?> _mediboGisPopup(
+    JSString title, JSString subtitle, JSString cancelLabel);
+
+/// CHANGE #568: the FALLBACK — GIS's own button, rendered into a hidden
+/// container and clicked programmatically, opening the "Choose an account to
+/// continue to mediBO" chooser in a popup (ux_mode:'popup', never 'redirect')
+/// that closes itself and hands the credential back to this document.
+///
+/// Restored because #567 proved the One Tap cooldown is server-side: clearing
+/// g_state AND re-initialising with a fresh nonce both ran, and Google still
+/// refused the sheet. This path is not subject to that cooldown.
+///
+/// GIS renders its button inside a cross-origin iframe, so the synthetic click
+/// is usually dropped; if no credential arrives within ~1.2 s the container is
+/// revealed so the user can tap the real button. That reveal is the safety net
+/// that makes a dead end impossible.
+///
+/// Uses the nonce pair minted by the One Tap attempt that preceded it, so the
+/// hashed half Google signed against still matches the raw half sent to
+/// Supabase.
+Future<({String idToken, String rawNonce})> gisPopupSignIn({
+  required String title,
+  required String subtitle,
+  required String cancelLabel,
+}) async {
+  try {
+    final r =
+        await _mediboGisPopup(title.toJS, subtitle.toJS, cancelLabel.toJS).toDart;
+    return _wrap(r?.toDart);
+  } on GisOneTapSuppressed {
+    rethrow;
+  } on GisOneTapUnavailable {
+    rethrow;
+  } catch (e) {
+    _rethrowAsGis(e);
+  }
+}
+
 @JS('mediboGisDisableAutoSelect')
 external bool _mediboGisDisableAutoSelectJs();
 

@@ -202,13 +202,10 @@ class _LoginViewState extends State<LoginView> {
           // CHANGE #563: the user said no. Stay put, button re-enables below.
           break;
         case GoogleOutcome.suppressed:
-          // CHANGE #564: neither sheet could be shown. Inline message only, and
-          // only if the backend supplies one — never a hardcoded string, and
-          // never a navigation.
-          final note = _cfg?['google_unavailable_note'];
-          if (note is String && note.isNotEmpty) {
-            setState(() => _message = note);
-          }
+          // CHANGE #568: the note is gone. With the popup restored the only way
+          // to land here is both the sheet AND the popup failing, which leaves
+          // nothing useful to say — and never a navigation.
+          break;
       }
     } catch (_) {
       // Keep whatever the backend last said; never invent error copy.

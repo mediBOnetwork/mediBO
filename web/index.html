@@ -869,6 +869,56 @@
     };
   </script>
 
+  <!-- CHANGE #568: host for the GIS button popup fallback (restored).
+       It starts INVISIBLE (opacity:0, pointer-events:none) rather than
+       display:none, because renderButton needs a laid-out box to draw into.
+       The programmatic click happens while it is invisible, so nothing is shown
+       to the user. It is only made visible if that click does not produce a
+       credential — see mediboGisPopup(). Until then the login screen is
+       pixel-identical. -->
+  <style>
+    @keyframes mediboSheetUp {
+      from { transform: translateY(100%); }
+      to   { transform: translateY(0); }
+    }
+    #gis-rb-overlay.mb-shown #gis-rb-panel {
+      animation: mediboSheetUp 260ms cubic-bezier(.22,.61,.36,1);
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #gis-rb-overlay.mb-shown #gis-rb-panel { animation: none; }
+    }
+    #gis-rb-overlay {
+      position: fixed; inset: 0; z-index: 99998;
+      display: flex; align-items: flex-end; justify-content: center;
+      background: rgba(0,0,0,0.45);
+      opacity: 0; pointer-events: none; visibility: hidden;
+    }
+    #gis-rb-overlay.mb-shown { opacity: 1; pointer-events: auto; visibility: visible; }
+  </style>
+  <div id="gis-rb-overlay" aria-hidden="true">
+    <div id="gis-rb-panel"
+         style="background:#fff;border-radius:22px 22px 0 0;
+                padding:10px 24px calc(28px + env(safe-area-inset-bottom));
+                display:flex;flex-direction:column;align-items:center;gap:14px;
+                box-shadow:0 -8px 40px rgba(0,0,0,0.22);
+                width:100%;max-width:520px;min-height:50vh;box-sizing:border-box;">
+      <div style="width:40px;height:4px;border-radius:2px;background:#E5E7EB;margin:2px 0 10px;"></div>
+      <p id="gis-rb-title"
+         style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+                font-size:19px;font-weight:700;color:#111827;text-align:center;"></p>
+      <p id="gis-rb-subtitle"
+         style="margin:-6px 0 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+                font-size:14px;color:#6B7280;text-align:center;"></p>
+      <div id="gis-rb-container"
+           style="min-height:44px;width:100%;display:flex;justify-content:center;
+                  align-items:center;margin-top:10px;"></div>
+      <button id="gis-rb-cancel"
+              style="background:none;border:none;color:#6B7280;cursor:pointer;
+                     font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+                     font-size:14px;padding:10px 24px;border-radius:8px;margin-top:auto;"></button>
+    </div>
+  </div>
+
   <!-- ═══════════════════════════════════════════════════════════════════════
        GOOGLE SIGN-IN BRIDGE — CHANGE #562 (GIS One Tap, restored)
 
@@ -1002,6 +1052,140 @@
         try { return String(window.location.origin || ''); } catch (e) { return ''; }
       };
 
+      // ── CHANGE #568: FALLBACK — the GIS button popup ──────────────────────
+      // Restored because #567 proved the One Tap cooldown is server-side: the
+      // g_state clear AND the fresh-nonce re-initialize both ran and Google
+      // still refused the sheet. This is the only cooldown-free chooser, and it
+      // is proven on this setup (#556 c556_path=sheet_button -> session
+      // established; #566 c564_popup=credential).
+      // renderButton draws Google's button, and ux_mode:'popup' (set in
+      // initialize) makes it open the "Choose an account to continue to mediBO"
+      // chooser in a popup that closes itself and hands the credential back to
+      // this document. It is NOT subject to the One Tap cooldown, so this
+      // branch always has a working chooser.
+      function clickRenderedButton(ctr) {
+        var targets = [];
+        try {
+          targets.push(ctr.querySelector('div[role="button"]'));
+          targets.push(ctr.querySelector('[role="button"]'));
+          targets.push(ctr.querySelector('button'));
+          targets.push(ctr.firstElementChild);
+        } catch (e) {}
+        var clicked = false;
+        for (var i = 0; i < targets.length; i++) {
+          var t = targets[i];
+          if (!t) continue;
+          try {
+            ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']
+              .forEach(function (type) {
+                var Ctor = (type.indexOf('pointer') === 0 && window.PointerEvent)
+                  ? PointerEvent : MouseEvent;
+                t.dispatchEvent(new Ctor(type, {
+                  bubbles: true, cancelable: true, view: window,
+                }));
+              });
+            if (typeof t.click === 'function') t.click();
+            clicked = true;
+            break;
+          } catch (e) {}
+        }
+        return clicked;
+      }
+
+      window.mediboGisPopup = function (title, subtitle, cancelLabel) {
+        return new Promise(function (resolve, reject) {
+          var settled = false;
+          var timer = null;
+          var revealTimer = null;
+          var tag = Math.random();
+
+          function note(v) {
+            try { window.mediboNote && window.mediboNote('c568_popup', v, true); } catch (e) {}
+          }
+          function hide() {
+            var ov = document.getElementById('gis-rb-overlay');
+            if (ov) { ov.className = ''; ov.onclick = null; }
+            var b = document.getElementById('gis-rb-cancel');
+            if (b) b.onclick = null;
+          }
+          function settle(fn, val) {
+            if (settled) return;
+            settled = true;
+            if (timer) clearTimeout(timer);
+            if (revealTimer) clearTimeout(revealTimer);
+            if (_pending && _pending.tag === tag) _pending = null;
+            hide();
+            fn(val);
+          }
+
+          if (!_ready || !gisReady()) { note('blocked'); reject('suppressed'); return; }
+
+          var ov  = document.getElementById('gis-rb-overlay');
+          var ctr = document.getElementById('gis-rb-container');
+          var btn = document.getElementById('gis-rb-cancel');
+          var ttl = document.getElementById('gis-rb-title');
+          var sub = document.getElementById('gis-rb-subtitle');
+          if (!ov || !ctr || !btn) { note('blocked'); reject('suppressed'); return; }
+
+          if (ttl) { ttl.textContent = title || ''; ttl.style.display = title ? '' : 'none'; }
+          if (sub) { sub.textContent = subtitle || ''; sub.style.display = subtitle ? '' : 'none'; }
+          btn.textContent = cancelLabel || '';
+          btn.style.display = cancelLabel ? '' : 'none';
+
+          _pending = {
+            tag: tag,
+            resolve: function (c) { note('credential'); settle(resolve, c); },
+            reject: function (r) { settle(reject, r); },
+          };
+
+          ctr.innerHTML = '';
+          try {
+            google.accounts.id.renderButton(ctr, {
+              type: 'standard', shape: 'pill', theme: 'outline',
+              text: 'continue_with', size: 'large', logo_alignment: 'left', width: 280,
+            });
+          } catch (e) {
+            _pending = null;
+            note('error:renderButton:' + ((e && e.message) || e));
+            reject('suppressed');
+            return;
+          }
+
+          // The button is laid out but invisible. Try the programmatic click.
+          note('opened');
+          setTimeout(function () {
+            if (settled) return;
+            var clicked = false;
+            try { clicked = clickRenderedButton(ctr); } catch (e) {
+              note('error:click:' + ((e && e.message) || e));
+            }
+            // GIS renders its button inside a cross-origin iframe
+            // (accounts.google.com/gsi/button), so a synthetic click in this
+            // document usually cannot reach the handler inside it. If no
+            // credential arrives shortly, reveal the sheet so the user can tap
+            // the real button — the path that signed in successfully on build
+            // c9ac1105 (c564_popup=credential). Never a dead end.
+            revealTimer = setTimeout(function () {
+              if (settled) return;
+              ov.className = 'mb-shown';
+              ov.setAttribute('aria-hidden', 'false');
+              note(clicked ? 'shown_after_click_ignored' : 'shown_click_unavailable');
+              var openedAt = Date.now();
+              btn.onclick = function () {
+                if (Date.now() - openedAt < 400) return;
+                settle(reject, 'cancelled');
+              };
+              ov.onclick = function (ev) {
+                if (Date.now() - openedAt < 400) return;
+                if (ev.target === ov) settle(reject, 'cancelled');
+              };
+            }, 1200);
+          }, 250);
+
+          timer = setTimeout(function () { settle(reject, 'cancelled'); }, 90000);
+        });
+      };
+
       // ── CHANGE #565: kill GIS's dismissal cooldown ────────────────────────
       // GIS records One Tap dismissals in a FIRST-PARTY cookie named g_state on
       // our own domain, and after a few cancels it stops displaying the sheet
@@ -1049,9 +1233,9 @@
       // ── CHANGE #567: the ONLY Google entry point ──────────────────────────
       // Every tap runs the full reset before prompt(), because clearing the
       // g_state cookie alone does not clear GIS's in-memory suppression:
-      //   a. log document.cookie                       -> c567_cookie_before
+      //   a. log document.cookie                       -> c568_cookie_before
       //   b. delete g_state on every domain/path variant
-      //   c. log document.cookie again                 -> c567_cookie_after
+      //   c. log document.cookie again                 -> c568_cookie_after
       //   d. disableAutoSelect()
       //   e. initialize() again with a FRESH nonce (resets in-memory state)
       //   f. prompt()
@@ -1075,7 +1259,7 @@
           }
           function moment(v) {
             try { window.mediboGisMoment = v; } catch (e) {}
-            note('c567_moment', v);
+            note('c568_moment', v);
           }
           function probe(n, name) {
             try { return !!(n[name] && n[name]()); } catch (e) { return false; }
@@ -1102,7 +1286,7 @@
             }
 
             // (a)
-            try { note('c567_cookie_before', String(document.cookie || '').slice(0, 200)); } catch (e) {}
+            try { note('c568_cookie_before', String(document.cookie || '').slice(0, 200)); } catch (e) {}
 
             // (b)
             var had = false;
@@ -1124,8 +1308,8 @@
             } catch (e) {}
 
             // (c)
-            try { note('c567_cookie_after', String(document.cookie || '').slice(0, 200)); } catch (e) {}
-            note('c567_gstate', had ? 'cleared' : 'absent');
+            try { note('c568_cookie_after', String(document.cookie || '').slice(0, 200)); } catch (e) {}
+            note('c568_gstate', had ? 'cleared' : 'absent');
 
             // (d)
             try { google.accounts.id.disableAutoSelect(); } catch (e) {}

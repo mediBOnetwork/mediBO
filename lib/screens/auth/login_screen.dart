@@ -137,27 +137,20 @@ class SupabaseLoginApi implements LoginApi {
       _log('c557_one_tap', 'unavailable');
     }
 
-    // 3 — our own half-screen sheet with the GIS button (popup ux_mode).
-    try {
-      final (:idToken, :rawNonce) = await gisSheetSignIn(
-        title: sheetTitle,
-        subtitle: sheetSubtitle,
-        cancelLabel: otherAccount,
-      );
-      _log('c557_path', 'sheet_button');
-      await _finishIdToken(idToken, rawNonce);
-      _log('c557_session', 'established');
-      return;
-    } on GisOneTapCancelled {
-      _log('c557_path', 'sheet_cancelled');
-      return;
-    } on GisOneTapUnavailable {
-      _log('c557_sheet', 'unavailable');
-    }
-
-    // 4 — last resort. Records whether this cost an installed PWA its chrome.
-    _log('c557_path',
-        isStandalonePwa() ? 'oauth_redirect_in_pwa' : 'oauth_redirect');
+    // 3 — CHANGE #558: supabase.auth.signInWithOAuth.
+    //
+    // This step used to be gisSheetSignIn() — our own sheet hosting the GIS
+    // button. That button hands control to the GIS library, which builds its
+    // own accounts.google.com URL and sends the browser there WITHOUT ever
+    // calling Supabase. The Supabase auth log proved it: the failing attempt
+    // produced no /authorize request at all, and Google rejected the
+    // GIS-built URL with "Access blocked: response_type missing".
+    //
+    // signInWithOAuth goes to Supabase's /authorize, which builds a complete,
+    // correct URL (response_type included) and then redirects to Google. It is
+    // now the only step permitted to navigate the browser off the page.
+    _log('c558_path',
+        isStandalonePwa() ? 'supabase_oauth_in_pwa' : 'supabase_oauth');
     await oauthFallback();
   }
 }

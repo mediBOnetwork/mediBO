@@ -477,23 +477,35 @@ class AuthNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
-  // CHANGE #310: Two-attempt Google sign-in.
-  // Attempt A: GIS programmatic prompt (no rendered HTML button — avoids overlay blocking Flutter).
-  //   Uses google.accounts.id.prompt() via gisSignInWithNonce() with a 3-second readiness guard.
-  //   Falls through to Attempt B ONLY when GIS library itself is unavailable (load timeout).
-  //   User dismissing the prompt just re-enables the button — no browser redirect.
-  // Attempt B: Standard OAuth PKCE redirect — only used when GIS can't load at all.
+  // CHANGE #558: Two-attempt Google sign-in, with every direct-to-Google
+  // navigation removed.
+  //
+  // WHY: Attempt A used to be gisSignInWithNonce(), which renders the GIS
+  // button (google.accounts.id.renderButton) and lets the GIS library take the
+  // browser to accounts.google.com on its own. That URL is built by GIS, not by
+  // Supabase — it never hits /authorize, and when GIS omits response_type from
+  // it Google answers "Access blocked: response_type missing". The Supabase auth
+  // log proved exactly this: the failing attempt produced NO /authorize request
+  // at all, while every succeeding attempt showed /authorize or grant_type=id_token.
+  //
+  // Attempt A is now the browser's own FedCM chooser (navigator.credentials.get),
+  // which is drawn over the page and never navigates anywhere, and its id_token
+  // goes to Supabase via signInWithIdToken.
+  // Attempt B is supabase.auth.signInWithOAuth — the ONLY thing allowed to send
+  // the browser to Google, and it does so through Supabase's /authorize.
   Future<void> signInWithGoogle() async {
     // CHANGE #399: log input type + launch marker synchronously, before any
     // await, so the tap-to-launch chain has no async gap.
     try { RenderLog.write('c399_input_type', isCoarsePointer() ? 'touch' : 'mouse'); } catch (_) {}
     try { RenderLog.write('c399_google_auth_launch', 'fired'); } catch (_) {}
 
-    // ── Attempt A: GIS programmatic prompt ──────────────────────────────────
-    bool gisLibraryUnavailable = false;
+    // ── Attempt A: the browser's native FedCM chooser (no navigation) ───────
+    // Unchanged in appearance: same navigator.credentials.get() chooser, same
+    // client ID, same nonce pair as CHANGE #557.
     try {
       RenderLog.write('c310_method', 'gis_idtoken');
-      final (:idToken, :rawNonce) = await gisSignInWithNonce();
+      final (:idToken, :rawNonce) = await fedcmChooseAccount();
+      RenderLog.write('c558_path', 'fedcm_chooser');
       RenderLog.write('c310_gis_loaded', 'true');
       RenderLog.write('c310_idtoken', 'got');
       await Supabase.instance.client.auth.signInWithIdToken(
@@ -505,29 +517,27 @@ class AuthNotifier extends ChangeNotifier {
       RenderLog.write('c308_login_method', 'gis_idtoken');
       RenderLog.write('c308_session', 'established');
       return; // success — done
-    } catch (e) {
-      final errStr = e.toString();
-      // Distinguish: GIS library failed to load (fall through to OAuth)
-      // vs user dismissed the prompt or prompt was suppressed (just re-enable button).
-      gisLibraryUnavailable = errStr.contains('gis-load-timeout') ||
-          errStr.contains('gis-not-loaded') ||
-          errStr.contains('gis-init-error');
-      RenderLog.write('c310_gis_loaded', gisLibraryUnavailable ? 'false' : 'true');
+    } on GisOneTapCancelled {
+      // The user closed the chooser — that is a decision, not a failure. Do NOT
+      // escalate to a redirect; just re-enable the button.
+      RenderLog.write('c558_path', 'fedcm_cancelled');
       RenderLog.write('c310_idtoken', 'none');
-
-      if (!gisLibraryUnavailable) {
-        // User cancelled / prompt suppressed — don't open browser, just re-enable.
-        // Throwing here propagates to _googleSignIn's catch → finally re-enables button.
-        rethrow;
-      }
-      // GIS unavailable → fall through to OAuth redirect below
+      rethrow;
+    } on GisOneTapUnavailable {
+      // FedCM genuinely unavailable (old browser, no IdentityCredential) →
+      // fall through to the Supabase OAuth redirect below.
+      RenderLog.write('c558_fedcm', lastGisError());
+      RenderLog.write('c310_gis_loaded', 'false');
+      RenderLog.write('c310_idtoken', 'none');
     }
 
-    // ── Attempt B: OAuth PKCE redirect ─────────────────────────────────────
-    // Only reached when GIS library itself could not load (load timeout / not present).
+    // ── Attempt B: Supabase OAuth PKCE redirect ────────────────────────────
+    // The ONLY path that may navigate to Google, and it goes through Supabase's
+    // /authorize — which builds a complete URL including response_type.
     RenderLog.write('c310_method', 'oauth_redirect');
     RenderLog.write('c308_login_method', 'oauth_redirect');
     RenderLog.write('c308_opened_external', 'true');
+    RenderLog.write('c558_path', 'supabase_oauth');
     await Supabase.instance.client.auth.signInWithOAuth(
       OAuthProvider.google,
       redirectTo: 'https://medibo.in',

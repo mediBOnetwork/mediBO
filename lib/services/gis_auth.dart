@@ -121,39 +121,114 @@ String _sha256Hex(List<int> message) {
   return h.map((v) => v.toRadixString(16).padLeft(8, '0')).join();
 }
 
-@JS('mediboGisOneTap')
-external JSPromise<JSString?> _mediboGisOneTap(
+@JS('mediboGisPrewarm')
+external JSPromise<JSString?> _mediboGisPrewarm(
     JSString clientId, JSString hashedNonce);
 
-/// CHANGE #555: thrown by [gisOneTapWithNonce] to tell the caller what to do.
+@JS('mediboGisPromptNow')
+external JSPromise<JSString?> _mediboGisPromptNow();
+
+@JS('mediboGisSheet')
+external JSPromise<JSString?> _mediboGisSheet(
+    JSString title, JSString subtitle, JSString cancelLabel);
+
+@JS('mediboIsStandalone')
+external bool _mediboIsStandaloneJs();
+
+/// True when the app is running as an installed PWA (standalone display mode).
+/// In that mode a full-page OAuth redirect leaves the app and shows browser
+/// chrome, so it must never be used as a silent fallback.
+bool isStandalonePwa() {
+  try {
+    return _mediboIsStandaloneJs();
+  } catch (_) {
+    return false;
+  }
+}
+
+/// CHANGE #555: the sheet could not be shown — try the next option.
 class GisOneTapUnavailable implements Exception {
   const GisOneTapUnavailable();
 }
 
-/// The user deliberately dismissed the One Tap sheet — do not fall back.
+/// The user deliberately dismissed the sheet — do not fall back.
 class GisOneTapCancelled implements Exception {
   const GisOneTapCancelled();
 }
 
-/// CHANGE #555: Google One Tap (FedCM), which renders as a bottom sheet on
-/// mobile web listing the device's signed-in accounts.
+/// The nonce pair for the currently pre-warmed GIS instance. `initialize()`
+/// embeds the hashed half in the JWT, so the raw half must survive until the
+/// credential comes back and is handed to Supabase.
+({String rawNonce, String hashedNonce})? _warmPair;
+
+/// CHANGE #556: load GIS and run `initialize()` up front, so the later tap can
+/// call `prompt()` synchronously and keep its transient user activation —
+/// without which Chrome silently refuses to display the One Tap sheet.
 ///
-/// Throws [GisOneTapUnavailable] when the sheet could not be shown — the caller
-/// must then run the existing OAuth flow — or [GisOneTapCancelled] when the
-/// user dismissed it on purpose.
-Future<({String idToken, String rawNonce})> gisOneTapWithNonce() async {
-  final pair = _generateNoncePair();
-  String? token;
+/// Safe to call repeatedly; returns true once the library is initialised.
+Future<bool> gisPrewarm() async {
+  _warmPair ??= _generateNoncePair();
   try {
-    final result =
-        await _mediboGisOneTap(_kGisClientId.toJS, pair.hashedNonce.toJS).toDart;
-    token = result?.toDart;
-  } catch (e) {
-    if (e.toString().contains('cancelled')) throw const GisOneTapCancelled();
-    throw const GisOneTapUnavailable();
+    final r = await _mediboGisPrewarm(
+      _kGisClientId.toJS,
+      _warmPair!.hashedNonce.toJS,
+    ).toDart;
+    return r?.toDart == 'ready';
+  } catch (_) {
+    return false;
   }
+}
+
+({String idToken, String rawNonce}) _wrap(String? token) {
   if (token == null || token.isEmpty) throw const GisOneTapUnavailable();
-  return (idToken: token, rawNonce: pair.rawNonce);
+  final raw = _warmPair?.rawNonce;
+  if (raw == null) throw const GisOneTapUnavailable();
+  return (idToken: token, rawNonce: raw);
+}
+
+Never _rethrowAsGis(Object e) {
+  if (e.toString().contains('cancelled')) throw const GisOneTapCancelled();
+  throw const GisOneTapUnavailable();
+}
+
+/// Google One Tap (FedCM): renders as a half-screen sheet listing the device's
+/// signed-in Google accounts, entirely in-page — no navigation, so an installed
+/// PWA never shows browser chrome.
+///
+/// MUST be called directly from the tap handler with no awaits in between, or
+/// the user activation is lost and the sheet will not display.
+Future<({String idToken, String rawNonce})> gisPromptOneTap() async {
+  try {
+    final r = await _mediboGisPromptNow().toDart;
+    return _wrap(r?.toDart);
+  } on GisOneTapUnavailable {
+    rethrow;
+  } catch (e) {
+    _rethrowAsGis(e);
+  }
+}
+
+/// Our own half-screen bottom sheet hosting the GIS button, used when One Tap
+/// itself could not be displayed. Still keeps an installed PWA in place: the
+/// GIS button opens Google in a popup that closes itself, rather than
+/// navigating the app away.
+///
+/// All copy comes from the caller (backend strings); pass empty strings to hide
+/// an element rather than inventing text here.
+Future<({String idToken, String rawNonce})> gisSheetSignIn({
+  required String title,
+  required String subtitle,
+  required String cancelLabel,
+}) async {
+  try {
+    final r =
+        await _mediboGisSheet(title.toJS, subtitle.toJS, cancelLabel.toJS).toDart;
+    return _wrap(r?.toDart);
+  } on GisOneTapUnavailable {
+    rethrow;
+  } catch (e) {
+    _rethrowAsGis(e);
+  }
 }
 
 /// Opens the GIS modal.

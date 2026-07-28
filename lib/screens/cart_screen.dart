@@ -1546,7 +1546,9 @@ class _CartStepperState extends State<_CartStepper> {
                     cursor: SystemMouseCursors.click,
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
-                      onTap: () => widget.cart.decrement(widget.product),
+                      onTap: widget.cart.isPending(widget.product.id)
+                          ? null
+                          : () => widget.cart.decrement(widget.product),
                     ),
                   ),
                 ),
@@ -1559,7 +1561,9 @@ class _CartStepperState extends State<_CartStepper> {
                     cursor: SystemMouseCursors.click,
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
-                      onTap: () => widget.cart.increment(widget.product),
+                      onTap: widget.cart.isPending(widget.product.id)
+                          ? null
+                          : () => widget.cart.increment(widget.product),
                     ),
                   ),
                 ),
@@ -1665,7 +1669,7 @@ class _RemovedItemCard extends StatelessWidget {
         if (line.cartItemId != null) ...[
           const SizedBox(width: 8),
           GestureDetector(
-            onTap: () => cart.hardDeleteRemovedItem(line.cartItemId!),
+            onTap: () => cart.hardDeleteRemovedItem(line.product.id),
             child: Container(
               width: 22,
               height: 22,
@@ -2946,17 +2950,18 @@ class _EmptyCart extends StatelessWidget {
                 size: 48, color: Color(0xFF9CA3AF)),
           ),
           const SizedBox(height: 20),
-          const Text(
-            'Your cart is empty',
-            style: TextStyle(
+          // CHANGE #559: empty-state copy is whatever cart_state() returned.
+          Text(
+            AppState.of(context).emptyTitle,
+            style: const TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.w700,
                 color: Color(0xFF111827)),
           ),
           const SizedBox(height: 8),
-          const Text(
-            'Add products from the catalog to start an order.',
-            style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
+          Text(
+            AppState.of(context).emptyNote,
+            style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
           ),
         ],
       ),

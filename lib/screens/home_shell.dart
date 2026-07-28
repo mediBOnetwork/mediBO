@@ -52,6 +52,25 @@ class HomeShell extends StatefulWidget {
 }
 
 class _HomeShellState extends State<HomeShell> {
+  /// CHANGE #559: surfaces `cart_set_item`'s own `message` when it returns
+  /// ok:false (e.g. "No supplier for this product right now"), unchanged.
+  void _showCartError() {
+    if (!mounted) return;
+    final cart = AppState.of(context);
+    final msg = cart.cartError.value;
+    if (msg == null || msg.isEmpty) return;
+    cart.cartError.value = null;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), behavior: SnackBarBehavior.floating),
+    );
+  }
+
+  /// CHANGE #559 rule 4: re-read the server cart on entering the cart screen.
+  void _openCart() {
+    setState(() => _cartOpen = true);
+    AppState.of(context).refresh();
+  }
+
   final MedicineRepository _repo = MedicineRepository();
   final TextEditingController _searchCtrl = TextEditingController();
   final FocusNode _searchFocus = FocusNode();
@@ -87,6 +106,12 @@ class _HomeShellState extends State<HomeShell> {
   void initState() {
     super.initState();
     BulkUploadScreen.navToBulkUpload = () { if (mounted) setState(() => _index = 2); };
+    // CHANGE #559: a rejected cart write shows the SERVER's message verbatim.
+    // The client never substitutes copy of its own.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      AppState.of(context).cartError.addListener(_showCartError);
+    });
     _initFromUrl();
     listenPopState(_applyPath);
     // CHANGE #497: categories are public data — fetch them immediately, in
@@ -572,7 +597,7 @@ class _HomeShellState extends State<HomeShell> {
             onFooterSearch: () => setState(() => _scrollToTopTrigger++),
             onFooterBulkUpload: () => _setIndex(2),
             onFooterOrders: () => _setIndex(1),
-            onFooterCart: () => setState(() => _cartOpen = true),
+            onFooterCart: () => _openCart(),
           ),
           OrdersScreen(
             viewAsUserId: isCustomerViewAs ? viewAs.identity?.userId : null,
@@ -645,7 +670,7 @@ class _HomeShellState extends State<HomeShell> {
               : _MobileBottomBar(
                   index: _index,
                   cartOpen: _cartOpen,
-                  onCartTap: () => setState(() => _cartOpen = true),
+                  onCartTap: () => _openCart(),
                   onNavTap: (i) {
                     switch (i) {
                       case 0:
@@ -665,7 +690,7 @@ class _HomeShellState extends State<HomeShell> {
               children: [
                 _LocationHeader(
                   isAdmin: isAdmin,
-                  onCart: () => setState(() => _cartOpen = true),
+                  onCart: () => _openCart(),
                   onHome: _goHome,
                   onLogoTap: onLogoTap,
                   logoTooltip: '',
@@ -725,7 +750,7 @@ class _HomeShellState extends State<HomeShell> {
                       width: sw * 0.90,
                       child: RepaintBoundary(
                         child: _StickyCartBar(
-                          onTap: () => setState(() => _cartOpen = true),
+                          onTap: () => _openCart(),
                         ),
                       ),
                     ),
@@ -775,7 +800,7 @@ class _HomeShellState extends State<HomeShell> {
                   logoTooltip: '',
                   onBulk: () => _setIndex(2),
                   onOrders: () => _setIndex(1),
-                  onCart: () => setState(() => _cartOpen = true),
+                  onCart: () => _openCart(),
                   onLogin: () => setState(() => _loginOpen = true),
                   index: _index,
                   cartOpen: _cartOpen,
@@ -825,7 +850,7 @@ class _HomeShellState extends State<HomeShell> {
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     child: RepaintBoundary(
                       child: _WebDiscountBar(
-                        onTap: () => setState(() => _cartOpen = true),
+                        onTap: () => _openCart(),
                       ),
                     ),
                   ),
@@ -1248,7 +1273,8 @@ class _MobileCartIconState extends State<_MobileCartIcon>
                     ),
                     child: Center(
                       child: Text(
-                        widget.cartItems > 9 ? '9+' : '${widget.cartItems}',
+                        // CHANGE #559: badge string comes from cart_state().
+                        AppState.of(context).badge ?? '',
                         style: const TextStyle(
                           fontSize: 9,
                           fontWeight: FontWeight.w800,
@@ -1778,7 +1804,9 @@ class _CartPanelContentState extends State<_CartPanelContent> {
                                       const SizedBox(width: 4),
                                       Expanded(
                                         child: Text(
-                                          '$itemCount product${itemCount == 1 ? '' : 's'} in cart',
+                                          // CHANGE #559: header string comes
+                                          // from cart_state(), never Dart.
+                                          cart.header ?? '',
                                           style: const TextStyle(
                                             fontSize: 16,
                                             fontWeight: FontWeight.w600,
@@ -3081,7 +3109,8 @@ class _CartChipState extends State<_CartChip> {
                     );
                   },
                   child: Text(
-                    '$uniqueItems item${uniqueItems == 1 ? '' : 's'}',
+                    // CHANGE #559: the "N items" pill is cart_state().cta_label.
+                    AppState.of(context).ctaLabel ?? '',
                     key: ValueKey(uniqueItems),
                     style: const TextStyle(
                       color: Colors.white,
@@ -3389,7 +3418,8 @@ class _DesktopHeader extends StatelessWidget {
                   children: [
                     Badge(
                       isLabelVisible: cartItems > 0,
-                      label: Text('$cartItems',
+                      // CHANGE #559: badge string comes from cart_state().
+                      label: Text(AppState.of(context).badge ?? '',
                           style: const TextStyle(fontSize: 10)),
                       child: const Icon(Icons.shopping_cart_outlined,
                           size: 22, color: Brand.ink),

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../models/account_registration.dart';
+import '../models/app_session.dart';
 import '../models/user_profile.dart';
 import '../user_state.dart';
 import '../utils/render_log.dart';
@@ -27,10 +29,67 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Map<String, dynamic>? _viewAsProfileRow;
   bool _viewAsLoading = false;
 
+  // CHANGE #569 / RULE 1 — the signed-in account comes from my_session() and
+  // from nothing else. The old path asked UserState, which resolves the
+  // profile with `pharmacy_profiles.eq('user_id', auth.uid())`. That join is
+  // not the account's identity: a profile whose user_id is null or points at a
+  // stale auth user resolves to no row, and the screen then claimed "Not
+  // Registered" for a fully registered, approved customer. my_session()
+  // resolves through login_identities (email/phone), so it is right whatever
+  // state the user_id column happens to be in.
+  AppSession? _session;
+
+  /// The account's own pharmacy_profiles row, fetched by PRIMARY KEY using the
+  /// owner_id my_session() returned — never by user_id. RLS allows this via
+  /// `own_profile_select: (id = my_customer_id() OR user_id = auth.uid())`,
+  /// and the first arm resolves the same way my_session() does.
+  Map<String, dynamic>? _ownProfileRow;
+  bool _selfLoading = false;
+  bool _selfError = false;
+
   @override
   void initState() {
     super.initState();
-    if (widget.viewAsUserId != null) _fetchViewAsProfile();
+    if (widget.viewAsUserId != null) {
+      _fetchViewAsProfile();
+    } else {
+      _loadSession();
+    }
+  }
+
+  /// RULE 1 — role, display_name and owner_id all come from this one call.
+  Future<void> _loadSession() async {
+    setState(() { _selfLoading = true; _selfError = false; });
+    try {
+      final client = Supabase.instance.client;
+      final raw = await client.rpc('my_session');
+      final session =
+          AppSession.fromJson(Map<String, dynamic>.from(raw as Map));
+
+      // Hydrate the detail fields only once the session says this account IS a
+      // customer and names it. No owner_id means there is nothing to load —
+      // that is the genuine unregistered case, not a failed lookup.
+      Map<String, dynamic>? row;
+      if (isRegisteredCustomer(session)) {
+        row = await client
+            .from('pharmacy_profiles')
+            .select()
+            .eq('id', session.ownerId)
+            .maybeSingle();
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _session = session;
+        _ownProfileRow = row;
+        _selfLoading = false;
+      });
+    } catch (_) {
+      // A transport/RPC failure is "we don't know", not "unregistered" — the
+      // retry card renders instead of the registration form (#402).
+      if (!mounted) return;
+      setState(() { _selfError = true; _selfLoading = false; });
+    }
   }
 
   Future<void> _fetchViewAsProfile() async {
@@ -51,25 +110,40 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Widget build(BuildContext context) {
     final isViewAs = widget.viewAsUserId != null;
 
-    // In View As mode: use the fetched row; otherwise use the real auth profile.
-    final auth = UserState.of(context);
+    // In View As mode: use the fetched row; otherwise use the my_session()
+    // account resolved in [_loadSession]. UserState is deliberately NOT read
+    // here — its user_id-keyed profile is the path that produced the false
+    // "Not Registered" (CHANGE #569 / RULE 1).
     final authUser = Supabase.instance.client.auth.currentUser;
+    final session = _session;
 
     // Build a synthetic UserProfile-like read from the fetched row when viewing as customer.
     final profile = isViewAs
         ? (_viewAsProfileRow != null ? UserProfile.fromJson(_viewAsProfileRow!) : null)
-        : auth.profile;
+        : (_ownProfileRow != null ? UserProfile.fromJson(_ownProfileRow!) : null);
     final authEmail = isViewAs
         ? (_viewAsProfileRow?['email'] as String? ?? '')
-        : (authUser?.email ?? '');
-    final isRegistered = isViewAs ? (profile != null) : auth.isRegistered;
+        : (session?.loginEmail ?? '');
 
-    // #402: while the real (non-ViewAs) profile fetch is still in flight,
-    // wait for it instead of judging isRegistered on a not-yet-loaded profile
-    // (which would flash the "Registration required" form for a real user).
-    // auth.loading always resolves to false (see UserState._init/_onAuthChange
-    // guards), so this can never hang.
-    if ((isViewAs && _viewAsLoading) || (!isViewAs && auth.loading)) {
+    // RULE 1 — registration is role + owner_id from my_session(), nothing else.
+    // owner_id is empty for a signed-in visitor with no customer account, which
+    // is exactly the "needs to register" case.
+    final isRegistered =
+        isViewAs ? (profile != null) : isRegisteredCustomer(session);
+
+    // The header name is the backend's display_name; the profile row is only a
+    // fallback for the brief window before the row lands.
+    final headerName = isViewAs
+        ? (profile?.displayName ?? 'My Account')
+        : ((session?.displayName.isNotEmpty ?? false)
+            ? session!.displayName
+            : (profile?.displayName ?? 'My Account'));
+
+    // #402: while the fetch is still in flight, wait for it instead of judging
+    // isRegistered on a not-yet-loaded session (which would flash the
+    // "Registration required" form for a real user).
+    final selfUnresolved = _selfLoading || (session == null && !_selfError);
+    if ((isViewAs && _viewAsLoading) || (!isViewAs && selfUnresolved)) {
       return const Scaffold(
         backgroundColor: Color(0xFFF9FAFB),
         body: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43))),
@@ -79,8 +153,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     // #402: a genuine fetch error (not just "no row") for a profile we've
     // never successfully loaded — show a retry option, not a false
     // "please register" screen.
-    final fetchErrorUnknown =
-        !isViewAs && auth.profileFetchError && profile == null;
+    final fetchErrorUnknown = !isViewAs && _selfError && session == null;
 
     if (fetchErrorUnknown) {
       RenderLog.write('c402_profile_fetch_err', 'true');
@@ -140,7 +213,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       ),
                       const SizedBox(height: 14),
                       Text(
-                        profile?.displayName ?? 'My Account',
+                        headerName,
                         textAlign: TextAlign.center,
                         style: const TextStyle(
                           fontSize: 20,
@@ -205,7 +278,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           SizedBox(
                             height: 44,
                             child: OutlinedButton(
-                              onPressed: () => UserState.read(context).retryLoadProfile(),
+                              onPressed: _loadSession,
                               style: OutlinedButton.styleFrom(
                                 foregroundColor: const Color(0xFFC2410C),
                                 side: const BorderSide(color: Color(0xFFFDBA74)),
@@ -514,7 +587,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 ],
 
                 // View As (Dev) — super-admin only, build-phase gated; hidden in viewAs mode
-                if (!isViewAs && kEnableViewAs && auth.isSuperAdmin)
+                // RULE 1 — the role gating this comes from my_session() too.
+                if (!isViewAs && kEnableViewAs && (session?.isSuperAdmin ?? false))
                   _ViewAsCard(),
 
                 // Logout button — hidden when viewing as another customer

@@ -550,6 +550,52 @@ on plain `.select()` calls. The strict pattern is
 `\.insert\(|\.update\(|\.upsert\(|\.delete\(`. Measured strictly at both
 ends: **baseline 43 → now 0.**
 
+### ADMIN INTERFACE — remaining work, per tab
+
+Measured with `scripts/scan_backend_shift.py` plus targeted greps.
+
+| Admin surface | money in Dart | device clock | `toStringAsFixed` | client sort |
+|---|---|---|---|---|
+| Customers | 11 | 5 | 15 | 3 |
+| Suppliers | 4 | 4 | 3 | 13 |
+| `sup_pay_panel` | 8 | 1 | 6 | 0 |
+| Fulfilment | 0 | 6 | 3 | 0 |
+| `order_payment_section` | 4 | 0 | 4 | 0 |
+| Alert overlay | 0 | 6 | 0 | 0 |
+| `payments_tab` | 3 | 0 | 1 | 0 |
+| `upi_pay_sheet` | 1 | 0 | 3 | 0 |
+| `cust_pay_panel` | 2 | 0 | 1 | 0 |
+| Add Medicine | 0 | 0 | 0 | 3 |
+
+Reads and writes are **zero** on every one of these. What remains is
+presentation and client-side derivation.
+
+### CHANGE #605 — one money rule for the payment panels (backend done, Dart pending)
+
+Each panel carries its own:
+
+```dart
+v == v.truncateToDouble() ? '₹${v.toInt()}' : '₹${v.toStringAsFixed(2)}'
+```
+
+Five copies — `sup_pay_panel`, `cust_pay_panel`, `order_payment_section`,
+`payments_tab`, `upi_pay_sheet`. **None groups digits**, so ₹1234567 renders as
+`₹1234567` in a panel while the cart shows `₹12,34,567.00`: two renderings of
+one amount, which is the same disagreement class as everything else here.
+
+`inr_money_compact()` is that rule once, with lakh grouping;
+`money_display_block(payload, keys)` attaches `<key>_display` to any payload;
+`sup_order_bill_panel_v2` / `customer_order_payment_panel_v2` /
+`admin_order_payment_view_v2` wrap the existing panel RPCs.
+
+Verified: `1234567 → ₹12,34,567`, `1234.5 → ₹1,234.50`, `0 → ₹0`, `49 → ₹49`.
+
+**The Dart swap is deliberately not done yet.** `sup_pay_panel._r()` takes
+values *derived inside the widget* (`paid`, `advReq`, `remDue`, `billsTotal`),
+not payload keys — a key-based swap would break the panel. Those derivations
+belong in the panel RPC, which is the next change. Shipping a half-swap would
+have been worse than leaving it measured.
+
 ---
 
 ## Verified figures (single consistent measurement)

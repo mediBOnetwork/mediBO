@@ -483,6 +483,44 @@ now serves change **581**, commit `42de0f76`.
 
 > `~/deploy.sh` lives outside the repo and is not version-controlled here.
 
+### CHANGE #584 — GST becomes a rule, not a NULL column
+
+All 562,549 `MEDICINE` rows had `gst_percent` NULL, so every cart line fell back
+to a hardcoded `12` in Dart.
+
+A backfill is not possible and not right: the table carries **six per-row
+triggers** (PS sync, marketer→company, supplier count, buyable, refresh-dirty),
+so every mass UPDATE times out — and a denormalised rate column drifts the
+moment a rule changes. GST is resolved at **read time** instead.
+
+- `app_settings.gst_rules` — 22 therapeutic classes mapped, configurable
+  default (12). Oncology/vaccines/blood/antimalarials **5%**, most
+  formulations **12%**, vitamins & rejuvenators **18%**.
+- `gst_class_map` + `gst_rules_refresh()` — the fast lookup table, rebuilt from
+  config; changing a rate is an UPDATE plus one refresh, never a deploy.
+- `gst_rate_for(class)` wired into `admin_cart_add` and `storefront_page`, so a
+  product card and a cart line can never show different GST for one product.
+
+Verified: oncology 5, cardiac 12, vitamins 18, unknown/unmapped → 12.
+
+### CHANGE #585 — the billing bug: one total, not two
+
+The cart showed **₹358.37** (`net_payable`, what `place_order_v2` charges) and
+**₹395.49** (`grand_total`, the tax panel). Charging one and displaying another
+is a billing bug.
+
+**`net_payable` is authoritative.** The screen labels the tax line *"GST Input
+Credit"*, not "GST payable" — MRP is GST-**inclusive** and the buyer reclaims
+the tax contained in it. Adding `rate/100` on top of an inclusive MRP
+double-counted. Contained tax is `amount × rate / (100 + rate)`.
+
+`grand_total` now equals `net_payable`, and each GST group's payable is its
+discounted amount (tax already inside) rather than amount + tax.
+
+Verified end-to-end on one cart: `net_payable` **₹621.02** = `grand_total`
+**₹621.02** = **what `place_order_v2` actually charged (621.02)**; GST credit
+**₹61.29** (= 572.02 × 12/112); group payable ₹572.02 + ₹49 delivery.
+
 ---
 
 ## Verified figures (single consistent measurement)

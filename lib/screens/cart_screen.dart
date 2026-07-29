@@ -284,13 +284,12 @@ class _CartScreenState extends State<CartScreen> {
         String viewAsDisplayCode = orderNumber;
         try {
           if (orderId != null) {
-            final rows = await Supabase.instance.client
-                .from('orders')
-                .select('order_code,id,created_at,payment_id')
-                .eq('id', orderId.toString())
-                .limit(1);
-            if (rows.isNotEmpty) {
-              viewAsDisplayCode = orderDisplayId(rows.first as Map<String, dynamic>);
+            final raw = await Supabase.instance.client
+                .rpc('order_code_for', params: {'p_order_id': orderId.toString()});
+            final m = (raw is List ? raw.first : raw) as Map;
+            if (m['found'] == true) {
+              viewAsDisplayCode =
+                  orderDisplayId(Map<String, dynamic>.from(m['row'] as Map));
             }
           }
         } catch (_) {}

@@ -33,13 +33,11 @@ class _AdminAddAdminScreenState extends State<AdminAddAdminScreen> {
 
   Future<void> _loadAdmins() async {
     try {
-      final res = await Supabase.instance.client
-          .from('admins')
-          .select()
-          .order('created_at');
+      final raw = await Supabase.instance.client.rpc('admin_list_admins_rows');
+      final res = ((raw is List ? raw.first : raw) as Map)['rows'] as List? ?? const [];
       if (mounted) {
         setState(() {
-          _admins = List<Map<String, dynamic>>.from(res as List);
+          _admins = List<Map<String, dynamic>>.from(res);
           _loadingAdmins = false;
         });
       }

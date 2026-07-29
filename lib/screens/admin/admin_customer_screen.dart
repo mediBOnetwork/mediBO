@@ -4645,14 +4645,15 @@ class _AdminAddItemDialogState extends State<_AdminAddItemDialog> {
     }
     setState(() => _searching = true);
     try {
-      final rows = await Supabase.instance.client
-          .from('MEDICINE')
-          .select('id, product_name, mrp, marketer, therapeutic_class, image_url_1, pack_qty, pack_size, gst_percent')
-          .ilike('product_name', '%${query.trim()}%')
-          .limit(30);
+      // #596 — medicine_search_admin() resolves gst_percent through
+      // gst_rate_for(), so search results, cart lines and product cards all
+      // report the same rate.
+      final raw = await Supabase.instance.client.rpc('medicine_search_admin',
+          params: {'p_term': query.trim(), 'p_limit': 30});
+      final rows = ((raw is List ? raw.first : raw) as Map)['rows'] as List? ?? const [];
       if (mounted) {
         setState(() {
-          _results = List<Map<String, dynamic>>.from(rows as List);
+          _results = List<Map<String, dynamic>>.from(rows);
           _searching = false;
         });
       }

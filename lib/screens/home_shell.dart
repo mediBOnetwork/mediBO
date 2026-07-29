@@ -4561,11 +4561,17 @@ class _ViewAsCustomerPreviewState extends State<_ViewAsCustomerPreview> {
   Future<void> _fetch() async {
     try {
       final res = await Supabase.instance.client
-          .from('pharmacy_profiles')
-          .select()
-          .eq('id', widget.identity.id)
-          .maybeSingle();
-      if (mounted) setState(() { _profile = res; _loading = false; });
+          .rpc('viewas_identity_profile',
+               params: {'p_kind': 'customer', 'p_id': widget.identity.id});
+      final m = (res is List ? res.first : res) as Map;
+      if (mounted) {
+        setState(() {
+          _profile = m['found'] == true
+              ? Map<String, dynamic>.from(m['row'] as Map)
+              : null;
+          _loading = false;
+        });
+      }
     } catch (_) {
       if (mounted) setState(() => _loading = false);
     }
@@ -4622,11 +4628,17 @@ class _ViewAsCompanyPreviewState extends State<_ViewAsCompanyPreview> {
   Future<void> _fetch() async {
     try {
       final res = await Supabase.instance.client
-          .from('company_profiles')
-          .select()
-          .eq('id', widget.identity.id)
-          .maybeSingle();
-      if (mounted) setState(() { _profile = res; _loading = false; });
+          .rpc('viewas_identity_profile',
+               params: {'p_kind': 'company', 'p_id': widget.identity.id});
+      final m = (res is List ? res.first : res) as Map;
+      if (mounted) {
+        setState(() {
+          _profile = m['found'] == true
+              ? Map<String, dynamic>.from(m['row'] as Map)
+              : null;
+          _loading = false;
+        });
+      }
     } catch (_) {
       if (mounted) setState(() => _loading = false);
     }
@@ -4683,11 +4695,17 @@ class _ViewAsDeliveryPartnerPreviewState extends State<_ViewAsDeliveryPartnerPre
   Future<void> _fetch() async {
     try {
       final res = await Supabase.instance.client
-          .from('delivery_partner_registrations')
-          .select()
-          .eq('id', widget.identity.id)
-          .maybeSingle();
-      if (mounted) setState(() { _profile = res; _loading = false; });
+          .rpc('viewas_identity_profile',
+               params: {'p_kind': 'delivery_partner', 'p_id': widget.identity.id});
+      final m = (res is List ? res.first : res) as Map;
+      if (mounted) {
+        setState(() {
+          _profile = m['found'] == true
+              ? Map<String, dynamic>.from(m['row'] as Map)
+              : null;
+          _loading = false;
+        });
+      }
     } catch (_) {
       if (mounted) setState(() => _loading = false);
     }

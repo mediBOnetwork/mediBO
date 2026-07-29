@@ -212,10 +212,12 @@ class MedicineRepository {
   Future<Map<String, bool>> fetchBuyableFlags(List<String> ids) async {
     if (ids.isEmpty) return {};
     try {
-      final rows = await _client
-          .from('MEDICINE')
-          .select('id,buyable')
-          .inFilter('id', ids);
+      final raw = await _client
+          .rpc('medicine_buyable_flags', params: {'p_ids': ids});
+      final flags = ((raw is List ? raw.first : raw) as Map)['flags'] as Map;
+      final rows = flags.entries
+          .map((e) => <String, dynamic>{'id': e.key, 'buyable': e.value})
+          .toList();
       final out = <String, bool>{};
       for (final r in rows as List) {
         final row = r as Map<String, dynamic>;

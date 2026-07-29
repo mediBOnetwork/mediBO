@@ -95,10 +95,10 @@ class MatchStatusService {
   Future<void> fetchStatuses(List<String> ids) async {
     if (ids.isEmpty || _disposed) return;
     try {
-      final rows = await _client
-          .from('supplier_match_status_v')
-          .select('*')
-          .inFilter('supplier_id', ids);
+      final raw = await _client
+          .rpc('supplier_match_statuses', params: {'p_ids': ids});
+      final rows = (((raw is List ? raw.first : raw) as Map)['rows']
+          as List<dynamic>? ?? const []);
       if (_disposed) return;
       final updated = Map<String, MatchStatus>.from(statuses.value);
       for (final row in (rows as List)) {

@@ -620,10 +620,10 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
     } catch (_) {}
     if (list.isEmpty) {
       try {
-        final r = await client.from('MEDICINE').select()
-            .or('product_name.ilike.%$name%,salt_composition.ilike.%$name%')
-            .eq('status', 'Available').order('sales_count', ascending: false).limit(20);
-        list = List<Map<String, dynamic>>.from(r);
+        final raw = await client.rpc('medicine_search_available',
+            params: {'p_term': name, 'p_limit': 20});
+        list = List<Map<String, dynamic>>.from(
+            (((raw is List ? raw.first : raw) as Map)['rows'] as List? ?? const []));
       } catch (_) {}
     }
     list = list.where((row) {

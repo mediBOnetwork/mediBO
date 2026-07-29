@@ -509,13 +509,11 @@ class CartModel extends ChangeNotifier {
   /// Loads this user's order history from public.orders and replaces _orders.
   Future<void> fetchOrders() async {
     try {
-      final uid = Supabase.instance.client.auth.currentUser?.id;
-      if (uid == null) return;
-      final rows = await Supabase.instance.client
-          .from('orders')
-          .select()
-          .eq('user_id', uid)
-          .order('created_at', ascending: true);
+      // CHANGE #595 — keyed to the ACCOUNT, not the login. Reading orders by
+      // user_id is the "orders vanished" bug: a second login saw none of them.
+      final raw = await Supabase.instance.client.rpc('my_orders_raw');
+      final rows = (((raw is List ? raw.first : raw) as Map)['rows']
+          as List<dynamic>? ?? const []);
       final loaded = <Order>[];
       for (final row in rows) {
         final items = (row['items'] as List<dynamic>?) ?? [];

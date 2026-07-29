@@ -1,5 +1,5 @@
 import re,sys,os
-STORAGE={'dispute-proofs','supplier-bills','whatsapp-media','customer-bills','bills'}
+STORAGE={'dispute-proofs','supplier-bills','whatsapp-media','customer-bills','bills','voice-clips'}
 WRITE=re.compile(r"\.(insert|update|upsert|delete)\s*\(")
 FROM=re.compile(r"(?<!storage)\.from\('([^']+)'\)")
 writes=[];reads=[]
@@ -10,6 +10,8 @@ for root,_,files in os.walk('lib'):
         for i,l in enumerate(lines):
             m=FROM.search(l)
             if not m: continue
+            # skip comments — a comment naming .from() is not a call
+            if l.lstrip().startswith('//') or l.lstrip().startswith('///'): continue
             if 'storage.from(' in l: continue
             if m.group(1) in STORAGE: continue
             window='\n'.join(lines[i:i+6])

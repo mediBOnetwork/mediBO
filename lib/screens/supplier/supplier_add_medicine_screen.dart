@@ -89,8 +89,8 @@ class _AddCompanyTabState extends State<_AddCompanyTab> {
   Future<void> _loadPending() async {
     try {
       final res = await Supabase.instance.client
-          .from('supplier_pending_companies').select()
-          .order('created_at', ascending: false) as List;
+          .rpc('pending_staging_all', params: {'p_kind': 'company'})
+          .then((r) => (((r is List ? r.first : r) as Map)['rows'] as List)) as List;
       if (mounted) setState(() => _pending = res.map((r) => Map<String, dynamic>.from(r as Map)).toList());
     } catch (_) {}
   }
@@ -181,8 +181,8 @@ class _AddMedicineTabState extends State<_AddMedicineTab> {
   Future<void> _loadPending() async {
     try {
       final res = await Supabase.instance.client
-          .from('supplier_pending_medicines').select()
-          .order('created_at', ascending: false) as List;
+          .rpc('pending_staging_all', params: {'p_kind': 'medicine'})
+          .then((r) => (((r is List ? r.first : r) as Map)['rows'] as List)) as List;
       if (mounted) setState(() => _pending = res.map((r) => Map<String, dynamic>.from(r as Map)).toList());
     } catch (_) {}
   }

@@ -2092,13 +2092,10 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
     if (list.isEmpty) {
       try {
-        final results = await client
-            .from('MEDICINE')
-            .select()
-            .or('product_name.ilike.%$name%,salt_composition.ilike.%$name%,marketer.ilike.%$name%')
-            .eq('status', 'Available')
-            .order('sales_count', ascending: false)
-            .limit(20);
+        final raw = await client.rpc('medicine_search_available',
+            params: {'p_term': name, 'p_limit': 20});
+        final results = (((raw is List ? raw.first : raw) as Map)['rows']
+            as List<dynamic>? ?? const []);
         list = List<Map<String, dynamic>>.from(results);
       } catch (e) {
         debugPrint('[FuzzyMatch] ILIKE failed for "$name": $e');
@@ -5122,13 +5119,10 @@ Future<List<Product>> _manualSearchProducts(String query, {int limit = 3}) async
         .toList();
   } catch (_) {
     try {
-      final results = await Supabase.instance.client
-          .from('MEDICINE')
-          .select()
-          .ilike('product_name', '%$q%')
-          .eq('status', 'Available')
-          .order('sales_count', ascending: false)
-          .limit(limit);
+      final raw = await Supabase.instance.client.rpc('medicine_search_available',
+          params: {'p_term': q, 'p_limit': limit});
+      final results = (((raw is List ? raw.first : raw) as Map)['rows']
+          as List<dynamic>? ?? const []);
       return List<Map<String, dynamic>>.from(results)
           .map((m) => Product.fromMap(m))
           .toList();

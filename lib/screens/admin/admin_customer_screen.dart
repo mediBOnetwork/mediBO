@@ -4017,33 +4017,26 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   Future<void> _persistLeadUpdate(_LeadItem lead, {String? status, String? assignedTo}) async {
     try {
       final client = Supabase.instance.client;
-      if (lead.leadsId != null) {
-        // Update existing leads row
-        final update = <String, dynamic>{};
-        if (status != null)     update['status']      = status;
-        if (assignedTo != null) update['assigned_to'] = assignedTo;
-        if (update.isNotEmpty) {
-          await client.from('leads').update(update).eq('id', lead.leadsId!);
-        }
-      } else {
-        // Insert new leads row (upsert for logged_in avoids duplicates)
-        final insert = <String, dynamic>{
+      // CHANGE #588 — admin_lead_save() owns insert-vs-update and the auth_uid
+      // dedupe. The conditional onConflict was expressed in Dart, so two
+      // admins saving the same lead could race; the server decides now.
+      final res = await client.rpc('admin_lead_save', params: {
+        'p_lead': <String, dynamic>{
+          if (lead.leadsId != null) 'leads_id': lead.leadsId,
           'name':        lead.name,
           'email':       lead.email,
           'mobile':      lead.mobile,
           'source':      lead.source,
-          'status':      lead.status,
-          'assigned_to': lead.assignedTo,
-        };
-        if (lead.authUid != null) insert['auth_uid'] = lead.authUid;
-        final res = await client.from('leads').upsert(
-          insert,
-          onConflict: lead.authUid != null ? 'auth_uid' : null,
-        ).select('id').single();
-        // Update local leadsId so subsequent changes update rather than insert
-        final newId = res['id'] as String?;
-        if (newId != null) lead.leadsId = newId;
-      }
+          if (status != null)     'status':      status,
+          if (status == null)     'status':      lead.status,
+          if (assignedTo != null) 'assigned_to': assignedTo,
+          if (assignedTo == null) 'assigned_to': lead.assignedTo,
+          if (lead.authUid != null) 'auth_uid': lead.authUid,
+        },
+      });
+      final m = (res is List ? res.first : res) as Map;
+      final newId = (m['id'] ?? '').toString();
+      if (newId.isNotEmpty) lead.leadsId = newId;
     } catch (_) {}
   }
 
@@ -5355,7 +5348,8 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
       }
 
       if (toInsert.isNotEmpty) {
-        await Supabase.instance.client.from('leads').insert(toInsert);
+        await Supabase.instance.client
+            .rpc('admin_import_leads_csv', params: {'p_rows': toInsert});
       }
 
       if (mounted) {

@@ -3944,13 +3944,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     final name = row['company_name'] as String? ?? '';
     try {
       // Insert into company table (dedupe by name)
-      await Supabase.instance.client.from('company').upsert(
-        {'company_name': name},
-        onConflict: 'company_name',
-        ignoreDuplicates: true,
-      );
-      await Supabase.instance.client.from('supplier_pending_companies')
-          .update({'status': 'approved'}).eq('id', row['id'] as int);
+      // #587 — company upsert + status flip as ONE authorised unit.
+      await Supabase.instance.client.rpc('admin_approve_pending_company',
+          params: {'p_id': row['id'], 'p_name': name});
       if (mounted) showToast(context, 'Company "$name" approved');
       _fetchStaging();
     } catch (e) {
@@ -3979,16 +3975,12 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           .ilike('product_name', name)
           .ilike('marketer', marketer)
           .maybeSingle();
-      if (existing == null) {
-        await Supabase.instance.client.from('MEDICINE').insert({
-          'product_name': name,
-          'marketer': marketer,
-          'therapeutic_class': row['therapeutic_class'],
-          'mrp': row['mrp']?.toString(),
-        });
-      }
-      await Supabase.instance.client.from('supplier_pending_medicines')
-          .update({'status': 'approved'}).eq('id', row['id'] as int);
+      // #587 — the catalogue insert and the status flip are one RPC; the
+      // "does it already exist" check is the server's, not a client race.
+      await Supabase.instance.client.rpc('admin_approve_pending_medicine', params: {
+        'p_id': row['id'], 'p_name': name, 'p_marketer': marketer,
+        'p_therapeutic_class': row['therapeutic_class'], 'p_mrp': row['mrp']?.toString(),
+      });
       if (mounted) showToast(context, 'Medicine "$name" approved');
       _fetchStaging();
     } catch (e) {
@@ -5297,7 +5289,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                   if (v == null) return;
                   setState(() => lead.status = v);
                   try {
-                    await Supabase.instance.client.from('supplier_leads').update({'status': v}).eq('id', lead.id);
+                    await Supabase.instance.client.rpc('admin_set_lead_status',
+                        params: {'p_id': lead.id, 'p_status': v});
                   } catch (_) {}
                 },
               ),
@@ -6240,7 +6233,8 @@ class _SupCsvImportDialogState extends State<_SupCsvImportDialog> {
         toInsert.add({'name': name, 'email': email, 'mobile': mobile, 'source': 'csv_import', 'status': 'new'});
       }
       if (toInsert.isNotEmpty) {
-        await Supabase.instance.client.from('supplier_leads').insert(toInsert);
+        await Supabase.instance.client
+            .rpc('admin_import_leads', params: {'p_rows': toInsert});
       }
       if (mounted) {
         Navigator.of(context).pop();
@@ -7439,10 +7433,10 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
     if (raw.isEmpty) return;
     setState(() => _saving = true);
     try {
-      await Supabase.instance.client.from('supplier_company').insert({
-        'supplier_id': widget.supplierId,
-        'supplier_name': widget.supplierName,
-        'supplier_company': raw,
+      await Supabase.instance.client.rpc('admin_supplier_company_add', params: {
+        'p_supplier_id': widget.supplierId,
+        'p_supplier_name': widget.supplierName,
+        'p_company': raw,
       });
       _supplierCompanyCtrl.clear();
       if (mounted) setState(() { _showAddForm = false; _saving = false; });
@@ -7770,7 +7764,8 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
       for (final row in packed) {
         final update = <String, dynamic>{};
         for (final col in _companyCols) { update[col] = row[col]; }
-        await client.from('supplier_company').update(update).eq('id', row['id'] as String);
+        await client.rpc('admin_supplier_company_update',
+            params: {'p_id': row['id'], 'p_patch': update});
       }
       if (mounted) {
         setState(() {
@@ -7859,7 +7854,8 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
       _packRow(row);
       final update = <String, dynamic>{};
       for (final col in _companyCols) { update[col] = row[col]; }
-      await Supabase.instance.client.from('supplier_company').update(update).eq('id', row['id'] as String);
+      await Supabase.instance.client.rpc('admin_supplier_company_update',
+          params: {'p_id': row['id'], 'p_patch': update});
       if (mounted) {
         setState(() {
           _rows[ri] = row;
@@ -12594,10 +12590,9 @@ class _BillTabState extends State<_BillTab> {
           preloadedFileName: fileName,
           onImportComplete: () async {
             try {
-              await Supabase.instance.client.from('pending_bills').update({
-                'status': 'imported',
-                'imported_at': DateTime.now().toIso8601String(),
-              }).eq('id', id);
+              // #587 — imported_at from the SERVER clock.
+              await Supabase.instance.client
+                  .rpc('admin_mark_bill_imported', params: {'p_id': id});
             } catch (_) {}
           },
         ),

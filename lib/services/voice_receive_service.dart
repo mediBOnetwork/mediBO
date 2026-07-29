@@ -161,7 +161,9 @@ class VoiceReceiveService {
     }
 
     try {
-      await Supabase.instance.client.from('voice_clip_mentions').insert(rows);
+      // #588 — the RPC keeps the 23505 no-op semantics this call relied on.
+      await Supabase.instance.client
+          .rpc('voice_insert_clip_mentions', params: {'p_rows': rows});
     } on PostgrestException catch (e) {
       // 23505 = unique_violation on (supplier_name, the_date, session_key, recording_seq,
       // ord): this exact window was already inserted by an earlier attempt (retry after a
@@ -263,11 +265,11 @@ Future<void> recordVoiceBagBoundary({
   required int bagNo,
   required double mappedAtSec,
 }) async {
-  await Supabase.instance.client.from('voice_bag_boundaries').insert({
-    'session_key': sessionKey,
-    'supplier_name': supplierName,
-    'bag_no': bagNo,
-    'mapped_at_sec': mappedAtSec,
+  await Supabase.instance.client.rpc('voice_map_bag_boundary', params: {
+    'p_session_key': sessionKey,
+    'p_supplier_name': supplierName,
+    'p_bag_no': bagNo,
+    'p_mapped_at_sec': mappedAtSec,
   });
   RenderLog.write('c142_bag_boundary_mapped',
       'supplier=$supplierName;bag=$bagNo;t=${mappedAtSec.toStringAsFixed(1)}');

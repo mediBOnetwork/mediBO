@@ -227,6 +227,40 @@ None of these branches on `my_session().role` to decide what the user may see
 or do. The registration form's `_role` is the applicant's own radio selection
 — user input, not an account fact.
 
+### CHANGE #576 — supplier lifecycle (approve / reject / delete / restore)
+
+Four admin actions wrote **straight into `supplier_profiles`** from Dart. Each
+carried its own bug class:
+
+| Problem | Detail |
+|---|---|
+| Status words in Dart | `'Active'`, `'Suspended'`, `'rejected'` spelled client-side |
+| **Device clock** | `approved_at`/`deleted_at` came from `DateTime.now()` — a skewed laptop stamps a wrong time nothing can correct afterwards |
+| **Identity** | `approved_by: 'admin'` was a hardcoded *literal*, not a person; `deleted_by` used `auth.currentUser.email` — a CREDENTIAL, not an account — with a Dart fallback of `'admin'` |
+| **Authorization** | left entirely to RLS: "only an admin may approve a supplier" was stated nowhere in the database |
+| Client snapshot | `deleted_snapshot: row.rawData` — whatever the client happened to hold |
+
+**Now:** `admin_supplier_action(p_supplier_id, p_action)` — server clock, server
+identity, an explicit `get_my_role()` check, and the snapshot taken from the
+row itself. Status words moved to `app_settings.supplier_status_values`.
+
+Three dead methods removed (`_suspendSupplier`, `_reactivateSupplier`,
+`_updateOrderStatus`) — each still contained a direct table write, waiting to
+be wired up again.
+
+**Verified** (rolled-back probe, every action):
+
+- **a customer calling `approve` is refused: `forbidden`** — the check now
+  lives in the database, not in RLS alone
+- suspend → `Suspended`; reactivate → `Active`; delete → `is_deleted=true`;
+  restore → `is_deleted=false`; approve → `approved=true`
+- `approved_at` = **2026-07-29 10:44:37+00**, within 1 minute of server `now()`
+- `approved_by` = **test.admin@medibo.in** — the real admin, not `'admin'`
+- `deleted_snapshot` taken server-side
+- production untouched: `approved_by` back to NULL, `is_deleted` false
+
+Direct table writes: **47 → 41** repo-wide (this file 24 → 18).
+
 ---
 
 ## Remaining — with the decision each still makes

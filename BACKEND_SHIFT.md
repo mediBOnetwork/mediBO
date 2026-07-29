@@ -378,6 +378,41 @@ errored with *malformed array literal*. Fixed with an explicit `::text`.
 **Zero `.from(...)` writes remain in `business_details_screen.dart`.**
 Direct table writes: **47 → 31**.
 
+### CHANGE #580 — registration review, and the `admins` table
+
+**Three review screens** (MR, Company, Delivery Partner) each ran the same
+direct UPDATE:
+
+```dart
+final adminEmail = auth.currentUser?.id ?? '';   // an ID, named "email"
+.update({'status': status,
+         'reviewed_by': adminEmail,              // a CREDENTIAL, not a person
+         'reviewed_at': DateTime.now()})         // the DEVICE clock
+```
+
+Three copies of one fault, and no admin check anywhere but RLS. Note the local
+was called `adminEmail` while holding `currentUser.id` — the column is a
+`uuid`, so it had been recording an id under an email-shaped name.
+
+`admin_review_registration(kind, id, status)` states the admin check in the
+database, stamps server time, and resolves the acting admin itself.
+
+**The `admins` table.** `admin_add_admin_screen` INSERTed straight into
+`admins` — the most privilege-bearing table in the app — taking `added_by` from
+`auth.currentUser.email` with a `''` fallback. **`admin_add_admin()` already
+existed, required `super_admin`, and was simply being bypassed.** Now called.
+
+**Verified** (rolled-back probe): a customer reviewing a registration is
+refused **`forbidden`**; status `approved`; `reviewed_by` = the acting admin's
+uid; `reviewed_at` within 1 minute of server `now()`. Production untouched —
+MR/company/delivery all back to 0 rows, 34 suppliers.
+
+Two of my own mistakes were caught by running this rather than reading it:
+the RPC first took `p_id bigint` when the ids are `uuid`, and then tried to
+write an **email** into `reviewed_by`, which is a `uuid` column.
+
+Direct table writes: **47 → 27**.
+
 ---
 
 ## Remaining — with the decision each still makes

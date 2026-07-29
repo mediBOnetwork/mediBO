@@ -82,7 +82,12 @@ class VoiceReceiveService {
         .toLowerCase()
         .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
         .replaceAll(RegExp(r'-+$'), '');
-    final today = DateTime.now().toUtc().toIso8601String().substring(0, 10);
+    // CHANGE #603 — the storage path's date came from the DEVICE clock, so a
+    // skewed laptop filed a clip under the wrong day and nothing could correct
+    // it afterwards. admin_active_date() is the same date the rest of the
+    // admin surface is scoped to.
+    final todayRaw = await Supabase.instance.client.rpc('admin_active_date');
+    final today = (todayRaw ?? '').toString();
     final path = '$today/$slug/$recordingSeq.$ext';
     final mimeForUpload = ext == 'webm' ? 'audio/webm' : 'audio/mp4';
     await Supabase.instance.client.storage.from('voice-clips').uploadBinary(

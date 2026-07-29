@@ -36,11 +36,22 @@ echo ""
 # C353 fix: bundles are fingerprinted (main.<commit>.dart.js); the legacy
 # /main.dart.js path now returns the SPA shell and always failed this check.
 echo "→ [1/3] checking main.${COMMIT}.dart.js..."
-RESULT=$(curl -s -o /dev/null -w "%{http_code} %{size_download}" "${BASE_URL}/main.${COMMIT}.dart.js" || echo "000 0")
-HTTP_CODE=$(echo "$RESULT" | cut -d' ' -f1)
-SIZE=$(echo "$RESULT" | cut -d' ' -f2)
+# CHANGE #602: retry. Immediately after a deploy an edge node can serve a
+# PARTIAL response — #601 read 71,561b for a bundle that is 7,873,501b — and a
+# verifier that fails on healthy deploys trains you to ignore it.
+HTTP_CODE=""; SIZE=0
+for attempt in 1 2 3 4 5 6; do
+  RESULT=$(curl -s -H 'Cache-Control: no-cache' -o /dev/null \
+             -w "%{http_code} %{size_download}" \
+             "${BASE_URL}/main.${COMMIT}.dart.js?cb=${RANDOM}${attempt}" || echo "000 0")
+  HTTP_CODE=$(echo "$RESULT" | cut -d' ' -f1)
+  SIZE=$(echo "$RESULT" | cut -d' ' -f2)
+  { [ "$HTTP_CODE" = "200" ] && [ "${SIZE:-0}" -ge 1000000 ]; } && break
+  echo "   poll ${attempt}/6: http=${HTTP_CODE} size=${SIZE}b — edge may still be propagating…"
+  sleep 10
+done
 if [ "$HTTP_CODE" != "200" ] || [ "${SIZE:-0}" -lt 1000000 ]; then
-  echo "   FAIL: main.dart.js http=${HTTP_CODE} size=${SIZE}b (need 200 + >1 MB)"
+  echo "   FAIL: main.dart.js http=${HTTP_CODE} size=${SIZE}b (need 200 + >1 MB) after 6 tries"
   echo ""
   echo "=== RESULT: BROKEN (HTTP check failed) ==="
   exit 1

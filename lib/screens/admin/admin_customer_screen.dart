@@ -85,6 +85,10 @@ class _ItemLine {
   final int? gstPercent;
   final String? packSize;
   final String addedBy;
+
+  /// CHANGE #599 — the backend's badge for this line: label + three colours.
+  /// It was `if (addedBy == 'admin')` with every string and colour in Dart.
+  final Map<String, dynamic> addedByBadge;
   final bool removedByAdmin;
 
   const _ItemLine({
@@ -97,6 +101,7 @@ class _ItemLine {
     this.gstPercent,
     this.packSize,
     this.addedBy = 'customer',
+    this.addedByBadge = const {},
     this.removedByAdmin = false,
   });
 }
@@ -815,6 +820,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                   gstPercent:     (ci['gst_percent'] as num?)?.toInt(),
                   packSize:       ci['pack_size'] as String?,
                   addedBy:        ci['added_by'] as String? ?? 'customer',
+                  addedByBadge:   (ci['added_by_badge'] as Map?)?.cast<String, dynamic>()
+                      ?? const {},
                   removedByAdmin: (ci['removed_by_admin'] as bool?) ?? false,
                 ))
             .where((i) => i.name.isNotEmpty)
@@ -2848,7 +2855,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                                   fontSize: 12, color: Color(0xFF374151)))),
                       SizedBox(
                           width: 120,
-                          child: _addedByBadge(item.addedBy)),
+                          child: _addedByBadge(item.addedByBadge)),
                       SizedBox(
                         width: 72,
                         child: item.id != null
@@ -2946,7 +2953,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                           Row(
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
-                              _addedByBadge(item.addedBy),
+                              _addedByBadge(item.addedByBadge),
                               const Spacer(),
                               if (item.id != null)
                                 GestureDetector(
@@ -3047,34 +3054,30 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     );
   }
 
-  static Widget _addedByBadge(String addedBy) {
-    if (addedBy == 'admin') {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-        decoration: BoxDecoration(
-          color: const Color(0xFFFEF08A),
-          borderRadius: BorderRadius.circular(4),
-          border: Border.all(color: const Color(0xFFFBBF24)),
-        ),
-        child: const Text('mediBO',
-            style: TextStyle(
-                fontSize: 9,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF92400E))),
-      );
-    }
+  /// CHANGE #599 — prints the backend's badge. No branch on addedBy, no
+  /// label and no colour written here.
+  static Color _hex(Object? v, Color fallback) {
+    final h = (v ?? '').toString().replaceFirst('#', '').trim();
+    if (h.length != 6) return fallback;
+    final n = int.tryParse(h, radix: 16);
+    return n == null ? fallback : Color(0xFF000000 | n);
+  }
+
+  static Widget _addedByBadge(Map<String, dynamic> badge) {
+    final label = (badge['label'] ?? '').toString();
+    if (label.isEmpty) return const SizedBox.shrink();
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
       decoration: BoxDecoration(
-        color: const Color(0xFFF3F4F6),
+        color: _hex(badge['bg'], const Color(0xFFF3F4F6)),
         borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: const Color(0xFFD1D5DB)),
+        border: Border.all(color: _hex(badge['border'], const Color(0xFFD1D5DB))),
       ),
-      child: const Text('Self',
+      child: Text(label,
           style: TextStyle(
               fontSize: 9,
               fontWeight: FontWeight.w600,
-              color: Color(0xFF6B7280))),
+              color: _hex(badge['fg'], const Color(0xFF6B7280)))),
     );
   }
 

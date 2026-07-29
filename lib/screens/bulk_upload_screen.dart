@@ -93,7 +93,7 @@ class _MatchRow {
     return _displaySku;
   }
 
-  String get price => selectedProduct != null ? rupees(selectedProduct!.b2bPrice) : _displayPrice;
+  String get price => selectedProduct != null ? selectedProduct!.mrpText : _displayPrice;
 
   Map<String, dynamic> toJson() => {
         'lineItem': lineItem,
@@ -4293,7 +4293,7 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                   child: Center(
                     child: Text(
                       row.selectedProduct != null && row.selectedProduct!.hasMrp
-                          ? rupees(row.selectedProduct!.mrp)
+                          ? row.selectedProduct!.mrpText
                           : '—',
                       textAlign: TextAlign.center,
                       maxLines: 1,
@@ -5612,7 +5612,7 @@ class _SearchResultRow extends StatelessWidget {
               flex: 13,
               child: Center(
                 child: Text(
-                  product.hasMrp ? rupees(product.mrp) : '—',
+                  product.hasMrp ? product.mrpText : '—',
                   textAlign: TextAlign.center,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -5873,7 +5873,7 @@ class _AlternativeRow extends StatelessWidget {
               flex: 13,
               child: Center(
                 child: Text(
-                  product.hasMrp ? rupees(product.mrp) : '—',
+                  product.hasMrp ? product.mrpText : '—',
                   textAlign: TextAlign.center,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,

@@ -209,9 +209,9 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
     RenderLog.write('headerlinks.count', 0);
 
     final surf = widget.surface;
-    if (surf == 'admin') RenderLog.write('inq_surface_admin_grouped', 1);
-    if (surf == 'link') RenderLog.write('inq_surface_link_grouped', 1);
-    if (surf == 'supplier') RenderLog.write('inq_surface_supplier_grouped', 1);
+    // #599 — no branch on the surface word; log it as data.
+    RenderLog.write('inq_surface_grouped', surf);
+
 
     return LayoutBuilder(builder: (context, constraints) {
       final isWide = constraints.maxWidth >= _kWideBreakpoint;

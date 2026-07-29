@@ -140,6 +140,24 @@ class _CartScreenState extends State<CartScreen> {
   // those keep the user's choice across rebuilds; everything else re-derives from
   // added_by every time.
   final Set<String> _viewAsChecked = {};
+
+  /// CHANGE #597 — the View As selected-line subtotal, computed AND formatted
+  /// by cart_selected_total(). It used to be summed in build() from
+  /// product.b2bPrice * quantity and then run through rupees() — the app both
+  /// pricing the selection and formatting it.
+  String _selectedTotalDisplay = '';
+
+  Future<void> _refreshSelectedTotal() async {
+    if (!mounted) return;
+    try {
+      final raw = await Supabase.instance.client.rpc('cart_selected_total',
+          params: {'p_product_ids': _viewAsChecked.toList()});
+      final m = (raw is List ? raw.first : raw) as Map;
+      if (mounted) {
+        setState(() => _selectedTotalDisplay = (m['total_display'] ?? '').toString());
+      }
+    } catch (_) {}
+  }
   final Set<String> _viewAsManualOverride = {};
 
   void _applyViewAsDefaults(List<CartLine> lines) {
@@ -152,8 +170,10 @@ class _CartScreenState extends State<CartScreen> {
         // user's explicit choice (if any) wins — everything else re-derives from added_by.
         if (line.addedByAdmin) {
           _viewAsChecked.add(id);
+          _refreshSelectedTotal();
         } else {
           _viewAsChecked.remove(id);
+          _refreshSelectedTotal();
         }
       }
       if (_viewAsChecked.contains(id)) checkedCount++;
@@ -167,8 +187,10 @@ class _CartScreenState extends State<CartScreen> {
       _viewAsManualOverride.add(productId);
       if (_viewAsChecked.contains(productId)) {
         _viewAsChecked.remove(productId);
+        _refreshSelectedTotal();
       } else {
         _viewAsChecked.add(productId);
+        _refreshSelectedTotal();
       }
     });
   }
@@ -239,40 +261,29 @@ class _CartScreenState extends State<CartScreen> {
           showToast(context, 'Customer id missing for ViewAs order', isError: true);
           return;
         }
-        final orderNumber = await _generateOrderNumber();
-        // CHANGE #324: build items from ONLY the checked (admin-added) rows.
-        final checkedLines = cart.lines
-            .where((l) => _viewAsChecked.contains(l.product.id))
-            .toList();
-        final items = checkedLines.map((l) => {
-          'product_name': l.product.name,
-          'quantity':     l.quantity,
-          'price':        l.product.b2bPrice,
-          'mrp':          l.product.mrp,
-          'gst_percent':  l.product.gstPercent,
-          'line_total':   l.product.b2bPrice * l.quantity,
-        }).toList();
-        if (items.isEmpty) {
+        // CHANGE #598 — the client sends WHO and WHICH LINES. Prices, totals,
+        // the address and the order number all come from the server, exactly
+        // as place_order_v2() does for the customer path. This used to build
+        // the items array with price/mrp/gst/line_total per line and fold its
+        // own netPayable, so an admin-placed order could be priced by whatever
+        // the browser happened to hold.
+        if (_viewAsChecked.isEmpty) {
           if (mounted) showToast(context, 'Select at least one item to order', isError: true);
           return;
         }
-        final netPayable = items.fold(0.0, (s, i) => s + (i['line_total'] as double));
-        // CHANGE #374 — impersonation place-order path (admin_writeas_place_order).
         RenderLog.write('actas_order_fix_374', 'userId:$customerId,approved:${viewAs.identity?.isApproved}');
-        final orderId = await Supabase.instance.client.rpc(
-          'admin_writeas_place_order',
+        final placedRaw = await Supabase.instance.client.rpc(
+          'admin_writeas_place_order_v2',
           params: {
-            'p_user_id':       customerId,
-            'p_pharmacy_name': viewAs.identity!.name,
-            'p_phone':         '',
-            'p_address':       '',
-            'p_items':         items,
-            'p_total_amount':  netPayable,
-            'p_payment_id':    orderNumber,
+            'p_customer_id': viewAs.identity!.id,
+            'p_product_ids': _viewAsChecked.toList(),
           },
         );
+        final placed = (placedRaw is List ? placedRaw.first : placedRaw) as Map;
+        final orderId = placed['id'];
+        final netPayableDisplay = (placed['amount_display'] ?? '').toString();
         RenderLog.write('c324_place_selected',
-            'order:$orderId:customer:$customerId:checked:${checkedLines.length}:total:${netPayable.toStringAsFixed(0)}');
+            'order:$orderId:customer:$customerId:checked:${_viewAsChecked.length}');
         // CHANGE #323/#324: WhatsApp convert finalize — stamp source='whatsapp'
         // and mark image done.  No-op when no WA session is active.
         if (orderId != null && BulkUploadScreen.onWaOrderPlaced != null) {
@@ -280,32 +291,22 @@ class _CartScreenState extends State<CartScreen> {
           await BulkUploadScreen.onWaOrderPlaced!(orderId.toString());
         }
         if (!mounted) return;
-        // Read back the DB-generated order_code for display.
-        String viewAsDisplayCode = orderNumber;
-        try {
-          if (orderId != null) {
-            final raw = await Supabase.instance.client
-                .rpc('order_code_for', params: {'p_order_id': orderId.toString()});
-            final m = (raw is List ? raw.first : raw) as Map;
-            if (m['found'] == true) {
-              viewAsDisplayCode =
-                  orderDisplayId(Map<String, dynamic>.from(m['row'] as Map));
-            }
-          }
-        } catch (_) {}
+        // #598 — the order code comes back in the same payload; no read-back.
+        final String viewAsDisplayCode = (placed['order_code'] ?? '').toString();
         if (!mounted) return;
         // CHANGE #324: remove ONLY the ordered (checked) rows; leave unchecked
         // customer-added rows in the cart. Defaults re-apply automatically on the
         // next build (CHANGE #435) — no manual reinit needed.
-        for (final line in checkedLines) {
-          cart.remove(line.product);
-        }
+        // #598 — the server already removed the ordered lines; re-read rather
+        // than mutating the local cart optimistically.
+        await cart.refresh();
+        _viewAsChecked.clear();
         showDialog(
           context: context,
           barrierDismissible: false,
           builder: (_) => _OrderPlacedDialog(
             orderNumber: viewAsDisplayCode,
-            amount: rupees(netPayable),
+            amount: netPayableDisplay,
             onDone: () {
               Navigator.of(context).pop();
               widget.onOrderPlaced?.call();
@@ -569,16 +570,8 @@ class _CartScreenState extends State<CartScreen> {
       _viewAsManualOverride.clear();
     }
 
-    // Compute selected total for ViewAs footer.
-    double viewAsSelectedTotal = 0;
-    if (cart.isViewAs) {
-      for (final l in cart.lines) {
-        if (_viewAsChecked.contains(l.product.id)) {
-          viewAsSelectedTotal += l.product.b2bPrice * l.quantity;
-        }
-      }
-    }
-    final double? selectedTotal = cart.isViewAs ? viewAsSelectedTotal : null;
+    // #597 — the subtotal is the server's; this only decides whether to show it.
+    final String? selectedTotal = cart.isViewAs ? _selectedTotalDisplay : null;
 
     final banner = cart.hasSampleItems ? _SampleBanner(cart: cart) : null;
 
@@ -1784,7 +1777,7 @@ class _CheckoutBar extends StatelessWidget {
   final CartModel cart;
   final VoidCallback onPlaceOrder;
   // CHANGE #324: when ViewAs, show selected-items total instead of full cart total.
-  final double? selectedTotal;
+  final String? selectedTotal;
 
   /// CHANGE #553 — true while cart_availability() reports a blocking_label.
   final bool availabilityBlocked;
@@ -1833,7 +1826,7 @@ class _CheckoutBar extends StatelessWidget {
                     ),
                     Text(
                       selectedTotal != null
-                          ? rupees(selectedTotal!)
+                          ? selectedTotal!
                           : cart.rs('net_payable_display'),
                       style: const TextStyle(
                         fontSize: 14,
@@ -2593,7 +2586,7 @@ class _OrderSummaryPanel extends StatelessWidget {
   final CartModel cart;
   final VoidCallback onPlaceOrder;
   // CHANGE #324: when ViewAs, show selected-items total instead of full cart total.
-  final double? selectedTotal;
+  final String? selectedTotal;
 
   /// CHANGE #553 — true while cart_availability() reports a blocking_label.
   final bool availabilityBlocked;
@@ -2660,7 +2653,7 @@ class _OrderSummaryPanel extends StatelessWidget {
           _row(
             selectedTotal != null ? 'Selected Total' : 'Net Payable Amount',
             selectedTotal != null
-                ? rupees(selectedTotal!)
+                ? selectedTotal!
                 : cart.rs('net_payable_display'),
             bold: true,
           ),

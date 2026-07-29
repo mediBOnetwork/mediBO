@@ -269,6 +269,7 @@ class Product {
     this.supplierCount,
     this.availability,
     this.pricing,
+    this.mrpText = '',
   });
 
   /// Returns a copy carrying [availability] — used to graft a cart line's
@@ -355,6 +356,7 @@ class Product {
       // CHANGE #553 — present on every storefront RPC row, absent elsewhere.
       availability: Availability.fromMap(map['availability']),
       pricing: Pricing.fromMap(map['pricing']),
+      mrpText: (map['mrp_display'] ?? '').toString(),
     );
   }
 
@@ -412,6 +414,7 @@ class Product {
       supplierCount: (map['supplierCount'] as num?)?.toInt(),
       availability: Availability.fromMap(map['availability']),
       pricing: Pricing.fromMap(map['pricing']),
+      mrpText: (map['mrp_display'] ?? '').toString(),
     );
   }
 
@@ -487,6 +490,11 @@ class Product {
 
   /// True when the product has a price — legacy check still used for MRP display.
   bool get hasMrp => mrp > 0;
+
+  /// CHANGE #597 — the backend's formatted MRP for this row ('' when the
+  /// catalogue has none). Every medicine payload carries it, so no widget
+  /// calls rupees() on a raw number.
+  final String mrpText;
 
   /// #102: True only when buyable==true (at least one PS supplier).
   /// null (during backfill) is treated as false (unavailable) for safety.

@@ -2496,10 +2496,10 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         .toList();
     if (ids.isEmpty) return orders;
     try {
-      final medRows = await Supabase.instance.client
-          .from('MEDICINE')
-          .select('id, therapeutic_class, marketer, image_url_1')
-          .inFilter('id', ids) as List;
+      final medRaw = await Supabase.instance.client
+          .rpc('medicine_rows_by_ids', params: {'p_ids': ids});
+      final medRows = (((medRaw is List ? medRaw.first : medRaw) as Map)['rows']
+          as List<dynamic>? ?? const []);
       final medMap = <int, Map<String, dynamic>>{
         for (final r in medRows)
           (r['id'] as num).toInt(): Map<String, dynamic>.from(r as Map),

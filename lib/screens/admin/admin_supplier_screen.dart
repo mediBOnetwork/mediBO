@@ -3272,24 +3272,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                 final sendBtn = Builder(builder: (btnCtx) => InquirySendButton(
                   enabled: !_inquiryLoading,
                   onOpenPopupOnly: () => _openSendPopupOnly(supName, btnCtx),
-                  // CHANGE #607 — the admin INQUIRY tab's button comes from
-                  // _sup_inquiry_send_state(), which still returns only
-                  // {state,label,tone} with no colours. Its two-tone palette
-                  // lives HERE, at the out-of-scope caller, so the shared
-                  // SendButtonView holds no colour logic at all and this tab
-                  // keeps the exact appearance it had. Delete these three
-                  // lines the day that function merges tone_colors() the way
-                  // _sup_order_send_state already does.
-                  child: SendButtonView(
-                    sendButton: sendButton,
-                    bg: sendButton?['tone'] == 'green'
-                        ? const Color(0xFFD1FAE5) : const Color(0xFFFEF3C7),
-                    fg: sendButton?['tone'] == 'green'
-                        ? const Color(0xFF065F46) : const Color(0xFF92400E),
-                    border: sendButton?['tone'] == 'green'
-                        ? const Color(0xFF065F46).withValues(alpha: 0.3)
-                        : const Color(0xFF92400E).withValues(alpha: 0.3),
-                  ),
+                  // CHANGE #608 — the two-tone palette parked here at #607 is
+                  // DELETED. _sup_inquiry_send_state() merges tone_colors()
+                  // now, so this call site passes the payload and nothing else,
+                  // exactly like the Orders tab.
+                  child: SendButtonView(sendButton: sendButton),
                 ));
                 if (narrow) {
                   return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -4603,18 +4590,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     // tapping Send does. #492 wrongly kept a wa.me branch here for AutoFlow
     // ON; deleted along with get_supplier_order_send_payload/_supplierShouldSend
     // (both now unreachable — no other caller).
-    // CHANGE #607 — bg/fg/border straight off send_button. _sup_order_send_state
-    // merges tone_colors() in, so the three hexes are the backend's and nothing
-    // here maps a tone to a colour.
-    final sb = row.sendButton;
+    // CHANGE #608 — SendButtonView reads bg/fg/border off send_button itself,
+    // so the caller passes the object and nothing else.
     return Builder(builder: (btnCtx) => GestureDetector(
       onTap: () => _showOrderSendPopup(row, btnCtx),
-      child: SendButtonView(
-        sendButton: sb,
-        bg: sb == null ? null : backendHex(sb['bg'] as String?, const Color(0xFFEDEFF2)),
-        fg: sb == null ? null : backendHex(sb['fg'] as String?, const Color(0xFF5A6472)),
-        border: sb == null ? null : backendHex(sb['border'] as String?, const Color(0xFFD3D8DF)),
-      ),
+      child: SendButtonView(sendButton: row.sendButton),
     ));
   }
 
@@ -4965,9 +4945,15 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                     style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500,
                         color: Color(0xFF9CA3AF), letterSpacing: 0.3)),
               ],
-              if (row.description?.isNotEmpty == true) ...[
+              // CHANGE #608 — description_label, the render-ready string, now
+              // that admin_supplier_orders returns it. The desktop grid reads
+              // the same key via columns[]; the mobile card was still reading
+              // the raw `description` column off the other RPC's segment, which
+              // is two sources for one visible value.
+              if (row.rs('description_label').isNotEmpty) ...[
                 const SizedBox(height: 4),
-                Text(row.description!, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+                Text(row.rs('description_label'),
+                    style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
               ],
               const SizedBox(height: 4),
               Row(children: [
@@ -11811,46 +11797,29 @@ class InquirySendButton extends StatelessWidget {
 class SendButtonView extends StatelessWidget {
   final Map<String, dynamic>? sendButton;
 
-  /// CHANGE #607 — colours the caller obtained from the backend, when its
-  /// payload carries them. See the class comment for why this is a parameter
-  /// and not a lookup.
-  final Color? bg;
-  final Color? fg;
-  final Color? border;
-
-  const SendButtonView({
-    super.key,
-    required this.sendButton,
-    this.bg,
-    this.fg,
-    this.border,
-  });
+  const SendButtonView({super.key, required this.sendButton});
 
   @override
   Widget build(BuildContext context) {
-    // CHANGE #607 — the tone -> hex map is DELETED from the Orders path.
+    // CHANGE #608 — one code path, and it derives nothing.
     //
-    // It was `tone == 'green' ? #D1FAE5 : #FEF3C7` for the fill and
-    // `#065F46 : #92400E` for the text — a two-entry palette in Dart that had
-    // to be kept in step with app_settings.ui_tone_colors by hand, and which
-    // silently painted every non-green tone yellow. _sup_order_send_state now
-    // merges tone_colors() into the object, so the Orders tab passes real
-    // bg/fg/border down and nothing is derived here.
+    // #607 deleted the tone -> hex map from the Orders path but had to leave a
+    // copy at the admin Inquiry call site, because _sup_inquiry_send_state()
+    // returned only {state,label,tone}. It now merges tone_colors() exactly
+    // like _sup_order_send_state(), so BOTH payloads carry bg/fg/border and the
+    // optional colour parameters #607 added are gone with the palette: this
+    // widget reads the three hexes straight off the object it was given.
     //
-    // The admin INQUIRY tab is a different call path: its button comes from
-    // _sup_inquiry_send_state(), which still returns only {state,label,tone}
-    // and no colours. Per the brief that path is left untouched, so when no
-    // colours are supplied this falls back to the neutral chip palette rather
-    // than guessing a tone. Adding `|| public.tone_colors(b->>'tone')` to that
-    // one function is all it would take to retire the fallback.
-    final label = sendButton?['label'] as String? ?? '';
+    // `state` and `tone` are still in the payload and still ignored here —
+    // `state` only matters to a tap handler, and nothing maps a tone any more.
+    final sb = sendButton;
+    final label = sb?['label'] as String? ?? '';
     if (label.isEmpty) return const SizedBox.shrink();
-    final enabled = sendButton == null ||
-        !sendButton!.containsKey('enabled') ||
-        sendButton!['enabled'] == true;
-    final cBg = bg ?? const Color(0xFFEDEFF2);
-    final cFg = fg ?? const Color(0xFF5A6472);
-    final cBorder = border ?? cBg;
+    final enabled =
+        sb == null || !sb.containsKey('enabled') || sb['enabled'] == true;
+    final cBg = backendHex(sb?['bg'] as String?, const Color(0xFFEDEFF2));
+    final cFg = backendHex(sb?['fg'] as String?, const Color(0xFF5A6472));
+    final cBorder = backendHex(sb?['border'] as String?, cBg);
     return Opacity(
       opacity: enabled ? 1.0 : 0.5,
       child: Container(

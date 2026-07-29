@@ -413,6 +413,24 @@ write an **email** into `reviewed_by`, which is a `uuid` column.
 
 Direct table writes: **47 → 27**.
 
+### CHANGE #581 — public contact form + push tokens
+
+**`contact_inquiries`** — a *public, unauthenticated* form INSERTing straight
+into a table. Required fields and length caps lived only in a client validator,
+which anything speaking to PostgREST can skip. `submit_contact_inquiry()`
+shapes the write and enforces both in the database.
+
+**`admin_push_tokens`** — the client passed its **own `admin_id`** and a
+device-clock `updated_at`, and delete matched on token alone. The server knows
+who is calling: `save_my_push_token()` / `remove_my_push_token()` key to
+`auth.uid()`, and the delete is scoped to the caller's own token.
+
+**Verified** (rolled-back probe): anonymous contact insert succeeds; a blank
+name is refused with **`missing_fields`**; the stored token's `admin_id` is the
+**caller**, not anything the client sent.
+
+Direct table writes: **47 → 25**.
+
 ---
 
 ## Remaining — with the decision each still makes

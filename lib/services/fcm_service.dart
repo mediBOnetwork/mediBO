@@ -41,14 +41,12 @@ class FcmService {
     }
   }
 
+  // CHANGE #581 — the client passed its own admin_id and a DEVICE-clock
+  // updated_at. The server knows who is calling; adminId is no longer sent.
   static Future<void> _storeToken(String adminId, String token) async {
     try {
-      await Supabase.instance.client.from('admin_push_tokens').upsert({
-        'admin_id':   adminId,
-        'token':      token,
-        'platform':   'web',
-        'updated_at': DateTime.now().toUtc().toIso8601String(),
-      }, onConflict: 'token');
+      await Supabase.instance.client.rpc('save_my_push_token',
+          params: {'p_token': token, 'p_platform': 'web'});
     } catch (e) {
       debugPrint('[FcmService] token store failed: $e');
     }
@@ -67,9 +65,7 @@ class FcmService {
           .timeout(const Duration(seconds: 5), onTimeout: () => null);
       if (token == null || token.isEmpty) return;
       await Supabase.instance.client
-          .from('admin_push_tokens')
-          .delete()
-          .eq('token', token);
+          .rpc('remove_my_push_token', params: {'p_token': token});
     } catch (_) {}
   }
 }

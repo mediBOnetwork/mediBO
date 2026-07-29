@@ -139,6 +139,12 @@ class VersionWatcher {
 
   /// Begin periodic polling. Call immediately after init().
   void start() {
+    // CHANGE #571 — start() is called from _AppRoot, and _AppRoot is now built
+    // again whenever an account change replaces the stack. Without this the
+    // periodic timer was simply overwritten and the old one ran forever, so
+    // every login added another /version.json poll for the life of the tab.
+    _firstPoll?.cancel();
+    _pollTimer?.cancel();
     _firstPoll = Timer(_firstDelay, _check);
     _pollTimer = Timer.periodic(_interval, (_) => _check());
     try {

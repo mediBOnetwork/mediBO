@@ -303,6 +303,10 @@ class CartModel extends ChangeNotifier {
     // so no line from the previous account can survive an account switch.
     _adoptCart(const <String, dynamic>{});
     _adminRemovedLines.clear();
+    // CHANGE #571 — the order list is account data too. signedOut already
+    // cleared it; an account SWITCH did not, so the previous account's orders
+    // stayed on screen until fetchOrders() happened to replace them.
+    _orders.clear();
     if (uid != null) _subscribeToCartRealtime(uid);
     // CHANGE #559 + #556: hand the guest cart to the account BEFORE anything
     // reads it, so what the customer built while logged out survives login.

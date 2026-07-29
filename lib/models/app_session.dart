@@ -18,6 +18,10 @@ import 'package:flutter/foundation.dart';
 enum AccountSurface {
   /// Session not resolved yet, or resolved against a different auth user.
   /// Nothing that shows account data may render.
+  ///
+  /// CHANGE #571 — this is also what a signed-out account looks like for the
+  /// instant between the auth event and my_session() returning. The shell
+  /// renders the neutral loading state for it; never the last surface it drew.
   unresolved,
 
   /// Dashboard, Customers, Suppliers, Fulfill, WhatsApp.
@@ -47,6 +51,7 @@ class AppSession {
     required this.displayName,
     required this.homeRoute,
     required this.homeLabel,
+    this.surfaceName = 'public',
     this.message = '',
     this.supplierStatus,
   });
@@ -64,6 +69,7 @@ class AppSession {
     displayName: '',
     homeRoute: '/login',
     homeLabel: 'Login',
+    surfaceName: 'public',
   );
 
   final bool signedIn;
@@ -79,6 +85,11 @@ class AppSession {
   final String displayName;
   final String homeRoute;
   final String homeLabel;
+
+  /// CHANGE #571 — `my_session().surface`, verbatim. The backend already
+  /// decides this ('public' | 'admin' | 'supplier' | 'customer' | 'worker');
+  /// the app must never re-derive it from role, email or a cached flag.
+  final String surfaceName;
 
   /// Backend-authored copy shown on the login screen. Never written in Dart.
   final String message;
@@ -116,6 +127,10 @@ class AppSession {
       // the user on a blank route.
       homeRoute: route.isEmpty ? '/store' : route,
       homeLabel: _str(json, 'home_label'),
+      // CHANGE #571 — taken from the payload, never inferred. An empty value
+      // means the backend told us nothing, which is not the same as "public":
+      // it resolves to [AccountSurface.unresolved] so nothing renders.
+      surfaceName: _str(json, 'surface'),
       message: _str(json, 'message'),
     );
   }
@@ -131,6 +146,7 @@ class AppSession {
         displayName: displayName,
         homeRoute: homeRoute,
         homeLabel: homeLabel,
+        surfaceName: surfaceName,
         message: message,
         supplierStatus: status,
       );
@@ -141,22 +157,42 @@ class AppSession {
   /// the one documented way an admin session renders customer surfaces.
   /// [matchesAuthUser] is the RULE 4 mismatch guard result; false means the
   /// cached session belongs to a different auth user and nothing may render.
+  /// CHANGE #571 — this no longer branches on role. It translates the
+  /// backend's own `surface` string into the enum the shell switches on, and
+  /// that is the whole decision. `'public'` (signed out) and `'worker'` both
+  /// render the customer surface, exactly as they did before, because the
+  /// public storefront IS the customer surface — what sends a logged-out user
+  /// to the login screen is `home_route`, not this.
   AccountSurface surface({
     required bool matchesAuthUser,
     bool actingAsCustomer = false,
   }) {
     if (!matchesAuthUser) return AccountSurface.unresolved;
     if (actingAsCustomer) return AccountSurface.customer;
-    if (isAdmin) return AccountSurface.admin;
-    if (isSupplier) return AccountSurface.supplier;
-    if (supplierStatus == 'pending_approval') {
-      return AccountSurface.pendingSupplier;
+    switch (surfaceName) {
+      case 'admin':
+        return AccountSurface.admin;
+      case 'supplier':
+        return AccountSurface.supplier;
+      case 'customer':
+      case 'public':
+      case 'worker':
+        // A supplier account still awaiting approval has no supplier surface
+        // to go to — `my_supplier_id()` only matches approved rows, so the
+        // backend calls it a customer. `supplier_status` (also the backend's
+        // word, from claim_supplier_profile) is what tells the two apart.
+        if (supplierStatus == 'pending_approval') {
+          return AccountSurface.pendingSupplier;
+        }
+        return AccountSurface.customer;
+      default:
+        // Includes '' — the backend said nothing, so nothing may render.
+        return AccountSurface.unresolved;
     }
-    return AccountSurface.customer;
   }
 
   @override
   String toString() => 'AppSession(signedIn: $signedIn, role: $role, '
       'isAdmin: $isAdmin, authUserId: $authUserId, owner: $ownerType/$ownerId, '
-      'home: $homeRoute)';
+      'surface: $surfaceName, home: $homeRoute)';
 }

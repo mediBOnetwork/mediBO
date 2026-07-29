@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../app_state.dart';
 import '../data/medicine_repository.dart';
+import '../models/app_session.dart';
 import '../models/cart_model.dart';
 import '../theme.dart';
 import '../url_sync.dart';
@@ -41,11 +42,19 @@ import 'supplier/supplier_shell.dart';
 /// App shell: responsive — desktop gets a top nav + sidebar, mobile/tablet
 /// keeps the existing header + quick-nav chips + bottom nav layout.
 class HomeShell extends StatefulWidget {
-  static final _shellKey = GlobalKey<_HomeShellState>();
-  HomeShell() : super(key: _shellKey);
-
-  /// Switch to the Bulk Upload tab (index 2). Called by Convert-to-Order flow.
-  static void switchToBulkUpload() => _shellKey.currentState?._setIndex(2);
+  /// CHANGE #571 — no static GlobalKey any more.
+  ///
+  /// It used to be `HomeShell() : super(key: _shellKey)`, so every HomeShell
+  /// ever built shared one key. That was survivable while exactly one existed
+  /// for the life of the page; it is not now that an account change replaces
+  /// the whole stack, because for the moment of the swap the outgoing shell
+  /// and the incoming one are both mounted and two live widgets holding the
+  /// same GlobalKey is an error — and worse, a *reparent* rather than a
+  /// rebuild, which would carry the old account's State straight into the new
+  /// tree. The key's only reader, `switchToBulkUpload()`, had no callers: the
+  /// Convert-to-Order flow goes through `BulkUploadScreen.navToBulkUpload`,
+  /// registered below.
+  const HomeShell({super.key});
 
   @override
   State<HomeShell> createState() => _HomeShellState();
@@ -81,8 +90,13 @@ class _HomeShellState extends State<HomeShell> {
   // and all processedCrop values. With a GlobalKey, Flutter reparents the element instead.
   final GlobalKey _bulkUploadKey = GlobalKey();
 
+  VoidCallback? _navToBulk;
+
   int _index = 0; // 0 = storefront, 1 = orders, 2 = bulk upload
   String _viewAsKey = 'none'; // tracks active ViewAs identity; reset _index on change
+  /// CHANGE #571 — the account this shell's state belongs to.
+  int _accountEpoch = 0;
+  String? _loggedSurface;
   String _query = '';
   String _category = 'All';
   bool _cartOpen = false;
@@ -105,7 +119,13 @@ class _HomeShellState extends State<HomeShell> {
   @override
   void initState() {
     super.initState();
-    BulkUploadScreen.navToBulkUpload = () { if (mounted) setState(() => _index = 2); };
+    // CHANGE #571 — hold on to the exact closure we registered, so a shell
+    // being torn down cannot unregister the one that replaced it. During an
+    // account swap the incoming shell's initState runs before the outgoing
+    // shell's dispose, and an unconditional clear in dispose would leave
+    // Convert-to-Order pointing at nothing.
+    _navToBulk = () { if (mounted) setState(() => _index = 2); };
+    BulkUploadScreen.navToBulkUpload = _navToBulk;
     // CHANGE #559: a rejected cart write shows the SERVER's message verbatim.
     // The client never substitutes copy of its own.
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -183,6 +203,31 @@ class _HomeShellState extends State<HomeShell> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     final authForSuper = UserState.of(context);
+    // CHANGE #571 — the account changed under this shell. Every field below is
+    // per-account: which tab the IndexedStack is showing, which slide-over is
+    // open, what was searched, whether this login is a super admin. The bug
+    // this change fixes was exactly this state surviving a logout — the nav
+    // redrew from the cleared role while the body kept rendering page _index
+    // of the account that had just gone. Reset here rather than in build() so
+    // it is one assignment per account change, not one per frame.
+    if (_accountEpoch != authForSuper.accountEpoch) {
+      _accountEpoch = authForSuper.accountEpoch;
+      _index = 0;
+      _cartOpen = false;
+      _loginOpen = false;
+      _query = '';
+      _category = 'All';
+      _searchCtrl.clear();
+      _searchLoading = false;
+      _desktopScrolled = false;
+      _ordersRefreshSignal = 0;
+      // _desktopMeta deliberately survives: the category chips are public
+      // catalogue data, fetched independently of auth by CHANGE #497. Blanking
+      // them on logout would undo that and leave the chip row empty.
+      _amISuper = false;
+      _amISuperChecked = false;
+      RenderLog.write('c571_shell_reset', 'epoch=$_accountEpoch');
+    }
     if (authForSuper.isAdmin && !_amISuperChecked) {
       _amISuperChecked = true;
       _checkAmISuper();
@@ -395,7 +440,9 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   void dispose() {
-    if (BulkUploadScreen.navToBulkUpload != null) BulkUploadScreen.navToBulkUpload = null;
+    if (identical(BulkUploadScreen.navToBulkUpload, _navToBulk)) {
+      BulkUploadScreen.navToBulkUpload = null;
+    }
     if (kIsWeb) HardwareKeyboard.instance.removeHandler(_globalKeyHandler);
     _searchFocus.dispose();
     _searchCtrl.dispose();
@@ -523,9 +570,25 @@ class _HomeShellState extends State<HomeShell> {
       RenderLog.write('view_as_active', 'customer:${viewAs.identity!.id}');
     }
 
+    // CHANGE #571 — the surface is the backend's `my_session().surface`,
+    // resolved in AppSession. This used to read `auth.isAdmin` / `isSupplier`,
+    // which meant the app held its own answer to "what may I show?" alongside
+    // the backend's. `unresolved` is the honest third state — the session is
+    // in flight, or it belongs to a different auth user than the one the SDK
+    // is holding — and it renders the neutral loading state, never the last
+    // surface this shell happened to draw.
+    final surface = auth.surfaceFor(actingAsCustomer: isCustomerViewAs);
+    // Only on change — build() runs on every scroll notification and this is
+    // proof of which surface rendered, not a frame counter.
+    if (surface.name != _loggedSurface) {
+      _loggedSurface = surface.name;
+      RenderLog.write('c571_shell_surface', surface.name);
+    }
+
     // CHANGE #308: while role is resolving after sign-in, show a brief spinner
     // instead of flashing the customer "Not Registered" profile for admins/suppliers.
-    if (auth.profileLoading && !viewAs.isActive) {
+    if ((auth.profileLoading && !viewAs.isActive) ||
+        surface == AccountSurface.unresolved) {
       return const Scaffold(
         backgroundColor: Color(0xFFF5F6F8),
         body: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43))),
@@ -533,12 +596,12 @@ class _HomeShellState extends State<HomeShell> {
     }
 
     // Supplier: completely separate shell — takes priority after admin check
-    if (!auth.isAdmin && auth.isSupplier) {
+    if (surface == AccountSurface.supplier) {
       return const SupplierShell();
     }
 
     // Pending-approval supplier: show a waiting screen
-    if (!auth.isAdmin && !auth.isSupplier && auth.supplierStatus == 'pending_approval') {
+    if (surface == AccountSurface.pendingSupplier) {
       return Scaffold(
         backgroundColor: const Color(0xFFF5F6F8),
         body: Center(
@@ -619,9 +682,11 @@ class _HomeShellState extends State<HomeShell> {
           AdminFulfillmentScreen(),
         ];
 
-        final isAdmin = UserState.of(context).isAdmin;
-        // Customer ViewAs: force customer shell (header + nav), never admin chrome
-        final effectiveAdmin = isCustomerViewAs ? false : isAdmin;
+        // CHANGE #571 — same backend surface as above; `surfaceFor` already
+        // folds the customer-ViewAs override in, so admin chrome and admin
+        // pages can never disagree about which account is on screen.
+        final isAdmin = surface == AccountSurface.admin;
+        final effectiveAdmin = isAdmin;
         if (isCustomerViewAs) {
           RenderLog.write('view_as_shell', 'customer:${isDesktop ? "desktop" : "mobile"}');
         }

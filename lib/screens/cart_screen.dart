@@ -1007,7 +1007,6 @@ class _CartItemCard extends StatelessWidget {
     // said about this product_id. Nothing here re-derives it.
     final av = availability;
     final discPct = cart.discountPct; // #559: server-decided
-    final salePrice = p.mrp * (1 - discPct / 100);
 
     // Parse scheme "X+Y" for free-qty calculation
     final schemeParts = p.scheme.split('+');
@@ -1232,7 +1231,8 @@ class _CartItemCard extends StatelessWidget {
                   children: [
                     if (p.mrp > 0 && discPct > 0)
                       Text(
-                        'MRP ${rupees(p.mrp)}',
+                        // #582 — 'MRP ' prefix and the amount both from cart_render()
+                        '${cart.label('mrp_prefix')}${line.ds('mrp_display')}',
                         style: const TextStyle(
                           fontSize: 11,
                           color: Color(0xFF9CA3AF),
@@ -1242,7 +1242,7 @@ class _CartItemCard extends StatelessWidget {
                       ),
                     if (discPct > 0) const SizedBox(height: 2),
                     Text(
-                      rupees(salePrice),
+                      line.ds('sale_price_display'),
                       style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w800,
@@ -1262,7 +1262,8 @@ class _CartItemCard extends StatelessWidget {
                               Border.all(color: const Color(0xFFFDE047)),
                         ),
                         child: Text(
-                          '${p.gstPercent.toStringAsFixed(0)}% GST (${rupees(salePrice * p.gstPercent / 100)} input credit)',
+                          // #582 — the whole badge is one backend string.
+                          '${line.ds('gst_label')} (${line.ds('gst_credit_display')} input credit)',
                           style: const TextStyle(
                             fontSize: 10,
                             fontWeight: FontWeight.w700,
@@ -1684,11 +1685,9 @@ class _BillingBreakdownSection extends StatelessWidget {
   Widget build(BuildContext context) {
     // CHANGE #559: percentage, discount and delivery fee all come from
     // cart_state() — no tier threshold is evaluated in Dart.
-    final discPct = cart.discountPct;
-    final discAmt = cart.discountAmount;
-    final netTaxable = cart.mrpTotal - discAmt;
-    final deliveryFee = cart.deliveryFee;
-    final gstAmt = cart.netPayable - deliveryFee - netTaxable;
+    // #582 — this block used to end with
+    //     gstAmt = cart.netPayable - deliveryFee - netTaxable
+    // deriving GST by subtraction. cart_render() reports it directly.
 
     return Container(
       margin: const EdgeInsets.only(bottom: 4),
@@ -1714,24 +1713,28 @@ class _BillingBreakdownSection extends StatelessWidget {
                 letterSpacing: 0.3),
           ),
           const SizedBox(height: 10),
-          _bRow('Net Total', rupees(cart.mrpTotal)),
+          // CHANGE #582 — every figure and label below is printed from
+          // cart_render(). No rupees(), no percentage string built in Dart,
+          // and no 'FREE' ternary: the backend words that too.
+          _bRow(cart.label('net_total'), cart.rs('mrp_total_display')),
           const SizedBox(height: 6),
           _bRow(
-            'Discount (${discPct.toStringAsFixed(0)}%)',
-            '− ${rupees(discAmt)}',
+            cart.rs('discount_label'),
+            '− ${cart.rs('discount_display')}',
             valueColor: const Color(0xFF16A34A),
           ),
           const SizedBox(height: 6),
           _bRow(
             'GST Input Credit',
-            rupees(gstAmt),
+            cart.rs('gst_total_display'),
             valueColor: const Color(0xFFD97706),
           ),
           const SizedBox(height: 6),
           _bRow(
             'Delivery Fee',
-            deliveryFee > 0 ? rupees(deliveryFee) : 'FREE',
-            valueColor: deliveryFee == 0 ? const Color(0xFF16A34A) : null,
+            cart.rs('delivery_fee_display'),
+            valueColor: cart.render['is_delivery_free'] == true
+                ? const Color(0xFF16A34A) : null,
           ),
         ],
       ),
@@ -1830,7 +1833,9 @@ class _CheckoutBar extends StatelessWidget {
                       ),
                     ),
                     Text(
-                      rupees(selectedTotal ?? cart.netPayable),
+                      selectedTotal != null
+                          ? rupees(selectedTotal!)
+                          : cart.rs('net_payable_display'),
                       style: const TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w700,
@@ -1972,8 +1977,6 @@ class _GstBillView extends StatelessWidget {
   Widget build(BuildContext context) {
     final lines = cart.lines;
 
-    // MRP total — single source of truth for discount tier (matches cart bar)
-    final totalMrp = cart.mrpTotal;
     final discPct = cart.discountPct; // #559: server-decided
 
     // Group lines by GST rate, ascending
@@ -1983,19 +1986,14 @@ class _GstBillView extends StatelessWidget {
     }
     final sortedRates = groups.keys.toList()..sort();
 
-    // Pre-compute each group's Final Payable for the summary section
-    final Map<int, double> finalPayables = {};
-    for (final rate in sortedRates) {
-      final gLines = groups[rate]!;
-      final net =
-          gLines.fold(0.0, (s, l) => s + l.product.mrp * l.quantity);
-      final disc = net * discPct / 100;
-      final taxable = net - disc;
-      finalPayables[rate] = taxable + taxable * rate / 100;
-    }
+    // CHANGE #582 — the per-rate tax ladder is cart_render()'s job now. This
+    // block used to recompute net -> discount -> taxable -> gst -> payable for
+    // every rate, a third copy of the same arithmetic in this one file.
+    final Map<int, Map<String, dynamic>> backendGroups = {
+      for (final g in cart.gstGroups)
+        ((g['rate'] as num?)?.toInt() ?? 0): g,
+    };
     final deliveryFee = cart.deliveryFee; // #559: server-decided
-    // Use the shared CartModel getter as the single source of truth
-    final grandTotal = cart.netPayable;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2027,8 +2025,9 @@ class _GstBillView extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
             child: Text(
-              '${discPct.toStringAsFixed(0)}% discount applied '
-              '(cart MRP value ${rupees(totalMrp)})',
+              // #582 — one sentence, worded by the backend. It used to be two
+              // adjacent Dart literals concatenated around a rupees() call.
+              cart.rs('discount_applied_note'),
               style: const TextStyle(
                 fontSize: 12,
                 color: Color(0xFF16A34A),
@@ -2051,6 +2050,7 @@ class _GstBillView extends StatelessWidget {
                     rate: rate,
                     lines: groups[rate]!,
                     discPct: discPct,
+                    group: backendGroups[rate] ?? const {},
                   ),
                   const SizedBox(height: 16),
                 ],
@@ -2140,7 +2140,8 @@ class _GstBillView extends StatelessWidget {
                                       ],
                                     ),
                                     Text(
-                                      rupees(finalPayables[rate]!),
+                                      (backendGroups[rate]?['final_payable_display'] ?? '')
+                                          .toString(),
                                       style: const TextStyle(
                                         fontSize: 12,
                                         fontWeight: FontWeight.w600,
@@ -2175,7 +2176,7 @@ class _GstBillView extends StatelessWidget {
                                   ),
                                   Text(
                                     deliveryFee > 0
-                                        ? rupees(deliveryFee)
+                                        ? cart.rs('delivery_fee_display')
                                         : 'FREE',
                                     style: TextStyle(
                                       fontSize: 12,
@@ -2233,7 +2234,7 @@ class _GstBillView extends StatelessWidget {
                               ],
                             ),
                             Text(
-                              rupees(grandTotal),
+                              cart.rs('net_payable_display'),
                               style: const TextStyle(
                                 fontSize: 20,
                                 fontWeight: FontWeight.w900,
@@ -2281,8 +2282,15 @@ class _GstGroup extends StatelessWidget {
   final int rate;
   final List<CartLine> lines;
   final double discPct;
+  /// CHANGE #582 — the backend's group for this rate, already totalled and
+  /// worded by cart_render(). The card prints it; it no longer runs its own
+  /// tax ladder (net -> discount -> taxable -> gst -> payable).
+  final Map<String, dynamic> group;
   const _GstGroup(
-      {required this.rate, required this.lines, required this.discPct});
+      {required this.rate, required this.lines, required this.discPct,
+       this.group = const {}});
+
+  String gs(String key) => (group[key] ?? '').toString();
 
   static const double _mrpW = 62.0;
   static const double _qtyW = 30.0;
@@ -2291,12 +2299,6 @@ class _GstGroup extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final netAmount =
-        lines.fold(0.0, (s, l) => s + l.product.mrp * l.quantity);
-    final discountAmount = netAmount * discPct / 100;
-    final netTaxable = netAmount - discountAmount;
-    final gstAmount = netTaxable * rate / 100;
-    final finalPayable = netTaxable + gstAmount;
 
     return Container(
       decoration: BoxDecoration(
@@ -2452,7 +2454,7 @@ class _GstGroup extends StatelessWidget {
                   SizedBox(
                     width: _mrpW,
                     child: Text(
-                      rupees(lines[i].product.mrp),
+                      lines[i].ds('mrp_display'),
                       textAlign: TextAlign.right,
                       style: const TextStyle(
                         fontSize: 11.5,
@@ -2476,7 +2478,7 @@ class _GstGroup extends StatelessWidget {
                   SizedBox(
                     width: _amtW,
                     child: Text(
-                      rupees(lines[i].product.mrp * lines[i].quantity),
+                      lines[i].ds('line_mrp_display'),
                       textAlign: TextAlign.right,
                       style: const TextStyle(
                         fontSize: 12,
@@ -2498,17 +2500,17 @@ class _GstGroup extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
             child: Column(
               children: [
-                _totRow('Net Amount', rupees(netAmount)),
+                _totRow('Net Amount', gs('net_amount_display')),
                 _totRow(
-                  'Discount (${discPct.toStringAsFixed(0)}%)',
-                  '− ${rupees(discountAmount)}',
+                  gs('discount_label'),
+                  '− ${gs('discount_display')}',
                   valueColor: const Color(0xFF16A34A),
                 ),
-                _totRow('Net Taxable Amount', rupees(netTaxable),
+                _totRow('Net Taxable Amount', gs('net_taxable_display'),
                     bold: true),
                 _totRow(
-                  'GST $rate%',
-                  '+ ${rupees(gstAmount)}',
+                  gs('rate_label'),
+                  '+ ${gs('gst_display')}',
                   valueColor: const Color(0xFFD97706),
                 ),
               ],
@@ -2537,7 +2539,7 @@ class _GstGroup extends StatelessWidget {
                   ),
                 ),
                 Text(
-                  rupees(finalPayable),
+                  gs('final_payable_display'),
                   style: const TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w800,
@@ -2605,7 +2607,6 @@ class _OrderSummaryPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final discPct = cart.discountPct; // #559: server-decided
     final deliveryFee = cart.deliveryFee; // #559: server-decided
     return Container(
       padding: const EdgeInsets.all(20),
@@ -2635,26 +2636,33 @@ class _OrderSummaryPanel extends StatelessWidget {
           const SizedBox(height: 16),
           _row('Items',
               '${cart.distinctItems} SKU${cart.distinctItems == 1 ? '' : 's'} · ${cart.totalUnits} packs'),
-          _row('Net Total', rupees(cart.mrpTotal)),
+          // CHANGE #582 — the GST line here used to be DERIVED BY SUBTRACTION:
+          //   cart.netPayable - deliveryFee - cart.mrpTotal * (1 - discPct/100)
+          // a second, independent GST calculation living in the same screen as
+          // the first. One server figure now feeds both.
+          _row(cart.label('net_total'), cart.rs('mrp_total_display')),
           _row(
-            'Discount (${discPct.toStringAsFixed(0)}%)',
-            '− ${rupees(cart.discountAmount)}',
+            cart.rs('discount_label'),
+            '− ${cart.rs('discount_display')}',
             valueColor: const Color(0xFF16A34A),
           ),
           _row(
             'GST Input Credit',
-            rupees(cart.netPayable - deliveryFee - cart.mrpTotal * (1 - discPct / 100)),
+            cart.rs('gst_total_display'),
             valueColor: const Color(0xFFD97706),
           ),
           _row(
             'Delivery Fee',
-            deliveryFee > 0 ? rupees(deliveryFee) : 'FREE',
-            valueColor: deliveryFee == 0 ? const Color(0xFF16A34A) : null,
+            cart.rs('delivery_fee_display'),
+            valueColor: cart.render['is_delivery_free'] == true
+                ? const Color(0xFF16A34A) : null,
           ),
           const Divider(height: 24),
           _row(
             selectedTotal != null ? 'Selected Total' : 'Net Payable Amount',
-            rupees(selectedTotal ?? cart.netPayable),
+            selectedTotal != null
+                ? rupees(selectedTotal!)
+                : cart.rs('net_payable_display'),
             bold: true,
           ),
           const SizedBox(height: 6),

@@ -184,87 +184,70 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
     if (!silent) setState(() => _loading = true);
     try {
       final sid = widget.viewAsSupplierId;
-      // CHANGE #472: supplier_inquiry_buckets has two overloads in the DB —
-      // (p_supplier_id) and (p_supplier_id, p_preview) — both fully defaulted.
-      // A bare zero-arg call (the real, non-View-As login path) is genuinely
-      // ambiguous to Postgres ("could not choose the best candidate
-      // function"), so every real supplier session was silently erroring out
-      // of _fetch() and rendering as an empty "No inquiries" tab regardless
-      // of actual data. Always pass both params explicitly to disambiguate —
-      // no backend change needed.
-      final params = <String, dynamic>{
-        'p_supplier_id': sid,
-        'p_preview': false,
-      };
-      final rows = await Supabase.instance.client
-          .rpc('supplier_inquiry_buckets', params: params);
+      // CHANGE #574 — ONE RPC for this screen.
+      //
+      // This used to make TWO calls (supplier_inquiry_buckets +
+      // supplier_my_inquiry_receipt / get_supplier_inquiry_receipt) and then
+      // decide four things here:
+      //   * grouped rows itself with three .where((r) => r['state'] == ...)
+      //   * picked the auto-open group with a Pending > Inquired > Expired ladder
+      //   * inferred status as `list.isEmpty ? 'draft' : 'pending'` — the old
+      //     comment admitted outright that this was "inferred client-side"
+      //   * chose which receipt RPC to call based on the identity in hand
+      //
+      // supplier_inquiry_screen() answers all of it in one payload that cannot
+      // disagree with itself. Each row also carries its own `flags` block
+      // (no_supplier / is_locked / answerable / badge), so nothing re-derives
+      // state from slot_index and role.
+      final raw = await Supabase.instance.client.rpc(
+        'supplier_inquiry_screen',
+        params: {'p_supplier_id': sid, 'p_preview': false},
+      );
       if (!mounted) return;
-
-      // CHANGE #465: receipt of items already answered today. supplier_my_inquiry_receipt()
-      // resolves identity from the caller's own JWT, so it only works for a real logged-in
-      // supplier — View-As mode (admin browsing on behalf of a named supplier) has no
-      // supplier JWT to resolve, so it uses the named-lookup RPC instead.
-      List<Map<String, dynamic>> receipt = [];
-      try {
-        final receiptRows = sid != null
-            ? await Supabase.instance.client.rpc('get_supplier_inquiry_receipt',
-                params: {'p_supplier_name': widget.viewAsSupplierName ?? sid})
-            : await Supabase.instance.client.rpc('supplier_my_inquiry_receipt');
-        receipt = (receiptRows as List<dynamic>? ?? [])
-            .map((e) => Map<String, dynamic>.from(e as Map))
-            .toList();
-      } catch (_) {}
-      if (!mounted) return;
-
-      final list = (rows as List<dynamic>? ?? [])
-          .map((e) => Map<String, dynamic>.from(e as Map))
-          .toList();
-
-      final pending  = list.where((r) => r['state'] == 'pending').toList();
-      final inquired = list.where((r) => r['state'] == 'inquired').toList();
-      final expired  = list.where((r) => r['state'] == 'expired').toList();
-
-      // Auto-open on first load: Pending > Inquired > Expired
-      String? autoOpen;
-      if (_firstLoad) {
-        if (pending.isNotEmpty) {
-          autoOpen = 'pending';
-        } else if (inquired.isNotEmpty) {
-          autoOpen = 'inquired';
-        } else if (expired.isNotEmpty) {
-          autoOpen = 'expired';
-        }
+      final map = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
+      if (map is! Map) {
+        setState(() => _loading = false);
+        return;
       }
+      final payload = map.cast<String, dynamic>();
+
+      List<Map<String, dynamic>> group(String key) =>
+          ((payload[key] as List<dynamic>?) ?? const [])
+              .whereType<Map>()
+              .map((e) => e.cast<String, dynamic>())
+              .toList();
+
+      final pending  = group('pending');
+      final inquired = group('inquired');
+      final expired  = group('expired');
+      final receipt  = group('receipt');
+      final autoOpen = (payload['auto_open'] ?? '').toString();
+      final status   = (payload['status'] ?? '').toString();
+      final badge    = (payload['badge'] as num?)?.toInt() ?? 0;
 
       setState(() {
         _pending  = pending;
         _inquired = inquired;
         _expired  = expired;
         _receipt  = receipt;
-        if (_firstLoad && autoOpen != null) _openGroup = autoOpen;
+        if (_firstLoad && autoOpen.isNotEmpty) _openGroup = autoOpen;
         _firstLoad = false;
         _loading = false;
       });
 
       final mode = sid != null ? 'viewas' : 'supplier';
       final supplierLabel = sid != null ? (widget.viewAsSupplierName ?? sid) : 'self';
-      RenderLog.write('c470_supplier_tab_refetch', '$supplierLabel:items=${list.length}');
-      // CHANGE #472: draft/pending status is inferred client-side — the
-      // backend only returns rows for a pending, non-expired form (see
-      // supplier_inquiry_buckets), so a non-empty result means 'pending'.
-      final status = list.isEmpty ? 'draft' : 'pending';
-      RenderLog.write('c472_supplier_tab_sync', '$supplierLabel:$status:items=${list.length}');
+      final total = (payload['total'] as num?)?.toInt() ?? 0;
+      RenderLog.write('c470_supplier_tab_refetch', '$supplierLabel:items=$total');
+      RenderLog.write('c574_supplier_tab_sync', '$supplierLabel:$status:items=$total');
       RenderLog.write('inq.src.mode', mode);
       RenderLog.write('inq.counts',
           'p=${pending.length};i=${inquired.length};e=${expired.length}');
-      RenderLog.write('inq.colours',
-          'pending=yellow;inquired=green;expired=red');
-      RenderLog.write('inq.badge', pending.length);
-      if (autoOpen != null) RenderLog.write('inq.autoopen', autoOpen);
+      RenderLog.write('inq.badge', badge);
+      if (autoOpen.isNotEmpty) RenderLog.write('inq.autoopen', autoOpen);
       RenderLog.write('inq.refresh.source', source);
-      RenderLog.write('inq.norefreshbtn', 1);
 
-      widget.onPendingCount?.call(pending.length);
+      widget.onPendingCount?.call(badge);
     } catch (e) {
       if (mounted) setState(() => _loading = false);
       RenderLog.write('inq.fetch.err', e.toString().substring(0, 60));

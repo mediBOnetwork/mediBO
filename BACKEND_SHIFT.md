@@ -136,6 +136,53 @@ read another account's orders by passing an id.
 - Copy relocated **verbatim** ("No purchase orders yet" / "Placed orders will
   appear here.") — no rewording smuggled in with the move.
 
+### CHANGE #574 — supplier Inquiry tab
+
+**What it decided in Dart, and no longer does:**
+
+- made **two** calls (`supplier_inquiry_buckets` + one of two receipt RPCs,
+  chosen by which identity was in hand) and reconciled them here.
+- grouped rows itself: three × `list.where((r) => r['state'] == '...')`.
+- picked the auto-open group with a Pending > Inquired > Expired ladder.
+- inferred status as `list.isEmpty ? 'draft' : 'pending'` — the old code
+  comment said outright that this was *"inferred client-side"*.
+
+**Now:** `supplier_inquiry_screen(p_supplier_id, p_preview)` returns
+`pending` / `inquired` / `expired` / `receipt`, plus `counts`, `badge`,
+`auto_open`, `status` and `has_items` — one payload that cannot disagree with
+itself. The identity guard inside `supplier_inquiry_buckets` still applies:
+passing `p_supplier_id` requires admin, and the wrapper is
+`SECURITY DEFINER` but the guard reads `get_my_role()` from the real caller,
+so it cannot be bypassed.
+
+**`inquiry_item_flags()` — one rule, one place.** "Does this line have a
+supplier?" was written three times in Dart from two raw fields, and the three
+copies had **already drifted**: `inquiry_v11`/`inquiry_v12` used `slot == 0`
+while `admin_supplier_screen` used `slot <= 0`. `<= 0` is correct (a missing
+slot parses to `-1` in the widgets' own default), so that is the rule kept.
+The helper also returns `is_locked`, `answerable`, and the role badge
+(label + both colours) that Dart derived from `role == 'current'`.
+
+**Verified with data** (rolled-back probe: the one draft inquiry form flipped
+to pending, then rolled back):
+
+- supplier **BHARAT SALES**, total 1, `status=pending`, `auto_open=pending`,
+  `badge=1`, `counts={pending:1, inquired:0, expired:0}`
+- row flags: `no_supplier=false`, `badge_label=Current`, `answerable=true`
+- empty supplier + admin View As paths: 0 nulls, `status=draft`, `auto_open=''`
+- `inquiry_item_flags` across 6 cases incl. slot 0, slot -1, role none, answered
+- **`has_mrp`** added after the probe showed a null MRP rendering as `₹0.00` —
+  the same false-zero the storefront had. Absence is now explicit.
+- Production untouched: form back to `draft`, 0 pending forms, all probe
+  functions dropped (`NONE LEFT`).
+
+**Deliberately NOT done in this change:** `inquiry_v12` is shared by three
+surfaces (public inquiry form, supplier tab, admin), and only the supplier
+tab's data source now emits `flags`. Converting the shared widget's
+`_noSupplier` before `inquiry_buckets_today`, `get_supplier_inquiry_items` and
+`get_inquiry_form` also emit flags would break the other two surfaces, so the
+widget still derives. That is the next step, listed below.
+
 ---
 
 ## Remaining — with the decision each still makes
@@ -146,7 +193,8 @@ Counts are `grep` over `lib/**.dart` at the time of writing.
 |---|---|---|---|
 | 1 | Orders — **admin side** | `admin_customer_screen` order views still read tables directly | — |
 | 2 | Storefront / catalogue | client-side filtering + `rupees()` formatting | — |
-| 3 | Inquiry + supplier orders | slot/role words (`role == 'none' \| 'no_supplier'`) in `inquiry_v11/v12.dart`, `admin_supplier_screen.dart` | 9 role branches |
+| 3 | Inquiry — **shared widget** | `inquiry_v12._noSupplier` still derives from slot+role. Blocked on `inquiry_buckets_today`, `get_supplier_inquiry_items` and `get_inquiry_form` emitting `flags` (helper `inquiry_item_flags()` already exists and is verified) | 3 sites |
+| 3b | `inquiry_v11.dart` | **dead file** — no screen imports it; delete or convert | 2 |
 | 4 | Fulfilment (collect/arrivals/warehouse/pack) | mostly backend already (`fw_*`); check stub fields | — |
 | 5 | Suppliers / customers / payments / dashboard | 47 direct table **writes** still bypass an RPC | 47 |
 | 6 | Everywhere | money/date formatted in Dart | 38 × `rupees()`, 60 × `toStringAsFixed`/`DateFormat` |

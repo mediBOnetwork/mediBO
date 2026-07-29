@@ -439,6 +439,33 @@ Direct table writes: **47 → 25**.
 
 ---
 
+## Verified figures (single consistent measurement)
+
+All measured with the **same** grep at both ends: baseline `c306294e`
+(pre-#571) vs the current branch. Doc comments excluded from the `rupees()`
+count, since a comment naming the function is not a call.
+
+| Metric | Baseline | Now |
+|---|---|---|
+| Role branches (filtered) | 14 | **5** |
+| Direct table **writes** | 48 | **25** |
+| All `.from(...)` calls | 143 | **109** |
+| `.from('cart_items')` writes | 2 | **0** |
+| `.from('pharmacy_profiles')` writes | 4 | **0** |
+| `.from('supplier_profiles')` **updates** | 5 | **0** |
+| `.from('supplier_profiles')` **inserts** | 5 | **4** |
+| `.from('admins')` writes | 1 | **0** |
+| `rupees()` **calls** | 37 | **34** |
+
+Earlier revisions of this file quoted "39 → 4" for role branches, "47" for
+baseline writes and "6" for `pharmacy_profiles`. Those mixed filtered and
+unfiltered greps. The table above is the corrected, like-for-like set.
+
+`rupees()` barely moved because **25 of the remaining 34 calls are in
+`cart_screen.dart`**, whose display formatting is not yet converted — #571
+only moved the order-placed dialog's amount. That is the single largest
+remaining item.
+
 ## Remaining — with the decision each still makes
 
 Counts are `grep` over `lib/**.dart` at the time of writing.

@@ -8,18 +8,14 @@ import '../../utils/toast.dart';
 import '../../widgets/backend_chip.dart';
 import '../../widgets/inquiry_v12.dart';
 
-// Colour tokens for the three inquiry GROUP shells (the accordion header
-// bands). These are not a status->colour map over row data: they are three
-// fixed surfaces, and supplier_inquiry_screen() returns no colours for them —
-// only labels{pending,inquired,expired}, which is what the headers now read.
-// Every colour that IS derived from data on this screen (the answered badge)
-// now comes from the backend via answer_badge.
-const _kPendingBg    = Color(0xFFFFF7E0);
-const _kPendingText  = Color(0xFFB26A00);
-const _kInquiredBg   = Color(0xFFE8F5E9);
-const _kInquiredText = Color(0xFF2E7D32);
-const _kExpiredBg    = Color(0xFFFDECEA);
-const _kExpiredText  = Color(0xFFC62828);
+// CHANGE #607 — the six group-header colour constants are DELETED.
+//
+// _kPendingBg/_kPendingText, _kInquiredBg/_kInquiredText and
+// _kExpiredBg/_kExpiredText hardcoded this screen's accordion palette. #606
+// left them because supplier_inquiry_screen() returned no colours for the
+// group shells; it does now. Each entry in groups[] carries bg/fg/border from
+// tone_colors(), keyed by app_settings.inquiry_group_tones, so recolouring a
+// group is a config edit.
 
 class SupplierInquiryScreen extends StatefulWidget {
   final String? viewAsSupplierId;
@@ -67,6 +63,14 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
   Map<String, dynamic> _submit = const {};
   String _dontStockAnswer = '';
   bool _hasItems = false;
+
+  /// CHANGE #607 — groups[]: the sections to draw, in the backend's display
+  /// order, each with key/label/count/show/is_open and bg/fg/border.
+  List<Map<String, dynamic>> _groups = const [];
+
+  /// True once the supplier has toggled a section themselves. Until then the
+  /// accordion follows the backend's is_open; after that it follows the user.
+  bool _userToggled = false;
 
   /// CHANGE #606 — the submit gate is decided backend-side from the CURRENT
   /// selection, so a selection change has to reach the backend. Debounced so a
@@ -276,7 +280,13 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
         _submit = (payload['submit'] as Map?)?.cast<String, dynamic>() ?? const {};
         _dontStockAnswer = (payload['dont_stock_answer'] as String?) ?? '';
         _hasItems = payload['has_items'] == true;
-        if (_firstLoad && autoOpen.isNotEmpty) _openGroup = autoOpen;
+        // CHANGE #607 — groups[] replaces the auto_open string entirely: each
+        // entry states its own is_open, so there is no ladder and no
+        // first-load-only assignment to a single _openGroup here.
+        _groups = ((payload['groups'] as List<dynamic>?) ?? const [])
+            .whereType<Map>()
+            .map((e) => e.cast<String, dynamic>())
+            .toList();
         _firstLoad = false;
         _loading = false;
       });
@@ -399,26 +409,37 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
     final enabled = _submit['enabled'] == true;
     final label = (_submit['label'] as String?) ?? '';
     if (label.isEmpty) return const SizedBox.shrink();
+    // CHANGE #607 — submit.bg/fg/border, from tone_colors(): green when the
+    // backend says the form is submittable, grey when it is not. The four
+    // hardcoded hexes that used to sit in this button's style block
+    // (#1B7A43 fill, #D1FAE5 disabled fill, #6B7280 disabled label, white
+    // label) are gone — one palette, in app_settings.
+    final sBg = backendHex(_submit['bg'] as String?, const Color(0xFFEDEFF2));
+    final sFg = backendHex(_submit['fg'] as String?, const Color(0xFF5A6472));
+    final sBorder =
+        backendHex(_submit['border'] as String?, const Color(0xFFD3D8DF));
     return SizedBox(
       width: double.infinity,
       height: 48,
       child: FilledButton(
         onPressed: (enabled && !_supplierSubmitting) ? _supplierSubmit : null,
         style: FilledButton.styleFrom(
-          backgroundColor: const Color(0xFF1B7A43),
-          disabledBackgroundColor: const Color(0xFFD1FAE5),
-          disabledForegroundColor: const Color(0xFF6B7280),
+          backgroundColor: sBg,
+          disabledBackgroundColor: sBg,
+          foregroundColor: sFg,
+          disabledForegroundColor: sFg,
+          side: BorderSide(color: sBorder),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         ),
         child: _supplierSubmitting
-            ? const SizedBox(
+            ? SizedBox(
                 width: 18,
                 height: 18,
-                child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                child: CircularProgressIndicator(color: sFg, strokeWidth: 2))
             : Text(
                 label,
-                style: const TextStyle(
-                    fontSize: 15, fontWeight: FontWeight.w700, color: Colors.white),
+                style: TextStyle(
+                    fontSize: 15, fontWeight: FontWeight.w700, color: sFg),
               ),
       ),
     );
@@ -512,7 +533,11 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
   }
 
   void _toggleGroup(String group) {
-    setState(() => _openGroup = _openGroup == group ? null : group);
+    // CHANGE #607 — from here on the accordion is the user's, not is_open's.
+    setState(() {
+      _userToggled = true;
+      _openGroup = _openGroup == group ? null : group;
+    });
   }
 
   @override
@@ -569,18 +594,27 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
           _buildReceiptSection(),
           const SizedBox(height: 8),
         ],
-        if (_pending.isNotEmpty)
+        // ── CHANGE #607 — the three sections come from groups[] ───────────
+        //
+        // This was three copy-pasted blocks, each naming its own group key,
+        // its own `_pending.isNotEmpty` visibility test, its own const colour
+        // pair (_kPendingBg/_kPendingText and friends), and its own spacing
+        // rule that had to know which of the other two blocks rendered before
+        // it. supplier_inquiry_screen() returns groups[] in display order with
+        // key, label, count, show, is_open and bg/fg/border from tone_colors().
+        // Adding, reordering, renaming or recolouring a group is an
+        // app_settings edit now.
+        for (final g in _groups) ...[
+          if (_groupIndexShown(g) > 0) const SizedBox(height: 8),
           _InquiryGroup(
-            // CHANGE #606 — labels.pending / counts.pending. The words
-            // 'Pending', 'Inquired' and 'Expired' were Dart literals and the
-            // numbers were list lengths measured on this side.
-            label: _label('pending'),
-            count: (_counts['pending'] as num?)?.toInt() ?? 0,
-            bgColor: _kPendingBg,
-            textColor: _kPendingText,
-            isOpen: _openGroup == 'pending',
-            onToggle: () => _toggleGroup('pending'),
-            items: _pending,
+            label: (g['label'] as String?) ?? '',
+            count: (g['count'] as num?)?.toInt() ?? 0,
+            bgColor: backendHex(g['bg'] as String?, const Color(0xFFEDEFF2)),
+            textColor: backendHex(g['fg'] as String?, const Color(0xFF5A6472)),
+            borderColor: backendHex(g['border'] as String?, const Color(0xFFD3D8DF)),
+            isOpen: _isGroupOpen(g),
+            onToggle: () => _toggleGroup((g['key'] as String?) ?? ''),
+            items: _itemsFor((g['key'] as String?) ?? ''),
             answeringIds: const {},
             answerOverrides: _supplierSelections,
             // CHANGE #606 — record the tap, then push the selection map to the
@@ -590,43 +624,54 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
               setState(() => _supplierSelections[id] = answer);
               _scheduleSelectionSync();
             },
-            onBulkCompanyCategory: _bulkDontStockLocalPending,
-            submitButton: _buildSupplierSubmitButton(),
-          ),
-        if (_inquired.isNotEmpty) ...[
-          if (_pending.isNotEmpty) const SizedBox(height: 8),
-          _InquiryGroup(
-            label: _label('inquired'),
-            count: (_counts['inquired'] as num?)?.toInt() ?? 0,
-            bgColor: _kInquiredBg,
-            textColor: _kInquiredText,
-            isOpen: _openGroup == 'inquired',
-            onToggle: () => _toggleGroup('inquired'),
-            items: _inquired,
-            answeringIds: const {},
-            onAnswer: (_, __) {},
-            readOnly: true,
-          ),
-        ],
-        if (_expired.isNotEmpty) ...[
-          if (_pending.isNotEmpty || _inquired.isNotEmpty)
-            const SizedBox(height: 8),
-          _InquiryGroup(
-            label: _label('expired'),
-            count: (_counts['expired'] as num?)?.toInt() ?? 0,
-            bgColor: _kExpiredBg,
-            textColor: _kExpiredText,
-            isOpen: _openGroup == 'expired',
-            onToggle: () => _toggleGroup('expired'),
-            items: _expired,
-            answeringIds: const {},
-            onAnswer: (_, __) {},
-            readOnly: true,
+            // Only the group the backend marks answerable takes input: an
+            // entry with no answerable items renders read-only and carries no
+            // submit button. `readOnly` is derived from the payload's own
+            // submit block, not from the group's name.
+            readOnly: !_groupTakesAnswers(g),
+            onBulkCompanyCategory:
+                _groupTakesAnswers(g) ? _bulkDontStockLocalPending : null,
+            submitButton:
+                _groupTakesAnswers(g) ? _buildSupplierSubmitButton() : null,
           ),
         ],
       ],
     );
   }
+
+  /// CHANGE #607 — the items array whose name equals the group's `key`. The
+  /// payload still ships pending[]/inquired[]/expired[] alongside groups[].
+  List<Map<String, dynamic>> _itemsFor(String key) => switch (key) {
+        'pending' => _pending,
+        'inquired' => _inquired,
+        'expired' => _expired,
+        _ => const [],
+      };
+
+  /// Sections the backend says to show, in its order.
+  List<Map<String, dynamic>> get _shownGroups =>
+      _groups.where((g) => g['show'] == true).toList();
+
+  /// Position of this group among the shown ones — used only to decide whether
+  /// a spacer is needed above it, never what to render.
+  int _groupIndexShown(Map<String, dynamic> g) => _shownGroups.indexOf(g);
+
+  /// Open state: the user's own toggle once they have touched one, otherwise
+  /// the backend's is_open. The Pending > Inquired > Expired ladder this screen
+  /// used to run is long gone; #607 also retires the auto_open string it was
+  /// replaced with, because each group now states its own is_open.
+  bool _isGroupOpen(Map<String, dynamic> g) {
+    final key = (g['key'] as String?) ?? '';
+    if (_openGroup != null || _userToggled) return _openGroup == key;
+    return g['is_open'] == true;
+  }
+
+  /// A group takes answers when it holds the items the backend counted as
+  /// answerable. `submit.answerable` is computed from the pending bucket, so a
+  /// group whose items are not that bucket is read-only.
+  bool _groupTakesAnswers(Map<String, dynamic> g) =>
+      (g['key'] as String?) == 'pending' &&
+      ((_submit['answerable'] as num?)?.toInt() ?? 0) > 0;
 
   // CHANGE #465: read-only receipt — success banner + one card per item
   // already answered today. No buttons, not tappable. Matches CHANGE #464's
@@ -765,6 +810,9 @@ class _InquiryGroup extends StatelessWidget {
   final int count;
   final Color bgColor;
   final Color textColor;
+  /// CHANGE #607 — the backend's own border colour. The header used to derive
+  /// one as `textColor.withValues(alpha: 0.25)`; groups[] supplies it.
+  final Color borderColor;
   final bool isOpen;
   final VoidCallback onToggle;
   final List<Map<String, dynamic>> items;
@@ -780,6 +828,7 @@ class _InquiryGroup extends StatelessWidget {
     required this.count,
     required this.bgColor,
     required this.textColor,
+    required this.borderColor,
     required this.isOpen,
     required this.onToggle,
     required this.items,
@@ -797,7 +846,7 @@ class _InquiryGroup extends StatelessWidget {
       decoration: BoxDecoration(
         color: bgColor,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: textColor.withValues(alpha: 0.25)),
+        border: Border.all(color: borderColor),
       ),
       child: Column(
         children: [

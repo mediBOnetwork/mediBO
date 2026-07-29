@@ -30,12 +30,15 @@ class _AdminDeliveryPartnerScreenState extends State<AdminDeliveryPartnerScreen>
   Future<void> _load() async {
     setState(() => _loading = true);
     try {
-      final rows = await Supabase.instance.client
-          .from('delivery_partner_registrations')
-          .select()
-          .eq('is_deleted', false)
-          .order('submitted_at', ascending: false) as List;
-      final all = List<Map<String, dynamic>>.from(rows);
+      final rows = await Supabase.instance.client.rpc('admin_registration_list',
+          params: {'p_kind': 'delivery_partner'});
+      // CHANGE #589 — one RPC: already scoped to non-deleted and ordered by
+      // submitted_at desc. The screen no longer filters or sorts server data.
+      final payload = (rows is List ? rows.first : rows) as Map;
+      final all = ((payload['rows'] as List<dynamic>?) ?? const [])
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
       if (!mounted) return;
       setState(() {
         _pending = all.where((r) => r['status'] == 'pending').toList();

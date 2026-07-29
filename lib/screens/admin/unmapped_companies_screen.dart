@@ -63,12 +63,11 @@ class _UnmappedCompaniesScreenState extends State<UnmappedCompaniesScreen> {
     if (_allCompanies.isNotEmpty || _companiesLoading) return;
     setState(() => _companiesLoading = true);
     try {
-      final res = await Supabase.instance.client
-          .from('company')
-          .select('company_name')
-          .order('company_name');
-      _allCompanies = (res as List)
-          .map((r) => (r as Map)['company_name'] as String)
+      final res = await Supabase.instance.client.rpc('admin_company_names');
+      // #589 — names arrive ordered and non-blank from the backend.
+      final m = (res is List ? res.first : res) as Map;
+      _allCompanies = ((m['names'] as List<dynamic>?) ?? const [])
+          .map((r) => r.toString())
           .toList();
     } catch (_) {
       // Free-text mapping still works even if the full list fails to load.

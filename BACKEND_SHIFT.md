@@ -483,6 +483,73 @@ now serves change **581**, commit `42de0f76`.
 
 > `~/deploy.sh` lives outside the repo and is not version-controlled here.
 
+### CHANGE #584 — GST becomes a rule, not a NULL column
+
+All 562,549 `MEDICINE` rows had `gst_percent` NULL, so every cart line fell back
+to a hardcoded `12` in Dart.
+
+A backfill is not possible and not right: the table carries **six per-row
+triggers** (PS sync, marketer→company, supplier count, buyable, refresh-dirty),
+so every mass UPDATE times out — and a denormalised rate column drifts the
+moment a rule changes. GST is resolved at **read time** instead.
+
+- `app_settings.gst_rules` — 22 therapeutic classes mapped, configurable
+  default (12). Oncology/vaccines/blood/antimalarials **5%**, most
+  formulations **12%**, vitamins & rejuvenators **18%**.
+- `gst_class_map` + `gst_rules_refresh()` — the fast lookup table, rebuilt from
+  config; changing a rate is an UPDATE plus one refresh, never a deploy.
+- `gst_rate_for(class)` wired into `admin_cart_add` and `storefront_page`, so a
+  product card and a cart line can never show different GST for one product.
+
+Verified: oncology 5, cardiac 12, vitamins 18, unknown/unmapped → 12.
+
+### CHANGE #585 — the billing bug: one total, not two
+
+The cart showed **₹358.37** (`net_payable`, what `place_order_v2` charges) and
+**₹395.49** (`grand_total`, the tax panel). Charging one and displaying another
+is a billing bug.
+
+**`net_payable` is authoritative.** The screen labels the tax line *"GST Input
+Credit"*, not "GST payable" — MRP is GST-**inclusive** and the buyer reclaims
+the tax contained in it. Adding `rate/100` on top of an inclusive MRP
+double-counted. Contained tax is `amount × rate / (100 + rate)`.
+
+`grand_total` now equals `net_payable`, and each GST group's payable is its
+discounted amount (tax already inside) rather than amount + tax.
+
+Verified end-to-end on one cart: `net_payable` **₹621.02** = `grand_total`
+**₹621.02** = **what `place_order_v2` actually charged (621.02)**; GST credit
+**₹61.29** (= 572.02 × 12/112); group payable ₹572.02 + ₹49 delivery.
+
+### CHANGE #586–#588 — DIRECT TABLE WRITES REACH ZERO
+
+`admin_supplier_screen.dart` (18), `admin_customer_screen.dart` leads (3) and
+`voice_receive_service.dart` (2) were the last holdouts.
+
+New RPCs, all with an explicit `get_my_role()` check and the server clock:
+
+| RPC | Replaces |
+|---|---|
+| `admin_create_supplier` / `admin_create_suppliers` | 4 create paths asserting `{'approved': true, 'status':'Active'}` from Dart |
+| `admin_approve_pending_company` | company upsert + status flip, now one unit |
+| `admin_approve_pending_medicine` | catalogue insert + status flip; the "already exists?" check was a client race |
+| `admin_set_lead_status`, `admin_import_leads` | supplier-lead status and CSV import |
+| `admin_supplier_company_add` / `_update` | company links |
+| `admin_mark_bill_imported` | `imported_at` came from the DEVICE clock |
+| `admin_lead_save`, `admin_import_leads_csv` | insert-vs-update AND the `auth_uid` dedupe, which was a conditional `onConflict` in Dart — two admins saving one lead could race |
+| `voice_insert_clip_mentions`, `voice_map_bag_boundary` | voice writes; the 23505 no-op semantics are preserved server-side |
+
+Two shape errors caught by verification, not by reading: `supplier_company` is
+**one row per company** (unique `supplier_id, supplier_company`), not
+`company_1..30` on a single row; and `companies_linked` counted attempts, so a
+duplicate reported as linked (3 inputs → 2 rows).
+
+**A counting correction.** Earlier write counts used
+`grep -E "insert|update|upsert|delete"`, which matched the *column* `is_deleted`
+on plain `.select()` calls. The strict pattern is
+`\.insert\(|\.update\(|\.upsert\(|\.delete\(`. Measured strictly at both
+ends: **baseline 43 → now 0.**
+
 ---
 
 ## Verified figures (single consistent measurement)
@@ -494,7 +561,7 @@ count, since a comment naming the function is not a call.
 | Metric | Baseline | Now |
 |---|---|---|
 | Role branches (filtered) | 14 | **5** |
-| Direct table **writes** | 48 | **25** |
+| Direct table **writes** (strict) | 43 | **0** |
 | All `.from(...)` calls | 143 | **109** |
 | `.from('cart_items')` writes | 2 | **0** |
 | `.from('pharmacy_profiles')` writes | 4 | **0** |

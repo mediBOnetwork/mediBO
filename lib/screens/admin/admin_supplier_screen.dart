@@ -3944,13 +3944,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     final name = row['company_name'] as String? ?? '';
     try {
       // Insert into company table (dedupe by name)
-      await Supabase.instance.client.from('company').upsert(
-        {'company_name': name},
-        onConflict: 'company_name',
-        ignoreDuplicates: true,
-      );
-      await Supabase.instance.client.from('supplier_pending_companies')
-          .update({'status': 'approved'}).eq('id', row['id'] as int);
+      // #587 — company upsert + status flip as ONE authorised unit.
+      await Supabase.instance.client.rpc('admin_approve_pending_company',
+          params: {'p_id': row['id'], 'p_name': name});
       if (mounted) showToast(context, 'Company "$name" approved');
       _fetchStaging();
     } catch (e) {
@@ -3979,16 +3975,12 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           .ilike('product_name', name)
           .ilike('marketer', marketer)
           .maybeSingle();
-      if (existing == null) {
-        await Supabase.instance.client.from('MEDICINE').insert({
-          'product_name': name,
-          'marketer': marketer,
-          'therapeutic_class': row['therapeutic_class'],
-          'mrp': row['mrp']?.toString(),
-        });
-      }
-      await Supabase.instance.client.from('supplier_pending_medicines')
-          .update({'status': 'approved'}).eq('id', row['id'] as int);
+      // #587 — the catalogue insert and the status flip are one RPC; the
+      // "does it already exist" check is the server's, not a client race.
+      await Supabase.instance.client.rpc('admin_approve_pending_medicine', params: {
+        'p_id': row['id'], 'p_name': name, 'p_marketer': marketer,
+        'p_therapeutic_class': row['therapeutic_class'], 'p_mrp': row['mrp']?.toString(),
+      });
       if (mounted) showToast(context, 'Medicine "$name" approved');
       _fetchStaging();
     } catch (e) {
@@ -5297,7 +5289,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                   if (v == null) return;
                   setState(() => lead.status = v);
                   try {
-                    await Supabase.instance.client.from('supplier_leads').update({'status': v}).eq('id', lead.id);
+                    await Supabase.instance.client.rpc('admin_set_lead_status',
+                        params: {'p_id': lead.id, 'p_status': v});
                   } catch (_) {}
                 },
               ),
@@ -6240,7 +6233,8 @@ class _SupCsvImportDialogState extends State<_SupCsvImportDialog> {
         toInsert.add({'name': name, 'email': email, 'mobile': mobile, 'source': 'csv_import', 'status': 'new'});
       }
       if (toInsert.isNotEmpty) {
-        await Supabase.instance.client.from('supplier_leads').insert(toInsert);
+        await Supabase.instance.client
+            .rpc('admin_import_leads', params: {'p_rows': toInsert});
       }
       if (mounted) {
         Navigator.of(context).pop();
@@ -6780,7 +6774,8 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
         if (name.isEmpty || seen.contains(name.toLowerCase())) continue;
         seen.add(name.toLowerCase());
         if (supplierMap.containsKey(name.toLowerCase())) continue;
-        final rec = <String, dynamic>{'supplier_name': name, 'status': 'Active', 'approved': true, 'is_deleted': false};
+        // #586 — approval state is set by admin_create_suppliers(), not here.
+        final rec = <String, dynamic>{'supplier_name': name};
         for (final f in allProfileFields.where((f) => f != 'supplier_name' && f != 'company_name')) {
           final v = rowVal(row, f);
           if (v.isNotEmpty) rec[f] = v;
@@ -6789,11 +6784,17 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
       }
       int profilesInserted = 0;
       if (toInsertProfiles.isNotEmpty) {
-        final inserted = await client.from('supplier_profiles').insert(toInsertProfiles).select('id, supplier_name');
-        for (final r in inserted as List<dynamic>) {
-          supplierMap[(r['supplier_name'] as String).toLowerCase()] = r['id'] as String;
+        // #586 — the CSV import used to INSERT an array of profiles, each one
+        // asserting {'approved': true, 'status': 'Active'} from the client.
+        final bulkRes = await client.rpc('admin_create_suppliers',
+            params: {'p_rows': toInsertProfiles});
+        final bulkMap = (bulkRes is List ? bulkRes.first : bulkRes) as Map;
+        for (final r in (bulkMap['suppliers'] as List<dynamic>? ?? const [])) {
+          final m = r as Map;
+          supplierMap[(m['supplier_name'] ?? '').toString().toLowerCase()] =
+              (m['id'] ?? '').toString();
         }
-        profilesInserted = inserted.length;
+        profilesInserted = (bulkMap['created'] as num?)?.toInt() ?? 0;
       }
       final profilesSkipped = distinctNames.length - profilesInserted;
 
@@ -7432,10 +7433,10 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
     if (raw.isEmpty) return;
     setState(() => _saving = true);
     try {
-      await Supabase.instance.client.from('supplier_company').insert({
-        'supplier_id': widget.supplierId,
-        'supplier_name': widget.supplierName,
-        'supplier_company': raw,
+      await Supabase.instance.client.rpc('admin_supplier_company_add', params: {
+        'p_supplier_id': widget.supplierId,
+        'p_supplier_name': widget.supplierName,
+        'p_company': raw,
       });
       _supplierCompanyCtrl.clear();
       if (mounted) setState(() { _showAddForm = false; _saving = false; });
@@ -7763,7 +7764,8 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
       for (final row in packed) {
         final update = <String, dynamic>{};
         for (final col in _companyCols) { update[col] = row[col]; }
-        await client.from('supplier_company').update(update).eq('id', row['id'] as String);
+        await client.rpc('admin_supplier_company_update',
+            params: {'p_id': row['id'], 'p_patch': update});
       }
       if (mounted) {
         setState(() {
@@ -7852,7 +7854,8 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
       _packRow(row);
       final update = <String, dynamic>{};
       for (final col in _companyCols) { update[col] = row[col]; }
-      await Supabase.instance.client.from('supplier_company').update(update).eq('id', row['id'] as String);
+      await Supabase.instance.client.rpc('admin_supplier_company_update',
+          params: {'p_id': row['id'], 'p_patch': update});
       if (mounted) {
         setState(() {
           _rows[ri] = row;
@@ -9453,31 +9456,22 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
       }
       _applySpnValuesToRec(rec, _spnValues);
 
-      final inserted = await client.from('supplier_profiles').insert(rec).select('id').single();
-      final supplierId = inserted['id'] as String;
-      RenderLog.write('c67_new_supplier_id', supplierId);
-
-      // 2. Upsert supplier_company rows — ignoreDuplicates handles UNIQUE (supplier_id, supplier_company)
+      // CHANGE #586 — admin_create_supplier() creates the profile AND links the
+      // companies. The map built above carried {'approved': true,
+      // 'status': 'Active'} straight from Dart: approving a supplier is an
+      // admin act and must be authorised by the database, not asserted by
+      // whatever assembled the map. The RPC sets those itself, refuses them
+      // from the payload, upserts each company, and dedupes the links.
       final companies = _companies.where((c) => c.canonical.isNotEmpty).toList();
-      int companiesWritten = 0;
-      if (companies.isNotEmpty) {
-        for (final co in companies) {
-          try {
-            await client.from('company')
-                .upsert({'company_name': co.canonical}, onConflict: 'company_name');
-          } catch (_) {}
-        }
-        await client.from('supplier_company').upsert(
-          companies.map((co) => <String, dynamic>{
-            'supplier_id': supplierId,
-            'supplier_name': name,
-            'supplier_company': co.canonical,
-          }).toList(),
-          onConflict: 'supplier_id,supplier_company',
-          ignoreDuplicates: true,
-        );
-        companiesWritten = companies.length;
-      }
+      final createRes = await client.rpc('admin_create_supplier', params: {
+        'p_profile': rec,
+        'p_companies': companies.map((c) => c.canonical).toList(),
+      });
+      final createMap = (createRes is List ? createRes.first : createRes) as Map;
+      final supplierId = (createMap['id'] ?? '').toString();
+      RenderLog.write('c67_new_supplier_id', supplierId);
+      final companiesWritten =
+          (createMap['companies_linked'] as num?)?.toInt() ?? 0;
       RenderLog.write('c67_insert_status', 'ok');
       RenderLog.write('c67_companies_written', companiesWritten.toString());
 
@@ -10020,24 +10014,17 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
         final v = f.value; if (v.isNotEmpty) rec[f.column] = v;
       }
       _applySpnValuesToRec(rec, _spnValues);
-      final inserted = await client.from('supplier_profiles').insert(rec).select('id').single();
-      final supplierId = inserted['id'] as String;
-      RenderLog.write('c67_new_supplier_id', supplierId);
+      // #586 — one RPC: profile + company links, approval decided server-side.
       final companies = _companies.where((c) => c.canonical.isNotEmpty).toList();
-      int companiesWritten = 0;
-      if (companies.isNotEmpty) {
-        for (final co in companies) {
-          try { await client.from('company').upsert({'company_name': co.canonical}, onConflict: 'company_name'); } catch (_) {}
-        }
-        await client.from('supplier_company').upsert(
-          companies.map((co) => <String, dynamic>{
-            'supplier_id': supplierId, 'supplier_name': name, 'supplier_company': co.canonical,
-          }).toList(),
-          onConflict: 'supplier_id,supplier_company',
-          ignoreDuplicates: true,
-        );
-        companiesWritten = companies.length;
-      }
+      final createRes = await client.rpc('admin_create_supplier', params: {
+        'p_profile': rec,
+        'p_companies': companies.map((c) => c.canonical).toList(),
+      });
+      final createMap = (createRes is List ? createRes.first : createRes) as Map;
+      final supplierId = (createMap['id'] ?? '').toString();
+      RenderLog.write('c67_new_supplier_id', supplierId);
+      final companiesWritten =
+          (createMap['companies_linked'] as num?)?.toInt() ?? 0;
       RenderLog.write('c67_insert_status', 'ok');
       RenderLog.write('c67_companies_written', companiesWritten.toString());
       RenderLog.write('multi_image_ocr_imported', '1');
@@ -10763,26 +10750,22 @@ class _ManualSupplierImportDialogState extends State<_ManualSupplierImportDialog
       if (!rec.containsKey('status')) rec['status'] = 'Active';
 
       RenderLog.write('manual_import_submitting', rec['supplier_name']?.toString() ?? '');
-      final inserted = await client.from('supplier_profiles').insert(rec).select('id').single();
-      final supplierId = inserted['id'] as String;
-      final supplierName = (rec['supplier_name'] as String? ?? '').trim();
-      RenderLog.write('manual_import_supplier_inserted', supplierId);
-
+      // #586 — profile + links in one authorised RPC.
       final companies = _unionCompanies.toList();
-      if (companies.isNotEmpty) {
-        final scRows = companies.map((co) => <String, dynamic>{
-          'supplier_id': supplierId,
-          'supplier_name': supplierName,
-          'supplier_company': co,
-        }).toList();
-        await client.from('supplier_company').insert(scRows);
-        RenderLog.write('manual_import_companies_linked', companies.length.toString());
-      }
+      final createRes = await client.rpc('admin_create_supplier', params: {
+        'p_profile': rec,
+        'p_companies': companies,
+      });
+      final createMap = (createRes is List ? createRes.first : createRes) as Map;
+      final supplierId = (createMap['id'] ?? '').toString();
+      RenderLog.write('manual_import_supplier_inserted', supplierId);
+      RenderLog.write('manual_import_companies_linked',
+          ((createMap['companies_linked'] as num?)?.toInt() ?? 0).toString());
 
       if (mounted) {
         Navigator.of(context).pop();
         widget.onImported();
-        showToast(context, 'Added $supplierName with ${companies.length} compan${companies.length == 1 ? 'y' : 'ies'}',
+        showToast(context, 'Added ${createMap['supplier_name'] ?? ''} with ${companies.length} compan${companies.length == 1 ? 'y' : 'ies'}',
             duration: const Duration(seconds: 5));
       }
     } catch (e) {
@@ -12607,10 +12590,9 @@ class _BillTabState extends State<_BillTab> {
           preloadedFileName: fileName,
           onImportComplete: () async {
             try {
-              await Supabase.instance.client.from('pending_bills').update({
-                'status': 'imported',
-                'imported_at': DateTime.now().toIso8601String(),
-              }).eq('id', id);
+              // #587 — imported_at from the SERVER clock.
+              await Supabase.instance.client
+                  .rpc('admin_mark_bill_imported', params: {'p_id': id});
             } catch (_) {}
           },
         ),

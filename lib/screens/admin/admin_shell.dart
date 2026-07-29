@@ -124,11 +124,13 @@ class _AdminShellState extends State<AdminShell> with WidgetsBindingObserver {
 
   Future<void> _loadPendingCount() async {
     try {
-      final res = await Supabase.instance.client
-          .from('pending_bills')
-          .select('id')
-          .eq('status', 'pending');
-      if (mounted) setState(() => _pendingBillsCount = (res as List).length);
+      final res = await Supabase.instance.client.rpc('admin_pending_bills_count');
+      // CHANGE #589 — the count is the server's; the screen no longer fetches
+      // rows just to call .length on them.
+      final m = (res is List ? res.first : res) as Map;
+      if (mounted) {
+        setState(() => _pendingBillsCount = (m['count'] as num?)?.toInt() ?? 0);
+      }
     } catch (_) {}
   }
 

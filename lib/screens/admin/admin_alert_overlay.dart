@@ -308,11 +308,11 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
   Future<void> _maybeFetchAndEnqueue(String id) async {
     if (_seenIds.contains(id)) return;
     try {
-      final res = await Supabase.instance.client
-          .from('pharmacy_profiles').select().eq('id', id).maybeSingle();
-      if (res != null) {
-        final rec = Map<String, dynamic>.from(res as Map);
-        _enqueue(rec, id);
+      final res = await Supabase.instance.client.rpc('admin_customer_alert_row', params: {'p_id': id});
+      // #589 — `found` is explicit; an empty row object is not "no customer".
+      final m = (res is List ? res.first : res) as Map;
+      if (m['found'] == true) {
+        _enqueue(Map<String, dynamic>.from(m['row'] as Map), id);
       }
     } catch (_) {}
   }

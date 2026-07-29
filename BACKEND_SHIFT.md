@@ -299,6 +299,43 @@ RLS. Now `admin_cart_remove_item(item_id)`.
 
 **Zero `.from('cart_items')` writes remain.** Direct table writes: **47 → 39**.
 
+### CHANGE #578 — customer lifecycle + edit form
+
+The mirror of #576, on the table that decides whether anyone may order at all.
+**`approved` on `pharmacy_profiles` is exactly what `my_session().can_place_order`
+reads** — a client-writable approval flag means the app could grant itself the
+right to order.
+
+`admin_customer_action(customer_id, action)` covers approve / reject / suspend /
+reactivate / delete / restore. Server clock, acting admin from the session,
+explicit `get_my_role()` check, snapshot taken from the row.
+
+`admin_customer_update(customer_id, patch)` replaces the edit form's raw
+UPDATE. Two faults beyond the direct write:
+
+- it patched **whatever keys the form held** — nothing stopped `approved`,
+  `status` or `user_id` riding along in that map
+- it pre-checked `customer_code` uniqueness with a SELECT and threw in Dart:
+  racy **and redundant**, because `pharmacy_profiles_customer_code_unique`
+  already enforces it. The index is the guard; the app was guessing ahead of it.
+
+**Verified** (rolled-back probes):
+
+- **a customer approving themselves is refused: `forbidden`**
+- **suspend actually closes the gate**: after `suspend`,
+  `my_session().can_place_order` reads **false** — end-to-end proof that #571's
+  gate and #578's action agree
+- `approved_by` = **test.admin@medibo.in**, `approved_at` within 1 min of
+  server `now()`
+- edit patch with `{city, approved, status, user_id}` → `city` applied,
+  **`rejected_keys: ["status","user_id","approved"]`**, `approved` untouched.
+  Refusals are reported, not silently dropped.
+- duplicate `customer_code` → **`customer_code_taken`**, raised by the index
+- production untouched: status back to `active`, `approved_by` NULL
+
+**Zero `.from('pharmacy_profiles')` writes remain.** Direct table writes:
+**47 → 35**.
+
 ---
 
 ## Remaining — with the decision each still makes

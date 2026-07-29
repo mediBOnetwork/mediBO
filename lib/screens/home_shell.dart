@@ -525,7 +525,15 @@ class _HomeShellState extends State<HomeShell> {
 
     // CHANGE #308: while role is resolving after sign-in, show a brief spinner
     // instead of flashing the customer "Not Registered" profile for admins/suppliers.
-    if (auth.profileLoading && !viewAs.isActive) {
+    //
+    // CHANGE #570 / RULE 2: the same neutral state also covers "signed in, but
+    // my_session() has not answered yet". Without it this build falls straight
+    // through to the customer storefront — a DEFAULT surface — and a supplier
+    // sees the shop for as long as the RPC is in flight. A signed-OUT visitor
+    // is unaffected: the public storefront is their correct surface, not a
+    // default. Same widget as above, so nothing about the layout changes.
+    final awaitingSession = auth.isAuthenticated && !auth.sessionResolved;
+    if ((auth.profileLoading || awaitingSession) && !viewAs.isActive) {
       return const Scaffold(
         backgroundColor: Color(0xFFF5F6F8),
         body: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43))),

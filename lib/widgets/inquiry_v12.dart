@@ -135,17 +135,26 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
     return counts;
   }
 
+  /// CHANGE #574 — `readOnly` is this widget's own display mode, so it stays
+  /// here. Whether the ITEM is locked is the backend's answer, read from the
+  /// `flags` block every inquiry source now emits.
   bool _isLocked(Map<String, dynamic> item) {
     if (widget.readOnly) return true;
-    if (item['locked'] == true) return true;
-    if (item['answered'] == true) return true;
-    return false;
+    return _flag(item, 'is_locked');
   }
 
-  bool _noSupplier(Map<String, dynamic> item) {
-    final slot = (item['slot_index'] as num?)?.toInt() ?? -1;
-    final role = item['role'] as String? ?? '';
-    return slot == 0 || role == 'none' || role == 'no_supplier';
+  /// CHANGE #574 — was: `slot == 0 || role == 'none' || role == 'no_supplier'`,
+  /// written identically in three files that had already drifted apart
+  /// (`== 0` here, `<= 0` in admin_supplier_screen). One rule now lives in
+  /// inquiry_item_flags() in Postgres and every surface reads the same answer.
+  bool _noSupplier(Map<String, dynamic> item) => _flag(item, 'no_supplier');
+
+  /// Reads one boolean out of the backend's `flags` block. A missing block
+  /// means the row did not come from a converted RPC; false is the safe read
+  /// (nothing is hidden or disabled on the strength of an absent answer).
+  bool _flag(Map<String, dynamic> item, String key) {
+    final f = item['flags'];
+    return f is Map && f[key] == true;
   }
 
   String? _currentAnswer(Map<String, dynamic> item) {

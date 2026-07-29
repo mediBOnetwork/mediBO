@@ -2340,7 +2340,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     }
     try {
       final rows = await Supabase.instance.client
-          .rpc('get_supplier_inquiry_items',
+          .rpc('get_supplier_inquiry_items_v2',
               params: {'p_supplier_name': supplierName}) as List;
       if (mounted) {
         setState(() {
@@ -3578,8 +3578,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     final inquiryId = (item['inquiry_id'] as num).toInt();
     final productName = item['product_name'] as String? ?? '';
     final isMoving = _moveInFlight[inquiryId] == true;
-    // current supplier from item data (role='current' means this supplier owns it)
-    final role = item['role'] as String? ?? 'current';
     final isPinned = item['manual_pin'] == true;
 
     return CompositedTransformTarget(
@@ -3625,15 +3623,20 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   ];
 
   Widget _buildInquiryItemRow(Map<String, dynamic> item, String supplierName) {
-    final role        = item['role'] as String? ?? 'current';
     final productName = item['product_name'] as String? ?? '';
     final qty         = item['quantity'];
     final mrp         = item['mrp'];
     final answer      = item['answer'] as String?;
     final inquiryId   = (item['inquiry_id'] as num).toInt();
-    final slotIndex   = (item['slot_index'] as num?)?.toInt() ?? 0;
-    final isCurrent   = role == 'current';
-    final noSupplier  = slotIndex <= 0 || role == 'none' || role == 'no_supplier';
+    // CHANGE #574 — both answers come from the backend's `flags` block now.
+    // This file's copy of the no-supplier rule used `<= 0` while the two
+    // inquiry widgets used `== 0`; the three had already drifted. One rule
+    // lives in inquiry_item_flags() and every surface reads the same answer.
+    final flags       = item['flags'] is Map
+        ? Map<String, dynamic>.from(item['flags'] as Map)
+        : const <String, dynamic>{};
+    final isCurrent   = flags['is_current'] == true;
+    final noSupplier  = flags['no_supplier'] == true;
     final isSetting   = _settingAnswerFor.contains(inquiryId);
     final subtitleParts = <String>[];
     if (qty != null) subtitleParts.add('Qty: $qty');

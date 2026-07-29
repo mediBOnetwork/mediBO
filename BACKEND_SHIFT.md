@@ -183,6 +183,50 @@ tab's data source now emits `flags`. Converting the shared widget's
 `get_inquiry_form` also emit flags would break the other two surfaces, so the
 widget still derives. That is the next step, listed below.
 
+### CHANGE #575 — the inquiry no-supplier rule, everywhere
+
+`inquiry_v12` is shared by **three** surfaces (public inquiry form, supplier
+tab, admin), which is why #574 stopped short of converting it. All three
+sources now emit the `flags` block, so the widget reads instead of derives:
+
+| Source | Change |
+|---|---|
+| `supplier_inquiry_screen()` | emitted `flags` in #574 |
+| `get_inquiry_form(token)` | now emits `flags` (+ `slot_index` alias) |
+| `get_supplier_inquiry_items_v2(name)` | new jsonb wrapper carrying `flags` + `has_mrp` |
+
+The public form emitted `slot` (not `slot_index`) and no `role` at all, so
+`_noSupplier` read `slot_index` → absent → `-1` → `false`. It had been getting
+the right answer **by accident**.
+
+Converted: `inquiry_v12._noSupplier` / `._isLocked` now read `flags`;
+`admin_supplier_screen` reads `flags.is_current` / `flags.no_supplier` and
+fetches from the v2 wrapper. Three now-dead locals removed (`role` ×2,
+`slotIndex`), one of which was already dead before this change.
+
+**`lib/widgets/inquiry_v11.dart` deleted** — nothing imported it and
+`InquiryV11List` had zero references. It carried its own stale copy of the
+no-supplier rule, so leaving it would have left a fourth version to drift.
+
+**Verified:** both `get_inquiry_form` and `get_supplier_inquiry_items_v2`
+return *identical* flags for the same real row (BHARAT SALES):
+`no_supplier=false`, `is_current=true`, `badge_label=Current`,
+`answerable=true`, `is_locked=false`. Rolled-back probe; production left with
+the form back at `draft`, 0 pending, no probe functions.
+
+### Role branches: 39 → 4, and none of the 4 is a session-role branch
+
+```
+main.dart:280                  if (role == null || identity == null)   // ViewAs null-check
+view_as_state.dart:29          isActive => _role != null              // dev-tool state
+inquiry_v12.dart:212,214       if (surf == 'admin') RenderLog.write(…) // diagnostics only
+business_details_screen.dart   _role == r                             // local form selector
+```
+
+None of these branches on `my_session().role` to decide what the user may see
+or do. The registration form's `_role` is the applicant's own radio selection
+— user input, not an account fact.
+
 ---
 
 ## Remaining — with the decision each still makes
@@ -193,8 +237,7 @@ Counts are `grep` over `lib/**.dart` at the time of writing.
 |---|---|---|---|
 | 1 | Orders — **admin side** | `admin_customer_screen` order views still read tables directly | — |
 | 2 | Storefront / catalogue | client-side filtering + `rupees()` formatting | — |
-| 3 | Inquiry — **shared widget** | `inquiry_v12._noSupplier` still derives from slot+role. Blocked on `inquiry_buckets_today`, `get_supplier_inquiry_items` and `get_inquiry_form` emitting `flags` (helper `inquiry_item_flags()` already exists and is verified) | 3 sites |
-| 3b | `inquiry_v11.dart` | **dead file** — no screen imports it; delete or convert | 2 |
+| 3 | Inquiry | ~~shared widget derives no_supplier~~ **done in #575** | 0 |
 | 4 | Fulfilment (collect/arrivals/warehouse/pack) | mostly backend already (`fw_*`); check stub fields | — |
 | 5 | Suppliers / customers / payments / dashboard | 47 direct table **writes** still bypass an RPC | 47 |
 | 6 | Everywhere | money/date formatted in Dart | 38 × `rupees()`, 60 × `toStringAsFixed`/`DateFormat` |

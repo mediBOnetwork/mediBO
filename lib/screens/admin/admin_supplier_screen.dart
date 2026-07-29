@@ -24,6 +24,7 @@ import '../../utils/render_log.dart';
 import '../../utils/safe_parse.dart';
 import '../../services/admin_date_scope.dart'; // CHANGE #545
 import '../../services/date_labels.dart'; // CHANGE #548
+import '../../widgets/backend_chip.dart'; // CHANGE #606
 import '../../widgets/code_field.dart';
 import '../../widgets/fullscreen_image.dart';
 import '../../widgets/inquiry_v12.dart';
@@ -101,10 +102,7 @@ class _OrderRow {
   final String id;
   final String? supplierName;
   final String? description;
-  final double? totalAmount;
   final String status;
-  /// CHANGE #548: RAW backend timestamp, verbatim.
-  final String? createdAt;
   final List<Map<String, dynamic>> items;
   final String? orderCode;
   // CHANGE #492 (Orders tab): backend-owned Send button state from
@@ -112,25 +110,36 @@ class _OrderRow {
   // derived from status/auto_order_sent_at client-side (spec E1).
   final Map<String, dynamic>? sendButton;
 
+  /// CHANGE #606 — the render-ready row from admin_supplier_orders, verbatim.
+  ///
+  /// #492 already took the Send button's state from this RPC and rendered it
+  /// verbatim; it just stopped there and left the rest of the row derived
+  /// locally. The whole row comes from here now: title, code_label,
+  /// order_no_label, status_chip, amount_label, items_label, time_label,
+  /// date_label. `totalAmount` and `createdAt` are GONE as fields — they were
+  /// raw numbers and a raw timestamp that this screen then formatted itself.
+  final Map<String, dynamic> render;
+
   const _OrderRow({
     required this.id,
     this.supplierName,
     this.description,
-    this.totalAmount,
     required this.status,
-    this.createdAt,
     this.items = const [],
     this.orderCode,
     this.sendButton,
+    this.render = const {},
   });
+
+  String rs(String k) => (render[k] as String?) ?? '';
+  bool   rb(String k) => render[k] == true;
+  Map<String, dynamic>? rchip(String k) => backendChipOf(render, k);
 
   factory _OrderRow.fromMap(Map<String, dynamic> m) => _OrderRow(
     id:           m['id'] as String,
     supplierName: m['supplier_name'] as String?,
     description:  m['description']  as String?,
-    totalAmount:  (m['total_amount'] as num?)?.toDouble(),
     status:       m['status'] as String? ?? 'pending',
-    createdAt:    m['created_at']?.toString(),
     items:        (m['items'] as List<dynamic>?)
                       ?.map((e) => Map<String, dynamic>.from(e as Map))
                       .toList() ?? [],
@@ -139,8 +148,22 @@ class _OrderRow {
 
   _OrderRow copyWithSendButton(Map<String, dynamic>? sb) => _OrderRow(
     id: id, supplierName: supplierName, description: description,
-    totalAmount: totalAmount, status: status, createdAt: createdAt,
-    items: items, orderCode: orderCode, sendButton: sb,
+    status: status, items: items, orderCode: orderCode, sendButton: sb,
+    render: render,
+  );
+
+  /// CHANGE #606 — adopt one render-ready row from admin_supplier_orders.
+  /// Identity fields (supplier name, order code, status) are taken from that
+  /// same payload so the row cannot hold two answers about one order.
+  _OrderRow copyWithRender(Map<String, dynamic> r) => _OrderRow(
+    id: id,
+    supplierName: r['supplier_name'] as String? ?? supplierName,
+    description: description,
+    status: (r['status_chip'] as Map?)?['value'] as String? ?? status,
+    items: items,
+    orderCode: r['order_code'] as String? ?? orderCode,
+    sendButton: (r['send_button'] as Map?)?.cast<String, dynamic>(),
+    render: r,
   );
 }
 
@@ -356,6 +379,14 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   List<Map<String, dynamic>> _stagingCompanies  = [];
   List<Map<String, dynamic>> _stagingMedicines  = [];
   List<_OrderRow>            _orders       = [];
+
+  /// CHANGE #606 — the Orders tab's header, count and empty state, exactly as
+  /// admin_supplier_orders returned them. The tab pill used to read
+  /// `_orders.length` and the empty state was the Dart literal
+  /// '0 supplier orders'.
+  String _ordersSummaryLabel = '';
+  int    _ordersCount        = 0;
+  Map<String, dynamic> _ordersEmpty = const {};
   List<_LeadItem>            _leads        = [];
   List<Map<String, dynamic>> _deletedRows  = [];
   bool _deletedExpanded = false;
@@ -771,7 +802,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       final countRows  = seg('company_links');
       final inquiryRaw = results[0] as List;
       final liveItems  = seg('open_order_items'); // CHANGE #277 / #591
-      final sendButtonById = _parseSendButtonMap(results[1]); // CHANGE #492
+      // CHANGE #606 — results[1] (admin_supplier_orders) is no longer mined for
+      // just the Send button; it now supplies the whole Orders table below.
 
       final newCounts = <String, int>{};
       for (final r in countRows) {
@@ -800,10 +832,40 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
       final rawOrders = orderRows.map((r) => _OrderRow.fromMap(Map<String, dynamic>.from(r as Map))).toList();
       final enrichedOrders = await _enrichOrderItems(rawOrders);
-      // CHANGE #492: attach backend-owned send_button per order (matched by id).
-      final orders = enrichedOrders
-          .map((o) => o.copyWithSendButton(sendButtonById[o.id]))
-          .toList();
+
+      // ── CHANGE #606 — admin_supplier_orders owns the Orders table ──────────
+      //
+      // #492 already read this RPC, but only to lift `send_button` out of it;
+      // every other visible string on the row was still derived here from the
+      // raw supplier_orders segment — ₹ via toStringAsFixed, the date via
+      // DateLabels, and the status through a Dart switch that owned both the
+      // word and the colour. The RPC returns all of it finished.
+      //
+      // The RPC's ROW SET and ORDER are authoritative (it sorts by
+      // supplier_name and drops cancelled/empty POs). Item lines are the one
+      // thing it does not carry, so they are looked up by id from the enriched
+      // segment — a detail-panel lookup, never a display decision.
+      final enrichedById = {for (final o in enrichedOrders) o.id: o};
+      final soRaw = results[1];
+      final soOne = soRaw is List ? (soRaw.isEmpty ? null : soRaw.first) : soRaw;
+      final soMap =
+          soOne is Map ? soOne.cast<String, dynamic>() : <String, dynamic>{};
+      final orders = <_OrderRow>[];
+      for (final r in ((soMap['supplier_orders'] as List<dynamic>?) ?? const [])) {
+        final m = Map<String, dynamic>.from(r as Map);
+        final id = m['supplier_order_id']?.toString() ?? '';
+        if (id.isEmpty) continue;
+        // A PO the RPC returns but the segment has not enriched still renders
+        // — with no item lines, never dropped.
+        final base = enrichedById[id] ??
+            _OrderRow(id: id, status: '', items: const []);
+        orders.add(base.copyWithRender(m));
+      }
+      final ordersSummaryLabel =
+          ((soMap['summary'] as Map?)?['label'] as String?) ?? '';
+      final ordersEmpty =
+          (soMap['empty'] as Map?)?.cast<String, dynamic>() ?? const {};
+      final ordersCount = (soMap['count'] as num?)?.toInt() ?? 0;
       final leads  = leadRows.map((r) {
         final m = Map<String, dynamic>.from(r as Map);
         return _LeadItem(
@@ -835,6 +897,10 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           _suppliers      = approved;
           _pending        = pending;
           _orders         = orders;
+          // CHANGE #606 — header, count and empty state as returned.
+          _ordersSummaryLabel = ordersSummaryLabel;
+          _ordersCount        = ordersCount;
+          _ordersEmpty        = ordersEmpty;
           _leads          = leads;
           _inquiryOverview = inquiryOverview;
           _deletedRows    = deletedR.map((r) => Map<String, dynamic>.from(r as Map)).toList();
@@ -1102,7 +1168,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                 const SizedBox(width: 4),
                 _tab(_SupFilter.inquiry,    'Supplier Inquiry (${_inquiryOverview.length})'),
                 const SizedBox(width: 4),
-                _tab(_SupFilter.orders,     'Supplier Orders (${_orders.length})'),
+                // CHANGE #606 — the backend's `count`, not _orders.length.
+                _tab(_SupFilter.orders,     'Supplier Orders ($_ordersCount)'),
                 const SizedBox(width: 4),
                 _tab(_SupFilter.pending,    'Pending Approval (${_pending.length})'),
                 const SizedBox(width: 4),
@@ -2407,13 +2474,37 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       // #591 — the same screen RPC: day-bounded orders and open order_items,
       // scoped server-side. Two more raw table reads gone.
       final scopeYmd = AdminDateScope.instance.dateYmd;
-      final screenRaw = await client.rpc('admin_supplier_screen_data',
-          params: {if (scopeYmd != null) 'p_date': scopeYmd});
-      final screen = (screenRaw is List ? screenRaw.first : screenRaw) as Map;
+      // CHANGE #606 — this targeted reloader must read the SAME render-ready
+      // RPC as _load(). Rebuilding _orders from the raw segment alone would
+      // strip every backend label off the rows and leave the table blank after
+      // any inquiry-answer action.
+      final both = await Future.wait<dynamic>([
+        client.rpc('admin_supplier_screen_data',
+            params: {if (scopeYmd != null) 'p_date': scopeYmd}),
+        client
+            .rpc('admin_supplier_orders',
+                params: {if (scopeYmd != null) 'p_date': scopeYmd})
+            .catchError((_) => <String, dynamic>{}),
+      ]);
+      final screen = (both[0] is List ? both[0].first : both[0]) as Map;
       final rows = (screen['orders'] as List<dynamic>?) ?? const [];
       final liveItems = (screen['open_order_items'] as List<dynamic>?) ?? const [];
       final raw = rows.map((r) => _OrderRow.fromMap(Map<String, dynamic>.from(r as Map))).toList();
       final enriched = await _enrichOrderItems(raw);
+      final enrichedById = {for (final o in enriched) o.id: o};
+      final soRaw = both[1];
+      final soOne = soRaw is List ? (soRaw.isEmpty ? null : soRaw.first) : soRaw;
+      final soMap =
+          soOne is Map ? soOne.cast<String, dynamic>() : <String, dynamic>{};
+      final merged = <_OrderRow>[];
+      for (final r in ((soMap['supplier_orders'] as List<dynamic>?) ?? const [])) {
+        final m = Map<String, dynamic>.from(r as Map);
+        final id = m['supplier_order_id']?.toString() ?? '';
+        if (id.isEmpty) continue;
+        final base =
+            enrichedById[id] ?? _OrderRow(id: id, status: '', items: const []);
+        merged.add(base.copyWithRender(m));
+      }
       final liveKeys = <String>{};
       for (final r in liveItems) {
         final m = r as Map;
@@ -2423,7 +2514,12 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       }
       if (mounted) {
         setState(() {
-          _orders = enriched;
+          _orders = merged;
+          _ordersSummaryLabel =
+              ((soMap['summary'] as Map?)?['label'] as String?) ?? '';
+          _ordersEmpty =
+              (soMap['empty'] as Map?)?.cast<String, dynamic>() ?? const {};
+          _ordersCount = (soMap['count'] as num?)?.toInt() ?? 0;
           _liveOrderItemKeys = liveKeys; // CHANGE #277
         });
         RenderLog.write('supplier_orders_refreshed', _orders.length);
@@ -2518,12 +2614,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           id: order.id,
           supplierName: order.supplierName,
           description: order.description,
-          totalAmount: order.totalAmount,
           status: order.status,
-          createdAt: order.createdAt,
           items: enrichedItems,
           orderCode: order.orderCode,
           sendButton: order.sendButton,
+          render: order.render,
         );
       }).toList();
       RenderLog.write('c108_admin_suporder_item_enriched', enrichedCount);
@@ -3839,29 +3934,15 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   // ── Supplier Orders status label (read-only, no actions) ─────────────────
 
-  Widget _orderStatusLabel(String status) {
-    final lower = status.toLowerCase();
-    final label = switch (lower) {
-      'confirmed' || 'accepted' => 'Accepted',
-      'rejected' => 'Rejected',
-      _ => 'Pending',
-    };
-    final bg = switch (lower) {
-      'confirmed' || 'accepted' => const Color(0xFFD1FAE5),
-      'rejected' => const Color(0xFFFEE2E2),
-      _ => const Color(0xFFFEF3C7),
-    };
-    final fg = switch (lower) {
-      'confirmed' || 'accepted' => const Color(0xFF065F46),
-      'rejected' => const Color(0xFF991B1B),
-      _ => const Color(0xFF92400E),
-    };
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
-      child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg)),
-    );
-  }
+  // CHANGE #606 — _orderStatusLabel is DELETED.
+  //
+  // It was three parallel `switch (status.toLowerCase())` expressions — one
+  // for the word, one for the background, one for the foreground — and its
+  // vocabulary disagreed with the database's: it collapsed everything that was
+  // not confirmed/accepted/rejected into the word "Pending", so a `sent`,
+  // `received` or `cancelled` PO was displayed to the admin as Pending. The
+  // backend's status_chip('supplier_status', …) has all six, with colours, and
+  // BackendChip paints it.
 
   // ── Badge helpers (inquiry tab) ───────────────────────────────────────────
 
@@ -4678,12 +4759,66 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     }
     RenderLog.write('c277_supplier_current_filter', 'active=${activeOrders.length};hidden=$supersededCount');
     RenderLog.write('c108_admin_suporders_list_built', _orders.length);
-    if (activeOrders.isEmpty) return _emptyState('0 supplier orders');
+    // CHANGE #606 — the empty state is the backend's empty{show,title,note};
+    // the Dart literal '0 supplier orders' is gone.
+    if (activeOrders.isEmpty) return _ordersEmptyState();
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      // CHANGE #606 — summary.label: "N POs • N items • ₹N", server-totalled.
+      if (_ordersSummaryLabel.isNotEmpty)
+        Padding(
+          padding: EdgeInsets.fromLTRB(isDesktop ? 28 : 16, 12, 16, 4),
+          child: Text(_ordersSummaryLabel,
+              style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF374151))),
+        ),
       if (isDesktop) _ordersTableHeader(),
       ...activeOrders.map((r) => isDesktop ? _desktopOrderRow(r) : _mobileOrderCard(r)),
       const SizedBox(height: 32),
     ]);
+  }
+
+  /// CHANGE #606 — Supplier Orders empty state, from the RPC. Renders nothing
+  /// when the backend says show:false; skips title or note when either is
+  /// empty rather than substituting Dart copy.
+  Widget _ordersEmptyState() {
+    if (_ordersEmpty['show'] != true) return const SizedBox.shrink();
+    final title = _ordersEmpty['title'] as String? ?? '';
+    final note  = _ordersEmpty['note'] as String? ?? '';
+    return Padding(
+      padding: const EdgeInsets.only(top: 80),
+      child: Center(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Container(
+            width: 64,
+            height: 64,
+            decoration: BoxDecoration(
+              color: const Color(0xFFF9FAFB),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: const Color(0xFFE5E7EB)),
+            ),
+            child: const Icon(Icons.inbox_outlined,
+                size: 28, color: Color(0xFFD1D5DB)),
+          ),
+          if (title.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            Text(title,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF6B7280))),
+          ],
+          if (note.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(note,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+          ],
+        ]),
+      ),
+    );
   }
 
   Widget _ordersTableHeader() {
@@ -4705,9 +4840,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   }
 
   Widget _desktopOrderRow(_OrderRow row) {
-    final dateStr = row.createdAt != null
-        ? (DateLabels.instance.label(row.createdAt, DateStyle.dmy) ?? '')
-        : '—';
+    // CHANGE #606 — date_label, verbatim. Was a DateLabels lookup off a raw
+    // created_at with an em-dash the app invented when it was null.
+    final dateStr = row.rs('date_label');
     final isExpanded = _expandedOrderId == row.id;
     final currentItems = _currentItemsFor(row); // CHANGE #277
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -4728,27 +4863,56 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(row.supplierName ?? '—',
+                // CHANGE #606 — `title` (the backend resolves the unnamed
+                // supplier), then code_label and order_no_label, each drawn
+                // only when its own show_* flag says so.
+                Text(row.rs('title'),
                     style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
                     overflow: TextOverflow.ellipsis),
-                if ((row.orderCode ?? '').isNotEmpty) ...[
+                if (row.rb('show_code')) ...[
                   const SizedBox(height: 1),
                   Builder(builder: (_) {
-                    try { RenderLog.write('c318_ord_id', row.orderCode!); } catch (_) {}
-                    return Text(row.orderCode!,
+                    try { RenderLog.write('c318_ord_id', row.rs('code_label')); } catch (_) {}
+                    return Text(row.rs('code_label'),
                         style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w500,
                             color: Color(0xFF9CA3AF), letterSpacing: 0.3),
                         overflow: TextOverflow.ellipsis);
                   }),
                 ],
+                if (row.rb('show_order_no')) ...[
+                  const SizedBox(height: 1),
+                  Text(row.rs('order_no_label'),
+                      style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w500,
+                          color: Color(0xFF9CA3AF), letterSpacing: 0.3),
+                      overflow: TextOverflow.ellipsis),
+                ],
               ],
             )),
-            Expanded(flex: 5, child: Text(row.description ?? '—',
+            // The render-ready RPC carries no description; this is the raw
+            // column, passed through untouched, and skipped when absent.
+            Expanded(flex: 5, child: Text(row.description ?? '',
                 style: const TextStyle(fontSize: 13, color: Color(0xFF374151)), overflow: TextOverflow.ellipsis)),
-            Expanded(flex: 2, child: Text(row.totalAmount != null ? '₹${row.totalAmount!.toStringAsFixed(0)}' : '—',
-                style: const TextStyle(fontSize: 13, color: Color(0xFF111827)))),
-            Expanded(flex: 3, child: _orderStatusLabel(row.status)),
-            Expanded(flex: 3, child: Text(dateStr, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)))),
+            // CHANGE #606 — amount_label / items_label / status_chip, verbatim.
+            Expanded(flex: 2, child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(row.rs('amount_label'),
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
+                Text(row.rs('items_label'),
+                    style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
+              ],
+            )),
+            Expanded(flex: 3, child: BackendChip(chip: row.rchip('status_chip'))),
+            Expanded(flex: 3, child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(dateStr, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+                Text(row.rs('time_label'),
+                    style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
+              ],
+            )),
             _buildOrderSendButton(row),
           ]),
         ),
@@ -4778,9 +4942,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   }
 
   Widget _mobileOrderCard(_OrderRow row) {
-    final dateStr = row.createdAt != null
-        ? (DateLabels.instance.label(row.createdAt, DateStyle.dmy) ?? '')
-        : '';
+    // CHANGE #606 — date_label, verbatim (see _desktopOrderRow).
+    final dateStr = row.rs('date_label');
     final isExpanded = _expandedOrderId == row.id;
     final currentItems = _currentItemsFor(row); // CHANGE #277
     return GestureDetector(
@@ -4800,15 +4963,23 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           Padding(
             padding: const EdgeInsets.all(14),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              // CHANGE #606 — every string below is the backend's, and every
+              // one of them is gated by the backend's own visibility flag.
               Row(children: [
-                Expanded(child: Text(row.supplierName ?? '—',
+                Expanded(child: Text(row.rs('title'),
                     style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
                     overflow: TextOverflow.ellipsis)),
                 if (dateStr.isNotEmpty) Text(dateStr, style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
               ]),
-              if ((row.orderCode ?? '').isNotEmpty) ...[
+              if (row.rb('show_code')) ...[
                 const SizedBox(height: 2),
-                Text(row.orderCode!,
+                Text(row.rs('code_label'),
+                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500,
+                        color: Color(0xFF9CA3AF), letterSpacing: 0.3)),
+              ],
+              if (row.rb('show_order_no')) ...[
+                const SizedBox(height: 2),
+                Text(row.rs('order_no_label'),
                     style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500,
                         color: Color(0xFF9CA3AF), letterSpacing: 0.3)),
               ],
@@ -4816,13 +4987,20 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                 const SizedBox(height: 4),
                 Text(row.description!, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
               ],
-              if (row.totalAmount != null) ...[
-                const SizedBox(height: 4),
-                Text('₹${row.totalAmount!.toStringAsFixed(0)}', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF1B7A43))),
-              ],
+              const SizedBox(height: 4),
+              Row(children: [
+                Text(row.rs('amount_label'),
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF1B7A43))),
+                const SizedBox(width: 10),
+                Text(row.rs('items_label'),
+                    style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+                const Spacer(),
+                Text(row.rs('time_label'),
+                    style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
+              ]),
               const SizedBox(height: 10),
               Row(children: [
-                _orderStatusLabel(row.status),
+                BackendChip(chip: row.rchip('status_chip')),
                 const Spacer(),
                 _buildOrderSendButton(row),
               ]),

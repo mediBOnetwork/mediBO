@@ -5,9 +5,15 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../utils/render_log.dart';
 import '../../utils/toast.dart';
+import '../../widgets/backend_chip.dart';
 import '../../widgets/inquiry_v12.dart';
 
-// Colour tokens for the three inquiry states
+// Colour tokens for the three inquiry GROUP shells (the accordion header
+// bands). These are not a status->colour map over row data: they are three
+// fixed surfaces, and supplier_inquiry_screen() returns no colours for them —
+// only labels{pending,inquired,expired}, which is what the headers now read.
+// Every colour that IS derived from data on this screen (the answered badge)
+// now comes from the backend via answer_badge.
 const _kPendingBg    = Color(0xFFFFF7E0);
 const _kPendingText  = Color(0xFFB26A00);
 const _kInquiredBg   = Color(0xFFE8F5E9);
@@ -48,6 +54,26 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
   final Map<int, String> _supplierSelections = {};
   bool _supplierSubmitting = false;
   int _submitCount = 0;
+
+  /// CHANGE #606 — everything the screen used to work out for itself, as the
+  /// backend returned it.
+  ///
+  /// `_labels` holds labels{pending,inquired,expired,empty,submitted,save_ok,
+  /// submit_failed}; `_counts` holds counts{}; `_submit` holds
+  /// submit{answerable,answered,selected,enabled,label}; `_dontStockAnswer` is
+  /// the exact answer string the bulk control writes.
+  Map<String, dynamic> _labels = const {};
+  Map<String, dynamic> _counts = const {};
+  Map<String, dynamic> _submit = const {};
+  String _dontStockAnswer = '';
+  bool _hasItems = false;
+
+  /// CHANGE #606 — the submit gate is decided backend-side from the CURRENT
+  /// selection, so a selection change has to reach the backend. Debounced so a
+  /// run of quick taps costs one round trip, not one each.
+  Timer? _selectDebounce;
+
+  String _label(String k) => (_labels[k] as String?) ?? '';
 
   final Set<int> _answering = {};
   RealtimeChannel? _rt;
@@ -114,6 +140,7 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
       _rt = null;
     }
     _c458Debounce?.cancel();
+    _selectDebounce?.cancel(); // CHANGE #606
     _stopPolling();
     super.dispose();
   }
@@ -199,9 +226,21 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
       // disagree with itself. Each row also carries its own `flags` block
       // (no_supplier / is_locked / answerable / badge), so nothing re-derives
       // state from slot_index and role.
+      // CHANGE #606 — all THREE parameters, always, and p_selected carries the
+      // live selection map. There is exactly one implementation of this
+      // function backend-side, (uuid, boolean, jsonb); passing p_selected is
+      // what lets the backend decide the submit button's enabled state and its
+      // label instead of this screen counting answers itself.
       final raw = await Supabase.instance.client.rpc(
         'supplier_inquiry_screen',
-        params: {'p_supplier_id': sid, 'p_preview': false},
+        params: {
+          'p_supplier_id': sid,
+          'p_preview': false,
+          'p_selected': {
+            for (final e in _supplierSelections.entries)
+              e.key.toString(): e.value,
+          },
+        },
       );
       if (!mounted) return;
       final map = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
@@ -230,6 +269,13 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
         _inquired = inquired;
         _expired  = expired;
         _receipt  = receipt;
+        // CHANGE #606 — labels, counts, the submit gate and the don't-stock
+        // answer string, all decided backend-side.
+        _labels = (payload['labels'] as Map?)?.cast<String, dynamic>() ?? const {};
+        _counts = (payload['counts'] as Map?)?.cast<String, dynamic>() ?? const {};
+        _submit = (payload['submit'] as Map?)?.cast<String, dynamic>() ?? const {};
+        _dontStockAnswer = (payload['dont_stock_answer'] as String?) ?? '';
+        _hasItems = payload['has_items'] == true;
         if (_firstLoad && autoOpen.isNotEmpty) _openGroup = autoOpen;
         _firstLoad = false;
         _loading = false;
@@ -254,22 +300,42 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
     }
   }
 
-  // Bulk don't-stock for pending group — updates local selections only
+  // Bulk don't-stock for pending group — updates local selections only.
+  //
+  // CHANGE #606 — matches on the backend's own normalised company_key /
+  // category_key instead of re-normalising with .toLowerCase()/.toUpperCase()
+  // here, and writes `dont_stock_answer` from the payload instead of the Dart
+  // literal "We don't stock this product". This is selecting rows to act on,
+  // not deciding what to display.
   Future<int?> _bulkDontStockLocalPending(String company, String category) async {
-    final matching = _pending.where((r) {
-      final c = (r['company'] as String? ?? '').toLowerCase();
-      final cat = (r['therapeutic_class'] as String? ?? '').toUpperCase();
-      return c == company.toLowerCase() && cat == category.toUpperCase();
-    }).toList();
-    final ids = matching.map((r) => (r['inquiry_id'] as num).toInt()).toList();
+    final wantCompany = company.trim().toLowerCase();
+    final wantCategory = category.trim().toUpperCase();
+    final ids = _pending
+        .where((r) =>
+            (r['company_key'] as String? ?? '') == wantCompany &&
+            (r['category_key'] as String? ?? '') == wantCategory)
+        .map((r) => (r['inquiry_id'] as num).toInt())
+        .toList();
+    if (_dontStockAnswer.isEmpty) return null;
     if (mounted) {
       setState(() {
         for (final id in ids) {
-          _supplierSelections[id] = "We don't stock this product";
+          _supplierSelections[id] = _dontStockAnswer;
         }
       });
+      _scheduleSelectionSync();
     }
     return ids.length;
+  }
+
+  /// CHANGE #606 — push the current selection to the backend so it can re-decide
+  /// the submit gate. Debounced: a burst of taps costs one round trip.
+  void _scheduleSelectionSync() {
+    _selectDebounce?.cancel();
+    _selectDebounce = Timer(const Duration(milliseconds: 250), () {
+      if (!mounted) return;
+      _fetch(source: 'selection', silent: true);
+    });
   }
 
   Future<void> _supplierSubmit() async {
@@ -293,8 +359,12 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
           params: {'p_answers': answers},
         ) as Map;
       }
+      // CHANGE #606 — toast copy is labels.submit_failed / labels.save_ok.
+      // Was 'Error: <raw pg error>', 'Saved N response(s)' pluralised in Dart,
+      // and 'Submit failed: <exception>' — three strings this screen wrote
+      // itself, one of which leaked a database error to a supplier.
       if (res['error'] != null) {
-        if (mounted) showToast(context, 'Error: ${res['error']}', isError: true);
+        if (mounted) _toast(_label('submit_failed'), isError: true);
         return;
       }
       final saved = (res['saved'] as num?)?.toInt() ?? 0;
@@ -302,34 +372,38 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
       RenderLog.write('inq_submit_called', _submitCount);
       RenderLog.write('inq_submit_last_saved', saved);
       if (mounted) {
-        showToast(context, 'Saved $saved response${saved == 1 ? '' : 's'}');
+        _toast(_label('save_ok'));
         setState(() => _supplierSelections.clear());
         await _fetch(source: 'post_submit', silent: true);
       }
     } catch (e) {
-      if (mounted) showToast(context, 'Submit failed: $e', isError: true);
+      RenderLog.write('inq.submit.err', e.toString());
+      if (mounted) _toast(_label('submit_failed'), isError: true);
     } finally {
       if (mounted) setState(() => _supplierSubmitting = false);
     }
   }
 
   Widget _buildSupplierSubmitButton() {
-    final answerableItems = _pending
-        .where((item) => item['locked'] != true && item['answered'] != true)
-        .toList();
-    final answerableCount = answerableItems.length;
-    final answeredCount = answerableItems
-        .where((item) => _supplierSelections
-            .containsKey((item['inquiry_id'] as num).toInt()))
-        .length;
-    final allAnswered =
-        answerableCount > 0 && answeredCount >= answerableCount;
-    final count = _supplierSelections.length;
+    // CHANGE #606 — the whole gate is the backend's.
+    //
+    // This used to re-implement it here: filter _pending by `locked != true &&
+    // answered != true` (two fields the payload no longer even carries at top
+    // level — they live under flags{} — so this filter was already reading
+    // nothing and counting every pending row as answerable), then compare that
+    // count against how many ids were in _supplierSelections, then build the
+    // label 'Submit response (N)' or 'Respond to all to submit' in Dart.
+    // supplier_inquiry_screen() computes answerable/answered from flags.is_locked
+    // against the p_selected map we send it, and returns both `enabled` and the
+    // finished `label`.
+    final enabled = _submit['enabled'] == true;
+    final label = (_submit['label'] as String?) ?? '';
+    if (label.isEmpty) return const SizedBox.shrink();
     return SizedBox(
       width: double.infinity,
       height: 48,
       child: FilledButton(
-        onPressed: (allAnswered && !_supplierSubmitting) ? _supplierSubmit : null,
+        onPressed: (enabled && !_supplierSubmitting) ? _supplierSubmit : null,
         style: FilledButton.styleFrom(
           backgroundColor: const Color(0xFF1B7A43),
           disabledBackgroundColor: const Color(0xFFD1FAE5),
@@ -342,14 +416,20 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
                 height: 18,
                 child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
             : Text(
-                allAnswered
-                    ? 'Submit response ($count)'
-                    : 'Respond to all to submit',
+                label,
                 style: const TextStyle(
                     fontSize: 15, fontWeight: FontWeight.w700, color: Colors.white),
               ),
       ),
     );
+  }
+
+  /// CHANGE #606 — a toast with a backend string, or no toast at all. An empty
+  /// label means the backend has nothing to say; showing a Dart substitute in
+  /// its place would be inventing copy.
+  void _toast(String message, {bool isError = false}) {
+    if (message.isEmpty) return;
+    showToast(context, message, isError: isError);
   }
 
   Future<void> _answer(int inquiryId, String answer) async {
@@ -366,17 +446,12 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
             'p_answer': answer,
           },
         ) as Map;
+        // CHANGE #606 — labels.submit_failed. The two branches here wrote
+        // their own copy: 'Already answered: <answer>' (the backend already
+        // returns that sentence as answered_note) and 'Error: <raw pg error>'.
         if (res['error'] != null) {
-          final err = res['error'] as String;
-          if (mounted) {
-            showToast(
-              context,
-              err == 'already_answered'
-                  ? 'Already answered: ${res['answer']}'
-                  : 'Error: $err',
-              isError: true,
-            );
-          }
+          RenderLog.write('inq.answer.rej', res['error'].toString());
+          if (mounted) _toast(_label('submit_failed'), isError: true);
           return;
         }
       } else {
@@ -384,23 +459,18 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
           'supplier_answer_inquiry',
           params: {'p_inquiry_id': inquiryId, 'p_answer': answer},
         ) as Map;
+        // CHANGE #606 — labels.submit_failed. The two branches here wrote
+        // their own copy: 'Already answered: <answer>' (the backend already
+        // returns that sentence as answered_note) and 'Error: <raw pg error>'.
         if (res['error'] != null) {
-          final err = res['error'] as String;
-          if (mounted) {
-            showToast(
-              context,
-              err == 'already_answered'
-                  ? 'Already answered: ${res['answer']}'
-                  : 'Error: $err',
-              isError: true,
-            );
-          }
+          RenderLog.write('inq.answer.rej', res['error'].toString());
+          if (mounted) _toast(_label('submit_failed'), isError: true);
           return;
         }
       }
       RenderLog.write('inq.answer',
           'id=$inquiryId;ans=$answer;path=${widget.viewAsSupplierId != null ? "writeas" : "supplier"}');
-      if (mounted) showToast(context, 'Response saved');
+      if (mounted) _toast(_label('save_ok'));
       await _fetch(source: 'post_answer', silent: true);
     } catch (e) {
       if (mounted) showToast(context, 'Failed: $e', isError: true);
@@ -464,27 +534,29 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
       );
     }
 
-    final total = _pending.length + _inquired.length + _expired.length;
-
     // CHANGE #465: a receipt-only state (everything answered, nothing else
     // pending) is valid — show the receipt instead of the empty state.
-    if (total == 0 && _receipt.isEmpty) {
+    //
+    // CHANGE #606 — `has_items` replaces the Dart sum
+    // `_pending.length + _inquired.length + _expired.length == 0`, and the copy
+    // is labels.empty. The second line ("You're all caught up!") is DELETED:
+    // the backend has one empty-state string and this screen does not get to
+    // invent a second one.
+    if (!_hasItems && _receipt.isEmpty) {
+      final emptyLabel = _label('empty');
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             const Icon(Icons.check_circle_outline,
                 size: 56, color: Color(0xFFD1FAE5)),
-            const SizedBox(height: 12),
-            const Text(
-              'No inquiries',
-              style: TextStyle(fontSize: 15, color: Color(0xFF6B7280)),
-            ),
-            const SizedBox(height: 6),
-            const Text(
-              "You're all caught up!",
-              style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)),
-            ),
+            if (emptyLabel.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Text(
+                emptyLabel,
+                style: const TextStyle(fontSize: 15, color: Color(0xFF6B7280)),
+              ),
+            ],
           ],
         ),
       );
@@ -499,8 +571,11 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
         ],
         if (_pending.isNotEmpty)
           _InquiryGroup(
-            label: 'Pending',
-            count: _pending.length,
+            // CHANGE #606 — labels.pending / counts.pending. The words
+            // 'Pending', 'Inquired' and 'Expired' were Dart literals and the
+            // numbers were list lengths measured on this side.
+            label: _label('pending'),
+            count: (_counts['pending'] as num?)?.toInt() ?? 0,
             bgColor: _kPendingBg,
             textColor: _kPendingText,
             isOpen: _openGroup == 'pending',
@@ -508,16 +583,21 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
             items: _pending,
             answeringIds: const {},
             answerOverrides: _supplierSelections,
-            onAnswer: (id, answer) =>
-                setState(() => _supplierSelections[id] = answer),
+            // CHANGE #606 — record the tap, then push the selection map to the
+            // backend so IT re-decides whether submit is enabled and what the
+            // button says.
+            onAnswer: (id, answer) {
+              setState(() => _supplierSelections[id] = answer);
+              _scheduleSelectionSync();
+            },
             onBulkCompanyCategory: _bulkDontStockLocalPending,
             submitButton: _buildSupplierSubmitButton(),
           ),
         if (_inquired.isNotEmpty) ...[
           if (_pending.isNotEmpty) const SizedBox(height: 8),
           _InquiryGroup(
-            label: 'Inquired',
-            count: _inquired.length,
+            label: _label('inquired'),
+            count: (_counts['inquired'] as num?)?.toInt() ?? 0,
             bgColor: _kInquiredBg,
             textColor: _kInquiredText,
             isOpen: _openGroup == 'inquired',
@@ -532,8 +612,8 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
           if (_pending.isNotEmpty || _inquired.isNotEmpty)
             const SizedBox(height: 8),
           _InquiryGroup(
-            label: 'Expired',
-            count: _expired.length,
+            label: _label('expired'),
+            count: (_counts['expired'] as num?)?.toInt() ?? 0,
             bgColor: _kExpiredBg,
             textColor: _kExpiredText,
             isOpen: _openGroup == 'expired',
@@ -572,19 +652,18 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
-                      'Response submitted ✓',
-                      style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w700,
-                          color: Color(0xFF065F46)),
-                    ),
-                    const SizedBox(height: 2),
-                    const Text(
-                      "You've already answered. Here's what you submitted.",
-                      style: TextStyle(
-                          fontSize: 12, color: Color(0xFF065F46)),
-                    ),
+                    // CHANGE #606 — labels.submitted. The second line
+                    // ("You've already answered. Here's what you submitted.")
+                    // is DELETED: no backend field carries it, and inventing
+                    // replacement copy in Dart is the thing being removed.
+                    if (_label('submitted').isNotEmpty)
+                      Text(
+                        _label('submitted'),
+                        style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFF065F46)),
+                      ),
                   ],
                 ),
               ),
@@ -601,25 +680,17 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
     final name = item['product_name'] as String? ?? '';
     final company = item['company'] as String?;
     final imageUrl = item['image_url'] as String?;
-    final answer = item['answer'] as String? ?? '';
 
-    Color badgeBg;
-    Color badgeFg;
-    String badgeLabel;
-    switch (answer) {
-      case 'Available':
-        badgeBg = const Color(0xFFD1FAE5);
-        badgeFg = const Color(0xFF065F46);
-        badgeLabel = 'Available';
-      case 'Out of Stock':
-        badgeBg = const Color(0xFFFEE2E2);
-        badgeFg = const Color(0xFF991B1B);
-        badgeLabel = 'Out of Stock';
-      default:
-        badgeBg = const Color(0xFFF3F4F6);
-        badgeFg = const Color(0xFF6B7280);
-        badgeLabel = "Don't stock";
-    }
+    // CHANGE #606 — answer_badge, painted verbatim.
+    //
+    // This was a `switch (answer)` holding a third copy of the answer
+    // vocabulary: it matched the exact strings 'Available' and 'Out of Stock'
+    // and silently fell through to "Don't stock" for anything else — so any
+    // answer wording changed in app_settings would have been mislabelled here
+    // as "Don't stock". inquiry_answer_badge() reads that same config and
+    // returns {label,bg,fg}; BackendChip draws it and draws nothing when the
+    // backend returns no badge.
+    final badge = backendChipOf(item, 'answer_badge');
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
@@ -678,15 +749,10 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
             ),
           ),
           const SizedBox(width: 8),
-          Container(
+          BackendChip(
+            chip: badge,
+            fontSize: 12,
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-            decoration: BoxDecoration(
-                color: badgeBg, borderRadius: BorderRadius.circular(20)),
-            child: Text(
-              badgeLabel,
-              style: TextStyle(
-                  fontSize: 12, fontWeight: FontWeight.w500, color: badgeFg),
-            ),
           ),
         ],
       ),
@@ -759,15 +825,20 @@ class _InquiryGroup extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 10),
+                // CHANGE #606 — an empty backend label draws nothing; the
+                // group itself still renders, because hiding it would hide the
+                // supplier's items, not just a word.
                 Expanded(
-                  child: Text(
-                    label,
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                      color: textColor,
-                    ),
-                  ),
+                  child: label.isEmpty
+                      ? const SizedBox.shrink()
+                      : Text(
+                          label,
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                            color: textColor,
+                          ),
+                        ),
                 ),
                 Icon(
                   isOpen

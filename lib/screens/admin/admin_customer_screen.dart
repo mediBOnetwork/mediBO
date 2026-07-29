@@ -26,6 +26,7 @@ import '../../widgets/route_google_map_panel.dart'; // CHANGE #463
 import '../bulk_upload_screen.dart';
 import '../../services/payment_claims_service.dart';
 import '../../view_as_state.dart';
+import '../../widgets/backend_chip.dart'; // CHANGE #606
 import '../../widgets/bill_actions_row.dart'; // CHANGE #465
 import '../../widgets/bill_viewer.dart'; // CHANGE #465
 import '../../widgets/import_customer_sheet.dart'; // CHANGE #547
@@ -121,7 +122,14 @@ class _CustRow {
   final List<_ItemLine> removedItems;
   final double? total;
   final double netPayable;
-  final bool placedByAdmin;
+
+  /// CHANGE #606 — the render-ready row from admin_customer_orders, verbatim.
+  ///
+  /// Customer Orders rows carry this; Cart rows (which have no order and come
+  /// from a different RPC) leave it empty. Everything the Orders tab paints —
+  /// title, chips, amount, item count, times — is read straight out of here.
+  /// Nothing in this file re-derives any of it.
+  final Map<String, dynamic> render;
 
   const _CustRow({
     required this.userId,
@@ -136,11 +144,17 @@ class _CustRow {
     this.removedItems = const [],
     this.total,
     this.netPayable = 0.0,
-    this.placedByAdmin = false,
+    this.render = const {},
   });
 
   bool get isOrder    => source == 'website' || source == 'whatsapp';
   bool get isCartOnly => source == 'cart_only';
+
+  /// A backend string, verbatim. Empty means "the backend withheld it" — the
+  /// caller must not render, never substitute a Dart default.
+  String rs(String k) => (render[k] as String?) ?? '';
+  bool   rb(String k) => render[k] == true;
+  Map<String, dynamic>? rchip(String k) => backendChipOf(render, k);
 }
 
 // ── CHANGE #369 — grouped WhatsApp lead models (one card per customer) ───────
@@ -539,6 +553,15 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   List<_CustRow>     _orderRows    = [];
   List<_CustRow>     _cartRows     = [];
 
+  /// CHANGE #606 — the Customer Orders tab's own header, count and empty state,
+  /// exactly as admin_customer_orders returned them. The tab pill used to read
+  /// `_orderRows.length` and the empty state was the Dart literal '0 orders';
+  /// both are backend strings now, so changing either is an app_settings edit,
+  /// not a deploy.
+  String _ordersSummaryLabel = '';
+  int    _ordersCount        = 0;
+  Map<String, dynamic> _ordersEmpty = const {};
+
   /// CHANGE #601 — footer totals as the server computed them.
   int    _cartFooterLines = 0;
   double _cartFooterValue = 0.0;
@@ -722,6 +745,20 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         client.rpc('get_unregistered_users').catchError((_) => <dynamic>[]),
         // CHANGE #369 — grouped WhatsApp leads for the Customer Orders tab.
         client.rpc('get_leads_grouped_today').catchError((_) => <dynamic>[]),
+        // CHANGE #606 — the Customer Orders tab, render-ready.
+        //
+        // The tab used to build every visible string here: it joined the raw
+        // orders segment against user_profiles/pharmacy_profiles to invent a
+        // title, formatted ₹ with toStringAsFixed, pluralised "N items" in
+        // Dart, mapped status -> label and status -> colour in _ConfirmActions,
+        // and printed '0 orders' as a literal. admin_customer_orders returns
+        // all of it already decided — title, four chips, amount_label,
+        // items_label, time_label, the summary line and the empty state — in
+        // the order it wants them drawn.
+        client
+            .rpc('admin_customer_orders',
+                params: {if (scopeYmd != null) 'p_date': scopeYmd})
+            .catchError((_) => <String, dynamic>{}),
       ]);
 
       final upRows       = seg('user_profiles');
@@ -759,27 +796,63 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         (cartByUser[m['user_id'] as String] ??= []).add(m);
       }
 
-      // Order rows
-      final orders = <_CustRow>[];
+      // ── CHANGE #606 — Customer Orders rows, rendered from the RPC verbatim ──
+      //
+      // What used to happen here: a uid-keyed join into upMap/ppMap to invent a
+      // customer name, a pharmacy and a phone (_name/_pharmacy/_phone), a
+      // client-side order code via orderDisplayId(), a raw status string that
+      // _ConfirmActions later mapped to a label AND a colour, and a raw
+      // total_amount that two widgets each formatted with toStringAsFixed.
+      // Six chances for this screen to disagree with the database about one
+      // order. admin_customer_orders decided all of it already.
+      final coRaw = results[2];
+      final coOne = coRaw is List ? (coRaw.isEmpty ? null : coRaw.first) : coRaw;
+      final coMap =
+          coOne is Map ? coOne.cast<String, dynamic>() : <String, dynamic>{};
+
+      // Item LINES are not in admin_customer_orders' payload — they feed the
+      // expand-a-row detail panel, not the row. They stay keyed off the screen
+      // RPC's orders segment by order id. This is a lookup for a detail panel,
+      // never a display decision: no string painted on the row comes from here.
+      final itemsByOrderId = <String, List<_ItemLine>>{};
       for (final o in orderRows) {
-        final mo  = Map<String, dynamic>.from(o as Map);
-        final uid = mo['user_id'] as String? ?? '';
-        final up  = upMap[uid];
-        final pp  = ppMap[uid];
+        final mo = Map<String, dynamic>.from(o as Map);
+        final id = mo['id'] as String?;
+        if (id != null) itemsByOrderId[id] = _parseItems(mo['items']);
+      }
+
+      final orders = <_CustRow>[];
+      // Order is the backend's (created_at DESC). NOT re-sorted here — two
+      // real sort bugs came from a client re-sorting an already-ordered list.
+      for (final r in ((coMap['orders'] as List<dynamic>?) ?? const [])) {
+        final m = Map<String, dynamic>.from(r as Map);
+        final oid = m['order_id'] as String?;
+        final srcChip = (m['source_chip'] as Map?)?.cast<String, dynamic>();
+        final stChip  = (m['status_chip'] as Map?)?.cast<String, dynamic>();
         orders.add(_CustRow(
-          userId:        uid,
-          name:          _name(up, pp, mo),
-          pharmacy:      _pharmacy(up, pp, mo),
-          phone:         _phone(up, pp, mo),
-          source:        mo['source'] as String? ?? 'website',
-          orderId:       mo['id'] as String?,
-          orderNumber:   orderDisplayId(mo),
-          orderStatus:   mo['status'] as String? ?? 'unknown',
-          items:         _parseItems(mo['items']),
-          total:         (mo['total_amount'] as num?)?.toDouble(),
-          placedByAdmin: (mo['placed_by_admin'] as bool?) ?? false,
+          userId:      m['user_id'] as String? ?? '',
+          // `title` already resolves the unnamed-pharmacy case backend-side.
+          name:        m['title'] as String? ?? '',
+          pharmacy:    '',
+          phone:       m['phone_label'] as String? ?? '',
+          // The backend's own normalised source/status values — used only to
+          // route behaviour (which panel, which action), never to pick a
+          // label or a colour. Those come from the chips.
+          source:      srcChip?['value'] as String? ?? '',
+          orderId:     oid,
+          orderNumber: m['code_label'] as String? ?? '',
+          orderStatus: stChip?['value'] as String? ?? '',
+          items:       oid != null ? (itemsByOrderId[oid] ?? const []) : const [],
+          render:      m,
         ));
       }
+
+      final coSummary =
+          (coMap['summary'] as Map?)?.cast<String, dynamic>() ?? const {};
+      final coEmpty =
+          (coMap['empty'] as Map?)?.cast<String, dynamic>() ?? const {};
+      final coCount = (coMap['count'] as num?)?.toInt() ?? 0;
+      final coSummaryLabel = coSummary['label'] as String? ?? '';
 
       // CHANGE #369 — grouped WhatsApp leads, one Lead per sender phone.
       // The RPC returns sender_phone (not user_id), so resolve customer
@@ -892,6 +965,10 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       if (mounted) {
         setState(() {
           _orderRows    = orders;
+          // CHANGE #606 — header, count and empty state as returned.
+          _ordersSummaryLabel = coSummaryLabel;
+          _ordersCount        = coCount;
+          _ordersEmpty        = coEmpty;
           _cartRows     = carts;
           _cartFooterLines =
               ((screen['cart_footer'] as Map?)?['total_lines'] as num?)?.toInt() ?? 0;
@@ -1699,27 +1776,88 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     if (showLeads) {
       RenderLog.write('c367_lead_above', 'leads:${_leads.length},orders:${rows.length}');
     }
+    // CHANGE #606 — the Customer Orders empty state is the backend's
+    // empty{show,title,note}. The Dart literals '0 orders' (twice) are gone.
+    // empty.show is what decides; an empty title renders no text rather than a
+    // Dart substitute.
+    final isOrders = _filter == _CustFilter.customerOrders;
     if (rows.isEmpty && !showLeads) {
-      return _ssvEmptyState(
-        _filter == _CustFilter.customerOrders
-            ? '0 orders'
-            : '0 customers with unpurchased cart items',
-      );
+      return isOrders
+          ? _ordersEmptyState()
+          : _ssvEmptyState('0 customers with unpurchased cart items');
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (showLeads) ..._buildLeadsSection(isDesktop),
         if (rows.isNotEmpty) ...[
+          // CHANGE #606 — summary.label: "N orders • N items • ₹N". Not one
+          // number of it is added up in Dart.
+          if (isOrders && _ordersSummaryLabel.isNotEmpty)
+            Padding(
+              padding: EdgeInsets.fromLTRB(isDesktop ? 28 : 16, 12, 16, 4),
+              child: Text(_ordersSummaryLabel,
+                  style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF374151))),
+            ),
           if (isDesktop) _buildCustTableHeader(),
           ...rows.map(
             (r) => isDesktop ? _buildDesktopCustRow(r) : _buildMobileCustCard(r)),
         ] else if (showLeads)
-          _ssvEmptyState('0 orders'),
+          _ordersEmptyState(),
         if (_filter == _CustFilter.cartNotOrdered)
           _buildCartTotalsFooter(isDesktop),
         const SizedBox(height: 32),
       ],
+    );
+  }
+
+  /// CHANGE #606 — the Customer Orders empty state, from the RPC's
+  /// empty{show,title,note}. Renders nothing at all when the backend says
+  /// show:false, and skips title or note individually when either is empty —
+  /// no Dart fallback copy anywhere in this path.
+  Widget _ordersEmptyState() {
+    if (_ordersEmpty['show'] != true) return const SizedBox.shrink();
+    final title = _ordersEmpty['title'] as String? ?? '';
+    final note  = _ordersEmpty['note'] as String? ?? '';
+    return Padding(
+      padding: const EdgeInsets.only(top: 80),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 64,
+              height: 64,
+              decoration: BoxDecoration(
+                color: const Color(0xFFF9FAFB),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: const Color(0xFFE5E7EB)),
+              ),
+              child: const Icon(Icons.inbox_outlined,
+                  size: 28, color: Color(0xFFD1D5DB)),
+            ),
+            if (title.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              Text(title,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF6B7280))),
+            ],
+            if (note.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(note,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                      fontSize: 13, color: Color(0xFF9CA3AF))),
+            ],
+          ],
+        ),
+      ),
     );
   }
 
@@ -1777,8 +1915,11 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                 _tab(_CustFilter.approvedCustomers,
                     'Customers (${_approvedRows.length})'),
                 const SizedBox(width: 4),
+                // CHANGE #606 — the count is the backend's `count`, not
+                // _orderRows.length. The list and the number can no longer
+                // disagree because only one of them is computed.
                 _tab(_CustFilter.customerOrders,
-                    'Customer Orders (${_orderRows.length})'),
+                    'Customer Orders ($_ordersCount)'),
                 const SizedBox(width: 4),
                 _tab(_CustFilter.cartNotOrdered,
                     'Cart (${_cartRows.length})'),
@@ -2112,15 +2253,23 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       ),
       child: Row(children: [
         _th('CUSTOMER', flex: 4),
-        _th('PHARMACY', flex: 3),
-        _th('PHONE', flex: 2),
-        _th('SOURCE', flex: 2),
         if (isCart) ...[
+          _th('PHARMACY', flex: 3),
+          _th('PHONE', flex: 2),
+          _th('SOURCE', flex: 2),
           _th('ITEMS', flex: 1),
           _th('VALUE', flex: 2),
           const SizedBox(width: 32),
         ] else ...[
-          _th('ORDER ID', flex: 2),
+          // CHANGE #606 — the Orders columns now mirror what
+          // admin_customer_orders actually returns per row. PHARMACY and
+          // SOURCE are gone as separate columns: `title` already resolves the
+          // pharmacy name (including the unnamed fallback) and the source is
+          // one of the chips the backend paints in STATUS.
+          _th('PHONE', flex: 2),
+          _th('STATUS', flex: 3),
+          _th('AMOUNT', flex: 2),
+          _th('ITEMS', flex: 2),
           _th('CONFIRMATION', flex: 3),
           // CHANGE #464: widened 2→4 to fit "Upload Bill" alongside "View Payment".
           _th('PAYMENT', flex: 4),  // CHANGE #213 — was ACTION
@@ -2155,27 +2304,94 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           child: Row(children: [
             Expanded(
                 flex: 4,
-                child: Text(row.name,
-                    style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFF111827)),
-                    overflow: TextOverflow.ellipsis)),
-            Expanded(
-                flex: 3,
-                child: Text(row.pharmacy.isNotEmpty ? row.pharmacy : '—',
-                    style: const TextStyle(
-                        fontSize: 13, color: Color(0xFF374151)),
-                    overflow: TextOverflow.ellipsis)),
-            Expanded(
+                // CHANGE #606 — orders: `title`, verbatim. The backend already
+                // decided the unnamed-pharmacy fallback; the code line under it
+                // renders only when show_code says so.
+                child: isCart
+                    ? Text(row.name,
+                        style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF111827)),
+                        overflow: TextOverflow.ellipsis)
+                    : Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(row.name,
+                              style: const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: Color(0xFF111827)),
+                              overflow: TextOverflow.ellipsis),
+                          if (row.rb('show_code')) ...[
+                            const SizedBox(height: 2),
+                            Text(row.rs('code_label'),
+                                style: const TextStyle(
+                                    fontSize: 10,
+                                    color: Color(0xFF9CA3AF),
+                                    fontFamily: 'monospace'),
+                                overflow: TextOverflow.ellipsis),
+                          ],
+                        ],
+                      )),
+            if (isCart) ...[
+              Expanded(
+                  flex: 3,
+                  child: Text(row.pharmacy.isNotEmpty ? row.pharmacy : '—',
+                      style: const TextStyle(
+                          fontSize: 13, color: Color(0xFF374151)),
+                      overflow: TextOverflow.ellipsis)),
+              Expanded(
+                  flex: 2,
+                  child: Text(row.phone.isNotEmpty ? row.phone : '—',
+                      style: const TextStyle(
+                          fontSize: 12, color: Color(0xFF6B7280)))),
+              Expanded(
                 flex: 2,
-                child: Text(row.phone.isNotEmpty ? row.phone : '—',
-                    style: const TextStyle(
-                        fontSize: 12, color: Color(0xFF6B7280)))),
-            Expanded(
-              flex: 2,
-              child: _SourceBadge(source: row.source),
-            ),
+                child: _SourceBadge(source: row.source),
+              ),
+            ] else ...[
+              // CHANGE #606 — phone_label is the string; has_phone decides
+              // whether there is anything to draw at all.
+              Expanded(
+                  flex: 2,
+                  child: row.rb('has_phone')
+                      ? Text(row.rs('phone_label'),
+                          style: const TextStyle(
+                              fontSize: 12, color: Color(0xFF6B7280)))
+                      : const SizedBox()),
+              Expanded(
+                flex: 3,
+                child: BackendChipRow(chips: [
+                  row.rchip('status_chip'),
+                  row.rchip('fulfillment_chip'),
+                  row.rchip('source_chip'),
+                  row.rchip('admin_chip'),
+                ]),
+              ),
+              Expanded(
+                  flex: 2,
+                  child: Text(row.rs('amount_label'),
+                      style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF111827)))),
+              Expanded(
+                  flex: 2,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(row.rs('items_label'),
+                          style: const TextStyle(
+                              fontSize: 12, color: Color(0xFF374151))),
+                      Text(row.rs('time_label'),
+                          style: const TextStyle(
+                              fontSize: 11, color: Color(0xFF9CA3AF))),
+                    ],
+                  )),
+            ],
             if (isCart) ...[
               Expanded(
                 flex: 1,
@@ -2194,36 +2410,11 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                         color: Color(0xFF1B7A43))),
               ),
             ] else ...[
-              Expanded(
-                  flex: 2,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        row.orderNumber ?? '—',
-                        style: const TextStyle(
-                            fontSize: 11,
-                            color: Color(0xFF6B7280),
-                            fontFamily: 'monospace'),
-                      ),
-                      if (row.placedByAdmin) ...[
-                        const SizedBox(height: 2),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFFEF3C7),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: const Text('by admin',
-                              style: TextStyle(
-                                  fontSize: 9,
-                                  color: Color(0xFF92400E),
-                                  fontWeight: FontWeight.w600)),
-                        ),
-                      ],
-                    ],
-                  )),
+              // CHANGE #606 — the ORDER ID cell moved under the title (it is
+              // `code_label`, gated by show_code), and the hand-rolled amber
+              // "by admin" pill is gone: that is admin_chip, painted with the
+              // backend's own colours in the STATUS cell and hidden entirely
+              // when admin_chip.show is false.
               Expanded(
                   flex: 3,
                   child: GestureDetector(
@@ -2325,8 +2516,14 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                             color: Color(0xFF111827)),
                         overflow: TextOverflow.ellipsis)),
                 const SizedBox(width: 6),
-                _SourceBadge(source: row.source),
-                const SizedBox(width: 4),
+                // CHANGE #606 — orders paint the backend's source_chip (in the
+                // chip row below); only Cart rows still use the Dart badge,
+                // because 'cart_only' is not an order source the backend
+                // returns a chip for.
+                if (isCart) ...[
+                  _SourceBadge(source: row.source),
+                  const SizedBox(width: 4),
+                ],
                 // CHANGE #370 — Delete order (re-added; #369 removed it on
                 // purpose). Only on real converted orders, left of the chevron.
                 if (row.orderId != null)
@@ -2357,16 +2554,18 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                       size: 18, color: Color(0xFF9CA3AF)),
                 ),
               ]),
-              if (row.pharmacy.isNotEmpty) ...[
+              if (isCart && row.pharmacy.isNotEmpty) ...[
                 const SizedBox(height: 3),
                 Text(row.pharmacy,
                     style: const TextStyle(
                         fontSize: 12, color: Color(0xFF6B7280)),
                     overflow: TextOverflow.ellipsis),
               ],
-              if (row.phone.isNotEmpty) ...[
+              // CHANGE #606 — orders: the phone line is phone_label, drawn only
+              // when has_phone. No `isEmpty ? A : B` display ternary.
+              if (isCart ? row.phone.isNotEmpty : row.rb('has_phone')) ...[
                 const SizedBox(height: 2),
-                Text(row.phone,
+                Text(isCart ? row.phone : row.rs('phone_label'),
                     style: const TextStyle(
                         fontSize: 12, color: Color(0xFF6B7280))),
               ],
@@ -2386,14 +2585,16 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                   ),
                 ]),
               ],
-              if (row.orderId != null || row.orderNumber != null) ...[
+              // CHANGE #606 — code_label drawn only when show_code is true.
+              // Was `row.orderNumber ?? '—'`: an em-dash the app invented for
+              // an order the backend simply had no code for.
+              if (row.rb('show_code')) ...[
                 const SizedBox(height: 6),
                 Row(children: [
                   const Icon(Icons.receipt_outlined,
                       size: 13, color: Color(0xFF9CA3AF)),
                   const SizedBox(width: 4),
-                  Text(
-                      row.orderNumber ?? '—',
+                  Text(row.rs('code_label'),
                       style: const TextStyle(
                           fontSize: 11,
                           color: Color(0xFF6B7280),
@@ -2401,6 +2602,31 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                 ]),
               ],
               if (showOrderCols) ...[
+                // CHANGE #606 — every chip the backend chose to show, painted
+                // in its colours. Hidden chips render zero pixels.
+                const SizedBox(height: 8),
+                BackendChipRow(chips: [
+                  row.rchip('status_chip'),
+                  row.rchip('fulfillment_chip'),
+                  row.rchip('source_chip'),
+                  row.rchip('admin_chip'),
+                ]),
+                const SizedBox(height: 8),
+                Row(children: [
+                  Text(row.rs('amount_label'),
+                      style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF111827))),
+                  const SizedBox(width: 12),
+                  Text(row.rs('items_label'),
+                      style: const TextStyle(
+                          fontSize: 12, color: Color(0xFF6B7280))),
+                  const Spacer(),
+                  Text(row.rs('time_label'),
+                      style: const TextStyle(
+                          fontSize: 11, color: Color(0xFF9CA3AF))),
+                ]),
                 const SizedBox(height: 10),
                 GestureDetector(
                   behavior: HitTestBehavior.opaque,
@@ -2554,8 +2780,12 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
             style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
       );
     }
-    final label = 'Order Items (${row.items.length})'
-        '${row.total != null ? ' · ₹${row.total!.toStringAsFixed(2)}' : ''}';
+    // CHANGE #606 — items_label and amount_label, verbatim. This line used to
+    // be `'Order Items (${row.items.length})' + ' · ₹' + total.toStringAsFixed(2)`
+    // — a Dart count, a Dart rupee prefix and a Dart decimal format, all three
+    // of which the backend already returns as finished strings.
+    final itemsLabel  = row.rs('items_label');
+    final amountLabel = row.rs('amount_label');
     final rawStatuses = row.orderId != null
         ? (_orderItemStatuses[row.orderId!] ?? <Map<String, dynamic>>[])
         : <Map<String, dynamic>>[];
@@ -2614,11 +2844,24 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         if (row.orderId != null)
           _AdminBillView(key: ValueKey('${row.orderId}_$_billUploadEpoch'), orderId: row.orderId!),
         const SizedBox(height: 8),
-        Text(label,
-            style: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                color: Color(0xFF374151))),
+        // CHANGE #606 — two backend strings, side by side. Neither is glued to
+        // the other with Dart punctuation, and either is skipped when empty.
+        Row(children: [
+          if (itemsLabel.isNotEmpty)
+            Text(itemsLabel,
+                style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF374151))),
+          if (amountLabel.isNotEmpty) ...[
+            const SizedBox(width: 12),
+            Text(amountLabel,
+                style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF111827))),
+          ],
+        ]),
         const SizedBox(height: 8),
         // CHANGE #382 — replaced the fixed 4-column Product/Qty/Price/Status
         // table (its fixed-width header cells wrapped "Product" to vertical
@@ -4443,25 +4686,27 @@ class _ConfirmActionsState extends State<_ConfirmActions> {
           child: CircularProgressIndicator(
               strokeWidth: 2, color: Color(0xFF1B7A43)));
     }
-    final status = widget.row.orderStatus.toLowerCase().trim();
+    // CHANGE #606 — this cell no longer owns a label or a colour.
+    //
+    // It used to hold its own status vocabulary: accepted|confirmed -> the
+    // word "Accepted" in green, rejected -> "Rejected" in red, cancelled ->
+    // grey, and anything else -> the raw status with its first letter
+    // upper-cased. That is a second, competing copy of what
+    // app_settings.order_status_chips already says, and the two could disagree
+    // for any status added on the backend. The order's status is now painted
+    // once, from status_chip, in the STATUS cell.
+    //
+    // What remains here is the ACTION, not the label. `orderStatus` is the
+    // backend's own normalised status_chip.value — no lowercasing or trimming
+    // in Dart. NOTE: the pending-means-actionable rule is the one decision
+    // still made on this side; it wants a `can_confirm` boolean in the
+    // admin_customer_orders row to be fully backend-owned.
+    final status = widget.row.orderStatus;
     final orderId = widget.row.orderId ?? '';
 
-    Widget resolved(String label, Color color) {
-      RenderLog.write('order_confirm_cell', '$orderId:$status→$label');
-      return _chip(label, color);
-    }
-
-    if (status == 'accepted' || status == 'confirmed') {
-      return resolved('Accepted', const Color(0xFF1B7A43));
-    }
-    if (status == 'rejected') {
-      return resolved('Rejected', const Color(0xFFDC2626));
-    }
-    if (status == 'cancelled') {
-      return resolved('Cancelled', const Color(0xFF6B7280));
-    }
-    if (status != 'pending' && status.isNotEmpty) {
-      return resolved(status[0].toUpperCase() + status.substring(1), const Color(0xFF6B7280));
+    if (status != 'pending') {
+      RenderLog.write('order_confirm_cell', '$orderId:$status→chip');
+      return const SizedBox.shrink();
     }
 
     RenderLog.write('order_confirm_cell', '$orderId:$status→buttons');
@@ -4471,16 +4716,6 @@ class _ConfirmActionsState extends State<_ConfirmActions> {
       _btn('Reject', const Color(0xFFDC2626), () => _act('rejected')),
     ]);
   }
-
-  Widget _chip(String label, Color color) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-        decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.1),
-            borderRadius: BorderRadius.circular(20)),
-        child: Text(label,
-            style: TextStyle(
-                fontSize: 11, fontWeight: FontWeight.w600, color: color)),
-      );
 
   Widget _btn(String label, Color color, VoidCallback onTap) => InkWell(
         onTap: onTap,

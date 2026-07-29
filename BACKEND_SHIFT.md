@@ -437,6 +437,52 @@ name is refused with **`missing_fields`**; the stored token's `admin_id` is the
 
 Direct table writes: **47 → 25**.
 
+### CHANGE #582 — the cart stops computing tax, and the deploy stale-alias trap
+
+**The cart.** `cart_screen.dart` held 25 of the 34 remaining `rupees()` calls,
+and around them a full tax engine written in Dart — computed **three separate
+times in one file**, including one that derived GST **by subtraction**:
+
+```dart
+gstAmt = cart.netPayable - deliveryFee - cart.mrpTotal * (1 - discPct/100)
+```
+
+`cart_render()` wraps `cart_state()` and adds a `render` block: display
+strings, backend labels ('Net Total', 'Delivery', 'FREE'), the
+`discount_applied_note` sentence Dart used to concatenate from two adjacent
+literals, and a `gst_groups` array with each rate's net / discount / taxable /
+gst / final-payable already totalled and worded. Per-item strings ride on the
+items themselves and reach widgets through `CartLine.display`.
+
+Existing keys are untouched — `cart_render()` returns everything `cart_state()`
+did — so nothing that already read the cart changed behaviour.
+
+**A discrepancy preserved deliberately:** `net_payable` (what checkout charges,
+no GST) and `grand_total` (the tax panel's figure, with GST) genuinely differ —
+₹358.37 vs ₹395.49 on the probe cart. The app already showed both in different
+places, so both are exposed under distinct names rather than silently
+reconciled. Changing what is charged is not a formatting decision.
+
+**Verified**: cart of ₹309.37 → taxable ₹309.37, GST 12% **₹37.12**, delivery
+₹49.00, grand total **₹395.49**; group `12% GST` final payable **₹346.49**;
+item sale price ₹126.56. Also found: **all 508,196 catalogue rows have a NULL
+`gst_percent`**, so every line falls back to 12 — recorded below as a data gap,
+not a code one.
+
+`rupees()` calls: **34 → 12** (cart_screen 25 → 3). The 3 that remain are all
+on the admin **View As** path, where the subtotal follows a client-side line
+selection: `viewAsSelectedTotal` (×2) and the write-as order-placed amount.
+
+**The deploy.** `medibo.in` was serving CHANGE #570 while #572 and #581 both
+reported success. Cause: the Pages project is Git-connected, so `deploy.sh`'s
+`git push` starts Cloudflare's **own** build, which fails (no Flutter
+toolchain) and lands *after* the good wrangler upload — pinning the live alias
+to the last successful build. Fixed in `~/deploy.sh` (CHANGE #582): re-upload
+after the push so the last Production deployment is always ours. `medibo.in`
+now serves change **581**, commit `42de0f76`.
+
+> `~/deploy.sh` lives outside the repo and is not version-controlled here.
+
 ---
 
 ## Verified figures (single consistent measurement)
@@ -455,7 +501,7 @@ count, since a comment naming the function is not a call.
 | `.from('supplier_profiles')` **updates** | 5 | **0** |
 | `.from('supplier_profiles')` **inserts** | 5 | **4** |
 | `.from('admins')` writes | 1 | **0** |
-| `rupees()` **calls** | 37 | **34** |
+| `rupees()` **calls** | 37 | **12** |
 
 Earlier revisions of this file quoted "39 → 4" for role branches, "47" for
 baseline writes and "6" for `pharmacy_profiles`. Those mixed filtered and

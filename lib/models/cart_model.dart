@@ -21,7 +21,17 @@ class CartLine {
   final bool addedByAdmin;
   final int? cartItemId;
 
-  CartLine(this.product, this.quantity, {this.isSample = false, this.bulkOrder, this.addedByAdmin = false, this.cartItemId});
+  /// CHANGE #582 — display strings for this line, formatted by cart_render().
+  /// Empty for sample/transient lines, which are never billed and never shown
+  /// with a server price.
+  final Map<String, dynamic> display;
+
+  CartLine(this.product, this.quantity, {this.isSample = false, this.bulkOrder,
+      this.addedByAdmin = false, this.cartItemId, this.display = const {}});
+
+  /// One backend-formatted string for this line ('' when absent — never a
+  /// locally formatted fallback).
+  String ds(String key) => (display[key] ?? '').toString();
 
   double get lineTotal => product.b2bPrice * quantity;
   double get lineGst => lineTotal * product.gstPercent / 100;
@@ -358,7 +368,11 @@ class CartModel extends ChangeNotifier {
     final gen = ++_loadGen;
     RenderLog.write(kC410ImpersonationPersist, 'gen:$gen;viewAs:$_viewAsUserId');
     try {
-      final res = await _rpc('cart_state', {'p_guest_uid': _guestParam});
+      // CHANGE #582 — cart_render() is cart_state() plus a `render` block of
+      // display strings and the per-GST-rate breakdown. Same keys as before,
+      // so nothing that already read cart_state() changes behaviour; the
+      // screen just stops formatting and computing tax itself.
+      final res = await _rpc('cart_render', {'p_guest_uid': _guestParam});
       if (gen != _loadGen) return; // a newer read superseded this one
       if (res is! Map) return;
       await _hydrateAndAdopt(Map<String, dynamic>.from(res), gen);
@@ -426,6 +440,8 @@ class CartModel extends ChangeNotifier {
       final row = raw as Map;
       final pid = row['product_id'].toString();
       final aux = _auxById[pid];
+      // #582 — carry the render strings cart_render() attached to this item.
+      final disp = row.cast<String, dynamic>();
       lines.add(CartLine(
         Product.fromCartData(
           id: pid,
@@ -443,6 +459,7 @@ class CartModel extends ChangeNotifier {
         (row['quantity'] as num?)?.toInt() ?? 0,
         addedByAdmin: (aux?['added_by'] as String?) == 'admin',
         cartItemId: (aux?['id'] as num?)?.toInt(),
+        display: disp,
       ));
     }
     // CHANGE #375: cart_state() orders by (updated_at, id), which moves a line
@@ -693,8 +710,33 @@ class CartModel extends ChangeNotifier {
 
   double get subtotal =>
       total + _sampleLines.values.fold(0.0, (s, l) => s + l.lineTotal);
-  double get totalGst => lines.fold(0.0, (s, l) => s + l.lineGst);
-  double get grandTotal => subtotal + totalGst;
+
+  /// CHANGE #582 — the `render` block from cart_render(): display strings and
+  /// the per-GST-rate breakdown, all computed server-side.
+  Map<String, dynamic> get render =>
+      (_cart['render'] as Map?)?.cast<String, dynamic>() ?? const {};
+
+  /// One display string from the render block. Missing reads as '' — never a
+  /// locally formatted fallback, which would be the app deciding again.
+  String rs(String key) => (render[key] ?? '').toString();
+
+  /// A label from the backend's own label set (Net Total, Delivery, GST, …).
+  String label(String key) =>
+      ((render['labels'] as Map?)?[key] ?? '').toString();
+
+  /// The per-rate GST groups the tax panel draws, already totalled and worded.
+  List<Map<String, dynamic>> get gstGroups =>
+      ((render['gst_groups'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => e.cast<String, dynamic>())
+          .toList(growable: false);
+
+  /// #582 — GST and the grand total come from the server. These used to be
+  /// folded from the lines in Dart while the tax panel derived GST a SECOND
+  /// way (netPayable − deliveryFee − mrpTotal × (1 − disc)); two calculations
+  /// of one number in a single screen.
+  double get totalGst => (render['gst_total'] as num?)?.toDouble() ?? 0.0;
+  double get grandTotal => (render['grand_total'] as num?)?.toDouble() ?? 0.0;
 
   /// Total MRP as the SERVER computed it. Drives the tier ladder.
   double get mrpTotal =>

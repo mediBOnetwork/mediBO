@@ -787,7 +787,9 @@ class _AdminProfileChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final auth = UserState.of(context);
-    final displayName = auth.profile?.displayName ?? 'Account';
+    // #571 — header_title is the backend's own field, and it carries its own
+    // fallback ('My Account'), so no Dart string is invented here.
+    final displayName = auth.headerTitle;
     final shortName = displayName.length > 16 ? '${displayName.substring(0, 14)}…' : displayName;
     final initial = shortName[0].toUpperCase();
     return ConstrainedBox(

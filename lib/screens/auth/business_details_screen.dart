@@ -232,7 +232,9 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
       paymentTerm: _paymentTerm!,
       customerCode: _customerCodeCtrl.text.trim().toUpperCase(),
     );
-    await UserState.read(context).saveProfile(profile);
+    // #571 — goes through save_customer_profile(), which keys the write to the
+    // ACCOUNT and refuses any client-supplied approval flag.
+    await UserState.read(context).saveProfile(profile.toInsertJson());
   }
 
   Future<void> _saveSupplier() async {

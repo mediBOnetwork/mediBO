@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../app_state.dart';
 import '../data/medicine_repository.dart';
+import '../models/app_session.dart';
 import '../models/cart_model.dart';
 import '../theme.dart';
 import '../url_sync.dart';
@@ -532,13 +533,21 @@ class _HomeShellState extends State<HomeShell> {
       );
     }
 
-    // Supplier: completely separate shell — takes priority after admin check
-    if (!auth.isAdmin && auth.isSupplier) {
+    // #571 — which shell renders is my_session().surface, not a role ladder.
+    // The old test was `!auth.isAdmin && auth.isSupplier`, then a second one
+    // reconciling auth.supplierStatus from a different RPC. One field decides
+    // now, so the two can no longer disagree.
+    final surface = auth.surface;
+
+    if (surface == AccountSurface.supplier) {
       return const SupplierShell();
     }
 
-    // Pending-approval supplier: show a waiting screen
-    if (!auth.isAdmin && !auth.isSupplier && auth.supplierStatus == 'pending_approval') {
+    // Pending-approval supplier: waiting screen. Every string below is printed
+    // verbatim from the backend — including 'Welcome, <name>', which the server
+    // composes so the app never concatenates user-facing copy.
+    if (surface == AccountSurface.pendingSupplier) {
+      final s = auth.session;
       return Scaffold(
         backgroundColor: const Color(0xFFF5F6F8),
         body: Center(
@@ -547,18 +556,18 @@ class _HomeShellState extends State<HomeShell> {
             child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
               const Icon(Icons.hourglass_empty, size: 56, color: Color(0xFF9CA3AF)),
               const SizedBox(height: 16),
-              Text('Welcome, ${auth.supplierName ?? 'Supplier'}',
+              Text(s.pendingText('title'),
                 style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
               const SizedBox(height: 8),
-              const Text('Your supplier account is pending admin approval.',
+              Text(s.pendingText('message'),
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 14, color: Color(0xFF6B7280))),
+                style: const TextStyle(fontSize: 14, color: Color(0xFF6B7280))),
               const SizedBox(height: 24),
               OutlinedButton(
                 onPressed: () => UserState.read(context).signOut(),
                 style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF1B7A43),
                   side: const BorderSide(color: Color(0xFF1B7A43))),
-                child: const Text('Sign Out'),
+                child: Text(s.pendingText('sign_out_label')),
               ),
             ]),
           ),
@@ -980,10 +989,10 @@ class _MobileProfileAvatar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final auth = UserState.of(context);
-    final profile = auth.profile;
-    final initial = (profile?.displayName.isNotEmpty == true)
-        ? profile!.displayName[0].toUpperCase()
-        : null;
+    // #571 — display_name comes from my_session(); no local profile row.
+    final sessionName = auth.displayName;
+    final initial =
+        sessionName.isNotEmpty ? sessionName[0].toUpperCase() : null;
 
     final viewAs = ViewAsState.of(context);
     final isCustomerViewAs = viewAs.isActive && viewAs.role == ViewAsRole.customer;
@@ -1044,7 +1053,6 @@ class _MobileProfileAvatar extends StatelessWidget {
   }
 
   void _showAdminSheet(BuildContext context, AuthNotifier auth) {
-    final profile = auth.profile;
     final nav = onAdminNav!;
     showResponsiveSheet(
       context: context,
@@ -1066,7 +1074,7 @@ class _MobileProfileAvatar extends StatelessWidget {
             ),
             const SizedBox(height: 16),
             Text(
-              profile?.displayName ?? 'Admin',
+              auth.headerTitle,
               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
             ),
             const SizedBox(height: 4),
@@ -3616,11 +3624,10 @@ class _DesktopProfileButton extends StatelessWidget {
       );
     }
 
-    final profile = auth.profile;
-    // In ViewAs mode show the impersonated account's name, not the admin's profile.
-    final displayName = viewAs.isActive
-        ? (viewAs.identity?.name ?? 'Account')
-        : (profile?.displayName ?? 'Account');
+    // #571 — no ViewAs name branch. my_session() already returns the
+    // impersonated account's name when acting_as is set, so there is one name
+    // and one place it comes from.
+    final displayName = auth.headerTitle;
     final initial = displayName.isNotEmpty ? displayName[0].toUpperCase() : '?';
     final shortName =
         displayName.length > 16 ? '${displayName.substring(0, 14)}…' : displayName;
@@ -3892,12 +3899,8 @@ class _MobileProfileButton extends StatelessWidget {
   }
 
   void _showProfileSheet(BuildContext context, AuthNotifier auth) {
-    final profile = auth.profile;
-    // Capture viewAs name before opening the modal (modal has a different context tree).
-    final viewAs = ViewAsState.read(context);
-    final displayName = viewAs.isActive
-        ? (viewAs.identity?.name ?? 'Account')
-        : (profile?.displayName ?? 'Account');
+    // #571 — one name, from my_session(). It already accounts for View As.
+    final displayName = auth.headerTitle;
     showResponsiveSheet(
       context: context,
       builder: (_) => Padding(
@@ -3942,10 +3945,10 @@ class _MobileProfileButton extends StatelessWidget {
                           color: Color(0xFF111827),
                         ),
                       ),
-                      if (profile?.phone.isNotEmpty == true) ...[
+                      if (auth.session.profileText('phone').isNotEmpty) ...[
                         const SizedBox(height: 2),
                         Text(
-                          profile!.phone,
+                          auth.session.profileText('phone'),
                           style: const TextStyle(
                               fontSize: 13, color: Color(0xFF6B7280)),
                         ),

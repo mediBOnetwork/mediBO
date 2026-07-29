@@ -411,12 +411,18 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
     final id    = rec['id'] as String? ?? '';
     final table = _tableForCurrentAlert();
     try {
-      await Supabase.instance.client.from(table).update({
-        'approved': true,
-        'status': 'approved',
-        'approved_at': DateTime.now().toUtc().toIso8601String(),
-        'approved_by': 'admin',
-      }).eq('id', id);
+      // CHANGE #603 — this write hid behind a VARIABLE table name, so it
+      // survived the whole write sweep. It stamped approved_at from the DEVICE
+      // clock, wrote approved_by as the literal string 'admin' rather than a
+      // person, and had no admin check beyond RLS — on the approval flag that
+      // my_session().can_place_order reads.
+      await Supabase.instance.client.rpc(
+        table == 'supplier_profiles' ? 'admin_supplier_action' : 'admin_customer_action',
+        params: {
+          table == 'supplier_profiles' ? 'p_supplier_id' : 'p_customer_id': id,
+          'p_action': 'approve',
+        },
+      );
       // Fire-and-forget notification (existing logic)
       // CHANGE #508 D: this path handles BOTH customer (pharmacy_profiles) and
       // supplier (supplier_profiles) approvals via _tableForCurrentAlert() —
@@ -444,8 +450,13 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
     final id    = rec['id'] as String? ?? '';
     final table = _tableForCurrentAlert();
     try {
-      await Supabase.instance.client.from(table)
-          .update({'approved': false, 'status': 'rejected'}).eq('id', id);
+      await Supabase.instance.client.rpc(
+        table == 'supplier_profiles' ? 'admin_supplier_action' : 'admin_customer_action',
+        params: {
+          table == 'supplier_profiles' ? 'p_supplier_id' : 'p_customer_id': id,
+          'p_action': 'reject',
+        },
+      );
       Supabase.instance.client.functions.invoke('notify-registration', body: {
         'action': 'reject',
         'ptype': table == 'supplier_profiles' ? 'supplier' : 'customer',

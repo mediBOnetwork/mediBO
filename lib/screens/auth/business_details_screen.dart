@@ -240,8 +240,18 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
   Future<void> _saveSupplier() async {
     final code = _supplierCodeCtrl.text.trim().toUpperCase();
     try { RenderLog.write('c307_saved_code', 'code=$code'); } catch (_) {}
-    await Supabase.instance.client.from('supplier_profiles').insert({
-      'user_id': widget.userId,
+    // CHANGE #579 — submit_registration() writes the row.
+    //
+    // This INSERTed into supplier_profiles directly with
+    // {'status':'pending','approved':false} sent FROM THE CLIENT. The values
+    // happened to be the safe ones, but nothing stopped a caller sending
+    // approved:true straight into the table — and `approved` is what
+    // my_session().can_place_order reads. The RPC sets status and approved
+    // itself, keys the row to auth.uid() rather than a widget-supplied
+    // user_id, and reports any privilege key it refused.
+    await Supabase.instance.client.rpc('submit_registration', params: {
+      'p_kind': 'supplier',
+      'p_payload': <String, dynamic>{
       'supplier_name': _supCompanyCtrl.text.trim(),
       'contact_name': _supContactCtrl.text.trim(),
       'phone': _supPhoneCtrl.text.trim(),
@@ -254,14 +264,14 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
       'drug_license': _supDlCtrl.text.trim().isNotEmpty ? _supDlCtrl.text.trim() : null,
       'notes': _supCategoriesCtrl.text.trim().isNotEmpty ? 'Product Categories: ${_supCategoriesCtrl.text.trim()}' : null,
       if (code.isNotEmpty) 'supplier_code': code,
-      'status': 'pending',
-      'approved': false,
+      },
     });
   }
 
   Future<void> _saveMr() async {
-    await Supabase.instance.client.from('mr_registrations').insert({
-      'user_id': widget.userId,
+    await Supabase.instance.client.rpc('submit_registration', params: {
+      'p_kind': 'mr',
+      'p_payload': <String, dynamic>{
       'full_name': _mrNameCtrl.text.trim(),
       'phone': _mrPhoneCtrl.text.trim(),
       'email': _mrEmailCtrl.text.trim(),
@@ -271,13 +281,14 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
       'state': _mrStateCtrl.text.trim(),
       'address': _mrAddressCtrl.text.trim().isNotEmpty ? _mrAddressCtrl.text.trim() : null,
       'id_proof_type': _mrIdProofType,
-      'status': 'pending',
+      },
     });
   }
 
   Future<void> _saveCompany() async {
-    await Supabase.instance.client.from('company_profiles').insert({
-      'user_id': widget.userId,
+    await Supabase.instance.client.rpc('submit_registration', params: {
+      'p_kind': 'company',
+      'p_payload': <String, dynamic>{
       'company_name': _coNameCtrl.text.trim(),
       'contact_person': _coContactCtrl.text.trim(),
       'phone': _coPhoneCtrl.text.trim(),
@@ -289,13 +300,14 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
       'city': _coCityCtrl.text.trim(),
       'state': _coStateCtrl.text.trim(),
       'website': _coWebsiteCtrl.text.trim().isNotEmpty ? _coWebsiteCtrl.text.trim() : null,
-      'status': 'pending',
+      },
     });
   }
 
   Future<void> _saveDeliveryPartner() async {
-    await Supabase.instance.client.from('delivery_partner_registrations').insert({
-      'user_id': widget.userId,
+    await Supabase.instance.client.rpc('submit_registration', params: {
+      'p_kind': 'delivery_partner',
+      'p_payload': <String, dynamic>{
       'full_name': _dpNameCtrl.text.trim(),
       'phone': _dpPhoneCtrl.text.trim(),
       'email': _dpEmailCtrl.text.trim(),
@@ -305,7 +317,7 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
       'state': _dpStateCtrl.text.trim(),
       'address': _dpAddressCtrl.text.trim().isNotEmpty ? _dpAddressCtrl.text.trim() : null,
       'id_proof_type': _dpIdProofType,
-      'status': 'pending',
+      },
     });
   }
 

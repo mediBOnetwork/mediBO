@@ -336,6 +336,48 @@ UPDATE. Two faults beyond the direct write:
 **Zero `.from('pharmacy_profiles')` writes remain.** Direct table writes:
 **47 → 35**.
 
+### CHANGE #579 — the four self-registration forms
+
+Every one of them INSERTed directly and **sent its own approval state from the
+client**:
+
+```
+supplier_profiles                {'status':'pending', 'approved': false}
+mr_registrations                 {'status':'pending'}
+company_profiles                 {'status':'pending'}
+delivery_partner_registrations   {'status':'pending'}
+```
+
+An applicant deciding their own approval state is the whole problem. The values
+happened to be the safe ones, but **nothing stopped a caller sending
+`approved: true` straight into `supplier_profiles`** — and `approved` is what
+`my_session().can_place_order` reads. Each form also passed `user_id` up from
+the widget rather than letting the server key the row.
+
+`submit_registration(kind, payload)` sets `status`/`approved` itself, keys to
+`auth.uid()`, and has a per-kind allow-list. Privilege keys are **reported**
+in `rejected_keys`, not silently dropped.
+
+**Verified** — an applicant that actively tries to approve itself:
+
+```
+sent:   {supplier_name, phone, city, approved: true, status: 'Active',
+         user_id: '00000000-…'}
+stored: approved = false
+        status   = 'pending'
+        user_id  = the real caller  (not the spoofed UUID)
+        rejected_keys = ["status","user_id","approved"]
+```
+
+Production untouched: 34 suppliers, 0 probe rows.
+
+A bug in my own first cut was caught here: `v_vals || 'false'` resolved to
+`array_cat` rather than append (an untyped literal against `text[]`), which
+errored with *malformed array literal*. Fixed with an explicit `::text`.
+
+**Zero `.from(...)` writes remain in `business_details_screen.dart`.**
+Direct table writes: **47 → 31**.
+
 ---
 
 ## Remaining — with the decision each still makes

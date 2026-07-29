@@ -15,10 +15,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 
-import '../../config/api_keys.dart';
-import '../../util.dart';
 import '../../utils/download_bytes.dart'; // CHANGE #463
-import '../../utils/order_code.dart';
 import '../../utils/render_log.dart';
 import '../../services/admin_date_scope.dart'; // CHANGE #545
 import '../../services/date_labels.dart'; // CHANGE #548
@@ -27,6 +24,7 @@ import '../bulk_upload_screen.dart';
 import '../../services/payment_claims_service.dart';
 import '../../view_as_state.dart';
 import '../../widgets/backend_chip.dart'; // CHANGE #606
+import '../../widgets/backend_table.dart'; // CHANGE #607
 import '../../widgets/bill_actions_row.dart'; // CHANGE #465
 import '../../widgets/bill_viewer.dart'; // CHANGE #465
 import '../../widgets/import_customer_sheet.dart'; // CHANGE #547
@@ -155,6 +153,9 @@ class _CustRow {
   String rs(String k) => (render[k] as String?) ?? '';
   bool   rb(String k) => render[k] == true;
   Map<String, dynamic>? rchip(String k) => backendChipOf(render, k);
+  /// CHANGE #607 — any nested backend object (actions{}, …), verbatim.
+  Map<String, dynamic>? rmap(String k) =>
+      render[k] is Map ? (render[k] as Map).cast<String, dynamic>() : null;
 }
 
 // ── CHANGE #369 — grouped WhatsApp lead models (one card per customer) ───────
@@ -562,6 +563,12 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   int    _ordersCount        = 0;
   Map<String, dynamic> _ordersEmpty = const {};
 
+  /// CHANGE #607 — the Customer Orders desktop table's shape, from the RPC's
+  /// columns[]. Header text, alignment, width and column ORDER all live in
+  /// app_settings.order_tab_columns now. There is no Dart fallback list: a
+  /// second copy would render a stale shape the moment the config changed.
+  List<BackendColumn> _ordersColumns = const [];
+
   /// CHANGE #601 — footer totals as the server computed them.
   int    _cartFooterLines = 0;
   double _cartFooterValue = 0.0;
@@ -853,6 +860,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           (coMap['empty'] as Map?)?.cast<String, dynamic>() ?? const {};
       final coCount = (coMap['count'] as num?)?.toInt() ?? 0;
       final coSummaryLabel = coSummary['label'] as String? ?? '';
+      // CHANGE #607 — the desktop table's columns, in the backend's order.
+      final coColumns = backendColumns(coMap['columns']);
 
       // CHANGE #369 — grouped WhatsApp leads, one Lead per sender phone.
       // The RPC returns sender_phone (not user_id), so resolve customer
@@ -969,6 +978,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           _ordersSummaryLabel = coSummaryLabel;
           _ordersCount        = coCount;
           _ordersEmpty        = coEmpty;
+          _ordersColumns      = coColumns; // CHANGE #607
           _cartRows     = carts;
           _cartFooterLines =
               ((screen['cart_footer'] as Map?)?['total_lines'] as num?)?.toInt() ?? 0;
@@ -1480,14 +1490,21 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
 
   // ── Order status ───────────────────────────────────────────────────────────
 
-  Future<void> _updateStatus(String orderId, String status) async {
+  /// CHANGE #607 — [status] is the value the backend put in the action object,
+  /// and [note] is the backend's success copy. After the write this refetches
+  /// admin_customer_orders via _load() and re-renders from the response: the
+  /// row's status and chip are never mutated locally, so the screen cannot show
+  /// a state the database did not confirm.
+  Future<void> _updateStatus(String orderId, String status, String note) async {
     try {
       await Supabase.instance.client
           .rpc('admin_set_order_status',
                params: {'p_order_id': orderId, 'p_status': status});
       RenderLog.write('order_status_written', 'orderId:$orderId status:$status');
-      _load();
+      await _load();
+      if (mounted && note.isNotEmpty) showToast(context, note);
     } catch (e) {
+      RenderLog.write('order_status_err', e.toString());
       if (mounted) {
         showToast(context, 'Update failed: $e', isError: true);
       }
@@ -2245,6 +2262,25 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   Widget _buildCustTableHeader() {
     final isCart = _filter == _CustFilter.cartNotOrdered;
     if (!isCart) RenderLog.write('c213_action_col_removed', 1); // CHANGE #213
+
+    // CHANGE #607 — Customer Orders header is columns[], nothing else.
+    //
+    // Deleted here: the literals 'PHONE', 'STATUS', 'AMOUNT', 'ITEMS',
+    // 'CONFIRMATION', 'PAYMENT' and the 'CUSTOMER' shared with Cart, plus every
+    // hardcoded flex on the orders branch. Renaming a column, reordering the
+    // table or changing a width is now an app_settings.order_tab_columns edit.
+    // The Cart tab is a different tab and keeps its own literal header until it
+    // gets a columns[] of its own.
+    if (!isCart) {
+      RenderLog.write('c607_cust_cols', _ordersColumns.length);
+      return BackendTableHeader(
+        columns: _ordersColumns,
+        // Fixed chrome only: the delete-order icon and the expand chevron.
+        // Neither is a column — no header text, no payload flex.
+        trailingWidth: 64,
+      );
+    }
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 10),
       decoration: const BoxDecoration(
@@ -2253,28 +2289,12 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       ),
       child: Row(children: [
         _th('CUSTOMER', flex: 4),
-        if (isCart) ...[
-          _th('PHARMACY', flex: 3),
-          _th('PHONE', flex: 2),
-          _th('SOURCE', flex: 2),
-          _th('ITEMS', flex: 1),
-          _th('VALUE', flex: 2),
-          const SizedBox(width: 32),
-        ] else ...[
-          // CHANGE #606 — the Orders columns now mirror what
-          // admin_customer_orders actually returns per row. PHARMACY and
-          // SOURCE are gone as separate columns: `title` already resolves the
-          // pharmacy name (including the unnamed fallback) and the source is
-          // one of the chips the backend paints in STATUS.
-          _th('PHONE', flex: 2),
-          _th('STATUS', flex: 3),
-          _th('AMOUNT', flex: 2),
-          _th('ITEMS', flex: 2),
-          _th('CONFIRMATION', flex: 3),
-          // CHANGE #464: widened 2→4 to fit "Upload Bill" alongside "View Payment".
-          _th('PAYMENT', flex: 4),  // CHANGE #213 — was ACTION
-          const SizedBox(width: 32),
-        ],
+        _th('PHARMACY', flex: 3),
+        _th('PHONE', flex: 2),
+        _th('SOURCE', flex: 2),
+        _th('ITEMS', flex: 1),
+        _th('VALUE', flex: 2),
+        const SizedBox(width: 32),
       ]),
     );
   }
@@ -2302,40 +2322,32 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
             border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
           ),
           child: Row(children: [
-            Expanded(
-                flex: 4,
-                // CHANGE #606 — orders: `title`, verbatim. The backend already
-                // decided the unnamed-pharmacy fallback; the code line under it
-                // renders only when show_code says so.
-                child: isCart
-                    ? Text(row.name,
-                        style: const TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: Color(0xFF111827)),
-                        overflow: TextOverflow.ellipsis)
-                    : Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(row.name,
-                              style: const TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                  color: Color(0xFF111827)),
-                              overflow: TextOverflow.ellipsis),
-                          if (row.rb('show_code')) ...[
-                            const SizedBox(height: 2),
-                            Text(row.rs('code_label'),
-                                style: const TextStyle(
-                                    fontSize: 10,
-                                    color: Color(0xFF9CA3AF),
-                                    fontFamily: 'monospace'),
-                                overflow: TextOverflow.ellipsis),
-                          ],
-                        ],
-                      )),
+            // ── CHANGE #607 — Customer Orders cells come from columns[] ─────
+            //
+            // Order, width, alignment and cell TYPE are all the backend's. The
+            // hand-built cells that lived here (title+code column, phone cell,
+            // a four-chip BackendChipRow, amount, items+time) are gone: the
+            // payload says which keys to print and in what order, and
+            // BackendTableCell prints them. Note the config currently shows
+            // ONE chip (status_chip) — fulfillment/source/admin are still in
+            // every row and can be added as columns without a deploy.
+            if (!isCart)
+              Expanded(
+                flex: _ordersColumns.fold<int>(0, (a, c) => a + c.flex),
+                child: BackendTableRowCells(
+                  columns: _ordersColumns,
+                  row: row.render,
+                ),
+              ),
             if (isCart) ...[
+              Expanded(
+                  flex: 4,
+                  child: Text(row.name,
+                      style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF111827)),
+                      overflow: TextOverflow.ellipsis)),
               Expanded(
                   flex: 3,
                   child: Text(row.pharmacy.isNotEmpty ? row.pharmacy : '—',
@@ -2351,48 +2363,6 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                 flex: 2,
                 child: _SourceBadge(source: row.source),
               ),
-            ] else ...[
-              // CHANGE #606 — phone_label is the string; has_phone decides
-              // whether there is anything to draw at all.
-              Expanded(
-                  flex: 2,
-                  child: row.rb('has_phone')
-                      ? Text(row.rs('phone_label'),
-                          style: const TextStyle(
-                              fontSize: 12, color: Color(0xFF6B7280)))
-                      : const SizedBox()),
-              Expanded(
-                flex: 3,
-                child: BackendChipRow(chips: [
-                  row.rchip('status_chip'),
-                  row.rchip('fulfillment_chip'),
-                  row.rchip('source_chip'),
-                  row.rchip('admin_chip'),
-                ]),
-              ),
-              Expanded(
-                  flex: 2,
-                  child: Text(row.rs('amount_label'),
-                      style: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xFF111827)))),
-              Expanded(
-                  flex: 2,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(row.rs('items_label'),
-                          style: const TextStyle(
-                              fontSize: 12, color: Color(0xFF374151))),
-                      Text(row.rs('time_label'),
-                          style: const TextStyle(
-                              fontSize: 11, color: Color(0xFF9CA3AF))),
-                    ],
-                  )),
-            ],
-            if (isCart) ...[
               Expanded(
                 flex: 1,
                 child: Text('${row.items.length}',
@@ -2409,31 +2379,6 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                         fontWeight: FontWeight.w600,
                         color: Color(0xFF1B7A43))),
               ),
-            ] else ...[
-              // CHANGE #606 — the ORDER ID cell moved under the title (it is
-              // `code_label`, gated by show_code), and the hand-rolled amber
-              // "by admin" pill is gone: that is admin_chip, painted with the
-              // backend's own colours in the STATUS cell and hidden entirely
-              // when admin_chip.show is false.
-              Expanded(
-                  flex: 3,
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: () {}, // absorb tap so Accept/Reject don't toggle row expand
-                    child: _ConfirmActions(row: row, onUpdate: _updateStatus),
-                  )),
-              // CHANGE #213 — View Payment replaces ACTION column
-              // CHANGE #464 — "Upload Bill" added to the left of View Payment.
-              Expanded(
-                  flex: 4,
-                  child: row.orderId != null
-                      ? GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onTap: () {},
-                          child: _buildUploadBillAndPayRow(row,
-                              onViewPayTap: () => _togglePayOpen(row.orderId!)),
-                        )
-                      : const SizedBox()),
             ],
             // CHANGE #370 — Delete order (re-added; #369 removed it on purpose).
             // Only on real converted orders, immediately left of the chevron.
@@ -2470,6 +2415,35 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           ]),
         ),
       ),
+      // CHANGE #607 — the action strip.
+      //
+      // Accept/Reject (whose visibility, labels, colours and written status all
+      // come from actions{}) and the bill/payment row are NOT columns: they
+      // carry no header text and no payload flex. Giving them their own
+      // full-width strip under the row is what lets the grid above be exactly
+      // the columns[] the backend described, with nothing hardcoded wedged in.
+      if (!isCart && row.orderId != null)
+        Container(
+          padding: const EdgeInsets.fromLTRB(28, 0, 28, 10),
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
+          ),
+          child: Row(children: [
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () {}, // absorb tap so Accept/Reject don't toggle expand
+              child: _ConfirmActions(row: row, onUpdate: _updateStatus),
+            ),
+            const Spacer(),
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () {},
+              child: _buildUploadBillAndPayRow(row,
+                  onViewPayTap: () => _togglePayOpen(row.orderId!)),
+            ),
+          ]),
+        ),
       // CHANGE #213 — per-order payment panel
       if (row.orderId != null && _payOpen[row.orderId] == true)
         _OrderPaymentPanel(
@@ -4656,7 +4630,10 @@ class _CustomerStatusBadge extends StatelessWidget {
 
 class _ConfirmActions extends StatefulWidget {
   final _CustRow row;
-  final Future<void> Function(String orderId, String status) onUpdate;
+  // CHANGE #607 — carries the success note from the action object through to
+  // the toast, so this screen writes no confirmation copy of its own.
+  final Future<void> Function(String orderId, String status, String note)
+      onUpdate;
   const _ConfirmActions({required this.row, required this.onUpdate});
 
   @override
@@ -4666,19 +4643,27 @@ class _ConfirmActions extends StatefulWidget {
 class _ConfirmActionsState extends State<_ConfirmActions> {
   bool _busy = false;
 
-  Future<void> _act(String status) async {
+  /// CHANGE #607 — the status VALUE written and the toast shown afterwards both
+  /// come out of the action object. Nothing here knows the word 'accepted'.
+  Future<void> _act(Map<String, dynamic> action) async {
     if (_busy) return;
+    final status = action['status'] as String? ?? '';
+    if (status.isEmpty) return;
     setState(() => _busy = true);
-    await widget.onUpdate(widget.row.orderId!, status);
+    await widget.onUpdate(
+      widget.row.orderId!,
+      status,
+      action['note'] as String? ?? '',
+    );
     if (mounted) setState(() => _busy = false);
   }
 
   @override
   Widget build(BuildContext context) {
-    if (widget.row.orderId == null) {
-      return const Text('—',
-          style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)));
-    }
+    // CHANGE #607 — the `orderId == null -> '—'` branch is DELETED. It painted
+    // an em-dash the app invented for a row that has no order, and it is
+    // unreachable anyway: the action strip only builds this widget when
+    // row.orderId != null. An absent action renders nothing, never a glyph.
     if (_busy) {
       return const SizedBox(
           width: 18,
@@ -4686,52 +4671,43 @@ class _ConfirmActionsState extends State<_ConfirmActions> {
           child: CircularProgressIndicator(
               strokeWidth: 2, color: Color(0xFF1B7A43)));
     }
-    // CHANGE #606 — this cell no longer owns a label or a colour.
+    // CHANGE #607 — the LAST decision leaves this cell.
     //
-    // It used to hold its own status vocabulary: accepted|confirmed -> the
-    // word "Accepted" in green, rejected -> "Rejected" in red, cancelled ->
-    // grey, and anything else -> the raw status with its first letter
-    // upper-cased. That is a second, competing copy of what
-    // app_settings.order_status_chips already says, and the two could disagree
-    // for any status added on the backend. The order's status is now painted
-    // once, from status_chip, in the STATUS cell.
+    // #606 removed the status -> label and status -> colour maps but left one
+    // branch behind: `if (status != 'pending') return nothing`. That was the
+    // app answering "what may I do?" — the second of the four questions the
+    // frontend must never answer — and its own comment said it wanted a
+    // backend boolean. It has one now.
     //
-    // What remains here is the ACTION, not the label. `orderStatus` is the
-    // backend's own normalised status_chip.value — no lowercasing or trimming
-    // in Dart. NOTE: the pending-means-actionable rule is the one decision
-    // still made on this side; it wants a `can_confirm` boolean in the
-    // admin_customer_orders row to be fully backend-owned.
-    final status = widget.row.orderStatus;
+    // admin_customer_orders returns can_confirm, and actions{show, accept{...},
+    // reject{...}} where each action carries its own label, the status VALUE to
+    // write, the success note, and bg/fg/border from tone_colors(). Deleted
+    // here: the 'pending' comparison, the literals 'Accept' and 'Reject', the
+    // hardcoded green #1B7A43 / red #DC2626, the `_btn` colour helper that
+    // derived a fill and a border by alpha-blending them, and the hardcoded
+    // 'accepted'/'rejected' status strings sent to the write RPC.
     final orderId = widget.row.orderId ?? '';
+    final actions = widget.row.rmap('actions');
 
-    if (status != 'pending') {
-      RenderLog.write('order_confirm_cell', '$orderId:$status→chip');
+    if (actions == null || actions['show'] != true) {
+      RenderLog.write('order_confirm_cell', '$orderId:hidden');
       return const SizedBox.shrink();
     }
 
-    RenderLog.write('order_confirm_cell', '$orderId:$status→buttons');
+    final accept = (actions['accept'] as Map?)?.cast<String, dynamic>();
+    final reject = (actions['reject'] as Map?)?.cast<String, dynamic>();
+    final showAccept = BackendActionButton.visible(accept);
+    final showReject = BackendActionButton.visible(reject);
+    if (!showAccept && !showReject) return const SizedBox.shrink();
+
+    RenderLog.write('order_confirm_cell',
+        '$orderId:actions=${showAccept ? "a" : ""}${showReject ? "r" : ""}');
     return Row(mainAxisSize: MainAxisSize.min, children: [
-      _btn('Accept', const Color(0xFF1B7A43), () => _act('accepted')),
-      const SizedBox(width: 4),
-      _btn('Reject', const Color(0xFFDC2626), () => _act('rejected')),
+      BackendActionButton(action: accept, onTap: () => _act(accept!)),
+      if (showAccept && showReject) const SizedBox(width: 4),
+      BackendActionButton(action: reject, onTap: () => _act(reject!)),
     ]);
   }
-
-  Widget _btn(String label, Color color, VoidCallback onTap) => InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(6),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.07),
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: color.withValues(alpha: 0.3)),
-          ),
-          child: Text(label,
-              style: TextStyle(
-                  fontSize: 11, fontWeight: FontWeight.w600, color: color)),
-        ),
-      );
 }
 
 // ── Registration Approve / Reject ─────────────────────────────────────────────

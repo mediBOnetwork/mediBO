@@ -25,6 +25,7 @@ import '../../utils/safe_parse.dart';
 import '../../services/admin_date_scope.dart'; // CHANGE #545
 import '../../services/date_labels.dart'; // CHANGE #548
 import '../../widgets/backend_chip.dart'; // CHANGE #606
+import '../../widgets/backend_table.dart'; // CHANGE #607
 import '../../widgets/code_field.dart';
 import '../../widgets/fullscreen_image.dart';
 import '../../widgets/inquiry_v12.dart';
@@ -387,6 +388,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   String _ordersSummaryLabel = '';
   int    _ordersCount        = 0;
   Map<String, dynamic> _ordersEmpty = const {};
+
+  /// CHANGE #607 — the Supplier Orders desktop table's shape, from columns[].
+  /// No Dart fallback list: see backend_table.dart for why a "for safety" copy
+  /// is the bug, not the safety net.
+  List<BackendColumn> _ordersColumns = const [];
   List<_LeadItem>            _leads        = [];
   List<Map<String, dynamic>> _deletedRows  = [];
   bool _deletedExpanded = false;
@@ -866,6 +872,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       final ordersEmpty =
           (soMap['empty'] as Map?)?.cast<String, dynamic>() ?? const {};
       final ordersCount = (soMap['count'] as num?)?.toInt() ?? 0;
+      final ordersColumns = backendColumns(soMap['columns']); // CHANGE #607
       final leads  = leadRows.map((r) {
         final m = Map<String, dynamic>.from(r as Map);
         return _LeadItem(
@@ -901,6 +908,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           _ordersSummaryLabel = ordersSummaryLabel;
           _ordersCount        = ordersCount;
           _ordersEmpty        = ordersEmpty;
+          _ordersColumns      = ordersColumns; // CHANGE #607
           _leads          = leads;
           _inquiryOverview = inquiryOverview;
           _deletedRows    = deletedR.map((r) => Map<String, dynamic>.from(r as Map)).toList();
@@ -2520,6 +2528,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           _ordersEmpty =
               (soMap['empty'] as Map?)?.cast<String, dynamic>() ?? const {};
           _ordersCount = (soMap['count'] as num?)?.toInt() ?? 0;
+          _ordersColumns = backendColumns(soMap['columns']); // CHANGE #607
           _liveOrderItemKeys = liveKeys; // CHANGE #277
         });
         RenderLog.write('supplier_orders_refreshed', _orders.length);
@@ -3263,7 +3272,24 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                 final sendBtn = Builder(builder: (btnCtx) => InquirySendButton(
                   enabled: !_inquiryLoading,
                   onOpenPopupOnly: () => _openSendPopupOnly(supName, btnCtx),
-                  child: SendButtonView(sendButton: sendButton),
+                  // CHANGE #607 — the admin INQUIRY tab's button comes from
+                  // _sup_inquiry_send_state(), which still returns only
+                  // {state,label,tone} with no colours. Its two-tone palette
+                  // lives HERE, at the out-of-scope caller, so the shared
+                  // SendButtonView holds no colour logic at all and this tab
+                  // keeps the exact appearance it had. Delete these three
+                  // lines the day that function merges tone_colors() the way
+                  // _sup_order_send_state already does.
+                  child: SendButtonView(
+                    sendButton: sendButton,
+                    bg: sendButton?['tone'] == 'green'
+                        ? const Color(0xFFD1FAE5) : const Color(0xFFFEF3C7),
+                    fg: sendButton?['tone'] == 'green'
+                        ? const Color(0xFF065F46) : const Color(0xFF92400E),
+                    border: sendButton?['tone'] == 'green'
+                        ? const Color(0xFF065F46).withValues(alpha: 0.3)
+                        : const Color(0xFF92400E).withValues(alpha: 0.3),
+                  ),
                 ));
                 if (narrow) {
                   return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -4577,9 +4603,18 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     // tapping Send does. #492 wrongly kept a wa.me branch here for AutoFlow
     // ON; deleted along with get_supplier_order_send_payload/_supplierShouldSend
     // (both now unreachable — no other caller).
+    // CHANGE #607 — bg/fg/border straight off send_button. _sup_order_send_state
+    // merges tone_colors() in, so the three hexes are the backend's and nothing
+    // here maps a tone to a colour.
+    final sb = row.sendButton;
     return Builder(builder: (btnCtx) => GestureDetector(
       onTap: () => _showOrderSendPopup(row, btnCtx),
-      child: SendButtonView(sendButton: row.sendButton),
+      child: SendButtonView(
+        sendButton: sb,
+        bg: sb == null ? null : backendHex(sb['bg'] as String?, const Color(0xFFEDEFF2)),
+        fg: sb == null ? null : backendHex(sb['fg'] as String?, const Color(0xFF5A6472)),
+        border: sb == null ? null : backendHex(sb['border'] as String?, const Color(0xFFD3D8DF)),
+      ),
     ));
   }
 
@@ -4821,28 +4856,19 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     );
   }
 
+  // CHANGE #607 — the Supplier Orders header is columns[], nothing else.
+  //
+  // Deleted here: the literals 'SUPPLIER', 'DESCRIPTION', 'AMOUNT', 'STATUS',
+  // 'DATE' and every hardcoded flex beside them. The live config orders the
+  // table SUPPLIER / PO / STATUS / AMOUNT / ITEMS / SEND — note DESCRIPTION and
+  // DATE are not in it, so they no longer occupy desktop columns (both still
+  // render on the mobile card, which is not a columns[] surface).
   Widget _ordersTableHeader() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 10),
-      decoration: const BoxDecoration(
-        color: Color(0xFFF9FAFB),
-        border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
-      ),
-      child: Row(children: [
-        _th('SUPPLIER', flex: 4),
-        _th('DESCRIPTION', flex: 5),
-        _th('AMOUNT', flex: 2),
-        _th('STATUS', flex: 3),
-        _th('DATE', flex: 3),
-        const SizedBox(width: 72),
-      ]),
-    );
+    RenderLog.write('c607_sup_cols', _ordersColumns.length);
+    return BackendTableHeader(columns: _ordersColumns);
   }
 
   Widget _desktopOrderRow(_OrderRow row) {
-    // CHANGE #606 — date_label, verbatim. Was a DateLabels lookup off a raw
-    // created_at with an em-dash the app invented when it was null.
-    final dateStr = row.rs('date_label');
     final isExpanded = _expandedOrderId == row.id;
     final currentItems = _currentItemsFor(row); // CHANGE #277
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -4858,63 +4884,19 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             color: Colors.white,
             border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
           ),
-          child: Row(children: [
-            Expanded(flex: 4, child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // CHANGE #606 — `title` (the backend resolves the unnamed
-                // supplier), then code_label and order_no_label, each drawn
-                // only when its own show_* flag says so.
-                Text(row.rs('title'),
-                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
-                    overflow: TextOverflow.ellipsis),
-                if (row.rb('show_code')) ...[
-                  const SizedBox(height: 1),
-                  Builder(builder: (_) {
-                    try { RenderLog.write('c318_ord_id', row.rs('code_label')); } catch (_) {}
-                    return Text(row.rs('code_label'),
-                        style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w500,
-                            color: Color(0xFF9CA3AF), letterSpacing: 0.3),
-                        overflow: TextOverflow.ellipsis);
-                  }),
-                ],
-                if (row.rb('show_order_no')) ...[
-                  const SizedBox(height: 1),
-                  Text(row.rs('order_no_label'),
-                      style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w500,
-                          color: Color(0xFF9CA3AF), letterSpacing: 0.3),
-                      overflow: TextOverflow.ellipsis),
-                ],
-              ],
-            )),
-            // The render-ready RPC carries no description; this is the raw
-            // column, passed through untouched, and skipped when absent.
-            Expanded(flex: 5, child: Text(row.description ?? '',
-                style: const TextStyle(fontSize: 13, color: Color(0xFF374151)), overflow: TextOverflow.ellipsis)),
-            // CHANGE #606 — amount_label / items_label / status_chip, verbatim.
-            Expanded(flex: 2, child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(row.rs('amount_label'),
-                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
-                Text(row.rs('items_label'),
-                    style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
-              ],
-            )),
-            Expanded(flex: 3, child: BackendChip(chip: row.rchip('status_chip'))),
-            Expanded(flex: 3, child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(dateStr, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
-                Text(row.rs('time_label'),
-                    style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
-              ],
-            )),
-            _buildOrderSendButton(row),
-          ]),
+          // ── CHANGE #607 — every cell comes from columns[] ────────────────
+          //
+          // Gone from here: the hand-built title/code/order_no column at a
+          // hardcoded flex:4, the description cell at flex:5, the amount+items
+          // stack at flex:2, the status chip at flex:3, the date+time stack at
+          // flex:3, and the send button pinned last. The payload names the
+          // keys, their widths, their alignment and their order; the
+          // type:"button" column is what places the send button now.
+          child: BackendTableRowCells(
+            columns: _ordersColumns,
+            row: row.render,
+            buttonBuilder: (_) => _buildOrderSendButton(row),
+          ),
         ),
       ),
       if (isExpanded) _buildOrderItemsPanel(currentItems, padH: 28), // CHANGE #277: show current items only
@@ -11828,26 +11810,64 @@ class InquirySendButton extends StatelessWidget {
 // unit-testable in isolation.
 class SendButtonView extends StatelessWidget {
   final Map<String, dynamic>? sendButton;
-  const SendButtonView({super.key, required this.sendButton});
+
+  /// CHANGE #607 — colours the caller obtained from the backend, when its
+  /// payload carries them. See the class comment for why this is a parameter
+  /// and not a lookup.
+  final Color? bg;
+  final Color? fg;
+  final Color? border;
+
+  const SendButtonView({
+    super.key,
+    required this.sendButton,
+    this.bg,
+    this.fg,
+    this.border,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final label = sendButton?['label'] as String? ?? 'Send';
-    final tone = sendButton?['tone'] as String? ?? 'yellow';
-    final bg = tone == 'green' ? const Color(0xFFD1FAE5) : const Color(0xFFFEF3C7);
-    final fg = tone == 'green' ? const Color(0xFF065F46) : const Color(0xFF92400E);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: fg.withValues(alpha: 0.3)),
+    // CHANGE #607 — the tone -> hex map is DELETED from the Orders path.
+    //
+    // It was `tone == 'green' ? #D1FAE5 : #FEF3C7` for the fill and
+    // `#065F46 : #92400E` for the text — a two-entry palette in Dart that had
+    // to be kept in step with app_settings.ui_tone_colors by hand, and which
+    // silently painted every non-green tone yellow. _sup_order_send_state now
+    // merges tone_colors() into the object, so the Orders tab passes real
+    // bg/fg/border down and nothing is derived here.
+    //
+    // The admin INQUIRY tab is a different call path: its button comes from
+    // _sup_inquiry_send_state(), which still returns only {state,label,tone}
+    // and no colours. Per the brief that path is left untouched, so when no
+    // colours are supplied this falls back to the neutral chip palette rather
+    // than guessing a tone. Adding `|| public.tone_colors(b->>'tone')` to that
+    // one function is all it would take to retire the fallback.
+    final label = sendButton?['label'] as String? ?? '';
+    if (label.isEmpty) return const SizedBox.shrink();
+    final enabled = sendButton == null ||
+        !sendButton!.containsKey('enabled') ||
+        sendButton!['enabled'] == true;
+    final cBg = bg ?? const Color(0xFFEDEFF2);
+    final cFg = fg ?? const Color(0xFF5A6472);
+    final cBorder = border ?? cBg;
+    return Opacity(
+      opacity: enabled ? 1.0 : 0.5,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: cBg,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: cBorder),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.send_outlined, size: 13, color: cFg),
+          const SizedBox(width: 4),
+          Text(label,
+              style: TextStyle(
+                  fontSize: 12, fontWeight: FontWeight.w600, color: cFg)),
+        ]),
       ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(Icons.send_outlined, size: 13, color: fg),
-        const SizedBox(width: 4),
-        Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: fg)),
-      ]),
     );
   }
 }

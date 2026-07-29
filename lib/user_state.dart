@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/widgets.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'models/app_session.dart';
 import 'models/user_profile.dart';
 import 'screens/auth/google_flow.dart';
 import 'services/gis_auth.dart';
@@ -27,6 +28,8 @@ class AuthNotifier extends ChangeNotifier {
   // distinct from a clean "no row" result, so the Profile screen can show a
   // retry option instead of wrongly claiming the user is unregistered.
   bool _profileFetchError = false;
+  // CHANGE #570: the my_session() response. Null means "not resolved yet".
+  AppSession? _session;
 
   bool get loading => _loading;
   bool get profileLoading => _profileLoading;
@@ -41,6 +44,20 @@ class AuthNotifier extends ChangeNotifier {
   bool get isAuthenticated =>
       Supabase.instance.client.auth.currentUser != null;
   UserProfile? get profile => _profile;
+
+  /// CHANGE #570 / RULE 1 — the my_session() response, the one place role,
+  /// account, display name and landing route come from.
+  AppSession? get session => _session;
+
+  /// The backend's landing route for this session. Null until my_session() has
+  /// answered — callers must hold a neutral loading state rather than assume a
+  /// destination (RULE 2).
+  String? get homeRoute => _session?.homeRoute;
+
+  /// False while a signed-in user's my_session() call is still outstanding (or
+  /// failed). Nothing that depends on the role may render a default surface
+  /// until this is true.
+  bool get sessionResolved => !isAuthenticated || _session != null;
 
   /// True when logged in AND has submitted a pharmacy_profiles row.
   bool get isRegistered => isAuthenticated && _profile != null;
@@ -105,7 +122,7 @@ class AuthNotifier extends ChangeNotifier {
       try {
         await Future.wait([
           _loadProfile(user.id),
-          _resolveRole(user.email ?? ''),
+          _resolveRole(),
         ]);
       } catch (_) {
         // Profile/role failure must NOT clear the session.
@@ -150,7 +167,7 @@ class AuthNotifier extends ChangeNotifier {
           try {
             await Future.wait([
               _loadProfile(user.id),
-              _resolveRole(user.email ?? ''),
+              _resolveRole(),
             ]);
           } catch (_) {
             // Profile/role failure must NOT clear the session.
@@ -212,7 +229,7 @@ class AuthNotifier extends ChangeNotifier {
           _initDone = true;
           await Future.wait([
             _loadProfile(user.id),
-            _resolveRole(user.email ?? ''),
+            _resolveRole(),
           ]);
           _loading = false;
           notifyListeners();
@@ -221,7 +238,7 @@ class AuthNotifier extends ChangeNotifier {
           notifyListeners();
           await Future.wait([
             _loadProfile(user.id),
-            _resolveRole(user.email ?? ''),
+            _resolveRole(),
           ]);
           _profileLoading = false;
           notifyListeners();
@@ -255,6 +272,7 @@ class AuthNotifier extends ChangeNotifier {
         _supplierName = null;
         _supplierId = null;
         _supplierStatus = null;
+        _session = null; // CHANGE #570
         _profileChannel?.unsubscribe();
         _profileChannel = null;
         FulfillRealtime.instance.onAuthInactive(); // C355: drop the app-level socket
@@ -291,6 +309,7 @@ class AuthNotifier extends ChangeNotifier {
       _supplierName = null;
       _supplierId = null;
       _supplierStatus = null;
+      _session = null; // CHANGE #570
       _profileChannel?.unsubscribe();
       _profileChannel = null;
       FulfillRealtime.instance.onAuthInactive(); // C355: drop the app-level socket
@@ -405,31 +424,47 @@ class AuthNotifier extends ChangeNotifier {
     } catch (_) {}
   }
 
-  Future<void> _resolveRole(String email) async {
-    if (email.isEmpty) {
-      _isAdmin = false;
-      _isSuperAdmin = false;
-      _isSupplier = false;
-      _supplierName = null;
-      _supplierId = null;
-      _supplierStatus = null;
-      return;
-    }
+  /// CHANGE #570 / RULE 1 + RULE 2 — the role comes from my_session() and from
+  /// nothing else.
+  ///
+  /// WHAT WAS WRONG: this asked get_my_role() for the admin bits and then
+  /// re-derived supplier-ness from `claim_supplier_profile(p_email:)` — keyed
+  /// on the auth user's EMAIL. The WhatsApp OTP path mints a synthetic address
+  /// (`8357881873@wa.medibo.in`), which matches no supplier row, so
+  /// claim_supplier_profile returned 'not_found', _isSupplier stayed false and
+  /// HomeShell fell through to the customer storefront — even though
+  /// my_session() said role=supplier, home_route=/supplier for that very user.
+  /// Logging in with the real email worked purely because the email happened to
+  /// match. my_session() resolves through login_identities (email OR phone), so
+  /// it is right on every path.
+  ///
+  /// The email parameter is gone on purpose: no login path may depend on the
+  /// account having a real email address.
+  Future<void> _resolveRole() async {
     try {
-      final role = await Supabase.instance.client.rpc('get_my_role') as String;
-      RenderLog.write('auth_role', role);
-      RenderLog.write('c308_role', role); // CHANGE #308
-      RenderLog.write('c310_role', role); // CHANGE #310
-      _isAdmin = role == 'super_admin' || role == 'admin';
-      _isSuperAdmin = role == 'super_admin';
-      _isSupplier = false;
-      _supplierName = null;
-      _supplierId = null;
-      _supplierStatus = null;
+      final raw = await Supabase.instance.client.rpc('my_session');
+      final session = AppSession.fromJson(Map<String, dynamic>.from(raw as Map));
+      _session = session;
 
-      if (!_isAdmin) {
-        // Resolve supplier details (approved or pending).
-        await _checkSupplierStatus(email);
+      RenderLog.write('auth_role', session.role);
+      RenderLog.write('c308_role', session.role); // CHANGE #308
+      RenderLog.write('c310_role', session.role); // CHANGE #310
+      RenderLog.write('c570_home_route', session.homeRoute);
+
+      _isAdmin = session.isAdmin;
+      _isSuperAdmin = session.isSuperAdmin;
+      _isSupplier = session.isSupplier;
+      _supplierName = session.isSupplier ? session.displayName : null;
+      _supplierId = session.supplierId;
+      _supplierStatus = session.isSupplier ? 'ok' : null;
+
+      // A session that is neither admin nor supplier may still be a supplier
+      // AWAITING APPROVAL, which my_session() does not carry. This is the only
+      // thing claim_supplier_profile is still consulted for, exactly as the
+      // CHANGE #558 AppSession contract specifies: it distinguishes an
+      // unapproved supplier from a plain customer, and never decides the role.
+      if (!_isAdmin && !_isSupplier) {
+        await _checkPendingSupplier();
       }
 
       // Log routing destination after all role data is resolved. CHANGE #308
@@ -440,6 +475,8 @@ class AuthNotifier extends ChangeNotifier {
       // for the whole session so cross-device changes arrive without a reload.
       _maybeActivateFulfillRealtime();
     } catch (_) {
+      // Leave _session null — the shells hold their neutral loading state
+      // rather than falling back to a default surface (RULE 2).
       _isAdmin = false;
       _isSuperAdmin = false;
       _isSupplier = false;
@@ -447,25 +484,29 @@ class AuthNotifier extends ChangeNotifier {
     }
   }
 
-  // Resolve supplier role by calling claim_supplier_profile RPC.
-  Future<void> _checkSupplierStatus(String email) async {
+  /// CHANGE #570 — 'pending_approval' ONLY. my_session() already decided that
+  /// this account is not an approved supplier; this call may never promote it
+  /// to one, so a 'ok' verdict here is deliberately ignored. It exists solely
+  /// so an unapproved supplier still gets the waiting screen instead of the
+  /// storefront.
+  ///
+  /// Still email-keyed, because claim_supplier_profile takes p_email and this
+  /// change does not touch RPCs — so a PENDING supplier logging in by phone
+  /// (synthetic address) will not be recognised as pending. Approved suppliers,
+  /// the reported bug, are unaffected: they never reach this path.
+  Future<void> _checkPendingSupplier() async {
+    final email = Supabase.instance.client.auth.currentUser?.email ?? '';
+    if (email.isEmpty) return;
     try {
       final res = await Supabase.instance.client
           .rpc('claim_supplier_profile', params: {'p_email': email}) as Map;
       final status = res['status'] as String? ?? 'not_found';
-      _supplierStatus = status;
-      if (status == 'ok') {
-        _isSupplier = true;
+      if (status == 'pending_approval') {
+        _supplierStatus = 'pending_approval';
         _supplierName = res['supplier_name'] as String?;
-        _supplierId   = res['id'] as String?;
-      } else {
-        _isSupplier = false;
-        _supplierName = status == 'pending_approval' ? res['supplier_name'] as String? : null;
-        _supplierId   = null;
       }
     } catch (_) {
-      _isSupplier = false;
-      _supplierStatus = null;
+      // Non-fatal: the session already said "not an approved supplier".
     }
   }
 

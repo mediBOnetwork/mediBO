@@ -1414,13 +1414,11 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
 
   Future<void> _adminSoftRemoveItem(int itemId) async {
     try {
+      // #577 — removed_at came from the DEVICE clock and the only thing
+      // stopping a non-admin was RLS. The RPC stamps server time and states
+      // the admin check in the database.
       await Supabase.instance.client
-          .from('cart_items')
-          .update({
-            'removed_by_admin': true,
-            'removed_at': DateTime.now().toUtc().toIso8601String(),
-          })
-          .eq('id', itemId);
+          .rpc('admin_cart_remove_item', params: {'p_item_id': itemId});
       _load(showSpinner: false);
     } catch (e) {
       if (mounted) {
@@ -4680,44 +4678,28 @@ class _AdminAddItemDialogState extends State<_AdminAddItemDialog> {
     if (item == null || _adding) return;
     setState(() => _adding = true);
     try {
+      // CHANGE #577 — admin_cart_add() owns this entirely.
+      //
+      // CLAUDE.md names this violation by name: never .from('cart_items').
+      // The old code SELECTed and then INSERTed/UPDATEd cart_items directly,
+      // keyed on user_id (the LOGIN, not the account — the cart-vanishing
+      // bug), merged the quantity itself
+      //     newQty = wasRemoved ? qty : existing.quantity + qty
+      // set the PRICE from the client ('price': mrp), invented defaults
+      // (gst ?? 12, category ?? 'Other'), stamped updated_at from the DEVICE
+      // clock, and wrote added_by: 'admin' as a literal rather than a person.
+      //
+      // The RPC takes only WHO, WHAT and HOW MANY. Price, MRP, GST, category,
+      // pack size and manufacturer are read from MEDICINE server-side; the
+      // quantity merge, the timestamp and the acting admin are resolved there
+      // too. It also accepts either an account id or an auth user id and
+      // resolves one to the other, because that is a backend question.
       final productId = item['id'].toString();
-      final mrp = _parseMrp(item['mrp']);
-
-      final existingList = await Supabase.instance.client
-          .from('cart_items')
-          .select('id, quantity, removed_by_admin')
-          .eq('user_id', widget.userId)
-          .eq('product_id', productId);
-
-      if (existingList.isNotEmpty) {
-        final existing = Map<String, dynamic>.from(existingList.first as Map);
-        final wasRemoved = (existing['removed_by_admin'] as bool?) ?? false;
-        final newQty =
-            wasRemoved ? _qty : (existing['quantity'] as int) + _qty;
-        await Supabase.instance.client.from('cart_items').update({
-          'quantity': newQty,
-          'removed_by_admin': false,
-          'updated_at': DateTime.now().toIso8601String(),
-        }).eq('id', existing['id'] as int);
-      } else {
-        await Supabase.instance.client.from('cart_items').insert({
-          'user_id':      widget.userId,
-          'product_id':   productId,
-          'product_name': item['product_name'] as String? ?? '',
-          'price':        mrp,
-          'mrp':          mrp,
-          'quantity':     _qty,
-          'image_url':    (item['image_url_1'] as String?) ?? '',
-          'manufacturer': (item['marketer']    as String?) ?? '',
-          'pack_size':    (item['pack_qty']    as String?) ??
-              (item['pack_size'] as String?) ?? '',
-          'category':     (item['therapeutic_class'] as String?) ?? 'Other',
-          'gst_percent':  (item['gst_percent'] as num?)?.toInt() ?? 12,
-          'added_by':     'admin',
-          'removed_by_admin': false,
-          'updated_at':   DateTime.now().toIso8601String(),
-        });
-      }
+      await Supabase.instance.client.rpc('admin_cart_add', params: {
+        'p_customer_id': widget.userId,
+        'p_product_id': productId,
+        'p_qty': _qty,
+      });
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
       if (mounted) {

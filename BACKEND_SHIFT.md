@@ -261,6 +261,44 @@ be wired up again.
 
 Direct table writes: **47 → 41** repo-wide (this file 24 → 18).
 
+### CHANGE #577 — admin cart writes (the violation CLAUDE.md names by name)
+
+`.from('cart_items')` is called out explicitly in CLAUDE.md. Two admin paths
+still did it:
+
+**Add item** — SELECTed then INSERTed/UPDATEd `cart_items` directly:
+
+| Problem | Detail |
+|---|---|
+| **Login keying** | `.eq('user_id', widget.userId)` — the cart-vanishing bug |
+| **App merges quantity** | `newQty = wasRemoved ? qty : existing.quantity + qty` |
+| **App sets the PRICE** | `'price': mrp, 'mrp': mrp` — the client decided what to charge |
+| Invented defaults | `gst_percent ?? 12`, `category ?? 'Other'` |
+| Device clock | `updated_at: DateTime.now()` |
+| Identity | `added_by: 'admin'` — a literal, not a person |
+
+`admin_writeas_cart_upsert()` already existed but still took `price`, `mrp`,
+`category` and `gst` **from the client** — the same violation moved into a
+function signature. `admin_cart_add(customer_id, product_id, qty)` takes only
+WHO / WHAT / HOW MANY; everything else is read from `MEDICINE` server-side.
+It accepts either an account id or an auth user id and resolves one to the
+other, because that is a backend question, not the caller's.
+
+**Soft-remove** — `removed_at` from the device clock, admin check nowhere but
+RLS. Now `admin_cart_remove_item(item_id)`.
+
+**Verified** (rolled-back probes):
+
+- **a customer calling either RPC is refused: `forbidden`**
+- add 2, then add 3 → quantity **5** (merge decided server-side)
+- price **131.25** read from the catalogue, GST 12 from `MEDICINE`
+- `added_by` = **test.admin@medibo.in**, `customer_id` stamped, server clock
+- passing an **auth user id** resolves to the right account
+  (`customer_id_matches: true`)
+- production untouched: 0 test rows, 44 cart rows unchanged
+
+**Zero `.from('cart_items')` writes remain.** Direct table writes: **47 → 39**.
+
 ---
 
 ## Remaining — with the decision each still makes

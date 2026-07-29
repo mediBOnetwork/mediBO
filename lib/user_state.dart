@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/widgets.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'app_navigator.dart';
+import 'models/app_session.dart';
 import 'models/user_profile.dart';
 import 'screens/auth/google_flow.dart';
 import 'services/gis_auth.dart';
@@ -42,6 +44,60 @@ class AuthNotifier extends ChangeNotifier {
       Supabase.instance.client.auth.currentUser != null;
   UserProfile? get profile => _profile;
 
+  // ── CHANGE #571: the session, and the account it belongs to ───────────────
+  //
+  // The shell used to pick its surface from _isAdmin/_isSupplier and keep
+  // whatever it had last drawn. After logout those booleans flipped, the nav
+  // redrew from them — and the body did not, because nothing told the shell
+  // its account had changed. These three fields are that signal.
+
+  /// The last resolved `my_session()`. Never null: before the first resolve,
+  /// and for the whole of a signed-out session, it is [AppSession.signedOut].
+  AppSession _session = AppSession.signedOut;
+
+  /// True while a `my_session()` for a NEW account is in flight. The shell
+  /// renders the neutral loading state for the whole of it — never the
+  /// previous account's screen, never a guessed default.
+  bool _sessionResolving = false;
+
+  /// Bumped once per account change. The shell compares it and throws away
+  /// every scrap of per-account state when it moves.
+  int _accountEpoch = 0;
+
+  /// The auth user id [_session] was resolved for. A signedIn/tokenRefreshed
+  /// event whose user id still matches this is a token refresh, not a new
+  /// account, and must NOT clear anything.
+  String _sessionAuthUserId = '';
+
+  AppSession get session => _session;
+  bool get sessionResolving => _sessionResolving;
+  int get accountEpoch => _accountEpoch;
+
+  /// RULE 4 — the cached session must belong to the auth user the SDK is
+  /// holding right now, or nothing account-shaped may render.
+  ///
+  /// A signed-out session is exempt, and that exemption is load-bearing: it is
+  /// also what [_fetchSession] falls back to when the backend is unreachable.
+  /// Without it an unreachable backend would read as "mismatch" forever and
+  /// pin the app on a spinner. A signed-out payload carries no account, so it
+  /// cannot be the wrong account's data — the worst it can do is show the
+  /// public storefront, which is what a failed role lookup already did.
+  bool get _matchesAuthUser {
+    if (!_session.signedIn) return true;
+    final live = Supabase.instance.client.auth.currentUser?.id ?? '';
+    return _session.authUserId == live;
+  }
+
+  /// The one question the shell asks: which surface am I allowed to draw?
+  /// The answer is the backend's `surface` string, resolved in [AppSession].
+  AccountSurface surfaceFor({bool actingAsCustomer = false}) {
+    if (_sessionResolving) return AccountSurface.unresolved;
+    return _session.surface(
+      matchesAuthUser: _matchesAuthUser,
+      actingAsCustomer: actingAsCustomer,
+    );
+  }
+
   /// True when logged in AND has submitted a pharmacy_profiles row.
   bool get isRegistered => isAuthenticated && _profile != null;
 
@@ -54,6 +110,7 @@ class AuthNotifier extends ChangeNotifier {
   static String? pendingSelftestEmail;
 
   late final StreamSubscription<AuthState> _sub;
+  Timer? _resolveWatchdog;
   // Prevents _init() and initialSession from both finalising loading state.
   bool _initDone = false;
   // True once boot confirmed a valid session (fast-path or initialSession with user).
@@ -83,6 +140,188 @@ class AuthNotifier extends ChangeNotifier {
     } catch (_) {}
   }
 
+  // ── CHANGE #571: account change ───────────────────────────────────────────
+
+  /// Asks the backend who this is. Bounded and retried, because the caller is
+  /// showing a spinner until it returns and a hung request must not become an
+  /// infinite one.
+  ///
+  /// On total failure it returns [AppSession.signedOut]. That is the fail-safe
+  /// direction and it is deliberate: the signed-out surface is the only one
+  /// that cannot show another account's data. The login screen re-asks
+  /// `my_session()` as soon as it paints, so a network blip during an account
+  /// switch heals itself instead of stranding anyone.
+  Future<AppSession> _fetchSession() async {
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        final raw = await Supabase.instance.client
+            .rpc('my_session')
+            .timeout(const Duration(seconds: 4));
+        if (raw is Map) {
+          return AppSession.fromJson(Map<String, dynamic>.from(raw));
+        }
+      } catch (_) {
+        // fall through to the retry / signed-out fallback
+      }
+      if (attempt == 0) {
+        await Future.delayed(const Duration(milliseconds: 300));
+      }
+    }
+    RenderLog.write('c571_session_failed', '1');
+    return AppSession.signedOut;
+  }
+
+  /// Publishes a freshly fetched session. `supplier_status` is stapled on here
+  /// because it comes from a different RPC (`claim_supplier_profile`) that has
+  /// just finished alongside it, and [AppSession.surface] needs both to tell a
+  /// supplier awaiting approval from a plain customer.
+  void _applyResolvedSession(AppSession resolved) {
+    _session = resolved.withSupplierStatus(_supplierStatus);
+    _sessionAuthUserId = _session.authUserId;
+    RenderLog.write('c571_surface', _session.surfaceName);
+  }
+
+  /// Belt-and-braces for the BOOT RESILIENCE RULE: whatever happens inside
+  /// [_fetchSession], the neutral loading state is never permanent.
+  void _armResolveWatchdog(int epoch) {
+    _resolveWatchdog?.cancel();
+    _resolveWatchdog = Timer(const Duration(seconds: 10), () {
+      if (epoch != _accountEpoch || !_sessionResolving) return;
+      _sessionResolving = false;
+      _loading = false;
+      RenderLog.write('c571_resolve_watchdog', 'forced;epoch=$epoch');
+      notifyListeners();
+    });
+  }
+
+  /// Everything this app knows about an account, dropped.
+  ///
+  /// The cart, the order list and the acting-as selection are cleared by their
+  /// own owners — [CartModel] on the same auth event, ViewAs from main.dart on
+  /// the epoch bump — because they own that state and this class must not
+  /// reach across and hold a second copy of it.
+  void _clearAccountState() {
+    _profile = null;
+    _needsProfile = false;
+    _profileLoading = false;
+    _profileFetchError = false;
+    _isAdmin = false;
+    _isSuperAdmin = false;
+    _isSupplier = false;
+    _supplierName = null;
+    _supplierId = null;
+    _supplierStatus = null;
+    _profileChannel?.unsubscribe();
+    _profileChannel = null;
+    FulfillRealtime.instance.onAuthInactive(); // drop the app-level socket
+  }
+
+  /// The ONE handler for "the account on screen is no longer the account we
+  /// are signed in as" — logout, login, and a switch straight from one account
+  /// to another. Rule 4 of the change: all three take this same path, so a
+  /// switch between accounts cannot show the previous account's screen either.
+  ///
+  /// Order matters. Clear first and publish that immediately, so the frame
+  /// after the auth event already shows the neutral loading state. Only then
+  /// ask the backend who we are, and only then navigate.
+  Future<void> _onAccountChanged(String reason) async {
+    final epoch = ++_accountEpoch;
+    RenderLog.write('c571_account_changed', '$reason;epoch=$epoch');
+    _armResolveWatchdog(epoch);
+
+    _sessionResolving = true;
+    _session = AppSession.signedOut;
+    _sessionAuthUserId = '';
+    _clearAccountState();
+    RenderLog.write('c571_cleared', reason);
+    notifyListeners();
+
+    // Take the previous account's screens off the glass NOW, before waiting on
+    // anything. The root route is the shell, and the shell is already showing
+    // the neutral loading state after the notify above — but a pushed screen
+    // (Bags, WhatsApp, Manage Admins, any open dialog) sits ON TOP of it and
+    // would stay there, fully visible, for the whole of the my_session() round
+    // trip. home_route replaces the stack properly once it arrives; this is
+    // just what happens in the meantime.
+    _popToRoot();
+
+    final live = Supabase.instance.client.auth.currentUser;
+    AppSession resolved;
+    if (live == null) {
+      // Nobody is signed in. my_session() would answer the signed-out payload
+      // and we already hold an identical copy of it — but home_route has to
+      // come from the backend, so ask anyway rather than assume '/login'.
+      resolved = await _fetchSession();
+    } else {
+      // Role/profile feed the parts of the app that have not moved onto the
+      // session object yet; they resolve alongside it, never after render.
+      final results = await Future.wait<Object?>([
+        _fetchSession(),
+        _loadProfile(live.id).then<Object?>((_) => null),
+        _resolveRole(live.email ?? '').then<Object?>((_) => null),
+      ]);
+      resolved = results.first as AppSession;
+    }
+
+    if (epoch != _accountEpoch) {
+      // A newer account change started while we were waiting. It owns the
+      // screen now; anything we publish here would be one account stale.
+      RenderLog.write('c571_stale_resolve', 'epoch=$epoch');
+      return;
+    }
+
+    _resolveWatchdog?.cancel();
+    _applyResolvedSession(resolved);
+    _sessionResolving = false;
+    _loading = false;
+    notifyListeners();
+
+    _goToHomeRoute(_session.homeRoute, reason);
+  }
+
+  /// Drops everything pushed over the root route. Best-effort: if there is no
+  /// navigator yet there is also nothing on it.
+  void _popToRoot() {
+    try {
+      final nav = appNavigatorKey.currentState;
+      if (nav == null || !nav.canPop()) return;
+      nav.popUntil((r) => r.isFirst);
+      RenderLog.write('c571_popped_to_root', '1');
+    } catch (e) {
+      final msg = e.toString();
+      RenderLog.write(
+          'c571_pop_error', msg.length > 80 ? msg.substring(0, 80) : msg);
+    }
+  }
+
+  /// Replaces the entire stack with the backend's `home_route`. Not a pop, not
+  /// a push over the top: anything still on the stack belongs to the account
+  /// that just went away — a pushed admin sub-screen, an open dialog, the
+  /// shell itself — and popping would only uncover more of it.
+  void _goToHomeRoute(String route, String reason) {
+    if (route.isEmpty) return;
+    final nav = appNavigatorKey.currentState;
+    if (nav == null) {
+      RenderLog.write('c571_nav_skipped', 'no_navigator');
+      return;
+    }
+    if (appRouteTracker.currentRouteName == route) {
+      // Already exactly where the backend wants us — the login screen does its
+      // own landing for the sign-in it drove. Pushing again would rebuild the
+      // shell for nothing.
+      RenderLog.write('c571_nav_skipped', 'already_on:$route');
+      return;
+    }
+    try {
+      nav.pushNamedAndRemoveUntil(route, (r) => false);
+      RenderLog.write('c571_nav', '$reason:$route');
+    } catch (e) {
+      final msg = e.toString();
+      RenderLog.write(
+          'c571_nav_error', msg.length > 80 ? msg.substring(0, 80) : msg);
+    }
+  }
+
   // Fast-path: if currentUser is already available synchronously (SDK restored
   // session before AuthNotifier was created), resolve loading immediately.
   // Otherwise gate on _onAuthChange(initialSession) which fires from BehaviorSubject.
@@ -103,10 +342,16 @@ class AuthNotifier extends ChangeNotifier {
       RenderLog.write('auth55_restore',
           'initialSession user=${user.email ?? 'null'}; logged_in=true; from=restored_session');
       try {
-        await Future.wait([
-          _loadProfile(user.id),
-          _resolveRole(user.email ?? ''),
+        // CHANGE #571 — the session resolves as part of the boot gate, not
+        // after it, so the shell never paints a surface it had to guess.
+        // No navigation here: on boot the URL the user arrived on wins, or a
+        // deep link into /orders would bounce to home_route on every reload.
+        final results = await Future.wait<Object?>([
+          _fetchSession(),
+          _loadProfile(user.id).then<Object?>((_) => null),
+          _resolveRole(user.email ?? '').then<Object?>((_) => null),
         ]);
+        _applyResolvedSession(results.first as AppSession);
       } catch (_) {
         // Profile/role failure must NOT clear the session.
       }
@@ -148,10 +393,14 @@ class AuthNotifier extends ChangeNotifier {
           RenderLog.write('auth55_restore',
               'initialSession user=${user.email ?? 'null'}; logged_in=true; from=restored_session');
           try {
-            await Future.wait([
-              _loadProfile(user.id),
-              _resolveRole(user.email ?? ''),
+            // CHANGE #571 — same as the fast path in _init(): resolve the
+            // session inside the boot gate, and do not navigate.
+            final results = await Future.wait<Object?>([
+              _fetchSession(),
+              _loadProfile(user.id).then<Object?>((_) => null),
+              _resolveRole(user.email ?? '').then<Object?>((_) => null),
             ]);
+            _applyResolvedSession(results.first as AppSession);
           } catch (_) {
             // Profile/role failure must NOT clear the session.
           }
@@ -208,21 +457,42 @@ class AuthNotifier extends ChangeNotifier {
       if (user != null) {
         RenderLog.write('auth_email', user.email ?? 'unknown');
         if (_loading) {
-          // We broke through the guard — take over loading state.
+          // We broke through the guard — take over loading state. Still boot:
+          // resolve, do not navigate, the arrival URL wins.
           _initDone = true;
-          await Future.wait([
-            _loadProfile(user.id),
-            _resolveRole(user.email ?? ''),
+          final results = await Future.wait<Object?>([
+            _fetchSession(),
+            _loadProfile(user.id).then<Object?>((_) => null),
+            _resolveRole(user.email ?? '').then<Object?>((_) => null),
           ]);
+          _applyResolvedSession(results.first as AppSession);
           _loading = false;
           notifyListeners();
+        } else if (user.id != _sessionAuthUserId) {
+          // CHANGE #571 rule 4 — the account on screen is not this account.
+          // A fresh login, or a switch straight from one account to another;
+          // either way the previous account's screens must not survive it.
+          //
+          // Keyed on the auth user id rather than the event name on purpose:
+          // `setSession(refreshToken)` — the WhatsApp OTP login — resolves
+          // through gotrue's refresh path and emits tokenRefreshed, not
+          // signedIn (CHANGE #566). Testing the account catches every login
+          // method whichever constant the SDK picks for it, and just as
+          // importantly a routine hourly token refresh keeps the SAME id and
+          // so falls through to the quiet branch below instead of tearing the
+          // user's screen down mid-session.
+          await _onAccountChanged(state.event.name);
         } else {
+          // Same account, new token. Nothing account-shaped changed: refresh
+          // profile and role in place, keep the screen exactly as it is.
           _profileLoading = true;
           notifyListeners();
-          await Future.wait([
-            _loadProfile(user.id),
-            _resolveRole(user.email ?? ''),
+          final results = await Future.wait<Object?>([
+            _fetchSession(),
+            _loadProfile(user.id).then<Object?>((_) => null),
+            _resolveRole(user.email ?? '').then<Object?>((_) => null),
           ]);
+          _applyResolvedSession(results.first as AppSession);
           _profileLoading = false;
           notifyListeners();
         }
@@ -246,21 +516,12 @@ class AuthNotifier extends ChangeNotifier {
             'getSessionBefore=${Supabase.instance.client.auth.currentSession != null ? 'yes' : 'no'}; '
             'explicit=true; $storageInfo; '
             'build=${RenderLog.buildHash}; change=65');
-        _profile = null;
-        _needsProfile = false;
-        _profileLoading = false;
-        _isAdmin = false;
-        _isSuperAdmin = false;
-        _isSupplier = false;
-        _supplierName = null;
-        _supplierId = null;
-        _supplierStatus = null;
-        _profileChannel?.unsubscribe();
-        _profileChannel = null;
-        FulfillRealtime.instance.onAuthInactive(); // C355: drop the app-level socket
         RenderLog.write('auth_email', 'signed_out');
         RenderLog.write('auth_role', 'none');
-        notifyListeners();
+        // CHANGE #571 — clearing the fields is only half of it. The screen the
+        // previous account was looking at is still mounted, and the routes it
+        // pushed are still on the stack, until this runs.
+        await _onAccountChanged('signedOut_explicit');
         return;
       }
 
@@ -282,21 +543,9 @@ class AuthNotifier extends ChangeNotifier {
           'getSessionBefore=no; explicit=false; $storageInfo; '
           'build=${RenderLog.buildHash}; change=65');
       _explicitSignOut = false;
-      _profile = null;
-      _needsProfile = false;
-      _profileLoading = false;
-      _isAdmin = false;
-      _isSuperAdmin = false;
-      _isSupplier = false;
-      _supplierName = null;
-      _supplierId = null;
-      _supplierStatus = null;
-      _profileChannel?.unsubscribe();
-      _profileChannel = null;
-      FulfillRealtime.instance.onAuthInactive(); // C355: drop the app-level socket
       RenderLog.write('auth_email', 'signed_out');
       RenderLog.write('auth_role', 'none');
-      notifyListeners();
+      await _onAccountChanged('signedOut_sdk');
     }
   }
 
@@ -531,6 +780,7 @@ class AuthNotifier extends ChangeNotifier {
   @override
   void dispose() {
     _sub.cancel();
+    _resolveWatchdog?.cancel();
     _profileChannel?.unsubscribe();
     super.dispose();
   }

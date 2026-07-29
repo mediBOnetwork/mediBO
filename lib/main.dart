@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'app_navigator.dart';
 import 'app_state.dart';
 import 'order_hours_state.dart';
 import 'inquiry_lock_state.dart';
@@ -211,6 +212,7 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
   final OrderHoursModel _orderHours = OrderHoursModel();
   final InquiryLockModel _inquiryLock = InquiryLockModel();
   bool _viewAsRestored = false;
+  int _seenAccountEpoch = 0;
 
   @override
   void initState() {
@@ -222,6 +224,18 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
   // ─── ViewAs persistence (shared_preferences only — never dart:html) ─────────
 
   void _onAuthChanged() {
+    // CHANGE #571 — acting-as is account state like any other. A super admin
+    // who was viewing a customer and then logs out (or logs in as someone
+    // else) must not carry that impersonation into the next account, and the
+    // persisted descriptor must go with it or the next boot would restore it.
+    if (_auth.accountEpoch != _seenAccountEpoch) {
+      _seenAccountEpoch = _auth.accountEpoch;
+      if (_viewAs.isActive) {
+        _viewAs.exit(); // _onViewAsChanged clears the descriptor + cart scope
+        RenderLog.write('c571_viewas_cleared', 'epoch=$_seenAccountEpoch');
+      }
+      _clearViewAsDescriptor();
+    }
     // Run once when auth fully resolves (loading=false means role is set too).
     if (_viewAsRestored) return;
     if (_auth.loading) return;
@@ -342,6 +356,10 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
             child: MaterialApp(
             title: 'mediBO',
             debugShowCheckedModeBanner: false,
+            // CHANGE #571 — the session owner replaces the whole stack on any
+            // account change, and it has no BuildContext of its own.
+            navigatorKey: appNavigatorKey,
+            navigatorObservers: [appRouteTracker],
             scaffoldMessengerKey: VersionWatcher.instance.messengerKey,
             theme: buildTheme(),
             scrollBehavior: const SmoothScrollBehavior(),
@@ -472,6 +490,15 @@ class _AppRootState extends State<_AppRoot> {
       listenable: widget.auth,
       builder: (context, _) {
         if (widget.auth.loading && !_timedOut) {
+          return const _SplashScreen();
+        }
+        // CHANGE #571 — an account change is in flight. Show the same neutral
+        // loading state boot uses; never the screen the previous account was
+        // on, never a default guessed while my_session() is still out. The
+        // 5-second boot timeout above deliberately does NOT cover this: it
+        // guards a session that never resolves, and this one always does —
+        // _fetchSession is bounded and _armResolveWatchdog is the backstop.
+        if (widget.auth.sessionResolving) {
           return const _SplashScreen();
         }
         // Write boot_status=painted exactly once — this is the render-log proof

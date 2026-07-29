@@ -320,14 +320,19 @@ for i in $(seq 1 $MAX); do
     # slightly different speeds (version.json can be live before bootstrap).
     echo "[live-assert] verifying edge serves the NEW bundle…"
     IDX_CODE=$(curl -s -o /dev/null -w "%{http_code}" https://medibo.in/)
-    BS_CODE=$(curl -s -o /dev/null -w "%{http_code}" https://medibo.in/flutter_bootstrap.js)
+    BS_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://medibo.in/flutter_bootstrap.js?cb=${RANDOM}")
     MAIN_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://medibo.in/main.${SHORT}.dart.js")
-    LIVE_CHANGE_CHECK=$(curl -sf --max-time 8 "https://medibo.in/version.json" 2>/dev/null \
+    LIVE_CHANGE_CHECK=$(curl -sf --max-time 8 -H 'Cache-Control: no-cache' \
+      "https://medibo.in/version.json?cb=${RANDOM}" 2>/dev/null \
       | python3 -c "import sys,json; print(json.load(sys.stdin).get('change',''))" 2>/dev/null || true)
     # Confirm the live flutter_bootstrap.js references the NEW bundle — retry 3x
     LIVE_BUNDLE_REF=""
     for _bsr in 1 2 3; do
-      LIVE_BUNDLE_REF=$(curl -s https://medibo.in/flutter_bootstrap.js 2>/dev/null \
+      # CHANGE #600: cache-bust. Without it this reads a CACHED bootstrap and
+      # fails a healthy deploy — exactly what happened on #599, where
+      # version.json already showed the new commit.
+      LIVE_BUNDLE_REF=$(curl -s -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+        "https://medibo.in/flutter_bootstrap.js?cb=${RANDOM}${_bsr}" 2>/dev/null \
         | grep -o "main\.[a-f0-9]*\.dart\.js" | head -1 || true)
       [ "$LIVE_BUNDLE_REF" = "main.${SHORT}.dart.js" ] && break
       [ "$_bsr" -lt 3 ] && sleep 5

@@ -538,6 +538,10 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
 
   List<_CustRow>     _orderRows    = [];
   List<_CustRow>     _cartRows     = [];
+
+  /// CHANGE #601 — footer totals as the server computed them.
+  int    _cartFooterLines = 0;
+  double _cartFooterValue = 0.0;
   List<_RegRow>      _regRows      = [];
   List<_ApprovedRow> _approvedRows = [];
   List<Map<String, dynamic>> _deletedRows = [];
@@ -846,7 +850,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           items:        activeItems,
           removedItems: removedItems,
           total:        null,
-          netPayable:   _computeNetPayable(activeItems),
+          // CHANGE #601 — the server's number for this customer's cart.
+          netPayable:   _serverNetPayable(screen, pp?['id']?.toString()),
         ));
       }
 
@@ -888,6 +893,10 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         setState(() {
           _orderRows    = orders;
           _cartRows     = carts;
+          _cartFooterLines =
+              ((screen['cart_footer'] as Map?)?['total_lines'] as num?)?.toInt() ?? 0;
+          _cartFooterValue =
+              ((screen['cart_footer'] as Map?)?['total_value'] as num?)?.toDouble() ?? 0.0;
           _regRows      = regs;
           _approvedRows = approved;
           _deletedRows  = deleted;
@@ -1078,21 +1087,17 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
 
   // ── Net payable helpers ────────────────────────────────────────────────────
 
-  static double _computeNetPayable(List<_ItemLine> items) {
-    if (items.isEmpty) return 0.0;
-    final mrpSum = items.fold(0.0, (s, i) => s + (i.mrp ?? 0) * i.qty);
-    final discPct = cartDiscountPercent(mrpSum);
-    final groupMrp = <int, double>{};
-    for (final item in items) {
-      final rate = item.gstPercent ?? 12;
-      groupMrp[rate] = (groupMrp[rate] ?? 0) + (item.mrp ?? 0) * item.qty;
-    }
-    double total = 0.0;
-    for (final entry in groupMrp.entries) {
-      final taxable = entry.value * (1 - discPct / 100);
-      total += taxable * (1 + entry.key / 100);
-    }
-    return total + cartDeliveryFee(mrpSum);
+  /// CHANGE #601 — reads cart_totals_for() out of the screen payload.
+  ///
+  /// This replaced _computeNetPayable(), a full tax engine in Dart: it summed
+  /// mrp*qty, called cartDiscountPercent() (a TIER LADDER evaluated in Dart),
+  /// grouped by GST rate, applied the discount and added tax per group — a
+  /// second, independent implementation of what the customer is charged, free
+  /// to disagree with the cart itself.
+  static double _serverNetPayable(Map screen, String? customerId) {
+    if (customerId == null) return 0.0;
+    final totals = (screen['cart_totals'] as Map?)?[customerId] as Map?;
+    return (totals?['net_payable'] as num?)?.toDouble() ?? 0.0;
   }
 
   // ── Profile helpers ────────────────────────────────────────────────────────
@@ -3082,8 +3087,9 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   }
 
   Widget _buildCartTotalsFooter(bool isDesktop) {
-    final totalItems = _cartRows.fold(0, (s, r) => s + r.items.length);
-    final totalValue = _cartRows.fold(0.0, (s, r) => s + r.netPayable);
+    // #601 — footer totals are the server's; the screen no longer folds rows.
+    final totalItems = _cartFooterLines;
+    final totalValue = _cartFooterValue;
 
     if (isDesktop) {
       return Container(

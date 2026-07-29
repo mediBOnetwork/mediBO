@@ -11,18 +11,14 @@ String prettyCategory(String raw) {
   return titled.replaceAll('Cns', 'CNS');
 }
 
-/// Returns the discount percentage applicable for the given total cart MRP value.
-/// ≥ ₹18999 → 7%, ≥ ₹8999 → 6%, ≥ ₹6999 → 5%, ≥ ₹2999 → 3%, else → 0%.
-double cartDiscountPercent(double total) {
-  if (total >= 18999) return 7.0;
-  if (total >= 8999) return 6.0;
-  if (total >= 6999) return 5.0;
-  if (total >= 2999) return 3.0;
-  return 0.0;
-}
-
-/// Returns the delivery fee: ₹0 when cart MRP total ≥ ₹999, else ₹49.
-double cartDeliveryFee(double total) => total >= 999 ? 0.0 : 49.0;
+// CHANGE #601 — cartDiscountPercent() and cartDeliveryFee() DELETED.
+//
+// They hardcoded the tier ladder (18999/8999/6999/2999 -> 7/6/5/3%) and the
+// delivery threshold (>= 999 -> free, else 49) in Dart. Those live in
+// app_settings.cart_tiers and app_settings.delivery_fee, which cart_state()
+// and cart_totals_for() both read — changing a threshold is a config UPDATE,
+// never a deploy. The Dart copies had already drifted out of the picture: the
+// admin screen used them while the customer cart used the server's.
 
 /// Formats a value as Indian Rupees, e.g. 1234567.5 -> "₹12,34,567.50".
 String rupees(double value) {

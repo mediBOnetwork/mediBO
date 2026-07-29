@@ -18,7 +18,6 @@ import '../app_state.dart';
 import '../config/api_keys.dart';
 import '../models/product.dart';
 import '../user_state.dart';
-import '../view_as_state.dart';
 import '../util.dart';
 import '../utils/render_log.dart';
 import 'auth/login_screen.dart';
@@ -2749,47 +2748,30 @@ class _WhatsAppCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final auth = UserState.of(context);
-    // CHANGE #433: this card must reflect the ACTING-AS pharmacy's real
-    // approved state, not the admin's own (null) profile — mirrors the
-    // ViewAsState.identity.isApproved check already used by cart_screen.dart
-    // for order placement. Without this, an admin acting-as an APPROVED
-    // customer falsely fell through to "Complete Registration to Order"
-    // because auth.isRegistered/auth.canOrder were evaluated against the
-    // admin's own (profile-less) account.
-    final viewAs = ViewAsState.of(context);
-    final isActingAsCustomer = viewAs.isActive && viewAs.role == ViewAsRole.customer;
-    final isAuthenticated = auth.isAuthenticated;
-    final isRegistered = isActingAsCustomer ? true : auth.isRegistered;
-    final approved = isActingAsCustomer
-        ? (viewAs.identity?.isApproved ?? false)
-        : (auth.profile?.isApproved ?? false);
-    final canOrder = isActingAsCustomer ? approved : auth.canOrder;
-
-    // Determine button label and gate message.
-    final String btnLabel;
-    final String? gateNote;
-    final VoidCallback? onTap;
-    if (canOrder) {
-      btnLabel = 'Send Order on WhatsApp';
-      gateNote = null;
-      onTap = () => _openWhatsApp();
-    } else if (!isAuthenticated) {
-      btnLabel = 'Login to Send Order';
-      gateNote = 'Login required to place orders';
-      onTap = () => Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => const LoginScreen()),
-          );
-    } else if (!isRegistered) {
-      btnLabel = 'Complete Registration to Order';
-      gateNote = 'Register your pharmacy to place orders';
-      onTap = null;
-    } else {
-      btnLabel = 'Pending Approval';
-      gateNote = 'Your account is pending admin approval';
-      onTap = null;
-    }
+    // #571 — this screen ran a THIRD copy of the order gate, with its own four
+    // hardcoded button labels and its own ViewAs special-case. That case
+    // existed to patch CHANGE #433: an admin acting as an APPROVED customer
+    // fell through to "Complete Registration to Order", because
+    // auth.isRegistered/auth.canOrder were evaluated against the admin's own
+    // profile-less account. With the backend judging the impersonated customer
+    // there is nothing left to special-case.
+    //
+    // my_session().bulk_wa_gate is the same decision, rendered for this button
+    // by the backend: label, note and enabled all arrive decided.
+    final waGate = auth.bulkWaGate;
+    final canOrder = auth.canOrder;
+    final btnLabel = waGate.label;
+    // has_note encodes absence explicitly — an empty note is not "no note".
+    final String? gateNote = waGate.hasNote ? waGate.note : null;
+    final VoidCallback? onTap = !waGate.enabled
+        ? null
+        : (waGate.action == 'login'
+            ? () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const LoginScreen()),
+                )
+            : (waGate.action == 'send' ? () => _openWhatsApp() : null));
     RenderLog.write('c433_wa_gate',
-        'approved=${approved.toString()};shows_register=${(!isRegistered).toString()}');
+        'reason=${auth.orderGate.reason};enabled=${waGate.enabled.toString()}');
 
     return Container(
       decoration: BoxDecoration(

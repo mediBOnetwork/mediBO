@@ -100,6 +100,78 @@ class Availability {
       '#${(argb & 0xFFFFFF).toRadixString(16).padLeft(6, '0').toUpperCase()}';
 }
 
+/// CHANGE #573 — the backend's own rendered PRICE block for one row.
+///
+/// product_card.dart used to do this per card:
+///     final discPct   = cart.discountPct;                  // server-decided
+///     final salePrice = product.mrp * (1 - discPct / 100); // app COMPUTES
+///     Text(rupees(salePrice));                             // app FORMATS
+///     Text('${discPct.round()}% off');                     // app COMPOSES
+///
+/// The percentage was already server-decided, which made it worse rather than
+/// better: the app took a server number and derived a price from it, so the
+/// price on the card and the price the server would actually charge were two
+/// answers to one question.
+///
+/// [hasPrice] encodes absence explicitly. 9.7% of MEDICINE rows (54,353 of
+/// 562,549) carry no mrp at all; rendering those as "₹0.00" reads as a FREE
+/// product rather than a missing one, so the card hides the price row instead.
+class Pricing {
+  /// False when the product has no usable MRP. NOT the same as a price of 0.
+  final bool hasPrice;
+
+  /// Backend-formatted, e.g. "₹98.40". Print verbatim; never re-format.
+  final String priceDisplay;
+  final String mrpDisplay;
+
+  /// e.g. "18% off". Empty when [hasDiscount] is false.
+  final String discountLabel;
+  final bool hasDiscount;
+
+  /// Raw numbers, for anything that must sort or compare. Never for display.
+  final double salePrice;
+  final double mrp;
+
+  const Pricing({
+    required this.hasPrice,
+    required this.priceDisplay,
+    required this.mrpDisplay,
+    required this.discountLabel,
+    required this.hasDiscount,
+    required this.salePrice,
+    required this.mrp,
+  });
+
+  /// Parses the `pricing` object attached to every storefront row. Returns
+  /// null when the row carried none, so callers can tell "backend said no
+  /// price" (hasPrice == false) apart from "this row never went through a
+  /// storefront RPC" (null) — two different situations that must not collapse.
+  static Pricing? fromMap(Object? raw) {
+    if (raw is! Map) return null;
+    final m = Map<String, dynamic>.from(raw);
+    if (!m.containsKey('has_price')) return null;
+    return Pricing(
+      hasPrice: m['has_price'] == true,
+      priceDisplay: (m['price_display'] ?? '').toString(),
+      mrpDisplay: (m['mrp_display'] ?? '').toString(),
+      discountLabel: (m['discount_label'] ?? '').toString(),
+      hasDiscount: m['has_discount'] == true,
+      salePrice: (m['sale_price'] as num?)?.toDouble() ?? 0.0,
+      mrp: (m['mrp'] as num?)?.toDouble() ?? 0.0,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'has_price': hasPrice,
+        'price_display': priceDisplay,
+        'mrp_display': mrpDisplay,
+        'discount_label': discountLabel,
+        'has_discount': hasDiscount,
+        'sale_price': salePrice,
+        'mrp': mrp,
+      };
+}
+
 /// A pharmaceutical product sold to business buyers (pharmacies, clinics).
 ///
 /// Field names stay in the app's domain vocabulary; [Product.fromMap] maps
@@ -170,6 +242,9 @@ class Product {
   /// legacy/fallback paths that do not carry one.
   final Availability? availability;
 
+  /// CHANGE #573 — the backend's rendered price block for this row.
+  final Pricing? pricing;
+
   const Product({
     required this.id,
     required this.name,
@@ -193,6 +268,7 @@ class Product {
     this.supplierLabel,
     this.supplierCount,
     this.availability,
+    this.pricing,
   });
 
   /// Returns a copy carrying [availability] — used to graft a cart line's
@@ -278,6 +354,7 @@ class Product {
       supplierCount: (map['supplier_count'] as num?)?.toInt(),
       // CHANGE #553 — present on every storefront RPC row, absent elsewhere.
       availability: Availability.fromMap(map['availability']),
+      pricing: Pricing.fromMap(map['pricing']),
     );
   }
 
@@ -304,6 +381,7 @@ class Product {
         'supplierLabel': supplierLabel,
         'supplierCount': supplierCount,
         'availability': availability?.toJson(),
+        'pricing': pricing?.toJson(),
       };
 
   factory Product.fromJson(Map<String, dynamic> map) {
@@ -333,6 +411,7 @@ class Product {
       supplierLabel: map['supplierLabel'] as String?,
       supplierCount: (map['supplierCount'] as num?)?.toInt(),
       availability: Availability.fromMap(map['availability']),
+      pricing: Pricing.fromMap(map['pricing']),
     );
   }
 

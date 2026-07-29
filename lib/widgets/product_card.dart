@@ -22,8 +22,6 @@ class ProductCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final style = categoryStyle(product.category);
-    final cart = AppState.of(context);
-    final discountPct = cart.discountPct.round(); // #559: server-decided
 
     return RepaintBoundary(
       child: HoverLift(
@@ -49,7 +47,6 @@ class ProductCard extends StatelessWidget {
                 _ImageBlock(
                     product: product,
                     style: style,
-                    discountPct: discountPct,
                     isBestSeller: isBestSeller),
                 Expanded(
                   child: Padding(
@@ -126,26 +123,35 @@ class _PriceRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cart = AppState.of(context);
-    final discPct = cart.discountPct; // #559: server-decided
-    final salePrice = product.mrp * (1 - discPct / 100);
+    // CHANGE #573 — the card no longer computes or formats a price. The whole
+    // block (sale price, struck-through MRP, "N% off") arrives rendered from
+    // storefront_pricing(), which uses the SAME tier discount the cart uses.
+    final pricing = product.pricing;
+
+    // No pricing block at all means this row never went through a storefront
+    // RPC. Render nothing rather than invent a number.
+    if (pricing == null) return const SizedBox.shrink();
+
+    // has_price is explicit absence: 9.7% of the catalogue has no MRP, and
+    // showing "₹0.00" for those reads as a free product.
+    if (!pricing.hasPrice) return const SizedBox.shrink();
 
     return Row(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         Text(
-          rupees(salePrice),
+          pricing.priceDisplay,
           style: const TextStyle(
             fontWeight: FontWeight.w700,
             fontSize: 16,
             color: Color(0xFF111827),
           ),
         ),
-        if (discPct > 0) ...[
+        if (pricing.hasDiscount) ...[
           const SizedBox(width: 6),
           Flexible(
             child: Text(
-              rupees(product.mrp),
+              pricing.mrpDisplay,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
@@ -165,7 +171,7 @@ class _PriceRow extends StatelessWidget {
               borderRadius: BorderRadius.circular(4),
             ),
             child: Text(
-              '${discPct.round()}% off',
+              pricing.discountLabel,
               style: const TextStyle(
                 fontSize: 10,
                 fontWeight: FontWeight.w600,
@@ -504,12 +510,10 @@ class _CartModeChip extends StatelessWidget {
 class _ImageBlock extends StatefulWidget {
   final Product product;
   final CategoryStyle style;
-  final int discountPct;
   final bool isBestSeller;
   const _ImageBlock({
     required this.product,
     required this.style,
-    required this.discountPct,
     this.isBestSeller = false,
   });
 

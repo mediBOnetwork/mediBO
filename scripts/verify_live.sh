@@ -48,11 +48,25 @@ fi
 echo "   OK: http=${HTTP_CODE} size=${SIZE}b"
 
 # ── Step 2: version.json commit must match ───────────────────────────────────
+#
+# CHANGE #590: cache-bust and retry. This fetched version.json with no
+# cache-buster immediately after a deploy, so it regularly read a STALE edge
+# copy and reported "BROKEN (wrong commit live)" for a deploy that was fine —
+# exactly what happened on CHANGE #583, seconds after live-assert had passed.
+# A verifier that cries wolf gets ignored, which is how a real stale deploy
+# slips through.
 echo "→ [2/3] checking version.json..."
-LIVE_COMMIT=$(curl -s "${BASE_URL}/version.json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('commit',''))" 2>/dev/null || echo "")
+LIVE_COMMIT=""
+for attempt in 1 2 3 4 5 6; do
+  LIVE_COMMIT=$(curl -s -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+                  "${BASE_URL}/version.json?cb=${RANDOM}${attempt}" \
+                | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('commit',''))" 2>/dev/null || echo "")
+  [ "$LIVE_COMMIT" = "$COMMIT" ] && break
+  echo "   poll ${attempt}/6: live='${LIVE_COMMIT}' want='${COMMIT}' — edge may still be propagating…"
+  sleep 10
+done
 if [ "$LIVE_COMMIT" != "$COMMIT" ]; then
-  echo "   FAIL: version.json shows commit=${LIVE_COMMIT}, expected ${COMMIT}"
-  echo "         (Cloudflare may still be propagating — retry in 30s)"
+  echo "   FAIL: version.json shows commit=${LIVE_COMMIT}, expected ${COMMIT} after 6 tries"
   echo ""
   echo "=== RESULT: BROKEN (wrong commit live) ==="
   exit 1

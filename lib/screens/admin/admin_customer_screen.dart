@@ -85,6 +85,10 @@ class _ItemLine {
   final int? gstPercent;
   final String? packSize;
   final String addedBy;
+
+  /// CHANGE #599 — the backend's badge for this line: label + three colours.
+  /// It was `if (addedBy == 'admin')` with every string and colour in Dart.
+  final Map<String, dynamic> addedByBadge;
   final bool removedByAdmin;
 
   const _ItemLine({
@@ -97,6 +101,7 @@ class _ItemLine {
     this.gstPercent,
     this.packSize,
     this.addedBy = 'customer',
+    this.addedByBadge = const {},
     this.removedByAdmin = false,
   });
 }
@@ -699,37 +704,29 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       // the central date's own 'YYYY-MM-DD' string, verbatim from the backend —
       // still zero client-side date formatting.
       final scopeYmd = AdminDateScope.instance.dateYmd;
-      final bounds = await client.rpc('ist_day_bounds',
-          params: {if (scopeYmd != null) 'p_date': scopeYmd}) as Map;
-      final ordersStartUtc = bounds['start_utc'] as String;
-      final ordersEndUtc   = bounds['end_utc'] as String;
+      // CHANGE #593 — ONE RPC replaces six raw table legs.
+      //
+      // user_profiles, pharmacy_profiles (active AND deleted), day-bounded
+      // orders and cart_items each scoped and ordered themselves here. Row
+      // shapes are unchanged, so everything downstream parses as before.
+      final screenRaw = await client.rpc('admin_customer_screen_data',
+          params: {if (scopeYmd != null) 'p_date': scopeYmd});
+      final screen = (screenRaw is List ? screenRaw.first : screenRaw) as Map;
+      List<dynamic> seg(String k) => (screen[k] as List<dynamic>?) ?? const [];
+
       final results = await Future.wait<dynamic>([
-        client.from('user_profiles').select(),
-        // Part A-2: always filter out deleted profiles from active list
-        client.from('pharmacy_profiles').select().or('is_deleted.is.null,is_deleted.eq.false'),
-        client.from('orders').select()
-            .gte('created_at', ordersStartUtc)
-            .lt('created_at', ordersEndUtc)
-            .order('created_at', ascending: false),
-        client.from('cart_items').select().order('id', ascending: true),
         client.rpc('get_unregistered_users').catchError((_) => <dynamic>[]),
-        // Fetch deleted profiles for "Recently Deleted" section
-        client.from('pharmacy_profiles').select().eq('is_deleted', true)
-            .order('deleted_at', ascending: false).catchError((_) => <dynamic>[]),
         // CHANGE #369 — grouped WhatsApp leads for the Customer Orders tab.
-        // MUST come solely from get_leads_grouped_today() — never a raw
-        // pending_orders/whatsapp_messages read (backend already scopes to
-        // today + order-list images only).
         client.rpc('get_leads_grouped_today').catchError((_) => <dynamic>[]),
       ]);
 
-      final upRows       = results[0] as List;
-      final ppRows       = results[1] as List;
-      final orderRows    = results[2] as List;
-      final cartRows     = results[3] as List;
-      final authRows     = results[4] as List;
-      final deletedList  = results[5] as List;
-      final leadRowsRaw  = results[6] as List;
+      final upRows       = seg('user_profiles');
+      final ppRows       = seg('profiles');
+      final orderRows    = seg('orders');
+      final cartRows     = seg('cart_items');
+      final authRows     = results[0] as List;
+      final deletedList  = seg('deleted');
+      final leadRowsRaw  = results[1] as List;
 
       // Auth users with no pharmacy_profile (logged-in but unregistered)
       final authMap = <String, Map<String, dynamic>>{};
@@ -823,6 +820,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                   gstPercent:     (ci['gst_percent'] as num?)?.toInt(),
                   packSize:       ci['pack_size'] as String?,
                   addedBy:        ci['added_by'] as String? ?? 'customer',
+                  addedByBadge:   (ci['added_by_badge'] as Map?)?.cast<String, dynamic>()
+                      ?? const {},
                   removedByAdmin: (ci['removed_by_admin'] as bool?) ?? false,
                 ))
             .where((i) => i.name.isNotEmpty)
@@ -936,11 +935,11 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       for (var i = 0; i < idList.length; i += 300) {
         final chunk =
             idList.sublist(i, i + 300 > idList.length ? idList.length : i + 300);
-        final rows = await client
-            .from('MEDICINE')
-            .select(
-                'id, image_url_1, marketer, pack_qty, pack_type, pack_size, salt_composition')
-            .inFilter('id', chunk) as List;
+        // #593 — medicine_rows_by_ids() also resolves gst_percent through
+        // gst_rate_for(), so this lookup can never disagree with the cart.
+        final raw = await client.rpc('medicine_rows_by_ids', params: {'p_ids': chunk});
+        final rows = (((raw is List ? raw.first : raw) as Map)['rows']
+            as List<dynamic>? ?? const []);
         for (final r in rows) {
           final m = Map<String, dynamic>.from(r as Map);
           fetched[(m['id'] as num).toInt()] = m;
@@ -978,7 +977,10 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       final client = Supabase.instance.client;
 
       // Fetch all leads rows
-      final leadsRows = await client.from('leads').select();
+      // #593 — same screen payload, fetched in this scope.
+      final lRaw = await client.rpc('admin_customer_screen_data');
+      final lMap = (lRaw is List ? lRaw.first : lRaw) as Map;
+      final leadsRows = (lMap['leads'] as List<dynamic>?) ?? const [];
       // Build a quick lookup: auth_uid or id → lead row
       final leadsByAuthUid = <String, Map<String, dynamic>>{};
       final otherLeadsRaw  = <Map<String, dynamic>>[];
@@ -994,7 +996,9 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       }
 
       // Fetch admins list
-      final adminsRows = await client.from('admins').select('id, email');
+      final aRaw = await client.rpc('admin_customer_screen_data');
+      final aMap = (aRaw is List ? aRaw.first : aRaw) as Map;
+      final adminsRows = (aMap['admins'] as List<dynamic>?) ?? const [];
       final adminsList = (adminsRows as List).map((r) {
         final m = Map<String, dynamic>.from(r as Map);
         return _AdminEntry(
@@ -1397,9 +1401,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   Future<void> _updateStatus(String orderId, String status) async {
     try {
       await Supabase.instance.client
-          .from('orders')
-          .update({'status': status})
-          .eq('id', orderId);
+          .rpc('admin_set_order_status',
+               params: {'p_order_id': orderId, 'p_status': status});
       RenderLog.write('order_status_written', 'orderId:$orderId status:$status');
       _load();
     } catch (e) {
@@ -2043,11 +2046,13 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     // wa_convert_start, instead of trusting the phone-matched lead fields.
     Map<String, dynamic>? profRow;
     try {
-      profRow = await Supabase.instance.client
-          .from('pharmacy_profiles')
-          .select()
-          .eq('user_id', userId)
-          .maybeSingle();
+      // #593 — `found` is explicit; an empty row object is not "no customer".
+      final pr = await Supabase.instance.client
+          .rpc('admin_customer_profile_by_user', params: {'p_user_id': userId});
+      final pm = (pr is List ? pr.first : pr) as Map;
+      profRow = pm['found'] == true
+          ? Map<String, dynamic>.from(pm['row'] as Map)
+          : null;
     } catch (_) {}
     if (!mounted) return;
     final isApproved = profRow?['approved'] == true &&
@@ -2850,7 +2855,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                                   fontSize: 12, color: Color(0xFF374151)))),
                       SizedBox(
                           width: 120,
-                          child: _addedByBadge(item.addedBy)),
+                          child: _addedByBadge(item.addedByBadge)),
                       SizedBox(
                         width: 72,
                         child: item.id != null
@@ -2948,7 +2953,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                           Row(
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
-                              _addedByBadge(item.addedBy),
+                              _addedByBadge(item.addedByBadge),
                               const Spacer(),
                               if (item.id != null)
                                 GestureDetector(
@@ -3049,34 +3054,30 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     );
   }
 
-  static Widget _addedByBadge(String addedBy) {
-    if (addedBy == 'admin') {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-        decoration: BoxDecoration(
-          color: const Color(0xFFFEF08A),
-          borderRadius: BorderRadius.circular(4),
-          border: Border.all(color: const Color(0xFFFBBF24)),
-        ),
-        child: const Text('mediBO',
-            style: TextStyle(
-                fontSize: 9,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF92400E))),
-      );
-    }
+  /// CHANGE #599 — prints the backend's badge. No branch on addedBy, no
+  /// label and no colour written here.
+  static Color _hex(Object? v, Color fallback) {
+    final h = (v ?? '').toString().replaceFirst('#', '').trim();
+    if (h.length != 6) return fallback;
+    final n = int.tryParse(h, radix: 16);
+    return n == null ? fallback : Color(0xFF000000 | n);
+  }
+
+  static Widget _addedByBadge(Map<String, dynamic> badge) {
+    final label = (badge['label'] ?? '').toString();
+    if (label.isEmpty) return const SizedBox.shrink();
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
       decoration: BoxDecoration(
-        color: const Color(0xFFF3F4F6),
+        color: _hex(badge['bg'], const Color(0xFFF3F4F6)),
         borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: const Color(0xFFD1D5DB)),
+        border: Border.all(color: _hex(badge['border'], const Color(0xFFD1D5DB))),
       ),
-      child: const Text('Self',
+      child: Text(label,
           style: TextStyle(
               fontSize: 9,
               fontWeight: FontWeight.w600,
-              color: Color(0xFF6B7280))),
+              color: _hex(badge['fg'], const Color(0xFF6B7280)))),
     );
   }
 
@@ -4647,14 +4648,15 @@ class _AdminAddItemDialogState extends State<_AdminAddItemDialog> {
     }
     setState(() => _searching = true);
     try {
-      final rows = await Supabase.instance.client
-          .from('MEDICINE')
-          .select('id, product_name, mrp, marketer, therapeutic_class, image_url_1, pack_qty, pack_size, gst_percent')
-          .ilike('product_name', '%${query.trim()}%')
-          .limit(30);
+      // #596 — medicine_search_admin() resolves gst_percent through
+      // gst_rate_for(), so search results, cart lines and product cards all
+      // report the same rate.
+      final raw = await Supabase.instance.client.rpc('medicine_search_admin',
+          params: {'p_term': query.trim(), 'p_limit': 30});
+      final rows = ((raw is List ? raw.first : raw) as Map)['rows'] as List? ?? const [];
       if (mounted) {
         setState(() {
-          _results = List<Map<String, dynamic>>.from(rows as List);
+          _results = List<Map<String, dynamic>>.from(rows);
           _searching = false;
         });
       }
@@ -7490,11 +7492,11 @@ class _WaOrderPanelState extends State<_WaOrderPanel> {
       // (the RPC payload doesn't include it) to complete the traceability chain.
       var leadCodes = <String, String?>{};
       try {
-        final rows = await Supabase.instance.client
-            .from('pending_orders')
-            .select('id, lead_code')
-            .eq('user_id', widget.userId);
-        for (final r in rows as List) {
+        final raw = await Supabase.instance.client
+            .rpc('admin_pending_orders_for_user',
+                 params: {'p_user_id': widget.userId});
+        final m0 = (raw is List ? raw.first : raw) as Map;
+        for (final r in (m0['rows'] as List<dynamic>? ?? const [])) {
           final m = Map<String, dynamic>.from(r as Map);
           leadCodes[m['id'] as String] = m['lead_code'] as String?;
         }
@@ -8370,7 +8372,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     try {
       final client = Supabase.instance.client;
       final results = await Future.wait<dynamic>([
-        client.from('lead_type_map').select().eq('active', true).order('sort_order'),
+        client.rpc('admin_lead_type_map'),
         client.rpc('lead_leads_summary', params: {'p_city': null}),
         // CHANGE #552 — one call now carries the title, modes, levels, the
         // category tree, the include/exclude labels, the saved-run sources,
@@ -8382,7 +8384,10 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         client.rpc('lead_get_hub'),
       ]);
 
-      final types = (results[0] as List)
+      // #593 — admin_lead_type_map() returns {rows, count}; rows are already
+      // active-filtered and sort_order-ordered by the backend.
+      final types = (((results[0] is List ? results[0].first : results[0]) as Map)['rows']
+              as List<dynamic>? ?? const [])
           .map((e) => _LeadTypeOption.fromMap(Map<String, dynamic>.from(e as Map)))
           .toList();
       final summary = Map<String, dynamic>.from(results[1] as Map);

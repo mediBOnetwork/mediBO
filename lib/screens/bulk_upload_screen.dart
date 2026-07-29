@@ -93,7 +93,7 @@ class _MatchRow {
     return _displaySku;
   }
 
-  String get price => selectedProduct != null ? rupees(selectedProduct!.b2bPrice) : _displayPrice;
+  String get price => selectedProduct != null ? selectedProduct!.mrpText : _displayPrice;
 
   Map<String, dynamic> toJson() => {
         'lineItem': lineItem,
@@ -2092,13 +2092,10 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
     if (list.isEmpty) {
       try {
-        final results = await client
-            .from('MEDICINE')
-            .select()
-            .or('product_name.ilike.%$name%,salt_composition.ilike.%$name%,marketer.ilike.%$name%')
-            .eq('status', 'Available')
-            .order('sales_count', ascending: false)
-            .limit(20);
+        final raw = await client.rpc('medicine_search_available',
+            params: {'p_term': name, 'p_limit': 20});
+        final results = (((raw is List ? raw.first : raw) as Map)['rows']
+            as List<dynamic>? ?? const []);
         list = List<Map<String, dynamic>>.from(results);
       } catch (e) {
         debugPrint('[FuzzyMatch] ILIKE failed for "$name": $e');
@@ -4296,7 +4293,7 @@ class _ExpandableMatchRowState extends State<_ExpandableMatchRow>
                   child: Center(
                     child: Text(
                       row.selectedProduct != null && row.selectedProduct!.hasMrp
-                          ? rupees(row.selectedProduct!.mrp)
+                          ? row.selectedProduct!.mrpText
                           : '—',
                       textAlign: TextAlign.center,
                       maxLines: 1,
@@ -5122,13 +5119,10 @@ Future<List<Product>> _manualSearchProducts(String query, {int limit = 3}) async
         .toList();
   } catch (_) {
     try {
-      final results = await Supabase.instance.client
-          .from('MEDICINE')
-          .select()
-          .ilike('product_name', '%$q%')
-          .eq('status', 'Available')
-          .order('sales_count', ascending: false)
-          .limit(limit);
+      final raw = await Supabase.instance.client.rpc('medicine_search_available',
+          params: {'p_term': q, 'p_limit': limit});
+      final results = (((raw is List ? raw.first : raw) as Map)['rows']
+          as List<dynamic>? ?? const []);
       return List<Map<String, dynamic>>.from(results)
           .map((m) => Product.fromMap(m))
           .toList();
@@ -5618,7 +5612,7 @@ class _SearchResultRow extends StatelessWidget {
               flex: 13,
               child: Center(
                 child: Text(
-                  product.hasMrp ? rupees(product.mrp) : '—',
+                  product.hasMrp ? product.mrpText : '—',
                   textAlign: TextAlign.center,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -5879,7 +5873,7 @@ class _AlternativeRow extends StatelessWidget {
               flex: 13,
               child: Center(
                 child: Text(
-                  product.hasMrp ? rupees(product.mrp) : '—',
+                  product.hasMrp ? product.mrpText : '—',
                   textAlign: TextAlign.center,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,

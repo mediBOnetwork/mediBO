@@ -29,34 +29,18 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
   Future<void> _loadStats() async {
     try {
-      final results = await Future.wait<int>([
-        Supabase.instance.client.from('MEDICINE').count(),
-        Supabase.instance.client
-            .from('pending_bills')
-            .count()
-            .eq('status', 'pending'),
-        Supabase.instance.client
-            .from('pending_bills')
-            .count()
-            .inFilter('verdict', ['needs_approval', 'fake']),
-        Supabase.instance.client
-            .from('orders')
-            .count()
-            .eq('status', 'pending'),
-        Supabase.instance.client.from('contact_inquiries').count(),
-        Supabase.instance.client
-            .from('pharmacy_profiles')
-            .count()
-            .or('approved.is.null,approved.eq.false'),
-      ]);
+      // CHANGE #594 — six separate .count() queries became one RPC.
+      final raw = await Supabase.instance.client.rpc('admin_dashboard_counts');
+      final c = (raw is List ? raw.first : raw) as Map;
+      int n(String k) => (c[k] as num?)?.toInt() ?? 0;
       if (mounted) {
         setState(() {
-          _totalMedicines       = results[0];
-          _pendingBills         = results[1];
-          _billsNeedingReview   = results[2];
-          _pendingOrders        = results[3];
-          _inquiries            = results[4];
-          _pendingRegistrations = results[5];
+          _totalMedicines       = n('medicines');
+          _pendingBills         = n('pending_bills');
+          _billsNeedingReview   = n('flagged_bills');
+          _pendingOrders        = n('pending_orders');
+          _inquiries            = n('contact_inquiries');
+          _pendingRegistrations = n('pending_customers');
           _loading = false;
         });
       }

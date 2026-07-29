@@ -2042,12 +2042,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Future<void> _loadSupplierOrderItems(String supplier) async {
     try {
       final res = await Supabase.instance.client
-          .from('supplier_orders')
-          .select('items')
-          .eq('supplier_name', supplier)
-          .eq('status', 'pending')
-          .order('created_at', ascending: false)
-          .limit(1)
+          .rpc('supplier_pending_order_items', params: {'p_supplier': supplier})
           .maybeSingle();
       if (!mounted) return;
       if (res == null) { setState(() => _supplierOrderItems = []); return; }
@@ -5900,12 +5895,12 @@ class _FinalizeReviewDialogState extends State<_FinalizeReviewDialog> {
     setState(() => _assigning.add(mentionId));
     try {
       // needs_bag_review[] doesn't carry t_start_sec — fetch it from the mention row.
-      final row = await Supabase.instance.client
-          .from('voice_clip_mentions')
-          .select('t_start_sec')
-          .eq('id', mentionId)
-          .maybeSingle();
-      final tStart = (row?['t_start_sec'] as num?)?.toDouble();
+      final raw = await Supabase.instance.client
+          .rpc('voice_mention_start_sec', params: {'p_id': mentionId});
+      final row = (raw is List ? raw.first : raw) as Map;
+      final tStart = row['found'] == true
+          ? (row['t_start_sec'] as num?)?.toDouble()
+          : null;
       if (tStart == null) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -6426,9 +6421,9 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
 
     try {
       await Supabase.instance.client
-          .from('voice_clip_mentions')
-          .update({'matched_name': productName, 'product_id': productId})
-          .eq('id', mentionId);
+          .rpc('voice_fix_mention', params: {
+            'p_id': mentionId, 'p_name': productName, 'p_product_id': productId,
+          });
       RenderLog.write('c334_voice_fallback', 'mention_fixed=$productName;qty=$mentionQty');
 
       // Apply the count via set_voice_received

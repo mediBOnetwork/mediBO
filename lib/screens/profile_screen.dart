@@ -71,11 +71,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
       // that is the genuine unregistered case, not a failed lookup.
       Map<String, dynamic>? row;
       if (isRegisteredCustomer(session)) {
-        row = await client
-            .from('pharmacy_profiles')
-            .select()
-            .eq('id', session.ownerId)
-            .maybeSingle();
+        final raw = await client.rpc('my_profile_row');
+        final m = (raw is List ? raw.first : raw) as Map;
+        row = m['found'] == true
+            ? Map<String, dynamic>.from(m['row'] as Map)
+            : null;
       }
 
       if (!mounted) return;
@@ -95,12 +95,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Future<void> _fetchViewAsProfile() async {
     setState(() => _viewAsLoading = true);
     try {
-      final res = await Supabase.instance.client
-          .from('pharmacy_profiles')
-          .select()
-          .eq('user_id', widget.viewAsUserId!)
-          .maybeSingle();
-      if (mounted) setState(() { _viewAsProfileRow = res; _viewAsLoading = false; });
+      final raw = await Supabase.instance.client
+          .rpc('admin_customer_profile_by_user',
+               params: {'p_user_id': widget.viewAsUserId!});
+      final m = (raw is List ? raw.first : raw) as Map;
+      if (mounted) {
+        setState(() {
+          _viewAsProfileRow = m['found'] == true
+              ? Map<String, dynamic>.from(m['row'] as Map)
+              : null;
+          _viewAsLoading = false;
+        });
+      }
     } catch (_) {
       if (mounted) setState(() => _viewAsLoading = false);
     }

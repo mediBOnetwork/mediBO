@@ -620,10 +620,10 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
     } catch (_) {}
     if (list.isEmpty) {
       try {
-        final r = await client.from('MEDICINE').select()
-            .or('product_name.ilike.%$name%,salt_composition.ilike.%$name%')
-            .eq('status', 'Available').order('sales_count', ascending: false).limit(20);
-        list = List<Map<String, dynamic>>.from(r);
+        final raw = await client.rpc('medicine_search_available',
+            params: {'p_term': name, 'p_limit': 20});
+        list = List<Map<String, dynamic>>.from(
+            (((raw is List ? raw.first : raw) as Map)['rows'] as List? ?? const []));
       } catch (_) {}
     }
     list = list.where((row) {
@@ -1413,7 +1413,7 @@ class _ImportDesktopRowState extends State<_ImportDesktopRow> with SingleTickerP
                   style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)))),
               Expanded(flex: 12, child: Text(p?.manufacturer ?? '', maxLines: 1, overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)))),
-              Expanded(flex: 9, child: Text(p != null ? rupees(p.mrp) : '', textAlign: TextAlign.right,
+              Expanded(flex: 9, child: Text(p != null ? p.mrpText : '', textAlign: TextAlign.right,
                   style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF111827)))),
               Expanded(flex: 8, child: Container(
                 margin: const EdgeInsets.only(right: 8),
@@ -1501,7 +1501,7 @@ class _AltRowDesktop extends StatelessWidget {
               style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)))),
           Expanded(flex: 12, child: Text(product.manufacturer, maxLines: 1, overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)))),
-          Expanded(flex: 9, child: Text(rupees(product.mrp), textAlign: TextAlign.right,
+          Expanded(flex: 9, child: Text(product.mrpText, textAlign: TextAlign.right,
               style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: nameColor))),
           const Expanded(flex: 8, child: SizedBox()),
           const SizedBox(width: 36),
@@ -1652,7 +1652,7 @@ class _ImportMobileCardState extends State<_ImportMobileCard> with SingleTickerP
                         const SizedBox(width: 8),
                         Text(_iPackShort(p), style: const TextStyle(fontSize: 11, color: Color(0xFF374151))),
                         const SizedBox(width: 8),
-                        Text(rupees(p.mrp), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF111827))),
+                        Text(p.mrpText, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF111827))),
                       ]),
                     ),
                 ]),
@@ -1686,7 +1686,7 @@ class _ImportMobileCardState extends State<_ImportMobileCard> with SingleTickerP
                             Expanded(child: Text(alts[k].$2.manufacturer, maxLines: 1, overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)))),
                             const SizedBox(width: 8),
-                            Text(rupees(alts[k].$2.mrp), style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500,
+                            Text(alts[k].$2.mrpText, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500,
                                 color: row.selectedIndex == alts[k].$1 ? const Color(0xFF1B7A43) : const Color(0xFF6B7280))),
                           ]),
                         ),
@@ -1818,7 +1818,7 @@ class _SearchPanelState extends State<_SearchPanel> {
                     const SizedBox(width: 8),
                     Text(_iPackShort(_results[i]), style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
                     const SizedBox(width: 8),
-                    Text(rupees(_results[i].mrp), style: const TextStyle(fontSize: 12, color: Color(0xFF374151))),
+                    Text(_results[i].mrpText, style: const TextStyle(fontSize: 12, color: Color(0xFF374151))),
                   ]),
                 ),
               ),

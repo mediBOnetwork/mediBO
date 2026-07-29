@@ -1,5 +1,162 @@
 # RULES - NEVER BREAK THESE
 
+# THE APP RENDERS. IT NEVER DECIDES.
+
+Highest-priority rule in this repo. It overrides convenience, it overrides "it's only
+one line", and it overrides any pattern already in the code. An existing file that
+violates it is a bug, not a precedent.
+
+Every class of bug that has cost us a full night came from one cause: the app and the
+backend each held an answer to the same question and disagreed. Admin sessions opened
+customer screens. Orders vanished. Carts vanished. A supplier's number landed on the
+customer storefront. Different faces, one cause.
+
+**If a value could have come from the backend, it MUST come from the backend.**
+
+The frontend's entire job: call an RPC, render what it returns, send user input back.
+Nothing else.
+
+---
+
+## 1. AUTHORITY — EXECUTE, DO NOT ASK
+
+You have Supabase write and DB access. Use it.
+
+- Do NOT ask permission to create, replace or alter functions, policies, triggers,
+  views, indexes or columns. Do it.
+- Do NOT ask which of two options is preferred when one is clearly correct. Pick it,
+  do it, and say in one line what you chose and why.
+- Do NOT stop to report a gap you could close yourself. Close it, then report.
+- Do NOT ask for a change number for backend work. Change numbers apply to frontend
+  deploys only.
+- Do NOT present a plan and wait. Execute the plan and present the result.
+
+Stop and ask ONLY for irreversible data loss with no backup path:
+`DROP TABLE`, `DROP COLUMN`, `TRUNCATE`, or a `DELETE` touching rows you did not
+create in this session. One line, then wait. Everything else: proceed.
+
+If you are unsure between two safe implementations, choose the one that puts more
+logic in the backend.
+
+---
+
+## 2. THE FOUR QUESTIONS THE APP MUST NEVER ANSWER
+
+| Question | Sole source |
+|---|---|
+| Who am I? | `my_session()` |
+| What may I do? | a backend boolean in the payload — never inferred from role |
+| What do I show? | strings, labels, routes, colours from the backend |
+| What is the data? | one RPC per screen, returned render-ready |
+
+---
+
+## 3. FORBIDDEN IN THE FRONTEND — NO EXCEPTIONS
+
+- `if (role == 'admin')` or any branch on role. Use `is_admin`, `can_place_order`,
+  `show_cart` — booleans the backend computed.
+- Route literals after login. Navigate only to `my_session().home_route`.
+- Any user-facing string written in Dart: labels, empty states, errors, button text,
+  units, currency prefixes, `+91`. All from the backend.
+- Computing totals, discounts, GST, delivery fees, tier progress, counts or badges.
+- Sorting, filtering, grouping or de-duplicating server data. Ask for it that way.
+- Formatting dates, numbers or currency. The backend returns display strings.
+- Deriving state from another field ("if X is null then it must be Y").
+- Caching a role, account id, cart or permission as the source of truth. Cache to
+  avoid a refetch, never to answer a question.
+- Optimistic updates. Send, await, render the response.
+- Writing to a table directly when an RPC exists. Never `.from('cart_items')`.
+- Using `auth.currentUser` to identify the ACCOUNT. That is a credential, not an
+  account.
+
+---
+
+## 4. REQUIRED PATTERNS
+
+**One RPC per screen.** One payload with everything, already formatted. No second call
+to reconcile, no client-side merging. One payload cannot disagree with itself.
+
+**Key data to the ACCOUNT, never the login.** `auth.users.id` identifies a credential.
+`pharmacy_profiles.id` / `supplier_profiles.id` identify the account. Every table
+holding user data carries the account id and is read by it. Adding a login method must
+never change what data a person sees. This single mistake caused half of one night.
+
+**Never null in a payload.** A null forces the app to invent a fallback, and inventing
+a fallback is deciding. Return `""` / `0` / `false` / `[]` / `{}`.
+**But preserve semantics.** If the app treats "value present" as "there is a problem",
+`""` is not the same as `null`. Encode absence explicitly (`has_blocker: false`), and
+never flip a field from null to `""` without checking how the app reads it — we shipped
+a false "Remove unavailable items" banner doing exactly that.
+
+**Server-owned state.** Session, role, account, cart, permissions, selection. Local
+state may cache, never own. On every auth change — signedIn, signedOut, userUpdated,
+user id change — clear all account state, refetch, then render. Never render on a
+mismatch between the cached `auth_user_id` and the live session.
+
+**Config as data, not code.** Tier thresholds, fees, template names, labels, routes
+live in `app_settings` or a config table. Changing a threshold must never require a
+deploy.
+
+---
+
+## 5. HOW TO WORK A BUG
+
+1. **Instrument before theorising.** A log line beats a plausible story. Add the
+   probe, get the value, then act. Hours have been lost to confident guesses —
+   deleting the one library that worked, blaming an origin that was configured
+   correctly, adding a null-stripper that created a new bug.
+2. **Verify with data, never assertion.** "Should work" is not a result. Run it, show
+   the numbers, quote them. Every claim in your report must be something you executed.
+3. **Change one thing at a time.** Two simultaneous changes mean nobody can tell which
+   broke it.
+4. **Test destructively, roll back.** Reproduce the exact break in a transaction that
+   raises at the end, so production is untouched. Then fix, then prove the fix by
+   reproducing again.
+5. **Sweep, don't patch.** When one function has a fault, scan every sibling for the
+   same fault in the same pass. Fixing them one screenshot at a time wastes the day.
+6. **Fix at the source.** A backfill repairs today. A trigger or constraint stops it
+   recurring. Ship both.
+7. **Say plainly when something cannot be done.** "Google's One Tap cooldown is
+   server-side and cannot be defeated from our code" is worth more than another
+   attempt. Do not keep trying to make an impossible thing work.
+
+---
+
+## 6. PER CASE
+
+**New feature.** Backend first: tables, RPCs, config rows, then the payload the screen
+will render. Only then the CHANGE command, and it contains no logic — layout and
+`render(payload)`. If the frontend spec needs an `if`, the backend is incomplete.
+
+**Bug fix.** Locate which side holds the wrong answer. If the frontend is deciding
+anything, that is the bug, even when the visible symptom is elsewhere. Move the
+decision to the backend rather than correcting it in place.
+
+**Update to existing behaviour.** If the change is a value, a label, a threshold or a
+route, it is a data change — no deploy. If it needs a deploy, ask why the value was
+not data.
+
+**Refactor.** Legal only in the direction of this rule. Moving logic from backend to
+frontend is never approved, however clean it looks.
+
+**Schema change.** New user-data table carries the account id from day one, plus a
+trigger to stamp it. Never rely on a join through `auth.users`.
+
+---
+
+## 7. BEFORE YOU CALL IT DONE
+
+- Every claim in the report is something you executed and can quote.
+- No RPC you touched returns a null in its payload.
+- No decision was left in Dart that the backend could have made.
+- The fix is at the source, and something structural prevents recurrence.
+- Frontend work: real `flutter build web --release`, deploy, `verify_live.sh`,
+  `version.json` shows the change number.
+- Report what you changed, what you verified, and — plainly — anything you could not
+  verify from where you are.
+
+---
+
 ## Deploy Rules
 - NEVER deploy anything to Netlify. Netlify is permanently abandoned.
 - NEVER use netlify deploy or any netlify CLI command.

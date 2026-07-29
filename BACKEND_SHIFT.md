@@ -214,7 +214,13 @@ return *identical* flags for the same real row (BHARAT SALES):
 `answerable=true`, `is_locked=false`. Rolled-back probe; production left with
 the form back at `draft`, 0 pending, no probe functions.
 
-### Role branches: 39 → 4, and none of the 4 is a session-role branch
+### Role branches: 14 → 5, and none of the 5 is a session-role branch
+
+> **Correction.** Earlier revisions of this file and of the PR quoted "39 → 4".
+> That compared an **unfiltered** grep of the baseline (which counted ViewAs
+> enum comparisons, the registration form's local `_Role`, and matches inside
+> comments) against a **filtered** count of the result. Measured the same way
+> at both ends, the honest figure is **14 → 5**.
 
 ```
 main.dart:280                  if (role == null || identity == null)   // ViewAs null-check
@@ -451,7 +457,7 @@ Counts are `grep` over `lib/**.dart` at the time of writing.
 
 | Metric | Before #571 | After #571 |
 |---|---|---|
-| Role branches on session role | 39 | **9** |
+| Role branches (like-for-like filter) | 14 | **9** |
 | Order-gate ladders in Dart | 3 (duplicated) | **0** |
 | Hardcoded gate strings | 16 | **0** |
 | Client-supplied order prices | yes | **no** |

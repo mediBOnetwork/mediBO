@@ -118,16 +118,24 @@ class BackendTableHeader extends StatelessWidget {
   }
 }
 
+/// Runs one backend-described action: writes `status`, then lets the caller
+/// refetch. [note] is the backend's success copy.
+typedef BackendActionHandler = Future<void> Function(
+    Map<String, dynamic> row, String status, String note);
+
 /// One body cell, chosen by the column's `type`.
 ///
 /// [buttonBuilder] supplies the widget for `type:"button"` columns — the caller
 /// owns that because a send button carries a tap handler this widget knows
 /// nothing about. When it is null the button cell renders nothing rather than
 /// inventing a placeholder.
+///
+/// CHANGE #608 — [actionHandler] does the same job for `type:"actions"`.
 class BackendTableCell extends StatelessWidget {
   final BackendColumn column;
   final Map<String, dynamic> row;
   final Widget Function(Map<String, dynamic> row)? buttonBuilder;
+  final BackendActionHandler? actionHandler;
   final TextStyle? textStyle;
 
   const BackendTableCell({
@@ -135,6 +143,7 @@ class BackendTableCell extends StatelessWidget {
     required this.column,
     required this.row,
     this.buttonBuilder,
+    this.actionHandler,
     this.textStyle,
   });
 
@@ -151,6 +160,21 @@ class BackendTableCell extends StatelessWidget {
       case 'button':
         if (buttonBuilder == null) return const SizedBox.shrink();
         return Align(alignment: column.boxAlign, child: buttonBuilder!(row));
+      case 'actions':
+        // CHANGE #608 — the cell type that made the CONFIRMATION column render
+        // blank. `actions` is an object, not a string, so the default branch
+        // below printed nothing for it.
+        if (actionHandler == null) return const SizedBox.shrink();
+        final actions = row[column.key] is Map
+            ? (row[column.key] as Map).cast<String, dynamic>()
+            : null;
+        return Align(
+          alignment: column.boxAlign,
+          child: BackendActionsCell(
+            actions: actions,
+            onAct: (status, note) => actionHandler!(row, status, note),
+          ),
+        );
       default:
         // A plain string, printed verbatim. An empty value prints nothing —
         // no em-dash, no placeholder.
@@ -173,12 +197,14 @@ class BackendTableRowCells extends StatelessWidget {
   final List<BackendColumn> columns;
   final Map<String, dynamic> row;
   final Widget Function(Map<String, dynamic> row)? buttonBuilder;
+  final BackendActionHandler? actionHandler;
 
   const BackendTableRowCells({
     super.key,
     required this.columns,
     required this.row,
     this.buttonBuilder,
+    this.actionHandler,
   });
 
   @override
@@ -191,8 +217,83 @@ class BackendTableRowCells extends StatelessWidget {
             column: c,
             row: row,
             buttonBuilder: buttonBuilder,
+            actionHandler: actionHandler,
           ),
         ),
+    ]);
+  }
+}
+
+/// CHANGE #608 — the ONE accept/reject implementation.
+///
+/// #607 put this logic inside `_ConfirmActions`, a private widget in
+/// admin_customer_screen.dart. The `type:"actions"` column needs exactly the
+/// same behaviour, and copy-pasting it is how the same value ends up decided in
+/// two places that then drift. It lives here now; the screen's mobile card and
+/// the desktop table cell both render THIS widget.
+///
+/// Everything visible comes from the action object: whether the pair shows at
+/// all (`actions.show`), each button's own `show`, its label, its three
+/// colours, the `status` value written, and the `note` toasted afterwards.
+/// Nothing here knows the words "Accept", "accepted", or what a pending order
+/// is.
+class BackendActionsCell extends StatefulWidget {
+  final Map<String, dynamic>? actions;
+
+  /// Called with the tapped action's `status` and `note`. The caller performs
+  /// the write and the refetch — this widget never mutates a row.
+  final Future<void> Function(String status, String note) onAct;
+
+  const BackendActionsCell({
+    super.key,
+    required this.actions,
+    required this.onAct,
+  });
+
+  @override
+  State<BackendActionsCell> createState() => _BackendActionsCellState();
+}
+
+class _BackendActionsCellState extends State<BackendActionsCell> {
+  bool _busy = false;
+
+  Future<void> _run(Map<String, dynamic> action) async {
+    if (_busy) return;
+    final status = action['status'] as String? ?? '';
+    if (status.isEmpty) return;
+    setState(() => _busy = true);
+    try {
+      await widget.onAct(status, action['note'] as String? ?? '');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final a = widget.actions;
+    // show:false means an empty cell — no placeholder text, no dash, no
+    // disabled button.
+    if (a == null || a['show'] != true) return const SizedBox.shrink();
+
+    if (_busy) {
+      return const SizedBox(
+        width: 18,
+        height: 18,
+        child: CircularProgressIndicator(strokeWidth: 2),
+      );
+    }
+
+    final accept = (a['accept'] as Map?)?.cast<String, dynamic>();
+    final reject = (a['reject'] as Map?)?.cast<String, dynamic>();
+    final showAccept = BackendActionButton.visible(accept);
+    final showReject = BackendActionButton.visible(reject);
+    if (!showAccept && !showReject) return const SizedBox.shrink();
+
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      BackendActionButton(action: accept, onTap: () => _run(accept!)),
+      if (showAccept && showReject) const SizedBox(width: 4),
+      BackendActionButton(action: reject, onTap: () => _run(reject!)),
     ]);
   }
 }

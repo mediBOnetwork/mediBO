@@ -1490,6 +1490,17 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
 
   // ── Order status ───────────────────────────────────────────────────────────
 
+  /// CHANGE #608 — the BackendActionHandler the desktop table's
+  /// `type:"actions"` cell calls. The order id is read out of the same payload
+  /// row the cell rendered from, so the write can only ever target the row the
+  /// admin actually tapped.
+  Future<void> _orderActionHandler(
+      Map<String, dynamic> row, String status, String note) async {
+    final orderId = row['order_id'] as String? ?? '';
+    if (orderId.isEmpty) return;
+    await _updateStatus(orderId, status, note);
+  }
+
   /// CHANGE #607 — [status] is the value the backend put in the action object,
   /// and [note] is the backend's success copy. After the write this refetches
   /// admin_customer_orders via _load() and re-renders from the response: the
@@ -2337,6 +2348,10 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                 child: BackendTableRowCells(
                   columns: _ordersColumns,
                   row: row.render,
+                  // CHANGE #608 — feeds the type:"actions" cell. The row's
+                  // order_id comes from the payload the cell was built from,
+                  // so the write always targets the row the admin tapped.
+                  actionHandler: _orderActionHandler,
                 ),
               ),
             if (isCart) ...[
@@ -2429,12 +2444,13 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
             color: Colors.white,
             border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
           ),
+          // CHANGE #608 — accept/reject is GONE from this strip. columns[]
+          // now carries a type:"actions" CONFIRMATION column, so the buttons
+          // render in the grid where the header says they are. Leaving a copy
+          // here would put two live accept buttons on one row. What remains is
+          // the bill/payment affordance, which is not a column: PAYMENT in
+          // columns[] is payment_chip, the status, not these buttons.
           child: Row(children: [
-            GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () {}, // absorb tap so Accept/Reject don't toggle expand
-              child: _ConfirmActions(row: row, onUpdate: _updateStatus),
-            ),
             const Spacer(),
             GestureDetector(
               behavior: HitTestBehavior.opaque,
@@ -2605,7 +2621,11 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                 GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onTap: () {},
-                  child: _ConfirmActions(row: row, onUpdate: _updateStatus),
+                  child: BackendActionsCell(
+                    actions: row.rmap('actions'),
+                    onAct: (status, note) =>
+                        _updateStatus(row.orderId!, status, note),
+                  ),
                 ),
                 // CHANGE #213 — View Payment (mobile)
                 // CHANGE #464 — "Upload Bill" added to the left of View Payment.
@@ -4627,88 +4647,15 @@ class _CustomerStatusBadge extends StatelessWidget {
 }
 
 // ── Order confirmation ────────────────────────────────────────────────────────
-
-class _ConfirmActions extends StatefulWidget {
-  final _CustRow row;
-  // CHANGE #607 — carries the success note from the action object through to
-  // the toast, so this screen writes no confirmation copy of its own.
-  final Future<void> Function(String orderId, String status, String note)
-      onUpdate;
-  const _ConfirmActions({required this.row, required this.onUpdate});
-
-  @override
-  State<_ConfirmActions> createState() => _ConfirmActionsState();
-}
-
-class _ConfirmActionsState extends State<_ConfirmActions> {
-  bool _busy = false;
-
-  /// CHANGE #607 — the status VALUE written and the toast shown afterwards both
-  /// come out of the action object. Nothing here knows the word 'accepted'.
-  Future<void> _act(Map<String, dynamic> action) async {
-    if (_busy) return;
-    final status = action['status'] as String? ?? '';
-    if (status.isEmpty) return;
-    setState(() => _busy = true);
-    await widget.onUpdate(
-      widget.row.orderId!,
-      status,
-      action['note'] as String? ?? '',
-    );
-    if (mounted) setState(() => _busy = false);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    // CHANGE #607 — the `orderId == null -> '—'` branch is DELETED. It painted
-    // an em-dash the app invented for a row that has no order, and it is
-    // unreachable anyway: the action strip only builds this widget when
-    // row.orderId != null. An absent action renders nothing, never a glyph.
-    if (_busy) {
-      return const SizedBox(
-          width: 18,
-          height: 18,
-          child: CircularProgressIndicator(
-              strokeWidth: 2, color: Color(0xFF1B7A43)));
-    }
-    // CHANGE #607 — the LAST decision leaves this cell.
-    //
-    // #606 removed the status -> label and status -> colour maps but left one
-    // branch behind: `if (status != 'pending') return nothing`. That was the
-    // app answering "what may I do?" — the second of the four questions the
-    // frontend must never answer — and its own comment said it wanted a
-    // backend boolean. It has one now.
-    //
-    // admin_customer_orders returns can_confirm, and actions{show, accept{...},
-    // reject{...}} where each action carries its own label, the status VALUE to
-    // write, the success note, and bg/fg/border from tone_colors(). Deleted
-    // here: the 'pending' comparison, the literals 'Accept' and 'Reject', the
-    // hardcoded green #1B7A43 / red #DC2626, the `_btn` colour helper that
-    // derived a fill and a border by alpha-blending them, and the hardcoded
-    // 'accepted'/'rejected' status strings sent to the write RPC.
-    final orderId = widget.row.orderId ?? '';
-    final actions = widget.row.rmap('actions');
-
-    if (actions == null || actions['show'] != true) {
-      RenderLog.write('order_confirm_cell', '$orderId:hidden');
-      return const SizedBox.shrink();
-    }
-
-    final accept = (actions['accept'] as Map?)?.cast<String, dynamic>();
-    final reject = (actions['reject'] as Map?)?.cast<String, dynamic>();
-    final showAccept = BackendActionButton.visible(accept);
-    final showReject = BackendActionButton.visible(reject);
-    if (!showAccept && !showReject) return const SizedBox.shrink();
-
-    RenderLog.write('order_confirm_cell',
-        '$orderId:actions=${showAccept ? "a" : ""}${showReject ? "r" : ""}');
-    return Row(mainAxisSize: MainAxisSize.min, children: [
-      BackendActionButton(action: accept, onTap: () => _act(accept!)),
-      if (showAccept && showReject) const SizedBox(width: 4),
-      BackendActionButton(action: reject, onTap: () => _act(reject!)),
-    ]);
-  }
-}
+//
+// CHANGE #608 — _ConfirmActions is DELETED.
+//
+// #607 wrote the accept/reject logic here, inside this screen. #608 needs the
+// identical behaviour in the table's `type:"actions"` cell, and a second copy
+// is how one surface ends up deciding something the other overwrites. The
+// implementation moved to BackendActionsCell in widgets/backend_table.dart;
+// this screen's mobile card and its desktop CONFIRMATION column both render
+// that one widget, wired through _orderActionHandler below.
 
 // ── Registration Approve / Reject ─────────────────────────────────────────────
 

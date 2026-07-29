@@ -99,6 +99,43 @@ a supplier told `needs_profile=true`; admin/supplier both given gate reason
 `not_registered` (which would have told an admin to "Complete your pharmacy
 registration"); and the gate judging the admin's own account under View As.
 
+### CHANGE #572 — customer Orders screen
+
+**What it decided in Dart, and no longer does:**
+
+- fetched with `.eq('user_id', currentUser.id)` — the **LOGIN**. An account
+  reachable by two login methods saw only the orders placed under one
+  credential. This is the "orders vanished" report. (Confirmed live: one real
+  email maps to two customer accounts in this database.)
+- realtime subscribed on `user_id` too, so a change to the *other* login's
+  order never triggered a refresh.
+- capitalised status with `rawStatus[0].toUpperCase() + substring(1)`.
+- `_StatusChip` switch-cased status into **both** a label and a colour.
+- folded quantities for `itemCount`; measured `lines.length` for the avatar.
+- fell back to `price * qty` when a stored `line_total` was missing.
+- empty state written in Dart.
+
+**Now:** `my_orders_screen(p_view_as_user)` — keyed to `customer_id`, rows
+returned already sorted, counted, coloured and money-formatted.
+`order_status_config` and `orders_screen_copy` make labels, chip colours and
+empty-state copy data. `placed_at` stays a RAW timestamp so DateLabels/ist_fmt
+keeps owning date strings (#548).
+
+`p_view_as_user` is honoured **only for an admin caller**, so a customer cannot
+read another account's orders by passing an id.
+
+**Verified with data:**
+
+- Migration safety checked first: all 6 orders already carry `customer_id`
+  (`would_vanish = 0`), and a `BEFORE INSERT/UPDATE` trigger
+  (`trg_stamp_customer_orders`) keeps it that way — structural, not luck.
+- Real customer (Nitesh Pharmacy): 2 orders, `CPO260726NIT123O1`,
+  `accepted` → label **Accepted**, colour **#22C55E**, total **₹11,497.29**,
+  13 unique items / 47 units, first line **₹912.64**.
+- Empty account: `count=0`, `has_orders=false`, empty copy present, 0 nulls.
+- Copy relocated **verbatim** ("No purchase orders yet" / "Placed orders will
+  appear here.") — no rewording smuggled in with the move.
+
 ---
 
 ## Remaining — with the decision each still makes
@@ -107,7 +144,7 @@ Counts are `grep` over `lib/**.dart` at the time of writing.
 
 | # | Area | Decision still in Dart | Count |
 |---|---|---|---|
-| 1 | Orders (customer + admin) | `orders_screen.dart` fetches by `currentUser.id`; client-side sort/group | — |
+| 1 | Orders — **admin side** | `admin_customer_screen` order views still read tables directly | — |
 | 2 | Storefront / catalogue | client-side filtering + `rupees()` formatting | — |
 | 3 | Inquiry + supplier orders | slot/role words (`role == 'none' \| 'no_supplier'`) in `inquiry_v11/v12.dart`, `admin_supplier_screen.dart` | 9 role branches |
 | 4 | Fulfilment (collect/arrivals/warehouse/pack) | mostly backend already (`fw_*`); check stub fields | — |

@@ -20,12 +20,20 @@ import '../widgets/cust_pay_panel.dart';
 
 class _DbOrder {
   final String id;
-  final String number;  // payment_id (PO-YYMMDD-XXXX); falls back to '—'
+  final String number;
   /// CHANGE #548: RAW backend timestamp, verbatim.
   final String placedAt;
   final List<_DbLine> lines;
   final double total;
-  final String status; // DB value capitalized: Pending / Confirmed / etc.
+  /// #572 — backend-formatted money. Never rupees() in Dart.
+  final String totalDisplay;
+  final String status;
+  /// #572 — the chip's words and colour, both decided by the backend.
+  final String statusLabel;
+  final String statusColor;
+  /// #572 — counted server-side, not folded from lines.
+  final int uniqueItemCount;
+  final int unitCount;
   final bool placedByAdmin;
 
   _DbOrder({
@@ -35,30 +43,36 @@ class _DbOrder {
     required this.lines,
     required this.total,
     required this.status,
+    this.totalDisplay = '',
+    this.statusLabel = '',
+    this.statusColor = '',
+    this.uniqueItemCount = 0,
+    this.unitCount = 0,
     this.placedByAdmin = false,
   });
 
-  factory _DbOrder.fromRow(Map<String, dynamic> row) {
-    final id = row['id'] as String;
-    final items = (row['items'] as List<dynamic>?) ?? [];
-    final rawStatus = ((row['status'] as String?) ?? 'pending').trim();
-    final status = rawStatus.isNotEmpty
-        ? rawStatus[0].toUpperCase() + rawStatus.substring(1)
-        : 'Pending';
-    return _DbOrder(
-      id: id,
-      number: orderDisplayId(row),
-      placedAt: row['created_at']?.toString() ?? '',
-      lines: items
-          .map((item) => _DbLine.fromJson(item as Map<String, dynamic>))
-          .toList(),
-      total: (row['total_amount'] as num?)?.toDouble() ?? 0.0,
-      status: status,
-      placedByAdmin: (row['placed_by_admin'] as bool?) ?? false,
-    );
-  }
-
-  int get itemCount => lines.fold(0, (s, l) => s + l.quantity);
+  /// CHANGE #572 — built from my_orders_screen(), which returns every field
+  /// already decided and already formatted. Nothing is derived here: the
+  /// status label, its colour, the money strings and both counts all arrive
+  /// resolved. `placedAt` stays the RAW timestamp because DateLabels/ist_fmt
+  /// owns every date string (#548).
+  factory _DbOrder.fromPayload(Map<String, dynamic> row) => _DbOrder(
+        id: (row['id'] ?? '').toString(),
+        number: (row['order_code'] ?? '').toString(),
+        placedAt: (row['placed_at'] ?? '').toString(),
+        lines: ((row['lines'] as List<dynamic>?) ?? const [])
+            .whereType<Map>()
+            .map((l) => _DbLine.fromPayload(l.cast<String, dynamic>()))
+            .toList(),
+        total: (row['total'] as num?)?.toDouble() ?? 0.0,
+        totalDisplay: (row['total_display'] ?? '').toString(),
+        status: (row['status'] ?? '').toString(),
+        statusLabel: (row['status_label'] ?? '').toString(),
+        statusColor: (row['status_color'] ?? '').toString(),
+        uniqueItemCount: (row['unique_item_count'] as num?)?.toInt() ?? 0,
+        unitCount: (row['unit_count'] as num?)?.toInt() ?? 0,
+        placedByAdmin: row['placed_by_admin'] == true,
+      );
 }
 
 class _DbLine {
@@ -66,24 +80,30 @@ class _DbLine {
   final double price;
   final int quantity;
   final double lineTotal;
+  /// #572 — backend-formatted money strings.
+  final String priceDisplay;
+  final String lineTotalDisplay;
 
   const _DbLine({
     required this.name,
     required this.price,
     required this.quantity,
     required this.lineTotal,
+    this.priceDisplay = '',
+    this.lineTotalDisplay = '',
   });
 
-  factory _DbLine.fromJson(Map<String, dynamic> j) {
-    final price = (j['price'] as num?)?.toDouble() ?? 0.0;
-    final qty = (j['quantity'] as num?)?.toInt() ?? 1;
-    return _DbLine(
-      name: (j['product_name'] as String?) ?? '',
-      price: price,
-      quantity: qty,
-      lineTotal: (j['line_total'] as num?)?.toDouble() ?? price * qty,
-    );
-  }
+  /// #572 — line_total arrives resolved. The old parser fell back to
+  /// `price * qty` when the stored value was missing, which is the app
+  /// deriving one field from two others.
+  factory _DbLine.fromPayload(Map<String, dynamic> j) => _DbLine(
+        name: (j['name'] ?? '').toString(),
+        price: (j['price'] as num?)?.toDouble() ?? 0.0,
+        quantity: (j['quantity'] as num?)?.toInt() ?? 1,
+        lineTotal: (j['line_total'] as num?)?.toDouble() ?? 0.0,
+        priceDisplay: (j['price_display'] ?? '').toString(),
+        lineTotalDisplay: (j['line_total_display'] ?? '').toString(),
+      );
 }
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
@@ -102,13 +122,19 @@ class OrdersScreen extends StatefulWidget {
 class _OrdersScreenState extends State<OrdersScreen> {
   List<_DbOrder> _orders = [];
   bool _loading = true;
+  /// #572 — empty-state copy comes from the payload, not from Dart literals.
+  String _emptyTitle = '';
+  String _emptyNote = '';
+  /// #572 — the ACCOUNT id, as the backend resolved it. Realtime keys on this.
+  String _customerId = '';
   RealtimeChannel? _channel;
 
   @override
   void initState() {
     super.initState();
+    // #572 — subscribe only AFTER the fetch has resolved the account id; the
+    // channel filter needs the account, which only the backend can tell us.
     _fetch();
-    _subscribeRealtime();
   }
 
   @override
@@ -126,47 +152,65 @@ class _OrdersScreenState extends State<OrdersScreen> {
     super.dispose();
   }
 
+  /// CHANGE #572 — ONE RPC, keyed to the ACCOUNT.
+  ///
+  /// This used to read the `orders` table directly with
+  /// `.eq('user_id', currentUser.id)` — the LOGIN. An account reachable by two
+  /// login methods saw only the orders placed under one of them; that is the
+  /// "orders vanished" report. my_orders_screen() resolves the account itself
+  /// and returns rows already sorted, counted and formatted, so there is no
+  /// client-side ordering, folding or money formatting left here.
   Future<void> _fetch() async {
     try {
-      // viewAsUserId is set when super-admin is previewing a customer's orders.
-      final uid = widget.viewAsUserId
-          ?? Supabase.instance.client.auth.currentUser?.id;
-      if (uid == null) {
+      final raw = await Supabase.instance.client.rpc(
+        'my_orders_screen',
+        params: {'p_view_as_user': widget.viewAsUserId},
+      );
+      final map = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
+      if (map is! Map) {
         if (mounted) setState(() => _loading = false);
         return;
       }
-      final rows = await Supabase.instance.client
-          .from('orders')
-          .select()
-          .eq('user_id', uid)
-          .order('created_at', ascending: false);
+      final payload = map.cast<String, dynamic>();
       if (!mounted) return;
-      final parsed = rows.map((r) => _DbOrder.fromRow(r)).toList();
+      final parsed = ((payload['orders'] as List<dynamic>?) ?? const [])
+          .whereType<Map>()
+          .map((r) => _DbOrder.fromPayload(r.cast<String, dynamic>()))
+          .toList();
       RenderLog.write('orders_fetched',
           'count:${parsed.length}${widget.viewAsUserId != null ? ':viewas' : ''}');
       setState(() {
         _orders = parsed;
+        _emptyTitle = (payload['empty_title'] ?? '').toString();
+        _emptyNote = (payload['empty_note'] ?? '').toString();
+        _customerId = (payload['customer_id'] ?? '').toString();
         _loading = false;
       });
+      if (_channel == null) _subscribeRealtime();
     } catch (_) {
       if (mounted) setState(() => _loading = false);
     }
   }
 
+  /// #572 — keyed to the ACCOUNT, like the fetch. Filtering on user_id meant a
+  /// change to an order placed under the account's OTHER login never triggered
+  /// a refresh. Realtime is only a refetch trigger: the callback re-runs the
+  /// RPC rather than parsing the row, so the backend stays the only answer.
   void _subscribeRealtime() {
     if (widget.viewAsUserId != null) return; // no realtime in view-as mode
-    final uid = Supabase.instance.client.auth.currentUser?.id;
-    if (uid == null) return;
+    final accountId = _customerId;
+    if (accountId.isEmpty) return;
+    _channel?.unsubscribe();
     _channel = Supabase.instance.client
-        .channel('customer_orders_$uid')
+        .channel('customer_orders_$accountId')
         .onPostgresChanges(
           event: PostgresChangeEvent.all,
           schema: 'public',
           table: 'orders',
           filter: PostgresChangeFilter(
             type: PostgresChangeFilterType.eq,
-            column: 'user_id',
-            value: uid,
+            column: 'customer_id',
+            value: accountId,
           ),
           callback: (_) => _fetch(),
         )
@@ -186,9 +230,10 @@ class _OrdersScreenState extends State<OrdersScreen> {
             Icon(Icons.receipt_long_outlined,
                 size: 64, color: Theme.of(context).hintColor),
             const SizedBox(height: 12),
-            const Text('No purchase orders yet'),
+            // #572 — empty-state copy printed verbatim from the payload.
+            Text(_emptyTitle),
             const SizedBox(height: 4),
-            Text('Placed orders will appear here.',
+            Text(_emptyNote,
                 style: TextStyle(color: Theme.of(context).hintColor)),
           ],
         ),
@@ -307,7 +352,9 @@ class _OrderCardState extends State<_OrderCard> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final order = widget.order;
-    final uniqueItemCount = order.lines.length.toString();
+    // #572 — counted by the backend (unique_item_count), not by measuring the
+    // lines list on the client.
+    final uniqueItemCount = order.uniqueItemCount.toString();
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -346,7 +393,11 @@ class _OrderCardState extends State<_OrderCard> {
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 // Status
-                _StatusChip(status: order.status),
+                _StatusChip(
+                  status: order.status,
+                  label: order.statusLabel,
+                  colorHex: order.statusColor,
+                ),
                 if (order.placedByAdmin) ...[
                   const SizedBox(height: 4),
                   Container(
@@ -1334,23 +1385,29 @@ class _WaNumberPickerState extends State<_WaNumberPicker> {
 
 class _StatusChip extends StatelessWidget {
   final String status;
-  const _StatusChip({required this.status});
+  final String label;
+  final String colorHex;
+  const _StatusChip({
+    required this.status,
+    required this.label,
+    required this.colorHex,
+  });
+
+  /// Parses '#RRGGBB' from the backend. Not a decision — a hex string is not a
+  /// Dart Color until something converts it.
+  static Color _hexColor(String hex, {required Color fallback}) {
+    final h = hex.replaceFirst('#', '').trim();
+    if (h.length != 6) return fallback;
+    final v = int.tryParse(h, radix: 16);
+    return v == null ? fallback : Color(0xFF000000 | v);
+  }
 
   @override
   Widget build(BuildContext context) {
-    final lower = status.toLowerCase();
-    final color = switch (lower) {
-      'accepted' || 'confirmed' => Colors.green,
-      'cancelled' || 'rejected' => Colors.red,
-      _ => Colors.orange, // pending, processing, etc.
-    };
-    final label = switch (lower) {
-      'accepted' || 'confirmed' => 'Accepted',
-      'cancelled' => 'Cancelled',
-      'rejected' => 'Rejected',
-      'pending' => 'Pending',
-      _ => status[0].toUpperCase() + status.substring(1),
-    };
+    // #572 — the chip no longer switch-cases the status into a label and a
+    // colour. Both arrive decided from order_status_config, so adding a status
+    // or recolouring one is an UPDATE in app_settings, not a deploy.
+    final color = _hexColor(colorHex, fallback: Colors.orange);
     return Container(
       margin: const EdgeInsets.only(top: 4),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),

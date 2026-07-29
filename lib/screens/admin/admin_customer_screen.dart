@@ -18,6 +18,7 @@ import 'package:pharma_b2b/utils/toast.dart';
 import '../../utils/download_bytes.dart'; // CHANGE #463
 import '../../utils/render_log.dart';
 import '../../services/admin_date_scope.dart'; // CHANGE #545
+import '../../services/admin_zone_scope.dart'; // CHANGE #609
 import '../../services/date_labels.dart'; // CHANGE #548
 import '../../widgets/route_google_map_panel.dart'; // CHANGE #463
 import '../bulk_upload_screen.dart';
@@ -409,6 +410,14 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     _load(showSpinner: false);
   }
 
+  /// CHANGE #609 — the zone moved. Same shape as the date listener: refetch and
+  /// render the response. The tab never filters the list it already holds,
+  /// because the zone rule lives in the RPC, not here.
+  void _onZoneScopeChanged() {
+    if (!mounted) return;
+    _load(showSpinner: false);
+  }
+
   // ── CHANGE #547: Import Customer ─────────────────────────────────────────
   // Anchor for the popup menu. Deliberately a menu AT THE BUTTON, not the
   // centred dialog the Import Supplier popover uses.
@@ -569,6 +578,13 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   /// second copy would render a stale shape the moment the config changed.
   List<BackendColumn> _ordersColumns = const [];
 
+  /// CHANGE #609 — the scope the backend applied, as it reported it.
+  /// `zone_label` reads "Raipur Zone" / "All zones"; both strings are the
+  /// backend's. This tab sends no zone argument and does no zone filtering —
+  /// these are display only, so the header can state what is on screen.
+  String _ordersDateLabel = '';
+  String _ordersZoneLabel = '';
+
   /// CHANGE #601 — footer totals as the server computed them.
   int    _cartFooterLines = 0;
   double _cartFooterValue = 0.0;
@@ -623,6 +639,11 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     // CHANGE #545 — follow the central admin date.
     AdminDateScope.instance.addListener(_onDateScopeChanged);
     AdminDateScope.instance.ensureLoaded();
+    // CHANGE #609 — and the central admin zone. The zone lives server-side, so
+    // this tab does not receive it and does not filter by it: it just refetches
+    // admin_customer_orders, which applies the saved scope itself.
+    AdminZoneScope.instance.addListener(_onZoneScopeChanged);
+    AdminZoneScope.instance.ensureLoaded();
     _load();
     _subscribeRealtime();
     _loadSLeadsTotal();
@@ -681,6 +702,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   @override
   void dispose() {
     AdminDateScope.instance.removeListener(_onDateScopeChanged);
+    AdminZoneScope.instance.removeListener(_onZoneScopeChanged); // CHANGE #609
     _debounce?.cancel();
     for (final ch in _realtimeChannels) {
       ch.unsubscribe();
@@ -862,6 +884,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       final coSummaryLabel = coSummary['label'] as String? ?? '';
       // CHANGE #607 — the desktop table's columns, in the backend's order.
       final coColumns = backendColumns(coMap['columns']);
+      final coDateLabel = coMap['date_label'] as String? ?? '';   // CHANGE #609
+      final coZoneLabel = coMap['zone_label'] as String? ?? '';   // CHANGE #609
 
       // CHANGE #369 — grouped WhatsApp leads, one Lead per sender phone.
       // The RPC returns sender_phone (not user_id), so resolve customer
@@ -979,6 +1003,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           _ordersCount        = coCount;
           _ordersEmpty        = coEmpty;
           _ordersColumns      = coColumns; // CHANGE #607
+          _ordersDateLabel    = coDateLabel; // CHANGE #609
+          _ordersZoneLabel    = coZoneLabel; // CHANGE #609
           _cartRows     = carts;
           _cartFooterLines =
               ((screen['cart_footer'] as Map?)?['total_lines'] as num?)?.toInt() ?? 0;
@@ -1821,14 +1847,42 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         if (rows.isNotEmpty) ...[
           // CHANGE #606 — summary.label: "N orders • N items • ₹N". Not one
           // number of it is added up in Dart.
-          if (isOrders && _ordersSummaryLabel.isNotEmpty)
+          if (isOrders)
             Padding(
               padding: EdgeInsets.fromLTRB(isDesktop ? 28 : 16, 12, 16, 4),
-              child: Text(_ordersSummaryLabel,
-                  style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF374151))),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // CHANGE #609 — the scope line: the date and the zone the
+                  // backend actually applied, each printed only when it sent
+                  // one. Neither string is built here.
+                  if (_ordersDateLabel.isNotEmpty || _ordersZoneLabel.isNotEmpty)
+                    Row(children: [
+                      if (_ordersDateLabel.isNotEmpty)
+                        Text(_ordersDateLabel,
+                            style: const TextStyle(
+                                fontSize: 12, color: Color(0xFF6B7280))),
+                      if (_ordersDateLabel.isNotEmpty &&
+                          _ordersZoneLabel.isNotEmpty)
+                        const SizedBox(width: 10),
+                      if (_ordersZoneLabel.isNotEmpty)
+                        Text(_ordersZoneLabel,
+                            style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: Color(0xFF1B7A43))),
+                    ]),
+                  if (_ordersSummaryLabel.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(_ordersSummaryLabel,
+                        style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF374151))),
+                  ],
+                ],
+              ),
             ),
           if (isDesktop) _buildCustTableHeader(),
           ...rows.map(

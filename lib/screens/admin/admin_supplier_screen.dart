@@ -23,6 +23,7 @@ import '../../services/spn_options.dart';
 import '../../utils/render_log.dart';
 import '../../utils/safe_parse.dart';
 import '../../services/admin_date_scope.dart'; // CHANGE #545
+import '../../services/admin_zone_scope.dart'; // CHANGE #609
 import '../../services/date_labels.dart'; // CHANGE #548
 import '../../widgets/backend_chip.dart'; // CHANGE #606
 import '../../widgets/backend_table.dart'; // CHANGE #607
@@ -374,6 +375,14 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     _load(showSpinner: false);
   }
 
+  /// CHANGE #609 — the zone moved. Same shape as the date listener: refetch and
+  /// render the response. The tab never filters the list it already holds,
+  /// because the zone rule lives in the RPC, not here.
+  void _onZoneScopeChanged() {
+    if (!mounted) return;
+    _load(showSpinner: false);
+  }
+
   List<_SupRow>              _suppliers    = [];
   List<_PendingRow>          _pending      = [];
   // Supplier staging (submitted companies + medicines awaiting admin approval)
@@ -393,6 +402,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   /// No Dart fallback list: see backend_table.dart for why a "for safety" copy
   /// is the bug, not the safety net.
   List<BackendColumn> _ordersColumns = const [];
+
+  /// CHANGE #609 — the scope the backend applied, as reported. Display only:
+  /// this tab sends no zone argument and never filters by zone itself.
+  String _ordersDateLabel = '';
+  String _ordersZoneLabel = '';
   List<_LeadItem>            _leads        = [];
   List<Map<String, dynamic>> _deletedRows  = [];
   bool _deletedExpanded = false;
@@ -538,6 +552,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     // CHANGE #545 — follow the central admin date.
     AdminDateScope.instance.addListener(_onDateScopeChanged);
     AdminDateScope.instance.ensureLoaded();
+    // CHANGE #609 — and the central admin zone; see the customer screen. No
+    // zone argument is sent anywhere: admin_supplier_orders applies the saved
+    // scope server-side.
+    AdminZoneScope.instance.addListener(_onZoneScopeChanged);
+    AdminZoneScope.instance.ensureLoaded();
     _load();
     _loadAllocationMode();
     _subscribeRealtime();
@@ -581,6 +600,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   @override
   void dispose() {
     AdminDateScope.instance.removeListener(_onDateScopeChanged);
+    AdminZoneScope.instance.removeListener(_onZoneScopeChanged); // CHANGE #609
     if (_matchServiceListener != null) {
       _matchService.statuses.removeListener(_matchServiceListener!);
     }
@@ -873,6 +893,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           (soMap['empty'] as Map?)?.cast<String, dynamic>() ?? const {};
       final ordersCount = (soMap['count'] as num?)?.toInt() ?? 0;
       final ordersColumns = backendColumns(soMap['columns']); // CHANGE #607
+      final ordersDateLabel = soMap['date_label'] as String? ?? ''; // CHANGE #609
+      final ordersZoneLabel = soMap['zone_label'] as String? ?? ''; // CHANGE #609
       final leads  = leadRows.map((r) {
         final m = Map<String, dynamic>.from(r as Map);
         return _LeadItem(
@@ -909,6 +931,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           _ordersCount        = ordersCount;
           _ordersEmpty        = ordersEmpty;
           _ordersColumns      = ordersColumns; // CHANGE #607
+          _ordersDateLabel    = ordersDateLabel; // CHANGE #609
+          _ordersZoneLabel    = ordersZoneLabel; // CHANGE #609
           _leads          = leads;
           _inquiryOverview = inquiryOverview;
           _deletedRows    = deletedR.map((r) => Map<String, dynamic>.from(r as Map)).toList();
@@ -2529,6 +2553,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
               (soMap['empty'] as Map?)?.cast<String, dynamic>() ?? const {};
           _ordersCount = (soMap['count'] as num?)?.toInt() ?? 0;
           _ordersColumns = backendColumns(soMap['columns']); // CHANGE #607
+          _ordersDateLabel = soMap['date_label'] as String? ?? ''; // CHANGE #609
+          _ordersZoneLabel = soMap['zone_label'] as String? ?? ''; // CHANGE #609
           _liveOrderItemKeys = liveKeys; // CHANGE #277
         });
         RenderLog.write('supplier_orders_refreshed', _orders.length);
@@ -4779,15 +4805,40 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     if (activeOrders.isEmpty) return _ordersEmptyState();
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       // CHANGE #606 — summary.label: "N POs • N items • ₹N", server-totalled.
-      if (_ordersSummaryLabel.isNotEmpty)
-        Padding(
-          padding: EdgeInsets.fromLTRB(isDesktop ? 28 : 16, 12, 16, 4),
-          child: Text(_ordersSummaryLabel,
-              style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF374151))),
+      // CHANGE #609 — with the scope line above it: the date and the zone the
+      // backend applied, each rendered only when it sent one.
+      Padding(
+        padding: EdgeInsets.fromLTRB(isDesktop ? 28 : 16, 12, 16, 4),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (_ordersDateLabel.isNotEmpty || _ordersZoneLabel.isNotEmpty)
+              Row(children: [
+                if (_ordersDateLabel.isNotEmpty)
+                  Text(_ordersDateLabel,
+                      style: const TextStyle(
+                          fontSize: 12, color: Color(0xFF6B7280))),
+                if (_ordersDateLabel.isNotEmpty && _ordersZoneLabel.isNotEmpty)
+                  const SizedBox(width: 10),
+                if (_ordersZoneLabel.isNotEmpty)
+                  Text(_ordersZoneLabel,
+                      style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF1B7A43))),
+              ]),
+            if (_ordersSummaryLabel.isNotEmpty) ...[
+              const SizedBox(height: 2),
+              Text(_ordersSummaryLabel,
+                  style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF374151))),
+            ],
+          ],
         ),
+      ),
       if (isDesktop) _ordersTableHeader(),
       ...activeOrders.map((r) => isDesktop ? _desktopOrderRow(r) : _mobileOrderCard(r)),
       const SizedBox(height: 32),

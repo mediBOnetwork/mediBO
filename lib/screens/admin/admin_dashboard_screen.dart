@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/widgets/admin_date_picker.dart';
+import 'package:pharma_b2b/widgets/admin_zone_picker.dart'; // CHANGE #609
 import 'package:pharma_b2b/widgets/order_hours_card.dart';
 import 'package:pharma_b2b/widgets/notifications_card.dart';
 
@@ -160,7 +161,25 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   // CHANGE #545 — THE admin date filter. One picker, here,
                   // directly above ORDER HOURS; every date-scoped tab follows
                   // it via AdminDateScope. No tab has one of its own.
-                  const AdminDatePicker(),
+                  //
+                  // CHANGE #609 — the zone filter sits immediately beside it,
+                  // same treatment, and follows the same rule: the selection is
+                  // server-side state, so the tabs read it by refetching their
+                  // own RPC, not by being handed a zone. AdminZonePicker
+                  // renders nothing at all when zone_picker() says show:false,
+                  // so the Wrap collapses to just the date control.
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: const [
+                        AdminDatePicker(bare: true),
+                        AdminZonePicker(),
+                      ],
+                    ),
+                  ),
                   const OrderHoursCard(),
                   const NotificationsCard(),
                   _sectionLabel('Action Required'),

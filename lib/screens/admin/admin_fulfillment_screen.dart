@@ -6426,9 +6426,9 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
 
     try {
       await Supabase.instance.client
-          .from('voice_clip_mentions')
-          .update({'matched_name': productName, 'product_id': productId})
-          .eq('id', mentionId);
+          .rpc('voice_fix_mention', params: {
+            'p_id': mentionId, 'p_name': productName, 'p_product_id': productId,
+          });
       RenderLog.write('c334_voice_fallback', 'mention_fixed=$productName;qty=$mentionQty');
 
       // Apply the count via set_voice_received

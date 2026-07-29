@@ -748,48 +748,31 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       // It gets the central date's own backend string; omitting it would pin
       // this tab to the server's today.
       final scopeYmd = AdminDateScope.instance.dateYmd;
-      final bounds = await client.rpc('ist_day_bounds',
-          params: {if (scopeYmd != null) 'p_date': scopeYmd}) as Map;
-      final ordersStartUtc = bounds['start_utc'] as String;
-      final ordersEndUtc   = bounds['end_utc'] as String;
+      // CHANGE #591 — ONE RPC replaces six raw table reads.
+      //
+      // This was an 8-way Future.wait whose legs each scoped and ordered their
+      // own slice of supplier_profiles / supplier_orders / supplier_leads /
+      // supplier_company / order_items. Six independent reads is six chances
+      // for the screen to hold a different answer than the database. Row
+      // shapes are unchanged, so everything downstream parses as before.
+      final screenRaw = await client.rpc('admin_supplier_screen_data',
+          params: {if (scopeYmd != null) 'p_date': scopeYmd});
+      final screen = (screenRaw is List ? screenRaw.first : screenRaw) as Map;
+      List<dynamic> seg(String k) => (screen[k] as List<dynamic>?) ?? const [];
+
       final results = await Future.wait<dynamic>([
-        client.from('supplier_profiles').select().or('is_deleted.is.null,is_deleted.eq.false')
-            .order('supplier_name').catchError((_) => <dynamic>[]),
-        client.from('supplier_orders').select()
-            .gte('created_at', ordersStartUtc)
-            .lt('created_at', ordersEndUtc)
-            .order('created_at', ascending: false)
-            .catchError((_) => <dynamic>[]),
-        client.from('supplier_leads').select().order('created_at', ascending: false)
-            .catchError((_) => <dynamic>[]),
-        client.from('supplier_profiles').select().eq('is_deleted', true)
-            .order('deleted_at', ascending: false).catchError((_) => <dynamic>[]),
-        client.from('supplier_company').select('supplier_id')
-            .catchError((_) => <dynamic>[]),
         client.rpc('get_supplier_inquiry_overview').catchError((_) => <dynamic>[]),
-        // CHANGE #277: live order_items for current-holder filter
-        client.from('order_items')
-            .select('assigned_supplier, product_id, fulfillment_state')
-            .not('fulfillment_state', 'in', '("shipped","cancelled")')
-            .catchError((_) => <dynamic>[]),
-        // CHANGE #492 (Orders tab): backend-owned Send button state — kept as
-        // an ADDITIONAL fetch alongside the existing supplier_orders table
-        // query rather than replacing it, so items/View Bill/View Payment
-        // stay on the untouched pipeline.
-        // CHANGE #545: p_date OMITTED — it defaults to admin_active_date(), the
-        // date the one Dashboard picker set. Never send it as an explicit null.
-        client.rpc('admin_supplier_orders')
-            .catchError((_) => <String, dynamic>{}),
+        client.rpc('admin_supplier_orders').catchError((_) => <String, dynamic>{}),
       ]);
 
-      final profRows   = results[0] as List;
-      final orderRows  = results[1] as List;
-      final leadRows   = results[2] as List;
-      final deletedR   = results[3] as List;
-      final countRows  = results[4] as List;
-      final inquiryRaw = results[5] as List;
-      final liveItems  = results[6] as List; // CHANGE #277
-      final sendButtonById = _parseSendButtonMap(results[7]); // CHANGE #492
+      final profRows   = seg('profiles');
+      final orderRows  = seg('orders');
+      final leadRows   = seg('leads');
+      final deletedR   = seg('deleted');
+      final countRows  = seg('company_links');
+      final inquiryRaw = results[0] as List;
+      final liveItems  = seg('open_order_items'); // CHANGE #277 / #591
+      final sendButtonById = _parseSendButtonMap(results[1]); // CHANGE #492
 
       final newCounts = <String, int>{};
       for (final r in countRows) {
@@ -948,10 +931,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     if (confirm != true) return;
     try {
       await Supabase.instance.client
-          .from('supplier_profiles')
-          .delete()
-          .eq('id', deletedRow['id'] as String)
-          .eq('is_deleted', true);
+          // CHANGE #592 — hard delete behind an RPC that SNAPSHOTS the row to
+          // supplier_profiles_purge_backup first. A permanent delete with no
+          // backup path is not reversible.
+          .rpc('admin_purge_deleted_supplier',
+               params: {'p_id': deletedRow['id']});
       _load(showSpinner: false);
       if (mounted) {
         showToast(context, '$displayName permanently deleted.', isError: true, duration: const Duration(seconds: 3));
@@ -990,9 +974,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     if (confirm != true) return;
     try {
       await Supabase.instance.client
-          .from('supplier_profiles')
-          .delete()
-          .eq('is_deleted', true);
+          .rpc('admin_purge_deleted_supplier');
       _load(showSpinner: false);
       if (mounted) {
         showToast(context, '$count supplier${count == 1 ? '' : 's'} permanently deleted.', isError: true, duration: const Duration(seconds: 3));
@@ -2425,25 +2407,14 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       // (all-time) data after any inquiry-answer action.
       // CHANGE #545 — same central date; see _load() for why ist_day_bounds
       // still takes an explicit p_date.
+      // #591 — the same screen RPC: day-bounded orders and open order_items,
+      // scoped server-side. Two more raw table reads gone.
       final scopeYmd = AdminDateScope.instance.dateYmd;
-      final bounds = await client.rpc('ist_day_bounds',
-          params: {if (scopeYmd != null) 'p_date': scopeYmd}) as Map;
-      final ordersStartUtc = bounds['start_utc'] as String;
-      final ordersEndUtc   = bounds['end_utc'] as String;
-      final results = await Future.wait<dynamic>([
-        client.from('supplier_orders').select()
-            .gte('created_at', ordersStartUtc)
-            .lt('created_at', ordersEndUtc)
-            .order('created_at', ascending: false)
-            .catchError((_) => <dynamic>[]),
-        // CHANGE #277: refresh live keys alongside orders
-        client.from('order_items')
-            .select('assigned_supplier, product_id, fulfillment_state')
-            .not('fulfillment_state', 'in', '("shipped","cancelled")')
-            .catchError((_) => <dynamic>[]),
-      ]);
-      final rows = results[0] as List;
-      final liveItems = results[1] as List;
+      final screenRaw = await client.rpc('admin_supplier_screen_data',
+          params: {if (scopeYmd != null) 'p_date': scopeYmd});
+      final screen = (screenRaw is List ? screenRaw.first : screenRaw) as Map;
+      final rows = (screen['orders'] as List<dynamic>?) ?? const [];
+      final liveItems = (screen['open_order_items'] as List<dynamic>?) ?? const [];
       final raw = rows.map((r) => _OrderRow.fromMap(Map<String, dynamic>.from(r as Map))).toList();
       final enriched = await _enrichOrderItems(raw);
       final liveKeys = <String>{};
@@ -3956,8 +3927,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   Future<void> _rejectCompany(Map<String, dynamic> row) async {
     try {
-      await Supabase.instance.client.from('supplier_pending_companies')
-          .update({'status': 'rejected'}).eq('id', row['id'] as int);
+      await Supabase.instance.client.rpc('admin_reject_pending',
+          params: {'p_kind': 'company', 'p_id': row['id']});
       if (mounted) showToast(context, 'Company rejected');
       _fetchStaging();
     } catch (e) {
@@ -3990,8 +3961,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   Future<void> _rejectMedicine(Map<String, dynamic> row) async {
     try {
-      await Supabase.instance.client.from('supplier_pending_medicines')
-          .update({'status': 'rejected'}).eq('id', row['id'] as int);
+      await Supabase.instance.client.rpc('admin_reject_pending',
+          params: {'p_kind': 'medicine', 'p_id': row['id']});
       if (mounted) showToast(context, 'Medicine rejected');
       _fetchStaging();
     } catch (e) {
@@ -5757,10 +5728,8 @@ class _StatusPillState extends State<_StatusPill> {
     RenderLog.write('status_pill_write', '$_selected→$newStatus');
     try {
       final res = await Supabase.instance.client
-          .from('supplier_profiles')
-          .update({'status': newStatus})
-          .eq('id', widget.supplierId)
-          .select('id, "SPN"')
+          .rpc('admin_set_supplier_status_value',
+               params: {'p_id': widget.supplierId, 'p_status': newStatus})
           .timeout(const Duration(seconds: 8));
       RenderLog.write('status_pill_result', res.isEmpty ? 'EMPTY' : 'OK');
       if (!mounted) return null;
@@ -6011,10 +5980,8 @@ class _SupplierEditDialogState extends State<_SupplierEditDialog> {
         update['payment_address'] = null;
       }
       await Supabase.instance.client
-          .from('supplier_profiles')
-          .update(update)
-          .eq('id', widget.row.id)
-          .select();
+          .rpc('admin_update_supplier',
+               params: {'p_id': widget.row.id, 'p_patch': update});
       if (mounted) {
         RenderLog.write('supplier_edit_saved', 'true');
         showToast(context, 'Saved ✓');
@@ -6812,8 +6779,8 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
         scInserted = scRows.length;
         for (int i = 0; i < scRows.length; i += 500) {
           final chunk = scRows.sublist(i, (i + 500).clamp(0, scRows.length));
-          await client.from('supplier_company')
-              .upsert(chunk, onConflict: 'supplier_id,supplier_company', ignoreDuplicates: true);
+          await client.rpc('admin_supplier_company_bulk_link',
+              params: {'p_rows': chunk});
         }
       }
 
@@ -7456,8 +7423,8 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
     final v = (value == null || value.isEmpty) ? null : value;
     try {
       await Supabase.instance.client
-          .from('supplier_company')
-          .update({col: v}).eq('id', rowId);
+          .rpc('admin_supplier_company_update',
+               params: {'p_id': rowId, 'p_patch': {col: v}});
       final idx = _rows.indexWhere((r) => r['id'] == rowId);
       if (idx >= 0 && mounted) setState(() => _rows[idx][col] = v);
     } catch (_) {}
@@ -8506,10 +8473,13 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
         final dbCol = spnLabelColumn[field]!;
         final pointsCol = spnPointsColumn[field]!;
         final res = await Supabase.instance.client
-            .from('supplier_profiles')
-            .update({dbCol: opt?.label, pointsCol: opt?.points})
-            .eq('id', id)
-            .select('id')
+            .rpc('admin_set_supplier_spn', params: {
+              'p_id': id,
+              'p_field': {
+                'col': dbCol, 'points_col': pointsCol,
+                'label': opt?.label, 'points': opt?.points?.toString(),
+              },
+            })
             .timeout(const Duration(seconds: 10));
         if ((res as List).isEmpty) {
           allOk = false;

@@ -92,9 +92,9 @@ class _AdminAddAdminScreenState extends State<AdminAddAdminScreen> {
   Future<void> _removeAdmin(String email) async {
     try {
       await Supabase.instance.client
-          .from('admins')
-          .delete()
-          .eq('email', email);
+          // #592 — admin_remove_admin() already existed and requires
+          // super_admin; the raw delete required nothing.
+          .rpc('admin_remove_admin', params: {'p_email': email});
       await _loadAdmins();
     } catch (_) {
       if (mounted) {

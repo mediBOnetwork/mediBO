@@ -1397,9 +1397,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   Future<void> _updateStatus(String orderId, String status) async {
     try {
       await Supabase.instance.client
-          .from('orders')
-          .update({'status': status})
-          .eq('id', orderId);
+          .rpc('admin_set_order_status',
+               params: {'p_order_id': orderId, 'p_status': status});
       RenderLog.write('order_status_written', 'orderId:$orderId status:$status');
       _load();
     } catch (e) {

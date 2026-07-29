@@ -881,72 +881,38 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   // ── Approve / Reject ────────────────────────────────────────────────────────
 
+  // CHANGE #576 — admin_supplier_action() owns the whole lifecycle.
+  //
+  // This wrote straight into supplier_profiles with the status word 'Active'
+  // spelled in Dart, approved_at taken from the DEVICE clock (a skewed laptop
+  // stamped a wrong time nothing could correct), and approved_by hardcoded to
+  // the literal string 'admin' — not a person. Authorization was left entirely
+  // to RLS, so "only an admin may approve a supplier" was stated nowhere in
+  // the database. The RPC now sets the server clock, resolves the acting admin
+  // from the session, and refuses a non-admin caller outright.
   Future<void> _approvePending(_PendingRow row) async {
-    await Supabase.instance.client.from('supplier_profiles').update({
-      'approved':    true,
-      'status':      'Active',
-      'approved_at': DateTime.now().toUtc().toIso8601String(),
-      'approved_by': 'admin',
-    }).eq('id', row.id);
+    await Supabase.instance.client.rpc('admin_supplier_action',
+        params: {'p_supplier_id': row.id, 'p_action': 'approve'});
     _load();
   }
 
   Future<void> _rejectPending(_PendingRow row) async {
-    await Supabase.instance.client
-        .from('supplier_profiles')
-        .update({'approved': false, 'status': 'rejected'})
-        .eq('id', row.id);
+    await Supabase.instance.client.rpc('admin_supplier_action',
+        params: {'p_supplier_id': row.id, 'p_action': 'reject'});
     _load();
   }
 
   // ── Suspend / Reactivate / Delete ───────────────────────────────────────────
 
-  Future<void> _suspendSupplier(_SupRow row) async {
-    final name = row.supplierName.isNotEmpty ? row.supplierName : row.contactName;
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: const Text('Suspend Supplier', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-        content: Text('Suspend $name? They will be blocked until reactivated.', style: const TextStyle(fontSize: 13)),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
-            child: const Text('Suspend'),
-          ),
-        ],
-      ),
-    );
-    if (confirm != true) return;
+      Future<void> _deleteSupplier(_SupRow row) async {
     try {
-      await Supabase.instance.client.from('supplier_profiles').update({'status': 'Suspended'}).eq('id', row.id);
-      _load(showSpinner: false);
-    } catch (e) {
-      if (mounted) showToast(context, 'Suspend failed: $e', isError: true);
-    }
-  }
-
-  Future<void> _reactivateSupplier(_SupRow row) async {
-    try {
-      await Supabase.instance.client.from('supplier_profiles').update({'status': 'Active'}).eq('id', row.id);
-      _load(showSpinner: false);
-    } catch (e) {
-      if (mounted) showToast(context, 'Reactivate failed: $e', isError: true);
-    }
-  }
-
-  Future<void> _deleteSupplier(_SupRow row) async {
-    try {
+      // #576 — deleted_by used auth.currentUser.email, which identifies a
+      // CREDENTIAL not an account, with a Dart fallback of 'admin'. The
+      // snapshot was whatever the client happened to hold. The server now
+      // stamps the time, resolves the admin, and snapshots the row itself.
       final client = Supabase.instance.client;
-      final adminEmail = client.auth.currentUser?.email ?? 'admin';
-      await client.from('supplier_profiles').update({
-        'is_deleted':       true,
-        'deleted_at':       DateTime.now().toUtc().toIso8601String(),
-        'deleted_by':       adminEmail,
-        'deleted_snapshot': row.rawData,
-      }).eq('id', row.id);
+      await client.rpc('admin_supplier_action',
+          params: {'p_supplier_id': row.id, 'p_action': 'delete'});
       _load(showSpinner: false);
       if (mounted) showToast(context, 'Supplier deleted.');
     } catch (e) {
@@ -1065,12 +1031,10 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     );
     if (confirm != true) return;
     try {
-      await Supabase.instance.client.from('supplier_profiles').update({
-        'is_deleted':       false,
-        'deleted_at':       null,
-        'deleted_by':       null,
-        'deleted_snapshot': null,
-      }).eq('id', deletedRow['id'] as String);
+      await Supabase.instance.client.rpc('admin_supplier_action', params: {
+        'p_supplier_id': deletedRow['id'] as String,
+        'p_action': 'restore',
+      });
       _load(showSpinner: false);
       if (mounted) {
         showToast(context, 'Supplier restored.', duration: const Duration(seconds: 3));
@@ -1095,16 +1059,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   // ── Order status ─────────────────────────────────────────────────────────────
 
-  Future<void> _updateOrderStatus(String orderId, String status) async {
-    try {
-      await Supabase.instance.client.from('supplier_orders').update({'status': status}).eq('id', orderId);
-      _load(showSpinner: false);
-    } catch (e) {
-      if (mounted) showToast(context, 'Update failed: $e', isError: true);
-    }
-  }
-
-  void _toggleExpand(String key) => setState(() {
+    void _toggleExpand(String key) => setState(() {
     if (_expandedSupplierId == key) {
       _expandedSupplierId = null;
     } else {
@@ -2340,7 +2295,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     }
     try {
       final rows = await Supabase.instance.client
-          .rpc('get_supplier_inquiry_items',
+          .rpc('get_supplier_inquiry_items_v2',
               params: {'p_supplier_name': supplierName}) as List;
       if (mounted) {
         setState(() {
@@ -3578,8 +3533,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     final inquiryId = (item['inquiry_id'] as num).toInt();
     final productName = item['product_name'] as String? ?? '';
     final isMoving = _moveInFlight[inquiryId] == true;
-    // current supplier from item data (role='current' means this supplier owns it)
-    final role = item['role'] as String? ?? 'current';
     final isPinned = item['manual_pin'] == true;
 
     return CompositedTransformTarget(
@@ -3625,15 +3578,20 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   ];
 
   Widget _buildInquiryItemRow(Map<String, dynamic> item, String supplierName) {
-    final role        = item['role'] as String? ?? 'current';
     final productName = item['product_name'] as String? ?? '';
     final qty         = item['quantity'];
     final mrp         = item['mrp'];
     final answer      = item['answer'] as String?;
     final inquiryId   = (item['inquiry_id'] as num).toInt();
-    final slotIndex   = (item['slot_index'] as num?)?.toInt() ?? 0;
-    final isCurrent   = role == 'current';
-    final noSupplier  = slotIndex <= 0 || role == 'none' || role == 'no_supplier';
+    // CHANGE #574 — both answers come from the backend's `flags` block now.
+    // This file's copy of the no-supplier rule used `<= 0` while the two
+    // inquiry widgets used `== 0`; the three had already drifted. One rule
+    // lives in inquiry_item_flags() and every surface reads the same answer.
+    final flags       = item['flags'] is Map
+        ? Map<String, dynamic>.from(item['flags'] as Map)
+        : const <String, dynamic>{};
+    final isCurrent   = flags['is_current'] == true;
+    final noSupplier  = flags['no_supplier'] == true;
     final isSetting   = _settingAnswerFor.contains(inquiryId);
     final subtitleParts = <String>[];
     if (qty != null) subtitleParts.add('Qty: $qty');

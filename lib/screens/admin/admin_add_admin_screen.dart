@@ -60,12 +60,13 @@ class _AdminAddAdminScreenState extends State<AdminAddAdminScreen> {
       _success = null;
     });
     try {
-      final addedBy =
-          Supabase.instance.client.auth.currentUser?.email ?? '';
-      await Supabase.instance.client.from('admins').insert({
-        'email': email,
-        'added_by': addedBy,
-      });
+      // CHANGE #580 — admin_add_admin() already existed and was being
+      // BYPASSED by this direct insert into `admins`, the most privilege-
+      // bearing table in the app. The RPC requires super_admin and resolves
+      // added_by from the session; the raw insert required neither, and took
+      // added_by from auth.currentUser.email with a '' fallback.
+      await Supabase.instance.client
+          .rpc('admin_add_admin', params: {'p_email': email});
       _emailCtrl.clear();
       if (mounted) setState(() => _success = '$email added as admin');
       await _loadAdmins();

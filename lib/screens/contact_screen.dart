@@ -31,10 +31,13 @@ class _ContactScreenState extends State<ContactScreen> {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _submitting = true);
     try {
-      await Supabase.instance.client.from('contact_inquiries').insert({
-        'name': _nameCtrl.text.trim(),
-        'phone': _phoneCtrl.text.trim(),
-        'message': _messageCtrl.text.trim(),
+      // CHANGE #581 — a PUBLIC form INSERTing straight into a table. The RPC
+      // shapes the write and enforces required fields and length caps in the
+      // database, where a skipped client validator cannot reach.
+      await Supabase.instance.client.rpc('submit_contact_inquiry', params: {
+        'p_name': _nameCtrl.text.trim(),
+        'p_phone': _phoneCtrl.text.trim(),
+        'p_message': _messageCtrl.text.trim(),
       });
       if (!mounted) return;
       setState(() {

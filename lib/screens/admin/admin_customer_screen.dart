@@ -1166,22 +1166,23 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
 
   // ── Approve / Reject registrations ────────────────────────────────────────
 
+  // CHANGE #578 — admin_customer_action() owns the customer lifecycle.
+  //
+  // This matters more than the supplier equivalent: `approved` on
+  // pharmacy_profiles is exactly what my_session().can_place_order reads. A
+  // client-writable approval flag means the app could grant itself the right
+  // to order. It also stamped approved_at from the DEVICE clock and wrote
+  // approved_by as the literal string 'admin' rather than a person.
   Future<void> _approveReg(_RegRow row) async {
-    await Supabase.instance.client.from('pharmacy_profiles').update({
-      'approved': true,
-      'status': 'approved',
-      'approved_at': DateTime.now().toUtc().toIso8601String(),
-      'approved_by': 'admin',
-    }).eq('id', row.id);
+    await Supabase.instance.client.rpc('admin_customer_action',
+        params: {'p_customer_id': row.id, 'p_action': 'approve'});
     _notifyRegistration(row, isApproved: true);
     _load();
   }
 
   Future<void> _rejectReg(_RegRow row) async {
-    await Supabase.instance.client
-        .from('pharmacy_profiles')
-        .update({'approved': false, 'status': 'rejected'})
-        .eq('id', row.id);
+    await Supabase.instance.client.rpc('admin_customer_action',
+        params: {'p_customer_id': row.id, 'p_action': 'reject'});
     _notifyRegistration(row, isApproved: false);
     _load();
   }
@@ -1234,10 +1235,11 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     );
     if (confirm != true) return;
     try {
-      await Supabase.instance.client
-          .from('pharmacy_profiles')
-          .update({'status': 'suspended'})
-          .eq('id', row.id);
+      // #578 — 'suspended' was a status word spelled in Dart; it now comes
+      // from app_settings.customer_status_values, and the admin check lives
+      // in the database rather than in RLS alone.
+      await Supabase.instance.client.rpc('admin_customer_action',
+          params: {'p_customer_id': row.id, 'p_action': 'suspend'});
       _load(showSpinner: false);
     } catch (e) {
       if (mounted) {
@@ -1249,9 +1251,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   Future<void> _reactivateCustomer(_ApprovedRow row) async {
     try {
       await Supabase.instance.client
-          .from('pharmacy_profiles')
-          .update({'status': 'approved'})
-          .eq('id', row.id);
+          .rpc('admin_customer_action',
+              params: {'p_customer_id': row.id, 'p_action': 'reactivate'});
       _load(showSpinner: false);
     } catch (e) {
       if (mounted) {
@@ -1300,14 +1301,12 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     if (confirm != true) return;
     try {
       final client    = Supabase.instance.client;
-      final adminEmail = client.auth.currentUser?.email ?? 'admin';
-      // Part A-3: mark deleted with full snapshot
-      await client.from('pharmacy_profiles').update({
-        'is_deleted':       true,
-        'deleted_at':       DateTime.now().toUtc().toIso8601String(),
-        'deleted_by':       adminEmail,
-        'deleted_snapshot': row.rawData,
-      }).eq('id', row.id);
+      // #578 — deleted_by came from auth.currentUser.email (a CREDENTIAL, not
+      // an account) with a Dart fallback of 'admin', deleted_at from the
+      // device clock, and the snapshot was whatever the client held. The
+      // server stamps all three from the row itself.
+      await client.rpc('admin_customer_action',
+          params: {'p_customer_id': row.id, 'p_action': 'delete'});
       // Supabase Admin API: DELETE /auth/v1/admin/users/{user_id}
       final uid = row.rawData['user_id'] as String?;
       if (uid != null) {
@@ -1366,13 +1365,11 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     if (confirm != true) return;
     try {
       final client = Supabase.instance.client;
-      // Part A-4: clear deleted flags
-      await client.from('pharmacy_profiles').update({
-        'is_deleted':       false,
-        'deleted_at':       null,
-        'deleted_by':       null,
-        'deleted_snapshot': null,
-      }).eq('id', deletedRow['id'] as String);
+      // #578 — restore via the same RPC family.
+      await client.rpc('admin_customer_action', params: {
+        'p_customer_id': deletedRow['id'] as String,
+        'p_action': 'restore',
+      });
       // Supabase Admin API: POST /auth/v1/admin/generate-link { type: 'magiclink', email }
       if (email.isNotEmpty) {
         try {
@@ -1414,13 +1411,11 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
 
   Future<void> _adminSoftRemoveItem(int itemId) async {
     try {
+      // #577 — removed_at came from the DEVICE clock and the only thing
+      // stopping a non-admin was RLS. The RPC stamps server time and states
+      // the admin check in the database.
       await Supabase.instance.client
-          .from('cart_items')
-          .update({
-            'removed_by_admin': true,
-            'removed_at': DateTime.now().toUtc().toIso8601String(),
-          })
-          .eq('id', itemId);
+          .rpc('admin_cart_remove_item', params: {'p_item_id': itemId});
       _load(showSpinner: false);
     } catch (e) {
       if (mounted) {
@@ -4680,44 +4675,28 @@ class _AdminAddItemDialogState extends State<_AdminAddItemDialog> {
     if (item == null || _adding) return;
     setState(() => _adding = true);
     try {
+      // CHANGE #577 — admin_cart_add() owns this entirely.
+      //
+      // CLAUDE.md names this violation by name: never .from('cart_items').
+      // The old code SELECTed and then INSERTed/UPDATEd cart_items directly,
+      // keyed on user_id (the LOGIN, not the account — the cart-vanishing
+      // bug), merged the quantity itself
+      //     newQty = wasRemoved ? qty : existing.quantity + qty
+      // set the PRICE from the client ('price': mrp), invented defaults
+      // (gst ?? 12, category ?? 'Other'), stamped updated_at from the DEVICE
+      // clock, and wrote added_by: 'admin' as a literal rather than a person.
+      //
+      // The RPC takes only WHO, WHAT and HOW MANY. Price, MRP, GST, category,
+      // pack size and manufacturer are read from MEDICINE server-side; the
+      // quantity merge, the timestamp and the acting admin are resolved there
+      // too. It also accepts either an account id or an auth user id and
+      // resolves one to the other, because that is a backend question.
       final productId = item['id'].toString();
-      final mrp = _parseMrp(item['mrp']);
-
-      final existingList = await Supabase.instance.client
-          .from('cart_items')
-          .select('id, quantity, removed_by_admin')
-          .eq('user_id', widget.userId)
-          .eq('product_id', productId);
-
-      if (existingList.isNotEmpty) {
-        final existing = Map<String, dynamic>.from(existingList.first as Map);
-        final wasRemoved = (existing['removed_by_admin'] as bool?) ?? false;
-        final newQty =
-            wasRemoved ? _qty : (existing['quantity'] as int) + _qty;
-        await Supabase.instance.client.from('cart_items').update({
-          'quantity': newQty,
-          'removed_by_admin': false,
-          'updated_at': DateTime.now().toIso8601String(),
-        }).eq('id', existing['id'] as int);
-      } else {
-        await Supabase.instance.client.from('cart_items').insert({
-          'user_id':      widget.userId,
-          'product_id':   productId,
-          'product_name': item['product_name'] as String? ?? '',
-          'price':        mrp,
-          'mrp':          mrp,
-          'quantity':     _qty,
-          'image_url':    (item['image_url_1'] as String?) ?? '',
-          'manufacturer': (item['marketer']    as String?) ?? '',
-          'pack_size':    (item['pack_qty']    as String?) ??
-              (item['pack_size'] as String?) ?? '',
-          'category':     (item['therapeutic_class'] as String?) ?? 'Other',
-          'gst_percent':  (item['gst_percent'] as num?)?.toInt() ?? 12,
-          'added_by':     'admin',
-          'removed_by_admin': false,
-          'updated_at':   DateTime.now().toIso8601String(),
-        });
-      }
+      await Supabase.instance.client.rpc('admin_cart_add', params: {
+        'p_customer_id': widget.userId,
+        'p_product_id': productId,
+        'p_qty': _qty,
+      });
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
       if (mounted) {
@@ -5076,22 +5055,22 @@ class _CustomerEditDialogState extends State<_CustomerEditDialog> {
           key: _ctrl[key]!.text.trim().isEmpty ? null : _ctrl[key]!.text.trim(),
       };
 
-      // Uniqueness check for customer_code
-      final newCode  = updates['customer_code'] as String?;
-      final oldCode  = widget.row.customerCode;
-      if (newCode != null && newCode.isNotEmpty && newCode != oldCode) {
-        final existing = await client
-            .from('pharmacy_profiles')
-            .select('id')
-            .eq('customer_code', newCode)
-            .neq('id', widget.row.id)
-            .maybeSingle();
-        if (existing != null) {
-          throw Exception('Customer Code "$newCode" is already in use by another customer');
-        }
-      }
-
-      await client.from('pharmacy_profiles').update(updates).eq('id', widget.row.id);
+      // CHANGE #578 — admin_customer_update() applies the patch.
+      //
+      // The old code UPDATEd pharmacy_profiles with whatever keys the form
+      // held: nothing stopped `approved`, `status` or `user_id` riding along —
+      // the very columns my_session().can_place_order reads. The RPC has an
+      // explicit allow-list and reports anything it refused rather than
+      // dropping it quietly.
+      //
+      // The customer_code uniqueness pre-check is gone too. It was a SELECT
+      // followed by a throw in Dart: racy, and redundant because
+      // pharmacy_profiles_customer_code_unique already enforces it. The index
+      // is the guard; the RPC surfaces its violation as customer_code_taken.
+      await client.rpc('admin_customer_update', params: {
+        'p_customer_id': widget.row.id,
+        'p_patch': updates,
+      });
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
       if (mounted) {

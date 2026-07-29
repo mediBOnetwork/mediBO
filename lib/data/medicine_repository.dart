@@ -300,7 +300,11 @@ class MedicineRepository {
     String? search,
     bool? buyable,
   }) async {
-    final rows = await _rpc('medicine_page', params: {
+    // #573 — v2 returns the same rows as jsonb, each carrying its own
+    // `pricing` and `availability` block. The old medicine_page returned
+    // SETOF "MEDICINE", so cards built from this deep-paging fallback had no
+    // price block to render.
+    final rows = await _rpc('medicine_page_v2', params: {
       'p_after_id': afterId == null ? null : int.tryParse(afterId),
       'p_limit': limit,
       'p_category': category == 'All' ? null : category,

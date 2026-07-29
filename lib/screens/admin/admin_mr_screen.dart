@@ -49,12 +49,19 @@ class _AdminMrScreenState extends State<AdminMrScreen> with SingleTickerProvider
   }
 
   Future<void> _review(Map<String, dynamic> row, String status) async {
-    final adminEmail = Supabase.instance.client.auth.currentUser?.id ?? '';
-    await Supabase.instance.client.from('mr_registrations').update({
-      'status': status,
-      'reviewed_by': adminEmail,
-      'reviewed_at': DateTime.now().toUtc().toIso8601String(),
-    }).eq('id', row['id']);
+    // CHANGE #580 — admin_review_registration() performs the review.
+    //
+    // This UPDATEd the table directly with reviewed_at from the DEVICE clock
+    // and reviewed_by taken from auth.currentUser.id — a CREDENTIAL. (The
+    // local was even named `adminEmail` while holding an id, which is how the
+    // confusion started; the column is a uuid.) Nothing but RLS stated that
+    // only an admin may review a registration. The RPC states it, stamps
+    // server time, and resolves the acting admin itself.
+    await Supabase.instance.client.rpc('admin_review_registration', params: {
+      'p_kind': 'mr',
+      'p_id': row['id'],
+      'p_status': status,
+    });
     await _load();
   }
 

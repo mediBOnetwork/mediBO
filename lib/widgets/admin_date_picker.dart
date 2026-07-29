@@ -25,7 +25,13 @@ import '../services/admin_date_scope.dart';
 import '../utils/render_log.dart';
 
 class AdminDatePicker extends StatefulWidget {
-  const AdminDatePicker({super.key});
+  /// CHANGE #609 — drop this widget's own bottom padding and left-align
+  /// wrapper so it can sit inside the Dashboard's filter row beside
+  /// AdminZonePicker. The button itself is unchanged; only the outer spacing
+  /// differs, so the two filters line up.
+  final bool bare;
+
+  const AdminDatePicker({super.key, this.bare = false});
 
   @override
   State<AdminDatePicker> createState() => _AdminDatePickerState();
@@ -93,11 +99,7 @@ class _AdminDatePickerState extends State<AdminDatePicker> {
     final text = scope.longLabel;
     RenderLog.write('c545_picker', 'label=$text');
 
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Align(
-        alignment: Alignment.centerLeft,
-        child: InkWell(
+    final button = InkWell(
           key: _anchorKey,
           onTap: _open,
           borderRadius: BorderRadius.circular(10),
@@ -129,8 +131,12 @@ class _AdminDatePickerState extends State<AdminDatePicker> {
                   size: 18, color: Color(0xFF6B7280)),
             ]),
           ),
-        ),
-      ),
+        );
+
+    if (widget.bare) return button;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Align(alignment: Alignment.centerLeft, child: button),
     );
   }
 }

@@ -322,9 +322,17 @@ for i in $(seq 1 $MAX); do
     IDX_CODE=$(curl -s -o /dev/null -w "%{http_code}" https://medibo.in/)
     BS_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://medibo.in/flutter_bootstrap.js?cb=${RANDOM}")
     MAIN_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://medibo.in/main.${SHORT}.dart.js")
-    LIVE_CHANGE_CHECK=$(curl -sf --max-time 8 -H 'Cache-Control: no-cache' \
-      "https://medibo.in/version.json?cb=${RANDOM}" 2>/dev/null \
-      | python3 -c "import sys,json; print(json.load(sys.stdin).get('change',''))" 2>/dev/null || true)
+    # CHANGE #604: retry. version.json propagates PER EDGE NODE — the poll loop
+    # above can succeed on one node while this check hits another that is still
+    # serving the old copy. #603 failed exactly that way on a healthy deploy.
+    LIVE_CHANGE_CHECK=""
+    for _vc in 1 2 3 4 5; do
+      LIVE_CHANGE_CHECK=$(curl -sf --max-time 8 -H 'Cache-Control: no-cache' \
+        "https://medibo.in/version.json?cb=${RANDOM}${_vc}" 2>/dev/null \
+        | python3 -c "import sys,json; print(json.load(sys.stdin).get('change',''))" 2>/dev/null || true)
+      [ "$LIVE_CHANGE_CHECK" = "$CHANGE_LABEL" ] && break
+      [ "$_vc" -lt 5 ] && sleep 6
+    done
     # Confirm the live flutter_bootstrap.js references the NEW bundle — retry 3x
     LIVE_BUNDLE_REF=""
     for _bsr in 1 2 3; do

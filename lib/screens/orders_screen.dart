@@ -152,6 +152,14 @@ class _OrdersScreenState extends State<OrdersScreen> {
   String? _authedUid;
   StreamSubscription<AuthState>? _authSub;
 
+  /// CHANGE #619 — one key, every outcome: ok / threw / badshape, with the
+  /// attempt number, whether a session was attached, and what came back.
+  /// #614 logged only success, so the failure that actually shipped was
+  /// invisible in the render-log.
+  static const kC619Fetch = 'c619_orders_fetch';
+  static const int _kMaxFetchRetries = 3;
+  Timer? _retryTimer;
+
   @override
   void initState() {
     super.initState();
@@ -195,6 +203,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
   @override
   void dispose() {
     _authSub?.cancel();
+    _retryTimer?.cancel();
     _channel?.unsubscribe();
     super.dispose();
   }
@@ -207,43 +216,103 @@ class _OrdersScreenState extends State<OrdersScreen> {
   /// "orders vanished" report. my_orders_screen() resolves the account itself
   /// and returns rows already sorted, counted and formatted, so there is no
   /// client-side ordering, folding or money formatting left here.
-  Future<void> _fetch() async {
+  /// CHANGE #619 — every exit is now recorded, and the one answer that cannot
+  /// be true is re-asked instead of believed.
+  ///
+  /// #614 made this re-fetch when the account arrives, and production proved
+  /// the re-fetch fires: the render-log carried `c614_orders_auth_refetch=uid:1`
+  /// on a `auth_role=customer` session. It also carried
+  /// `c614_orders_payload=has:0;admin:0;nocust:1` — and `my_customer_id()` was
+  /// verified server-side to resolve that exact account. So the request that
+  /// answered "no account" reached the server WITHOUT its token.
+  ///
+  /// The reason it stuck: of the three ways out of the old body, only the
+  /// happy path wrote anything. A throw and a non-Map response both returned
+  /// silently, leaving the cold-boot (signed-out) payload on screen as though
+  /// the server had confirmed it. An authed re-fetch could fail and look
+  /// exactly like "you have no orders".
+  ///
+  /// `no_customer_account: true` while a session is live is a contradiction,
+  /// not an answer. Ask again. Never fabricate the list.
+  Future<void> _fetch({int attempt = 0}) async {
+    final client = Supabase.instance.client;
+    final hasSession = client.auth.currentSession != null;
     try {
-      final raw = await Supabase.instance.client.rpc(
+      final raw = await client.rpc(
         'my_orders_screen',
-        params: {'p_view_as_user': widget.viewAsUserId},
+        // #619 — a normal customer sends NO argument. p_view_as_user belongs to
+        // the admin view-as path alone; the backend defaults it to null.
+        params: widget.viewAsUserId == null
+            ? const <String, dynamic>{}
+            : {'p_view_as_user': widget.viewAsUserId},
       );
       final map = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
       if (map is! Map) {
-        if (mounted) setState(() => _loading = false);
+        RenderLog.write(
+            kC619Fetch, 'badshape;try:$attempt;sess:${hasSession ? 1 : 0}');
+        _retryOrSettle(attempt);
         return;
       }
-      final payload = map.cast<String, dynamic>();
       if (!mounted) return;
+      final payload = map.cast<String, dynamic>();
       final parsed = ((payload['orders'] as List<dynamic>?) ?? const [])
           .whereType<Map>()
           .map((r) => _DbOrder.fromPayload(r.cast<String, dynamic>()))
           .toList();
+      final hasOrders = payload['has_orders'] == true;
+      final noCust = payload['no_customer_account'] == true;
+      final custId = (payload['customer_id'] ?? '').toString();
+
+      RenderLog.write(
+          kC619Fetch,
+          'ok;try:$attempt;sess:${hasSession ? 1 : 0};count:${parsed.length}'
+          ';has:${hasOrders ? 1 : 0};nocust:${noCust ? 1 : 0}'
+          ';cust:${custId.isEmpty ? 0 : 1}');
       RenderLog.write('orders_fetched',
           'count:${parsed.length}${widget.viewAsUserId != null ? ':viewas' : ''}');
+
+      // Signed in, yet the server resolved no account — re-ask rather than
+      // render a signed-out empty state at a customer who has orders. On the
+      // last attempt the payload is adopted as-is: a genuinely account-less
+      // login (a fresh admin) must still get its own copy, not a spinner.
+      if (noCust && hasSession && attempt < _kMaxFetchRetries) {
+        _retryOrSettle(attempt);
+        return;
+      }
+
       setState(() {
         _orders = parsed;
         _emptyTitle = (payload['empty_title'] ?? '').toString();
         _emptyNote = (payload['empty_note'] ?? '').toString();
-        _customerId = (payload['customer_id'] ?? '').toString();
+        _customerId = custId;
         // CHANGE #614 — the backend already said whether there are orders and
         // what kind of session this is. Read those; do not re-derive them.
-        _hasOrders = payload['has_orders'] == true;
+        _hasOrders = hasOrders;
         _isAdminSession = payload['is_admin_session'] == true;
-        _noCustomerAccount = payload['no_customer_account'] == true;
+        _noCustomerAccount = noCust;
         _loading = false;
       });
-      RenderLog.write('c614_orders_payload',
-          'has:${_hasOrders ? 1 : 0};admin:${_isAdminSession ? 1 : 0};nocust:${_noCustomerAccount ? 1 : 0}');
       if (_channel == null) _subscribeRealtime();
-    } catch (_) {
-      if (mounted) setState(() => _loading = false);
+    } catch (e) {
+      RenderLog.write(
+          kC619Fetch, 'threw;try:$attempt;sess:${hasSession ? 1 : 0}');
+      _retryOrSettle(attempt);
     }
+  }
+
+  /// Backs off and asks again, or stops pretending and shows what we have.
+  /// A fetch that failed must never leave a stale payload looking authoritative.
+  void _retryOrSettle(int attempt) {
+    if (!mounted) return;
+    if (attempt >= _kMaxFetchRetries) {
+      setState(() => _loading = false);
+      return;
+    }
+    _retryTimer?.cancel();
+    _retryTimer = Timer(
+      Duration(milliseconds: 400 * (attempt + 1)),
+      () => _fetch(attempt: attempt + 1),
+    );
   }
 
   /// #572 — keyed to the ACCOUNT, like the fetch. Filtering on user_id meant a
@@ -452,6 +521,17 @@ class _OrderCardState extends State<_OrderCard> {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(fontWeight: FontWeight.bold)),
+                // #619 — the order total, printed from the backend's own
+                // total_display. No rupee prefix, rounding or grouping is
+                // applied here; the string arrives finished.
+                if (order.totalDisplay.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(order.totalDisplay,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+                ],
               ]),
             ),
             const SizedBox(width: 8),

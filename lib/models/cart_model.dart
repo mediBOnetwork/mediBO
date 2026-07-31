@@ -6,7 +6,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'product.dart';
-import '../data/medicine_repository.dart';
 import '../utils/order_code.dart';
 import '../utils/render_log.dart';
 
@@ -158,9 +157,61 @@ class CartModel extends ChangeNotifier {
   Timer? _sampleTimer;
   int _sampleCountdown = 15;
 
-  /// Product ids with a `cart_set_item()` call in flight. Their steppers are
-  /// disabled until the server answers (CHANGE #559 rule 5).
+  /// Product ids with a `cart_set_item()` call in flight.
   final Set<String> _pending = {};
+
+  // ── CHANGE #610 — stepper intent (debounce + last-write-wins) ─────────────
+  //
+  // What this is NOT: an optimistic cart. No total, badge, item/unit count,
+  // tier, discount or delivery fee is ever derived from anything below. Those
+  // stay exactly as the last SERVER payload reported until the next payload
+  // lands — the app still never answers "what is the data?".
+  //
+  // What this IS: an echo of the user's own keystroke. `_localQty[p]` is the
+  // number the user has tapped the stepper to and the server has not yet
+  // acknowledged. It is displayed in that one stepper and nowhere else, and it
+  // is dropped the moment the server answers (or the call fails), at which
+  // point the server's number is on screen again.
+  //
+  // Why it exists: rapid taps used to be DISCARDED — `_setItem` returned early
+  // while a write was in flight, so tapping + five times landed a quantity of
+  // 1 or 2. Holding the user's intent locally is what lets every tap count
+  // while still sending exactly one RPC for the burst.
+  final Map<String, int> _localQty = {};
+
+  /// Per-product debounce timers. A burst of taps sends ONE cart_set_item.
+  final Map<String, Timer> _debounce = {};
+
+  /// Products with a cart_set_item in flight, and the newest quantity that
+  /// arrived while it was in flight (last write wins — never interleaved).
+  final Set<String> _inFlight = {};
+  final Map<String, int> _queued = {};
+
+  static const Duration _kStepperDebounce = Duration(milliseconds: 300);
+
+  /// When this client last committed a cart write. Used only to recognise the
+  /// realtime echo of that write, which carries no information we do not
+  /// already have — the write response WAS the new cart.
+  DateTime? _lastSelfWriteAt;
+  static const Duration _kSelfEchoWindow = Duration(seconds: 2);
+
+  bool _isSelfInflicted() {
+    if (_inFlight.isNotEmpty) return true;
+    final t = _lastSelfWriteAt;
+    return t != null && DateTime.now().difference(t) < _kSelfEchoWindow;
+  }
+
+  /// Drops every unsent tap. Called wherever account state is cleared: an
+  /// intent recorded for the previous account must never be sent for the new
+  /// one.
+  void _clearLocalIntent() {
+    for (final t in _debounce.values) {
+      t.cancel();
+    }
+    _debounce.clear();
+    _localQty.clear();
+    _queued.clear();
+  }
 
   /// Verbatim `message` from the last `ok:false` response, for the UI to show.
   /// The client never writes its own copy for a server-rejected cart change.
@@ -213,6 +264,7 @@ class CartModel extends ChangeNotifier {
     _viewAsUserId = userId;
     _adoptCart(const <String, dynamic>{}); // #556 rule 3 — clear before refetch
     _adminRemovedLines.clear();
+    _clearLocalIntent();
     _cartChannel?.unsubscribe();
     _cartChannel = null;
     RenderLog.write('view_as_cart', 'enter:$userId');
@@ -225,6 +277,7 @@ class CartModel extends ChangeNotifier {
     _viewAsUserId = null;
     _adoptCart(const <String, dynamic>{});
     _adminRemovedLines.clear();
+    _clearLocalIntent();
     RenderLog.write('view_as_cart', 'exit');
     await refreshCartMode();
     await refresh();
@@ -274,6 +327,7 @@ class CartModel extends ChangeNotifier {
       _viewAsUserId = null;
       _adoptCart(const <String, dynamic>{});
       _adminRemovedLines.clear();
+      _clearLocalIntent();
       _orders.clear();
       notifyListeners();
       // Back to browsing as a guest — show whatever that guest cart holds.
@@ -313,6 +367,7 @@ class CartModel extends ChangeNotifier {
     // so no line from the previous account can survive an account switch.
     _adoptCart(const <String, dynamic>{});
     _adminRemovedLines.clear();
+    _clearLocalIntent();
     if (uid != null) _subscribeToCartRealtime(uid);
     // CHANGE #559 + #556: hand the guest cart to the account BEFORE anything
     // reads it, so what the customer built while logged out survives login.
@@ -349,7 +404,19 @@ class CartModel extends ChangeNotifier {
             column: 'user_id',
             value: uid,
           ),
-          callback: (_) => refresh(),
+          callback: (_) {
+            // CHANGE #610 — our OWN cart_set_item already returned the new
+            // cart, and adopting it is what put it on screen. The realtime
+            // echo of that same write must not kick off a second full read:
+            // that was a whole extra cart_render round trip per tap, arriving
+            // after the tap had already been rendered.
+            //
+            // Only self-inflicted writes are skipped. A change made anywhere
+            // else — another device, an admin edit — still refreshes, which is
+            // the entire point of the subscription.
+            if (_isSelfInflicted()) return;
+            refresh();
+          },
         )
         .subscribe();
   }
@@ -380,55 +447,27 @@ class CartModel extends ChangeNotifier {
     } catch (_) {}
   }
 
-  /// Adopts a `cart_state()` payload as the displayed cart.
+  /// Adopts a cart payload as the displayed cart. No network — the payload is
+  /// already everything.
   ///
-  /// `cart_state()` deliberately returns only what the cart screen renders, so
-  /// two server-side lookups top it up — neither of which can invent a line:
-  ///   * the auxiliary cart read supplies each row's `id` (stable add-order,
-  ///     CHANGE #375), `added_by`, `category` and `gst_percent`, plus the
-  ///     removed-by-admin section, which `cart_state()` filters out;
-  ///   * MEDICINE supplies current `buyable` (CHANGE #401).
-  /// Lines themselves are built from `cart_state().items` and nothing else.
+  /// CHANGE #610: this used to fire TWO more round trips before it could show
+  /// anything — `get_my_cart` for each row's `id`/`added_by`/`category`, and
+  /// `medicine_buyable_flags` for `buyable` — then merge the three results in
+  /// Dart. Three sequential round trips for one tap, and a client-side merge
+  /// of server data, which is exactly what the rule forbids. `cart_state()`
+  /// now returns those fields itself, so there is one payload, and one payload
+  /// cannot disagree with itself.
   Future<void> _hydrateAndAdopt(Map<String, dynamic> cart, int gen) async {
-    final items = (cart['items'] as List?) ?? const [];
-    final ids = [
-      for (final r in items) (r as Map)['product_id'].toString(),
-    ];
-
-    final aux = await _readAuxRows();
-    final buyable = rpcTransport == null
-        ? await MedicineRepository().fetchBuyableFlags(ids)
-        : const <String, bool>{};
     if (gen != _loadGen) return;
-
     RenderLog.write('c401_cart_uses_buyable', 'true');
-    _auxById = aux;
-    _buyableById = buyable;
+    RenderLog.write(kC610OnePayload, 'roundtrips:1');
     _adoptCart(cart);
-    _rebuildAdminRemoved(aux, buyable);
+    _rebuildAdminRemoved(cart);
     RenderLog.write(kC559ServerCart,
         'items:${_serverLines.length};units:$totalUnits;total:$total');
   }
 
-  Map<String, Map<String, dynamic>> _auxById = const {};
-  Map<String, bool> _buyableById = const {};
-
-  /// Reads the raw cart rows for metadata `cart_state()` does not return.
-  /// Read-only — every WRITE goes through cart_set_item/cart_clear.
-  Future<Map<String, Map<String, dynamic>>> _readAuxRows() async {
-    try {
-      final List rows = _viewAsUserId != null
-          ? await _rpc('admin_preview_customer_cart',
-              {'p_user_id': _viewAsUserId!}) as List
-          : await _rpc('get_my_cart') as List;
-      return {
-        for (final r in rows)
-          (r as Map)['product_id'].toString(): Map<String, dynamic>.from(r),
-      };
-    } catch (_) {
-      return const {};
-    }
-  }
+  static const kC610OnePayload = 'c610_cart_one_payload';
 
   /// Rebuilds `_serverLines` from the payload. Pure — no network, no mutation
   /// of the payload, and no line that is not in `cart['items']`.
@@ -439,7 +478,6 @@ class CartModel extends ChangeNotifier {
     for (final raw in items) {
       final row = raw as Map;
       final pid = row['product_id'].toString();
-      final aux = _auxById[pid];
       // #582 — carry the render strings cart_render() attached to this item.
       final disp = row.cast<String, dynamic>();
       lines.add(CartLine(
@@ -451,39 +489,36 @@ class CartModel extends ChangeNotifier {
           imageUrl: (row['image_url'] as String?) ?? '',
           manufacturer: (row['manufacturer'] as String?) ?? '',
           packSize: (row['pack_size'] as String?) ?? '',
-          category: (aux?['category'] as String?) ?? 'Other',
+          // CHANGE #610: category, buyable, added_by and the row id all come
+          // from the one payload now — no second read to merge them in.
+          category: (row['category'] as String?) ?? 'Other',
           // CHANGE #559: gst_percent is returned per line by cart_state().
           gstPercent: (row['gst_percent'] as num?)?.toDouble() ?? 12.0,
-          buyable: _buyableById[pid],
+          buyable: row['buyable'] as bool?,
         ),
         (row['quantity'] as num?)?.toInt() ?? 0,
-        addedByAdmin: (aux?['added_by'] as String?) == 'admin',
-        cartItemId: (aux?['id'] as num?)?.toInt(),
+        addedByAdmin: row['added_by_admin'] == true,
+        cartItemId: (row['id'] as num?)?.toInt(),
         display: disp,
       ));
     }
-    // CHANGE #375: cart_state() orders by (updated_at, id), which moves a line
-    // to the bottom on every qty edit. Re-sort by cart_items.id — stable
-    // add-order — exactly as before. Lines with no aux row keep server order.
-    final indexed = <int, CartLine>{};
-    var maxId = 0;
-    for (final l in lines) {
-      if (l.cartItemId != null) maxId = maxId > l.cartItemId! ? maxId : l.cartItemId!;
-    }
-    var synthetic = maxId + 1;
-    for (final l in lines) {
-      indexed[l.cartItemId ?? synthetic++] = l;
-    }
-    final keys = indexed.keys.toList()..sort();
-    _serverLines = [for (final k in keys) indexed[k]!];
+    // CHANGE #375 / #610: stable add-order. cart_state() used to order by
+    // (updated_at, id) — which moved a line to the bottom on every qty edit —
+    // so the client re-sorted by cart_items.id in Dart. cart_state() now
+    // orders by ci.id itself, so the order arrives correct and the client
+    // stops sorting server data. Same visible order as before, decided once,
+    // on the server.
+    _serverLines = lines;
     notifyListeners();
   }
 
-  void _rebuildAdminRemoved(
-      Map<String, Map<String, dynamic>> aux, Map<String, bool> buyable) {
+  /// CHANGE #610 — the removed-by-admin section comes from the payload's own
+  /// `admin_removed` array. The client no longer decides which rows belong in
+  /// it by filtering an auxiliary read.
+  void _rebuildAdminRemoved(Map<String, dynamic> cart) {
     _adminRemovedLines.clear();
-    for (final row in aux.values) {
-      if ((row['removed_by_admin'] as bool?) != true) continue;
+    for (final raw in (cart['admin_removed'] as List?) ?? const []) {
+      final row = raw as Map;
       final pid = row['product_id'].toString();
       _adminRemovedLines.add(CartLine(
         Product.fromCartData(
@@ -496,10 +531,10 @@ class CartModel extends ChangeNotifier {
           packSize: (row['pack_size'] as String?) ?? '',
           category: (row['category'] as String?) ?? 'Other',
           gstPercent: (row['gst_percent'] as num?)?.toDouble() ?? 12.0,
-          buyable: buyable[pid],
+          buyable: row['buyable'] as bool?,
         ),
         (row['quantity'] as num?)?.toInt() ?? 0,
-        addedByAdmin: (row['added_by'] as String?) == 'admin',
+        addedByAdmin: row['added_by_admin'] == true,
         cartItemId: (row['id'] as num?)?.toInt(),
       ));
     }
@@ -555,17 +590,50 @@ class CartModel extends ChangeNotifier {
   // admin_acting_as, which cart_mode() set when View As was entered.
   static const _c408ActingAsCart = 'c408_actingas_cart';
 
+  /// CHANGE #610 — the STEPPER write path: record the tap, show it in that
+  /// stepper, and send one `cart_set_item` once the taps stop.
+  ///
+  /// The old path returned early while a write was in flight, so every tap
+  /// after the first in a burst was silently thrown away. Now each tap updates
+  /// the user's own intent immediately and restarts a 300ms timer; the burst
+  /// costs exactly one RPC carrying the final quantity.
+  void _requestQty(String productId, int quantity) {
+    final q = quantity < 0 ? 0 : quantity;
+    _localQty[productId] = q;
+    notifyListeners(); // the tap is on screen in this frame
+    _debounce.remove(productId)?.cancel();
+    _debounce[productId] = Timer(_kStepperDebounce, () => _flush(productId));
+  }
+
+  /// Sends the settled quantity — or parks it behind the call already running.
+  void _flush(String productId) {
+    _debounce.remove(productId)?.cancel();
+    final q = _localQty[productId];
+    if (q == null) return;
+    if (_inFlight.contains(productId)) {
+      // Last write wins. Never two cart_set_item calls for one product in
+      // flight at once — that is how a stale response overwrites a fresh one.
+      _queued[productId] = q;
+      return;
+    }
+    unawaited(_setItem(productId, q));
+  }
+
   /// The single write path. Calls `cart_set_item` and renders the cart it
-  /// returns. No optimistic update: nothing changes on screen until the
-  /// server has answered.
+  /// returns — the response IS the new cart, so nothing is re-read afterwards.
+  ///
+  /// On failure the local echo is dropped, which puts the server's own number
+  /// back on screen. That is the whole rollback: `_serverLines`, the totals,
+  /// the badge and the tier were never touched, so there is nothing to undo.
   Future<void> _setItem(String productId, int quantity) async {
-    if (_pending.contains(productId)) return;
+    _inFlight.add(productId);
     _pending.add(productId);
     notifyListeners();
     if (isViewAs) {
       RenderLog.write('c407_actingas_cart_write', 'customer_uid:$_viewAsUserId:not_admin');
       RenderLog.write(_c408ActingAsCart, 'write:set:customer_uid:$_viewAsUserId');
     }
+    var accepted = false;
     try {
       // A logged-out add needs a guest id to file the row under; mint one on
       // first write rather than for every idle visitor.
@@ -575,11 +643,24 @@ class CartModel extends ChangeNotifier {
         'p_quantity': quantity,
         'p_guest_uid': guest,
       });
-      await _applyWriteResult(res);
+      _lastSelfWriteAt = DateTime.now();
+      accepted = await _applyWriteResult(res);
     } catch (e) {
+      // Network threw — the server may never have seen this at all.
       cartError.value = 'Could not update the cart. Please try again.';
     } finally {
+      _inFlight.remove(productId);
       _pending.remove(productId);
+      final next = _queued.remove(productId);
+      if (next != null && next != quantity) {
+        // More taps landed while this was in flight — send only the latest.
+        unawaited(_setItem(productId, next));
+      } else if (!accepted || _localQty[productId] == quantity) {
+        // Either the server rejected/never answered (roll back to its number),
+        // or it acknowledged exactly what is echoed (the echo is now redundant
+        // — the payload already says the same thing). Both mean: stop echoing.
+        _localQty.remove(productId);
+      }
       notifyListeners();
     }
   }
@@ -587,22 +668,30 @@ class CartModel extends ChangeNotifier {
   /// Adopts the `cart` a write RPC returned. On `ok:false` the server's own
   /// message is surfaced verbatim and the displayed quantity is left exactly
   /// as the server reports it.
-  Future<void> _applyWriteResult(dynamic res) async {
-    if (res is! Map) return;
+  /// Returns true when the server accepted the write and its cart is now on
+  /// screen; false when it rejected the write or sent no cart, in which case
+  /// the caller drops its local echo.
+  Future<bool> _applyWriteResult(dynamic res) async {
+    if (res is! Map) return false;
     final m = Map<String, dynamic>.from(res);
     if (m['ok'] != true) {
       cartError.value = m['message']?.toString();
       RenderLog.write('c559_cart_write_rejected', '${m['message']}');
       // No cart came back — re-read so the display still matches the server.
       await refresh();
-      return;
+      return false;
     }
     final cart = m['cart'];
     if (cart is Map) {
+      // CHANGE #610 — this response is the complete, render-ready cart
+      // (cart_render output: items with their display strings, badge, counts,
+      // totals, tier). Adopting it is the last thing that happens on a tap;
+      // there is no follow-up read.
       await _hydrateAndAdopt(Map<String, dynamic>.from(cart), ++_loadGen);
-    } else {
-      await refresh();
+      return true;
     }
+    await refresh();
+    return false;
   }
 
   /// CHANGE #559 rule 2 / #556: move the logged-out cart onto the account that
@@ -749,12 +838,28 @@ class CartModel extends ChangeNotifier {
   bool get hasSampleItems => _sampleLines.isNotEmpty;
   int get sampleCountdown => _sampleCountdown;
 
-  /// True while this product has a cart write in flight — its stepper is
-  /// disabled until the server answers (CHANGE #559 rule 5).
-  bool isPending(String productId) => _pending.contains(productId);
+  /// True while this product has a cart write in flight AND the user has no
+  /// newer tap of their own waiting.
+  ///
+  /// CHANGE #610: the steppers disable themselves on this. While a burst of
+  /// taps is being debounced the user always has an unsent tap outstanding, so
+  /// this reads false and every further tap is accepted — which is the fix for
+  /// taps being dropped mid-burst (CHANGE #559 rule 5 disabled the control on
+  /// the first tap and ate the rest). A write with no local intent behind it —
+  /// a bulk-upload row, a swipe-to-remove — still reports pending exactly as
+  /// before.
+  bool isPending(String productId) =>
+      _pending.contains(productId) && !_localQty.containsKey(productId);
 
-  /// The quantity the SERVER last reported. There is no local quantity map.
+  /// The quantity to display for this product.
+  ///
+  /// The server's number, unless the user has tapped the stepper since and the
+  /// server has not answered yet — then it is the user's own unsent tap
+  /// (CHANGE #610). Nothing else is derived from it: every count, total, tier
+  /// and label still comes from the last server payload.
   int quantityOf(String productId) {
+    final tapped = _localQty[productId];
+    if (tapped != null) return tapped;
     for (final l in _serverLines) {
       if (l.product.id == productId) return l.quantity;
     }
@@ -763,42 +868,67 @@ class CartModel extends ChangeNotifier {
 
   // ── Public API ────────────────────────────────────────────────────────────
 
+  // CHANGE #610 — the four stepper actions are debounced (one RPC per burst);
+  // everything else writes straight away, because none of it can burst.
+
   void add(Product product) {
     final current = quantityOf(product.id);
-    _setItem(product.id, current > 0 ? current + 1 : 1);
+    _requestQty(product.id, current > 0 ? current + 1 : 1);
   }
 
-  void setQuantity(Product product, int qty) => _setItem(product.id, qty);
-
-  /// Bulk-upload add. Awaits its write so cart_items.id assignment order
-  /// matches the bulk-upload list order (CHANGE #413) rather than racing.
-  Future<void> setBulkQuantity(Product product, int qty, int bulkOrder) async {
-    RenderLog.write(kC413CartInsertionOrder,
-        'insert:bulkOrder:$bulkOrder;product:${product.id}');
-    await _setItem(product.id, qty);
-  }
+  void setQuantity(Product product, int qty) => _requestQty(product.id, qty);
 
   void increment(Product product) =>
-      _setItem(product.id, quantityOf(product.id) + 1);
+      _requestQty(product.id, quantityOf(product.id) + 1);
 
   /// Decrement. Quantity 0 removes the line server-side.
   void decrement(Product product) =>
-      _setItem(product.id, quantityOf(product.id) - 1);
+      _requestQty(product.id, quantityOf(product.id) - 1);
 
-  void remove(Product product) => _setItem(product.id, 0);
+  /// Bulk-upload add. Awaits its write so cart_items.id assignment order
+  /// matches the bulk-upload list order (CHANGE #413) rather than racing.
+  /// Never debounced: the ordering guarantee IS the sequential await.
+  Future<void> setBulkQuantity(Product product, int qty, int bulkOrder) async {
+    RenderLog.write(kC413CartInsertionOrder,
+        'insert:bulkOrder:$bulkOrder;product:${product.id}');
+    _dropLocalIntentFor(product.id);
+    await _setItem(product.id, qty);
+  }
 
-  void removeById(String productId) => _setItem(productId, 0);
+  void remove(Product product) => _removeNow(product.id);
+
+  void removeById(String productId) => _removeNow(productId);
 
   /// Hard-removes a row the admin had marked removed. Goes through
   /// cart_set_item like every other write — never a direct table delete.
-  Future<void> hardDeleteRemovedItem(String productId) =>
-      _setItem(productId, 0);
+  Future<void> hardDeleteRemovedItem(String productId) {
+    _dropLocalIntentFor(productId);
+    return _setItem(productId, 0);
+  }
+
+  /// A removal cancels any unsent stepper taps for that product — the row is
+  /// going away, so the last tap on it is moot — and then goes out through the
+  /// same last-write-wins gate, so it can never race a stepper call already in
+  /// flight for the same product.
+  void _removeNow(String productId) {
+    _debounce.remove(productId)?.cancel();
+    _localQty[productId] = 0;
+    _flush(productId);
+    notifyListeners();
+  }
+
+  void _dropLocalIntentFor(String productId) {
+    _debounce.remove(productId)?.cancel();
+    _localQty.remove(productId);
+    _queued.remove(productId);
+  }
 
   Future<void> clear() async {
     _sampleTimer?.cancel();
     _sampleTimer = null;
     _sampleCountdown = 15;
     _sampleLines.clear();
+    _clearLocalIntent(); // #610 — the whole cart is going; unsent taps are moot
     try {
       final res = await _rpc('cart_clear', {'p_guest_uid': _guestParam});
       await _applyWriteResult(res);
@@ -865,6 +995,7 @@ class CartModel extends ChangeNotifier {
     _authSub?.cancel();
     _cartChannel?.unsubscribe();
     _sampleTimer?.cancel();
+    _clearLocalIntent(); // #610 — no debounce timer outlives the model
     cartError.dispose();
     super.dispose();
   }

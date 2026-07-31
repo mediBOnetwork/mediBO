@@ -128,7 +128,10 @@ void main() {
     expect(find.textContaining('line:'), findsNothing);
 
     await tester.tap(find.text('Add to cart'));
-    // Flush the async RPC, then RenderLog's 800ms debounce timer.
+    // CHANGE #610 — a stepper tap is now debounced for 300ms before it is
+    // sent, so advance past that first; then flush the async RPC, then
+    // RenderLog's own 800ms debounce timer.
+    await tester.pump(const Duration(milliseconds: 400));
     await tester.pump();
     await tester.pump(const Duration(seconds: 1));
 
@@ -188,7 +191,10 @@ void main() {
     final cart = CartModel.forTest();
     await tester.pumpWidget(harness(cart, product));
     await tester.tap(find.text('Add to cart'));
-    // Flush the async RPC, then RenderLog's 800ms debounce timer.
+    // CHANGE #610 — a stepper tap is now debounced for 300ms before it is
+    // sent, so advance past that first; then flush the async RPC, then
+    // RenderLog's own 800ms debounce timer.
+    await tester.pump(const Duration(milliseconds: 400));
     await tester.pump();
     await tester.pump(const Duration(seconds: 1));
 
@@ -210,7 +216,10 @@ void main() {
     final cart = CartModel.forTest();
     await tester.pumpWidget(harness(cart, product));
     await tester.tap(find.text('Add to cart'));
-    // Flush the async RPC, then RenderLog's 800ms debounce timer.
+    // CHANGE #610 — a stepper tap is now debounced for 300ms before it is
+    // sent, so advance past that first; then flush the async RPC, then
+    // RenderLog's own 800ms debounce timer.
+    await tester.pump(const Duration(milliseconds: 400));
     await tester.pump();
     await tester.pump(const Duration(seconds: 1));
 
@@ -233,6 +242,8 @@ void main() {
     final cart = CartModel.forTest();
     await tester.pumpWidget(harness(cart, product));
     await tester.tap(find.text('Add to cart'));
+    // CHANGE #610 — clear the 300ms stepper debounce before the RPC is sent.
+    await tester.pump(const Duration(milliseconds: 400));
     await tester.pump();
     await tester.pump(const Duration(seconds: 1));
 
@@ -246,7 +257,10 @@ void main() {
     // A later read reuses the SAME id — one guest, one cart.
     await cart.refresh();
     await tester.pump(const Duration(seconds: 1));
-    final read = calls.lastWhere((c) => c.$1 == 'cart_state');
+    // CHANGE #582 renamed the read to cart_render() (cart_state plus display
+    // strings); this assertion still named the old RPC and had been failing
+    // ever since. It is the same read, under the name it actually has.
+    final read = calls.lastWhere((c) => c.$1 == 'cart_render');
     expect(read.$2!['p_guest_uid'], guest);
 
     // And it survives as the persisted identity, not as cart contents.

@@ -16,7 +16,6 @@ import '../widgets/animations.dart';
 import '../widgets/bill_actions_row.dart';
 import '../widgets/bill_viewer.dart';
 import '../widgets/cust_pay_panel.dart';
-import '../widgets/seller_block.dart';
 
 // ─── Data models ─────────────────────────────────────────────────────────────
 
@@ -501,13 +500,6 @@ class _OrderCardState extends State<_OrderCard> {
           if (_tab != null) ...[
             const SizedBox(height: 12),
             _buildSectionContent(),
-            // #611 — the partner stamped on THIS order (not today's active
-            // partner). Lines come from order_seller_block() verbatim.
-            OrderSellerBlock(
-              key: ValueKey('seller_${order.id}'),
-              orderId: order.id,
-              padding: const EdgeInsets.only(top: 14),
-            ),
           ],
         ]),
       ),

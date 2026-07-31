@@ -25,10 +25,9 @@ class _AboutScreenState extends State<AboutScreen> {
   bool _loading = true;
   bool _failed = false;
 
-  /// CHANGE #618 — index of the zone whose partner is currently revealed.
-  /// null = every zone collapsed, which is the initial state: partner identity
-  /// is shown only after the visitor opens a zone, and only on this page.
-  int? _openZone;
+  /// CHANGE #621 — index of the selected zone chip. The first chip is selected
+  /// by default, so the leading zone's partner is shown on open.
+  int _selectedZone = 0;
 
   @override
   void initState() {
@@ -82,7 +81,7 @@ class _AboutScreenState extends State<AboutScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       RenderLog.write('screen', 'about-app');
       RenderLog.write('layout', 'policy_page_layout');
-      RenderLog.write('change', '#611');
+      RenderLog.write('change', '#621');
     });
 
     final header = _obj('header');
@@ -155,8 +154,9 @@ class _AboutScreenState extends State<AboutScreen> {
         return _relationship(_obj('relationship'));
       case 'partners':
         return _partners(_obj('partners'));
-      case 'contact':
-        return _contact(_obj('contact'));
+      // CHANGE #621 — 'contact' is no longer in sections[], and the renderer
+      // for it is deleted, so Phone/Email cannot appear on About. The
+      // `contact` object still ships in the payload for the Contact page.
       default:
         return null;
     }
@@ -246,8 +246,23 @@ class _AboutScreenState extends State<AboutScreen> {
   Widget? _partners(Map<String, dynamic> m) {
     final title = _s(m, 'title');
     final note = _s(m, 'note');
+    final servingLine = _s(m, 'serving_line');
     final list = _rows(m, 'list');
-    if (title.isEmpty && note.isEmpty && list.isEmpty) return null;
+    if (title.isEmpty && note.isEmpty && servingLine.isEmpty && list.isEmpty) {
+      return null;
+    }
+    // Clamp so a shrinking list can never leave the selection out of range.
+    final sel = list.isEmpty
+        ? -1
+        : (_selectedZone < 0 || _selectedZone >= list.length
+            ? 0
+            : _selectedZone);
+    final selected = sel < 0 ? null : list[sel];
+
+    // Proof the chip row rendered, and how many zones it drew.
+    if (list.isNotEmpty) {
+      RenderLog.write('c621_about_zone_chips', list.length);
+    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -259,55 +274,55 @@ class _AboutScreenState extends State<AboutScreen> {
                   fontSize: 14, height: 1.6, color: Brand.inkMuted)),
           const SizedBox(height: 14),
         ],
-        // CHANGE #618 — one tappable row per zone. Partner identity is only
-        // revealed for the zone the visitor opens, and only here on About.
-        ...List.generate(list.length, (i) => _zoneTile(i, list[i])),
+        // CHANGE #621 — the serving line is composed by the backend (it
+        // pluralises itself); rendered verbatim, never counted in Dart.
+        if (servingLine.isNotEmpty) ...[
+          Text(servingLine,
+              style: const TextStyle(
+                  fontSize: 14, height: 1.6, color: Brand.inkMuted)),
+          const SizedBox(height: 12),
+        ],
+        // CHANGE #621 — horizontally scrollable zone chips, one per list entry.
+        // Labels are each item's zone_label; no zone name is written here.
+        SizedBox(
+          height: 38,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            padding: EdgeInsets.zero,
+            itemCount: list.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 8),
+            itemBuilder: (_, i) => _zoneChip(i, list[i], sel),
+          ),
+        ),
+        const SizedBox(height: 16),
+        // Detail for the selected zone only.
+        if (selected != null) _partnerCard(selected),
       ],
     );
   }
 
-  /// Collapsed: the zone name alone. Expanded: that zone's partner.
-  Widget _zoneTile(int index, Map<String, dynamic> p) {
-    final zone = _s(p, 'zone');
-    final open = _openZone == index;
+  /// One zone chip. Selected chip is filled; the rest are outlined.
+  Widget _zoneChip(int index, Map<String, dynamic> p, int selectedIndex) {
+    final label = _s(p, 'zone_label');
+    final on = selectedIndex == index;
 
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          InkWell(
-            key: Key('about_zone_$index'),
-            onTap: () => setState(() => _openZone = open ? null : index),
-            borderRadius: BorderRadius.circular(12),
-            child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-              decoration: BoxDecoration(
-                border: Border.all(color: Brand.border),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(zone,
-                        style: const TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w800,
-                            color: Brand.ink)),
-                  ),
-                  Icon(open ? Icons.expand_less : Icons.expand_more,
-                      size: 20, color: Brand.green),
-                ],
-              ),
-            ),
-          ),
-          if (open)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(4, 12, 0, 8),
-              child: _partnerCard(p),
-            ),
-        ],
+    return InkWell(
+      key: Key('about_zone_chip_$index'),
+      onTap: () => setState(() => _selectedZone = index),
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        alignment: Alignment.center,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        decoration: BoxDecoration(
+          color: on ? Brand.green : Colors.transparent,
+          border: Border.all(color: on ? Brand.green : Brand.border),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Text(label,
+            style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: on ? Colors.white : Brand.ink)),
       ),
     );
   }
@@ -350,19 +365,6 @@ class _AboutScreenState extends State<AboutScreen> {
             const SizedBox(height: 10),
             _DocList(docs: docs),
           ],
-      ],
-    );
-  }
-
-  Widget? _contact(Map<String, dynamic> m) {
-    final title = _s(m, 'title');
-    final rows = _rows(m, 'rows');
-    if (title.isEmpty && rows.isEmpty) return null;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (title.isNotEmpty) ...[_heading(title), const SizedBox(height: 12)],
-        if (rows.isNotEmpty) _InfoCard(rows: rows),
       ],
     );
   }

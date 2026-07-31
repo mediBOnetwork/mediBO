@@ -15,11 +15,18 @@ class PolicyPageLayout extends StatelessWidget {
   final String? lastUpdated;
   final Widget child;
 
+  /// CHANGE #611 — About renders its header from `about_screen()`. When these
+  /// are null the 5 static policy pages keep their existing wordmark exactly.
+  final String? headerName;
+  final String? headerTagline;
+
   const PolicyPageLayout({
     super.key,
     required this.title,
     this.lastUpdated,
     required this.child,
+    this.headerName,
+    this.headerTagline,
   });
 
   @override
@@ -64,17 +71,18 @@ class PolicyPageLayout extends StatelessWidget {
                         Image.asset('assets/images/medibo_logo.png',
                             height: 30, filterQuality: FilterQuality.medium),
                         const SizedBox(width: 12),
-                        const Column(
+                        Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text('mediBO',
-                                style: TextStyle(
+                            Text(headerName ?? 'mediBO',
+                                style: const TextStyle(
                                     fontSize: 22,
                                     fontWeight: FontWeight.w800,
                                     color: Brand.ink,
                                     letterSpacing: -0.4)),
-                            Text('B2B Pharmacy Platform',
-                                style: TextStyle(fontSize: 12, color: Brand.inkMuted)),
+                            Text(headerTagline ?? 'B2B Pharmacy Platform',
+                                style: const TextStyle(
+                                    fontSize: 12, color: Brand.inkMuted)),
                           ],
                         ),
                       ],

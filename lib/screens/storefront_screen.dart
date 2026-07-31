@@ -18,6 +18,7 @@ import '../util.dart';
 import '../utils/render_log.dart';
 import '../widgets/animations.dart';
 import '../widgets/product_card.dart';
+import '../widgets/seller_block.dart';
 
 const double _kMaxContent = 1200;
 
@@ -629,6 +630,13 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
             onBulkUpload: widget.onFooterBulkUpload,
             onOrders: widget.onFooterOrders,
             onCart: widget.onFooterCart,
+          ),
+          // #611 — seller-of-record note. Copy is partner_seller_block().
+          const PartnerSellerBlock(
+            lines: [SellerLine.footerNote],
+            align: TextAlign.center,
+            padding: EdgeInsets.fromLTRB(24, 16, 24, 24),
+            logTag: 'c611_home_seller_note',
           ),
         ],
           ),

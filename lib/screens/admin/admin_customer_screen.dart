@@ -1621,6 +1621,16 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
               rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
         });
         RenderLog.write('order_item_status', 'orderId:$orderId count:${rows.length}');
+        // CHANGE #625 — proof the three new columns arrived and that the chip
+        // is painting from them rather than from a colour map in Dart.
+        final unf = rows
+            .where((r) => (r as Map)['unfulfillable'] == true)
+            .length;
+        final withColors = rows
+            .where((r) => (r as Map)['status_colors'] is Map)
+            .length;
+        RenderLog.write('c625_unfulfilled_items',
+            'admin;order:$orderId;rows:${rows.length};unfulfillable:$unf;colors:$withColors');
         for (final r in rows) {
           final m = r as Map;
           RenderLog.write('order_item_rpc_row',
@@ -2719,34 +2729,54 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     );
   }
 
-  Widget _itemInquiryBadge(String? status, String? supplier) {
-    if (status == null || status == 'Not in inquiry' || status == '—') {
-      return const Text('—', style: TextStyle(fontSize: 10, color: Color(0xFF9CA3AF)));
-    }
-    final lower = status.toLowerCase();
-    final Color bg;
-    final Color fg;
-    final String label;
-    if (lower.contains('no supplier')) {
-      bg = const Color(0xFFFEE2E2); fg = const Color(0xFF991B1B);
-      label = 'No supplier available';
-    } else if (lower == 'available') {
-      bg = const Color(0xFFD1FAE5); fg = const Color(0xFF065F46);
-      label = supplier != null && supplier.isNotEmpty ? 'Available — $supplier' : 'Available';
-    } else if (lower.contains('confirmation') || lower.contains('pending')) {
-      bg = const Color(0xFFFEF3C7); fg = const Color(0xFF92400E);
-      label = supplier != null && supplier.isNotEmpty ? 'Awaiting $supplier' : 'Confirmation pending';
-    } else if (lower.contains('out of stock')) {
-      bg = const Color(0xFFFEE2E2); fg = const Color(0xFF991B1B);
-      label = 'Out of stock';
-    } else {
-      bg = const Color(0xFFF3F4F6); fg = const Color(0xFF374151);
-      label = status;
-    }
+  /// CHANGE #625 — the per-item status chip, printed exactly as
+  /// get_order_item_inquiry_status returned it.
+  ///
+  /// What was here before was a workaround. The RPC used to answer
+  /// "Not asked yet" for every item (two backend bugs, both now fixed), so this
+  /// method lower-cased the status, substring-matched it and wrote its OWN
+  /// words back out — 'No supplier available', 'Available — $supplier',
+  /// 'Awaiting $supplier', 'Confirmation pending' — against its own hard-coded
+  /// colour map. Every one of those was the app answering "what do I show?".
+  /// The RPC's status values are correct now, so the override is deleted rather
+  /// than corrected: it renders `current_status` verbatim and paints it with
+  /// the `status_colors` that came with the row.
+  ///
+  /// `current_status` already resolves to `unfulfillable_reason` server-side
+  /// when an item could not be sourced, so C2's reason text needs no branch
+  /// here — the same field carries it.
+  Widget _itemInquiryBadge(Map<String, dynamic>? s) {
+    final text = (s?['current_status'] ?? '').toString().trim();
+    if (text.isEmpty) return const SizedBox.shrink();
+    final colors = s?['status_colors'] is Map
+        ? (s!['status_colors'] as Map).cast<String, dynamic>()
+        : const <String, dynamic>{};
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(4)),
-      child: Text(label, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: fg)),
+      decoration: BoxDecoration(
+          color: _hex(colors['bg'], const Color(0xFFF3F4F6)),
+          borderRadius: BorderRadius.circular(4)),
+      child: Text(text,
+          style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              color: _hex(colors['fg'], const Color(0xFF374151)))),
+    );
+  }
+
+  /// #625 — the assigned supplier, when there is one. It used to be glued into
+  /// the status chip's sentence in Dart; it is a value, so it renders as a
+  /// value beside the chip instead of being written into a phrase.
+  Widget _itemSupplierBadge(Map<String, dynamic>? s) {
+    final name = (s?['current_supplier'] ?? '').toString().trim();
+    if (name.isEmpty) return const SizedBox.shrink();
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+          color: const Color(0xFFF3F4F6), borderRadius: BorderRadius.circular(4)),
+      child: Text(name,
+          style: const TextStyle(
+              fontSize: 10, fontWeight: FontWeight.w600, color: Color(0xFF4B5563))),
     );
   }
 
@@ -2920,8 +2950,11 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         // Payment, delete — are unchanged; only this item-row layout changed.
         ...row.items.map((item) {
           final s = statusByName[_norm(item.name)];
-          final currentStatus   = s?['current_status'] as String?;
-          final currentSupplier = s?['current_supplier'] as String?;
+          // CHANGE #625 C2 — the backend says whether we could source this
+          // item; the card is flagged on that boolean alone. The items are NOT
+          // regrouped in Dart: splitting or reordering server rows is the app
+          // deciding what the list is. The flag rides on the row in place.
+          final unfulfillable = s?['unfulfillable'] == true;
           try {
             RenderLog.write('cust_order_items_redesign_382',
                 'orderId:${row.orderId ?? "?"}:item:${item.name}');
@@ -2957,13 +2990,25 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           final priceText =
               priceVal != null ? '₹${priceVal.toStringAsFixed(2)}' : null;
 
+          // #625 — an unfulfilled item is tinted with the SAME status_colors
+          // its chip uses, so the card and the chip cannot disagree about
+          // which items we could not source.
+          final rowColors = s?['status_colors'] is Map
+              ? (s!['status_colors'] as Map).cast<String, dynamic>()
+              : const <String, dynamic>{};
           return Container(
             margin: const EdgeInsets.only(top: 10),
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: unfulfillable
+                  ? _hex(rowColors['bg'], const Color(0xFFFBE9E7))
+                  : Colors.white,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: const Color(0xFFE5E7EB), width: 0.5),
+              border: Border.all(
+                  color: unfulfillable
+                      ? _hex(rowColors['fg'], const Color(0xFFB42318))
+                      : const Color(0xFFE5E7EB),
+                  width: unfulfillable ? 1 : 0.5),
             ),
             child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
               _custOrderItemThumb(imageUrl, isDesktop: isDesktop),
@@ -3011,7 +3056,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                                   fontSize: 15,
                                   fontWeight: FontWeight.w700,
                                   color: Color(0xFF111827))),
-                        _itemInquiryBadge(currentStatus, currentSupplier),
+                        _itemInquiryBadge(s),
+                        _itemSupplierBadge(s),
                       ],
                     ),
                   ],

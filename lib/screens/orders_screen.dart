@@ -37,6 +37,23 @@ class _DbOrder {
   final int unitCount;
   final bool placedByAdmin;
 
+  // ── CHANGE #625 — the items we could not source ───────────────────────────
+  /// Items separated out when the inquiry finished. They are never deleted —
+  /// the customer still sees them — but they no longer go to Pack or the bill,
+  /// and the order total already excludes them. Every field below is decided
+  /// and worded server-side; `has_unfulfilled` is the ONLY thing that decides
+  /// whether the section exists, and the app does not re-derive it by
+  /// measuring `unfulfilledLines`.
+  final List<_DbLine> unfulfilledLines;
+  final bool hasUnfulfilled;
+  final int unfulfilledCount;
+  final String unfulfilledTitle;
+  final String unfulfilledLabel;
+  final String unfulfilledNote;
+  final bool unfulfilledCollapsed;
+  /// Every item on the order, fulfilled or not. Counted server-side.
+  final int totalItemCount;
+
   _DbOrder({
     required this.id,
     required this.number,
@@ -50,7 +67,23 @@ class _DbOrder {
     this.uniqueItemCount = 0,
     this.unitCount = 0,
     this.placedByAdmin = false,
+    this.unfulfilledLines = const [],
+    this.hasUnfulfilled = false,
+    this.unfulfilledCount = 0,
+    this.unfulfilledTitle = '',
+    this.unfulfilledLabel = '',
+    this.unfulfilledNote = '',
+    this.unfulfilledCollapsed = true,
+    this.totalItemCount = 0,
   });
+
+  /// One parser for both arrays — they carry identical row shapes, so there is
+  /// exactly one place that can get a line wrong.
+  static List<_DbLine> _linesOf(dynamic raw) =>
+      ((raw as List<dynamic>?) ?? const [])
+          .whereType<Map>()
+          .map((l) => _DbLine.fromPayload(l.cast<String, dynamic>()))
+          .toList();
 
   /// CHANGE #572 — built from my_orders_screen(), which returns every field
   /// already decided and already formatted. Nothing is derived here: the
@@ -61,10 +94,7 @@ class _DbOrder {
         id: (row['id'] ?? '').toString(),
         number: (row['order_code'] ?? '').toString(),
         placedAt: (row['placed_at'] ?? '').toString(),
-        lines: ((row['lines'] as List<dynamic>?) ?? const [])
-            .whereType<Map>()
-            .map((l) => _DbLine.fromPayload(l.cast<String, dynamic>()))
-            .toList(),
+        lines: _linesOf(row['lines']),
         total: (row['total'] as num?)?.toDouble() ?? 0.0,
         totalDisplay: (row['total_display'] ?? '').toString(),
         status: (row['status'] ?? '').toString(),
@@ -73,6 +103,16 @@ class _DbOrder {
         uniqueItemCount: (row['unique_item_count'] as num?)?.toInt() ?? 0,
         unitCount: (row['unit_count'] as num?)?.toInt() ?? 0,
         placedByAdmin: row['placed_by_admin'] == true,
+        // #625 — adopted verbatim, including the decision to show the section
+        // at all and the decision to start it collapsed.
+        unfulfilledLines: _linesOf(row['unfulfilled_lines']),
+        hasUnfulfilled: row['has_unfulfilled'] == true,
+        unfulfilledCount: (row['unfulfilled_count'] as num?)?.toInt() ?? 0,
+        unfulfilledTitle: (row['unfulfilled_title'] ?? '').toString(),
+        unfulfilledLabel: (row['unfulfilled_label'] ?? '').toString(),
+        unfulfilledNote: (row['unfulfilled_note'] ?? '').toString(),
+        unfulfilledCollapsed: row['unfulfilled_collapsed'] != false,
+        totalItemCount: (row['total_item_count'] as num?)?.toInt() ?? 0,
       );
 }
 
@@ -84,6 +124,13 @@ class _DbLine {
   /// #572 — backend-formatted money strings.
   final String priceDisplay;
   final String lineTotalDisplay;
+  /// #625 — the item chip's words and both its colours, all decided by the
+  /// backend. On a fulfilled line this is the inquiry status ("Available"); on
+  /// an unfulfilled one it is the reason we could not source it ("No supplier
+  /// available"). Dart never maps a status to a colour or rewrites the words.
+  final String statusText;
+  final String statusBg;
+  final String statusFg;
 
   const _DbLine({
     required this.name,
@@ -92,19 +139,30 @@ class _DbLine {
     required this.lineTotal,
     this.priceDisplay = '',
     this.lineTotalDisplay = '',
+    this.statusText = '',
+    this.statusBg = '',
+    this.statusFg = '',
   });
 
   /// #572 — line_total arrives resolved. The old parser fell back to
   /// `price * qty` when the stored value was missing, which is the app
   /// deriving one field from two others.
-  factory _DbLine.fromPayload(Map<String, dynamic> j) => _DbLine(
-        name: (j['name'] ?? '').toString(),
-        price: (j['price'] as num?)?.toDouble() ?? 0.0,
-        quantity: (j['quantity'] as num?)?.toInt() ?? 1,
-        lineTotal: (j['line_total'] as num?)?.toDouble() ?? 0.0,
-        priceDisplay: (j['price_display'] ?? '').toString(),
-        lineTotalDisplay: (j['line_total_display'] ?? '').toString(),
-      );
+  factory _DbLine.fromPayload(Map<String, dynamic> j) {
+    final colors = j['status_colors'] is Map
+        ? (j['status_colors'] as Map).cast<String, dynamic>()
+        : const <String, dynamic>{};
+    return _DbLine(
+      name: (j['name'] ?? '').toString(),
+      price: (j['price'] as num?)?.toDouble() ?? 0.0,
+      quantity: (j['quantity'] as num?)?.toInt() ?? 1,
+      lineTotal: (j['line_total'] as num?)?.toDouble() ?? 0.0,
+      priceDisplay: (j['price_display'] ?? '').toString(),
+      lineTotalDisplay: (j['line_total_display'] ?? '').toString(),
+      statusText: (j['status_text'] ?? '').toString(),
+      statusBg: (colors['bg'] ?? '').toString(),
+      statusFg: (colors['fg'] ?? '').toString(),
+    );
+  }
 }
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
@@ -465,9 +523,6 @@ class _OrderCard extends StatefulWidget {
 }
 
 class _OrderCardState extends State<_OrderCard> {
-  Map<String, dynamic>? _panel;
-  bool _loading = false;
-  String? _error;
   // CHANGE #458: null = nothing open (static card, no auto-expand). 0=Items 1=Payment 2=Bill.
   // A single int? enforces "only one section open at once" by construction — never
   // independent per-section booleans that could disagree.
@@ -475,57 +530,15 @@ class _OrderCardState extends State<_OrderCard> {
 
   // CHANGE #458 B3: tapping the open button again closes it; tapping a different
   // button switches to it (closing whatever was open) — never two sections at once.
-  // CHANGE #463: Bill (tab 2) no longer needs cust_order_panel — _BillTab now
-  // fetches customer_bill_file() itself — so skip the shared panel load for it.
+  //
+  // CHANGE #625: nothing is fetched on open any more. See _buildSectionContent.
   void _toggleTab(int tab) {
-    final opening = _tab != tab;
-    setState(() => _tab = opening ? tab : null);
-    if (opening && tab != 2 && _panel == null && !_loading) _loadPanel();
+    setState(() => _tab = _tab == tab ? null : tab);
   }
 
   // CHANGE #548: backend-formatted (ist_fmt 'dmy_hm2'); no Dart date math.
   String _date(String ts) =>
       DateLabels.instance.label(ts, DateStyle.dmyHm2) ?? '';
-
-  Future<void> _loadPanel() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    try {
-      final res = await Supabase.instance.client
-          .rpc('cust_order_panel', params: {'p_order_id': widget.order.id});
-      final panel = Map<String, dynamic>.from(res as Map);
-      if (!mounted) return;
-      final items = (panel['items'] as List?) ?? [];
-      final bill = Map<String, dynamic>.from(panel['bill'] as Map? ?? {});
-      final payment = Map<String, dynamic>.from(panel['payment'] as Map? ?? {});
-      final advance = Map<String, dynamic>.from(payment['advance'] as Map? ?? {});
-      final upi = Map<String, dynamic>.from(payment['upi'] as Map? ?? {});
-      RenderLog.write('c446_expanded', 1);
-      RenderLog.write('c446_items', items.length);
-      if (items.isNotEmpty) {
-        final first = Map<String, dynamic>.from(items.first as Map);
-        RenderLog.write('c446_first_item', first['name']?.toString() ?? '');
-        RenderLog.write('c446_first_qty', first['qty_label']?.toString() ?? '');
-      }
-      RenderLog.write('c446_bill_ready', bill['ready'] == true);
-      RenderLog.write('c446_bill_reason', bill['reason_label']?.toString() ?? '');
-      RenderLog.write('c446_advance_label', advance['expected_label']?.toString() ?? '');
-      RenderLog.write('c446_upi_present', (upi['vpa'] != null) ? 1 : 0);
-      setState(() {
-        _panel = panel;
-        _loading = false;
-      });
-    } catch (_) {
-      if (mounted) {
-        setState(() {
-          _error = 'Could not load order details.';
-          _loading = false;
-        });
-      }
-    }
-  }
 
   // CHANGE #458: static card — no ExpansionTile, no whole-card tap target.
   // B1: header trimmed to Order ID, Date & Time, Status, Total (₹), and
@@ -650,42 +663,39 @@ class _OrderCardState extends State<_OrderCard> {
     );
   }
 
+  /// CHANGE #625 — the Items list is the payload this card was BUILT from.
+  ///
+  /// It used to be a second RPC. Opening Items called `cust_order_panel()`,
+  /// whose `items` array answers exactly the question `my_orders_screen().lines`
+  /// already answered — "what is in this order" — and the two disagreed. The
+  /// panel builds its array with `LEFT JOIN inquiry i ON i.product_id =
+  /// oi.product_id`, unqualified by order or by date, so an order_item whose
+  /// product carries N inquiry rows is emitted N times. Verified on live order
+  /// CPO310726PAL124O1: 8 order_items, 18 rows out of that join — Rozustat 20
+  /// Tablet three times, Pinkgums Dental Gel twice. That is the duplicate the
+  /// customer saw, and it was never in the data.
+  ///
+  /// `lines` is grouped by product_id server-side and takes its inquiry status
+  /// through a `limit 1` lateral, so it cannot fan out. One payload, one
+  /// answer, and nothing left that could disagree with itself.
+  ///
+  /// Bill and Payment already fetch for themselves (#463 / CustPayPanel), so
+  /// with Items served from the payload this card makes no call of its own at
+  /// all — there is no load state left to render.
   Widget _buildSectionContent() {
-    // CHANGE #463: Bill (tab 2) is independent of cust_order_panel now — it
-    // fetches customer_bill_file() itself — so it must not sit behind the
-    // _loading/_panel gate below (that's Items/Payment's own loading state,
-    // untouched).
-    // CHANGE #464: "Upload Bill" moved off this card entirely (now
-    // admin-Customer-Orders-tab only) — no upload-triggered refresh needed
-    // here anymore, so a plain per-order key is enough.
-    if (_tab == 2) {
-      return _BillTab(key: ValueKey(widget.order.id), orderId: widget.order.id);
-    }
-    if (_loading) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 24),
-        child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
-      );
-    }
-    if (_error != null) {
-      return Padding(
-        padding: const EdgeInsets.all(16),
-        child: Text(_error!, style: const TextStyle(color: Colors.red)),
-      );
-    }
-    final panel = _panel;
-    if (panel == null) return const SizedBox.shrink();
-    final header = Map<String, dynamic>.from(panel['header'] as Map? ?? {});
-    final items = ((panel['items'] as List?) ?? [])
-        .map((e) => Map<String, dynamic>.from(e as Map))
-        .toList();
-    final orderId = (header['order_id'] ?? widget.order.id).toString();
-
     switch (_tab) {
       case 0:
-        return _ItemsTab(items: items);
+        return _ItemsTab(order: widget.order);
       case 1:
-        return CustPayPanel(key: ValueKey(orderId), orderId: orderId, orderCode: widget.order.number);
+        return CustPayPanel(
+            key: ValueKey(widget.order.id),
+            orderId: widget.order.id,
+            orderCode: widget.order.number);
+      case 2:
+        // CHANGE #464: "Upload Bill" moved off this card entirely (now
+        // admin-Customer-Orders-tab only) — no upload-triggered refresh needed
+        // here anymore, so a plain per-order key is enough.
+        return _BillTab(key: ValueKey(widget.order.id), orderId: widget.order.id);
       default:
         return const SizedBox.shrink();
     }
@@ -725,122 +735,176 @@ class _TabButton extends StatelessWidget {
 
 // ─── Items tab ──────────────────────────────────────────────────────────────
 
-class _ItemsTab extends StatelessWidget {
-  final List<Map<String, dynamic>> items;
-  const _ItemsTab({required this.items});
+/// CHANGE #625 — the order's items, straight off the payload the card already
+/// holds. Two lists arrive already separated by the backend: `lines` (what we
+/// will supply) and `unfulfilled_lines` (what we could not source). The app
+/// splits nothing, counts nothing and words nothing — it renders two arrays and
+/// obeys one boolean.
+class _ItemsTab extends StatefulWidget {
+  final _DbOrder order;
+  const _ItemsTab({required this.order});
+
+  @override
+  State<_ItemsTab> createState() => _ItemsTabState();
+}
+
+class _ItemsTabState extends State<_ItemsTab> {
+  /// Seeded from `unfulfilled_collapsed`, so whether the section starts open is
+  /// a config row, not a Dart constant. After that it is ordinary UI state: the
+  /// customer's own tap, which is the one thing the backend cannot know.
+  late bool _unfulfilledOpen = !widget.order.unfulfilledCollapsed;
 
   @override
   Widget build(BuildContext context) {
-    if (items.isEmpty) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 16),
-        child: Text('No items.', style: TextStyle(color: Color(0xFF9CA3AF))),
-      );
-    }
-    return Column(children: items.map((it) => _itemRow(it)).toList());
+    final order = widget.order;
+    RenderLog.write(
+        'c625_unfulfilled_items',
+        'order:${order.number};lines:${order.lines.length}'
+        ';has_unf:${order.hasUnfulfilled ? 1 : 0}'
+        ';unf:${order.unfulfilledCount};unf_rows:${order.unfulfilledLines.length}'
+        ';total_items:${order.totalItemCount};open:${_unfulfilledOpen ? 1 : 0}');
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      // B1 — the items we WILL supply.
+      ...order.lines.map(_itemRow),
+      // B2/B3 — the section exists only because the backend said so. When
+      // has_unfulfilled is false nothing at all renders here: no header, no
+      // divider, no reserved gap.
+      if (order.hasUnfulfilled) _unfulfilledSection(order),
+    ]);
   }
 
-  Widget _itemRow(Map<String, dynamic> it) {
-    final imageUrl = it['image_url']?.toString();
-    final name = it['name']?.toString() ?? '';
-    final company = it['company']?.toString();
-    final packLabel = it['pack_label']?.toString();
-    final qtyLabel = it['qty_label']?.toString();
-    final rateLabel = it['rate_label']?.toString();
-    final lineLabel = it['line_label']?.toString();
-    final statusLabel = it['status_label']?.toString();
-    final statusOk = it['status_ok'] == true;
+  // ── B2 — the collapsed "Unfulfilled items (N)" section ────────────────────
 
+  Widget _unfulfilledSection(_DbOrder order) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(10),
+      margin: const EdgeInsets.only(top: 4),
       decoration: BoxDecoration(
-        color: const Color(0xFFFAFAFA),
+        color: const Color(0xFFFDF8F7),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
+        border: Border.all(color: const Color(0xFFF0DCD8)),
       ),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        _itemPhoto(imageUrl),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(name,
-                maxLines: 2, overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-            if (company != null && company.isNotEmpty)
-              Text(company,
-                  maxLines: 1, overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
-            if (packLabel != null && packLabel.isNotEmpty)
-              Text(packLabel,
-                  maxLines: 1, overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
-            const SizedBox(height: 6),
-            Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 10, runSpacing: 4, children: [
-              if (qtyLabel != null && qtyLabel.isNotEmpty)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                  decoration: BoxDecoration(color: const Color(0xFFF3F4F6), borderRadius: BorderRadius.circular(6)),
-                  child: Text(qtyLabel, style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
-                ),
-              if (rateLabel != null && rateLabel.isNotEmpty)
-                Text(rateLabel, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
-              if (lineLabel != null && lineLabel.isNotEmpty)
-                Text(lineLabel, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-              if (statusLabel != null && statusLabel.isNotEmpty) _itemStatusChip(statusLabel, statusOk),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        InkWell(
+          onTap: () => setState(() => _unfulfilledOpen = !_unfulfilledOpen),
+          borderRadius: BorderRadius.circular(10),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+            child: Row(children: [
+              const Icon(Icons.info_outline, size: 15, color: Color(0xFFB42318)),
+              const SizedBox(width: 8),
+              // The header is unfulfilled_label, printed verbatim — the count
+              // inside it was formatted server-side. Dart never builds "(N)".
+              Expanded(
+                child: Text(order.unfulfilledLabel,
+                    style: const TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF8A2B22))),
+              ),
+              Icon(_unfulfilledOpen ? Icons.expand_less : Icons.expand_more,
+                  size: 20, color: const Color(0xFF8A2B22)),
             ]),
-          ]),
+          ),
         ),
+        if (_unfulfilledOpen)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              if (order.unfulfilledNote.isNotEmpty) ...[
+                Text(order.unfulfilledNote,
+                    style: const TextStyle(
+                        fontSize: 11.5, height: 1.35, color: Color(0xFF6B7280))),
+                const SizedBox(height: 10),
+              ],
+              ...order.unfulfilledLines.map(_itemRow),
+            ]),
+          ),
       ]),
     );
   }
 
-  Widget _itemPhoto(String? url) {
-    const size = 56.0;
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(8),
-      child: SizedBox(
-        width: size, height: size,
-        child: (url == null || url.isEmpty)
-            ? Container(
-                color: const Color(0xFFF3F4F6),
-                alignment: Alignment.center,
-                child: const Icon(Icons.medication_outlined, size: 24, color: Color(0xFFD1D5DB)),
-              )
-            : Image.network(
-                url,
-                fit: BoxFit.cover,
-                gaplessPlayback: true,
-                cacheWidth: 112,
-                loadingBuilder: (_, child, prog) => prog == null
-                    ? child
-                    : Container(
-                        color: const Color(0xFFF3F4F6),
-                        alignment: Alignment.center,
-                        child: const SizedBox(
-                            width: 16, height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFD1D5DB))),
-                      ),
-                errorBuilder: (_, __, ___) => Container(
-                  color: const Color(0xFFF3F4F6),
-                  alignment: Alignment.center,
-                  child: const Icon(Icons.medication_outlined, size: 24, color: Color(0xFFD1D5DB)),
-                ),
-              ),
+  // ── One row shape for both lists ──────────────────────────────────────────
+  // B4 — the status chip rides on the main lines too, coloured by the
+  // status_colors that came with the line. On an unfulfilled line the same
+  // field already carries the reason ("No supplier available"), so there is no
+  // second code path and no chance of the two drifting apart.
+
+  Widget _itemRow(_DbLine l) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(l.name,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+                fontSize: 13.5,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF111827))),
+        const SizedBox(height: 6),
+        Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 10,
+            runSpacing: 4,
+            children: [
+              // The quantity as the backend counted it. No unit word is glued
+              // on here — `lines` carries no qty_label, and inventing "Units"
+              // in Dart is exactly the kind of string this repo forbids.
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                decoration: BoxDecoration(
+                    color: const Color(0xFFF3F4F6),
+                    borderRadius: BorderRadius.circular(6)),
+                child: Text('${l.quantity}',
+                    style: const TextStyle(
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF374151))),
+              ),
+              if (l.priceDisplay.isNotEmpty)
+                Text(l.priceDisplay,
+                    style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+              if (l.lineTotalDisplay.isNotEmpty)
+                Text(l.lineTotalDisplay,
+                    style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF111827))),
+              if (l.statusText.isNotEmpty)
+                _LineStatusChip(text: l.statusText, bg: l.statusBg, fg: l.statusFg),
+            ]),
+      ]),
     );
   }
+}
 
-  Widget _itemStatusChip(String label, bool ok) {
-    final color = ok ? const Color(0xFF16A34A) : const Color(0xFFD97706);
+/// #625 — words and both colours arrive together on the line. Recolouring a
+/// status is an UPDATE in `unfulfilled_copy`, never a deploy.
+class _LineStatusChip extends StatelessWidget {
+  final String text;
+  final String bg;
+  final String fg;
+  const _LineStatusChip(
+      {required this.text, required this.bg, required this.fg});
+
+  @override
+  Widget build(BuildContext context) {
+    final fgColor = _hexColor(fg, fallback: const Color(0xFF374151));
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
+        color: _hexColor(bg, fallback: const Color(0xFFF3F4F6)),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withValues(alpha: 0.3)),
       ),
-      child: Text(label, style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: color)),
+      child: Text(text,
+          style: TextStyle(
+              fontSize: 10.5, fontWeight: FontWeight.w700, color: fgColor)),
     );
   }
 }
@@ -1594,6 +1658,16 @@ class _WaNumberPickerState extends State<_WaNumberPicker> {
 
 // ─── Status chip ──────────────────────────────────────────────────────────────
 
+/// Parses '#RRGGBB' from the backend. Not a decision — a hex string is not a
+/// Dart Color until something converts it. #625 lifted this out of _StatusChip
+/// so the order chip and the per-line chip parse backend colours identically.
+Color _hexColor(String hex, {required Color fallback}) {
+  final h = hex.replaceFirst('#', '').trim();
+  if (h.length != 6) return fallback;
+  final v = int.tryParse(h, radix: 16);
+  return v == null ? fallback : Color(0xFF000000 | v);
+}
+
 class _StatusChip extends StatelessWidget {
   final String status;
   final String label;
@@ -1603,15 +1677,6 @@ class _StatusChip extends StatelessWidget {
     required this.label,
     required this.colorHex,
   });
-
-  /// Parses '#RRGGBB' from the backend. Not a decision — a hex string is not a
-  /// Dart Color until something converts it.
-  static Color _hexColor(String hex, {required Color fallback}) {
-    final h = hex.replaceFirst('#', '').trim();
-    if (h.length != 6) return fallback;
-    final v = int.tryParse(h, radix: 16);
-    return v == null ? fallback : Color(0xFF000000 | v);
-  }
 
   @override
   Widget build(BuildContext context) {

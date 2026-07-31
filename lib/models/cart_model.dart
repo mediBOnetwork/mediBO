@@ -467,7 +467,7 @@ class CartModel extends ChangeNotifier {
     RenderLog.write(kC610OnePayload, 'roundtrips:1');
     // CHANGE #615 — proves the flat cart rendered: the subtotal strings the
     // footer prints, straight out of the payload that was just adopted.
-    RenderLog.write(kC615CartFlatSmooth,
+    RenderLog.write(kC616CartFlatSmooth,
         'subtotal:${(cart['render'] as Map?)?['subtotal_display'] ?? ''};'
         'line:${(cart['render'] as Map?)?['subtotal_line'] ?? ''};'
         'debounce_ms:${_kStepperDebounce.inMilliseconds}');
@@ -478,7 +478,7 @@ class CartModel extends ChangeNotifier {
   }
 
   static const kC610OnePayload = 'c610_cart_one_payload';
-  static const kC615CartFlatSmooth = 'c615_cart_flat_smooth';
+  static const kC616CartFlatSmooth = 'c616_cart_flat_smooth';
 
   /// Rebuilds `_serverLines` from the payload. Pure — no network, no mutation
   /// of the payload, and no line that is not in `cart['items']`.

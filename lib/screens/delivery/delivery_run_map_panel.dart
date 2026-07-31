@@ -40,6 +40,13 @@ class DeliveryRunMapPanel extends StatefulWidget {
   /// delivery_run_map().waypoints both already have.
   final List<Map<String, dynamic>> stops;
 
+  /// CHANGE #630 (D6): additional people to plot on this SAME map — an
+  /// agency's riders, from agency_team().riders. Each needs lat, lng and name;
+  /// rows without a fix are skipped rather than dropped at (0,0). They are
+  /// deliberately NOT merged into [stops]: a rider is not a stop, has no
+  /// pin_color and must not be numbered into the route sequence.
+  final List<Map<String, dynamic>> extraMarkers;
+
   /// delivery_run_map().road_polyline — empty/absent draws no line.
   final String roadPolyline;
 
@@ -53,6 +60,7 @@ class DeliveryRunMapPanel extends StatefulWidget {
   const DeliveryRunMapPanel({
     super.key,
     required this.stops,
+    this.extraMarkers = const [],
     this.roadPolyline = '',
     this.originLat,
     this.originLng,
@@ -168,6 +176,13 @@ class _DeliveryRunMapPanelState extends State<DeliveryRunMapPanel> {
       final lng = (s['lng'] as num?)?.toDouble();
       if (lat != null && lng != null) pts.add(LatLng(lat, lng));
     }
+    // Riders count towards the fit too — an agency whose stops are all handed
+    // out would otherwise have nothing to frame the camera on.
+    for (final e in widget.extraMarkers) {
+      final lat = (e['lat'] as num?)?.toDouble();
+      final lng = (e['lng'] as num?)?.toDouble();
+      if (lat != null && lng != null) pts.add(LatLng(lat, lng));
+    }
     if (widget.originLat != null && widget.originLng != null) {
       pts.add(LatLng(widget.originLat!, widget.originLng!));
     }
@@ -221,6 +236,22 @@ class _DeliveryRunMapPanelState extends State<DeliveryRunMapPanel> {
         zIndexInt: 1000 - seq,
         infoWindow: InfoWindow(title: s['pharmacy_name']?.toString() ?? ''),
         onTap: widget.onTapStop == null ? null : () => widget.onTapStop!(s),
+      ));
+    }
+
+    // D6 — an agency's riders, in a distinct hue so they can never be mistaken
+    // for a delivery stop. No status is read and no colour is chosen per rider.
+    for (var i = 0; i < widget.extraMarkers.length; i++) {
+      final e = widget.extraMarkers[i];
+      final lat = (e['lat'] as num?)?.toDouble();
+      final lng = (e['lng'] as num?)?.toDouble();
+      if (lat == null || lng == null) continue;
+      markers.add(Marker(
+        markerId: MarkerId('rider_${e['partner_id'] ?? i}'),
+        position: LatLng(lat, lng),
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueViolet),
+        infoWindow: InfoWindow(title: e['name']?.toString() ?? ''),
+        zIndexInt: 1500,
       ));
     }
 

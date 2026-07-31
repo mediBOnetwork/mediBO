@@ -34,6 +34,7 @@ import '../../fulfill/fulfill_lookups.dart';
 import '../../services/admin_date_scope.dart';
 import '../../services/admin_zone_scope.dart';
 import '../../utils/render_log.dart';
+import 'admin_delivery_partners_section.dart'; // C630: PART A
 
 Color get _kGreen => FulfillLookups.instance.color('c_ff1b7a43', const Color(0xFF1B7A43));
 Color get _kBorder => FulfillLookups.instance.color('c_ffe5e7eb', const Color(0xFFE5E7EB));
@@ -86,6 +87,9 @@ class AdminDeliveryTabState extends State<AdminDeliveryTab>
   /// order_id -> selected. Only ever holds ids the backend said can_assign.
   final Set<String> _selected = {};
 
+  /// CHANGE #630: the partners section refetches on a zone change too.
+  final _partnersKey = GlobalKey<AdminDeliveryPartnersSectionState>();
+
   @override
   void initState() {
     super.initState();
@@ -118,6 +122,9 @@ class AdminDeliveryTabState extends State<AdminDeliveryTab>
     // never be assigned while Bilaspur is on screen.
     _selected.clear();
     _load();
+    // The active roster is zone-scoped too — it must not keep showing another
+    // zone's partners after the picker moves.
+    _partnersKey.currentState?.reload();
   }
 
   /// The two filters, sent on EVERY call in this file.
@@ -403,11 +410,20 @@ class AdminDeliveryTabState extends State<AdminDeliveryTab>
           padding: EdgeInsets.fromLTRB(16, 12, 16, _selected.isEmpty ? 24 : 96),
           children: [
             _zoneHeader(),
-            if (_missingCount > 0) ...[
-              const SizedBox(height: 12),
-              _missingBanner(),
-            ],
             const SizedBox(height: 12),
+            // CHANGE #630 (PART A): approve registrations and manage the active
+            // roster. Collapsed by default so it never buries the queue; its
+            // own pending badge is what draws the eye when something is waiting.
+            AdminDeliveryPartnersSection(
+              key: _partnersKey,
+              // Approving a partner changes who can be assigned, so the queue
+              // is refetched rather than left holding a stale partners[].
+              onChanged: _load,
+            ),
+            if (_missingCount > 0) ...[
+              _missingBanner(),
+              const SizedBox(height: 12),
+            ],
             _dashboardStrip(),
             if (_riders.isNotEmpty) ...[
               const SizedBox(height: 12),

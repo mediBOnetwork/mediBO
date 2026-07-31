@@ -158,30 +158,10 @@ class _ContactScreenState extends State<ContactScreen> {
               color: Brand.mint,
               borderRadius: BorderRadius.circular(12),
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: const [
-                Text('Direct Contact',
-                    style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        color: Brand.green)),
-                SizedBox(height: 12),
-                _ContactRow(Icons.business_outlined,
-                    'Jai Mahakal Medical And Surgical'),
-                SizedBox(height: 8),
-                _ContactRow(Icons.location_on_outlined,
-                    'P H No 19, Vill-Jaunda, R N M-Champaran, Tah-Gobra Nawapara, District-Raipur, Chhattisgarh - 493885'),
-                SizedBox(height: 8),
-                _ContactRow(Icons.phone_outlined, '9329252090'),
-                SizedBox(height: 8),
-                _ContactRow(
-                    Icons.email_outlined, 'medibonetwork@gmail.com'),
-                SizedBox(height: 8),
-                _ContactRow(Icons.receipt_long_outlined,
-                    'GSTIN: 22BXXPJ8518F1Z4'),
-              ],
-            ),
+            // CHANGE #619 — mediBO's own details, from
+            // platform_public_identity(). The partner's name, address and
+            // GSTIN that used to sit here are shown on About and nowhere else.
+            child: const _DirectContact(),
           ),
         ],
       ),
@@ -242,22 +222,88 @@ class _ContactScreenState extends State<ContactScreen> {
   }
 }
 
-class _ContactRow extends StatelessWidget {
-  final IconData icon;
-  final String text;
-  const _ContactRow(this.icon, this.text);
+/// CHANGE #619 — mediBO's own contact block, rendered from
+/// `platform_public_identity()`. The heading and every label/value pair come
+/// from the payload; this widget writes no copy of its own. The RPC returns
+/// no partner data, so the partner cannot appear here.
+class _DirectContact extends StatefulWidget {
+  const _DirectContact();
+
+  @override
+  State<_DirectContact> createState() => _DirectContactState();
+}
+
+class _DirectContactState extends State<_DirectContact> {
+  Map<String, dynamic>? _data;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final raw =
+          await Supabase.instance.client.rpc('platform_public_identity');
+      if (!mounted) return;
+      setState(() => _data = Map<String, dynamic>.from(raw as Map));
+    } catch (e) {
+      // Nothing to show without a payload — the block stays empty rather
+      // than inventing a fallback.
+      if (!mounted) return;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Row(
+    final d = _data;
+    if (d == null) return const SizedBox.shrink();
+
+    final title = d['contact_title'];
+    final raw = d['contact_rows'];
+    final rows = raw is List
+        ? raw.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList()
+        : const <Map<String, dynamic>>[];
+    if (rows.isEmpty) return const SizedBox.shrink();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Icon(icon, size: 15, color: Brand.green),
-        const SizedBox(width: 10),
-        Text(text,
-            style: const TextStyle(
-                fontSize: 13,
-                color: Brand.ink,
-                fontWeight: FontWeight.w500)),
+        if (title is String && title.isNotEmpty) ...[
+          Text(title,
+              style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: Brand.green)),
+          const SizedBox(height: 12),
+        ],
+        ...rows.map((r) {
+          final label = r['label'];
+          final value = r['value'];
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: 110,
+                  child: Text(label is String ? label : '',
+                      style: const TextStyle(
+                          fontSize: 12.5, color: Brand.inkMuted)),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(value is String ? value : '',
+                      style: const TextStyle(
+                          fontSize: 13,
+                          color: Brand.ink,
+                          fontWeight: FontWeight.w500)),
+                ),
+              ],
+            ),
+          );
+        }),
       ],
     );
   }

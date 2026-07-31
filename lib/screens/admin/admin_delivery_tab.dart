@@ -92,6 +92,12 @@ class AdminDeliveryTabState extends State<AdminDeliveryTab>
     FulfillLookups.instance.ensureLoaded();
     AdminDateScope.instance.addListener(_onScopeChanged);
     AdminZoneScope.instance.addListener(_onScopeChanged);
+    // BOTH scopes are loaded before anything is asked of them. Without this the
+    // first _load() can fire while dateYmd is still null, sending p_date:null —
+    // the backend then answers for ITS today instead of the date the admin has
+    // chosen, and the two disagree about which day is on screen. Both are
+    // idempotent; each fires _onScopeChanged when it lands, which refetches.
+    AdminDateScope.instance.ensureLoaded();
     AdminZoneScope.instance.ensureLoaded();
     _load();
   }
@@ -155,8 +161,11 @@ class AdminDeliveryTabState extends State<AdminDeliveryTab>
         _loading = false;
       });
 
+      // `allowed` is logged so an empty zone/date reads as "this caller is not
+      // an admin" rather than "the zone filter is broken" — the two look
+      // identical in the log otherwise.
       RenderLog.write('c629_delivery',
-          'zone=$_zoneLabel;date=${AdminDateScope.instance.dateYmd ?? ''};'
+          'allowed=$_allowed;zone=$_zoneLabel;date=${AdminDateScope.instance.dateYmd ?? ''};'
           'orders=${_orders.length};ready=$_readyCount;partners=${_partners.length}');
     } catch (e) {
       if (!mounted) return;

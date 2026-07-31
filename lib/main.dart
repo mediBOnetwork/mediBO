@@ -115,6 +115,9 @@ void main() {
     // CHANGE #619: Orders fetch records every outcome and re-asks when a live
     // session comes back "no customer account" — which cannot be true.
     RenderLog.write('c619_orders_render_fix', 1);
+    // CHANGE #622: the Orders fetch names what it caught, and a failed load can
+    // no longer masquerade as "no orders".
+    RenderLog.write('c622_orders_error_state', 1);
     // #108 static build properties (flat list, responsive popup)
     RenderLog.write('inq_flat_list', 1);
     RenderLog.write('inq_toggle_removed', 1);

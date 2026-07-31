@@ -156,9 +156,16 @@ class _OrdersScreenState extends State<OrdersScreen> {
   /// attempt number, whether a session was attached, and what came back.
   /// #614 logged only success, so the failure that actually shipped was
   /// invisible in the render-log.
-  static const kC619Fetch = 'c619_orders_fetch';
+  static const kC622Fetch = 'c622_orders_fetch';
   static const int _kMaxFetchRetries = 3;
   Timer? _retryTimer;
+
+  /// CHANGE #622 — true only when the RPC never gave us an answer (threw, or
+  /// returned a shape that is not the payload). Kept strictly apart from
+  /// `_hasOrders == false`, which the SERVER said. One means "we don't know",
+  /// the other means "there are none"; showing the second for the first is
+  /// exactly the bug customers reported.
+  bool _loadFailed = false;
 
   @override
   void initState() {
@@ -186,7 +193,12 @@ class _OrdersScreenState extends State<OrdersScreen> {
     _channel = null;
     _customerId = '';
     if (!mounted) return;
-    setState(() => _loading = true);
+    // #622 — a new account deserves a clean slate: the previous account's
+    // failure must not colour what this one sees.
+    setState(() {
+      _loading = true;
+      _loadFailed = false;
+    });
     RenderLog.write('c614_orders_auth_refetch', 'uid:${uid == null ? 0 : 1}');
     _fetch();
   }
@@ -248,9 +260,9 @@ class _OrdersScreenState extends State<OrdersScreen> {
       );
       final map = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
       if (map is! Map) {
-        RenderLog.write(
-            kC619Fetch, 'badshape;try:$attempt;sess:${hasSession ? 1 : 0}');
-        _retryOrSettle(attempt);
+        RenderLog.write(kC622Fetch,
+            'badshape:${raw.runtimeType};try:$attempt;sess:${hasSession ? 1 : 0}');
+        _retryOrSettle(attempt, failed: true);
         return;
       }
       if (!mounted) return;
@@ -264,7 +276,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
       final custId = (payload['customer_id'] ?? '').toString();
 
       RenderLog.write(
-          kC619Fetch,
+          kC622Fetch,
           'ok;try:$attempt;sess:${hasSession ? 1 : 0};count:${parsed.length}'
           ';has:${hasOrders ? 1 : 0};nocust:${noCust ? 1 : 0}'
           ';cust:${custId.isEmpty ? 0 : 1}');
@@ -291,21 +303,42 @@ class _OrdersScreenState extends State<OrdersScreen> {
         _isAdminSession = payload['is_admin_session'] == true;
         _noCustomerAccount = noCust;
         _loading = false;
+        _loadFailed = false; // the server answered; whatever it said stands
       });
       if (_channel == null) _subscribeRealtime();
     } catch (e) {
+      // CHANGE #622 — record WHAT was thrown, not merely that something was.
+      // #619 logged the bare word "threw", which proved a failure existed but
+      // named nothing; the answer turned out to be a PostgrestException
+      // carrying SQLSTATE 25006, and that message is what identified the bug.
       RenderLog.write(
-          kC619Fetch, 'threw;try:$attempt;sess:${hasSession ? 1 : 0}');
-      _retryOrSettle(attempt);
+          kC622Fetch,
+          'threw:${e.runtimeType}:${_short(e)}'
+          ';try:$attempt;sess:${hasSession ? 1 : 0}');
+      _retryOrSettle(attempt, failed: true);
     }
+  }
+
+  /// First 60 characters of an error, flattened onto one line so it survives
+  /// the render-log's key=value format.
+  static String _short(Object e) {
+    final s = e.toString().replaceAll(RegExp(r'[\r\n;=]+'), ' ').trim();
+    return s.length <= 60 ? s : s.substring(0, 60);
   }
 
   /// Backs off and asks again, or stops pretending and shows what we have.
   /// A fetch that failed must never leave a stale payload looking authoritative.
-  void _retryOrSettle(int attempt) {
+  void _retryOrSettle(int attempt, {bool failed = false}) {
     if (!mounted) return;
     if (attempt >= _kMaxFetchRetries) {
-      setState(() => _loading = false);
+      // CHANGE #622 — a transport failure must NEVER settle into the empty
+      // state. "No orders" is a thing only the server may say; when it never
+      // answered, saying it for them is the app inventing the one fact the
+      // customer cares about. Retries exhausted on a throw => error state.
+      setState(() {
+        _loading = false;
+        if (failed) _loadFailed = true;
+      });
       return;
     }
     _retryTimer?.cancel();
@@ -345,6 +378,37 @@ class _OrdersScreenState extends State<OrdersScreen> {
     if (_loading) {
       return const Center(child: CircularProgressIndicator());
     }
+    // CHANGE #622 — the RPC never answered (threw, or returned a shape that is
+    // not the payload), and the retries are spent. Say THAT. Borrowing the
+    // empty state's words here is how a signed-in customer with orders was
+    // told they had none. "You have no orders" is the server's sentence to
+    // pronounce, never the app's guess when the server is unreachable.
+    //
+    // This is the one screen state whose copy is written in Dart rather than
+    // fetched: there is no payload to take it from, because the payload is
+    // exactly what failed to arrive.
+    if (_loadFailed) {
+      return RefreshIndicator(
+        onRefresh: _fetch,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          children: [
+            SizedBox(height: MediaQuery.of(context).size.height * 0.25),
+            Icon(Icons.cloud_off_outlined,
+                size: 64, color: Theme.of(context).hintColor),
+            const SizedBox(height: 12),
+            const Center(child: Text("Couldn't load orders")),
+            const SizedBox(height: 4),
+            Center(
+              child: Text('Pull down to try again.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Theme.of(context).hintColor)),
+            ),
+          ],
+        ),
+      );
+    }
+
     // CHANGE #614 — `has_orders` is the backend's answer; the screen used to
     // decide this itself with `_orders.isEmpty`. Same result on the happy
     // path, but it is not the app's question to answer.

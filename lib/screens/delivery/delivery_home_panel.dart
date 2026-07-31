@@ -67,8 +67,19 @@ class DeliveryHomePanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final active = home['allowed'] != false && home['is_partner'] != false;
+
+    // Attestation fires for BOTH states, and before the early return below.
+    // A rider who has registered but not yet been approved is exactly the case
+    // this panel most needs to be provable in — if the key only fired once
+    // somebody was already approved, it could not prove the not-approved path
+    // shipped at all.
+    RenderLog.write('c630_delivery_depth',
+        'active=$active;on_shift=${home['on_shift'] == true};'
+        'tiles=${_tiles.length};agency=${home['is_agency'] == true}');
+
     // Not an active partner yet — the backend's own two sentences, nothing else.
-    if (home['allowed'] == false || home['is_partner'] == false) {
+    if (!active) {
       return Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
@@ -92,9 +103,6 @@ class DeliveryHomePanel extends StatelessWidget {
     final perDrop = home['per_drop_display']?.toString() ?? '';
     final zone = home['zone_label']?.toString() ?? '';
     final onShift = home['on_shift'] == true;
-
-    RenderLog.write('c630_delivery_depth',
-        'on_shift=$onShift;tiles=${_tiles.length};zone=$zone');
 
     return Container(
       padding: const EdgeInsets.all(12),

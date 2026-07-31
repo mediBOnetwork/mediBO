@@ -25,6 +25,11 @@ class _AboutScreenState extends State<AboutScreen> {
   bool _loading = true;
   bool _failed = false;
 
+  /// CHANGE #618 — index of the zone whose partner is currently revealed.
+  /// null = every zone collapsed, which is the initial state: partner identity
+  /// is shown only after the visitor opens a zone, and only on this page.
+  int? _openZone;
+
   @override
   void initState() {
     super.initState();
@@ -254,31 +259,68 @@ class _AboutScreenState extends State<AboutScreen> {
                   fontSize: 14, height: 1.6, color: Brand.inkMuted)),
           const SizedBox(height: 14),
         ],
-        ...list.map(_partnerCard),
+        // CHANGE #618 — one tappable row per zone. Partner identity is only
+        // revealed for the zone the visitor opens, and only here on About.
+        ...List.generate(list.length, (i) => _zoneTile(i, list[i])),
       ],
     );
   }
 
-  Widget _partnerCard(Map<String, dynamic> p) {
+  /// Collapsed: the zone name alone. Expanded: that zone's partner.
+  Widget _zoneTile(int index, Map<String, dynamic> p) {
     final zone = _s(p, 'zone');
+    final open = _openZone == index;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            key: Key('about_zone_$index'),
+            onTap: () => setState(() => _openZone = open ? null : index),
+            borderRadius: BorderRadius.circular(12),
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              decoration: BoxDecoration(
+                border: Border.all(color: Brand.border),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(zone,
+                        style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w800,
+                            color: Brand.ink)),
+                  ),
+                  Icon(open ? Icons.expand_less : Icons.expand_more,
+                      size: 20, color: Brand.green),
+                ],
+              ),
+            ),
+          ),
+          if (open)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 12, 0, 8),
+              child: _partnerCard(p),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _partnerCard(Map<String, dynamic> p) {
     final name = _s(p, 'name');
     final badge = _s(p, 'badge');
     final rows = _rows(p, 'rows');
     final docs = _rows(p, 'docs');
 
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 18),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (zone.isNotEmpty) ...[
-            Text(zone,
-                style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w800,
-                    color: Brand.ink)),
-            const SizedBox(height: 8),
-          ],
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
           if (name.isNotEmpty)
             Text(name,
                 style: const TextStyle(
@@ -308,8 +350,7 @@ class _AboutScreenState extends State<AboutScreen> {
             const SizedBox(height: 10),
             _DocList(docs: docs),
           ],
-        ],
-      ),
+      ],
     );
   }
 

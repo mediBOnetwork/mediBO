@@ -15,7 +15,6 @@ import '../user_state.dart';
 import '../util.dart';
 import '../view_as_state.dart';
 import '../widgets/animations.dart';
-import '../widgets/seller_block.dart';
 import 'auth/login_screen.dart';
 import 'profile_screen.dart';
 
@@ -1783,14 +1782,6 @@ class _CheckoutBar extends StatelessWidget {
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      // #611 — who actually sells this order, stated before
-                      // it is placed. Lines are partner_seller_block().
-                      const PartnerSellerBlock(
-                        lines: SellerLine.checkoutLines,
-                        padding: EdgeInsets.only(bottom: 10),
-                        fontSize: 10.5,
-                        logTag: 'c611_checkout_seller_mobile',
-                      ),
                       // CHANGE #615 — "View bill" and the sheet it opened are
                       // gone. There is no breakdown left to open: the bill IS
                       // the subtotal printed above.
@@ -1935,13 +1926,6 @@ class _OrderSummaryPanel extends StatelessWidget {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // #611 — seller-of-record lines above Place Order.
-                const PartnerSellerBlock(
-                  lines: SellerLine.checkoutLines,
-                  padding: EdgeInsets.only(bottom: 10),
-                  fontSize: 10.5,
-                  logTag: 'c611_checkout_seller_desktop',
-                ),
                 GestureDetector(
                   onTap: onPlaceOrder,
                   child: Container(

@@ -27,6 +27,7 @@ import '../../widgets/box_date_row.dart'; // C545: BoxDateOlderRow (the shared d
 import '../../services/date_labels.dart'; // C546: backend-owned date strings
 import '../../supabase_config.dart' show SupabaseConfig;
 import 'voice_receive.dart';
+import 'barcode_count_screen.dart'; // CHANGE #624: barcode counting screen
 import '../../widgets/pinned_footer_list.dart';
 import '../../widgets/fulfill_item_sheet.dart';
 import '../../widgets/report_issue_section.dart';
@@ -1079,6 +1080,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // today's mentions for the supplier+stage). Set on recording start; cleared
   // only when the card is freshly (re)loaded, never nulled on stop/finalize, so
   // the badge/popup still agree right after Stop.
+  // ignore: unused_field  // #624: still written by the voice session (path untouched);
+  // no longer read — the review sheet scopes by the backend tab bar, not session_key.
   String? _activeVoiceSessionKey;
 
   // ── Voice state ──
@@ -1271,6 +1274,18 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   int get _spokenCount => _voiceMentions.isEmpty
       ? 0
       : (_voiceMentions.first['distinct_products'] as num?)?.toInt() ?? 0;
+
+  // CHANGE #624 (D1): the chip's whole sentence is backend-owned —
+  // get_voice_clip_mentions returns items_label ("5 items") on every row and it
+  // is printed verbatim. Nothing is composed in Dart. With no rows there is no
+  // row to read it from, so the copy catalog's own zero form is used instead.
+  String get _itemsLabel {
+    if (_voiceMentions.isNotEmpty) {
+      final l = _voiceMentions.first['items_label']?.toString() ?? '';
+      if (l.isNotEmpty) return l;
+    }
+    return FulfillLookups.instance.uiCount('items_badge', 0) ?? '';
+  }
 
   // ── Lifecycle ───────────────────────────────────────────────────────────────
 
@@ -2566,10 +2581,16 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     );
   }
 
-  // #263/#453: load voice clip mentions from DB → derive distinct-product count
-  // for "N spoken" badge. Scoped by _activeVoiceSessionKey via the SAME shared
-  // helper the "Counted items" popup uses (see fetchScopedVoiceMentions), so the
+  // #263/#453: load clip mentions from DB → drives the "N item" chip and the
+  // review sheet, via the SAME shared helper (fetchScopedVoiceMentions) so the
   // two can never disagree.
+  //
+  // CHANGE #624: sessionKey is now null — i.e. every mention for this
+  // supplier+stage+date, voice AND barcode. Filtering by the live voice
+  // session_key would drop every barcode row (a barcode scan writes its own
+  // session_key), and the review sheet must show both sources together. The
+  // per-session view did not disappear: it is now the backend-owned tab bar
+  // (voice_review_groups → All / Clip N / Barcode), which scopes by group_key.
   Future<void> _refreshVoiceMentions() async {
     final supplier = _selectedSupplier;
     if (supplier == null) return;
@@ -2577,7 +2598,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       final mentions = await fetchScopedVoiceMentions(
         supplierName: supplier,
         stage: widget.arrivals ? 'warehouse' : 'shop',
-        sessionKey: _activeVoiceSessionKey,
+        sessionKey: null,
       );
       if (!mounted) return;
       // CHANGE #536: both figures are backend-owned columns now.
@@ -3565,6 +3586,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         .toList();
   }
 
+  // ignore: unused_element  // #624: Ask mediBO pill removed; agent code kept intact.
   Future<void> _startAgentRecording() async {
     if (_agentBusy || _voiceListening || _agentPhase != AgentPhase.idle) return;
     _agentBusy = true;
@@ -3593,6 +3615,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     _agentBusy = false;
   }
 
+  // ignore: unused_element  // #624: Ask mediBO pill removed; agent code kept intact.
   Future<void> _stopAgentRecording() async {
     if (!_agentRecStarted) return;
     _agentRecStarted = false;
@@ -4158,12 +4181,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       RenderLog.write('c284_voice_gated',
           'bag=$voiceBagPresent;enabled=$voiceBagPresent');
     }
-    final agentDisabled = _voiceListening || _voiceProcessing;
-    final agentPhase = _agentPhase;
-    final bool agentBusy = agentPhase == AgentPhase.thinking || agentPhase == AgentPhase.speaking;
-    final bool agentListening = agentPhase == AgentPhase.listening;
-    final bool confirming = agentPhase == AgentPhase.confirming;
-
     return Padding(
       // 16px matches item list horizontal padding → pills line up with items below
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
@@ -4197,42 +4214,21 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           ),
         ),
 
-        // Ask mediBO — Expanded, same width as Count items (#90: no Spacer or fixed width)
+        // CHANGE #624: Barcode count — replaces Ask mediBO. Same Expanded pill
+        // as Count items, so the two counting methods sit side by side.
         if (isAdmin) ...[
           const SizedBox(width: 12),
           Expanded(
-            child: CompositedTransformTarget(
-              link: _askPillLayerLink,
-              child: SizedBox(
-                height: _kVoiceBtnH,
-                child: _buildWidePill(
-                  icon: agentListening
-                      ? Icons.stop_rounded
-                      : agentBusy
-                          ? Icons.hourglass_top_rounded
-                          : Icons.record_voice_over_rounded,
-                  label: agentListening
-                      ? 'Listening…'
-                      : agentBusy
-                          ? (agentPhase == AgentPhase.thinking ? 'Thinking…' : 'Speaking…')
-                          : confirming
-                              ? 'Confirming…'
-                              : 'Ask mediBO',
-                  active: agentListening,
-                  activeColor: _kAgentAccent,
-                  disabled: agentDisabled && !agentListening,
-                  spinning: agentBusy,
-                  // CHANGE #277: silent noop when no bag
-                  onTap: () {
-                    if (widget.arrivals && _activeBag == null) return;
-                    if (agentBusy) return;
-                    if (agentListening) {
-                      _stopAgentRecording();
-                    } else if (agentPhase == AgentPhase.idle) {
-                      _startAgentRecording();
-                    }
-                  },
-                ),
+            child: SizedBox(
+              height: _kVoiceBtnH,
+              child: _buildWidePill(
+                icon: Icons.qr_code_scanner_rounded,
+                label: FulfillLookups.instance.ui('barcode_count'),
+                active: false,
+                activeColor: _kGreen,
+                disabled: countingDisabled,
+                spinning: false,
+                onTap: _openBarcodeCount,
               ),
             ),
           ),
@@ -4971,11 +4967,6 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final total = _boxProgressTotal;
     // CHANGE #277: bag-missing is a silent noop, not a disabled state
     final countingDisabled = _agentPhase != AgentPhase.idle;
-    final agentDisabled = _voiceListening || _voiceProcessing;
-    final agentPhase = _agentPhase;
-    final bool agentBusy = agentPhase == AgentPhase.thinking || agentPhase == AgentPhase.speaking;
-    final bool agentListening = agentPhase == AgentPhase.listening;
-    final bool confirming = agentPhase == AgentPhase.confirming;
 
     return Container(
       margin: const EdgeInsets.fromLTRB(24, 12, 24, 0),
@@ -5103,42 +5094,21 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           ),
         ],
 
-        // 5. Ask mediBO pill — FIXED SIZE BOX + LayerLink for popup anchor (#88)
+        // 5. CHANGE #624: Barcode count pill — replaces Ask mediBO, same fixed box
+        // as Count items so the two counting methods sit side by side.
         if (isAdmin) ...[
           const SizedBox(width: 10),
-          CompositedTransformTarget(
-            link: _askPillLayerLink,
-            child: SizedBox(
-              width: _kVoiceBtnW,
-              height: _kVoiceBtnH,
-              child: _buildWidePill(
-                icon: agentListening
-                    ? Icons.stop_rounded
-                    : agentBusy
-                        ? Icons.hourglass_top_rounded
-                        : Icons.record_voice_over_rounded,
-                label: agentListening
-                    ? 'Listening…'
-                    : agentBusy
-                        ? (agentPhase == AgentPhase.thinking ? 'Thinking…' : 'Speaking…')
-                        : confirming
-                            ? 'Confirming…'
-                            : 'Ask mediBO',
-                active: agentListening,
-                activeColor: _kAgentAccent,
-                disabled: agentDisabled && !agentListening,
-                spinning: agentBusy,
-                // CHANGE #277: silent noop when no bag
-                onTap: () {
-                  if (widget.arrivals && _activeBag == null) return;
-                  if (agentBusy) return;
-                  if (agentListening) {
-                    _stopAgentRecording();
-                  } else if (agentPhase == AgentPhase.idle) {
-                    _startAgentRecording();
-                  }
-                },
-              ),
+          SizedBox(
+            width: _kVoiceBtnW,
+            height: _kVoiceBtnH,
+            child: _buildWidePill(
+              icon: Icons.qr_code_scanner_rounded,
+              label: FulfillLookups.instance.ui('barcode_count'),
+              active: false,
+              activeColor: _kGreen,
+              disabled: countingDisabled,
+              spinning: false,
+              onTap: _openBarcodeCount,
             ),
           ),
         ],
@@ -5146,6 +5116,31 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       ]),
       ]),
     );
+  }
+
+  // CHANGE #624: Barcode count — the SECOND counting method, alongside voice.
+  // A3: full screen page, never a sheet. Stage is the tab's own stage, so a
+  // Warehouse scan maps to the active bag exactly as a Warehouse voice count
+  // does (E1). Nothing about the voice path is touched.
+  Future<void> _openBarcodeCount() async {
+    final supplier = _selectedSupplier ?? '';
+    if (supplier.isEmpty) return;
+    final stage = widget.arrivals ? 'warehouse' : 'shop';
+    RenderLog.write('c624_barcode_count',
+        'open;supplier=$supplier;stage=$stage;surface=${widget.arrivals ? 'warehouse' : 'shop'}');
+    final committed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => BarcodeCountScreen(supplierName: supplier, stage: stage),
+      ),
+    );
+    if (!mounted) return;
+    if (committed == true) {
+      // Barcode scans land in voice_clip_mentions and are applied through the
+      // same set_voice_received / bag_count_set writes voice uses — so the box
+      // simply refetches, exactly as it does after a voice finalize.
+      await _reloadItemsFromDB();
+      await _refreshVoiceMentions();
+    }
   }
 
   // _buildWideAgentBanner removed in #88 — replaced by popup overlay (_buildAgentBubbleOverlay).
@@ -5584,12 +5579,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               supplierName: supplierForPopup,
               stage: widget.arrivals ? 'warehouse' : 'shop',
               orderItems: orderSnapshot,
-              // #9/#453: scope mentions to the ContinuousVoiceSession's own generated
-              // session_key (supplier|stage|ms) — the only key insertMentions ever
-              // writes. Sourced from _activeVoiceSessionKey (not _voiceSession?.sessionKey
-              // directly) so the scope survives Stop/finalize, when _voiceSession is
-              // already null but the just-recorded mentions should still show.
-              activeSessionKey: _activeVoiceSessionKey,
+              // CHANGE #624 (D2): the sheet shows BOTH voice and barcode counts,
+              // so it is no longer scoped to one recording's session_key — that
+              // filter would drop every barcode row. Per-session viewing moved to
+              // the backend-owned tab bar (voice_review_groups). See
+              // _refreshVoiceMentions for the matching change on the chip.
+              activeSessionKey: null,
               onDismiss: dismiss,
               // #338: frozen — shop: box locked or forwarded; warehouse: arrivals confirmed
               frozen: widget.arrivals
@@ -5646,7 +5641,8 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           children: [
             Icon(Icons.check_rounded, size: 11, color: _kReceivedFg),
             const SizedBox(width: 4),
-            Text(FulfillLookups.instance.uiCount('spoken_badge', count) ?? '',
+            // CHANGE #624 (D1): "N item" — items_label, verbatim from the backend.
+            Text(_itemsLabel,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                     fontSize: 12, fontWeight: FontWeight.w600, color: _kReceivedFg,
@@ -6113,7 +6109,14 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   // CHANGE #456: group key (session_key, or "legacy:<date>") of the clip chip
   // last tapped — null = default "All" order. Was recording_seq (per chunk
   // window); a chip is now one whole recording, which may span several windows.
+  // CHANGE #624: the value now comes from the backend tab bar's own key
+  // (voice_review_groups → tabs[].key); null still means the "all" tab.
   String? _selectedGroupKey;
+
+  // CHANGE #624 (D3): voice_review_groups → tabs:[{key,label,count}], already
+  // ordered All → Clip N… → Barcode. Rendered verbatim, never re-sorted, never
+  // re-labelled. The first entry ('all') is the default view.
+  List<Map<String, dynamic>> _tabs = const [];
   // CHANGE #456: remaining clip_paths for the group currently playing, so
   // multi-window recordings play back-to-back as one continuous clip instead
   // of stopping after the first window.
@@ -6191,11 +6194,24 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
           'p_supplier_name': widget.supplierName,
           'p_stage': widget.stage,
         }),
+        // CHANGE #624 (D3): the tab bar. Backend-owned keys, labels and order.
+        Supabase.instance.client.rpc('voice_review_groups', params: {
+          'p_supplier_name': widget.supplierName,
+          'p_stage': widget.stage,
+          if (AdminDateScope.instance.dateYmd != null)
+            'p_date': AdminDateScope.instance.dateYmd,
+        }),
       ]);
       if (!mounted) return;
       final mentions = results[0] as List<Map<String, dynamic>>;
       final rawTotals = results[1];
       final productTotals = rawTotals is Map ? Map<String, dynamic>.from(rawTotals) : <String, dynamic>{};
+      final rawGroups = results[2];
+      final tabs = (rawGroups is Map ? (rawGroups['tabs'] as List? ?? const []) : const [])
+          .map((t) => Map<String, dynamic>.from(t as Map))
+          .toList();
+      RenderLog.write('c624_barcode_count',
+          'review_tabs=${tabs.map((t) => t['key']).join(',')}');
       // CHANGE #456: clip count = distinct RECORDINGS (session groups), not distinct
       // chunk-window clip_paths — verifiable via curl/render-log for this change.
       final distinctClips = groupMentionsIntoClips(mentions).length;
@@ -6208,6 +6224,13 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
       setState(() {
         _mentions = mentions;
         _productTotals = productTotals;
+        _tabs = tabs;
+        // A tab can disappear between refreshes (last row of a clip removed) —
+        // fall back to the backend's first tab rather than an empty view.
+        if (_selectedGroupKey != null &&
+            !tabs.any((t) => t['key']?.toString() == _selectedGroupKey)) {
+          _selectedGroupKey = null;
+        }
       });
     } catch (e) {
       if (mounted) setState(() => _error = FulfillLookups.instance.errorText(e) ?? '');
@@ -6582,7 +6605,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
         }),
         // #120/#126/#110: "All" chip + clip chips in a single horizontally-scrolling row
         // #110: overflow dot indicator on left/right when chips overflow the popup width
-        if (mentions != null && clips.isNotEmpty)
+        if (mentions != null && _tabs.isNotEmpty)
           Builder(builder: (_) {
             RenderLog.write('c126_chips_row', 'scroll=horizontal;wrap=n');
             // #110 overflow key — only fires if dots are actually shown
@@ -6603,51 +6626,65 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
                     scrollDirection: Axis.horizontal,
                     // #110: extra horizontal padding so dots don't cover first/last chip
                     padding: const EdgeInsets.symmetric(horizontal: 14),
+                    // CHANGE #624 (D3): tabs come from voice_review_groups and are
+                    // rendered verbatim in the order given — "All", "Clip 1"…,
+                    // "Barcode". No key, label or position is decided here. A tab
+                    // whose key matches a playable recording keeps the play button;
+                    // "All" and "Barcode" have no audio, so they are plain chips.
                     child: Row(
-                      children: [
-                        // "All" chip — returns to grouped overview
-                        GestureDetector(
-                          onTap: () {
-                            setState(() => _selectedGroupKey = null);
-                            RenderLog.write('c120_back_to_all', 'true');
-                          },
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: selGroupKey == null ? _kGreen : FulfillLookups.instance.color('c_ffe8f5e9'),
-                              borderRadius: BorderRadius.circular(20),
-                              border: Border.all(color: _kGreen),
-                            ),
-                            child: Text(FulfillLookups.instance.ui('all'),
-                                style: TextStyle(
-                                  fontSize: 12, fontWeight: FontWeight.w600,
-                                  color: selGroupKey == null ? Colors.white : _kGreen,
-                                )),
-                          ),
-                        ),
-                        // CHANGE #456: one chip per RECORDING (session), not per chunk window.
-                        ...clips.asMap().entries.map((e) {
-                          final idx = e.key;
-                          final group = e.value;
+                      children: _tabs.asMap().entries.map((e) {
+                        final i = e.key;
+                        final tab = e.value;
+                        final key = tab['key']?.toString() ?? '';
+                        final label = tab['label']?.toString() ?? '';
+                        final isAll = key == 'all';
+                        final selected = isAll
+                            ? selGroupKey == null
+                            : selGroupKey == key;
+                        ClipGroup? group;
+                        for (final g in clips) {
+                          if (g.groupKey == key) { group = g; break; }
+                        }
+                        final pad = EdgeInsets.only(left: i == 0 ? 0 : 8);
+                        if (group != null) {
+                          final g = group;
                           return Padding(
-                            padding: const EdgeInsets.only(left: 8),
+                            padding: pad,
                             child: _ClipPlayButton(
-                              // #455: "Clip N" for Shop, "Part N" for Warehouse (see #455).
-                              // CHANGE #532: backend-owned chip wording (fw_ui_labels).
-                              label: FulfillLookups.instance.uiCount(
-                                      widget.stage == 'warehouse' ? 'part_chip' : 'clip_chip',
-                                      idx + 1) ??
-                                  '',
-                              clipPath: group.windows.first.clipPath,
-                              recordingSeq: group.windows.first.seq,
+                              label: label,
+                              clipPath: g.windows.first.clipPath,
+                              recordingSeq: g.windows.first.seq,
                               playing: _playingClip != null &&
-                                  group.windows.any((w) => w.clipPath == _playingClip),
-                              onPlay: () => _tapGroup(group),
+                                  g.windows.any((w) => w.clipPath == _playingClip),
+                              onPlay: () => _tapGroup(g),
                               onStop: _stopAudio,
                             ),
                           );
-                        }),
-                      ],
+                        }
+                        return Padding(
+                          padding: pad,
+                          child: GestureDetector(
+                            onTap: () {
+                              setState(() => _selectedGroupKey = isAll ? null : key);
+                              RenderLog.write('c624_barcode_count', 'review_tab=$key');
+                              if (isAll) RenderLog.write('c120_back_to_all', 'true');
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: selected ? _kGreen : FulfillLookups.instance.color('c_ffe8f5e9'),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(color: _kGreen),
+                              ),
+                              child: Text(label,
+                                  style: TextStyle(
+                                    fontSize: 12, fontWeight: FontWeight.w600,
+                                    color: selected ? Colors.white : _kGreen,
+                                  )),
+                            ),
+                          ),
+                        );
+                      }).toList(),
                     ),
                   ),
                   // #110: LEFT overflow dot — shown when chips are hidden to the left
@@ -6890,8 +6927,13 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
     // Backend-owned: get_voice_clip_mentions already orders by (recording_seq,
     // ord); .where() is order-preserving, so the filtered sublist needs no
     // re-sort.
+    // CHANGE #624 (D4): match on the backend's own group_key, which is the same
+    // value voice_review_groups puts in tabs[].key — 'barcode' for a scanned
+    // row, the session group for a spoken one. Deriving the key in Dart
+    // (clipGroupKeyOf) would put every barcode session in its own tab instead
+    // of the single "Barcode" tab the backend defines.
     final rows = (_mentions ?? [])
-        .where((r) => clipGroupKeyOf(r) == groupKey)
+        .where((r) => (r['group_key']?.toString() ?? clipGroupKeyOf(r)) == groupKey)
         .toList();
 
     RenderLog.write('c120_flat_built', 'group=$groupKey;rows=${rows.length};ord_sorted=y');
@@ -9208,6 +9250,7 @@ class _PackTabState extends State<_PackTab>
   // CHANGE #299: Ask mediBO (rewired #304: audio → voice-agent, same as Warehouse)
   bool _askListening = false;
   bool _askProcessing = false;
+  // ignore: unused_field  // #624: Ask mediBO pill removed; agent state kept intact.
   String _askInterim = '';
 
   // Dispatch button in-flight guard (tap-to-toggle, backend RPC is the source of truth)
@@ -9712,6 +9755,7 @@ class _PackTabState extends State<_PackTab>
 
   // CHANGE #304: Ask mediBO — rewired to audio-bytes → voice-agent (same as Warehouse).
   // First tap starts recording (_voiceService.start), second tap stops + processes.
+  // ignore: unused_element  // #624: Ask mediBO pill removed; agent code kept intact.
   Future<void> _toggleAskMediaBO(String orderId) async {
     if (_voiceProcessing || _voiceListening || _packCounting || _askProcessing) return;
     if (_askListening) {
@@ -10196,7 +10240,8 @@ class _PackTabState extends State<_PackTab>
     ]);
   }
 
-  // CHANGE #299: active voice bar — Count items + Ask mediBO
+  // CHANGE #299: active voice bar — Count items + (CHANGE #624) Barcode count.
+  // Ask mediBO removed; the two counting methods now sit side by side here too.
   Widget _buildPackVoiceBar(String orderId, int spokenCount) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
@@ -10208,7 +10253,7 @@ class _PackTabState extends State<_PackTab>
         const SizedBox(width: 12),
         Expanded(
             child: SizedBox(
-                height: 44, child: _buildAskPill(orderId))),
+                height: 44, child: _buildBarcodePill(orderId))),
       ]),
     );
   }
@@ -10285,45 +10330,36 @@ class _PackTabState extends State<_PackTab>
     );
   }
 
-  Widget _buildAskPill(String orderId) {
-    final bool listening = _askListening;
-    final bool disabled = _voiceListening || _voiceProcessing;
+  // CHANGE #624: Barcode count — replaces Ask mediBO in Pack. Styled exactly
+  // like the Count items pill next to it, so the two counting methods match.
+  //
+  // Pack's card is keyed by ORDER and carries no supplier, and the barcode RPCs
+  // are supplier+stage scoped (there is no pack barcode backend). The scanner
+  // therefore opens with no supplier: barcode_lookup answers with its own
+  // ok:false payload and renders that, so nothing can ever be staged or
+  // committed from here and no Pack scan can land in the receiving ledger.
+  Widget _buildBarcodePill(String orderId) {
+    final bool disabled = _voiceListening || _voiceProcessing || _packCounting;
     return GestureDetector(
-      onTap: disabled ? null : () => _toggleAskMediaBO(orderId),
+      onTap: disabled ? null : () => _openPackBarcodeCount(orderId),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
         decoration: BoxDecoration(
-          color: listening ? FulfillLookups.instance.color('c_ff1e40af') : Colors.white,
+          color: Colors.white,
           borderRadius: BorderRadius.circular(22),
-          border: Border.all(
-              color: listening
-                  ? FulfillLookups.instance.color('c_ff1e40af')
-                  : _kBorder),
+          border: Border.all(color: _kBorder),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.max,
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-                listening
-                    ? Icons.stop_rounded
-                    : Icons.record_voice_over_rounded,
-                size: 16,
-                color: listening
-                    ? Colors.white
-                    : _kGreen),
+            Icon(Icons.qr_code_scanner_rounded, size: 16, color: _kGreen),
             const SizedBox(width: 6),
             Flexible(
                 child: Text(
-              listening
-                  ? (_askInterim.isNotEmpty
-                      ? _askInterim
-                      : 'Listening…')
-                  : 'Ask mediBO',
+              FulfillLookups.instance.ui('barcode_count'),
               style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: listening ? Colors.white : _kText),
+                  fontSize: 13, fontWeight: FontWeight.w600, color: _kText),
               overflow: TextOverflow.ellipsis,
               maxLines: 1,
             )),
@@ -10331,6 +10367,17 @@ class _PackTabState extends State<_PackTab>
         ),
       ),
     );
+  }
+
+  Future<void> _openPackBarcodeCount(String orderId) async {
+    RenderLog.write('c624_barcode_count', 'open;surface=pack;order=$orderId');
+    final committed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => const BarcodeCountScreen(supplierName: '', stage: 'shop'),
+      ),
+    );
+    if (!mounted) return;
+    if (committed == true) _loadFromPackQueue(orderId);
   }
 
   // CHANGE #304: takes orderId so the spoken chip can open the review sheet.

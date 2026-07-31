@@ -546,30 +546,44 @@ class CartModel extends ChangeNotifier {
     try {
       // CHANGE #595 — keyed to the ACCOUNT, not the login. Reading orders by
       // user_id is the "orders vanished" bug: a second login saw none of them.
-      final raw = await Supabase.instance.client.rpc('my_orders_raw');
-      final rows = (((raw is List ? raw.first : raw) as Map)['rows']
+      //
+      // CHANGE #614 — this fed the Orders tab BADGE from my_orders_raw while
+      // the Orders screen itself read my_orders_screen: two RPCs answering
+      // "how many orders do I have". Both happen to be account-keyed, so they
+      // agreed — but a badge and a list that can disagree is the shape of
+      // every bug this repo has paid for. One RPC, one answer. No args: the
+      // customer path never passes p_view_as_user (callers guard on
+      // !isViewAs), and the backend resolves the account itself.
+      final raw = await Supabase.instance.client.rpc('my_orders_screen');
+      final rows = (((raw is List ? raw.first : raw) as Map)['orders']
           as List<dynamic>? ?? const []);
       final loaded = <Order>[];
       for (final row in rows) {
-        final items = (row['items'] as List<dynamic>?) ?? [];
+        // #614 — my_orders_screen names the array `lines`, and each row is
+        // {name, quantity, price, *_display}. There is no mrp or gst on an
+        // order line, so mrp stays 0 rather than being back-filled from price:
+        // these CartLines exist only to give the Order a body, and the Orders
+        // SCREEN builds its own rows straight from the same payload.
+        final items = (row['lines'] as List<dynamic>?) ?? [];
         final lines = <CartLine>[];
         for (int i = 0; i < items.length; i++) {
-          final item = items[i] as Map<String, dynamic>;
+          final item = (items[i] as Map).cast<String, dynamic>();
           final product = Product.fromCartData(
             id: 'order_item_$i',
-            name: (item['product_name'] as String?) ?? '',
+            name: (item['name'] as String?) ?? '',
             b2bPrice: (item['price'] as num?)?.toDouble() ?? 0.0,
-            mrp: (item['mrp'] as num?)?.toDouble() ?? 0.0,
-            gstPercent: (item['gst_percent'] as num?)?.toDouble() ?? 12.0,
+            mrp: 0.0,
           );
           lines.add(CartLine(product, (item['quantity'] as num?)?.toInt() ?? 1));
         }
-        final total = (row['total_amount'] as num?)?.toDouble() ?? 0.0;
-        final rawStatus = (row['status'] as String?) ?? 'pending';
-        final status = rawStatus[0].toUpperCase() + rawStatus.substring(1);
+        final total = (row['total'] as num?)?.toDouble() ?? 0.0;
+        // #614 — status_label arrives decided and worded by the backend. The
+        // old line rebuilt it in Dart (`rawStatus[0].toUpperCase() + …`),
+        // which is the app writing a user-facing string.
+        final status = (row['status_label'] as String?) ?? '';
         loaded.add(Order(
-          number: orderDisplayId(row),
-          placedAt: row['created_at']?.toString(),
+          number: (row['order_code'] as String?) ?? '',
+          placedAt: row['placed_at']?.toString(),
           lines: lines,
           grandTotal: total,
           netPayable: total,
@@ -731,7 +745,9 @@ class CartModel extends ChangeNotifier {
   }
 
   List<CartLine> get adminRemovedLines => List.unmodifiable(_adminRemovedLines);
-  List<Order> get orders => List.unmodifiable(_orders.reversed);
+  /// #614 — my_orders_screen() returns newest-first already, so this no longer
+  /// reverses. my_orders_raw ordered oldest-first, which is why it used to.
+  List<Order> get orders => List.unmodifiable(_orders);
 
   // ── Server-rendered display strings (CHANGE #559 rule 3) ──────────────────
   // Never computed or formatted in Dart.

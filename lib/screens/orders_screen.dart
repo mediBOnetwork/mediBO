@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
@@ -129,11 +130,56 @@ class _OrdersScreenState extends State<OrdersScreen> {
   String _customerId = '';
   RealtimeChannel? _channel;
 
+  // ── CHANGE #614 ───────────────────────────────────────────────────────────
+  /// Backend answers, adopted verbatim. `has_orders` decides whether the list
+  /// or the empty state renders — the screen no longer decides that itself by
+  /// measuring the array it just parsed.
+  bool _hasOrders = false;
+  bool _isAdminSession = false;
+  bool _noCustomerAccount = false;
+
+  /// The login this screen last fetched for.
+  ///
+  /// CHANGE #614 — this screen lives inside home_shell's IndexedStack, which
+  /// keeps its State alive on purpose ("no re-fetch on tab switch"). So
+  /// initState ran EXACTLY ONCE, at shell build — which for a cold open is
+  /// before the session is resolved. my_customer_id() was null, the payload
+  /// came back `no_customer_account: true`, and that empty list was then kept
+  /// forever: switching to the tab does not rebuild the State, and realtime
+  /// never started because subscribing needs the account id the empty payload
+  /// did not carry. A customer with orders saw "no orders" until a full page
+  /// reload. That is the bug.
+  String? _authedUid;
+  StreamSubscription<AuthState>? _authSub;
+
   @override
   void initState() {
     super.initState();
+    _authedUid = Supabase.instance.client.auth.currentUser?.id;
+    // CHANGE #614 — refetch whenever the ACCOUNT changes, not when a
+    // particular event constant arrives. setSession(refreshToken) — the
+    // WhatsApp OTP path — resolves through gotrue's token-refresh branch and
+    // emits tokenRefreshed, never signedIn, so a signedIn-only listener would
+    // be dead on that login exactly as in #566.
+    _authSub =
+        Supabase.instance.client.auth.onAuthStateChange.listen(_onAuthState);
     // #572 — subscribe only AFTER the fetch has resolved the account id; the
     // channel filter needs the account, which only the backend can tell us.
+    _fetch();
+  }
+
+  void _onAuthState(AuthState _) {
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    if (uid == _authedUid) return;
+    _authedUid = uid;
+    // The old channel is keyed to the previous account — drop it, and drop the
+    // account id with it so nothing renders against a mismatch.
+    _channel?.unsubscribe();
+    _channel = null;
+    _customerId = '';
+    if (!mounted) return;
+    setState(() => _loading = true);
+    RenderLog.write('c614_orders_auth_refetch', 'uid:${uid == null ? 0 : 1}');
     _fetch();
   }
 
@@ -148,6 +194,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
 
   @override
   void dispose() {
+    _authSub?.cancel();
     _channel?.unsubscribe();
     super.dispose();
   }
@@ -184,8 +231,15 @@ class _OrdersScreenState extends State<OrdersScreen> {
         _emptyTitle = (payload['empty_title'] ?? '').toString();
         _emptyNote = (payload['empty_note'] ?? '').toString();
         _customerId = (payload['customer_id'] ?? '').toString();
+        // CHANGE #614 — the backend already said whether there are orders and
+        // what kind of session this is. Read those; do not re-derive them.
+        _hasOrders = payload['has_orders'] == true;
+        _isAdminSession = payload['is_admin_session'] == true;
+        _noCustomerAccount = payload['no_customer_account'] == true;
         _loading = false;
       });
+      RenderLog.write('c614_orders_payload',
+          'has:${_hasOrders ? 1 : 0};admin:${_isAdminSession ? 1 : 0};nocust:${_noCustomerAccount ? 1 : 0}');
       if (_channel == null) _subscribeRealtime();
     } catch (_) {
       if (mounted) setState(() => _loading = false);
@@ -222,19 +276,32 @@ class _OrdersScreenState extends State<OrdersScreen> {
     if (_loading) {
       return const Center(child: CircularProgressIndicator());
     }
-    if (_orders.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
+    // CHANGE #614 — `has_orders` is the backend's answer; the screen used to
+    // decide this itself with `_orders.isEmpty`. Same result on the happy
+    // path, but it is not the app's question to answer.
+    //
+    // This branch also covers the admin login: the backend sends
+    // is_admin_session + no_customer_account with empty_title "Admin account"
+    // and a note pointing at the admin Orders tab, and both print verbatim —
+    // no blank screen, no crash, nothing worded in Dart.
+    if (!_hasOrders) {
+      return RefreshIndicator(
+        onRefresh: _fetch,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
           children: [
+            SizedBox(height: MediaQuery.of(context).size.height * 0.25),
             Icon(Icons.receipt_long_outlined,
                 size: 64, color: Theme.of(context).hintColor),
             const SizedBox(height: 12),
             // #572 — empty-state copy printed verbatim from the payload.
-            Text(_emptyTitle),
+            Center(child: Text(_emptyTitle)),
             const SizedBox(height: 4),
-            Text(_emptyNote,
-                style: TextStyle(color: Theme.of(context).hintColor)),
+            Center(
+              child: Text(_emptyNote,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Theme.of(context).hintColor)),
+            ),
           ],
         ),
       );

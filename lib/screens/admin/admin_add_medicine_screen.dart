@@ -6,6 +6,7 @@ import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:pharma_b2b/utils/toast.dart';
@@ -21,6 +22,10 @@ import '../../util.dart';
 // ─── Enums ───────────────────────────────────────────────────────────────────
 
 enum _ImpStep { idle, parsing, geminiCols, mapping, matching, reviewing, writing, done }
+
+/// CHANGE #623 — steps of the second import ("Import barcode"). Kept separate
+/// from _ImpStep so the medicine import flow above is untouched.
+enum _BcStep { none, setup, busy, mapping, previewing, done }
 
 enum _MsStatus { matched, partial, unrecognized, manuallyMatched }
 
@@ -88,12 +93,19 @@ class _ImpCol {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const _kMedCols = [
-  'product_name', 'salt_composition', 'marketer', 'mrp',
+  // CHANGE #623 — 'barcode' is mappable here too (Part A3). If the admin maps
+  // it, it rides along in the row payload the medicine import already writes;
+  // nothing else about that flow changed.
+  'product_name', 'salt_composition', 'marketer', 'mrp', 'barcode',
   'pack_qty', 'pack_size', 'pack_type', 'therapeutic_class',
   'rx_required', 'status', 'uses', 'benefits', 'side_effects',
   'storage', 'chemical_class', 'action_class',
   'product_introduction', 'product_highlight',
 ];
+
+/// CHANGE #623 — the only two things a barcode sheet has to carry. product_id
+/// is optional; the backend prefers it over the name when present.
+const _kBcCols = ['product_name', 'barcode', 'product_id'];
 
 const _kTh = TextStyle(
   fontSize: 11,
@@ -140,6 +152,22 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
   int _updatedCount = 0;
   int _insertedCount = 0;
   int _skippedCount = 0;
+
+  // ── CHANGE #623 — barcode import state ─────────────────────────────────────
+  // Every label, count and colour shown by this flow comes out of the RPC
+  // payloads below (_bcTargets / _bcPreview / _bcApply). Nothing here derives
+  // a verdict, a total or a colour from the rows itself.
+  _BcStep _bcStep = _BcStep.none;
+  String _bcMode = 'item';                 // 'item' | 'order' → p_mode
+  DateTime _bcDate = DateTime.now();       // only sent in 'order' mode
+  String _bcStatusMsg = '';
+  Map<String, dynamic>? _bcTargets;        // barcode_import_targets payload
+  bool _bcTargetsLoading = false;
+  List<_ImpCol> _bcCols = [];
+  List<List<String>> _bcRawRows = [];
+  List<Map<String, dynamic>> _bcRows = []; // the exact array sent to both RPCs
+  Map<String, dynamic>? _bcPreview;        // barcode_import_preview payload
+  Map<String, dynamic>? _bcApply;          // barcode_import_apply payload
 
   @override
   void initState() {
@@ -420,7 +448,45 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
 
   // ── Gemini column mapping ─────────────────────────────────────────────────────
 
-  Future<List<_ImpCol>> _geminiMapCols(List<String> headers, List<List<String>> dataRows) async {
+  Future<List<_ImpCol>> _geminiMapCols(List<String> headers, List<List<String>> dataRows) =>
+      _geminiMapColsWith(headers, dataRows,
+          'Database fields:\n'
+          '- product_name: medicine name (e.g. "Augmentin 625 Duo", "Pan 40mg")\n'
+          '- salt_composition: active ingredients (e.g. "Amoxicillin 500mg")\n'
+          '- marketer: brand/company (e.g. "GSK", "Abbott")\n'
+          '- mrp: price in ₹ (e.g. "₹159.28", "206.25")\n'
+          '- barcode: barcode / EAN / UPC / GTIN printed on the pack (a long digit run, usually 8-14 digits)\n'
+          '- pack_qty: pack description (e.g. "10 tablets in 1 strip", "30ml")\n'
+          '- pack_size: pack code (e.g. "10\'T", "30ml")\n'
+          '- pack_type: packaging (e.g. "Strip", "Bottle")\n'
+          '- therapeutic_class: category (e.g. "ANTIBIOTICS")\n'
+          '- rx_required: prescription? ("Rx" or empty)\n'
+          '- status: availability (e.g. "Available")\n'
+          '- uses, benefits, side_effects, storage, chemical_class, action_class\n'
+          '- ignore: skip this column\n\n'
+          'Infer from BOTH header AND sample values. '
+          'Numbers with ₹ or decimals like "159.28" → mrp. '
+          'Values like "10\'T","30ml","500mg" → pack_qty or pack_size. '
+          'Digit-only values 8-14 characters long → barcode. '
+          'Date-like values → ignore. Serial/index numbers → ignore.\n\n');
+
+  /// CHANGE #623 — barcode import maps the SAME way, through the SAME Gemini
+  /// step; only the field list it is allowed to choose from differs.
+  Future<List<_ImpCol>> _geminiMapColsBarcode(List<String> headers, List<List<String>> dataRows) =>
+      _geminiMapColsWith(headers, dataRows,
+          'Database fields:\n'
+          '- product_name: medicine name (e.g. "Augmentin 625 Duo", "Pan 40mg")\n'
+          '- barcode: barcode / EAN / UPC / GTIN printed on the pack (a long digit run, usually 8-14 digits)\n'
+          '- product_id: our own numeric catalogue id — ONLY if the sheet clearly carries one\n'
+          '- ignore: skip this column\n\n'
+          'Infer from BOTH header AND sample values. '
+          'Digit-only values 8-14 characters long → barcode. '
+          'Short running numbers (1,2,3…) → ignore, NOT product_id. '
+          'Text containing mg/ml/tablet/cap → product_name. '
+          'Date-like values → ignore.\n\n');
+
+  Future<List<_ImpCol>> _geminiMapColsWith(
+      List<String> headers, List<List<String>> dataRows, String fieldSpec) async {
     final entries = <Map<String, dynamic>>[];
     for (int i = 0; i < headers.length; i++) {
       final samples = dataRows.map((r) => i < r.length ? r[i] : '').where((v) => v.trim().isNotEmpty).take(5).toList();
@@ -428,23 +494,7 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
     }
     final prompt =
         'Map each spreadsheet column to the correct pharmaceutical database field.\n\n'
-        'Database fields:\n'
-        '- product_name: medicine name (e.g. "Augmentin 625 Duo", "Pan 40mg")\n'
-        '- salt_composition: active ingredients (e.g. "Amoxicillin 500mg")\n'
-        '- marketer: brand/company (e.g. "GSK", "Abbott")\n'
-        '- mrp: price in ₹ (e.g. "₹159.28", "206.25")\n'
-        '- pack_qty: pack description (e.g. "10 tablets in 1 strip", "30ml")\n'
-        '- pack_size: pack code (e.g. "10\'T", "30ml")\n'
-        '- pack_type: packaging (e.g. "Strip", "Bottle")\n'
-        '- therapeutic_class: category (e.g. "ANTIBIOTICS")\n'
-        '- rx_required: prescription? ("Rx" or empty)\n'
-        '- status: availability (e.g. "Available")\n'
-        '- uses, benefits, side_effects, storage, chemical_class, action_class\n'
-        '- ignore: skip this column\n\n'
-        'Infer from BOTH header AND sample values. '
-        'Numbers with ₹ or decimals like "159.28" → mrp. '
-        'Values like "10\'T","30ml","500mg" → pack_qty or pack_size. '
-        'Date-like values → ignore. Serial/index numbers → ignore.\n\n'
+        '$fieldSpec'
         'Columns:\n${jsonEncode(entries)}\n\n'
         'Return ONLY a JSON array (no markdown): '
         '[{"index":0,"mapped_to":"product_name"},...]';
@@ -778,12 +828,372 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
     setState(() { _updatedCount = updated; _insertedCount = inserted; _skippedCount = skipped; _step = _ImpStep.done; });
   }
 
+  // ══ CHANGE #623 — BARCODE IMPORT ═══════════════════════════════════════════
+  //
+  // The backend owns every decision here. This side picks a mode, reuses the
+  // medicine import's file pickers + Gemini mapper to turn a sheet into rows,
+  // POSTs those rows, and renders the returned payload verbatim.
+
+  /// p_date — only meaningful in order-wise mode; item-wise sends null so the
+  /// backend matches the whole catalogue.
+  String? get _bcDateParam => _bcMode == 'order' ? _isoDate(_bcDate) : null;
+
+  String _isoDate(DateTime d) =>
+      '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+  /// Supabase returns a jsonb scalar either bare or wrapped in a one-element
+  /// list depending on the client path — normalise both.
+  Map<String, dynamic> _asMap(dynamic res) =>
+      Map<String, dynamic>.from(((res is List ? res.first : res) as Map));
+
+  /// Colours arrive as "#RRGGBB" strings from status_colors — parse, never pick.
+  Color _hex(String? s, Color fallback) {
+    final v = (s ?? '').replaceAll('#', '').trim();
+    if (v.length != 6) return fallback;
+    final n = int.tryParse(v, radix: 16);
+    return n == null ? fallback : Color(0xFF000000 | n);
+  }
+
+  String _str(Map<String, dynamic>? m, String k) => (m?[k] ?? '').toString();
+
+  void _bcStart(String mode) {
+    setState(() {
+      _bcMode = mode;
+      _bcStep = _BcStep.setup;
+      _bcDate = DateTime.now();
+      _bcTargets = null;
+      _bcPreview = null;
+      _bcApply = null;
+      _bcCols = [];
+      _bcRawRows = [];
+      _bcRows = [];
+    });
+    if (mode == 'order') _bcLoadTargets();
+  }
+
+  void _bcExit() => setState(() {
+        _bcStep = _BcStep.none;
+        _bcPreview = null;
+        _bcApply = null;
+      });
+
+  // ── E1 — order-wise helper list ────────────────────────────────────────────
+
+  Future<void> _bcLoadTargets() async {
+    setState(() => _bcTargetsLoading = true);
+    try {
+      final res = await Supabase.instance.client.rpc('barcode_import_targets',
+          params: {'p_date': _bcDateParam, 'p_supplier': null});
+      if (!mounted) return;
+      setState(() => _bcTargets = _asMap(res));
+    } catch (e) {
+      if (!mounted) return;
+      showToast(context, e.toString().replaceFirst('Exception: ', ''), isError: true);
+    } finally {
+      if (mounted) setState(() => _bcTargetsLoading = false);
+    }
+  }
+
+  // ── E2 — share the list as plain text, built from the returned fields ──────
+
+  Future<void> _bcShareTargets() async {
+    final rows = (_bcTargets?['rows'] as List<dynamic>? ?? const []);
+    final lines = <String>[
+      _str(_bcTargets, 'title'),
+      _str(_bcTargets, 'note'),
+      '',
+      for (final r in rows)
+        () {
+          final m = Map<String, dynamic>.from(r as Map);
+          final parts = <String>[
+            _str(m, 'product_name'),
+            if (_str(m, 'pack_label').isNotEmpty) _str(m, 'pack_label'),
+            'x${_str(m, 'ordered_qty')}',
+          ];
+          return '${parts.join(' · ')}${m['has_barcode'] == true ? ' ✓' : ''}';
+        }(),
+    ];
+    await Clipboard.setData(ClipboardData(text: lines.join('\n')));
+    if (mounted) showToast(context, 'List copied — paste it to the supplier');
+  }
+
+  // ── B — file → rows, through the SAME pipeline the medicine import uses ────
+
+  Future<void> _bcPickFile() async {
+    final input = html.FileUploadInputElement()
+      ..accept = '.csv,.xlsx,.xls,.pdf,.ods,.tsv,.txt,.docx,.jpg,.jpeg,.png,.webp,.heic,.heif,.gif'
+      ..multiple = false;
+    input.click();
+    await input.onChange.first;
+    final files = input.files;
+    if (files == null || files.isEmpty) return;
+
+    setState(() { _bcStep = _BcStep.busy; _bcStatusMsg = 'Reading file…'; });
+    try {
+      final table = await _parseFile(files.first);
+      if (table.rows.isEmpty) throw Exception('No data rows found in the file');
+      if (!mounted) return;
+      setState(() => _bcStatusMsg = 'Mapping columns with Gemini…');
+      final cols = await _geminiMapColsBarcode(table.headers, table.rows);
+      if (!mounted) return;
+      setState(() {
+        _bcRawRows = table.rows;
+        _bcCols = cols;
+        for (final c in _bcCols) _newColCtrls.putIfAbsent(c.fileIndex, () => TextEditingController());
+        _bcStep = _BcStep.mapping;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _bcStep = _BcStep.setup);
+      showToast(context, e.toString().replaceFirst('Exception: ', ''), duration: const Duration(seconds: 6));
+    }
+  }
+
+  _ImpCol? _bcColFor(String field) {
+    for (final c in _bcCols) { if (c.mappedTo == field) return c; }
+    return null;
+  }
+
+  // ── B3 — build the row payload ────────────────────────────────────────────
+
+  Future<void> _bcConfirmMapping() async {
+    final nameCol = _bcColFor('product_name');
+    final bcCol   = _bcColFor('barcode');
+    final idCol   = _bcColFor('product_id');
+    if (bcCol == null) {
+      showToast(context, 'Map one column to "barcode" — it is required.');
+      return;
+    }
+    if (nameCol == null && idCol == null) {
+      showToast(context, 'Map one column to "product_name" (or "product_id") so rows can be matched.');
+      return;
+    }
+
+    final rows = <Map<String, dynamic>>[];
+    for (final raw in _bcRawRows) {
+      String cell(_ImpCol? c) =>
+          (c != null && c.fileIndex < raw.length) ? raw[c.fileIndex].trim() : '';
+      final name = cell(nameCol), bc = cell(bcCol), pid = cell(idCol);
+      // A wholly blank sheet line is not a row — everything else goes to the
+      // backend as-is, including blank barcodes (it labels them 'no_barcode').
+      if (name.isEmpty && bc.isEmpty && pid.isEmpty) continue;
+      rows.add({
+        'name': name,
+        'barcode': bc,
+        if (pid.isNotEmpty) 'product_id': pid,
+      });
+    }
+    if (rows.isEmpty) {
+      showToast(context, 'No usable rows found in that file.');
+      return;
+    }
+    _bcRows = rows;
+    await _bcRunPreview();
+  }
+
+  // ── C — preview ───────────────────────────────────────────────────────────
+
+  Future<void> _bcRunPreview() async {
+    setState(() { _bcStep = _BcStep.busy; _bcStatusMsg = 'Checking rows…'; });
+    try {
+      final res = await Supabase.instance.client.rpc('barcode_import_preview', params: {
+        'p_rows': _bcRows,
+        'p_mode': _bcMode,
+        'p_date': _bcDateParam,
+        'p_supplier': null,
+      });
+      if (!mounted) return;
+      final map = _asMap(res);
+      if (map['ok'] != true) {
+        setState(() => _bcStep = _BcStep.mapping);
+        showToast(context, _str(map, 'message').isNotEmpty ? _str(map, 'message') : _str(map, 'error'),
+            isError: true, duration: const Duration(seconds: 6));
+        return;
+      }
+      setState(() { _bcPreview = map; _bcStep = _BcStep.previewing; });
+      RenderLog.write('c623_barcode_preview', '${_bcMode}:${_str(map, 'summary_label')}');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _bcStep = _BcStep.mapping);
+      showToast(context, e.toString().replaceFirst('Exception: ', ''), isError: true, duration: const Duration(seconds: 6));
+    }
+  }
+
+  // ── D — apply (send the SAME rows; the backend re-runs the preview) ───────
+
+  Future<void> _bcApplyNow() async {
+    setState(() { _bcStep = _BcStep.busy; _bcStatusMsg = 'Saving barcodes…'; });
+    try {
+      final res = await Supabase.instance.client.rpc('barcode_import_apply', params: {
+        'p_rows': _bcRows,
+        'p_mode': _bcMode,
+        'p_date': _bcDateParam,
+        'p_supplier': null,
+        'p_allow_overwrite': true,
+      });
+      if (!mounted) return;
+      final map = _asMap(res);
+      if (map['ok'] != true) {
+        setState(() => _bcStep = _BcStep.previewing);
+        showToast(context, _str(map, 'message').isNotEmpty ? _str(map, 'message') : _str(map, 'error'),
+            isError: true, duration: const Duration(seconds: 6));
+        return;
+      }
+      setState(() { _bcApply = map; _bcStep = _BcStep.done; });
+      RenderLog.write('c623_barcode_apply', _str(map, 'title'));
+      if (_bcMode == 'order') await _bcLoadTargets();   // D3
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _bcStep = _BcStep.previewing);
+      showToast(context, e.toString().replaceFirst('Exception: ', ''), isError: true, duration: const Duration(seconds: 6));
+    }
+  }
+
+  // ── F — one barcode, by hand ──────────────────────────────────────────────
+
+  /// Reads the product's current barcode through the preview RPC (a zero-row
+  /// write, read-only) rather than touching the table directly.
+  Future<String> _bcCurrentBarcode(int productId) async {
+    try {
+      final res = await Supabase.instance.client.rpc('barcode_import_preview', params: {
+        'p_rows': [{'product_id': '$productId', 'name': '', 'barcode': ''}],
+        'p_mode': 'item',
+        'p_date': null,
+        'p_supplier': null,
+      });
+      final map = _asMap(res);
+      final rows = map['rows'] as List<dynamic>? ?? const [];
+      if (rows.isEmpty) return '';
+      return (Map<String, dynamic>.from(rows.first as Map)['current_barcode'] ?? '').toString();
+    } catch (_) {
+      return '';
+    }
+  }
+
+  Future<void> _showBarcodeEditor({
+    required int productId,
+    required String productName,
+    required String packLabel,
+    String? currentBarcode,
+  }) async {
+    final current = currentBarcode ?? await _bcCurrentBarcode(productId);
+    if (!mounted) return;
+    final ctrl = TextEditingController(text: current);
+    String err = '';
+    bool saving = false;
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dctx) => StatefulBuilder(builder: (dctx, setD) {
+        Future<void> save() async {
+          final nav = Navigator.of(dctx);   // captured before the await
+          setD(() { saving = true; err = ''; });
+          try {
+            final res = await Supabase.instance.client.rpc('medicine_set_barcode', params: {
+              'p_product_id': productId,
+              'p_barcode': ctrl.text.trim(),
+            });
+            final map = _asMap(res);
+            if (map['ok'] == true) {
+              nav.pop();
+              if (mounted) showToast(context, _str(map, 'message'));
+              RenderLog.write('c623_barcode_manual', 'ok');
+              if (_bcMode == 'order' && _bcStep != _BcStep.none) await _bcLoadTargets();
+            } else {
+              // F2 — barcode_taken: show the backend's message, do not save.
+              setD(() {
+                saving = false;
+                err = _str(map, 'message').isNotEmpty ? _str(map, 'message') : _str(map, 'error');
+              });
+            }
+          } catch (e) {
+            setD(() { saving = false; err = e.toString().replaceFirst('Exception: ', ''); });
+          }
+        }
+
+        return AlertDialog(
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            Text(productName,
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+            if (packLabel.isNotEmpty) ...[
+              const SizedBox(height: 2),
+              Text(packLabel, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w400, color: Color(0xFF6B7280))),
+            ],
+          ]),
+          content: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 380),
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              TextField(
+                controller: ctrl,
+                autofocus: true,
+                enabled: !saving,
+                keyboardType: TextInputType.text,
+                decoration: InputDecoration(
+                  labelText: 'Barcode',
+                  hintText: 'Leave empty to clear',
+                  hintStyle: const TextStyle(color: Color(0xFF9CA3AF)),
+                  filled: true,
+                  fillColor: const Color(0xFFF5F6F8),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+                  focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(color: Color(0xFF1B7A43))),
+                ),
+                style: const TextStyle(fontSize: 15, color: Color(0xFF111827)),
+              ),
+              if (err.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(color: const Color(0xFFFEE2E2), borderRadius: BorderRadius.circular(8)),
+                  child: Text(err, style: const TextStyle(fontSize: 13, color: Color(0xFF991B1B), height: 1.4)),
+                ),
+              ],
+            ]),
+          ),
+          actions: [
+            TextButton(
+              onPressed: saving ? null : () => Navigator.of(dctx).pop(),
+              child: const Text('Cancel', style: TextStyle(color: Color(0xFF6B7280), fontWeight: FontWeight.w600)),
+            ),
+            FilledButton(
+              onPressed: saving ? null : save,
+              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
+              child: saving
+                  ? const SizedBox(width: 16, height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Text('Save', style: TextStyle(fontWeight: FontWeight.w700)),
+            ),
+          ],
+        );
+      }),
+    );
+    ctrl.dispose();
+  }
+
   // ── Build ─────────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (ctx, c) {
       final isDesktop = c.maxWidth >= 768;
+      if (_bcStep != _BcStep.none) {
+        return switch (_bcStep) {
+          _BcStep.setup      => _bcBuildSetup(isDesktop),
+          _BcStep.busy       => _bcBuildLoading(),
+          _BcStep.mapping    => _bcBuildMapping(isDesktop),
+          _BcStep.previewing => _bcBuildPreview(isDesktop),
+          _BcStep.done       => _bcBuildDone(),
+          _BcStep.none       => const SizedBox.shrink(),
+        };
+      }
       return switch (_step) {
         _ImpStep.idle                                          => _buildIdle(isDesktop),
         _ImpStep.parsing || _ImpStep.geminiCols || _ImpStep.writing => _buildLoading(),
@@ -807,6 +1217,7 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Builder(builder: (_) {
                 RenderLog.write('titles_removed_addmedicine', 'true');
+                RenderLog.write('c623_barcode_import', 'cards=2');
                 return const SizedBox(height: 8);
               }),
               Container(
@@ -828,12 +1239,12 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
                         decoration: BoxDecoration(color: const Color(0xFFECFDF5), borderRadius: BorderRadius.circular(12)),
                         child: const Icon(Icons.upload_file, color: Color(0xFF1B7A43), size: 22)),
                     const SizedBox(width: 14),
-                    const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text('Import', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+                    const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text('Import medicine', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
                       SizedBox(height: 2),
                       Text('Gemini auto-maps columns — you confirm before anything writes',
                           style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
-                    ]),
+                    ])),
                   ]),
                   const SizedBox(height: 20),
                   Row(children: [
@@ -862,18 +1273,495 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
                     child: FilledButton.icon(
                       onPressed: _pickFile,
                       icon: const Icon(Icons.upload_rounded, size: 18),
-                      label: const Text('Import', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+                      label: const Text('Import medicine', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
                       style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
                     ),
                   ),
                 ]),
               ),
+              const SizedBox(height: 24),
+              _bcBuildImportCard(),
+              const SizedBox(height: 24),
+              _bcBuildManualCard(),
             ]),
           ),
         ),
       ),
     );
+  }
+
+  // ── A2 — the second card: Import barcode ──────────────────────────────────
+
+  Widget _bcBuildImportCard() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 12, offset: const Offset(0, 3))],
+      ),
+      padding: const EdgeInsets.all(28),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Container(width: 44, height: 44,
+              decoration: BoxDecoration(color: const Color(0xFFEFF6FF), borderRadius: BorderRadius.circular(12)),
+              child: const Icon(Icons.qr_code_2, color: Color(0xFF1E40AF), size: 22)),
+          const SizedBox(width: 14),
+          const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Import barcode', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+            SizedBox(height: 2),
+            Text('Same file types, same column mapping — barcodes only',
+                style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+          ])),
+        ]),
+        const SizedBox(height: 20),
+        LayoutBuilder(builder: (ctx, bc) {
+          final stacked = bc.maxWidth < 520;
+          final itemBtn = _BcModeButton(
+            icon: Icons.inventory_2_outlined,
+            label: 'Item wise',
+            sub: 'Match against the whole catalogue',
+            onTap: () => _bcStart('item'),
+          );
+          final orderBtn = _BcModeButton(
+            icon: Icons.event_note_outlined,
+            label: 'Order wise',
+            sub: 'Match only items ordered on a date',
+            onTap: () => _bcStart('order'),
+          );
+          if (stacked) {
+            return Column(children: [itemBtn, const SizedBox(height: 12), orderBtn]);
+          }
+          return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Expanded(child: itemBtn),
+            const SizedBox(width: 12),
+            Expanded(child: orderBtn),
+          ]);
+        }),
+      ]),
+    );
+  }
+
+  // ── F1 — set one barcode by hand ──────────────────────────────────────────
+
+  Widget _bcBuildManualCard() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 12, offset: const Offset(0, 3))],
+      ),
+      padding: const EdgeInsets.all(28),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Container(width: 44, height: 44,
+              decoration: BoxDecoration(color: const Color(0xFFF3F4F6), borderRadius: BorderRadius.circular(12)),
+              child: const Icon(Icons.edit_outlined, color: Color(0xFF374151), size: 22)),
+          const SizedBox(width: 14),
+          const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Barcode', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+            SizedBox(height: 2),
+            Text('Find a medicine and set or clear its barcode',
+                style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+          ])),
+        ]),
+        const SizedBox(height: 20),
+        _BarcodeQuickSet(
+          onPick: (p) => _showBarcodeEditor(
+            productId: p.productId,
+            productName: p.productName,
+            packLabel: p.packLabel,
+          ),
+        ),
+      ]),
+    );
+  }
+
+  // ── Barcode: mode setup (+ order-wise helper list) ────────────────────────
+
+  Widget _bcBuildSetup(bool isDesktop) {
+    final isOrder = _bcMode == 'order';
+    final rows = (_bcTargets?['rows'] as List<dynamic>? ?? const []);
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      _StageHeader(
+        title: isOrder ? 'Import barcode — Order wise' : 'Import barcode — Item wise',
+        subtitle: isOrder
+            ? 'Only items ordered on the chosen date are matched'
+            : 'Rows are matched against the whole catalogue',
+        onBack: _bcExit,
+        action: FilledButton.icon(
+          onPressed: _bcPickFile,
+          icon: const Icon(Icons.upload_rounded, size: 16),
+          label: const Text('Choose file', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
+        ),
+      ),
+      Expanded(child: SingleChildScrollView(
+        padding: EdgeInsets.symmetric(horizontal: isDesktop ? 24 : 16, vertical: 20),
+        child: Center(child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 920),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            if (isOrder) ...[
+              Container(
+                decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFFE5E7EB))),
+                padding: const EdgeInsets.all(16),
+                child: Row(children: [
+                  const Icon(Icons.calendar_today_outlined, size: 18, color: Color(0xFF6B7280)),
+                  const SizedBox(width: 10),
+                  Expanded(child: Text(_isoDate(_bcDate),
+                      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Color(0xFF111827)))),
+                  TextButton(
+                    onPressed: () async {
+                      final picked = await showDatePicker(
+                        context: context,
+                        initialDate: _bcDate,
+                        firstDate: DateTime(2024, 1, 1),
+                        lastDate: DateTime.now().add(const Duration(days: 1)),
+                      );
+                      if (picked != null) {
+                        setState(() => _bcDate = picked);
+                        await _bcLoadTargets();
+                      }
+                    },
+                    child: const Text('Change', style: TextStyle(color: Color(0xFF1B7A43), fontWeight: FontWeight.w600)),
+                  ),
+                ]),
+              ),
+              const SizedBox(height: 16),
+              if (_bcTargetsLoading)
+                const Padding(padding: EdgeInsets.symmetric(vertical: 32),
+                    child: Center(child: SizedBox(width: 28, height: 28,
+                        child: CircularProgressIndicator(strokeWidth: 3, color: Color(0xFF1B7A43)))))
+              else if (_bcTargets != null) ...[
+                Container(
+                  decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFFE5E7EB))),
+                  padding: const EdgeInsets.all(16),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Row(children: [
+                      // E1 — title and note are the backend's strings.
+                      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Text(_str(_bcTargets, 'title'),
+                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+                        const SizedBox(height: 2),
+                        Text(_str(_bcTargets, 'note'),
+                            style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+                      ])),
+                      const SizedBox(width: 12),
+                      OutlinedButton.icon(
+                        onPressed: rows.isEmpty ? null : _bcShareTargets,
+                        icon: const Icon(Icons.ios_share, size: 16),
+                        label: const Text('Share list', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFF1B7A43),
+                          side: const BorderSide(color: Color(0xFF1B7A43)),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        ),
+                      ),
+                    ]),
+                    if (rows.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      const Divider(height: 1, color: Color(0xFFE5E7EB)),
+                      for (final r in rows) _bcTargetRow(Map<String, dynamic>.from(r as Map)),
+                    ],
+                  ]),
+                ),
+              ],
+              const SizedBox(height: 20),
+            ],
+            SizedBox(height: 48, child: FilledButton.icon(
+              onPressed: _bcPickFile,
+              icon: const Icon(Icons.upload_rounded, size: 18),
+              label: const Text('Choose file', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+            )),
+            const SizedBox(height: 12),
+            Row(children: [
+              Expanded(child: _InfoTile(icon: Icons.table_chart_outlined, label: 'Files', sub: 'CSV · Excel · ODS · PDF · DOCX · TXT')),
+              const SizedBox(width: 12),
+              Expanded(child: _InfoTile(icon: Icons.photo_camera_outlined, label: 'Photos', sub: 'JPG · PNG · WEBP — Gemini reads the table')),
+            ]),
+          ]),
+        )),
+      )),
+    ]);
+  }
+
+  Widget _bcTargetRow(Map<String, dynamic> m) {
+    final img = _str(m, 'image_url');
+    final has = m['has_barcode'] == true;
+    final pid = int.tryParse(_str(m, 'product_id'));
+    return InkWell(
+      onTap: pid == null ? null : () => _showBarcodeEditor(
+        productId: pid,
+        productName: _str(m, 'product_name'),
+        packLabel: _str(m, 'pack_label'),
+        currentBarcode: _str(m, 'current_barcode'),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: Row(children: [
+          Container(
+            width: 40, height: 40,
+            decoration: BoxDecoration(color: const Color(0xFFF9FAFB), borderRadius: BorderRadius.circular(8)),
+            clipBehavior: Clip.antiAlias,
+            child: img.isEmpty
+                ? const Icon(Icons.medication_outlined, size: 18, color: Color(0xFF9CA3AF))
+                : Image.network(img, fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => const Icon(Icons.medication_outlined, size: 18, color: Color(0xFF9CA3AF))),
+          ),
+          const SizedBox(width: 12),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(_str(m, 'product_name'),
+                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
+                maxLines: 2, overflow: TextOverflow.ellipsis),
+            const SizedBox(height: 2),
+            Text(
+              [_str(m, 'pack_label'), _str(m, 'company'), _str(m, 'suppliers')]
+                  .where((s) => s.isNotEmpty).join(' · '),
+              style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+              maxLines: 1, overflow: TextOverflow.ellipsis,
+            ),
+          ])),
+          const SizedBox(width: 10),
+          Text(_str(m, 'ordered_qty'),
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+          const SizedBox(width: 12),
+          Icon(has ? Icons.check_circle : Icons.radio_button_unchecked,
+              size: 18, color: has ? const Color(0xFF1B7A43) : const Color(0xFFD1D5DB)),
+        ]),
+      ),
+    );
+  }
+
+  Widget _bcBuildLoading() {
+    return Center(
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        const SizedBox(width: 40, height: 40, child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 3)),
+        const SizedBox(height: 18),
+        Text(_bcStatusMsg, style: const TextStyle(fontSize: 14, color: Color(0xFF6B7280))),
+      ]),
+    );
+  }
+
+  // ── B2 — confirm the mapping (same step, two fields) ──────────────────────
+
+  Widget _bcBuildMapping(bool isDesktop) {
+    final items = <DropdownMenuItem<String>>[
+      ..._kBcCols.map((c) => DropdownMenuItem(value: c, child: Text(_colLabel(c), style: const TextStyle(fontSize: 13)))),
+      const DropdownMenuItem(value: 'ignore', child: Text('— Ignore —', style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)))),
+    ];
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      _StageHeader(
+        title: 'Confirm columns',
+        subtitle: 'Map the product and the barcode — everything else can be ignored',
+        onBack: () => setState(() => _bcStep = _BcStep.setup),
+        action: FilledButton(
+          onPressed: _bcConfirmMapping,
+          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
+          child: const Text('Confirm & Check →', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+        ),
+      ),
+      Expanded(child: SingleChildScrollView(
+        padding: EdgeInsets.symmetric(horizontal: isDesktop ? 24 : 12, vertical: 20),
+        child: Center(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 920),
+          child: LayoutBuilder(builder: (ctx, bc) {
+            final isMobile = bc.maxWidth < 600;
+            return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              if (!isMobile)
+                Padding(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6), child: Row(children: const [
+                  Expanded(flex: 4, child: Text('FILE COLUMN', style: _kTh)),
+                  Expanded(flex: 6, child: Text('SAMPLE VALUES', style: _kTh)),
+                  Expanded(flex: 5, child: Text('MAPS TO', style: _kTh)),
+                ])),
+              if (!isMobile) const Divider(color: Color(0xFFE5E7EB)),
+              for (int i = 0; i < _bcCols.length; i++) ...[
+                _buildColRow(_bcCols[i], isMobile: isMobile, itemsOverride: items),
+                if (!isMobile) const Divider(height: 1, color: Color(0xFFF3F4F6)),
+                if (isMobile) const SizedBox(height: 8),
+              ],
+              const SizedBox(height: 24),
+              SizedBox(width: double.infinity, height: 48, child: FilledButton(
+                onPressed: _bcConfirmMapping,
+                style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+                child: const Text('Confirm Mapping & Check Rows', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+              )),
+            ]);
+          }))),
+      )),
+    ]);
+  }
+
+  // ── C — preview, rendered verbatim ────────────────────────────────────────
+
+  Widget _bcBuildPreview(bool isDesktop) {
+    final p = _bcPreview;
+    final rows = (p?['rows'] as List<dynamic>? ?? const []);
+    final canApply = p?['can_apply'] == true;
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      _StageHeader(
+        // C2 — header IS summary_label; nothing counted here.
+        title: _str(p, 'summary_label'),
+        subtitle: 'Rows that will not be written are listed below with the reason',
+        onBack: () => setState(() => _bcStep = _BcStep.mapping),
+        action: FilledButton(
+          onPressed: canApply ? _bcApplyNow : null,
+          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
+          // C2 — button label IS apply_label.
+          child: Text(_str(p, 'apply_label'), style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+        ),
+      ),
+      const Divider(height: 1, color: Color(0xFFE5E7EB)),
+      Expanded(child: SingleChildScrollView(
+        padding: EdgeInsets.symmetric(horizontal: isDesktop ? 24 : 12, vertical: 16),
+        child: Center(child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 1000),
+          child: Container(
+            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12),
+                boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 8, offset: const Offset(0, 2))]),
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            // C4 — given order, no filtering, no sorting.
+            child: Column(children: [
+              for (int i = 0; i < rows.length; i++)
+                _bcPreviewRow(Map<String, dynamic>.from(rows[i] as Map), last: i == rows.length - 1),
+            ]),
+          ),
+        )),
+      )),
+      SafeArea(top: false, child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+        child: SizedBox(height: 48, child: FilledButton(
+          onPressed: canApply ? _bcApplyNow : null,
+          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+          child: Text(_str(p, 'apply_label'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+        )),
+      )),
+    ]);
+  }
+
+  Widget _bcPreviewRow(Map<String, dynamic> m, {required bool last}) {
+    // C3 — will_import decides emphasis; the chip's words and colours are the
+    // backend's (status_label + status_colors).
+    final willImport = m['will_import'] == true;
+    final colors = Map<String, dynamic>.from((m['status_colors'] as Map?) ?? const {});
+    final bg = _hex(colors['bg'] as String?, const Color(0xFFF3F4F6));
+    final fg = _hex(colors['fg'] as String?, const Color(0xFF6B7280));
+    final img = _str(m, 'image_url');
+    final productName = _str(m, 'product_name');
+    final currentBc = _str(m, 'current_barcode');
+
+    return Opacity(
+      opacity: willImport ? 1.0 : 0.55,
+      child: Column(children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Container(
+              width: 44, height: 44,
+              decoration: BoxDecoration(color: const Color(0xFFF9FAFB), borderRadius: BorderRadius.circular(8)),
+              clipBehavior: Clip.antiAlias,
+              child: img.isEmpty
+                  ? const Icon(Icons.medication_outlined, size: 18, color: Color(0xFF9CA3AF))
+                  : Image.network(img, fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => const Icon(Icons.medication_outlined, size: 18, color: Color(0xFF9CA3AF))),
+            ),
+            const SizedBox(width: 12),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(_str(m, 'input_name'),
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
+                  maxLines: 2, overflow: TextOverflow.ellipsis),
+              if (productName.isNotEmpty) ...[
+                const SizedBox(height: 3),
+                Row(children: [
+                  const Icon(Icons.subdirectory_arrow_right, size: 13, color: Color(0xFF9CA3AF)),
+                  const SizedBox(width: 4),
+                  Expanded(child: Text(productName,
+                      style: const TextStyle(fontSize: 13, color: Color(0xFF374151)),
+                      maxLines: 1, overflow: TextOverflow.ellipsis)),
+                ]),
+              ],
+              const SizedBox(height: 3),
+              Text(
+                [_str(m, 'pack_label'), _str(m, 'company')].where((s) => s.isNotEmpty).join(' · '),
+                style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+                maxLines: 1, overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 6),
+              Wrap(spacing: 8, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                Text(_str(m, 'barcode'),
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
+                        color: Color(0xFF111827), fontFeatures: [FontFeature.tabularFigures()])),
+                if (currentBc.isNotEmpty)
+                  Text('was $currentBc',
+                      style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF),
+                          decoration: TextDecoration.lineThrough)),
+              ]),
+            ])),
+            const SizedBox(width: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
+              child: Text(_str(m, 'status_label'),
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: fg)),
+            ),
+          ]),
+        ),
+        if (!last) const Divider(height: 1, color: Color(0xFFF3F4F6)),
+      ]),
+    );
+  }
+
+  // ── D2 — result ───────────────────────────────────────────────────────────
+
+  Widget _bcBuildDone() {
+    return Center(child: ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 440),
+      child: Padding(padding: const EdgeInsets.all(32), child: Container(
+        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFFE5E7EB))),
+        padding: const EdgeInsets.all(32),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Container(width: 68, height: 68,
+              decoration: BoxDecoration(color: const Color(0xFFECFDF5), borderRadius: BorderRadius.circular(18)),
+              child: const Icon(Icons.check_circle_outline, color: Color(0xFF1B7A43), size: 38)),
+          const SizedBox(height: 18),
+          Text(_str(_bcApply, 'title'), textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
+          const SizedBox(height: 8),
+          Text(_str(_bcApply, 'note'), textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 14, color: Color(0xFF6B7280))),
+          const SizedBox(height: 28),
+          SizedBox(width: double.infinity, height: 48, child: FilledButton(
+            onPressed: () => setState(() {
+              _bcStep = _BcStep.setup;
+              _bcPreview = null;
+              _bcApply = null;
+              _bcCols = [];
+              _bcRawRows = [];
+              _bcRows = [];
+            }),
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+            child: const Text('Import Another File', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+          )),
+          const SizedBox(height: 10),
+          SizedBox(width: double.infinity, height: 44, child: TextButton(
+            onPressed: _bcExit,
+            child: const Text('Back to Add Medicine',
+                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14, color: Color(0xFF6B7280))),
+          )),
+        ]),
+      )),
+    ));
   }
 
   // ── Loading ───────────────────────────────────────────────────────────────────
@@ -952,10 +1840,12 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
     ]);
   }
 
-  Widget _buildColRow(_ImpCol col, {bool isMobile = false}) {
+  /// [itemsOverride] lets the barcode import reuse this exact row with its own
+  /// (much shorter) field list — CHANGE #623.
+  Widget _buildColRow(_ImpCol col, {bool isMobile = false, List<DropdownMenuItem<String>>? itemsOverride}) {
     final ctrl = _newColCtrls[col.fileIndex] ??= TextEditingController();
     final isCreate = col.mappedTo == 'create_new';
-    final items = <DropdownMenuItem<String>>[
+    final items = itemsOverride ?? <DropdownMenuItem<String>>[
       ..._kMedCols.map((c) => DropdownMenuItem(value: c, child: Text(_colLabel(c), style: const TextStyle(fontSize: 13)))),
       const DropdownMenuItem(value: 'ignore', child: Text('— Ignore —', style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)))),
       const DropdownMenuItem(value: 'create_new', child: Text('Create new column…', style: TextStyle(fontSize: 13, color: Color(0xFF1B7A43)))),
@@ -1093,6 +1983,8 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
     'salt_composition'  => 'salt_composition (generic)',
     'marketer'          => 'marketer (company)',
     'mrp'               => 'mrp (price ₹)',
+    'barcode'           => 'barcode (EAN / UPC)',
+    'product_id'        => 'product_id (catalogue id)',
     'pack_qty'          => 'pack_qty (pack quantity)',
     'pack_size'         => 'pack_size',
     'pack_type'         => 'pack_type',
@@ -1852,6 +2744,163 @@ class _InfoTile extends StatelessWidget {
         ])),
       ]),
     );
+  }
+}
+
+// ─── CHANGE #623 — barcode import support widgets ─────────────────────────────
+
+/// One of the two choices the admin makes BEFORE picking a file (A2).
+class _BcModeButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String sub;
+  final VoidCallback onTap;
+  const _BcModeButton({required this.icon, required this.label, required this.sub, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF9FAFB),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFFE5E7EB)),
+        ),
+        child: Row(children: [
+          Icon(icon, size: 20, color: const Color(0xFF1B7A43)),
+          const SizedBox(width: 12),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(label, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
+            const SizedBox(height: 2),
+            Text(sub, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+          ])),
+          const Icon(Icons.chevron_right, size: 20, color: Color(0xFF9CA3AF)),
+        ]),
+      ),
+    );
+  }
+}
+
+class _BcPick {
+  final int productId;
+  final String productName;
+  final String packLabel;
+  const _BcPick(this.productId, this.productName, this.packLabel);
+}
+
+/// F1 — find a medicine, then set/clear its barcode. Search goes through the
+/// same catalogue RPC the import matcher uses; the barcode itself is written
+/// only by medicine_set_barcode.
+class _BarcodeQuickSet extends StatefulWidget {
+  final ValueChanged<_BcPick> onPick;
+  const _BarcodeQuickSet({required this.onPick});
+
+  @override
+  State<_BarcodeQuickSet> createState() => _BarcodeQuickSetState();
+}
+
+class _BarcodeQuickSetState extends State<_BarcodeQuickSet> {
+  final _ctrl = TextEditingController();
+  Timer? _debounce;
+  bool _busy = false;
+  List<Map<String, dynamic>> _results = [];
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _onChanged(String v) {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 350), () => _search(v));
+  }
+
+  Future<void> _search(String q) async {
+    if (q.trim().length < 2) { setState(() => _results = []); return; }
+    setState(() => _busy = true);
+    try {
+      final rows = await Supabase.instance.client.rpc('search_medicines_priority', params: {
+        'search_term': q.trim(), 'category_filter': 'All', 'page_offset': 0, 'page_limit': 8,
+      });
+      if (!mounted) return;
+      setState(() => _results = List<Map<String, dynamic>>.from(rows as List));
+    } catch (_) {
+      if (mounted) setState(() => _results = []);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      TextField(
+        controller: _ctrl,
+        onChanged: _onChanged,
+        decoration: InputDecoration(
+          hintText: 'Search a medicine…',
+          hintStyle: const TextStyle(color: Color(0xFF9CA3AF)),
+          prefixIcon: const Icon(Icons.search, size: 20, color: Color(0xFF9CA3AF)),
+          suffixIcon: _busy
+              ? const Padding(padding: EdgeInsets.all(12),
+                  child: SizedBox(width: 16, height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF1B7A43))))
+              : null,
+          isDense: true,
+          filled: true,
+          fillColor: const Color(0xFFF5F6F8),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+              borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+          enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+              borderSide: const BorderSide(color: Color(0xFFE5E7EB))),
+          focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
+              borderSide: const BorderSide(color: Color(0xFF1B7A43))),
+        ),
+        style: const TextStyle(fontSize: 15, color: Color(0xFF111827)),
+      ),
+      for (final r in _results) ...[
+        const SizedBox(height: 8),
+        InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: () {
+            final id = r['id'];
+            final pid = id is int ? id : int.tryParse('$id');
+            if (pid == null) return;
+            final pack = ((r['pack_qty'] ?? r['pack_type'] ?? '') as Object).toString().trim();
+            widget.onPick(_BcPick(pid, (r['product_name'] ?? '').toString(), pack));
+          },
+          child: Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF9FAFB),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFFE5E7EB)),
+            ),
+            child: Row(children: [
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text((r['product_name'] ?? '').toString(),
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
+                const SizedBox(height: 2),
+                Text(
+                  [(r['pack_qty'] ?? '').toString(), (r['marketer'] ?? '').toString()]
+                      .where((s) => s.trim().isNotEmpty).join(' · '),
+                  style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+                  maxLines: 1, overflow: TextOverflow.ellipsis,
+                ),
+              ])),
+              const Icon(Icons.chevron_right, size: 20, color: Color(0xFF9CA3AF)),
+            ]),
+          ),
+        ),
+      ],
+    ]);
   }
 }
 

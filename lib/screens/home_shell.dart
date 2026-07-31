@@ -2884,37 +2884,22 @@ class _StickyCartBarState extends State<_StickyCartBar>
     final cart = AppState.of(context);
     final uniqueItems = cart.distinctItems;
 
-    // CHANGE #559: the whole five-tier ladder is decided by cart_state() from
-    // app_settings.cart_tiers — which tier is current, which is next, how far
-    // away it is and the progress toward it. No threshold, percentage or
-    // rupee gap is computed here. Same three widget shapes as before.
-    final progress = cart.tierProgress;
-    final Widget leftContent;
-
-    if (cart.tierMaxed) {
-      leftContent = Text(
-        '🎉 ${cart.tierLabel} unlocked! (maximum)',
-        maxLines: 1,
-        softWrap: false,
-        overflow: TextOverflow.clip,
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 12,
-          fontWeight: FontWeight.w700,
-        ),
-      );
-    } else if (cart.tierCurrent != null) {
-      leftContent = _UnlockedTierText(
-        unlockedLabel: cart.tierLabel ?? '',
-        nextPct: cart.tierNextPct,
-        remaining: cart.tierGap.ceil(),
-      );
-    } else {
-      leftContent = _DiscountText(
-        amount: '₹${cart.tierGap.ceil()}',
-        suffix: ' more for ${cart.tierNextLabel ?? ''}',
-      );
-    }
+    // CHANGE #615 — the five-tier discount ladder is gone from the backend, so
+    // the bar shows the one thing the cart still has: the MRP subtotal line,
+    // worded by cart_render(). Left as it was, tier_gap/tier_progress would
+    // have read 0 off a payload that no longer carries them and rendered
+    // "Add ₹0 more for " over an empty progress bar.
+    final Widget leftContent = Text(
+      cart.rs('subtotal_line'),
+      maxLines: 1,
+      softWrap: false,
+      overflow: TextOverflow.clip,
+      style: const TextStyle(
+        color: Colors.white,
+        fontSize: 12,
+        fontWeight: FontWeight.w700,
+      ),
+    );
 
     return SlideTransition(
       position: _slideAnim,
@@ -2952,33 +2937,6 @@ class _StickyCartBarState extends State<_StickyCartBar>
                       ScaleTransition(
                         scale: _pulseAnim,
                         child: _CartChip(uniqueItems: uniqueItems),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
-                child: LayoutBuilder(
-                  builder: (_, constraints) => Stack(
-                    children: [
-                      Container(
-                        height: 4,
-                        width: constraints.maxWidth,
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.25),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                      ),
-                      AnimatedContainer(
-                        duration: const Duration(milliseconds: 500),
-                        curve: Curves.easeOut,
-                        height: 4,
-                        width: constraints.maxWidth * progress.clamp(0.0, 1.0),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
                       ),
                     ],
                   ),
@@ -3189,37 +3147,22 @@ class _WebDiscountBarState extends State<_WebDiscountBar>
       return const SizedBox.shrink();
     }
 
-    // CHANGE #559: the whole five-tier ladder is decided by cart_state() from
-    // app_settings.cart_tiers — which tier is current, which is next, how far
-    // away it is and the progress toward it. No threshold, percentage or
-    // rupee gap is computed here. Same three widget shapes as before.
-    final progress = cart.tierProgress;
-    final Widget leftContent;
-
-    if (cart.tierMaxed) {
-      leftContent = Text(
-        '🎉 ${cart.tierLabel} unlocked! (maximum)',
-        maxLines: 1,
-        softWrap: false,
-        overflow: TextOverflow.clip,
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 12,
-          fontWeight: FontWeight.w700,
-        ),
-      );
-    } else if (cart.tierCurrent != null) {
-      leftContent = _UnlockedTierText(
-        unlockedLabel: cart.tierLabel ?? '',
-        nextPct: cart.tierNextPct,
-        remaining: cart.tierGap.ceil(),
-      );
-    } else {
-      leftContent = _DiscountText(
-        amount: '₹${cart.tierGap.ceil()}',
-        suffix: ' more for ${cart.tierNextLabel ?? ''}',
-      );
-    }
+    // CHANGE #615 — the five-tier discount ladder is gone from the backend, so
+    // the bar shows the one thing the cart still has: the MRP subtotal line,
+    // worded by cart_render(). Left as it was, tier_gap/tier_progress would
+    // have read 0 off a payload that no longer carries them and rendered
+    // "Add ₹0 more for " over an empty progress bar.
+    final Widget leftContent = Text(
+      cart.rs('subtotal_line'),
+      maxLines: 1,
+      softWrap: false,
+      overflow: TextOverflow.clip,
+      style: const TextStyle(
+        color: Colors.white,
+        fontSize: 12,
+        fontWeight: FontWeight.w700,
+      ),
+    );
 
     return SlideTransition(
       position: _slideAnim,
@@ -3248,33 +3191,6 @@ class _WebDiscountBarState extends State<_WebDiscountBar>
                     Expanded(child: leftContent),
                     _CartChip(uniqueItems: uniqueItems),
                   ],
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                child: LayoutBuilder(
-                  builder: (_, constraints) => Stack(
-                    children: [
-                      Container(
-                        height: 4,
-                        width: constraints.maxWidth,
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.25),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                      ),
-                      AnimatedContainer(
-                        duration: const Duration(milliseconds: 500),
-                        curve: Curves.easeOut,
-                        height: 4,
-                        width: constraints.maxWidth * progress.clamp(0.0, 1.0),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                      ),
-                    ],
-                  ),
                 ),
               ),
             ],

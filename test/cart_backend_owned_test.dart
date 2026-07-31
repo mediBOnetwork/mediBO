@@ -40,8 +40,8 @@ void main() {
                 Text('badge:${c.badge ?? '-'}'),
                 Text('header:${c.header ?? '-'}'),
                 Text('cta:${c.ctaLabel ?? '-'}'),
-                Text('tier:${c.tierNote ?? '-'}'),
-                Text('tierlabel:${c.tierLabel ?? '-'}'),
+                Text('subtotal:${c.rs('subtotal_display')}'),
+                Text('subline:${c.rs('subtotal_line')}'),
                 Text('net:${c.netPayable}'),
                 for (final l in c.lines)
                   Text('line:${l.product.name}:${l.quantity}'),
@@ -67,45 +67,44 @@ void main() {
             'product_id': '101',
             'product_name': 'Telvas 40',
             'quantity': qty,
-            'price': 881.38,
             'mrp': 881.38,
             'image_url': '',
             'manufacturer': 'Aristo',
             'pack_size': '10 tab',
-            'gst_percent': 12,
-            'line_total': 881.38 * qty,
             'line_mrp': 881.38 * qty,
+            'mrp_display': '₹881.38',
+            'line_mrp_display': '₹${(881.38 * qty).toStringAsFixed(2)}',
+            'qty_label': '$qty × ₹881.38',
           }
         ],
         'item_count': 1,
         'unit_count': qty,
-        'total': 881.38 * qty,
+        'subtotal': 881.38 * qty,
         'header': '1 product in cart',
         'badge': '1',
         'cta_label': '1 item',
         'empty_title': 'Your cart is empty',
         'empty_note': 'Add products from the catalog to start an order.',
         'mrp_total': 881.38 * qty,
-        'tier_current': {
-          'label': 'FREE delivery',
-          'min_mrp': 999,
-          'discount_pct': 0,
-          'free_delivery': true,
-        },
-        'tier_next': {
-          'label': '3% off',
-          'min_mrp': 2999,
-          'discount_pct': 3,
-          'free_delivery': true,
-        },
-        'tier_label': 'FREE delivery',
-        'tier_gap': 1236.24,
-        'tier_progress': 0.382,
-        'tier_note': 'Add ₹1236.24 more for 3% off',
-        'discount_pct': 0,
-        'discount_amount': 0,
-        'delivery_fee': 0,
         'net_payable': 881.38 * qty,
+        // CHANGE #615 — cart_render()'s block. One number, already worded.
+        // There is no tier ladder, discount, GST or delivery fee left to send.
+        'render': {
+          'subtotal_display': '₹${(881.38 * qty).toStringAsFixed(2)}',
+          'mrp_total_display': '₹${(881.38 * qty).toStringAsFixed(2)}',
+          'net_payable_display': '₹${(881.38 * qty).toStringAsFixed(2)}',
+          'grand_total': 881.38 * qty,
+          'grand_total_display': '₹${(881.38 * qty).toStringAsFixed(2)}',
+          'item_count': 1,
+          'unit_count': qty,
+          'items_label': '1 item',
+          'subtotal_line': '1 item • MRP worth ₹${(881.38 * qty).toStringAsFixed(2)}',
+          'labels': {
+            'subtotal': 'Subtotal',
+            'mrp_worth': 'MRP worth',
+            'total': 'Total',
+          },
+        },
       };
 
   tearDown(() => CartModel.rpcTransport = null);
@@ -150,21 +149,17 @@ void main() {
     expect(find.text('badge:1'), findsOneWidget);
     expect(find.text('header:1 product in cart'), findsOneWidget);
     expect(find.text('cta:1 item'), findsOneWidget);
-    expect(find.text('tier:Add ₹1236.24 more for 3% off'), findsOneWidget);
-    expect(find.text('tierlabel:FREE delivery'), findsOneWidget);
+    expect(find.text('subtotal:₹1762.76'), findsOneWidget);
+    expect(find.text('subline:1 item • MRP worth ₹1762.76'), findsOneWidget);
 
-    // The tier ladder is the server's: current/next/gap/progress, no Dart maths.
-    expect(cart.tierNextLabel, '3% off');
-    expect(cart.tierNextPct, 3);
-    expect(cart.tierGap, 1236.24);
-    expect(cart.tierProgress, 0.382);
-    expect(cart.tierMaxed, isFalse);
-
-    // Money is the server's too, including per-line GST.
+    // CHANGE #615 — the cart is ONE number, and it is the server's. Nothing
+    // here multiplies, discounts or taxes: the footer prints these two
+    // strings and the per-line price prints the two below.
     expect(cart.netPayable, 1762.76);
     expect(cart.mrpTotal, 1762.76);
-    expect(cart.deliveryFee, 0);
-    expect(cart.lines.single.product.gstPercent, 12);
+    expect(cart.grandTotal, 1762.76);
+    expect(cart.lines.single.ds('line_mrp_display'), '₹1762.76');
+    expect(cart.lines.single.ds('qty_label'), '2 × ₹881.38');
   });
 
   testWidgets('no cart line is rendered from local state', (tester) async {

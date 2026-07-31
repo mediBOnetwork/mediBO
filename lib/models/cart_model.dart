@@ -32,8 +32,12 @@ class CartLine {
   /// locally formatted fallback).
   String ds(String key) => (display[key] ?? '').toString();
 
-  double get lineTotal => product.b2bPrice * quantity;
-  double get lineGst => lineTotal * product.gstPercent / 100;
+  /// CHANGE #615 — a cart line is worth qty × MRP and nothing else. There is no
+  /// sale price, no GST and no discount left to fold in, so `mrp` is the only
+  /// number this can be built from. The BILLED figure is still the server's
+  /// (`line_mrp` / `line_mrp_display`); this exists only for the transient
+  /// sample overlay, which is never billed.
+  double get lineTotal => product.mrp * quantity;
 }
 
 /// A placed purchase order, kept in memory for the Orders screen.
@@ -461,6 +465,12 @@ class CartModel extends ChangeNotifier {
     if (gen != _loadGen) return;
     RenderLog.write('c401_cart_uses_buyable', 'true');
     RenderLog.write(kC610OnePayload, 'roundtrips:1');
+    // CHANGE #615 — proves the flat cart rendered: the subtotal strings the
+    // footer prints, straight out of the payload that was just adopted.
+    RenderLog.write(kC615CartFlatSmooth,
+        'subtotal:${(cart['render'] as Map?)?['subtotal_display'] ?? ''};'
+        'line:${(cart['render'] as Map?)?['subtotal_line'] ?? ''};'
+        'debounce_ms:${_kStepperDebounce.inMilliseconds}');
     _adoptCart(cart);
     _rebuildAdminRemoved(cart);
     RenderLog.write(kC559ServerCart,
@@ -468,6 +478,7 @@ class CartModel extends ChangeNotifier {
   }
 
   static const kC610OnePayload = 'c610_cart_one_payload';
+  static const kC615CartFlatSmooth = 'c615_cart_flat_smooth';
 
   /// Rebuilds `_serverLines` from the payload. Pure — no network, no mutation
   /// of the payload, and no line that is not in `cart['items']`.
@@ -484,7 +495,11 @@ class CartModel extends ChangeNotifier {
         Product.fromCartData(
           id: pid,
           name: (row['product_name'] as String?) ?? '',
-          b2bPrice: (row['price'] as num?)?.toDouble() ?? 0.0,
+          // CHANGE #615 — the cart is ONE number: qty × MRP. cart_state() no
+          // longer returns `price` or `gst_percent`, because there is no sale
+          // price and no GST in the cart any more. Reading a key that is gone
+          // would silently price every line at 0.
+          b2bPrice: (row['mrp'] as num?)?.toDouble() ?? 0.0,
           mrp: (row['mrp'] as num?)?.toDouble() ?? 0.0,
           imageUrl: (row['image_url'] as String?) ?? '',
           manufacturer: (row['manufacturer'] as String?) ?? '',
@@ -492,8 +507,6 @@ class CartModel extends ChangeNotifier {
           // CHANGE #610: category, buyable, added_by and the row id all come
           // from the one payload now — no second read to merge them in.
           category: (row['category'] as String?) ?? 'Other',
-          // CHANGE #559: gst_percent is returned per line by cart_state().
-          gstPercent: (row['gst_percent'] as num?)?.toDouble() ?? 12.0,
           buyable: row['buyable'] as bool?,
         ),
         (row['quantity'] as num?)?.toInt() ?? 0,
@@ -524,13 +537,12 @@ class CartModel extends ChangeNotifier {
         Product.fromCartData(
           id: pid,
           name: (row['product_name'] as String?) ?? '',
-          b2bPrice: (row['price'] as num?)?.toDouble() ?? 0.0,
+          b2bPrice: (row['mrp'] as num?)?.toDouble() ?? 0.0,
           mrp: (row['mrp'] as num?)?.toDouble() ?? 0.0,
           imageUrl: (row['image_url'] as String?) ?? '',
           manufacturer: (row['manufacturer'] as String?) ?? '',
           packSize: (row['pack_size'] as String?) ?? '',
           category: (row['category'] as String?) ?? 'Other',
-          gstPercent: (row['gst_percent'] as num?)?.toDouble() ?? 12.0,
           buyable: row['buyable'] as bool?,
         ),
         (row['quantity'] as num?)?.toInt() ?? 0,
@@ -756,48 +768,17 @@ class CartModel extends ChangeNotifier {
   String? get ctaLabel => _cart['cta_label']?.toString();
   String get emptyTitle => _cart['empty_title']?.toString() ?? '';
   String get emptyNote => _cart['empty_note']?.toString() ?? '';
-  // ── Discount-tier ladder (CHANGE #559) ────────────────────────────────────
-  // The five tiers, which tier is current, which is next, how far away it is
-  // and the progress toward it are ALL decided by cart_state() from
-  // app_settings.cart_tiers. No threshold or percentage is hardcoded in Dart.
 
-  /// The tier reached, or null below the first one. Keys: label, min_mrp,
-  /// discount_pct, free_delivery.
-  Map<String, dynamic>? get tierCurrent => _asMap(_cart['tier_current']);
-
-  /// The next tier up, or null once the top tier is reached.
-  Map<String, dynamic>? get tierNext => _asMap(_cart['tier_next']);
-
-  /// Label of the tier reached, e.g. "FREE delivery", "3% off".
-  String? get tierLabel => _cart['tier_label']?.toString();
-
-  /// Label of the next tier up, e.g. "3% off".
-  String? get tierNextLabel => tierNext?['label']?.toString();
-
-  /// Discount percent the next tier unlocks.
-  int get tierNextPct => (tierNext?['discount_pct'] as num?)?.toInt() ?? 0;
-
-  /// Rupees of MRP still needed to reach the next tier.
-  double get tierGap => (_cart['tier_gap'] as num?)?.toDouble() ?? 0.0;
-
-  /// Progress across the CURRENT tier band, 0..1. Already 1 at the top tier.
-  double get tierProgress =>
-      (_cart['tier_progress'] as num?)?.toDouble() ?? 0.0;
-
-  /// One-line tier sentence, e.g. "Add ₹727.24 more for 3% off".
-  String? get tierNote => _cart['tier_note']?.toString();
-
-  /// True once the top tier is reached — nothing further to unlock.
-  bool get tierMaxed => tierNext == null && tierCurrent != null;
-
-  // ── Money, all computed server-side ───────────────────────────────────────
-  double get discountPct => (_cart['discount_pct'] as num?)?.toDouble() ?? 0.0;
-  double get discountAmount =>
-      (_cart['discount_amount'] as num?)?.toDouble() ?? 0.0;
-  double get deliveryFee => (_cart['delivery_fee'] as num?)?.toDouble() ?? 0.0;
-
-  static Map<String, dynamic>? _asMap(dynamic v) =>
-      v is Map ? Map<String, dynamic>.from(v) : null;
+  // ── CHANGE #615 — the cart is ONE number ──────────────────────────────────
+  //
+  // The discount-tier ladder, the GST breakdown, the sale price, the discount
+  // and the delivery fee are GONE from the backend payload: cart_state() now
+  // returns qty × MRP and nothing else. The getters that read `tier_current`,
+  // `tier_gap`, `tier_progress`, `discount_pct`, `discount_amount` and
+  // `delivery_fee` are deleted rather than left to read a key that no longer
+  // exists — a getter over a missing key returns 0/null silently, which is the
+  // app inventing an answer the backend never gave. The "Add ₹0 more for "
+  // string the delivery bar would have rendered is exactly that failure.
 
   /// Distinct products, straight from the server. Sample items are transient
   /// and counted alongside so the badge matches what the list shows.
@@ -808,14 +789,16 @@ class CartModel extends ChangeNotifier {
       ((_cart['unit_count'] as num?)?.toInt() ?? 0) +
       _sampleLines.values.fold(0, (s, l) => s + l.quantity);
 
-  /// Cart value as the server computed it.
-  double get total => (_cart['total'] as num?)?.toDouble() ?? 0.0;
+  /// Cart value as the server computed it — the MRP subtotal, which is now the
+  /// only number the cart has. #615: cart_state() returns `subtotal`, not
+  /// `total`; the old key would have read 0 forever.
+  double get total => (_cart['subtotal'] as num?)?.toDouble() ?? 0.0;
 
   double get subtotal =>
       total + _sampleLines.values.fold(0.0, (s, l) => s + l.lineTotal);
 
-  /// CHANGE #582 — the `render` block from cart_render(): display strings and
-  /// the per-GST-rate breakdown, all computed server-side.
+  /// CHANGE #582/#615 — the `render` block from cart_render(): the display
+  /// strings for the one subtotal, all computed and worded server-side.
   Map<String, dynamic> get render =>
       (_cart['render'] as Map?)?.cast<String, dynamic>() ?? const {};
 
@@ -827,28 +810,19 @@ class CartModel extends ChangeNotifier {
   String label(String key) =>
       ((render['labels'] as Map?)?[key] ?? '').toString();
 
-  /// The per-rate GST groups the tax panel draws, already totalled and worded.
-  List<Map<String, dynamic>> get gstGroups =>
-      ((render['gst_groups'] as List?) ?? const [])
-          .whereType<Map>()
-          .map((e) => e.cast<String, dynamic>())
-          .toList(growable: false);
-
-  /// #582 — GST and the grand total come from the server. These used to be
-  /// folded from the lines in Dart while the tax panel derived GST a SECOND
-  /// way (netPayable − deliveryFee − mrpTotal × (1 − disc)); two calculations
-  /// of one number in a single screen.
-  double get totalGst => (render['gst_total'] as num?)?.toDouble() ?? 0.0;
+  /// #615 — the one figure the customer pays, as the SERVER computed it:
+  /// sum(qty × MRP). `grand_total` in the render block, `mrp_total` /
+  /// `subtotal` / `net_payable` at the top level are all the same number by
+  /// construction, so there is nothing left that can disagree.
   double get grandTotal => (render['grand_total'] as num?)?.toDouble() ?? 0.0;
 
-  /// Total MRP as the SERVER computed it. Drives the tier ladder.
+  /// Total MRP as the SERVER computed it.
   double get mrpTotal =>
       ((_cart['mrp_total'] as num?)?.toDouble() ?? 0.0) +
       _sampleLines.values.fold(0.0, (s, l) => s + l.product.mrp * l.quantity);
 
-  /// Net payable, straight from cart_state() — discount and delivery fee are
-  /// applied server-side. Sample items are transient and never billed, so the
-  /// server figure stands alone.
+  /// Net payable, straight from cart_state(). #615: identical to the MRP
+  /// subtotal — there is no discount, GST or delivery fee to apply.
   double get netPayable => (_cart['net_payable'] as num?)?.toDouble() ?? 0.0;
 
   bool get hasSampleItems => _sampleLines.isNotEmpty;

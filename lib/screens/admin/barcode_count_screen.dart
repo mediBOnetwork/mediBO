@@ -58,7 +58,7 @@ class _Staged {
   });
 }
 
-// CHANGE #625: the screen has two MODES, and which one it is in is decided by
+// CHANGE #627: the screen has two MODES, and which one it is in is decided by
 // the constructor the caller uses — never inferred from an empty string.
 //
 //   BarcodeCountScreen.supplier(supplierName:, stage:)  Supplier Shop / Warehouse
@@ -144,7 +144,7 @@ class _BarcodeCountScreenState extends State<BarcodeCountScreen> {
       detectionTimeoutMs: 700,
     );
     if (widget.isPack) {
-      RenderLog.write('c625_pack_barcode',
+      RenderLog.write('c627_pack_barcode',
           'screen=open;mode=pack;order=${widget.orderId};session=$_sessionKey');
     }
     RenderLog.write('c624_barcode_count',
@@ -195,7 +195,7 @@ class _BarcodeCountScreenState extends State<BarcodeCountScreen> {
   Future<void> _lookup(String code) async {
     setState(() => _busy = true);
     try {
-      // CHANGE #625: Pack is order-scoped and has no supplier, stage, date or
+      // CHANGE #627: Pack is order-scoped and has no supplier, stage, date or
       // bag. Supplier Shop / Warehouse keep calling barcode_lookup exactly as
       // they did in #624.
       final raw = widget.isPack
@@ -217,7 +217,7 @@ class _BarcodeCountScreenState extends State<BarcodeCountScreen> {
         // In Pack this also covers `unfulfillable` — an item we could not source,
         // which is not being packed and so cannot be counted.
         if (widget.isPack) {
-          RenderLog.write('c625_pack_barcode',
+          RenderLog.write('c627_pack_barcode',
               'lookup=refused;error=${res['error'] ?? ''}');
         }
         RenderLog.write('c624_barcode_count',
@@ -245,7 +245,7 @@ class _BarcodeCountScreenState extends State<BarcodeCountScreen> {
         bagWarning: widget.isPack ? false : res['bag_warning'] == true,
       );
       if (widget.isPack) {
-        RenderLog.write('c625_pack_barcode',
+        RenderLog.write('c627_pack_barcode',
             'lookup=ok;product=${s.productId};progress=${s.progressLabel};bag=none');
       }
       RenderLog.write('c624_barcode_count',
@@ -286,7 +286,7 @@ class _BarcodeCountScreenState extends State<BarcodeCountScreen> {
 
     setState(() => _busy = true);
     try {
-      // CHANGE #625: Pack commits through pack_barcode_submit_scan, which writes
+      // CHANGE #627: Pack commits through pack_barcode_submit_scan, which writes
       // to pack_clip_mentions and applies via pack_set_counted — the SAME
       // function Pack's voice count uses. Supplier Shop / Warehouse are
       // untouched and still call barcode_submit_scan.
@@ -311,7 +311,7 @@ class _BarcodeCountScreenState extends State<BarcodeCountScreen> {
 
       if (res['ok'] != true) {
         if (widget.isPack) {
-          RenderLog.write('c625_pack_barcode',
+          RenderLog.write('c627_pack_barcode',
               'commit=refused;error=${res['error'] ?? ''}');
         }
         RenderLog.write('c624_barcode_count',
@@ -327,7 +327,7 @@ class _BarcodeCountScreenState extends State<BarcodeCountScreen> {
 
       // C5: bottom bar is whatever the commit response says it is.
       if (widget.isPack) {
-        RenderLog.write('c625_pack_barcode',
+        RenderLog.write('c627_pack_barcode',
             'commit=ok;qty=${s.qty};counted=${res['counted_qty']};over=${res['over_qty']}');
       }
       RenderLog.write('c624_barcode_count',

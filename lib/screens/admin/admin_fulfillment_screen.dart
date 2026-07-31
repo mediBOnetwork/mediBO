@@ -9248,13 +9248,13 @@ class _PackTabState extends State<_PackTab>
   // scope to exactly this value (see fetchScopedPackMentions), so they can never
   // disagree. Set on recording start; kept (not nulled) through Stop/finalize;
   // reset to null only when the order card is freshly (re)loaded.
-  // #625: still written by the pack voice session (that path is untouched), but
+  // #627: still written by the pack voice session (that path is untouched), but
   // no longer read — the review sheet scopes by the backend tab bar, not by
   // session_key.
   // ignore: unused_field
   String? _activePackSessionKey;
 
-  // CHANGE #625 (B1): the Pack "N item" chip, printed verbatim from
+  // CHANGE #627 (B1): the Pack "N item" chip, printed verbatim from
   // get_pack_clip_mentions.items_label. Never composed in Dart. With no rows
   // there is no row to read it from, so the copy catalog's own zero form is
   // used instead — still backend-owned.
@@ -9543,7 +9543,7 @@ class _PackTabState extends State<_PackTab>
   // CHANGE #454: fetched through the SAME shared helper the "Counted items"
   // sheet uses (fetchScopedPackMentions), so the two can never disagree.
   //
-  // CHANGE #625 (B2): sessionKey is now null — every mention for this order,
+  // CHANGE #627 (B2): sessionKey is now null — every mention for this order,
   // voice AND barcode. Filtering by the live voice session_key would drop every
   // barcode row (a barcode scan writes its own session_key). Per-session
   // viewing is the backend-owned tab bar's job (pack_review_groups → All /
@@ -10189,12 +10189,12 @@ class _PackTabState extends State<_PackTab>
     final spokenCount = _packMentions.isEmpty
         ? 0
         : (_packMentions.first['spoken_count'] as num?)?.toInt() ?? 0;
-    // CHANGE #625 (B1): the chip's whole sentence is backend-owned —
+    // CHANGE #627 (B1): the chip's whole sentence is backend-owned —
     // get_pack_clip_mentions now returns items_label ("5 items") on every row
     // and it is printed verbatim. Nothing is composed in Dart. With no rows
     // there is no row to read it from, so the copy catalog's zero form is used.
     try {
-      RenderLog.write('c625_pack_barcode',
+      RenderLog.write('c627_pack_barcode',
           'items_label=$_packItemsLabel;rows=${_packMentions.length}');
       RenderLog.write('c301_spoken', '$spokenCount');
       RenderLog.write('c304_spoken', '$spokenCount');
@@ -10363,7 +10363,7 @@ class _PackTabState extends State<_PackTab>
   // CHANGE #624: Barcode count — replaces Ask mediBO in Pack. Styled exactly
   // like the Count items pill next to it, so the two counting methods match.
   //
-  // CHANGE #625: Pack now has its own order-scoped barcode backend
+  // CHANGE #627: Pack now has its own order-scoped barcode backend
   // (pack_barcode_lookup / pack_barcode_submit_scan → pack_clip_mentions →
   // pack_set_counted, the same apply function Pack's voice count uses). The
   // scanner opens in PACK MODE with this order's id; it never touches the
@@ -10401,7 +10401,7 @@ class _PackTabState extends State<_PackTab>
   }
 
   Future<void> _openPackBarcodeCount(String orderId) async {
-    RenderLog.write('c625_pack_barcode', 'open;mode=pack;order=$orderId');
+    RenderLog.write('c627_pack_barcode', 'open;mode=pack;order=$orderId');
     RenderLog.write('c624_barcode_count', 'open;surface=pack;order=$orderId');
     final committed = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
@@ -10424,7 +10424,7 @@ class _PackTabState extends State<_PackTab>
   // product count instead, passed in separately as spokenCount.
   // CHANGE #532: `progressLabel` is pack_get_queue's labels.counted_progress,
   // rendered verbatim — the "$counted/$total" fraction is no longer composed here.
-  // CHANGE #625: spokenCount dropped — the chip now prints items_label verbatim
+  // CHANGE #627: spokenCount dropped — the chip now prints items_label verbatim
   // from the backend instead of filling a {n} slot with a client-side count.
   Widget _buildPackProgressRow(int counted, int total, String orderId,
       String progressLabel) {
@@ -10441,7 +10441,7 @@ class _PackTabState extends State<_PackTab>
                 color: _kGreen,
                 borderRadius: BorderRadius.circular(6),
               ),
-              // CHANGE #625 (B1): "N item" — items_label, printed verbatim from
+              // CHANGE #627 (B1): "N item" — items_label, printed verbatim from
               // get_pack_clip_mentions. The whole sentence is backend-owned.
               child: Text(_packItemsLabel,
                   style: const TextStyle(
@@ -10887,7 +10887,7 @@ class _PackTabState extends State<_PackTab>
         mentions: mentions,
         packItems: packItems,
         orderId: orderId,
-        // CHANGE #625 (B2): null, so BOTH voice and barcode rows appear. The
+        // CHANGE #627 (B2): null, so BOTH voice and barcode rows appear. The
         // sheet's own post-toggle refetches use this same value, so the sheet
         // and the chip can never diverge. Per-session viewing is the tab bar.
         sessionKey: null,
@@ -10929,12 +10929,12 @@ class _PackMentionsSheet extends StatefulWidget {
 class _PackMentionsSheetState extends State<_PackMentionsSheet> {
   // CHANGE #456: group key (session_key, or "legacy:<date>") of the clip chip
   // last tapped — null = default "All" order.
-  // CHANGE #625: the value now comes from the backend tab bar's own key
+  // CHANGE #627: the value now comes from the backend tab bar's own key
   // (pack_review_groups → tabs[].key); null still means the "all" tab.
   String? _selectedGroupKey;
   final _chipScrollCtrl = ScrollController();
 
-  // CHANGE #625 (B1): pack_review_groups → tabs:[{key,label,count}], already
+  // CHANGE #627 (B1): pack_review_groups → tabs:[{key,label,count}], already
   // ordered All → Clip N… → Barcode. Rendered verbatim, never re-sorted, never
   // re-labelled.
   List<Map<String, dynamic>> _tabs = const [];
@@ -10967,7 +10967,7 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
     } catch (_) {}
   }
 
-  // CHANGE #625 (B1): the tab bar. Backend-owned keys, labels and order.
+  // CHANGE #627 (B1): the tab bar. Backend-owned keys, labels and order.
   Future<void> _fetchTabs() async {
     try {
       final raw = await Supabase.instance.client
@@ -10976,7 +10976,7 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
       final tabs = ((raw['tabs'] as List?) ?? const [])
           .map((t) => Map<String, dynamic>.from(t as Map))
           .toList();
-      RenderLog.write('c625_pack_barcode',
+      RenderLog.write('c627_pack_barcode',
           'review_tabs=${tabs.map((t) => t['key']).join(',')}');
       setState(() {
         _tabs = tabs;
@@ -11023,7 +11023,7 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
               orderId: widget.orderId, sessionKey: widget.sessionKey);
           if (mounted) setState(() => _mentions = rows);
           _fetchProductTotals();
-          _fetchTabs(); // #625: tab counts change with delete/re-add
+          _fetchTabs(); // #627: tab counts change with delete/re-add
         } catch (_) {
           if (mounted) {
             setState(() {
@@ -11060,7 +11060,7 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
                   orderId: widget.orderId, sessionKey: widget.sessionKey);
               if (mounted) setState(() => _mentions = rows);
               _fetchProductTotals();
-              _fetchTabs(); // #625: tab counts change with delete/re-add
+              _fetchTabs(); // #627: tab counts change with delete/re-add
             } catch (_) {}
           } else {
             ScaffoldMessenger.of(context)
@@ -11220,7 +11220,7 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
     final allMentions = _mentions; // #338: local list — updates on hold toggles
     // CHANGE #456: one chip per RECORDING (session), not per chunk window.
     final clips = groupMentionsIntoClips(allMentions);
-    // CHANGE #625 (B1): match on the backend's own group_key, which is the same
+    // CHANGE #627 (B1): match on the backend's own group_key, which is the same
     // value pack_review_groups puts in tabs[].key — 'barcode' for a scanned
     // row, the session group for a spoken one. Deriving the key in Dart
     // (clipGroupKeyOf) would put every barcode session in its own tab instead
@@ -11276,7 +11276,7 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
               ),
             ]),
           ),
-          // CHANGE #625 (B1): tabs come from pack_review_groups and are rendered
+          // CHANGE #627 (B1): tabs come from pack_review_groups and are rendered
           // verbatim in the order given — "All", "Clip 1"…, "Barcode". No key,
           // label or position is decided here. A tab whose key matches a
           // playable recording keeps its play icon; "All" and "Barcode" have no
@@ -11315,7 +11315,7 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
                           } else {
                             _stopAudio();
                             setState(() => _selectedGroupKey = isAll ? null : key);
-                            RenderLog.write('c625_pack_barcode', 'review_tab=$key');
+                            RenderLog.write('c627_pack_barcode', 'review_tab=$key');
                           }
                         },
                         child: Container(

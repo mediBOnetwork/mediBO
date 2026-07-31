@@ -146,7 +146,12 @@ class _CartScreenState extends State<CartScreen> {
   /// by cart_selected_total(). It used to be summed in build() from
   /// product.b2bPrice * quantity and then run through rupees() — the app both
   /// pricing the selection and formatting it.
+  ///
+  /// CHANGE #615 — the caption comes from the same call, so the ticked-lines
+  /// footer reads exactly like the whole-cart one and cannot word its own
+  /// "N items • MRP worth …".
   String _selectedTotalDisplay = '';
+  String _selectedSubtotalLine = '';
 
   Future<void> _refreshSelectedTotal() async {
     if (!mounted) return;
@@ -155,7 +160,10 @@ class _CartScreenState extends State<CartScreen> {
           params: {'p_product_ids': _viewAsChecked.toList()});
       final m = (raw is List ? raw.first : raw) as Map;
       if (mounted) {
-        setState(() => _selectedTotalDisplay = (m['total_display'] ?? '').toString());
+        setState(() {
+          _selectedTotalDisplay = (m['subtotal_display'] ?? '').toString();
+          _selectedSubtotalLine = (m['subtotal_line'] ?? '').toString();
+        });
       }
     } catch (_) {}
   }
@@ -626,6 +634,7 @@ class _CartScreenState extends State<CartScreen> {
                               cart: cart,
                               onPlaceOrder: _placeOrder,
                               selectedTotal: selectedTotal,
+                              selectedSubtotalLine: _selectedSubtotalLine,
                               availabilityBlocked: blocked,
                             ),
                           ),
@@ -649,7 +658,6 @@ class _CartScreenState extends State<CartScreen> {
               child: _ItemList(
                 cart: cart,
                 externalSearchQuery: widget.externalSearchQuery,
-                showBreakdown: true,
                 viewAsChecked: cart.isViewAs ? _viewAsChecked : null,
                 onViewAsToggle: cart.isViewAs ? _toggleViewAsChecked : null,
                 lineAvailability: _lineAvailability,
@@ -659,6 +667,7 @@ class _CartScreenState extends State<CartScreen> {
               cart: cart,
               onPlaceOrder: _placeOrder,
               selectedTotal: selectedTotal,
+              selectedSubtotalLine: _selectedSubtotalLine,
               availabilityBlocked: blocked,
             ),
           ],
@@ -837,7 +846,6 @@ int _editDistance(String a, String b) {
 class _ItemList extends StatefulWidget {
   final CartModel cart;
   final String? externalSearchQuery;
-  final bool showBreakdown;
   // CHANGE #324: ViewAs checkbox state — null means not ViewAs (show X button).
   final Set<String>? viewAsChecked;
   final void Function(String productId)? onViewAsToggle;
@@ -848,7 +856,6 @@ class _ItemList extends StatefulWidget {
   const _ItemList({
     required this.cart,
     this.externalSearchQuery,
-    this.showBreakdown = false,
     this.viewAsChecked,
     this.onViewAsToggle,
     this.lineAvailability = const {},
@@ -912,10 +919,8 @@ class _ItemListState extends State<_ItemList> {
 
     final removed = widget.cart.adminRemovedLines;
     final hasRemoved = removed.isNotEmpty && !searchActive;
-    final showBreakdown = widget.showBreakdown && !searchActive;
 
     int afterCount = 0;
-    if (showBreakdown) afterCount += 2;
     if (hasRemoved) {
       afterCount += 1;
       if (_showRemoved) afterCount += removed.length;
@@ -946,12 +951,6 @@ class _ItemListState extends State<_ItemList> {
         }
 
         int extra = i - filtered.length;
-
-        if (showBreakdown) {
-          if (extra == 0) return const SizedBox(height: 4);
-          if (extra == 1) return _BillingBreakdownSection(cart: widget.cart);
-          extra -= 2;
-        }
 
         if (hasRemoved) {
           if (extra == 0) {
@@ -999,7 +998,6 @@ class _CartItemCard extends StatelessWidget {
     // CHANGE #553 — the line's availability is whatever cart_availability()
     // said about this product_id. Nothing here re-derives it.
     final av = availability;
-    final discPct = cart.discountPct; // #559: server-decided
 
     // Parse scheme "X+Y" for free-qty calculation
     final schemeParts = p.scheme.split('+');
@@ -1214,28 +1212,23 @@ class _CartItemCard extends StatelessWidget {
 
             const SizedBox(height: 10),
 
-            // ── BOTTOM ROW: MRP/price/GST (left) | qty selector (right) ──
+            // ── BOTTOM ROW: line price (left) | qty selector (right) ──
+            //
+            // CHANGE #615 — one price, one source. The struck-through MRP, the
+            // black sale price beneath it and the "N% GST (₹x input credit)"
+            // badge are all gone: there is no sale price, no discount and no
+            // GST in the cart any more, so a second number here could only
+            // ever be a number the backend never sent.
             Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                // Left: struck MRP, sale price, GST badge
+                // Left: the line total and how it was reached — both printed
+                // verbatim from cart_render(). Nothing multiplied in Dart.
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (p.mrp > 0 && discPct > 0)
-                      Text(
-                        // #582 — 'MRP ' prefix and the amount both from cart_render()
-                        '${cart.label('mrp_prefix')}${line.ds('mrp_display')}',
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: Color(0xFF9CA3AF),
-                          decoration: TextDecoration.lineThrough,
-                          decorationColor: Color(0xFF9CA3AF),
-                        ),
-                      ),
-                    if (discPct > 0) const SizedBox(height: 2),
                     Text(
-                      line.ds('sale_price_display'),
+                      line.ds('line_mrp_display'),
                       style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w800,
@@ -1243,28 +1236,16 @@ class _CartItemCard extends StatelessWidget {
                         height: 1.1,
                       ),
                     ),
-                    if (p.gstPercent > 0) ...[
-                      const SizedBox(height: 4),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFFEF9C3),
-                          borderRadius: BorderRadius.circular(4),
-                          border:
-                              Border.all(color: const Color(0xFFFDE047)),
-                        ),
-                        child: Text(
-                          // #582 — the whole badge is one backend string.
-                          '${line.ds('gst_label')} (${line.ds('gst_credit_display')} input credit)',
-                          style: const TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w700,
-                            color: Color(0xFF854D0E),
-                          ),
-                        ),
+                    const SizedBox(height: 3),
+                    Text(
+                      // "4 × ₹153.30" — the backend's own wording.
+                      line.ds('qty_label'),
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: Color(0xFF6B7280),
+                        height: 1.1,
                       ),
-                    ],
+                    ),
                   ],
                 ),
                 const Spacer(),
@@ -1291,9 +1272,19 @@ class _CartItemCard extends StatelessWidget {
                       ),
                       const SizedBox(height: 4),
                     ],
+                    // CHANGE #615 — the stepper shows cart.quantityOf(), which
+                    // is the user's own unsent tap when there is one and the
+                    // server's number otherwise. This used to pass
+                    // line.quantity — the SERVER quantity — so #610's
+                    // optimistic echo and 300ms debounce were built but never
+                    // seen HERE: every tap on the cart screen sat unchanged
+                    // until the RPC came back, which is the lag being
+                    // reported. The product card already read quantityOf(),
+                    // which is why the catalog stepper felt instant and this
+                    // one did not.
                     _CartStepper(
                       product: p,
-                      quantity: line.quantity,
+                      quantity: cart.quantityOf(p.id),
                       cart: cart,
                     ),
                   ],
@@ -1668,91 +1659,6 @@ class _RemovedItemCard extends StatelessWidget {
   }
 }
 
-// ─── Billing breakdown section (scrolls with products) ───────────────────────
-
-class _BillingBreakdownSection extends StatelessWidget {
-  final CartModel cart;
-  const _BillingBreakdownSection({required this.cart});
-
-  @override
-  Widget build(BuildContext context) {
-    // CHANGE #559: percentage, discount and delivery fee all come from
-    // cart_state() — no tier threshold is evaluated in Dart.
-    // #582 — this block used to end with
-    //     gstAmt = cart.netPayable - deliveryFee - netTaxable
-    // deriving GST by subtraction. cart_render() reports it directly.
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 4),
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-        boxShadow: const [
-          BoxShadow(
-              color: Color(0x06000000), blurRadius: 4, offset: Offset(0, 1)),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const Text(
-            'Price Breakdown',
-            style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                color: Color(0xFF6B7280),
-                letterSpacing: 0.3),
-          ),
-          const SizedBox(height: 10),
-          // CHANGE #582 — every figure and label below is printed from
-          // cart_render(). No rupees(), no percentage string built in Dart,
-          // and no 'FREE' ternary: the backend words that too.
-          _bRow(cart.label('net_total'), cart.rs('mrp_total_display')),
-          const SizedBox(height: 6),
-          _bRow(
-            cart.rs('discount_label'),
-            '− ${cart.rs('discount_display')}',
-            valueColor: const Color(0xFF16A34A),
-          ),
-          const SizedBox(height: 6),
-          _bRow(
-            'GST Input Credit',
-            cart.rs('gst_total_display'),
-            valueColor: const Color(0xFFD97706),
-          ),
-          const SizedBox(height: 6),
-          _bRow(
-            'Delivery Fee',
-            cart.rs('delivery_fee_display'),
-            valueColor: cart.render['is_delivery_free'] == true
-                ? const Color(0xFF16A34A) : null,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _bRow(String label, String value, {Color? valueColor}) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(label,
-            style: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-                color: Color(0xFF374151))),
-        Text(value,
-            style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-                color: valueColor ?? const Color(0xFF374151))),
-      ],
-    );
-  }
-}
-
 // Returns a short gate message when the user cannot place orders, null when they can.
 // Pass viewAs when inside a ViewAs session to gate on the impersonated customer's approval.
 // orderHoursClosedLabel does NOT apply to ViewAs orders — admin-placed orders
@@ -1780,12 +1686,17 @@ class _CheckoutBar extends StatelessWidget {
   // CHANGE #324: when ViewAs, show selected-items total instead of full cart total.
   final String? selectedTotal;
 
+  /// #615 — the caption that goes with [selectedTotal], formatted by
+  /// cart_selected_total(). Empty outside View As.
+  final String selectedSubtotalLine;
+
   /// CHANGE #553 — true while cart_availability() reports a blocking_label.
   final bool availabilityBlocked;
   const _CheckoutBar({
     required this.cart,
     required this.onPlaceOrder,
     this.selectedTotal,
+    this.selectedSubtotalLine = '',
     this.availabilityBlocked = false,
   });
 
@@ -1813,32 +1724,45 @@ class _CheckoutBar extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // Pinned Net Payable row
+                // CHANGE #615 — the whole footer is two backend strings: the
+                // subtotal and the line that explains it ("8 items • MRP worth
+                // ₹6,685.25"). Both arrive formatted from cart_render(); the
+                // label, the counts and the amount are never assembled here.
+                // In View As the same two strings come from
+                // cart_selected_total() for the ticked lines only.
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
-                    Text(
-                      selectedTotal != null ? 'Selected Total' : 'Net Payable Amount',
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                        color: Color(0xFF111827),
+                    Expanded(
+                      child: Text(
+                        selectedTotal != null
+                            ? selectedSubtotalLine
+                            : cart.rs('subtotal_line'),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                          color: Color(0xFF6B7280),
+                        ),
                       ),
                     ),
+                    const SizedBox(width: 10),
                     Text(
                       selectedTotal != null
                           ? selectedTotal!
-                          : cart.rs('net_payable_display'),
+                          : cart.rs('subtotal_display'),
                       style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
                         color: Color(0xFF111827),
                       ),
                     ),
                   ],
                 ),
                 const SizedBox(height: 12),
-                // View bill + Make Payment (auth-gated)
+                // Place Order (auth-gated)
                 Builder(builder: (ctx) {
                   final auth = UserState.of(ctx);
                   final viewAsNotifier = ViewAsState.of(ctx);
@@ -1867,28 +1791,11 @@ class _CheckoutBar extends StatelessWidget {
                         fontSize: 10.5,
                         logTag: 'c611_checkout_seller_mobile',
                       ),
+                      // CHANGE #615 — "View bill" and the sheet it opened are
+                      // gone. There is no breakdown left to open: the bill IS
+                      // the subtotal printed above.
                       Row(
                         children: [
-                          GestureDetector(
-                            onTap: () => _showBill(context),
-                            child: const Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  'View bill',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: Color(0xFF1D4ED8),
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                SizedBox(width: 2),
-                                Icon(Icons.keyboard_arrow_up,
-                                    size: 14, color: Color(0xFF1D4ED8)),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 14),
                           Expanded(
                             child: GestureDetector(
                               onTap: onPlaceOrder,
@@ -1941,652 +1848,6 @@ class _CheckoutBar extends StatelessWidget {
     );
   }
 
-  void _showBill(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) {
-        final h = MediaQuery.of(ctx).size.height;
-        return ConstrainedBox(
-          constraints: BoxConstraints(maxHeight: h * 0.92),
-          child: _GstBillView(cart: cart),
-        );
-      },
-    );
-  }
-}
-
-// ─── GST-categorized bill view ────────────────────────────────────────────────
-
-class _GstBillView extends StatelessWidget {
-  final CartModel cart;
-  const _GstBillView({required this.cart});
-
-  static const String _estimateNote =
-      'Please note that all prices, quantities, taxes, shipping charges, and '
-      'other details shown on the website are estimates only. We will send you '
-      'the actual bill when we process your order, which will include the final '
-      'amount along with other details such as batch number, expiry date, and '
-      'any additional information. The final invoice will be considered the '
-      'binding amount.';
-
-  @override
-  Widget build(BuildContext context) {
-    final lines = cart.lines;
-
-    final discPct = cart.discountPct; // #559: server-decided
-
-    // Group lines by GST rate, ascending
-    final Map<int, List<CartLine>> groups = {};
-    for (final l in lines) {
-      groups.putIfAbsent(l.product.gstPercent.toInt(), () => []).add(l);
-    }
-    final sortedRates = groups.keys.toList()..sort();
-
-    // CHANGE #582 — the per-rate tax ladder is cart_render()'s job now. This
-    // block used to recompute net -> discount -> taxable -> gst -> payable for
-    // every rate, a third copy of the same arithmetic in this one file.
-    final Map<int, Map<String, dynamic>> backendGroups = {
-      for (final g in cart.gstGroups)
-        ((g['rate'] as num?)?.toInt() ?? 0): g,
-    };
-    final deliveryFee = cart.deliveryFee; // #559: server-decided
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        // ── Fixed header ──
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 14, 8, 10),
-          child: Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  'Bill Details',
-                  style: TextStyle(
-                    fontSize: 17,
-                    fontWeight: FontWeight.w800,
-                    color: Color(0xFF111827),
-                  ),
-                ),
-              ),
-              IconButton(
-                icon: const Icon(Icons.close, size: 20),
-                color: const Color(0xFF6B7280),
-                onPressed: () => Navigator.of(context).pop(),
-              ),
-            ],
-          ),
-        ),
-        if (discPct > 0)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
-            child: Text(
-              // #582 — one sentence, worded by the backend. It used to be two
-              // adjacent Dart literals concatenated around a rupees() call.
-              cart.rs('discount_applied_note'),
-              style: const TextStyle(
-                fontSize: 12,
-                color: Color(0xFF16A34A),
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ),
-        const Divider(height: 1, color: Color(0xFFE5E7EB)),
-
-        // ── Scrollable body ──
-        Expanded(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 36),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // GST groups in ascending order
-                for (final rate in sortedRates) ...[
-                  _GstGroup(
-                    rate: rate,
-                    lines: groups[rate]!,
-                    discPct: discPct,
-                    group: backendGroups[rate] ?? const {},
-                  ),
-                  const SizedBox(height: 16),
-                ],
-
-                // Summary card
-                Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0xFFE5E7EB)),
-                    boxShadow: const [
-                      BoxShadow(
-                        color: Color(0x08000000),
-                        blurRadius: 6,
-                        offset: Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      // Header bar
-                      Container(
-                        padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
-                        decoration: const BoxDecoration(
-                          color: Color(0xFFF9FAFB),
-                          borderRadius: BorderRadius.only(
-                            topLeft: Radius.circular(11),
-                            topRight: Radius.circular(11),
-                          ),
-                        ),
-                        child: const Text(
-                          'ORDER SUMMARY',
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w800,
-                            color: Color(0xFF6B7280),
-                            letterSpacing: 0.8,
-                          ),
-                        ),
-                      ),
-                      const Divider(height: 1, color: Color(0xFFE5E7EB)),
-
-                      // Per-GST-group rows
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(14, 10, 14, 4),
-                        child: Column(
-                          children: [
-                            for (final rate in sortedRates)
-                              Padding(
-                                padding: const EdgeInsets.only(bottom: 7),
-                                child: Row(
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(
-                                              horizontal: 6, vertical: 2),
-                                          decoration: BoxDecoration(
-                                            color: const Color(0xFFF0FDF4),
-                                            borderRadius:
-                                                BorderRadius.circular(4),
-                                            border: Border.all(
-                                                color:
-                                                    const Color(0xFFBBF7D0)),
-                                          ),
-                                          child: Text(
-                                            '$rate% GST',
-                                            style: const TextStyle(
-                                              fontSize: 9.5,
-                                              fontWeight: FontWeight.w700,
-                                              color: Color(0xFF15803D),
-                                            ),
-                                          ),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        const Text(
-                                          'products',
-                                          style: TextStyle(
-                                            fontSize: 12,
-                                            color: Color(0xFF6B7280),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    Text(
-                                      (backendGroups[rate]?['final_payable_display'] ?? '')
-                                          .toString(),
-                                      style: const TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w600,
-                                        color: Color(0xFF374151),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-
-                            // Delivery Fee row
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 7),
-                              child: Row(
-                                mainAxisAlignment:
-                                    MainAxisAlignment.spaceBetween,
-                                children: [
-                                  const Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Icon(Icons.local_shipping_outlined,
-                                          size: 13, color: Color(0xFF9CA3AF)),
-                                      SizedBox(width: 6),
-                                      Text(
-                                        'Delivery Fee',
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          color: Color(0xFF6B7280),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  Text(
-                                    deliveryFee > 0
-                                        ? cart.rs('delivery_fee_display')
-                                        : 'FREE',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w600,
-                                      color: deliveryFee == 0
-                                          ? const Color(0xFF16A34A)
-                                          : const Color(0xFF374151),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-
-                      const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 14),
-                        child: Divider(height: 1, color: Color(0xFFE5E7EB)),
-                      ),
-
-                      // Net Payable Amount — prominent highlighted row
-                      Container(
-                        margin: const EdgeInsets.all(12),
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 14),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFECFDF5),
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: const Color(0xFFBBF7D0)),
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            const Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'NET PAYABLE AMOUNT',
-                                  style: TextStyle(
-                                    fontSize: 9.5,
-                                    fontWeight: FontWeight.w700,
-                                    color: Color(0xFF15803D),
-                                    letterSpacing: 0.6,
-                                  ),
-                                ),
-                                SizedBox(height: 3),
-                                Text(
-                                  'incl. GST + delivery',
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    color: Color(0xFF6EE7B7),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            Text(
-                              cart.rs('net_payable_display'),
-                              style: const TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.w900,
-                                color: Color(0xFF065F46),
-                                height: 1,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 16),
-
-                // Estimate note box
-                Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFFFBEB),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: const Color(0xFFD1D5DB)),
-                  ),
-                  child: const Text(
-                    _estimateNote,
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: Color(0xFF6B7280),
-                      height: 1.55,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-// ─── GST group card (table layout) ───────────────────────────────────────────
-
-class _GstGroup extends StatelessWidget {
-  final int rate;
-  final List<CartLine> lines;
-  final double discPct;
-  /// CHANGE #582 — the backend's group for this rate, already totalled and
-  /// worded by cart_render(). The card prints it; it no longer runs its own
-  /// tax ladder (net -> discount -> taxable -> gst -> payable).
-  final Map<String, dynamic> group;
-  const _GstGroup(
-      {required this.rate, required this.lines, required this.discPct,
-       this.group = const {}});
-
-  String gs(String key) => (group[key] ?? '').toString();
-
-  static const double _mrpW = 62.0;
-  static const double _qtyW = 30.0;
-  static const double _amtW = 74.0;
-  static const double _gap = 8.0;
-
-  @override
-  Widget build(BuildContext context) {
-
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x08000000),
-            blurRadius: 6,
-            offset: Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // ── Group header bar ──────────────────────────────────────────
-          Container(
-            padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
-            decoration: const BoxDecoration(
-              color: Color(0xFFF0FDF4),
-              borderRadius: BorderRadius.only(
-                topLeft: Radius.circular(11),
-                topRight: Radius.circular(11),
-              ),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF16A34A),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Text(
-                    'GST $rate%',
-                    style: const TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w800,
-                      color: Colors.white,
-                      letterSpacing: 0.3,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Text(
-                  '${lines.length} product${lines.length == 1 ? '' : 's'}',
-                  style: const TextStyle(
-                    fontSize: 11,
-                    color: Color(0xFF6B7280),
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          // ── Column header row ─────────────────────────────────────────
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-            child: Row(
-              children: [
-                const Expanded(
-                  child: Text(
-                    'PRODUCT',
-                    style: TextStyle(
-                      fontSize: 9.5,
-                      fontWeight: FontWeight.w700,
-                      color: Color(0xFF9CA3AF),
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                ),
-                SizedBox(
-                  width: _mrpW,
-                  child: const Text(
-                    'MRP',
-                    textAlign: TextAlign.right,
-                    style: TextStyle(
-                      fontSize: 9.5,
-                      fontWeight: FontWeight.w700,
-                      color: Color(0xFF9CA3AF),
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: _gap),
-                SizedBox(
-                  width: _qtyW,
-                  child: const Text(
-                    'QTY',
-                    textAlign: TextAlign.right,
-                    style: TextStyle(
-                      fontSize: 9.5,
-                      fontWeight: FontWeight.w700,
-                      color: Color(0xFF9CA3AF),
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: _gap),
-                SizedBox(
-                  width: _amtW,
-                  child: const Text(
-                    'AMOUNT',
-                    textAlign: TextAlign.right,
-                    style: TextStyle(
-                      fontSize: 9.5,
-                      fontWeight: FontWeight.w700,
-                      color: Color(0xFF9CA3AF),
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 12),
-            child: Divider(height: 1, color: Color(0xFFE5E7EB)),
-          ),
-
-          // ── Product rows (zebra-striped, single-line names) ───────────
-          for (int i = 0; i < lines.length; i++)
-            Container(
-              decoration: BoxDecoration(
-                color: i.isEven ? const Color(0xFFF9FAFB) : Colors.white,
-                border: i < lines.length - 1
-                    ? const Border(
-                        bottom: BorderSide(color: Color(0xFFF0F0F0)))
-                    : null,
-              ),
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  Expanded(
-                    child: Text(
-                      lines[i].product.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: Color(0xFF111827),
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ),
-                  SizedBox(
-                    width: _mrpW,
-                    child: Text(
-                      lines[i].ds('mrp_display'),
-                      textAlign: TextAlign.right,
-                      style: const TextStyle(
-                        fontSize: 11.5,
-                        color: Color(0xFF6B7280),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: _gap),
-                  SizedBox(
-                    width: _qtyW,
-                    child: Text(
-                      '${lines[i].quantity}',
-                      textAlign: TextAlign.right,
-                      style: const TextStyle(
-                        fontSize: 11.5,
-                        color: Color(0xFF6B7280),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: _gap),
-                  SizedBox(
-                    width: _amtW,
-                    child: Text(
-                      lines[i].ds('line_mrp_display'),
-                      textAlign: TextAlign.right,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: Color(0xFF111827),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
-          // ── Group totals ──────────────────────────────────────────────
-          const Padding(
-            padding: EdgeInsets.fromLTRB(12, 8, 12, 0),
-            child: Divider(height: 1, color: Color(0xFFE5E7EB)),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-            child: Column(
-              children: [
-                _totRow('Net Amount', gs('net_amount_display')),
-                _totRow(
-                  gs('discount_label'),
-                  '− ${gs('discount_display')}',
-                  valueColor: const Color(0xFF16A34A),
-                ),
-                _totRow('Net Taxable Amount', gs('net_taxable_display'),
-                    bold: true),
-                _totRow(
-                  gs('rate_label'),
-                  '+ ${gs('gst_display')}',
-                  valueColor: const Color(0xFFD97706),
-                ),
-              ],
-            ),
-          ),
-
-          // ── Final Payable Amount (highlighted) ────────────────────────
-          Container(
-            margin: const EdgeInsets.all(12),
-            padding:
-                const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-            decoration: BoxDecoration(
-              color: const Color(0xFFECFDF5),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: const Color(0xFFBBF7D0)),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text(
-                  'Final Payable Amount',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    color: Color(0xFF065F46),
-                  ),
-                ),
-                Text(
-                  gs('final_payable_display'),
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w800,
-                    color: Color(0xFF065F46),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _totRow(String label, String value,
-      {bool bold = false, Color? valueColor}) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: bold ? FontWeight.w600 : FontWeight.w400,
-              color: bold
-                  ? const Color(0xFF111827)
-                  : const Color(0xFF6B7280),
-            ),
-          ),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: bold ? FontWeight.w700 : FontWeight.w500,
-              color: valueColor ??
-                  (bold
-                      ? const Color(0xFF111827)
-                      : const Color(0xFF374151)),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 }
 
 // ─── Order summary sidebar (wide layout) ─────────────────────────────────────
@@ -2597,18 +1858,22 @@ class _OrderSummaryPanel extends StatelessWidget {
   // CHANGE #324: when ViewAs, show selected-items total instead of full cart total.
   final String? selectedTotal;
 
+  /// #615 — the caption that goes with [selectedTotal], formatted by
+  /// cart_selected_total(). Empty outside View As.
+  final String selectedSubtotalLine;
+
   /// CHANGE #553 — true while cart_availability() reports a blocking_label.
   final bool availabilityBlocked;
   const _OrderSummaryPanel({
     required this.cart,
     required this.onPlaceOrder,
     this.selectedTotal,
+    this.selectedSubtotalLine = '',
     this.availabilityBlocked = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    final deliveryFee = cart.deliveryFee; // #559: server-decided
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -2627,58 +1892,35 @@ class _OrderSummaryPanel extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text(
-            'Bill details',
-            style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w800,
-                color: Color(0xFF111827)),
-          ),
-          const SizedBox(height: 16),
-          _row('Items',
-              '${cart.distinctItems} SKU${cart.distinctItems == 1 ? '' : 's'} · ${cart.totalUnits} packs'),
-          // CHANGE #582 — the GST line here used to be DERIVED BY SUBTRACTION:
-          //   cart.netPayable - deliveryFee - cart.mrpTotal * (1 - discPct/100)
-          // a second, independent GST calculation living in the same screen as
-          // the first. One server figure now feeds both.
-          _row(cart.label('net_total'), cart.rs('mrp_total_display')),
-          _row(
-            cart.rs('discount_label'),
-            '− ${cart.rs('discount_display')}',
-            valueColor: const Color(0xFF16A34A),
-          ),
-          _row(
-            'GST Input Credit',
-            cart.rs('gst_total_display'),
-            valueColor: const Color(0xFFD97706),
-          ),
-          _row(
-            'Delivery Fee',
-            cart.rs('delivery_fee_display'),
-            valueColor: cart.render['is_delivery_free'] == true
-                ? const Color(0xFF16A34A) : null,
-          ),
-          const Divider(height: 24),
-          _row(
-            selectedTotal != null ? 'Selected Total' : 'Net Payable Amount',
+          // CHANGE #615 — the sidebar is the same two backend strings as the
+          // narrow footer. The Items / Net Total / Discount / GST Input Credit
+          // / Delivery Fee ladder and the "View detailed bill →" dialog are
+          // gone: none of those figures exist in the payload any more, and the
+          // "Items" row was the app counting SKUs and packs and wording the
+          // plural itself.
+          Text(
             selectedTotal != null
-                ? selectedTotal!
-                : cart.rs('net_payable_display'),
-            bold: true,
-          ),
-          const SizedBox(height: 6),
-          GestureDetector(
-            onTap: () => _showBillDialog(context),
-            child: const Text(
-              'View detailed bill →',
-              style: TextStyle(
-                fontSize: 12,
-                color: Color(0xFF1D4ED8),
-                fontWeight: FontWeight.w600,
-              ),
+                ? selectedSubtotalLine
+                : cart.rs('subtotal_line'),
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+              color: Color(0xFF6B7280),
             ),
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 6),
+          Text(
+            selectedTotal != null
+                ? selectedTotal!
+                : cart.rs('subtotal_display'),
+            style: const TextStyle(
+              fontSize: 26,
+              fontWeight: FontWeight.w800,
+              color: Color(0xFF111827),
+              height: 1.1,
+            ),
+          ),
+          const SizedBox(height: 16),
           Builder(builder: (ctx) {
             final auth = UserState.of(ctx);
             final orderHours = OrderHoursState.of(ctx);
@@ -2739,106 +1981,16 @@ class _OrderSummaryPanel extends StatelessWidget {
             );
           }),
           const SizedBox(height: 12),
-          if (deliveryFee == 0)
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF0FDF4),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFFBBF7D0)),
-              ),
-              child: const Row(
-                children: [
-                  Icon(Icons.local_shipping_outlined,
-                      size: 15, color: Color(0xFF16A34A)),
-                  SizedBox(width: 7),
-                  Text(
-                    'Free delivery on this order',
-                    style: TextStyle(
-                        fontSize: 12,
-                        color: Color(0xFF15803D),
-                        fontWeight: FontWeight.w600),
-                  ),
-                ],
-              ),
-            )
-          else
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFFF7ED),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFFFED7AA)),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.local_shipping_outlined,
-                      size: 15, color: Color(0xFFEA580C)),
-                  const SizedBox(width: 7),
-                  Text(
-                    'Add ₹${(999 - cart.mrpTotal).ceil()} more for free delivery',
-                    style: const TextStyle(
-                        fontSize: 12,
-                        color: Color(0xFF9A3412),
-                        fontWeight: FontWeight.w600),
-                  ),
-                ],
-              ),
-            ),
-          const SizedBox(height: 8),
+          // CHANGE #615 — the free-delivery / "Add ₹N more for free
+          // delivery" pair is gone. There is no delivery fee in the payload,
+          // and that second banner hardcoded the ₹999 threshold and did the
+          // subtraction in Dart — a rule the backend no longer even has.
           const Text(
             'Net 30 credit terms apply',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _row(String label, String value,
-      {bool bold = false, Color? valueColor}) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label,
-              style: TextStyle(
-                fontSize: bold ? 15 : 13,
-                fontWeight: bold ? FontWeight.w700 : FontWeight.w400,
-                color: bold
-                    ? const Color(0xFF111827)
-                    : const Color(0xFF374151),
-              )),
-          Text(value,
-              style: TextStyle(
-                fontSize: bold ? 15 : 13,
-                fontWeight: bold ? FontWeight.w700 : FontWeight.w400,
-                color: valueColor ??
-                    (bold
-                        ? const Color(0xFF111827)
-                        : const Color(0xFF374151)),
-              )),
-        ],
-      ),
-    );
-  }
-
-  void _showBillDialog(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (_) => Dialog(
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        backgroundColor: Colors.white,
-        child: SizedBox(
-          width: 620,
-          height: MediaQuery.of(context).size.height * 0.85,
-          child: _GstBillView(cart: cart),
-        ),
       ),
     );
   }

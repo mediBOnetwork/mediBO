@@ -52,17 +52,21 @@ void main() {
     expect(cart.lines, isEmpty);
   });
 
-  test('Totals include 12% GST and checkout empties the cart', () {
+  test('CHANGE #615 — the cart is one number and it is the server\'s', () {
+    // GST, discount and sale price are gone from the payload, so there is no
+    // 12% for the client to add. With no server cart adopted, every money
+    // getter must read 0 rather than fold something out of the local lines —
+    // a non-zero here would mean the app had priced the cart itself.
     final cart = CartModel();
-    cart.add(sample(price: 100, moq: 1)); // qty 1, subtotal 100
 
-    expect(cart.subtotal, 100);
-    expect(cart.totalGst, closeTo(12, 0.001));
-    expect(cart.grandTotal, closeTo(112, 0.001));
-
-    final order = cart.checkout();
-    expect(order.lines, hasLength(1));
-    expect(cart.lines, isEmpty);
+    expect(cart.subtotal, 0);
+    expect(cart.mrpTotal, 0);
+    expect(cart.grandTotal, 0);
+    expect(cart.netPayable, 0);
+    // No render block until the server sends one; strings read '', never a
+    // locally formatted fallback.
+    expect(cart.rs('subtotal_display'), '');
+    expect(cart.rs('subtotal_line'), '');
   });
 
   test('rupees() formats with Indian digit grouping', () {

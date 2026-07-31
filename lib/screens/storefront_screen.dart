@@ -1759,6 +1759,8 @@ class _Footer extends StatelessWidget {
                   child: LayoutBuilder(
                     builder: (ctx, c) {
                       final wide = c.maxWidth >= 600;
+                      // CHANGE #619 — the partner's drug licence numbers used
+                      // to sit here. Partner details belong on About only.
                       if (wide) {
                         return Row(
                           children: [
@@ -1767,13 +1769,6 @@ class _Footer extends StatelessWidget {
                               style: TextStyle(
                                   color: Colors.white.withValues(alpha: 0.6),
                                   fontSize: 12),
-                            ),
-                            const Spacer(),
-                            Text(
-                              'DL 20B: WLF20B2025CT000337  ·  DL 21B: WLF21B2025CT000337',
-                              style: TextStyle(
-                                  color: Colors.white.withValues(alpha: 0.45),
-                                  fontSize: 11),
                             ),
                           ],
                         );
@@ -1786,14 +1781,6 @@ class _Footer extends StatelessWidget {
                             style: TextStyle(
                                 color: Colors.white.withValues(alpha: 0.6),
                                 fontSize: 12),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'DL 20B: WLF20B2025CT000337  ·  DL 21B: WLF21B2025CT000337',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                                color: Colors.white.withValues(alpha: 0.45),
-                                fontSize: 11),
                           ),
                         ],
                       );

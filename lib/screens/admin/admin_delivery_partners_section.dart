@@ -1,7 +1,18 @@
-// lib/screens/admin/admin_delivery_partners_section.dart — CHANGE #630 (PART A)
+// lib/screens/admin/admin_delivery_partners_section.dart — CHANGE #630,
+// moved onto its own tab by #632 (PART B)
 //
-// Delivery partners, inside the Delivery tab: registrations awaiting approval,
-// and the active roster for the zone on screen.
+// Delivery partners: registrations awaiting approval, and the active roster
+// for the zone on screen. As of #632 this lives on the "Delivery Partner" tab
+// (admin_delivery_partner_tab.dart), not inside the assignment-only Delivery
+// tab.
+//
+// B3 — EDITING A PARTNER. The account id never changes: admin_update_delivery_
+// partner() only ever UPDATEs the existing row, so runs/deliveries/earnings
+// stay attached. Blank fields mean "leave unchanged" — the backend itself
+// coalesces a blank/null input onto the existing value, so the edit sheet only
+// sends what the admin actually typed. identity_taken is printed verbatim
+// (title/message/hint); "Who has this number?" calls identity_owner_lookup()
+// so the admin can see which account already holds it before freeing it up.
 //
 // A1 — admin_delivery_partners(p_zone). NOTE the asymmetry, which is the
 // backend's and is deliberate: `partners` (active) is zone-filtered, `pending`
@@ -69,7 +80,10 @@ class AdminDeliveryPartnersSectionState
     extends State<AdminDeliveryPartnersSection> {
   bool _loading = true;
   bool _allowed = true;
-  bool _open = false;
+  // CHANGE #632: this section now lives on its own dedicated "Delivery
+  // Partner" tab rather than collapsed inside the Delivery (assignment) tab,
+  // so it opens expanded — there is no queue left to bury.
+  bool _open = true;
 
   String _zoneLabel = '';
   int? _zoneId;
@@ -160,6 +174,24 @@ class AdminDeliveryPartnersSectionState
         defaultZoneId: _zoneId,
         defaultZoneLabel: _zoneLabel,
       ),
+    );
+    if (saved == true) {
+      await _load();
+      await widget.onChanged();
+    }
+  }
+
+  /// B3 — the account id in [row] never changes; this only updates contact/ID
+  /// fields on the SAME row.
+  Future<void> _openEdit(Map<String, dynamic> row) async {
+    final saved = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => _EditPartnerSheet(row: row),
     );
     if (saved == true) {
       await _load();
@@ -421,6 +453,14 @@ class AdminDeliveryPartnersSectionState
             ),
           ],
           const Spacer(),
+          TextButton(
+            style: TextButton.styleFrom(
+              visualDensity: VisualDensity.compact,
+              foregroundColor: _kText,
+            ),
+            onPressed: () => _openEdit(p),
+            child: Text(_ui('dlv_edit'), style: const TextStyle(fontSize: 12)),
+          ),
           TextButton(
             style: TextButton.styleFrom(
               visualDensity: VisualDensity.compact,
@@ -689,6 +729,367 @@ class _ApproveSheetState extends State<_ApproveSheet> {
             ]),
           ),
         ]),
+      ),
+    );
+  }
+}
+
+// ── B3: edit a partner's contact/ID details ───────────────────────────────────
+
+class _EditPartnerSheet extends StatefulWidget {
+  final Map<String, dynamic> row;
+
+  const _EditPartnerSheet({required this.row});
+
+  @override
+  State<_EditPartnerSheet> createState() => _EditPartnerSheetState();
+}
+
+class _EditPartnerSheetState extends State<_EditPartnerSheet> {
+  final _nameCtrl = TextEditingController();
+  final _phoneCtrl = TextEditingController();
+  final _emailCtrl = TextEditingController();
+  final _vehicleCtrl = TextEditingController();
+  final _addressCtrl = TextEditingController();
+  final _cityCtrl = TextEditingController();
+  final _stateCtrl = TextEditingController();
+  final _idTypeCtrl = TextEditingController();
+  final _idNumberCtrl = TextEditingController();
+  bool _busy = false;
+
+  /// The backend's refusal, held verbatim.
+  String _errorTitle = '';
+  String _errorMessage = '';
+  String _errorHint = '';
+  bool _canLookup = false;
+
+  /// identity_owner_lookup()'s own answer, printed verbatim once fetched.
+  String _lookupMessage = '';
+  bool _lookupBusy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Only full_name/phone are on the active-roster row this sheet opened
+    // from; every other field starts blank, which the backend reads as "no
+    // change" — the admin only ever submits what they actually typed.
+    _nameCtrl.text = widget.row['full_name']?.toString() ?? '';
+    _phoneCtrl.text = widget.row['phone']?.toString() ?? '';
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _phoneCtrl.dispose();
+    _emailCtrl.dispose();
+    _vehicleCtrl.dispose();
+    _addressCtrl.dispose();
+    _cityCtrl.dispose();
+    _stateCtrl.dispose();
+    _idTypeCtrl.dispose();
+    _idNumberCtrl.dispose();
+    super.dispose();
+  }
+
+  String? _val(TextEditingController c) {
+    final t = c.text.trim();
+    return t.isEmpty ? null : t;
+  }
+
+  Future<void> _submit() async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _errorTitle = '';
+      _errorMessage = '';
+      _errorHint = '';
+      _canLookup = false;
+      _lookupMessage = '';
+    });
+    try {
+      final res = await Supabase.instance.client.rpc(
+        'admin_update_delivery_partner',
+        params: {
+          'p_partner_id': widget.row['partner_id']?.toString() ?? '',
+          'p_full_name': _val(_nameCtrl),
+          'p_phone': _val(_phoneCtrl),
+          'p_email': _val(_emailCtrl),
+          'p_vehicle_type': _val(_vehicleCtrl),
+          'p_address': _val(_addressCtrl),
+          'p_city': _val(_cityCtrl),
+          'p_state': _val(_stateCtrl),
+          'p_id_doc_type': _val(_idTypeCtrl),
+          'p_id_doc_number': _val(_idNumberCtrl),
+          'p_id_doc_path': null,
+        },
+      );
+      if (!mounted) return;
+      if (res is Map && res['ok'] == true) {
+        RenderLog.write('c632_partner_edited',
+            'changed=${(res['credentials_changed'] as List?)?.join(',') ?? ''}');
+        final msg = res['message']?.toString() ?? '';
+        Navigator.of(context).pop(true);
+        if (msg.isNotEmpty) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text(msg)));
+        }
+        return;
+      }
+      if (res is Map) {
+        final code = res['error']?.toString() ?? '';
+        RenderLog.write('c632_partner_edit_refused', code);
+        setState(() {
+          _errorTitle = res['title']?.toString() ?? '';
+          _errorMessage = res['message']?.toString() ?? '';
+          _errorHint = res['hint']?.toString() ?? '';
+          // The lookup only makes sense for the refusal it exists for, and
+          // only when there is something to look up.
+          _canLookup = code == 'identity_taken' &&
+              (_val(_phoneCtrl) != null || _val(_emailCtrl) != null);
+        });
+      }
+    } catch (_) {
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// B3 — "Who has this number?" reads identity_owner_lookup() verbatim; it
+  /// does not decide anything, it only shows the admin what the backend found
+  /// so they know which account to free the identity from first.
+  Future<void> _lookup(String identity) async {
+    if (_lookupBusy || identity.isEmpty) return;
+    setState(() {
+      _lookupBusy = true;
+      _lookupMessage = '';
+    });
+    try {
+      final res = await Supabase.instance.client
+          .rpc('identity_owner_lookup', params: {'p_identity': identity});
+      if (!mounted) return;
+      if (res is Map) {
+        final ownerName = res['owner_name']?.toString() ?? '';
+        final typeLabel = res['type_label']?.toString() ?? '';
+        final message = res['message']?.toString() ?? '';
+        setState(() => _lookupMessage = [
+              message,
+              [ownerName, typeLabel].where((x) => x.isNotEmpty).join(' · '),
+            ].where((x) => x.isNotEmpty).join(' — '));
+      }
+    } catch (_) {
+    } finally {
+      if (mounted) setState(() => _lookupBusy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.75,
+        minChildSize: 0.4,
+        maxChildSize: 0.95,
+        builder: (context, ctrl) => ListView(
+          controller: ctrl,
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+          children: [
+            Center(
+              child: Container(
+                width: 40, height: 4,
+                decoration: BoxDecoration(
+                  color: _kBorder,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(_ui('dlv_edit_partner_title'),
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: _kText)),
+            const SizedBox(height: 14),
+
+            // The refusal, printed exactly as it arrived.
+            if (_errorMessage.isNotEmpty || _errorTitle.isNotEmpty) ...[
+              Container(
+                padding: const EdgeInsets.all(11),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFBE9E7),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  if (_errorTitle.isNotEmpty)
+                    Text(_errorTitle,
+                        style: TextStyle(
+                            fontSize: 13, fontWeight: FontWeight.w800, color: _kBad)),
+                  if (_errorMessage.isNotEmpty) ...[
+                    const SizedBox(height: 3),
+                    Text(_errorMessage,
+                        style: TextStyle(
+                            fontSize: 12.5, fontWeight: FontWeight.w600, color: _kBad)),
+                  ],
+                  if (_errorHint.isNotEmpty) ...[
+                    const SizedBox(height: 3),
+                    Text(_errorHint, style: TextStyle(fontSize: 12, color: _kBad)),
+                  ],
+                  if (_canLookup) ...[
+                    const SizedBox(height: 8),
+                    Row(children: [
+                      if (_val(_phoneCtrl) != null)
+                        OutlinedButton(
+                          style: OutlinedButton.styleFrom(
+                            visualDensity: VisualDensity.compact,
+                            side: BorderSide(color: _kBad),
+                            foregroundColor: _kBad,
+                          ),
+                          onPressed: _lookupBusy ? null : () => _lookup(_val(_phoneCtrl)!),
+                          child: Text(_ui('dlv_who_has_this'),
+                              style: const TextStyle(fontSize: 12)),
+                        ),
+                      if (_val(_phoneCtrl) != null && _val(_emailCtrl) != null)
+                        const SizedBox(width: 8),
+                      if (_val(_emailCtrl) != null)
+                        OutlinedButton(
+                          style: OutlinedButton.styleFrom(
+                            visualDensity: VisualDensity.compact,
+                            side: BorderSide(color: _kBad),
+                            foregroundColor: _kBad,
+                          ),
+                          onPressed: _lookupBusy ? null : () => _lookup(_val(_emailCtrl)!),
+                          child: Text(_ui('dlv_who_has_this'),
+                              style: const TextStyle(fontSize: 12)),
+                        ),
+                    ]),
+                  ],
+                  if (_lookupBusy) ...[
+                    const SizedBox(height: 8),
+                    const SizedBox(
+                        width: 16, height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2)),
+                  ],
+                  if (_lookupMessage.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(_lookupMessage,
+                        style: TextStyle(
+                            fontSize: 12.5, fontWeight: FontWeight.w600, color: _kBad)),
+                  ],
+                ]),
+              ),
+              const SizedBox(height: 14),
+            ],
+
+            TextField(
+              controller: _nameCtrl,
+              decoration: InputDecoration(
+                labelText: _ui('dlv_rider_name'),
+                border: const OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _phoneCtrl,
+              keyboardType: TextInputType.phone,
+              decoration: InputDecoration(
+                labelText: _ui('dlv_rider_phone'),
+                border: const OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _emailCtrl,
+              keyboardType: TextInputType.emailAddress,
+              decoration: InputDecoration(
+                labelText: _ui('dlv_reg_email'),
+                border: const OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _vehicleCtrl,
+              decoration: InputDecoration(
+                labelText: _ui('dlv_rider_vehicle'),
+                border: const OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _addressCtrl,
+              decoration: InputDecoration(
+                labelText: _ui('dlv_reg_address'),
+                border: const OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Row(children: [
+              Expanded(
+                child: TextField(
+                  controller: _cityCtrl,
+                  decoration: InputDecoration(
+                    labelText: _ui('dlv_reg_city'),
+                    border: const OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: TextField(
+                  controller: _stateCtrl,
+                  decoration: InputDecoration(
+                    labelText: _ui('dlv_reg_state'),
+                    border: const OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                ),
+              ),
+            ]),
+            const SizedBox(height: 10),
+            Row(children: [
+              Expanded(
+                child: TextField(
+                  controller: _idTypeCtrl,
+                  decoration: InputDecoration(
+                    labelText: _ui('dlv_reg_id_type'),
+                    border: const OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: TextField(
+                  controller: _idNumberCtrl,
+                  decoration: InputDecoration(
+                    labelText: _ui('dlv_reg_id_number'),
+                    border: const OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                ),
+              ),
+            ]),
+            const SizedBox(height: 16),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _kGreen,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+              onPressed: _busy ? null : _submit,
+              child: _busy
+                  ? const SizedBox(
+                      width: 18, height: 18,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.white))
+                  : Text(_ui('dlv_save_changes'),
+                      style: const TextStyle(fontWeight: FontWeight.w700)),
+            ),
+          ],
+        ),
       ),
     );
   }

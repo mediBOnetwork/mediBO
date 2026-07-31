@@ -1,16 +1,19 @@
-// lib/screens/admin/admin_delivery_tab.dart — CHANGE #629 (PART A)
+// lib/screens/admin/admin_delivery_tab.dart — CHANGE #629, split by #632 (PART A)
 //
 // The admin Delivery tab, sixth in Fulfillment beside Supplier Shop / Warehouse
-// / Bag / Pack / Disputes.
+// / Bag / Pack / Disputes. As of #632 this tab is ASSIGNMENT ONLY: the order
+// queue, the eligibility-gated Assign button, and reassign. Everything about
+// partners themselves — approval, the active roster, editing a partner,
+// performance, missing locations — moved to the new "Delivery Partner" tab
+// (admin_delivery_partner_tab.dart, seventh in Fulfillment).
 //
 // A2 — IT BUILDS NO PICKERS. The date comes from AdminDateScope (the ONE admin
 // date picker, #545) and the zone from AdminZoneScope (#609). Both are passed
-// EXPLICITLY on every call in this file, because admin_delivery_queue() and
-// admin_delivery_dashboard() each expose a (p_date) overload and a
-// (p_date, p_zone) overload — sending both keys is what selects the zone-aware
-// one. Sibling fulfillment RPCs omit p_date deliberately (they default to
-// admin_active_date()); these two do not, and the spec is explicit: both
-// filters, every call.
+// EXPLICITLY on every call in this file, because admin_delivery_queue() exposes
+// a (p_date) overload and a (p_date, p_zone) overload — sending both keys is
+// what selects the zone-aware one. Sibling fulfillment RPCs omit p_date
+// deliberately (they default to admin_active_date()); this one does not, and
+// the spec is explicit: both filters, every call.
 //
 // A3 — zone_label is printed in the header so it is never ambiguous which zone
 // is on screen. Zones behave as separate shops and must never mix.
@@ -24,8 +27,8 @@
 // the message that must never be swallowed.
 //
 // Nothing on this screen is counted, sorted, coloured or phrased in Dart:
-// ready_count, the dashboard tiles, status_label, status_colors, success_label,
-// the missing-location title and every partner label arrive finished.
+// ready_count, status_label, status_colors and every partner label in the
+// picker arrive finished.
 
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -34,7 +37,6 @@ import '../../fulfill/fulfill_lookups.dart';
 import '../../services/admin_date_scope.dart';
 import '../../services/admin_zone_scope.dart';
 import '../../utils/render_log.dart';
-import 'admin_delivery_partners_section.dart'; // C630: PART A
 
 Color get _kGreen => FulfillLookups.instance.color('c_ff1b7a43', const Color(0xFF1B7A43));
 Color get _kBorder => FulfillLookups.instance.color('c_ffe5e7eb', const Color(0xFFE5E7EB));
@@ -74,21 +76,8 @@ class AdminDeliveryTabState extends State<AdminDeliveryTab>
   List<Map<String, dynamic>> _orders = const [];
   List<Map<String, dynamic>> _partners = const [];
 
-  // admin_delivery_dashboard()
-  Map<String, dynamic> _tiles = const {};
-  List<Map<String, dynamic>> _riders = const [];
-
-  // admin_missing_locations()
-  int _missingCount = 0;
-  String _missingTitle = '';
-  String _missingNote = '';
-  List<Map<String, dynamic>> _missingRows = const [];
-
   /// order_id -> selected. Only ever holds ids the backend said can_assign.
   final Set<String> _selected = {};
-
-  /// CHANGE #630: the partners section refetches on a zone change too.
-  final _partnersKey = GlobalKey<AdminDeliveryPartnersSectionState>();
 
   @override
   void initState() {
@@ -122,9 +111,6 @@ class AdminDeliveryTabState extends State<AdminDeliveryTab>
     // never be assigned while Bilaspur is on screen.
     _selected.clear();
     _load();
-    // The active roster is zone-scoped too — it must not keep showing another
-    // zone's partners after the picker moves.
-    _partnersKey.currentState?.reload();
   }
 
   /// The two filters, sent on EVERY call in this file.
@@ -137,16 +123,10 @@ class AdminDeliveryTabState extends State<AdminDeliveryTab>
     if (mounted) setState(() => _loading = true);
     final client = Supabase.instance.client;
     try {
-      final results = await Future.wait([
-        client.rpc('admin_delivery_queue', params: _scope),
-        client.rpc('admin_delivery_dashboard', params: _scope),
-        client.rpc('admin_missing_locations'),
-      ]);
+      final q0 = await client.rpc('admin_delivery_queue', params: _scope);
       if (!mounted) return;
 
-      final q = results[0] is Map ? Map<String, dynamic>.from(results[0] as Map) : <String, dynamic>{};
-      final d = results[1] is Map ? Map<String, dynamic>.from(results[1] as Map) : <String, dynamic>{};
-      final m = results[2] is Map ? Map<String, dynamic>.from(results[2] as Map) : <String, dynamic>{};
+      final q = q0 is Map ? Map<String, dynamic>.from(q0) : <String, dynamic>{};
 
       setState(() {
         _allowed = q['allowed'] != false;
@@ -154,14 +134,6 @@ class AdminDeliveryTabState extends State<AdminDeliveryTab>
         _readyCount = (q['ready_count'] as num?)?.toInt() ?? 0;
         _orders = _list(q['orders']);
         _partners = _list(q['partners']);
-
-        _tiles = d['tiles'] is Map ? Map<String, dynamic>.from(d['tiles'] as Map) : const {};
-        _riders = _list(d['riders']);
-
-        _missingCount = (m['missing_count'] as num?)?.toInt() ?? 0;
-        _missingTitle = m['title']?.toString() ?? '';
-        _missingNote = m['note']?.toString() ?? '';
-        _missingRows = _list(m['rows']);
 
         // Anything no longer assignable in this payload leaves the selection.
         _selected.removeWhere((id) => !_canAssign(id));
@@ -376,25 +348,6 @@ class AdminDeliveryTabState extends State<AdminDeliveryTab>
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
-  // ── A9: missing locations ─────────────────────────────────────────────────
-
-  Future<void> _openMissingLocations() async {
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) => _MissingLocationsSheet(
-        title: _missingTitle,
-        note: _missingNote,
-        rows: _missingRows,
-      ),
-    );
-    await _load();
-  }
-
   // ── UI ────────────────────────────────────────────────────────────────────
 
   @override
@@ -410,25 +363,6 @@ class AdminDeliveryTabState extends State<AdminDeliveryTab>
           padding: EdgeInsets.fromLTRB(16, 12, 16, _selected.isEmpty ? 24 : 96),
           children: [
             _zoneHeader(),
-            const SizedBox(height: 12),
-            // CHANGE #630 (PART A): approve registrations and manage the active
-            // roster. Collapsed by default so it never buries the queue; its
-            // own pending badge is what draws the eye when something is waiting.
-            AdminDeliveryPartnersSection(
-              key: _partnersKey,
-              // Approving a partner changes who can be assigned, so the queue
-              // is refetched rather than left holding a stale partners[].
-              onChanged: _load,
-            ),
-            if (_missingCount > 0) ...[
-              _missingBanner(),
-              const SizedBox(height: 12),
-            ],
-            _dashboardStrip(),
-            if (_riders.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              _ridersStrip(),
-            ],
             const SizedBox(height: 16),
             if (_orders.isEmpty)
               Padding(
@@ -480,114 +414,6 @@ class AdminDeliveryTabState extends State<AdminDeliveryTab>
       ),
     ]);
   }
-
-  Widget _missingBanner() {
-    return InkWell(
-      onTap: _openMissingLocations,
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: const Color(0xFFFEF3C7),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: const Color(0xFFF59E0B)),
-        ),
-        child: Row(children: [
-          const Icon(Icons.location_off_outlined, size: 20, color: Color(0xFF92400E)),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(_missingTitle,
-                  style: const TextStyle(
-                      fontSize: 13, fontWeight: FontWeight.w800, color: Color(0xFF92400E))),
-              if (_missingNote.isNotEmpty)
-                Text(_missingNote,
-                    style: const TextStyle(fontSize: 12, color: Color(0xFF92400E))),
-            ]),
-          ),
-          const Icon(Icons.chevron_right, color: Color(0xFF92400E)),
-        ]),
-      ),
-    );
-  }
-
-  /// A8 — tiles, counted by admin_delivery_dashboard(). The labels are the
-  /// payload's own keys; no total is added up here.
-  Widget _dashboardStrip() {
-    const order = ['assigned', 'out', 'delivered', 'failed', 'rto', 'unaccepted', 'total'];
-    final tiles = <Widget>[];
-    for (final k in order) {
-      if (!_tiles.containsKey(k)) continue;
-      tiles.add(Container(
-        margin: const EdgeInsets.only(right: 8),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          border: Border.all(color: _kBorder),
-          borderRadius: BorderRadius.circular(10),
-        ),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Text('${(_tiles[k] as num?)?.toInt() ?? 0}',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: _kText)),
-          // dlv_tile_<key> in the copy catalog. Empty renders nothing — the raw
-          // payload key is a column name, not a label, and printing it would be
-          // writing English in Dart.
-          Text(_ui('dlv_tile_$k'), style: TextStyle(fontSize: 11, color: _kSub)),
-        ]),
-      ));
-    }
-    if (tiles.isEmpty) return const SizedBox.shrink();
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(children: tiles),
-    );
-  }
-
-  Widget _ridersStrip() {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(children: [
-        for (final r in _riders)
-          Container(
-            width: 190,
-            margin: const EdgeInsets.only(right: 8),
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              border: Border.all(color: _kBorder),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(r['name']?.toString() ?? '',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText)),
-              Text(r['type_label']?.toString() ?? '',
-                  style: TextStyle(fontSize: 11, color: _kSub)),
-              const SizedBox(height: 6),
-              Row(children: [
-                _miniStat('${(r['delivered'] as num?)?.toInt() ?? 0}', _kGreen),
-                const SizedBox(width: 6),
-                _miniStat('${(r['failed'] as num?)?.toInt() ?? 0}', _kBad),
-                const SizedBox(width: 6),
-                _miniStat('${(r['pending'] as num?)?.toInt() ?? 0}', _kSub),
-                const Spacer(),
-                Text(r['success_label']?.toString() ?? '',
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kText)),
-              ]),
-            ]),
-          ),
-      ]),
-    );
-  }
-
-  Widget _miniStat(String v, Color c) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-        decoration: BoxDecoration(
-          color: c.withValues(alpha: 0.10),
-          borderRadius: BorderRadius.circular(6),
-        ),
-        child: Text(v, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: c)),
-      );
 
   Widget _orderRow(Map<String, dynamic> o) {
     final orderId = o['order_id']?.toString() ?? '';
@@ -877,193 +703,6 @@ class _PartnerPicker extends StatelessWidget {
             : Text('$openStops ${_ui('dlv_open_stops')}',
                 style: TextStyle(fontSize: 11.5, color: _kSub)),
       ),
-    );
-  }
-}
-
-// ── A9: missing locations ─────────────────────────────────────────────────────
-
-class _MissingLocationsSheet extends StatefulWidget {
-  final String title;
-  final String note;
-  final List<Map<String, dynamic>> rows;
-
-  const _MissingLocationsSheet({
-    required this.title,
-    required this.note,
-    required this.rows,
-  });
-
-  @override
-  State<_MissingLocationsSheet> createState() => _MissingLocationsSheetState();
-}
-
-class _MissingLocationsSheetState extends State<_MissingLocationsSheet> {
-  /// pharmacy_id currently being edited.
-  String _open = '';
-  final _latCtrl = TextEditingController();
-  final _lngCtrl = TextEditingController();
-  final _urlCtrl = TextEditingController();
-  bool _busy = false;
-
-  @override
-  void dispose() {
-    _latCtrl.dispose();
-    _lngCtrl.dispose();
-    _urlCtrl.dispose();
-    super.dispose();
-  }
-
-  /// A9 — p_maps_url takes a PASTED Google Maps link and the backend extracts
-  /// the coordinates. No URL is parsed here: this app has no idea what a Maps
-  /// link looks like, and must not acquire one.
-  Future<void> _save(String pharmacyId) async {
-    if (_busy) return;
-    setState(() => _busy = true);
-    try {
-      final url = _urlCtrl.text.trim();
-      final res = await Supabase.instance.client.rpc('pharmacy_set_location', params: {
-        'p_pharmacy_id': pharmacyId,
-        'p_lat': double.tryParse(_latCtrl.text.trim()),
-        'p_lng': double.tryParse(_lngCtrl.text.trim()),
-        'p_maps_url': url.isEmpty ? null : url,
-      });
-      if (!mounted) return;
-      final msg = res is Map ? (res['message']?.toString() ?? '') : '';
-      if (res is Map && res['ok'] == true) {
-        setState(() {
-          _open = '';
-          _latCtrl.clear();
-          _lngCtrl.clear();
-          _urlCtrl.clear();
-        });
-      }
-      if (msg.isNotEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-      }
-    } catch (_) {
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-      child: DraggableScrollableSheet(
-        expand: false,
-        initialChildSize: 0.75,
-        minChildSize: 0.4,
-        maxChildSize: 0.95,
-        builder: (context, ctrl) => ListView(
-          controller: ctrl,
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-          children: [
-            Center(
-              child: Container(
-                width: 40, height: 4,
-                decoration: BoxDecoration(
-                  color: _kBorder,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-            Text(widget.title,
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: _kText)),
-            if (widget.note.isNotEmpty) ...[
-              const SizedBox(height: 4),
-              Text(widget.note, style: TextStyle(fontSize: 12.5, color: _kSub)),
-            ],
-            const SizedBox(height: 14),
-            for (final r in widget.rows) _row(r),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _row(Map<String, dynamic> r) {
-    final id = r['pharmacy_id']?.toString() ?? '';
-    final isOpen = _open == id;
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        border: Border.all(color: _kBorder),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(r['pharmacy_name']?.toString() ?? '',
-                  style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: _kText)),
-              if ((r['address']?.toString() ?? '').isNotEmpty)
-                Text(r['address']!.toString(),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 12, color: _kSub)),
-            ]),
-          ),
-          TextButton(
-            onPressed: () => setState(() {
-              _open = isOpen ? '' : id;
-              _latCtrl.clear();
-              _lngCtrl.clear();
-              _urlCtrl.clear();
-            }),
-            child: Text(_ui('dlv_fix_location'), style: const TextStyle(fontSize: 12.5)),
-          ),
-        ]),
-        if (isOpen) ...[
-          const SizedBox(height: 8),
-          TextField(
-            controller: _urlCtrl,
-            decoration: InputDecoration(
-              labelText: _ui('dlv_maps_link'),
-              border: const OutlineInputBorder(),
-              isDense: true,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Row(children: [
-            Expanded(
-              child: TextField(
-                controller: _latCtrl,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
-                decoration: InputDecoration(
-                  labelText: _ui('dlv_lat'),
-                  border: const OutlineInputBorder(),
-                  isDense: true,
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: TextField(
-                controller: _lngCtrl,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
-                decoration: InputDecoration(
-                  labelText: _ui('dlv_lng'),
-                  border: const OutlineInputBorder(),
-                  isDense: true,
-                ),
-              ),
-            ),
-          ]),
-          const SizedBox(height: 10),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _kGreen,
-              foregroundColor: Colors.white,
-            ),
-            onPressed: _busy ? null : () => _save(id),
-            child: Text(_ui('dlv_save_location')),
-          ),
-        ],
-      ]),
     );
   }
 }

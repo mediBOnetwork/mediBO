@@ -1,9 +1,11 @@
 // CHANGE #208 — Super-Admin UPI Account Manager (Payment Settings)
 // CHANGE #494 — renamed to "Payment and Partner"; added Partner section
+// CHANGE #611 — added Platform Details + Platform Documents; PDF uploads
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/utils/bill_mime.dart';
@@ -52,14 +54,23 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
   final Set<String> _partnerBusy = {};
   final Set<String> _docBusy = {};
 
+  // ── Platform state (CHANGE #611) ─────────────────────────────────────────
+  // The whole platform block — rows, note and documents — is whatever
+  // about_screen() returns. This screen never composes those strings.
+  Map<String, dynamic>? _platformEntity;
+  bool _platformLoading = true;
+  final Set<String> _platformDocBusy = {};
+
   @override
   void initState() {
     super.initState();
     RenderLog.write('c208_upi_screen_opened', 1);
     RenderLog.write('c209_upi_screen_opened', 1);
     RenderLog.write('c494_partner_screen_opened', 1);
+    RenderLog.write('c611_platform_screen_opened', 1);
     _fetchList();
     _fetchPartnerData();
+    _fetchPlatformData();
   }
 
   @override
@@ -70,7 +81,7 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
   }
 
   Future<void> _refreshAll() async {
-    await Future.wait([_fetchList(), _fetchPartnerData()]);
+    await Future.wait([_fetchList(), _fetchPartnerData(), _fetchPlatformData()]);
   }
 
   // ── Data ──────────────────────────────────────────────────────────────────
@@ -347,9 +358,11 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
     final busyKey = '$area|$kind';
     if (_docBusy.contains(busyKey)) return;
 
+    // #611 — PDFs are accepted alongside images. The allowed list is config,
+    // not code: partner_screen_config().doc_extensions.
     final result = await FilePicker.pickFiles(
       type: FileType.custom,
-      allowedExtensions: const ['jpg', 'jpeg', 'png', 'webp'],
+      allowedExtensions: _docExtensions,
       allowMultiple: false,
       withData: true,
     );
@@ -457,6 +470,15 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
         }
         return;
       }
+      // #611 — the backend says whether this file is a PDF; the app does not
+      // sniff extensions. A PDF opens in the browser, an image in the viewer.
+      if (data['is_pdf'] == true) {
+        final url = data['url'] as String? ?? '';
+        if (url.isNotEmpty) {
+          await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+        }
+        return;
+      }
       final bucket = data['bucket'] as String;
       final path = data['path'] as String;
       final url = await Supabase.instance.client.storage.from(bucket).createSignedUrl(path, 3600);
@@ -464,6 +486,140 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
     } catch (e) {
       if (mounted) showToast(context, 'Something went wrong. Please try again.', isError: true);
     }
+  }
+
+  // ── Data: Platform (CHANGE #611) ─────────────────────────────────────────
+
+  /// Allowed upload extensions come from the backend, never from a Dart list.
+  List<String> get _docExtensions {
+    final v = _config?['doc_extensions'];
+    if (v is List) {
+      final out = v.whereType<String>().toList();
+      if (out.isNotEmpty) return out;
+    }
+    return const ['pdf', 'jpg', 'jpeg', 'png'];
+  }
+
+  String _cfg(String key) => _config?[key] as String? ?? '';
+
+  Future<void> _fetchPlatformData() async {
+    setState(() => _platformLoading = true);
+    try {
+      final raw = await Supabase.instance.client.rpc('about_screen');
+      final data = Map<String, dynamic>.from(raw as Map);
+      final entity = data['platform_entity'];
+      if (!mounted) return;
+      setState(() {
+        _platformEntity = entity is Map ? Map<String, dynamic>.from(entity) : {};
+        _platformLoading = false;
+      });
+      RenderLog.write('c611_platform_loaded', 1);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _platformLoading = false);
+      RenderLog.write('c611_platform_error', 1);
+    }
+  }
+
+  List<Map<String, dynamic>> get _platformRows {
+    final v = _platformEntity?['rows'];
+    if (v is! List) return const [];
+    return v.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+  }
+
+  List<Map<String, dynamic>> get _platformDocs {
+    final v = _platformEntity?['docs'];
+    if (v is! List) return const [];
+    return v.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+  }
+
+  void _openPlatformForm() {
+    final cfg = _config;
+    if (cfg == null) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _PlatformFormDialog(
+        config: cfg,
+        onSaved: () async {
+          // Re-read both: the form fields are prefilled from the config RPC.
+          await Future.wait([_fetchPartnerData(), _fetchPlatformData()]);
+        },
+      ),
+    );
+  }
+
+  void _openPlatformDocForm() {
+    final cfg = _config;
+    if (cfg == null) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _PlatformDocDialog(
+        config: cfg,
+        extensions: _docExtensions,
+        onSaved: _fetchPlatformData,
+      ),
+    );
+  }
+
+  Future<void> _viewPlatformDoc(Map<String, dynamic> doc) async {
+    final url = doc['url'] as String? ?? '';
+    if (url.isEmpty) return;
+    // Platform docs live in a public bucket and about_screen() hands back a
+    // ready URL — PDFs and images both open in the browser.
+    await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+  }
+
+  Future<void> _confirmDeletePlatformDoc(Map<String, dynamic> doc) async {
+    final kind = doc['kind'] as String? ?? doc['label'] as String? ?? '';
+    if (_platformDocBusy.contains(kind)) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: Text(_cfg('platform_doc_delete_title'),
+            style: const TextStyle(
+                fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+        content: Text(_cfg('platform_doc_delete_body'),
+            style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(_cfg('platform_cancel_label')),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFDC2626),
+              foregroundColor: Colors.white,
+              elevation: 0,
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(_cfg('platform_doc_delete_confirm')),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) await _deletePlatformDoc(doc);
+  }
+
+  Future<void> _deletePlatformDoc(Map<String, dynamic> doc) async {
+    final kind = doc['kind'] as String? ?? '';
+    if (kind.isEmpty || _platformDocBusy.contains(kind)) return;
+    setState(() => _platformDocBusy.add(kind));
+    try {
+      final res = await Supabase.instance.client
+          .rpc('delete_platform_doc', params: {'p_kind': kind});
+      final data = Map<String, dynamic>.from(res as Map);
+      final message = data['message'] as String?;
+      if (mounted && message != null) {
+        showToast(context, message, isError: data['ok'] != true);
+      }
+      if (data['ok'] == true) await _fetchPlatformData();
+    } catch (e) {
+      if (mounted) showToast(context, _cfg('generic_error'), isError: true);
+    }
+    if (mounted) setState(() => _platformDocBusy.remove(kind));
   }
 
   // ── Build ─────────────────────────────────────────────────────────────────
@@ -513,6 +669,14 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
               const Divider(color: Color(0xFFE5E7EB)),
               const SizedBox(height: 24),
               _buildPartnerSection(),
+              const SizedBox(height: 32),
+              const Divider(color: Color(0xFFE5E7EB)),
+              const SizedBox(height: 24),
+              _buildPlatformSection(),
+              const SizedBox(height: 32),
+              const Divider(color: Color(0xFFE5E7EB)),
+              const SizedBox(height: 24),
+              _buildPlatformDocsSection(),
             ],
           ),
         ),
@@ -568,6 +732,14 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
             const Divider(color: Color(0xFFE5E7EB)),
             const SizedBox(height: 24),
             _buildPartnerSection(),
+            const SizedBox(height: 32),
+            const Divider(color: Color(0xFFE5E7EB)),
+            const SizedBox(height: 24),
+            _buildPlatformSection(),
+            const SizedBox(height: 32),
+            const Divider(color: Color(0xFFE5E7EB)),
+            const SizedBox(height: 24),
+            _buildPlatformDocsSection(),
           ],
         ),
       ),
@@ -710,6 +882,194 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
                 ),
               );
             }).toList(),
+          ),
+      ],
+    );
+  }
+
+  // ── Platform sections (CHANGE #611) ──────────────────────────────────────
+
+  Widget _buildPlatformSection() {
+    if (_config == null || _platformLoading) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(40),
+          child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 3),
+        ),
+      );
+    }
+    final rows = _platformRows;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Expanded(
+              child: Text(_cfg('platform_heading'),
+                  style: const TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+            ),
+            TextButton.icon(
+              key: const Key('platform_edit_button'),
+              onPressed: _openPlatformForm,
+              icon: const Icon(Icons.edit_outlined, size: 16, color: Color(0xFF1B7A43)),
+              label: Text(_cfg('platform_edit_label'),
+                  style: const TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF1B7A43))),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Text(_cfg('platform_helper'),
+            style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+        const SizedBox(height: 16),
+        Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: const Color(0xFFE5E7EB)),
+          ),
+          child: Column(
+            children: List.generate(rows.length, (i) {
+              final last = i == rows.length - 1;
+              final label = rows[i]['label'];
+              final value = rows[i]['value'];
+              return Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SizedBox(
+                          width: 150,
+                          child: Text(label is String ? label : '',
+                              style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(value is String ? value : '',
+                              style: const TextStyle(
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.w600,
+                                  color: Color(0xFF111827))),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (!last)
+                    const Divider(height: 1, indent: 16, endIndent: 16, color: Color(0xFFE5E7EB)),
+                ],
+              );
+            }),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPlatformDocsSection() {
+    if (_config == null || _platformLoading) return const SizedBox.shrink();
+    final docs = _platformDocs;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Expanded(
+              child: Text(_cfg('platform_docs_heading'),
+                  style: const TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+            ),
+            TextButton.icon(
+              key: const Key('platform_doc_add_button'),
+              onPressed: _openPlatformDocForm,
+              icon: const Icon(Icons.add, size: 18, color: Color(0xFF1B7A43)),
+              label: Text(_cfg('platform_docs_add_label'),
+                  style: const TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF1B7A43))),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Text(_cfg('platform_docs_helper'),
+            style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+        const SizedBox(height: 16),
+        if (docs.isEmpty)
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 24),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: const Color(0xFFE5E7EB)),
+            ),
+            child: Center(
+              child: Text(_cfg('platform_docs_empty'),
+                  style: const TextStyle(fontSize: 14, color: Color(0xFF9CA3AF))),
+            ),
+          )
+        else
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: const Color(0xFFE5E7EB)),
+            ),
+            child: Column(
+              children: List.generate(docs.length, (i) {
+                final d = docs[i];
+                final kind = d['kind'] as String? ?? '';
+                final label = d['label'] as String? ?? '';
+                final busy = _platformDocBusy.contains(kind);
+                final last = i == docs.length - 1;
+                return Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(label,
+                                style: const TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF111827))),
+                          ),
+                          if (busy)
+                            const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2, color: Color(0xFF1B7A43)))
+                          else ...[
+                            IconButton(
+                              key: Key('platform_doc_view_$kind'),
+                              icon: const Icon(Icons.open_in_new,
+                                  size: 16, color: Color(0xFF1B7A43)),
+                              onPressed: () => _viewPlatformDoc(d),
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                            ),
+                            IconButton(
+                              key: Key('platform_doc_delete_$kind'),
+                              icon: const Icon(Icons.delete_outline,
+                                  size: 16, color: Color(0xFFDC2626)),
+                              onPressed: () => _confirmDeletePlatformDoc(d),
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    if (!last)
+                      const Divider(height: 1, indent: 16, endIndent: 16, color: Color(0xFFE5E7EB)),
+                  ],
+                );
+              }),
+            ),
           ),
       ],
     );
@@ -1404,6 +1764,420 @@ class _PartnerFormDialogState extends State<_PartnerFormDialog> {
                           ? const SizedBox(width: 16, height: 16,
                               child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                           : const Text('Save', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Platform Details form (CHANGE #611) ──────────────────────────────────────
+//
+// Fields, labels, types and prefilled values all arrive as
+// partner_screen_config().platform_fields. This dialog does not know that a
+// field called "udyam_no" exists — it renders whatever the backend lists.
+
+class _PlatformFormDialog extends StatefulWidget {
+  final Map<String, dynamic> config;
+  final Future<void> Function() onSaved;
+
+  const _PlatformFormDialog({required this.config, required this.onSaved});
+
+  @override
+  State<_PlatformFormDialog> createState() => _PlatformFormDialogState();
+}
+
+class _PlatformFormDialogState extends State<_PlatformFormDialog> {
+  final Map<String, TextEditingController> _controllers = {};
+  final Map<String, String> _initial = {};
+  bool _saving = false;
+
+  List<Map<String, dynamic>> get _fields {
+    final v = widget.config['platform_fields'];
+    if (v is! List) return const [];
+    return v.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+  }
+
+  String _cfg(String key) => widget.config[key] as String? ?? '';
+
+  @override
+  void initState() {
+    super.initState();
+    for (final f in _fields) {
+      final key = f['key'] as String? ?? '';
+      if (key.isEmpty) continue;
+      final value = f['value'] as String? ?? '';
+      _initial[key] = value;
+      _controllers[key] = TextEditingController(text: value);
+    }
+  }
+
+  @override
+  void dispose() {
+    for (final c in _controllers.values) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  /// Only fields the admin actually touched are sent — the RPC COALESCEs, so
+  /// an untouched field keeps its stored value.
+  Map<String, dynamic> _changed() {
+    final out = <String, dynamic>{};
+    _controllers.forEach((key, ctrl) {
+      final now = ctrl.text.trim();
+      if (now != (_initial[key] ?? '')) out[key] = now;
+    });
+    return out;
+  }
+
+  Future<void> _save() async {
+    if (_saving) return;
+    final changed = _changed();
+    if (changed.isEmpty) {
+      Navigator.of(context).pop();
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      final res = await Supabase.instance.client
+          .rpc('admin_save_platform_identity', params: {'p': changed});
+      final data = Map<String, dynamic>.from(res as Map);
+      if (!mounted) return;
+      final message = data['message'] as String?;
+      if (data['ok'] == true) {
+        if (message != null) showToast(context, message);
+        Navigator.of(context).pop();
+        await widget.onSaved();
+        return;
+      }
+      if (message != null) showToast(context, message, isError: true);
+    } catch (e) {
+      if (mounted) showToast(context, _cfg('generic_error'), isError: true);
+    }
+    if (mounted) setState(() => _saving = false);
+  }
+
+  static final InputBorder _border = OutlineInputBorder(
+      borderRadius: BorderRadius.circular(8),
+      borderSide: const BorderSide(color: Color(0xFFD1D5DB)));
+
+  Widget _buildField(Map<String, dynamic> f) {
+    final type = f['type'] as String? ?? 'text';
+    final key = f['key'] as String? ?? '';
+    final ctrl = _controllers[key];
+    if (ctrl == null) return const SizedBox.shrink();
+
+    return TextField(
+      key: Key('platform_field_$key'),
+      controller: ctrl,
+      maxLines: type == 'multiline' ? 4 : 1,
+      style: const TextStyle(fontSize: 13),
+      decoration: InputDecoration(
+        labelText: f['label'] as String? ?? '',
+        labelStyle: const TextStyle(color: Color(0xFF6B7280), fontSize: 13),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        border: _border,
+        enabledBorder: _border,
+        focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: const BorderSide(color: Color(0xFF1B7A43), width: 1.5)),
+        isDense: true,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 460, maxHeight: 620),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(_cfg('platform_sheet_title'),
+                  style: const TextStyle(
+                      fontSize: 17, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
+              const SizedBox(height: 16),
+              Flexible(
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      for (final f in _fields) ...[
+                        _buildField(f),
+                        const SizedBox(height: 10),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: _saving ? null : () => Navigator.of(context).pop(),
+                    child: Text(_cfg('platform_cancel_label')),
+                  ),
+                  const SizedBox(width: 8),
+                  ElevatedButton(
+                    key: const Key('platform_save_button'),
+                    onPressed: _saving ? null : _save,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF1B7A43),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      elevation: 0,
+                    ),
+                    child: _saving
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.white))
+                        : Text(_cfg('platform_save_label'),
+                            style: const TextStyle(
+                                fontSize: 13, fontWeight: FontWeight.w600)),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Add Platform Document (CHANGE #611) ──────────────────────────────────────
+//
+// kind + label + file → platform_doc_upload_path → storage upload →
+// save_platform_doc. PDFs and images are both accepted; the extension the
+// picker reports is what the backend is told, and the contentType matches.
+
+class _PlatformDocDialog extends StatefulWidget {
+  final Map<String, dynamic> config;
+  final List<String> extensions;
+  final Future<void> Function() onSaved;
+
+  const _PlatformDocDialog({
+    required this.config,
+    required this.extensions,
+    required this.onSaved,
+  });
+
+  @override
+  State<_PlatformDocDialog> createState() => _PlatformDocDialogState();
+}
+
+class _PlatformDocDialogState extends State<_PlatformDocDialog> {
+  final _kindCtrl = TextEditingController();
+  final _labelCtrl = TextEditingController();
+  String? _fileName;
+  Uint8List? _bytes;
+  String _ext = '';
+  bool _busy = false;
+
+  String _cfg(String key) => widget.config[key] as String? ?? '';
+
+  @override
+  void dispose() {
+    _kindCtrl.dispose();
+    _labelCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pick() async {
+    final result = await FilePicker.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: widget.extensions,
+      allowMultiple: false,
+      withData: true,
+    );
+    final picked = result?.files.singleOrNull;
+    final bytes = picked?.bytes;
+    if (picked == null || bytes == null) return;
+    setState(() {
+      _fileName = picked.name;
+      _bytes = bytes;
+      _ext = picked.extension?.toLowerCase() ?? '';
+    });
+  }
+
+  Future<void> _upload() async {
+    if (_busy) return;
+    final kind = _kindCtrl.text.trim();
+    if (kind.isEmpty) {
+      showToast(context, _cfg('platform_doc_kind_required'), isError: true);
+      return;
+    }
+    final bytes = _bytes;
+    if (bytes == null) {
+      showToast(context, _cfg('platform_doc_file_required'), isError: true);
+      return;
+    }
+
+    setState(() => _busy = true);
+    try {
+      final pathRes = await Supabase.instance.client.rpc(
+          'platform_doc_upload_path',
+          params: {'p_kind': kind, 'p_ext': _ext});
+      final pathData = Map<String, dynamic>.from(pathRes as Map);
+      if (pathData['ok'] != true) {
+        if (mounted) {
+          final message = pathData['message'] as String?;
+          if (message != null) showToast(context, message, isError: true);
+        }
+        if (mounted) setState(() => _busy = false);
+        return;
+      }
+      final bucket = pathData['bucket'] as String;
+      final path = pathData['path'] as String;
+
+      await Supabase.instance.client.storage.from(bucket).uploadBinary(
+            path,
+            bytes,
+            fileOptions: FileOptions(contentType: mimeFromBillName(_fileName ?? '')),
+          );
+
+      final saveRes = await Supabase.instance.client.rpc('save_platform_doc',
+          params: {
+            'p_kind': kind,
+            'p_label': _labelCtrl.text.trim(),
+            'p_path': path,
+          });
+      final saveData = Map<String, dynamic>.from(saveRes as Map);
+      if (!mounted) return;
+      final message = saveData['message'] as String?;
+      if (saveData['ok'] == true) {
+        if (message != null) showToast(context, message);
+        Navigator.of(context).pop();
+        await widget.onSaved();
+        return;
+      }
+      if (message != null) showToast(context, message, isError: true);
+    } catch (e) {
+      if (mounted) showToast(context, _cfg('generic_error'), isError: true);
+    }
+    if (mounted) setState(() => _busy = false);
+  }
+
+  static final InputBorder _border = OutlineInputBorder(
+      borderRadius: BorderRadius.circular(8),
+      borderSide: const BorderSide(color: Color(0xFFD1D5DB)));
+
+  InputDecoration _dec(String label, String hint) => InputDecoration(
+        labelText: label,
+        hintText: hint,
+        labelStyle: const TextStyle(color: Color(0xFF6B7280), fontSize: 13),
+        hintStyle: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 12),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        border: _border,
+        enabledBorder: _border,
+        focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: const BorderSide(color: Color(0xFF1B7A43), width: 1.5)),
+        isDense: true,
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 420),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(_cfg('platform_doc_sheet_title'),
+                    style: const TextStyle(
+                        fontSize: 17, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
+                const SizedBox(height: 16),
+                TextField(
+                  key: const Key('platform_doc_kind_field'),
+                  controller: _kindCtrl,
+                  style: const TextStyle(fontSize: 13),
+                  decoration: _dec(
+                      _cfg('platform_doc_kind_label'), _cfg('platform_doc_kind_hint')),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  key: const Key('platform_doc_label_field'),
+                  controller: _labelCtrl,
+                  style: const TextStyle(fontSize: 13),
+                  decoration: _dec(
+                      _cfg('platform_doc_label_label'), _cfg('platform_doc_label_hint')),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    OutlinedButton.icon(
+                      key: const Key('platform_doc_pick_button'),
+                      onPressed: _busy ? null : _pick,
+                      icon: const Icon(Icons.attach_file, size: 16, color: Color(0xFF1B7A43)),
+                      label: Text(_cfg('platform_doc_pick_label'),
+                          style: const TextStyle(
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF1B7A43))),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: Color(0xFFD1D5DB)),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8)),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(_fileName ?? '',
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                      onPressed: _busy ? null : () => Navigator.of(context).pop(),
+                      child: Text(_cfg('platform_cancel_label')),
+                    ),
+                    const SizedBox(width: 8),
+                    ElevatedButton(
+                      key: const Key('platform_doc_upload_button'),
+                      onPressed: _busy ? null : _upload,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF1B7A43),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8)),
+                        elevation: 0,
+                      ),
+                      child: _busy
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Colors.white))
+                          : Text(_cfg('platform_doc_upload_label'),
+                              style: const TextStyle(
+                                  fontSize: 13, fontWeight: FontWeight.w600)),
                     ),
                   ],
                 ),

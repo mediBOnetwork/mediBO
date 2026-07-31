@@ -1,7 +1,41 @@
+// lib/screens/admin/admin_delivery_partner_screen.dart — CHANGE #632
+//
+// The standalone "Delivery Partners" admin page (home_shell.dart nav item):
+// approve or reject a registration, manage the active roster, edit a
+// partner's contact/ID details, see performance, and fix missing pharmacy
+// locations. This used to be a separate, older approve/reject-by-status flow
+// (admin_registration_list/admin_review_registration) that only ever set
+// `status` and never actually activated a rider — CHANGE #630's
+// admin_set_delivery_partner() is what really activates one (it needs a type
+// and a zone first), so that is what backs approval here. Reject still goes
+// through admin_review_registration() — it only needs to mark `status`, which
+// admin_delivery_partners() now excludes from the pending queue at the source.
+//
+// The Fulfillment "Delivery" tab (admin_delivery_tab.dart) stays
+// assignment-only: order queue, assign, reassign. Nothing about partners
+// themselves lives there — it all lives here instead.
+//
+// Same date/zone scope as every other admin screen: AdminDateScope/
+// AdminZoneScope are the only source for p_date/p_zone. This screen builds no
+// picker of its own.
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
-import '../../user_state.dart';
+import '../../fulfill/fulfill_lookups.dart';
+import '../../services/admin_date_scope.dart';
+import '../../services/admin_zone_scope.dart';
+import '../../utils/render_log.dart';
+import 'admin_delivery_partners_section.dart';
+
+Color get _kGreen => FulfillLookups.instance.color('c_ff1b7a43', const Color(0xFF1B7A43));
+Color get _kBorder => FulfillLookups.instance.color('c_ffe5e7eb', const Color(0xFFE5E7EB));
+Color get _kText => FulfillLookups.instance.color('c_ff111827', const Color(0xFF111827));
+Color get _kSub => FulfillLookups.instance.color('c_ff6b7280', const Color(0xFF6B7280));
+Color get _kBad => FulfillLookups.instance.color('c_ffb42318', const Color(0xFFB42318));
+
+String _ui(String k) => FulfillLookups.instance.ui(k);
 
 class AdminDeliveryPartnerScreen extends StatefulWidget {
   const AdminDeliveryPartnerScreen({super.key});
@@ -10,63 +44,111 @@ class AdminDeliveryPartnerScreen extends StatefulWidget {
   State<AdminDeliveryPartnerScreen> createState() => _AdminDeliveryPartnerScreenState();
 }
 
-class _AdminDeliveryPartnerScreenState extends State<AdminDeliveryPartnerScreen> with SingleTickerProviderStateMixin {
-  late TabController _tab;
+class _AdminDeliveryPartnerScreenState extends State<AdminDeliveryPartnerScreen> {
   bool _loading = true;
-  List<Map<String, dynamic>> _pending = [];
-  List<Map<String, dynamic>> _approved = [];
-  List<Map<String, dynamic>> _rejected = [];
+  bool _allowed = true;
+  String _zoneLabel = '';
+
+  // admin_delivery_dashboard() — performance
+  Map<String, dynamic> _tiles = const {};
+  List<Map<String, dynamic>> _riders = const [];
+
+  // admin_missing_locations()
+  int _missingCount = 0;
+  String _missingTitle = '';
+  String _missingNote = '';
+  List<Map<String, dynamic>> _missingRows = const [];
+
+  final _partnersKey = GlobalKey<AdminDeliveryPartnersSectionState>();
 
   @override
   void initState() {
     super.initState();
-    _tab = TabController(length: 3, vsync: this);
+    FulfillLookups.instance.ensureLoaded();
+    AdminDateScope.instance.addListener(_onScopeChanged);
+    AdminZoneScope.instance.addListener(_onScopeChanged);
+    AdminDateScope.instance.ensureLoaded();
+    AdminZoneScope.instance.ensureLoaded();
     _load();
   }
 
   @override
-  void dispose() { _tab.dispose(); super.dispose(); }
+  void dispose() {
+    AdminDateScope.instance.removeListener(_onScopeChanged);
+    AdminZoneScope.instance.removeListener(_onScopeChanged);
+    super.dispose();
+  }
+
+  void _onScopeChanged() {
+    _load();
+    _partnersKey.currentState?.reload();
+  }
+
+  Map<String, dynamic> get _dashboardScope => {
+        'p_date': AdminDateScope.instance.dateYmd,
+        'p_zone': AdminZoneScope.instance.selectedZoneId,
+      };
 
   Future<void> _load() async {
-    setState(() => _loading = true);
+    if (mounted) setState(() => _loading = true);
+    final client = Supabase.instance.client;
     try {
-      final rows = await Supabase.instance.client.rpc('admin_registration_list',
-          params: {'p_kind': 'delivery_partner'});
-      // CHANGE #589 — one RPC: already scoped to non-deleted and ordered by
-      // submitted_at desc. The screen no longer filters or sorts server data.
-      final payload = (rows is List ? rows.first : rows) as Map;
-      final all = ((payload['rows'] as List<dynamic>?) ?? const [])
-          .whereType<Map>()
-          .map((e) => Map<String, dynamic>.from(e))
-          .toList();
+      final results = await Future.wait([
+        client.rpc('admin_delivery_dashboard', params: _dashboardScope),
+        client.rpc('admin_missing_locations'),
+      ]);
       if (!mounted) return;
+
+      final d = results[0] is Map ? Map<String, dynamic>.from(results[0] as Map) : <String, dynamic>{};
+      final m = results[1] is Map ? Map<String, dynamic>.from(results[1] as Map) : <String, dynamic>{};
+
       setState(() {
-        _pending = all.where((r) => r['status'] == 'pending').toList();
-        _approved = all.where((r) => r['status'] == 'approved').toList();
-        _rejected = all.where((r) => r['status'] == 'rejected').toList();
+        _allowed = d['allowed'] != false;
+        _zoneLabel = d['zone_label']?.toString() ?? '';
+        _tiles = d['tiles'] is Map ? Map<String, dynamic>.from(d['tiles'] as Map) : const {};
+        _riders = _list(d['riders']);
+
+        _missingCount = (m['missing_count'] as num?)?.toInt() ?? 0;
+        _missingTitle = m['title']?.toString() ?? '';
+        _missingNote = m['note']?.toString() ?? '';
+        _missingRows = _list(m['rows']);
         _loading = false;
       });
+
+      RenderLog.write('c632_delivery_partners_screen',
+          'allowed=$_allowed;zone=$_zoneLabel;date=${AdminDateScope.instance.dateYmd ?? ''};'
+          'riders=${_riders.length};missing=$_missingCount');
     } catch (e) {
-      if (mounted) setState(() => _loading = false);
+      if (!mounted) return;
+      setState(() => _loading = false);
+      RenderLog.write('c632_delivery_partners_screen_err', e.toString());
     }
   }
 
-  Future<void> _review(Map<String, dynamic> row, String status) async {
-    // CHANGE #580 — admin_review_registration() performs the review.
-    //
-    // This UPDATEd the table directly with reviewed_at from the DEVICE clock
-    // and reviewed_by taken from auth.currentUser.id — a CREDENTIAL. (The
-    // local was even named `adminEmail` while holding an id, which is how the
-    // confusion started; the column is a uuid.) Nothing but RLS stated that
-    // only an admin may review a registration. The RPC states it, stamps
-    // server time, and resolves the acting admin itself.
-    await Supabase.instance.client.rpc('admin_review_registration', params: {
-      'p_kind': 'delivery_partner',
-      'p_id': row['id'],
-      'p_status': status,
-    });
+  List<Map<String, dynamic>> _list(dynamic v) => v is List
+      ? v.map((e) => Map<String, dynamic>.from(e as Map)).toList()
+      : const [];
+
+  // ── missing locations ─────────────────────────────────────────────────────
+
+  Future<void> _openMissingLocations() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => _MissingLocationsSheet(
+        title: _missingTitle,
+        note: _missingNote,
+        rows: _missingRows,
+      ),
+    );
     await _load();
   }
+
+  // ── UI ────────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -75,129 +157,385 @@ class _AdminDeliveryPartnerScreenState extends State<AdminDeliveryPartnerScreen>
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,
-        title: const Text('Delivery Partners', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-        bottom: TabBar(
-          controller: _tab,
-          labelStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
-          unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
-          indicatorColor: const Color(0xFF1B5E20),
-          labelColor: const Color(0xFF1B5E20),
-          unselectedLabelColor: const Color(0xFF6B7280),
-          tabs: [
-            Tab(text: 'Pending (${_pending.length})'),
-            Tab(text: 'Approved (${_approved.length})'),
-            Tab(text: 'Rejected (${_rejected.length})'),
-          ],
-        ),
+        title: const Text('Delivery Partners',
+            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
         actions: [
           IconButton(icon: const Icon(Icons.refresh, color: Color(0xFF374151)), onPressed: _load, tooltip: 'Refresh'),
         ],
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator(color: Color(0xFF1B5E20)))
-          : TabBarView(controller: _tab, children: [
-              _buildList(_pending, showActions: true),
-              _buildList(_approved),
-              _buildList(_rejected),
-            ]),
+          : !_allowed
+              ? const SizedBox.shrink()
+              : RefreshIndicator(
+                  onRefresh: _load,
+                  child: ListView(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                    children: [
+                      _header(),
+                      const SizedBox(height: 12),
+                      AdminDeliveryPartnersSection(
+                        key: _partnersKey,
+                        onChanged: _load,
+                      ),
+                      if (_missingCount > 0) ...[
+                        _missingBanner(),
+                        const SizedBox(height: 12),
+                      ],
+                      if (_tiles.isNotEmpty || _riders.isNotEmpty) ...[
+                        _dashboardStrip(),
+                        if (_riders.isNotEmpty) ...[
+                          const SizedBox(height: 12),
+                          _ridersStrip(),
+                        ],
+                      ],
+                    ],
+                  ),
+                ),
     );
   }
 
-  Widget _buildList(List<Map<String, dynamic>> rows, {bool showActions = false}) {
-    if (rows.isEmpty) {
-      return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-        const Icon(Icons.delivery_dining_outlined, size: 48, color: Color(0xFFD1D5DB)),
-        const SizedBox(height: 12),
-        Text(showActions ? 'No pending delivery partner registrations' : 'No records here', style: const TextStyle(fontSize: 15, color: Color(0xFF6B7280))),
-      ]));
-    }
-    return ListView.separated(
-      padding: const EdgeInsets.all(16),
-      itemCount: rows.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 12),
-      itemBuilder: (context, i) => _buildCard(rows[i], showActions: showActions),
-    );
-  }
-
-  Widget _buildCard(Map<String, dynamic> r, {bool showActions = false}) {
-    return Container(
-      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: const Color(0xFFE5E7EB)), boxShadow: const [BoxShadow(color: Color(0x0F000000), blurRadius: 8, offset: Offset(0, 2))]),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
+  Widget _header() {
+    return Row(children: [
+      Expanded(
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            Expanded(child: Text(r['full_name'] ?? '—', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827)))),
-            _StatusChip(r['status'] ?? 'pending'),
-          ]),
-          const SizedBox(height: 8),
-          if ((r['vehicle_type'] ?? '').isNotEmpty) _InfoRow(icon: Icons.two_wheeler_outlined, text: r['vehicle_type']),
-          _InfoRow(icon: Icons.map_outlined, text: r['delivery_zone'] ?? '—'),
-          _InfoRow(icon: Icons.location_city_outlined, text: '${r['city'] ?? '—'}, ${r['state'] ?? '—'}'),
-          _InfoRow(icon: Icons.phone_outlined, text: r['phone'] ?? '—'),
-          if ((r['email'] ?? '').isNotEmpty) _InfoRow(icon: Icons.email_outlined, text: r['email']),
-          if ((r['id_proof_type'] ?? '').isNotEmpty) _InfoRow(icon: Icons.badge_outlined, text: 'ID: ${r['id_proof_type']}'),
-          if ((r['reviewed_by'] ?? '').isNotEmpty) _InfoRow(icon: Icons.admin_panel_settings_outlined, text: 'Reviewed by: ${r['reviewed_by']}', subtle: true),
-          if (showActions) ...[
-            const SizedBox(height: 14),
-            const Divider(height: 1, color: Color(0xFFE5E7EB)),
-            const SizedBox(height: 14),
-            Row(children: [
-              Expanded(child: OutlinedButton.icon(
-                onPressed: () => _review(r, 'rejected'),
-                icon: const Icon(Icons.close, size: 16),
-                label: const Text('Reject'),
-                style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF991B1B), side: const BorderSide(color: Color(0xFF991B1B)), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
-              )),
-              const SizedBox(width: 12),
-              Expanded(child: FilledButton.icon(
-                onPressed: () => _review(r, 'approved'),
-                icon: const Icon(Icons.check, size: 16),
-                label: const Text('Approve'),
-                style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B5E20), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
-              )),
+          Text(_zoneLabel,
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: _kText)),
+          const SizedBox(height: 2),
+          Text(AdminDateScope.instance.longLabel,
+              style: TextStyle(fontSize: 12, color: _kSub)),
+        ]),
+      ),
+    ]);
+  }
+
+  Widget _missingBanner() {
+    return InkWell(
+      onTap: _openMissingLocations,
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFEF3C7),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: const Color(0xFFF59E0B)),
+        ),
+        child: Row(children: [
+          const Icon(Icons.location_off_outlined, size: 20, color: Color(0xFF92400E)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(_missingTitle,
+                  style: const TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w800, color: Color(0xFF92400E))),
+              if (_missingNote.isNotEmpty)
+                Text(_missingNote,
+                    style: const TextStyle(fontSize: 12, color: Color(0xFF92400E))),
             ]),
-          ],
+          ),
+          const Icon(Icons.chevron_right, color: Color(0xFF92400E)),
         ]),
       ),
     );
   }
+
+  /// Tiles, counted by admin_delivery_dashboard(). The labels are the
+  /// payload's own keys; no total is added up here.
+  Widget _dashboardStrip() {
+    const order = ['assigned', 'out', 'delivered', 'failed', 'rto', 'unaccepted', 'total'];
+    final tiles = <Widget>[];
+    for (final k in order) {
+      if (!_tiles.containsKey(k)) continue;
+      tiles.add(Container(
+        margin: const EdgeInsets.only(right: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border.all(color: _kBorder),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text('${(_tiles[k] as num?)?.toInt() ?? 0}',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: _kText)),
+          Text(_ui('dlv_tile_$k'), style: TextStyle(fontSize: 11, color: _kSub)),
+        ]),
+      ));
+    }
+    if (tiles.isEmpty) return const SizedBox.shrink();
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(children: tiles),
+    );
+  }
+
+  /// Per-rider performance. Every field the backend sends is rendered:
+  /// delivered/failed/pending, success_label, avg_minutes, last_seen, and a
+  /// map link when lat/lng are present.
+  Widget _ridersStrip() {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(children: [
+        for (final r in _riders) _riderTile(r),
+      ]),
+    );
+  }
+
+  Widget _riderTile(Map<String, dynamic> r) {
+    final avgMinutes = (r['avg_minutes'] as num?)?.toInt();
+    final lastSeen = r['last_seen']?.toString() ?? '';
+    final lat = (r['lat'] as num?)?.toDouble();
+    final lng = (r['lng'] as num?)?.toDouble();
+
+    return Container(
+      width: 190,
+      margin: const EdgeInsets.only(right: 8),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: _kBorder),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(
+            child: Text(r['name']?.toString() ?? '',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _kText)),
+          ),
+          if (lat != null && lng != null)
+            InkWell(
+              onTap: () => _openMap(lat, lng),
+              child: Icon(Icons.location_on_outlined, size: 16, color: _kSub),
+            ),
+        ]),
+        Text(r['type_label']?.toString() ?? '',
+            style: TextStyle(fontSize: 11, color: _kSub)),
+        const SizedBox(height: 6),
+        Row(children: [
+          _miniStat('${(r['delivered'] as num?)?.toInt() ?? 0}', _kGreen),
+          const SizedBox(width: 6),
+          _miniStat('${(r['failed'] as num?)?.toInt() ?? 0}', _kBad),
+          const SizedBox(width: 6),
+          _miniStat('${(r['pending'] as num?)?.toInt() ?? 0}', _kSub),
+          const Spacer(),
+          Text(r['success_label']?.toString() ?? '',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: _kText)),
+        ]),
+        if (avgMinutes != null || lastSeen.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          if (avgMinutes != null)
+            Text(FulfillLookups.instance.uiFill('dlv_avg_minutes', {'n': avgMinutes}),
+                style: TextStyle(fontSize: 11, color: _kSub)),
+          if (lastSeen.isNotEmpty)
+            Text('${_ui('dlv_last_seen')}: $lastSeen',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 10.5, color: _kSub)),
+        ],
+      ]),
+    );
+  }
+
+  Future<void> _openMap(double lat, double lng) async {
+    try {
+      await launchUrl(Uri.parse('https://www.google.com/maps?q=$lat,$lng'),
+          mode: LaunchMode.externalApplication);
+    } catch (_) {}
+  }
+
+  Widget _miniStat(String v, Color c) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: c.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Text(v, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: c)),
+      );
 }
 
-class _InfoRow extends StatelessWidget {
-  final IconData icon;
-  final String text;
-  final bool subtle;
-  const _InfoRow({required this.icon, required this.text, this.subtle = false});
+// ── missing locations ──────────────────────────────────────────────────────────
+
+class _MissingLocationsSheet extends StatefulWidget {
+  final String title;
+  final String note;
+  final List<Map<String, dynamic>> rows;
+
+  const _MissingLocationsSheet({
+    required this.title,
+    required this.note,
+    required this.rows,
+  });
+
+  @override
+  State<_MissingLocationsSheet> createState() => _MissingLocationsSheetState();
+}
+
+class _MissingLocationsSheetState extends State<_MissingLocationsSheet> {
+  /// pharmacy_id currently being edited.
+  String _open = '';
+  final _latCtrl = TextEditingController();
+  final _lngCtrl = TextEditingController();
+  final _urlCtrl = TextEditingController();
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    _latCtrl.dispose();
+    _lngCtrl.dispose();
+    _urlCtrl.dispose();
+    super.dispose();
+  }
+
+  /// p_maps_url takes a PASTED Google Maps link and the backend extracts the
+  /// coordinates. No URL is parsed here: this app has no idea what a Maps
+  /// link looks like, and must not acquire one.
+  Future<void> _save(String pharmacyId) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final url = _urlCtrl.text.trim();
+      final res = await Supabase.instance.client.rpc('pharmacy_set_location', params: {
+        'p_pharmacy_id': pharmacyId,
+        'p_lat': double.tryParse(_latCtrl.text.trim()),
+        'p_lng': double.tryParse(_lngCtrl.text.trim()),
+        'p_maps_url': url.isEmpty ? null : url,
+      });
+      if (!mounted) return;
+      final msg = res is Map ? (res['message']?.toString() ?? '') : '';
+      if (res is Map && res['ok'] == true) {
+        setState(() {
+          _open = '';
+          _latCtrl.clear();
+          _lngCtrl.clear();
+          _urlCtrl.clear();
+        });
+      }
+      if (msg.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      }
+    } catch (_) {
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(top: 5),
-      child: Row(children: [
-        Icon(icon, size: 14, color: subtle ? const Color(0xFF9CA3AF) : const Color(0xFF6B7280)),
-        const SizedBox(width: 7),
-        Expanded(child: Text(text, style: TextStyle(fontSize: 13, color: subtle ? const Color(0xFF9CA3AF) : const Color(0xFF374151)))),
-      ]),
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.75,
+        minChildSize: 0.4,
+        maxChildSize: 0.95,
+        builder: (context, ctrl) => ListView(
+          controller: ctrl,
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+          children: [
+            Center(
+              child: Container(
+                width: 40, height: 4,
+                decoration: BoxDecoration(
+                  color: _kBorder,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(widget.title,
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: _kText)),
+            if (widget.note.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(widget.note, style: TextStyle(fontSize: 12.5, color: _kSub)),
+            ],
+            const SizedBox(height: 14),
+            for (final r in widget.rows) _row(r),
+          ],
+        ),
+      ),
     );
   }
-}
 
-class _StatusChip extends StatelessWidget {
-  final String status;
-  const _StatusChip(this.status);
-
-  @override
-  Widget build(BuildContext context) {
-    Color bg, fg;
-    switch (status) {
-      case 'approved': bg = const Color(0xFFD1FAE5); fg = const Color(0xFF065F46); break;
-      case 'rejected': bg = const Color(0xFFFEE2E2); fg = const Color(0xFF991B1B); break;
-      default: bg = const Color(0xFFFEF3C7); fg = const Color(0xFF92400E);
-    }
+  Widget _row(Map<String, dynamic> r) {
+    final id = r['pharmacy_id']?.toString() ?? '';
+    final isOpen = _open == id;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
-      child: Text(status[0].toUpperCase() + status.substring(1), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: fg)),
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        border: Border.all(color: _kBorder),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(r['pharmacy_name']?.toString() ?? '',
+                  style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: _kText)),
+              if ((r['address']?.toString() ?? '').isNotEmpty)
+                Text(r['address']!.toString(),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 12, color: _kSub)),
+            ]),
+          ),
+          TextButton(
+            onPressed: () => setState(() {
+              _open = isOpen ? '' : id;
+              _latCtrl.clear();
+              _lngCtrl.clear();
+              _urlCtrl.clear();
+            }),
+            child: Text(_ui('dlv_fix_location'), style: const TextStyle(fontSize: 12.5)),
+          ),
+        ]),
+        if (isOpen) ...[
+          const SizedBox(height: 8),
+          TextField(
+            controller: _urlCtrl,
+            decoration: InputDecoration(
+              labelText: _ui('dlv_maps_link'),
+              border: const OutlineInputBorder(),
+              isDense: true,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(children: [
+            Expanded(
+              child: TextField(
+                controller: _latCtrl,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+                decoration: InputDecoration(
+                  labelText: _ui('dlv_lat'),
+                  border: const OutlineInputBorder(),
+                  isDense: true,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: TextField(
+                controller: _lngCtrl,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+                decoration: InputDecoration(
+                  labelText: _ui('dlv_lng'),
+                  border: const OutlineInputBorder(),
+                  isDense: true,
+                ),
+              ),
+            ),
+          ]),
+          const SizedBox(height: 10),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _kGreen,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: _busy ? null : () => _save(id),
+            child: Text(_ui('dlv_save_location')),
+          ),
+        ],
+      ]),
     );
   }
 }

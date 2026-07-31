@@ -143,6 +143,24 @@ class AdminDeliveryPartnersSectionState
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
+  /// Reject a pending registration. admin_review_registration() only ever
+  /// marks `status` — it never touches is_active, so nothing here can
+  /// accidentally activate a rider. admin_delivery_partners() itself excludes
+  /// status='rejected' from the pending list, so a rejected row drops out of
+  /// view on the next load without this file deciding to hide it.
+  Future<void> _reject(String partnerId) async {
+    try {
+      final res = await Supabase.instance.client.rpc(
+        'admin_review_registration',
+        params: {'p_kind': 'delivery_partner', 'p_id': partnerId, 'p_status': 'rejected'},
+      );
+      if (!mounted) return;
+      await _load();
+      await widget.onChanged();
+      if (res is Map) _toast(res['message']?.toString() ?? '');
+    } catch (_) {}
+  }
+
   /// Deactivate. The same RPC that approves — one write path, one set of rules.
   Future<void> _deactivate(String partnerId) async {
     try {
@@ -352,7 +370,16 @@ class AdminDeliveryPartnersSectionState
               icon: const Icon(Icons.badge_outlined, size: 15),
               label: Text(_ui('dlv_view_id'), style: const TextStyle(fontSize: 12)),
             ),
-          if (docPath.isNotEmpty) const SizedBox(width: 8),
+          const Spacer(),
+          TextButton(
+            style: TextButton.styleFrom(
+              visualDensity: VisualDensity.compact,
+              foregroundColor: _kBad,
+            ),
+            onPressed: () => _reject(r['partner_id']?.toString() ?? ''),
+            child: Text(_ui('dlv_reject'), style: const TextStyle(fontSize: 12.5)),
+          ),
+          const SizedBox(width: 4),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
               backgroundColor: _kGreen,

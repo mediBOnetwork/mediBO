@@ -28,7 +28,6 @@ import '../../services/date_labels.dart'; // C546: backend-owned date strings
 import '../../supabase_config.dart' show SupabaseConfig;
 import 'voice_receive.dart';
 import 'admin_delivery_tab.dart'; // CHANGE #629: Delivery tab (zone + date scoped)
-import 'admin_delivery_partner_tab.dart'; // CHANGE #632: Delivery Partner tab (split from #629)
 import 'barcode_count_screen.dart'; // CHANGE #624: barcode counting screen
 import '../../widgets/pinned_footer_list.dart';
 import '../../widgets/fulfill_item_sheet.dart';
@@ -8221,7 +8220,6 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
   final _packTabKey   = GlobalKey<_PackTabState>();
   final _bagTabKey    = GlobalKey<_BagTabState>();
   final _deliveryKey  = GlobalKey<AdminDeliveryTabState>(); // CHANGE #629
-  final _deliveryPartnerKey = GlobalKey<AdminDeliveryPartnerTabState>(); // CHANGE #632
 
   // ── #187→C353: realtime now via the single FulfillRealtime channel ────────
   Timer? _collectDebounce;
@@ -8542,16 +8540,6 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
                   _deliveryKey.currentState?.reload();
                 });
               }),
-              const SizedBox(width: 6),
-              // CHANGE #632: Delivery Partner tab — index 6. Split out of
-              // Delivery (#629): approval, the active roster, editing a
-              // partner, performance and missing locations all live here now.
-              _TabBtn(FulfillLookups.instance.ui('dlv_partner_admin_tab'), _tab == 6, () {
-                setState(() => _tab = 6);
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  _deliveryPartnerKey.currentState?.reload();
-                });
-              }),
             ]),
           ),
           const SizedBox(height: 1),
@@ -8563,8 +8551,6 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
           RenderLog.write('c280_fulfill_tabs_5', 5);
           // CHANGE #629: six tabs — Delivery joined the five above.
           RenderLog.write('c629_fulfill_tabs', 6);
-          // CHANGE #632: seven tabs now — Delivery Partner split out of Delivery.
-          RenderLog.write('c632_fulfill_tabs', 7);
           // CHANGE #284: confirms Confirm-all gating removed; fires at boot for curl verify.
           RenderLog.write('c284_confirm_always_clickable', 'gating_removed=y;enabled=always');
           return IndexedStack(
@@ -8582,7 +8568,6 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
                   onRefreshCollect: _refreshCollect, onRefreshArrivals: _refreshArrivals,
                   onRefreshPack: _refreshPack),
               AdminDeliveryTab(key: _deliveryKey),
-              AdminDeliveryPartnerTab(key: _deliveryPartnerKey),
             ],
           );
         }),

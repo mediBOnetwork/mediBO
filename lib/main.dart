@@ -112,9 +112,9 @@ void main() {
     // CHANGE #614: Orders tab re-fetches on account change and on tab open,
     // and renders has_orders / empty copy straight from my_orders_screen().
     RenderLog.write('c614_cart_smooth_orders_fix', 1);
-    // CHANGE #618: Orders fetch records every outcome and re-asks when a live
+    // CHANGE #619: Orders fetch records every outcome and re-asks when a live
     // session comes back "no customer account" — which cannot be true.
-    RenderLog.write('c618_orders_render_fix', 1);
+    RenderLog.write('c619_orders_render_fix', 1);
     // #108 static build properties (flat list, responsive popup)
     RenderLog.write('inq_flat_list', 1);
     RenderLog.write('inq_toggle_removed', 1);

@@ -152,11 +152,11 @@ class _OrdersScreenState extends State<OrdersScreen> {
   String? _authedUid;
   StreamSubscription<AuthState>? _authSub;
 
-  /// CHANGE #618 — one key, every outcome: ok / threw / badshape, with the
+  /// CHANGE #619 — one key, every outcome: ok / threw / badshape, with the
   /// attempt number, whether a session was attached, and what came back.
   /// #614 logged only success, so the failure that actually shipped was
   /// invisible in the render-log.
-  static const kC618Fetch = 'c618_orders_fetch';
+  static const kC619Fetch = 'c619_orders_fetch';
   static const int _kMaxFetchRetries = 3;
   Timer? _retryTimer;
 
@@ -216,7 +216,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
   /// "orders vanished" report. my_orders_screen() resolves the account itself
   /// and returns rows already sorted, counted and formatted, so there is no
   /// client-side ordering, folding or money formatting left here.
-  /// CHANGE #618 — every exit is now recorded, and the one answer that cannot
+  /// CHANGE #619 — every exit is now recorded, and the one answer that cannot
   /// be true is re-asked instead of believed.
   ///
   /// #614 made this re-fetch when the account arrives, and production proved
@@ -240,7 +240,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
     try {
       final raw = await client.rpc(
         'my_orders_screen',
-        // #618 — a normal customer sends NO argument. p_view_as_user belongs to
+        // #619 — a normal customer sends NO argument. p_view_as_user belongs to
         // the admin view-as path alone; the backend defaults it to null.
         params: widget.viewAsUserId == null
             ? const <String, dynamic>{}
@@ -249,7 +249,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
       final map = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
       if (map is! Map) {
         RenderLog.write(
-            kC618Fetch, 'badshape;try:$attempt;sess:${hasSession ? 1 : 0}');
+            kC619Fetch, 'badshape;try:$attempt;sess:${hasSession ? 1 : 0}');
         _retryOrSettle(attempt);
         return;
       }
@@ -264,7 +264,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
       final custId = (payload['customer_id'] ?? '').toString();
 
       RenderLog.write(
-          kC618Fetch,
+          kC619Fetch,
           'ok;try:$attempt;sess:${hasSession ? 1 : 0};count:${parsed.length}'
           ';has:${hasOrders ? 1 : 0};nocust:${noCust ? 1 : 0}'
           ';cust:${custId.isEmpty ? 0 : 1}');
@@ -295,7 +295,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
       if (_channel == null) _subscribeRealtime();
     } catch (e) {
       RenderLog.write(
-          kC618Fetch, 'threw;try:$attempt;sess:${hasSession ? 1 : 0}');
+          kC619Fetch, 'threw;try:$attempt;sess:${hasSession ? 1 : 0}');
       _retryOrSettle(attempt);
     }
   }
@@ -521,7 +521,7 @@ class _OrderCardState extends State<_OrderCard> {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(fontWeight: FontWeight.bold)),
-                // #618 — the order total, printed from the backend's own
+                // #619 — the order total, printed from the backend's own
                 // total_display. No rupee prefix, rounding or grouping is
                 // applied here; the string arrives finished.
                 if (order.totalDisplay.isNotEmpty) ...[

@@ -24,6 +24,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../fulfill/fulfill_lookups.dart';
 import '../../utils/render_log.dart';
+import 'delivery_id_scan.dart'; // C631: PART A — scan Aadhaar / driving licence
 
 Color get _kGreen => FulfillLookups.instance.color('c_ff1b7a43', const Color(0xFF1B7A43));
 Color get _kBorder => FulfillLookups.instance.color('c_ffe5e7eb', const Color(0xFFE5E7EB));
@@ -66,6 +67,18 @@ class AgencyTeamSectionState extends State<AgencyTeamSection> {
   final _phoneCtrl = TextEditingController();
   final _vehicleCtrl = TextEditingController();
 
+  // CHANGE #631 (PART A1b) — the fields an Aadhaar / driving-licence scan can
+  // fill. They are ordinary controllers, typeable whether or not a scan ran.
+  final _idTypeCtrl = TextEditingController();
+  final _idNumberCtrl = TextEditingController();
+  final _addressCtrl = TextEditingController();
+  final _cityCtrl = TextEditingController();
+  final _stateCtrl = TextEditingController();
+
+  /// A5/A6 — carried from the scan to agency_add_partner, never rendered.
+  Map<String, dynamic> _ocrPayload = const {};
+  String _idDocPath = '';
+
   @override
   void initState() {
     super.initState();
@@ -77,7 +90,37 @@ class AgencyTeamSectionState extends State<AgencyTeamSection> {
     _nameCtrl.dispose();
     _phoneCtrl.dispose();
     _vehicleCtrl.dispose();
+    _idTypeCtrl.dispose();
+    _idNumberCtrl.dispose();
+    _addressCtrl.dispose();
+    _cityCtrl.dispose();
+    _stateCtrl.dispose();
     super.dispose();
+  }
+
+  /// A3 — the scan FILLS the form and nothing more. No field is disabled here
+  /// or anywhere below, so a misread value can always be corrected.
+  void _applyScan(IdScanResult r) {
+    void put(TextEditingController c, String key) {
+      final v = r.prefill[key]?.toString() ?? '';
+      // An empty read must not wipe something already typed.
+      if (v.trim().isNotEmpty) c.text = v;
+    }
+
+    // The edge function's `prefill` keys already ARE these field names — a
+    // straight assignment, no mapping and no renaming.
+    put(_nameCtrl, 'full_name');
+    put(_idTypeCtrl, 'id_doc_type');
+    put(_idNumberCtrl, 'id_doc_number');
+    put(_addressCtrl, 'address');
+    put(_cityCtrl, 'city');
+    put(_stateCtrl, 'state');
+
+    setState(() {
+      _ocrPayload = r.ocrPayload;
+      _idDocPath = r.idDocPath;
+    });
+    RenderLog.write('c631_delivery_onboarding', 'agency_prefill;doc=${r.docType}');
   }
 
   Future<void> reload() => _load();
@@ -135,14 +178,33 @@ class AgencyTeamSectionState extends State<AgencyTeamSection> {
           'full_name': _nameCtrl.text.trim(),
           'phone': _phoneCtrl.text.trim(),
           'vehicle_type': _vehicleCtrl.text.trim(),
+          'id_doc_type': _idTypeCtrl.text.trim(),
+          'id_doc_number': _idNumberCtrl.text.trim(),
+          'address': _addressCtrl.text.trim(),
+          'city': _cityCtrl.text.trim(),
+          'state': _stateCtrl.text.trim(),
+          // A5/A6 — the whole scan payload and the stored image, verbatim, so
+          // an admin can compare the card against the typed values later.
+          'id_doc_path': _idDocPath,
+          'ocr_payload': _ocrPayload,
         },
       });
       if (!mounted) return;
       final msg = res is Map ? (res['message']?.toString() ?? '') : '';
+      RenderLog.write('c631_delivery_onboarding',
+          'agency_add;ok=${res is Map && res['ok'] == true};'
+          'ocr=${_ocrPayload.isNotEmpty};doc_path=${_idDocPath.isNotEmpty}');
       if (res is Map && res['ok'] == true) {
         _nameCtrl.clear();
         _phoneCtrl.clear();
         _vehicleCtrl.clear();
+        _idTypeCtrl.clear();
+        _idNumberCtrl.clear();
+        _addressCtrl.clear();
+        _cityCtrl.clear();
+        _stateCtrl.clear();
+        _ocrPayload = const {};
+        _idDocPath = '';
         setState(() => _addOpen = false);
         await _load();
         await widget.onChanged();
@@ -153,6 +215,27 @@ class AgencyTeamSectionState extends State<AgencyTeamSection> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  /// A3 — every add-rider field is a plain, always-enabled TextField. There is
+  /// no `enabled:` and no `readOnly:` to flip, so a scanned value stays
+  /// correctable.
+  Widget _addField(
+    TextEditingController c,
+    String labelKey, {
+    TextInputType? keyboard,
+    int lines = 1,
+  }) {
+    return TextField(
+      controller: c,
+      keyboardType: keyboard,
+      maxLines: lines,
+      decoration: InputDecoration(
+        labelText: _ui(labelKey),
+        border: const OutlineInputBorder(),
+        isDense: true,
+      ),
+    );
   }
 
   // ── D4: hand a stop to a rider ────────────────────────────────────────────
@@ -262,33 +345,24 @@ class AgencyTeamSectionState extends State<AgencyTeamSection> {
 
         if (_addOpen) ...[
           const SizedBox(height: 8),
-          TextField(
-            controller: _nameCtrl,
-            decoration: InputDecoration(
-              labelText: _ui('dlv_rider_name'),
-              border: const OutlineInputBorder(),
-              isDense: true,
-            ),
-          ),
+          // A1(b) — the SAME scan control the public registration form uses.
+          DeliveryIdScanCard(onScanned: _applyScan),
+          const SizedBox(height: 10),
+          _addField(_nameCtrl, 'dlv_rider_name'),
           const SizedBox(height: 8),
-          TextField(
-            controller: _phoneCtrl,
-            keyboardType: TextInputType.phone,
-            decoration: InputDecoration(
-              labelText: _ui('dlv_rider_phone'),
-              border: const OutlineInputBorder(),
-              isDense: true,
-            ),
-          ),
+          _addField(_phoneCtrl, 'dlv_rider_phone', keyboard: TextInputType.phone),
           const SizedBox(height: 8),
-          TextField(
-            controller: _vehicleCtrl,
-            decoration: InputDecoration(
-              labelText: _ui('dlv_rider_vehicle'),
-              border: const OutlineInputBorder(),
-              isDense: true,
-            ),
-          ),
+          _addField(_vehicleCtrl, 'dlv_rider_vehicle'),
+          const SizedBox(height: 8),
+          _addField(_idTypeCtrl, 'dlv_reg_id_type'),
+          const SizedBox(height: 8),
+          _addField(_idNumberCtrl, 'dlv_reg_id_number'),
+          const SizedBox(height: 8),
+          _addField(_addressCtrl, 'dlv_reg_address', lines: 2),
+          const SizedBox(height: 8),
+          _addField(_cityCtrl, 'dlv_reg_city'),
+          const SizedBox(height: 8),
+          _addField(_stateCtrl, 'dlv_reg_state'),
           const SizedBox(height: 10),
           ElevatedButton(
             style: ElevatedButton.styleFrom(

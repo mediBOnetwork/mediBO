@@ -105,6 +105,10 @@ void main() {
     RenderLog.adoptJsNotes();
     // CHANGE #432: restored ORIGINAL 1080x1080 logo, resize-only (no trim/reshape/gloss).
     RenderLog.write('c432_logo', 'icons=v4;resize_only');
+    // CHANGE #612: the link parser accepts "/{CODE}/{token}" and hands both
+    // segments to the backend as one untouched string. Written at boot (not
+    // only when a link is opened) so the build itself is provable by curl.
+    RenderLog.write('c612_link_token_passthrough', 1);
     // #108 static build properties (flat list, responsive popup)
     RenderLog.write('inq_flat_list', 1);
     RenderLog.write('inq_toggle_removed', 1);
@@ -393,12 +397,31 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
                   );
                 }
               }
-              // /:code — short tracking code resolver (MUST be last guard)
-              // Only matches segments shaped like SPO… or CPO… (e.g. SPO300626SAG100O1)
+              // /:code and /:code/:token — short tracking code resolver
+              // (MUST be last guard). Matches SPO…/CPO… codes, e.g.
+              //   /SPO300626SAG100O1            (legacy, no secret)
+              //   /SPO300726TOP012I1/jerps      (CHANGE #612, secret required)
+              //
+              // CHANGE #612: links now carry a 5-char secret as a SECOND path
+              // segment. The old pattern was anchored with `$` straight after
+              // the code, so a two-segment link matched nothing, fell through
+              // to onUnknownRoute and opened the storefront instead of the
+              // form. Both segments are captured and handed to the backend as
+              // ONE string, exactly as received — resolve_code() takes
+              // "CODE/secret" (and "CODE-secret") and splits it itself. The
+              // app does not parse, split, case-fold or trim the secret: it
+              // has no idea what a valid one looks like, and it must not
+              // acquire one.
               {
-                final seg = name.startsWith('/') ? name.substring(1) : name;
-                final codePattern = RegExp(r'^(SPO|CPO)[A-Za-z0-9]+$');
+                final path = name.split('?').first;
+                final seg = path.startsWith('/') ? path.substring(1) : path;
+                final codePattern =
+                    RegExp(r'^(SPO|CPO)[A-Za-z0-9]+(?:[/-][A-Za-z0-9]+)?/?$');
                 if (seg.isNotEmpty && codePattern.hasMatch(seg)) {
+                  try {
+                    RenderLog.write('c612_link_token_route',
+                        'segments=${seg.split('/').length}');
+                  } catch (_) {}
                   return MaterialPageRoute(
                     settings: settings,
                     builder: (_) => CodeResolverPage(code: seg),

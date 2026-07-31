@@ -49,8 +49,14 @@ class _CodeResolverPageState extends State<CodeResolverPage> {
   Future<void> _resolve() async {
     try { RenderLog.write('c317_resolve_called', 'code=${widget.code}'); } catch (_) {}
     try {
+      // CHANGE #612: hand the path through EXACTLY as it arrived —
+      // "{CODE}/{token}" in one string. No upper(), no trim(), no split: the
+      // secret is the backend's to interpret, and resolve_code() already
+      // uppercases the code, lowercases the secret and accepts either "/" or
+      // "-" as the separator. Case-folding here would be the app deciding
+      // what a valid secret looks like.
       final result = await Supabase.instance.client
-          .rpc('resolve_code', params: {'p_code': widget.code.toUpperCase().trim()});
+          .rpc('resolve_code', params: {'p_code': widget.code});
       if (!mounted) return;
 
       final data = result is Map
@@ -62,6 +68,11 @@ class _CodeResolverPageState extends State<CodeResolverPage> {
       final err   = data['error'] as String?;
 
       if (err != null || kind.isEmpty || token.isEmpty) {
+        // #612: a link with no secret now comes back 'forbidden'. That is the
+        // error state, never the form.
+        try {
+          RenderLog.write('c612_resolve_error', err ?? 'notfound');
+        } catch (_) {}
         setState(() { _error = err ?? 'notfound'; });
         return;
       }

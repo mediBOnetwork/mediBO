@@ -109,6 +109,9 @@ void main() {
     // segments to the backend as one untouched string. Written at boot (not
     // only when a link is opened) so the build itself is provable by curl.
     RenderLog.write('c612_link_token_passthrough', 1);
+    // CHANGE #614: Orders tab re-fetches on account change and on tab open,
+    // and renders has_orders / empty copy straight from my_orders_screen().
+    RenderLog.write('c614_cart_smooth_orders_fix', 1);
     // #108 static build properties (flat list, responsive popup)
     RenderLog.write('inq_flat_list', 1);
     RenderLog.write('inq_toggle_removed', 1);

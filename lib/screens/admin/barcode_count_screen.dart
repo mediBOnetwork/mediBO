@@ -58,21 +58,47 @@ class _Staged {
   });
 }
 
+// CHANGE #627: the screen has two MODES, and which one it is in is decided by
+// the constructor the caller uses — never inferred from an empty string.
+//
+//   BarcodeCountScreen.supplier(supplierName:, stage:)  Supplier Shop / Warehouse
+//     → barcode_lookup / barcode_submit_scan            (supplier + stage scoped)
+//
+//   BarcodeCountScreen.pack(orderId:)                   Pack
+//     → pack_barcode_lookup / pack_barcode_submit_scan  (order scoped, no bag)
+//
+// The two RPC families write to different tables and must never be crossed:
+// a Pack scan sent to barcode_submit_scan would land in the shop receiving
+// ledger. `isPack` is the single switch, and it is derived from orderId being
+// non-null, which only the .pack constructor can produce.
 class BarcodeCountScreen extends StatefulWidget {
-  /// The supplier whose order is being counted. Empty means the caller has no
-  /// supplier context — barcode_lookup then answers with its own "not on this
-  /// order" payload and nothing can be staged or committed.
+  /// Supplier mode only. The supplier whose order is being counted.
   final String supplierName;
 
-  /// 'shop' | 'warehouse' — passed straight through to both RPCs. The backend
-  /// re-derives the effective stage (a forwarded supplier is always warehouse).
+  /// Supplier mode only. 'shop' | 'warehouse' — passed straight through to both
+  /// RPCs. The backend re-derives the effective stage (a forwarded supplier is
+  /// always warehouse).
   final String stage;
 
-  const BarcodeCountScreen({
+  /// Pack mode only. The customer order being packed. Non-null IS pack mode.
+  final String? orderId;
+
+  /// Supplier Shop / Warehouse. Unchanged from #624.
+  const BarcodeCountScreen.supplier({
     super.key,
     required this.supplierName,
     required this.stage,
-  });
+  }) : orderId = null;
+
+  /// Pack. There is no supplier and no bag in this mode.
+  const BarcodeCountScreen.pack({
+    super.key,
+    required String this.orderId,
+  })  : supplierName = '',
+        stage = '';
+
+  /// True when this screen must use the pack_* RPCs.
+  bool get isPack => orderId != null;
 
   @override
   State<BarcodeCountScreen> createState() => _BarcodeCountScreenState();
@@ -109,14 +135,20 @@ class _BarcodeCountScreenState extends State<BarcodeCountScreen> {
   @override
   void initState() {
     super.initState();
-    _sessionKey =
-        'barcode:${widget.supplierName}|${widget.stage}|${DateTime.now().millisecondsSinceEpoch}';
+    final ms = DateTime.now().millisecondsSinceEpoch;
+    _sessionKey = widget.isPack
+        ? 'packbc:${widget.orderId}|$ms'
+        : 'barcode:${widget.supplierName}|${widget.stage}|$ms';
     _ctrl = MobileScannerController(
       detectionSpeed: DetectionSpeed.normal,
       detectionTimeoutMs: 700,
     );
+    if (widget.isPack) {
+      RenderLog.write('c627_pack_barcode',
+          'screen=open;mode=pack;order=${widget.orderId};session=$_sessionKey');
+    }
     RenderLog.write('c624_barcode_count',
-        'screen=open;supplier=${widget.supplierName};stage=${widget.stage};session=$_sessionKey');
+        'screen=open;mode=${widget.isPack ? 'pack' : 'supplier'};supplier=${widget.supplierName};stage=${widget.stage};session=$_sessionKey');
   }
 
   @override
@@ -163,17 +195,31 @@ class _BarcodeCountScreenState extends State<BarcodeCountScreen> {
   Future<void> _lookup(String code) async {
     setState(() => _busy = true);
     try {
-      final raw = await Supabase.instance.client.rpc('barcode_lookup', params: {
-        'p_supplier': widget.supplierName,
-        'p_barcode': code,
-        'p_stage': widget.stage,
-        'p_date': _dateYmd,
-      });
+      // CHANGE #627: Pack is order-scoped and has no supplier, stage, date or
+      // bag. Supplier Shop / Warehouse keep calling barcode_lookup exactly as
+      // they did in #624.
+      final raw = widget.isPack
+          ? await Supabase.instance.client.rpc('pack_barcode_lookup', params: {
+              'p_order_id': widget.orderId,
+              'p_barcode': code,
+            })
+          : await Supabase.instance.client.rpc('barcode_lookup', params: {
+              'p_supplier': widget.supplierName,
+              'p_barcode': code,
+              'p_stage': widget.stage,
+              'p_date': _dateYmd,
+            });
       if (!mounted) return;
       final res = raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
 
       if (res['ok'] != true) {
         // B1: render the backend's own title + message. Nothing is staged.
+        // In Pack this also covers `unfulfillable` — an item we could not source,
+        // which is not being packed and so cannot be counted.
+        if (widget.isPack) {
+          RenderLog.write('c627_pack_barcode',
+              'lookup=refused;error=${res['error'] ?? ''}');
+        }
         RenderLog.write('c624_barcode_count',
             'lookup=refused;error=${res['error'] ?? ''}');
         setState(() {
@@ -192,9 +238,16 @@ class _BarcodeCountScreenState extends State<BarcodeCountScreen> {
         packLabel: res['pack_label']?.toString() ?? '',
         company: res['company']?.toString() ?? '',
         progressLabel: res['progress_label']?.toString() ?? '',
-        bagLabel: res['bag_label']?.toString() ?? '',
-        bagWarning: res['bag_warning'] == true,
+        // A2: there is no bag in Pack. pack_barcode_lookup returns no bag
+        // fields at all, and this guard makes that explicit rather than
+        // relying on the key being absent.
+        bagLabel: widget.isPack ? '' : (res['bag_label']?.toString() ?? ''),
+        bagWarning: widget.isPack ? false : res['bag_warning'] == true,
       );
+      if (widget.isPack) {
+        RenderLog.write('c627_pack_barcode',
+            'lookup=ok;product=${s.productId};progress=${s.progressLabel};bag=none');
+      }
       RenderLog.write('c624_barcode_count',
           'lookup=ok;product=${s.productId};progress=${s.progressLabel};bag_warning=${s.bagWarning}');
       setState(() {
@@ -233,19 +286,34 @@ class _BarcodeCountScreenState extends State<BarcodeCountScreen> {
 
     setState(() => _busy = true);
     try {
-      final raw =
-          await Supabase.instance.client.rpc('barcode_submit_scan', params: {
-        'p_supplier': widget.supplierName,
-        'p_product_id': s.productId,
-        'p_qty': s.qty,
-        'p_stage': widget.stage,
-        'p_date': _dateYmd,
-        'p_session_key': _sessionKey,
-      });
+      // CHANGE #627: Pack commits through pack_barcode_submit_scan, which writes
+      // to pack_clip_mentions and applies via pack_set_counted — the SAME
+      // function Pack's voice count uses. Supplier Shop / Warehouse are
+      // untouched and still call barcode_submit_scan.
+      final raw = widget.isPack
+          ? await Supabase.instance.client
+              .rpc('pack_barcode_submit_scan', params: {
+              'p_order_id': widget.orderId,
+              'p_product_id': s.productId,
+              'p_qty': s.qty,
+              'p_session_key': _sessionKey,
+            })
+          : await Supabase.instance.client.rpc('barcode_submit_scan', params: {
+              'p_supplier': widget.supplierName,
+              'p_product_id': s.productId,
+              'p_qty': s.qty,
+              'p_stage': widget.stage,
+              'p_date': _dateYmd,
+              'p_session_key': _sessionKey,
+            });
       if (!mounted) return;
       final res = raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
 
       if (res['ok'] != true) {
+        if (widget.isPack) {
+          RenderLog.write('c627_pack_barcode',
+              'commit=refused;error=${res['error'] ?? ''}');
+        }
         RenderLog.write('c624_barcode_count',
             'commit=refused;error=${res['error'] ?? ''}');
         setState(() {
@@ -258,6 +326,10 @@ class _BarcodeCountScreenState extends State<BarcodeCountScreen> {
       }
 
       // C5: bottom bar is whatever the commit response says it is.
+      if (widget.isPack) {
+        RenderLog.write('c627_pack_barcode',
+            'commit=ok;qty=${s.qty};counted=${res['counted_qty']};over=${res['over_qty']}');
+      }
       RenderLog.write('c624_barcode_count',
           'commit=ok;qty=${s.qty};counted=${res['counted_qty']};over=${res['over_qty']}');
       _anyCommitted = true;

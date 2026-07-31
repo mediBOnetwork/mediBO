@@ -1,4 +1,4 @@
-// CHANGE #623 — BARCODE COUNT (second counting method, alongside voice)
+// CHANGE #624 — BARCODE COUNT (second counting method, alongside voice)
 //
 // This screen captures scans and calls exactly two RPCs:
 //   barcode_lookup      — identify the scanned code against this supplier's order
@@ -115,7 +115,7 @@ class _BarcodeCountScreenState extends State<BarcodeCountScreen> {
       detectionSpeed: DetectionSpeed.normal,
       detectionTimeoutMs: 700,
     );
-    RenderLog.write('c623_barcode_count',
+    RenderLog.write('c624_barcode_count',
         'screen=open;supplier=${widget.supplierName};stage=${widget.stage};session=$_sessionKey');
   }
 
@@ -148,7 +148,7 @@ class _BarcodeCountScreenState extends State<BarcodeCountScreen> {
     // B2: the SAME barcode again just increments the staged qty. No RPC.
     if (staged != null && staged.barcode == code) {
       setState(() => staged.qty += 1);
-      RenderLog.write('c623_barcode_count', 'stage=increment;qty=${staged.qty}');
+      RenderLog.write('c624_barcode_count', 'stage=increment;qty=${staged.qty}');
       return;
     }
 
@@ -174,7 +174,7 @@ class _BarcodeCountScreenState extends State<BarcodeCountScreen> {
 
       if (res['ok'] != true) {
         // B1: render the backend's own title + message. Nothing is staged.
-        RenderLog.write('c623_barcode_count',
+        RenderLog.write('c624_barcode_count',
             'lookup=refused;error=${res['error'] ?? ''}');
         setState(() {
           _staged = null;
@@ -195,7 +195,7 @@ class _BarcodeCountScreenState extends State<BarcodeCountScreen> {
         bagLabel: res['bag_label']?.toString() ?? '',
         bagWarning: res['bag_warning'] == true,
       );
-      RenderLog.write('c623_barcode_count',
+      RenderLog.write('c624_barcode_count',
           'lookup=ok;product=${s.productId};progress=${s.progressLabel};bag_warning=${s.bagWarning}');
       setState(() {
         _staged = s;
@@ -226,7 +226,7 @@ class _BarcodeCountScreenState extends State<BarcodeCountScreen> {
     if (s == null || _busy) return;
 
     if (s.qty <= 0) {
-      RenderLog.write('c623_barcode_count', 'commit=skipped_zero');
+      RenderLog.write('c624_barcode_count', 'commit=skipped_zero');
       setState(() => _staged = null);
       return;
     }
@@ -246,7 +246,7 @@ class _BarcodeCountScreenState extends State<BarcodeCountScreen> {
       final res = raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
 
       if (res['ok'] != true) {
-        RenderLog.write('c623_barcode_count',
+        RenderLog.write('c624_barcode_count',
             'commit=refused;error=${res['error'] ?? ''}');
         setState(() {
           _errTitle = '';
@@ -258,7 +258,7 @@ class _BarcodeCountScreenState extends State<BarcodeCountScreen> {
       }
 
       // C5: bottom bar is whatever the commit response says it is.
-      RenderLog.write('c623_barcode_count',
+      RenderLog.write('c624_barcode_count',
           'commit=ok;qty=${s.qty};counted=${res['counted_qty']};over=${res['over_qty']}');
       _anyCommitted = true;
       setState(() {
@@ -290,7 +290,7 @@ class _BarcodeCountScreenState extends State<BarcodeCountScreen> {
     final next = s.qty + delta;
     if (next < 0) return;
     setState(() => s.qty = next);
-    RenderLog.write('c623_barcode_count', 'tap=$delta;qty=${s.qty}');
+    RenderLog.write('c624_barcode_count', 'tap=$delta;qty=${s.qty}');
   }
 
   Future<void> _closeScreen() async {
@@ -311,7 +311,7 @@ class _BarcodeCountScreenState extends State<BarcodeCountScreen> {
     final screenH = MediaQuery.of(context).size.height;
     final viewfinderH = (screenH * 0.30).clamp(180.0, 300.0);
 
-    RenderLog.write('c623_barcode_count',
+    RenderLog.write('c624_barcode_count',
         'build;stage=${widget.stage};staged=${s == null ? 'none' : s.productId};count=$_countedQty');
 
     return PopScope(
@@ -521,7 +521,7 @@ class _BarcodeCountScreenState extends State<BarcodeCountScreen> {
       onHorizontalDragEnd: (d) {
         if (_staged == null) return;
         if ((d.primaryVelocity ?? 0) > 250) {
-          RenderLog.write('c623_barcode_count', 'swipe=commit');
+          RenderLog.write('c624_barcode_count', 'swipe=commit');
           _commit();
         }
       },

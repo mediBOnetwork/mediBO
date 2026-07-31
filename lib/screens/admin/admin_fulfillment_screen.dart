@@ -27,7 +27,7 @@ import '../../widgets/box_date_row.dart'; // C545: BoxDateOlderRow (the shared d
 import '../../services/date_labels.dart'; // C546: backend-owned date strings
 import '../../supabase_config.dart' show SupabaseConfig;
 import 'voice_receive.dart';
-import 'barcode_count_screen.dart'; // CHANGE #623: barcode counting screen
+import 'barcode_count_screen.dart'; // CHANGE #624: barcode counting screen
 import '../../widgets/pinned_footer_list.dart';
 import '../../widgets/fulfill_item_sheet.dart';
 import '../../widgets/report_issue_section.dart';
@@ -1080,7 +1080,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // today's mentions for the supplier+stage). Set on recording start; cleared
   // only when the card is freshly (re)loaded, never nulled on stop/finalize, so
   // the badge/popup still agree right after Stop.
-  // ignore: unused_field  // #623: still written by the voice session (path untouched);
+  // ignore: unused_field  // #624: still written by the voice session (path untouched);
   // no longer read — the review sheet scopes by the backend tab bar, not session_key.
   String? _activeVoiceSessionKey;
 
@@ -1275,7 +1275,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       ? 0
       : (_voiceMentions.first['distinct_products'] as num?)?.toInt() ?? 0;
 
-  // CHANGE #623 (D1): the chip's whole sentence is backend-owned —
+  // CHANGE #624 (D1): the chip's whole sentence is backend-owned —
   // get_voice_clip_mentions returns items_label ("5 items") on every row and it
   // is printed verbatim. Nothing is composed in Dart. With no rows there is no
   // row to read it from, so the copy catalog's own zero form is used instead.
@@ -2585,7 +2585,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // review sheet, via the SAME shared helper (fetchScopedVoiceMentions) so the
   // two can never disagree.
   //
-  // CHANGE #623: sessionKey is now null — i.e. every mention for this
+  // CHANGE #624: sessionKey is now null — i.e. every mention for this
   // supplier+stage+date, voice AND barcode. Filtering by the live voice
   // session_key would drop every barcode row (a barcode scan writes its own
   // session_key), and the review sheet must show both sources together. The
@@ -3586,7 +3586,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         .toList();
   }
 
-  // ignore: unused_element  // #623: Ask mediBO pill removed; agent code kept intact.
+  // ignore: unused_element  // #624: Ask mediBO pill removed; agent code kept intact.
   Future<void> _startAgentRecording() async {
     if (_agentBusy || _voiceListening || _agentPhase != AgentPhase.idle) return;
     _agentBusy = true;
@@ -3615,7 +3615,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     _agentBusy = false;
   }
 
-  // ignore: unused_element  // #623: Ask mediBO pill removed; agent code kept intact.
+  // ignore: unused_element  // #624: Ask mediBO pill removed; agent code kept intact.
   Future<void> _stopAgentRecording() async {
     if (!_agentRecStarted) return;
     _agentRecStarted = false;
@@ -4214,7 +4214,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           ),
         ),
 
-        // CHANGE #623: Barcode count — replaces Ask mediBO. Same Expanded pill
+        // CHANGE #624: Barcode count — replaces Ask mediBO. Same Expanded pill
         // as Count items, so the two counting methods sit side by side.
         if (isAdmin) ...[
           const SizedBox(width: 12),
@@ -5094,7 +5094,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           ),
         ],
 
-        // 5. CHANGE #623: Barcode count pill — replaces Ask mediBO, same fixed box
+        // 5. CHANGE #624: Barcode count pill — replaces Ask mediBO, same fixed box
         // as Count items so the two counting methods sit side by side.
         if (isAdmin) ...[
           const SizedBox(width: 10),
@@ -5118,7 +5118,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     );
   }
 
-  // CHANGE #623: Barcode count — the SECOND counting method, alongside voice.
+  // CHANGE #624: Barcode count — the SECOND counting method, alongside voice.
   // A3: full screen page, never a sheet. Stage is the tab's own stage, so a
   // Warehouse scan maps to the active bag exactly as a Warehouse voice count
   // does (E1). Nothing about the voice path is touched.
@@ -5126,7 +5126,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     final supplier = _selectedSupplier ?? '';
     if (supplier.isEmpty) return;
     final stage = widget.arrivals ? 'warehouse' : 'shop';
-    RenderLog.write('c623_barcode_count',
+    RenderLog.write('c624_barcode_count',
         'open;supplier=$supplier;stage=$stage;surface=${widget.arrivals ? 'warehouse' : 'shop'}');
     final committed = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
@@ -5579,7 +5579,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               supplierName: supplierForPopup,
               stage: widget.arrivals ? 'warehouse' : 'shop',
               orderItems: orderSnapshot,
-              // CHANGE #623 (D2): the sheet shows BOTH voice and barcode counts,
+              // CHANGE #624 (D2): the sheet shows BOTH voice and barcode counts,
               // so it is no longer scoped to one recording's session_key — that
               // filter would drop every barcode row. Per-session viewing moved to
               // the backend-owned tab bar (voice_review_groups). See
@@ -5641,7 +5641,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
           children: [
             Icon(Icons.check_rounded, size: 11, color: _kReceivedFg),
             const SizedBox(width: 4),
-            // CHANGE #623 (D1): "N item" — items_label, verbatim from the backend.
+            // CHANGE #624 (D1): "N item" — items_label, verbatim from the backend.
             Text(_itemsLabel,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
@@ -6109,11 +6109,11 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   // CHANGE #456: group key (session_key, or "legacy:<date>") of the clip chip
   // last tapped — null = default "All" order. Was recording_seq (per chunk
   // window); a chip is now one whole recording, which may span several windows.
-  // CHANGE #623: the value now comes from the backend tab bar's own key
+  // CHANGE #624: the value now comes from the backend tab bar's own key
   // (voice_review_groups → tabs[].key); null still means the "all" tab.
   String? _selectedGroupKey;
 
-  // CHANGE #623 (D3): voice_review_groups → tabs:[{key,label,count}], already
+  // CHANGE #624 (D3): voice_review_groups → tabs:[{key,label,count}], already
   // ordered All → Clip N… → Barcode. Rendered verbatim, never re-sorted, never
   // re-labelled. The first entry ('all') is the default view.
   List<Map<String, dynamic>> _tabs = const [];
@@ -6194,7 +6194,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
           'p_supplier_name': widget.supplierName,
           'p_stage': widget.stage,
         }),
-        // CHANGE #623 (D3): the tab bar. Backend-owned keys, labels and order.
+        // CHANGE #624 (D3): the tab bar. Backend-owned keys, labels and order.
         Supabase.instance.client.rpc('voice_review_groups', params: {
           'p_supplier_name': widget.supplierName,
           'p_stage': widget.stage,
@@ -6210,7 +6210,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
       final tabs = (rawGroups is Map ? (rawGroups['tabs'] as List? ?? const []) : const [])
           .map((t) => Map<String, dynamic>.from(t as Map))
           .toList();
-      RenderLog.write('c623_barcode_count',
+      RenderLog.write('c624_barcode_count',
           'review_tabs=${tabs.map((t) => t['key']).join(',')}');
       // CHANGE #456: clip count = distinct RECORDINGS (session groups), not distinct
       // chunk-window clip_paths — verifiable via curl/render-log for this change.
@@ -6626,7 +6626,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
                     scrollDirection: Axis.horizontal,
                     // #110: extra horizontal padding so dots don't cover first/last chip
                     padding: const EdgeInsets.symmetric(horizontal: 14),
-                    // CHANGE #623 (D3): tabs come from voice_review_groups and are
+                    // CHANGE #624 (D3): tabs come from voice_review_groups and are
                     // rendered verbatim in the order given — "All", "Clip 1"…,
                     // "Barcode". No key, label or position is decided here. A tab
                     // whose key matches a playable recording keeps the play button;
@@ -6666,7 +6666,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
                           child: GestureDetector(
                             onTap: () {
                               setState(() => _selectedGroupKey = isAll ? null : key);
-                              RenderLog.write('c623_barcode_count', 'review_tab=$key');
+                              RenderLog.write('c624_barcode_count', 'review_tab=$key');
                               if (isAll) RenderLog.write('c120_back_to_all', 'true');
                             },
                             child: Container(
@@ -6927,7 +6927,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
     // Backend-owned: get_voice_clip_mentions already orders by (recording_seq,
     // ord); .where() is order-preserving, so the filtered sublist needs no
     // re-sort.
-    // CHANGE #623 (D4): match on the backend's own group_key, which is the same
+    // CHANGE #624 (D4): match on the backend's own group_key, which is the same
     // value voice_review_groups puts in tabs[].key — 'barcode' for a scanned
     // row, the session group for a spoken one. Deriving the key in Dart
     // (clipGroupKeyOf) would put every barcode session in its own tab instead
@@ -9250,7 +9250,7 @@ class _PackTabState extends State<_PackTab>
   // CHANGE #299: Ask mediBO (rewired #304: audio → voice-agent, same as Warehouse)
   bool _askListening = false;
   bool _askProcessing = false;
-  // ignore: unused_field  // #623: Ask mediBO pill removed; agent state kept intact.
+  // ignore: unused_field  // #624: Ask mediBO pill removed; agent state kept intact.
   String _askInterim = '';
 
   // Dispatch button in-flight guard (tap-to-toggle, backend RPC is the source of truth)
@@ -9755,7 +9755,7 @@ class _PackTabState extends State<_PackTab>
 
   // CHANGE #304: Ask mediBO — rewired to audio-bytes → voice-agent (same as Warehouse).
   // First tap starts recording (_voiceService.start), second tap stops + processes.
-  // ignore: unused_element  // #623: Ask mediBO pill removed; agent code kept intact.
+  // ignore: unused_element  // #624: Ask mediBO pill removed; agent code kept intact.
   Future<void> _toggleAskMediaBO(String orderId) async {
     if (_voiceProcessing || _voiceListening || _packCounting || _askProcessing) return;
     if (_askListening) {
@@ -10240,7 +10240,7 @@ class _PackTabState extends State<_PackTab>
     ]);
   }
 
-  // CHANGE #299: active voice bar — Count items + (CHANGE #623) Barcode count.
+  // CHANGE #299: active voice bar — Count items + (CHANGE #624) Barcode count.
   // Ask mediBO removed; the two counting methods now sit side by side here too.
   Widget _buildPackVoiceBar(String orderId, int spokenCount) {
     return Padding(
@@ -10330,7 +10330,7 @@ class _PackTabState extends State<_PackTab>
     );
   }
 
-  // CHANGE #623: Barcode count — replaces Ask mediBO in Pack. Styled exactly
+  // CHANGE #624: Barcode count — replaces Ask mediBO in Pack. Styled exactly
   // like the Count items pill next to it, so the two counting methods match.
   //
   // Pack's card is keyed by ORDER and carries no supplier, and the barcode RPCs
@@ -10370,7 +10370,7 @@ class _PackTabState extends State<_PackTab>
   }
 
   Future<void> _openPackBarcodeCount(String orderId) async {
-    RenderLog.write('c623_barcode_count', 'open;surface=pack;order=$orderId');
+    RenderLog.write('c624_barcode_count', 'open;surface=pack;order=$orderId');
     final committed = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
         builder: (_) => const BarcodeCountScreen(supplierName: '', stage: 'shop'),

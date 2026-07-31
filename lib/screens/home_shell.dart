@@ -32,6 +32,8 @@ import 'admin/admin_fulfillment_screen.dart';
 import 'admin/admin_upi_screen.dart';
 import 'auth/login_screen.dart';
 import 'bulk_upload_screen.dart';
+import 'delivery/delivery_home_screen.dart'; // C629: the rider/agency surface
+import '../services/delivery_role_state.dart'; // C629: is_partner, from the backend
 import 'cart_screen.dart';
 import '../utils/toast.dart';
 import 'orders_screen.dart';
@@ -115,6 +117,10 @@ class _HomeShellState extends State<HomeShell> {
     });
     _initFromUrl();
     listenPopState(_applyPath);
+    // CHANGE #629: the delivery-role probe is fired by UserState (the one place
+    // a session is fetched); this only listens so the shell repaints when it
+    // answers.
+    DeliveryRoleState.instance.addListener(_onDeliveryRoleChanged);
     // CHANGE #497: categories are public data — fetch them immediately, in
     // parallel with auth/session resolution below, never behind it. Renders
     // instantly from cache when one exists; refreshes in the background with
@@ -404,9 +410,16 @@ class _HomeShellState extends State<HomeShell> {
   void dispose() {
     if (BulkUploadScreen.navToBulkUpload != null) BulkUploadScreen.navToBulkUpload = null;
     if (kIsWeb) HardwareKeyboard.instance.removeHandler(_globalKeyHandler);
+    DeliveryRoleState.instance.removeListener(_onDeliveryRoleChanged); // C629
     _searchFocus.dispose();
     _searchCtrl.dispose();
     super.dispose();
+  }
+
+  /// CHANGE #629 — the delivery probe settled (or was cleared by a sign-out).
+  /// Rebuild so the shell re-reads it; the decision itself stays in build().
+  void _onDeliveryRoleChanged() {
+    if (mounted) setState(() {});
   }
 
   // CHANGE #440: pressing any letter/number key with no text field focused
@@ -537,6 +550,34 @@ class _HomeShellState extends State<HomeShell> {
         backgroundColor: Color(0xFFF5F6F8),
         body: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43))),
       );
+    }
+
+    // CHANGE #629 (PART B1) — the delivery interface is its own home, exactly
+    // as the supplier interface is.
+    //
+    // my_session() has no 'delivery' surface: its CASE resolves a rider's login
+    // to 'customer', because a rider is not staff, not a supplier and not a
+    // pending supplier. Teaching it one means altering my_session(), and this
+    // change touches no RPC. So the role signal is the one the spec names —
+    // my_delivery_run().is_partner — still a BACKEND boolean, asked once per
+    // credential and never inferred here.
+    //
+    // The gate below holds the storefront back while that probe is in flight,
+    // so a rider never sees a flash of the customer shell. It cannot hang: the
+    // probe has a 6s timeout and resolves to "unresolved" on failure, which
+    // falls through to my_session()'s own answer.
+    final deliveryRole = DeliveryRoleState.instance;
+    if (!viewAs.isActive && auth.isAuthenticated) {
+      if (deliveryRole.isPartner) {
+        RenderLog.write('c629_surface', 'delivery');
+        return const DeliveryHomeScreen();
+      }
+      if (!deliveryRole.resolved && deliveryRole.loading) {
+        return const Scaffold(
+          backgroundColor: Color(0xFFF5F6F8),
+          body: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43))),
+        );
+      }
     }
 
     // #571 — which shell renders is my_session().surface, not a role ladder.

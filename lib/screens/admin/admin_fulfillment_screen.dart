@@ -27,6 +27,7 @@ import '../../widgets/box_date_row.dart'; // C545: BoxDateOlderRow (the shared d
 import '../../services/date_labels.dart'; // C546: backend-owned date strings
 import '../../supabase_config.dart' show SupabaseConfig;
 import 'voice_receive.dart';
+import 'admin_delivery_tab.dart'; // CHANGE #629: Delivery tab (zone + date scoped)
 import 'barcode_count_screen.dart'; // CHANGE #624: barcode counting screen
 import '../../widgets/pinned_footer_list.dart';
 import '../../widgets/fulfill_item_sheet.dart';
@@ -8218,6 +8219,7 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
   final _disputesKey  = GlobalKey<_DisputesScreenState>();
   final _packTabKey   = GlobalKey<_PackTabState>();
   final _bagTabKey    = GlobalKey<_BagTabState>();
+  final _deliveryKey  = GlobalKey<AdminDeliveryTabState>(); // CHANGE #629
 
   // ── #187→C353: realtime now via the single FulfillRealtime channel ────────
   Timer? _collectDebounce;
@@ -8528,6 +8530,16 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
                     ),
                   ),
               ]),
+              const SizedBox(width: 6),
+              // CHANGE #629: Delivery tab — index 5. Shares the ONE admin date
+              // picker and the ONE zone picker; the tab itself passes both to
+              // every call it makes.
+              _TabBtn(FulfillLookups.instance.ui('dlv_admin_tab'), _tab == 5, () {
+                setState(() => _tab = 5);
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  _deliveryKey.currentState?.reload();
+                });
+              }),
             ]),
           ),
           const SizedBox(height: 1),
@@ -8537,6 +8549,8 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
       Expanded(
         child: Builder(builder: (context) {
           RenderLog.write('c280_fulfill_tabs_5', 5);
+          // CHANGE #629: six tabs now — Delivery joined the five above.
+          RenderLog.write('c629_fulfill_tabs', 6);
           // CHANGE #284: confirms Confirm-all gating removed; fires at boot for curl verify.
           RenderLog.write('c284_confirm_always_clickable', 'gating_removed=y;enabled=always');
           return IndexedStack(
@@ -8553,6 +8567,7 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
               _DisputesScreen(key: _disputesKey, onCountChanged: _setDisputeCount,
                   onRefreshCollect: _refreshCollect, onRefreshArrivals: _refreshArrivals,
                   onRefreshPack: _refreshPack),
+              AdminDeliveryTab(key: _deliveryKey),
             ],
           );
         }),

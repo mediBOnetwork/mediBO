@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'models/app_session.dart';
 import 'screens/auth/google_flow.dart';
 import 'services/gis_auth.dart';
+import 'services/delivery_role_state.dart'; // C629: is this login a delivery account?
 import 'services/fulfill_realtime.dart'; // C355: app-level realtime auth + subscription
 import 'utils/render_log.dart';
 
@@ -309,6 +310,9 @@ class AuthNotifier extends ChangeNotifier {
     _profileChannel?.unsubscribe();
     _profileChannel = null;
     FulfillRealtime.instance.onAuthInactive(); // C355: drop the app-level socket
+    // CHANGE #629: the delivery answer belongs to the credential that just went
+    // away. A stale "yes" would open the rider interface for the next login.
+    DeliveryRoleState.instance.clear();
     RenderLog.write('auth_email', 'signed_out');
     RenderLog.write('auth_role', 'none');
   }
@@ -343,6 +347,14 @@ class AuthNotifier extends ChangeNotifier {
       // alive so cross-device changes arrive without a reload.
       _maybeActivateFulfillRealtime();
       _subscribeProfileRealtime();
+
+      // CHANGE #629 — "is this login a delivery account?" is asked here, in the
+      // ONE place a session is fetched, so every path that resolves a session
+      // (initialSession, signedIn, and the tokenRefreshed-only WhatsApp OTP
+      // path of #566) probes exactly once. Not awaited: a delivery probe must
+      // never sit in front of first paint, and DeliveryRoleState answers
+      // "unresolved", never "no", when it fails.
+      unawaited(DeliveryRoleState.instance.probe());
     } catch (_) {
       // A fetch error is NOT a clean "no account" answer. Keep whatever we
       // already had and flag the error so the UI can offer a retry.

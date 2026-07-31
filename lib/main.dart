@@ -25,6 +25,7 @@ import 'screens/public/inquiry_form_screen.dart';
 import 'pages/dispute_token_page.dart';
 import 'screens/public/dispute_form_screen.dart';
 import 'screens/public/public_order_page.dart';
+import 'screens/public/track_page.dart'; // C629: /track/<qr_token>
 import 'screens/code_resolver_page.dart';
 import 'screens/inquiry_link_page.dart';
 import 'screens/dispute_link_page.dart';
@@ -375,6 +376,18 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
                   return MaterialPageRoute(
                     settings: settings,
                     builder: (_) => PublicOrderPage(token: token),
+                  );
+                }
+              }
+              // CHANGE #629 (PART F4): /track/<qr_token> — the link the
+              // out-for-delivery WhatsApp message sends. No auth: the token in
+              // the URL is the authorisation, exactly as /order/<token> works.
+              if (name.startsWith('/track/')) {
+                final token = name.substring('/track/'.length).split('?').first;
+                if (token.isNotEmpty) {
+                  return MaterialPageRoute(
+                    settings: settings,
+                    builder: (_) => TrackPage(token: token),
                   );
                 }
               }

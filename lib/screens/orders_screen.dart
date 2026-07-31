@@ -340,6 +340,25 @@ class _OrdersScreenState extends State<OrdersScreen> {
           ';cust:${custId.isEmpty ? 0 : 1}');
       RenderLog.write('orders_fetched',
           'count:${parsed.length}${widget.viewAsUserId != null ? ':viewas' : ''}');
+      // CHANGE #625 — written where the PAYLOAD lands, not where the Items tab
+      // renders, so the key proves the new contract arrived without anyone
+      // having to tap a card open first. `dup` is the check that matters for
+      // the duplicate bug: distinct names vs rows, per order. dup:0 across the
+      // board means no order is carrying a repeated line.
+      if (parsed.isNotEmpty) {
+        var rows = 0, distinct = 0, unfOrders = 0, unfRows = 0;
+        for (final o in parsed) {
+          rows += o.lines.length;
+          distinct += o.lines.map((l) => l.name).toSet().length;
+          if (o.hasUnfulfilled) unfOrders++;
+          unfRows += o.unfulfilledLines.length;
+        }
+        RenderLog.write(
+            'c625_unfulfilled_items',
+            'orders:${parsed.length};lines:$rows;dup:${rows - distinct}'
+            ';unf_orders:$unfOrders;unf_lines:$unfRows'
+            ';src:my_orders_screen');
+      }
 
       // Signed in, yet the server resolved no account — re-ask rather than
       // render a signed-out empty state at a customer who has orders. On the

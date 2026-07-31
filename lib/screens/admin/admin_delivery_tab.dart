@@ -34,6 +34,7 @@ import '../../fulfill/fulfill_lookups.dart';
 import '../../services/admin_date_scope.dart';
 import '../../services/admin_zone_scope.dart';
 import '../../utils/render_log.dart';
+import 'admin_delivery_partners_section.dart';
 
 Color get _kGreen => FulfillLookups.instance.color('c_ff1b7a43', const Color(0xFF1B7A43));
 Color get _kBorder => FulfillLookups.instance.color('c_ffe5e7eb', const Color(0xFFE5E7EB));
@@ -424,6 +425,11 @@ class AdminDeliveryTabState extends State<AdminDeliveryTab>
               )
             else
               for (final o in _orders) _orderRow(o),
+
+            // ── CHANGE #630 (PART B): registrations awaiting approval, and
+            // the partners already working. Its own RPC, its own strings.
+            const SizedBox(height: 24),
+            const AdminDeliveryPartnersSection(),
           ],
         ),
       ),

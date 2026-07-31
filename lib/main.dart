@@ -26,6 +26,7 @@ import 'pages/dispute_token_page.dart';
 import 'screens/public/dispute_form_screen.dart';
 import 'screens/public/public_order_page.dart';
 import 'screens/public/track_page.dart'; // C629: /track/<qr_token>
+import 'screens/delivery/delivery_register_screen.dart'; // C630: PART A
 import 'screens/code_resolver_page.dart';
 import 'screens/inquiry_link_page.dart';
 import 'screens/dispute_link_page.dart';
@@ -460,6 +461,11 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
             routes: {
               '/login':        (_) => const LoginScreen(),
               '/register':     (_) => const LoginScreen(),
+              // CHANGE #630 (PART A) — the delivery-partner registration form.
+              // delivery_partner_register() stamps auth.uid() itself, so the
+              // screen asks for a sign-in rather than inventing an anonymous
+              // path.
+              '/delivery-register': (_) => const DeliveryRegisterScreen(),
               '/about-app':    (_) => const AboutScreen(),
               '/contact':      (_) => const ContactScreen(),
               '/terms':        (_) => const TermsScreen(),

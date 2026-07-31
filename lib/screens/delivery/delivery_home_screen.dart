@@ -31,7 +31,9 @@ import '../../fulfill/fulfill_lookups.dart';
 import '../../services/device_location.dart';
 import '../../user_state.dart';
 import '../../utils/render_log.dart';
+import 'agency_team_section.dart';
 import 'delivery_google_route.dart';
+import 'delivery_history_sheet.dart';
 import 'delivery_proof_sheet.dart';
 import 'delivery_run_map_panel.dart';
 
@@ -63,6 +65,13 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
   List<Map<String, dynamic>> _stops = const [];
   List<Map<String, dynamic>> _batches = const [];
 
+  /// C1 — my_delivery_home(). The tiles, the shift button and the earnings all
+  /// come from here, already labelled, valued and coloured.
+  Map<String, dynamic> _home = const {};
+
+  /// E6 — rider positions from agency_team(), pinned on the same map.
+  List<Map<String, dynamic>> _riderPins = const [];
+
   /// null = the "All" chip. Otherwise the batch's `key`.
   int? _batch;
 
@@ -81,9 +90,24 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
   bool _respondOpen = false;
 
   String get _runId => _run['run_id']?.toString() ?? '';
-  String get _runStatus => _run['run_status']?.toString() ?? 'none';
-  bool get _isAgency => _run['is_agency'] == true;
-  bool get _started => _runStatus == 'started';
+
+  // ── C5 — THE TRIP BUTTON IS THE BACKEND'S ────────────────────────────────
+  // my_delivery_run() now returns can_start / can_finish / trip_action /
+  // trip_button_label / trip_button_enabled. Nothing below compares
+  // run_status to 'started', 'none' or anything else: `run_status` is no
+  // longer read in this file at all. The button prints trip_button_label,
+  // enables on trip_button_enabled, and dispatches on trip_action.
+  String get _tripAction => _run['trip_action']?.toString() ?? 'none';
+  String get _tripLabel => _run['trip_button_label']?.toString() ?? '';
+  bool get _tripEnabled => _run['trip_button_enabled'] == true;
+
+  /// The trip is running exactly when the backend says the next action is to
+  /// finish it. This is a backend field, not a status string parsed here.
+  bool get _started => _tripAction == 'finish';
+
+  /// E1 — my_delivery_home()'s boolean, the ONE signal that builds the agency
+  /// section. Never a partner_type comparison.
+  bool get _isAgency => _home['is_agency'] == true;
 
   @override
   void initState() {
@@ -126,6 +150,12 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
       RenderLog.write('c629_delivery_run',
           'partner=${m['is_partner']};agency=${m['is_agency']};'
           'status=${m['run_status']};stops=${_stops.length}');
+      RenderLog.write('c630_delivery_onboarding',
+          'trip_action=${m['trip_action']};enabled=${m['trip_button_enabled']}');
+
+      // C1 — the home payload. Loaded in the same pass so tiles and stops can
+      // never show two different days.
+      await _loadHome();
 
       // The heartbeat follows the run's state, never a local flag.
       if (_started) {
@@ -140,6 +170,47 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
       if (!mounted) return;
       setState(() => _loading = false);
       RenderLog.write('c629_delivery_run_err', e.toString());
+    }
+  }
+
+  /// C1 — my_delivery_home(). No p_date: like my_delivery_run() it defaults to
+  /// IST today and scopes to the caller, so the app never names a date.
+  Future<void> _loadHome() async {
+    try {
+      final res = await Supabase.instance.client.rpc('my_delivery_home');
+      if (!mounted || res is! Map) return;
+      final m = Map<String, dynamic>.from(res);
+      setState(() => _home = m);
+      RenderLog.write('c630_delivery_onboarding',
+          'home;tiles=${_list(m['tiles']).length};on_shift=${m['on_shift']};'
+          'agency=${m['is_agency']}');
+    } catch (_) {
+      // The stops list is the screen's job; a missing home payload hides the
+      // strip rather than blocking the rider.
+    }
+  }
+
+  /// C3 — start / end the shift. The action and the label are both the
+  /// backend's; this sends the device position with whichever it asked for.
+  Future<void> _toggleShift() async {
+    if (_busy) return;
+    final action = _home['shift_action']?.toString() ?? '';
+    if (action.isEmpty) return;
+    setState(() => _busy = true);
+    try {
+      final fix = await DeviceLocation.current();
+      final res = await Supabase.instance.client.rpc('delivery_shift', params: {
+        'p_action': action,
+        'p_lat': fix?.lat,
+        'p_lng': fix?.lng,
+      });
+      if (!mounted) return;
+      if (res is Map) _toast(res['message']?.toString() ?? '');
+      RenderLog.write('c630_delivery_onboarding', 'shift;$action');
+      await _load();
+    } catch (_) {
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 
@@ -437,9 +508,16 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
         child: ListView(
           padding: const EdgeInsets.fromLTRB(12, 12, 12, 28),
           children: [
-            // ── B2 (1): the map, first.
+            // ── C: RIDER HOME, above the map/stops screen.
+            if (_home['allowed'] == true) ...[
+              _homeStrip(),
+              const SizedBox(height: 12),
+            ],
+
+            // ── B2 (1): the map. E6 — the agency's riders are pinned on this
+            // same map, alongside the stops.
             DeliveryRunMapPanel(
-              stops: _stops,
+              stops: [..._stops, ..._riderPins],
               roadPolyline: _roadPolyline,
               originLat: _meLat,
               originLng: _meLng,
@@ -472,10 +550,15 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
             else
               for (final s in visible) _stopRow(s),
 
-            // ── E: agency extras.
+            // ── E1: agency extras, built ONLY when my_delivery_home() says
+            // is_agency. A non-agency rider never constructs this widget, so
+            // agency_team() is never even called for them.
             if (_isAgency) ...[
               const SizedBox(height: 20),
-              _MyRidersSection(onChanged: _load),
+              AgencyTeamSection(
+                onChanged: _load,
+                onRiders: _setRiderPins,
+              ),
             ],
           ],
         ),
@@ -483,12 +566,16 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
     );
   }
 
-  /// B6. The trip's state is the backend's `run_status`; this renders the action
-  /// that state allows. There is no can_start / can_finish boolean in the
-  /// payload to read instead, and the RPCs validate independently (a start with
-  /// no run answers `no_run`), so an out-of-date screen cannot force a bad write.
+  /// C5 — the trip button, entirely backend-driven.
+  ///
+  /// Before #630 this branched on `run_status` and picked its own label from
+  /// two lookup keys. my_delivery_run() now answers all three questions itself:
+  ///   trip_action         'start' | 'finish' | 'none'  -> which RPC, or none
+  ///   trip_button_label   the words on the button
+  ///   trip_button_enabled whether it may be pressed
+  /// so there is no status comparison and no label choice left here.
   Widget _tripBar() {
-    if (_runId.isEmpty && !_started) return const SizedBox.shrink();
+    if (_tripAction == 'none' || _tripLabel.isEmpty) return const SizedBox.shrink();
     return SizedBox(
       width: double.infinity,
       child: ElevatedButton(
@@ -498,14 +585,185 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
           side: _started ? BorderSide(color: _kBorder) : null,
           padding: const EdgeInsets.symmetric(vertical: 14),
         ),
-        onPressed: _busy ? null : (_started ? _finishTrip : _startTrip),
+        onPressed: (_busy || !_tripEnabled) ? null : _doTrip,
         child: _busy
             ? const SizedBox(
                 width: 18, height: 18,
                 child: CircularProgressIndicator(strokeWidth: 2))
-            : Text(_started ? _ui('dlv_trip_finish') : _ui('dlv_trip_start'),
-                style: const TextStyle(fontWeight: FontWeight.w700)),
+            : Text(_tripLabel, style: const TextStyle(fontWeight: FontWeight.w700)),
       ),
+    );
+  }
+
+  /// C5 — dispatch on trip_action, never on a status the app interpreted.
+  Future<void> _doTrip() async {
+    switch (_tripAction) {
+      case 'start':
+        await _startTrip();
+        break;
+      case 'finish':
+        await _finishTrip();
+        break;
+      default:
+        break;
+    }
+  }
+
+  // ── PART C: rider home ────────────────────────────────────────────────────
+
+  /// E6 — riders become map pins. `pin_color` is the rider's OWN
+  /// status_colors.bg from agency_team(), used verbatim: this picks no colour,
+  /// it only says which backend colour the pin uses. Riders without a fix are
+  /// dropped, because a pin needs coordinates the backend actually has.
+  void _setRiderPins(List<Map<String, dynamic>> riders) {
+    final pins = <Map<String, dynamic>>[];
+    for (final r in riders) {
+      final lat = (r['lat'] as num?)?.toDouble();
+      final lng = (r['lng'] as num?)?.toDouble();
+      if (lat == null || lng == null) continue;
+      final colors = r['status_colors'] is Map
+          ? Map<String, dynamic>.from(r['status_colors'] as Map)
+          : const <String, dynamic>{};
+      pins.add({
+        'lat': lat,
+        'lng': lng,
+        'pin_color': colors['bg']?.toString() ?? '',
+        'pharmacy_name': r['name']?.toString() ?? '',
+      });
+    }
+    if (!mounted) return;
+    setState(() => _riderPins = pins);
+  }
+
+  /// C2/C3/C4 — tiles, shift button, earnings. Every string, number and colour
+  /// below is printed from the payload. Nothing is computed, relabelled or
+  /// re-ordered: `tiles` renders in the order the backend sent it.
+  Widget _homeStrip() {
+    final tiles = _list(_home['tiles']);
+    final shiftLabel = _home['shift_button_label']?.toString() ?? '';
+    final earning = _home['earning_today_display']?.toString() ?? '';
+    final perDrop = _home['per_drop_display']?.toString() ?? '';
+    final zone = _home['zone_label']?.toString() ?? '';
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: _kBorder),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Row(children: [
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(_home['partner_name']?.toString() ?? '',
+                  style: TextStyle(
+                      fontSize: 15, fontWeight: FontWeight.w700, color: _kText)),
+              if (zone.isNotEmpty)
+                Text(zone, style: TextStyle(fontSize: 12.5, color: _kSub)),
+            ]),
+          ),
+          if (_home['on_shift'] == true)
+            Text(_ui('dlv_on_shift'),
+                style: TextStyle(
+                    fontSize: 12.5, fontWeight: FontWeight.w600, color: _kGreen)),
+        ]),
+
+        // C2 — tiles, verbatim.
+        if (tiles.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          Wrap(spacing: 8, runSpacing: 8, children: [
+            for (final t in tiles) _homeTile(t),
+          ]),
+        ],
+
+        // C4 — earnings, already formatted as display strings.
+        if (earning.isNotEmpty || perDrop.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          Row(children: [
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(_ui('dlv_earning_today'),
+                    style: TextStyle(fontSize: 12.5, color: _kSub)),
+                Text(earning,
+                    style: TextStyle(
+                        fontSize: 18, fontWeight: FontWeight.w700, color: _kText)),
+              ]),
+            ),
+            if (perDrop.isNotEmpty)
+              Text(perDrop, style: TextStyle(fontSize: 12.5, color: _kSub)),
+          ]),
+        ],
+
+        // C3 — the shift button. Its words and its action are both the
+        // backend's; the device position rides along.
+        if (shiftLabel.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          Row(children: [
+            Expanded(
+              child: OutlinedButton(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: _kGreen,
+                  side: BorderSide(color: _kGreen),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+                onPressed: _busy ? null : _toggleShift,
+                child: Text(shiftLabel,
+                    style: const TextStyle(
+                        fontSize: 13.5, fontWeight: FontWeight.w600)),
+              ),
+            ),
+            const SizedBox(width: 8),
+            // D — history lives one tap away, not in the main scroll.
+            OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: _kText,
+                side: BorderSide(color: _kBorder),
+                padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
+              ),
+              onPressed: () => showDeliveryHistorySheet(context),
+              icon: const Icon(Icons.history, size: 16),
+              label: Text(_ui('dlv_history'), style: const TextStyle(fontSize: 13.5)),
+            ),
+          ]),
+        ],
+      ]),
+    );
+  }
+
+  /// C2 — one tile, printed. label, value/display and colors{bg,fg} all arrive
+  /// finished; this chooses none of them.
+  Widget _homeTile(Map<String, dynamic> t) {
+    final colors = t['colors'] is Map
+        ? Map<String, dynamic>.from(t['colors'] as Map)
+        : const <String, dynamic>{};
+    // `display` is the backend's formatted form when it sent one ("12.4 km");
+    // otherwise the raw value it sent. The app formats neither.
+    final shown = (t['display']?.toString() ?? '').isNotEmpty
+        ? t['display'].toString()
+        : (t['value']?.toString() ?? '');
+
+    return Container(
+      width: 96,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+      decoration: BoxDecoration(
+        color: _hex(colors['bg']?.toString()) ?? const Color(0xFFF5F6F8),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(shown,
+            style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+                color: _hex(colors['fg']?.toString()) ?? _kText)),
+        const SizedBox(height: 2),
+        Text(t['label']?.toString() ?? '',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+                fontSize: 12,
+                color: _hex(colors['fg']?.toString()) ?? _kSub)),
+      ]),
     );
   }
 
@@ -720,124 +978,3 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
   }
 }
 
-// ── PART E: agency extras ─────────────────────────────────────────────────────
-
-/// E1/E2 — "My riders", shown only when my_delivery_run() says is_agency.
-/// agency_add_partner() takes ONE jsonb argument, so the form is submitted as a
-/// single map; only full_name and phone are required, and the RPC says so
-/// itself (name_required) rather than this form deciding.
-class _MyRidersSection extends StatefulWidget {
-  final Future<void> Function() onChanged;
-  const _MyRidersSection({required this.onChanged});
-
-  @override
-  State<_MyRidersSection> createState() => _MyRidersSectionState();
-}
-
-class _MyRidersSectionState extends State<_MyRidersSection> {
-  bool _open = false;
-  bool _busy = false;
-  final _nameCtrl = TextEditingController();
-  final _phoneCtrl = TextEditingController();
-  final _vehicleCtrl = TextEditingController();
-
-  @override
-  void dispose() {
-    _nameCtrl.dispose();
-    _phoneCtrl.dispose();
-    _vehicleCtrl.dispose();
-    super.dispose();
-  }
-
-  Future<void> _add() async {
-    if (_busy) return;
-    setState(() => _busy = true);
-    try {
-      final res = await Supabase.instance.client.rpc('agency_add_partner', params: {
-        'p': {
-          'full_name': _nameCtrl.text.trim(),
-          'phone': _phoneCtrl.text.trim(),
-          'vehicle_type': _vehicleCtrl.text.trim(),
-        },
-      });
-      if (!mounted) return;
-      final msg = res is Map ? (res['message']?.toString() ?? '') : '';
-      if (res is Map && res['ok'] == true) {
-        _nameCtrl.clear();
-        _phoneCtrl.clear();
-        _vehicleCtrl.clear();
-        setState(() => _open = false);
-        await widget.onChanged();
-      }
-      if (msg.isNotEmpty && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-      }
-    } catch (_) {
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(color: _kBorder),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Row(children: [
-          Expanded(
-            child: Text(_ui('dlv_my_riders'),
-                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: _kText)),
-          ),
-          TextButton(
-            onPressed: () => setState(() => _open = !_open),
-            child: Text(_open ? _ui('dlv_cancel') : _ui('dlv_add_rider')),
-          ),
-        ]),
-        if (_open) ...[
-          const SizedBox(height: 8),
-          TextField(
-            controller: _nameCtrl,
-            decoration: InputDecoration(
-              labelText: _ui('dlv_rider_name'),
-              border: const OutlineInputBorder(),
-              isDense: true,
-            ),
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _phoneCtrl,
-            keyboardType: TextInputType.phone,
-            decoration: InputDecoration(
-              labelText: _ui('dlv_rider_phone'),
-              border: const OutlineInputBorder(),
-              isDense: true,
-            ),
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _vehicleCtrl,
-            decoration: InputDecoration(
-              labelText: _ui('dlv_rider_vehicle'),
-              border: const OutlineInputBorder(),
-              isDense: true,
-            ),
-          ),
-          const SizedBox(height: 10),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _kGreen,
-              foregroundColor: Colors.white,
-            ),
-            onPressed: _busy ? null : _add,
-            child: Text(_ui('dlv_rider_save')),
-          ),
-        ],
-      ]),
-    );
-  }
-}

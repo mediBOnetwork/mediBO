@@ -94,6 +94,12 @@ List<LatLng> _decodeEncodedPolyline(String encoded) {
       .toList();
 }
 
+// CHANGE #629: the delivery run map draws the SAME kind of encoded polyline
+// (delivery_runs.road_polyline, written by delivery_apply_google() exactly as
+// route_apply_google() writes route_plan_routes.road_polyline). It reuses this
+// decoder rather than growing a second one — one decoder, one behaviour.
+List<LatLng> decodeEncodedPolyline(String encoded) => _decodeEncodedPolyline(encoded);
+
 // CHANGE #478 (fix v2): the ancestor page SingleChildScrollView (owned by
 // admin_customer_screen.dart, several widget layers above this file) needs to
 // switch to NeverScrollableScrollPhysics for as long as a finger is down on

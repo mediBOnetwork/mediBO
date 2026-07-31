@@ -4,7 +4,9 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../fulfill/fulfill_lookups.dart'; // C629: backend-owned button copy
 import '../services/date_labels.dart';
+import 'delivery/customer_track_sheet.dart'; // C629: PART F1 — live tracking
 import 'package:http/http.dart' as http;
 import 'package:pharma_b2b/utils/toast.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -236,6 +238,13 @@ class _OrdersScreenState extends State<OrdersScreen> {
     // be dead on that login exactly as in #566.
     _authSub =
         Supabase.instance.client.auth.onAuthStateChange.listen(_onAuthState);
+    // CHANGE #629: the Track button's label lives in the copy catalog like
+    // every other string. Load it, then repaint — the button is never given a
+    // hardcoded fallback, so an unloaded catalog shows no word rather than an
+    // English one written here.
+    FulfillLookups.instance.ensureLoaded().then((_) {
+      if (mounted) setState(() {});
+    });
     // #572 — subscribe only AFTER the fetch has resolved the account id; the
     // channel filter needs the account, which only the backend can tell us.
     _fetch();
@@ -671,6 +680,19 @@ class _OrderCardState extends State<_OrderCard> {
             const SizedBox(width: 8),
             Expanded(
               child: _TabButton(label: 'Bill', selected: _tab == 2, onTap: () => _toggleTab(2)),
+            ),
+            const SizedBox(width: 8),
+            // CHANGE #629 (PART F1): Track. This opens a sheet rather than a
+            // fourth accordion section, because customer_track_order() answers
+            // for itself whether there is anything to track — including
+            // 'Preparing your order' when no delivery row exists yet. The card
+            // never works that out from order.status.
+            Expanded(
+              child: _TabButton(
+                label: FulfillLookups.instance.ui('dlv_track'),
+                selected: false,
+                onTap: () => showCustomerTrackSheet(context, order.id),
+              ),
             ),
           ]),
           if (_tab != null) ...[

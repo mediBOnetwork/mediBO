@@ -11,16 +11,15 @@
 // admin_fulfillment_screen.dart; does not touch that list, the Warehouse
 // tab, or any other screen.
 
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
-import 'package:flutter/foundation.dart' show Factory;
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../screens/admin/admin_customer_screen.dart' show AdminCustomerScreen;
 import '../utils/toast.dart';
+import 'adaptive_map.dart';
 
 // Parses a backend-supplied "#RRGGBB" (or "RRGGBB") hex colour string.
 // Pure format conversion — Flutter needs a Color object, the RPC gives a
@@ -361,24 +360,27 @@ class _SupplierMapGroupsPanelState extends State<SupplierMapGroupsPanel> {
 }
 
 // ── Map ───────────────────────────────────────────────────────────────────
-// Same google_maps_flutter package + GoogleMap config knobs the Route tab's
-// map uses (lib/widgets/route_google_map_panel.dart) — no new map dependency,
-// no second map implementation. Scoped to its own touch-scroll lock (passed
-// in by the panel above) rather than the Route tab's, since this lives on a
-// different screen entirely.
+// CHANGE #634: draws through AdaptiveMap, so the provider and tile source come
+// from map_config_get() exactly as they do for the Route tab and the delivery
+// map. This file no longer names a map provider or carries an API key. The
+// pins are unchanged — still one dot per map_supplier_groups().map_points row,
+// in the pin_color the backend chose.
 class _SupplierPointsMap extends StatefulWidget {
   final Map? center;
   final List<Map<String, dynamic>> points;
   final ValueNotifier<bool> touchLock;
-  const _SupplierPointsMap({required this.center, required this.points, required this.touchLock});
+  const _SupplierPointsMap({
+    required this.center,
+    required this.points,
+    required this.touchLock,
+  });
 
   @override
   State<_SupplierPointsMap> createState() => _SupplierPointsMapState();
 }
 
 class _SupplierPointsMapState extends State<_SupplierPointsMap> {
-  GoogleMapController? _controller;
-  final Map<String, BitmapDescriptor> _iconCache = {};
+  final Map<String, Uint8List> _iconCache = {};
 
   @override
   void initState() {
@@ -390,7 +392,6 @@ class _SupplierPointsMapState extends State<_SupplierPointsMap> {
   void didUpdateWidget(covariant _SupplierPointsMap old) {
     super.didUpdateWidget(old);
     _prepareIcons();
-    _moveCamera();
   }
 
   Future<void> _prepareIcons() async {
@@ -408,7 +409,7 @@ class _SupplierPointsMapState extends State<_SupplierPointsMap> {
     if (mounted && changed) setState(() {});
   }
 
-  Future<BitmapDescriptor> _dotMarkerIcon(Color color) async {
+  Future<Uint8List> _dotMarkerIcon(Color color) async {
     const size = 40.0;
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder, const Rect.fromLTWH(0, 0, size, size));
@@ -424,69 +425,46 @@ class _SupplierPointsMapState extends State<_SupplierPointsMap> {
     final picture = recorder.endRecording();
     final image = await picture.toImage(size.toInt(), size.toInt());
     final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-    return BitmapDescriptor.bytes(bytes!.buffer.asUint8List(), width: 24, height: 24);
-  }
-
-  Future<void> _moveCamera() async {
-    final c = _controller;
-    final center = widget.center;
-    if (c == null || center == null) return;
-    final lat = (center['lat'] as num?)?.toDouble();
-    final lng = (center['lng'] as num?)?.toDouble();
-    if (lat == null || lng == null) return;
-    await c.animateCamera(CameraUpdate.newLatLng(LatLng(lat, lng)));
+    return bytes!.buffer.asUint8List();
   }
 
   @override
   Widget build(BuildContext context) {
     final centerMap = widget.center;
-    // Raipur fallback only used before the first response lands.
-    final centerLat = (centerMap?['lat'] as num?)?.toDouble() ?? 21.2514;
-    final centerLng = (centerMap?['lng'] as num?)?.toDouble() ?? 81.6296;
+    final centerLat = (centerMap?['lat'] as num?)?.toDouble();
+    final centerLng = (centerMap?['lng'] as num?)?.toDouble();
 
-    final markers = <Marker>{};
+    final pins = <MapPin>[];
     for (final p in widget.points) {
       final lat = (p['lat'] as num?)?.toDouble();
       final lng = (p['lng'] as num?)?.toDouble();
       if (lat == null || lng == null) continue;
       final hex = p['pin_color']?.toString();
-      final icon = (hex != null ? _iconCache[hex] : null) ?? BitmapDescriptor.defaultMarker;
-      markers.add(Marker(
-        markerId: MarkerId('supplier_${p['supplier']}_${lat}_$lng'),
-        position: LatLng(lat, lng),
-        icon: icon,
-        anchor: const Offset(0.5, 0.5),
-        infoWindow: InfoWindow(title: p['supplier']?.toString() ?? ''),
+      pins.add(MapPin(
+        id: 'supplier_${p['supplier']}_${lat}_$lng',
+        lat: lat,
+        lng: lng,
+        iconBytes: hex != null ? _iconCache[hex] : null,
+        iconWidth: 24,
+        iconHeight: 24,
+        tipAtPoint: false,
+        fallbackColor: _hexColor(hex, const Color(0xFF1B7A43)),
+        title: p['supplier']?.toString() ?? '',
       ));
     }
 
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(10),
-      child: Listener(
-        onPointerDown: (_) => widget.touchLock.value = true,
-        onPointerUp: (_) => widget.touchLock.value = false,
-        onPointerCancel: (_) => widget.touchLock.value = false,
-        onPointerSignal: (_) {},
-        child: SizedBox(
-          height: 320,
-          child: GoogleMap(
-            initialCameraPosition: CameraPosition(target: LatLng(centerLat, centerLng), zoom: 13),
-            markers: markers,
-            onMapCreated: (c) => _controller = c,
-            myLocationButtonEnabled: false,
-            mapToolbarEnabled: false,
-            zoomControlsEnabled: true,
-            zoomGesturesEnabled: true,
-            scrollGesturesEnabled: true,
-            rotateGesturesEnabled: false,
-            tiltGesturesEnabled: false,
-            webGestureHandling: WebGestureHandling.greedy,
-            gestureRecognizers: <Factory<OneSequenceGestureRecognizer>>{
-              Factory<EagerGestureRecognizer>(() => EagerGestureRecognizer()),
-            },
-          ),
-        ),
-      ),
+    // A7 — no plotted suppliers: AdaptiveMap prints map_config.empty_label
+    // instead of a blank grey map. No copy is written in this file.
+    return AdaptiveMap(
+      pins: pins,
+      center: (centerLat != null && centerLng != null)
+          ? MapPoint(centerLat, centerLng)
+          : null,
+      cameraSignature: '${pins.length}|$centerLat,$centerLng',
+      height: 320,
+      borderRadius: const BorderRadius.all(Radius.circular(10)),
+      touchLock: widget.touchLock,
+      logKey: 'c634_supplier_map',
     );
   }
 }

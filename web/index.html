@@ -464,10 +464,13 @@
           onload="try{window.mediboNote&&window.mediboNote('c559_gis_script','onload',true)}catch(e){}"
           onerror="try{window.mediboNote&&window.mediboNote('c559_gis_script','onerror',true)}catch(e){}"></script>
 
-  <!-- CHANGE #463 — Google Maps JS API for the Route tab map. Browser key
-       "medibo-web-maps", restricted to medibo.in/*.pages.dev + Maps JS API
-       only. Safe to publish (see key's HTTP referrer restriction). -->
-  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCKGmOhiHrpzaov_o800JY36hGnAWerdgg"></script>
+  <!-- CHANGE #634 — the Google Maps JS API <script> tag (with its hardcoded
+       key) is GONE. Every map now reads map_config_get(); when that row says
+       uses_google_js the loader in lib/services/maps_js_loader_web.dart injects
+       this script at runtime with the key the backend sent. On the current
+       default (provider='osm') no Google Maps JS is loaded at all, so there is
+       nothing to bill and nothing to misconfigure.
+       Navigation deep links are unaffected — they never used this API. -->
 
   <!-- ═══════════════════════════════════════════════════════════════════════
        ADMIN ALERT AUDIO  (Web Audio API — no file required)

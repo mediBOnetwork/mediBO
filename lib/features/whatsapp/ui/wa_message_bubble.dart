@@ -4,6 +4,7 @@ import '../../../services/date_labels.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:pharma_b2b/services/map_config.dart'; // C634: map deep links from config
 import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/utils/wa_markdown.dart';
 import '../data/wa_repository.dart';
@@ -115,11 +116,15 @@ class _WaMessageBubbleState extends State<WaMessageBubble> {
           lng: msg.longitude,
           name: msg.locationName,
           address: msg.locationAddress,
-          onOpen: () {
-            if (msg.latitude != null && msg.longitude != null) {
-              _openUrl(
-                  'https://maps.google.com/?q=${msg.latitude},${msg.longitude}');
-            }
+          // CHANGE #634: URL from map_config.point_deeplink, not a literal
+          // written here. Keyless — deep-links to the Google Maps app.
+          onOpen: () async {
+            if (msg.latitude == null || msg.longitude == null) return;
+            try {
+              final cfg = MapConfigService.cached ?? await MapConfigService.load();
+              final url = cfg.pointUrl(msg.latitude!, msg.longitude!);
+              if (url.isNotEmpty) await _openUrl(url);
+            } catch (_) {}
           },
         );
       } else if (isContact) {

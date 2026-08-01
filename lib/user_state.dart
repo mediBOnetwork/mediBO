@@ -8,6 +8,7 @@ import 'screens/auth/google_flow.dart';
 import 'services/gis_auth.dart';
 import 'services/delivery_role_state.dart'; // C629: is this login a delivery account?
 import 'services/fulfill_realtime.dart'; // C355: app-level realtime auth + subscription
+import 'services/map_config.dart'; // C634: one backend-owned map config, session-cached
 import 'utils/render_log.dart';
 
 /// CHANGE #571 — ONE question, ONE answer.
@@ -313,6 +314,10 @@ class AuthNotifier extends ChangeNotifier {
     // CHANGE #629: the delivery answer belongs to the credential that just went
     // away. A stale "yes" would open the rider interface for the next login.
     DeliveryRoleState.instance.clear();
+    // CHANGE #634: the map config is fetched once per session and cached. Drop
+    // it with the rest of the account state so the next login re-reads it
+    // rather than rendering on the previous session's provider/key.
+    MapConfigService.clear();
     RenderLog.write('auth_email', 'signed_out');
     RenderLog.write('auth_role', 'none');
   }
@@ -347,6 +352,12 @@ class AuthNotifier extends ChangeNotifier {
       // alive so cross-device changes arrive without a reload.
       _maybeActivateFulfillRealtime();
       _subscribeProfileRealtime();
+
+      // CHANGE #634 — warm the ONE map config here, in the one place a session
+      // is resolved, so every map surface and every map deep link already has
+      // it by the time a user can tap. NOT awaited and never allowed to throw:
+      // a map config must never sit in front of first paint (BOOT RESILIENCE).
+      MapConfigService.load().ignore();
 
       // CHANGE #629 — "is this login a delivery account?" is asked here, in the
       // ONE place a session is fetched, so every path that resolves a session

@@ -1,21 +1,26 @@
-// lib/widgets/route_google_map_panel.dart — CHANGE #463
-// Google Maps rendering of ONE route (route_map() RPC). DUMB: this widget
-// only draws what the server sends — no ETA maths, no km rounding, no
-// building of Google Maps URLs, no deriving marker colour from open/closed
-// (that's `tone`, already decided server-side).
+// lib/widgets/route_google_map_panel.dart — CHANGE #634 (was #463)
+// Rendering of ONE route (route_map() RPC). DUMB: this widget only draws what
+// the server sends — no ETA maths, no km rounding, no building of Google Maps
+// URLs, no deriving marker colour from open/closed (that's `tone`, already
+// decided server-side).
+//
+// CHANGE #634: the base map is no longer a Google map chosen by this file. It
+// is whatever map_config_get() says, drawn by AdaptiveMap. This file no longer
+// imports google_maps_flutter and no longer knows an API key exists. Markers,
+// polyline, pin colours and stop ordering are unchanged — they still come from
+// route_map().
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
-import 'package:flutter/foundation.dart' show Factory;
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
 
 import '../utils/render_log.dart';
+import 'adaptive_map.dart';
 
 // CHANGE #484: fetch the actual road-following path from the self-hosted
 // OSRM server so the route line curves along streets instead of jumping
@@ -32,10 +37,10 @@ const int _osrmMaxWaypointsPerRequest = 100;
 /// concatenated path has no gap. Returns null on ANY failure (timeout,
 /// non-200, malformed body, network error, VM off) so the caller can fall
 /// back to straight lines — this must never throw.
-Future<List<LatLng>?> fetchRoadPolyline(List<LatLng> stops) async {
+Future<List<MapPoint>?> fetchRoadPolyline(List<MapPoint> stops) async {
   if (stops.length < 2) return null;
 
-  final chunks = <List<LatLng>>[];
+  final chunks = <List<MapPoint>>[];
   if (stops.length <= _osrmMaxWaypointsPerRequest) {
     chunks.add(stops);
   } else {
@@ -49,7 +54,7 @@ Future<List<LatLng>?> fetchRoadPolyline(List<LatLng> stops) async {
     }
   }
 
-  final result = <LatLng>[];
+  final result = <MapPoint>[];
   for (final chunk in chunks) {
     final points = await _fetchOsrmChunk(chunk);
     if (points == null) return null; // any chunk failing fails the whole path
@@ -62,10 +67,10 @@ Future<List<LatLng>?> fetchRoadPolyline(List<LatLng> stops) async {
   return result.length >= 2 ? result : null;
 }
 
-Future<List<LatLng>?> _fetchOsrmChunk(List<LatLng> points) async {
+Future<List<MapPoint>?> _fetchOsrmChunk(List<MapPoint> points) async {
   if (points.length < 2) return null;
   try {
-    final coords = points.map((p) => '${p.longitude},${p.latitude}').join(';');
+    final coords = points.map((p) => '${p.lng},${p.lat}').join(';');
     final url = Uri.parse('$_osrmBaseUrl$coords?overview=full&geometries=polyline');
     final resp = await http.get(url).timeout(const Duration(seconds: 6));
     if (resp.statusCode != 200) return null;
@@ -87,10 +92,10 @@ Future<List<LatLng>?> _fetchOsrmChunk(List<LatLng> points) async {
 // hand-rolled decoder — same standard Encoded Polyline Algorithm Format (used
 // by both OSRM's geometries=polyline and Google Routes API's
 // ENCODED_POLYLINE), but battle-tested instead of reimplemented here.
-List<LatLng> _decodeEncodedPolyline(String encoded) {
+List<MapPoint> _decodeEncodedPolyline(String encoded) {
   return PolylinePoints()
       .decodePolyline(encoded)
-      .map((p) => LatLng(p.latitude, p.longitude))
+      .map((p) => MapPoint(p.latitude, p.longitude))
       .toList();
 }
 
@@ -98,7 +103,7 @@ List<LatLng> _decodeEncodedPolyline(String encoded) {
 // (delivery_runs.road_polyline, written by delivery_apply_google() exactly as
 // route_apply_google() writes route_plan_routes.road_polyline). It reuses this
 // decoder rather than growing a second one — one decoder, one behaviour.
-List<LatLng> decodeEncodedPolyline(String encoded) => _decodeEncodedPolyline(encoded);
+List<MapPoint> decodeEncodedPolyline(String encoded) => _decodeEncodedPolyline(encoded);
 
 // CHANGE #478 (fix v2): the ancestor page SingleChildScrollView (owned by
 // admin_customer_screen.dart, several widget layers above this file) needs to
@@ -125,13 +130,12 @@ class RouteGoogleMapPanel extends StatefulWidget {
 }
 
 class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
-  GoogleMapController? _controller;
-  final Map<String, BitmapDescriptor> _iconCache = {};
+  final Map<String, Uint8List> _iconCache = {};
 
   // CHANGE #484: road-following polyline fetched from OSRM, cached per
   // route_id so switching Map/List tabs doesn't refetch. Null (or a
   // mismatched route id) means "still on the straight-line fallback".
-  final Map<String, List<LatLng>> _roadPolylineCache = {};
+  final Map<String, List<MapPoint>> _roadPolylineCache = {};
   String? _roadFetchInFlightForRouteId;
 
   @override
@@ -154,7 +158,7 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
   // after a Google Routes optimization. Same encoding as OSRM's, so the
   // shared _decodeEncodedPolyline handles it. Null/empty/malformed -> null,
   // and the caller falls back to OSRM or the straight-line path — never throws.
-  List<LatLng>? _googlePolylinePoints(Map<String, dynamic> data) {
+  List<MapPoint>? _googlePolylinePoints(Map<String, dynamic> data) {
     final encoded = data['road_polyline']?.toString();
     if (encoded == null || encoded.isEmpty) return null;
     try {
@@ -165,7 +169,7 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
     }
   }
 
-  List<LatLng> _pathPoints(Map<String, dynamic> data) {
+  List<MapPoint> _pathPoints(Map<String, dynamic> data) {
     final path = ((data['path'] as List?) ?? [])
         .map((p) => Map<String, dynamic>.from(p as Map))
         .toList();
@@ -173,9 +177,9 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
         .map((p) {
           final lat = (p['lat'] as num?)?.toDouble();
           final lng = (p['lng'] as num?)?.toDouble();
-          return (lat != null && lng != null) ? LatLng(lat, lng) : null;
+          return (lat != null && lng != null) ? MapPoint(lat, lng) : null;
         })
-        .whereType<LatLng>()
+        .whereType<MapPoint>()
         .toList();
   }
 
@@ -191,7 +195,7 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
     if (stops.length < 2) return;
 
     _roadFetchInFlightForRouteId = routeId;
-    List<LatLng>? result;
+    List<MapPoint>? result;
     try {
       result = await fetchRoadPolyline(stops);
     } catch (_) {
@@ -236,7 +240,9 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
     if (mounted) setState(() {});
   }
 
-  Future<BitmapDescriptor> _numberedMarkerIcon(String label, Color bg, {bool teardrop = false}) async {
+  /// Returns raw PNG bytes rather than a provider-specific descriptor — the
+  /// same art is drawn whichever base map map_config_get() selects.
+  Future<Uint8List> _numberedMarkerIcon(String label, Color bg, {bool teardrop = false}) async {
     if (!teardrop) {
       // Unchanged — still used for the hub "H" pin.
       const size = 84.0;
@@ -266,13 +272,12 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
       final picture = recorder.endRecording();
       final image = await picture.toImage(size.toInt(), size.toInt());
       final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-      return BitmapDescriptor.bytes(bytes!.buffer.asUint8List(), width: 40, height: 40);
+      return bytes!.buffer.asUint8List();
     }
 
     // CHANGE #490: small teardrop pin — head ~32dp, full height ~46dp (down
     // from the old 40dp circle), tip anchored at the stop coordinate so
-    // `anchor: Offset(0.5, 1.0)` lands exactly on it. Supersampled 3x for
-    // crisp text at this size.
+    // `tipAtPoint` lands exactly on it. Supersampled 3x for crisp text.
     const double w = 32.0;
     const double h = 46.0;
     const double scale = 3.0;
@@ -322,29 +327,12 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
     final picture = recorder.endRecording();
     final image = await picture.toImage((w * scale).round(), (h * scale).round());
     final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-    return BitmapDescriptor.bytes(bytes!.buffer.asUint8List(), width: w, height: h);
+    return bytes!.buffer.asUint8List();
   }
 
-  BitmapDescriptor? _iconFor({required bool isHub, required String label, required bool bad}) {
+  Uint8List? _iconFor({required bool isHub, required String label, required bool bad}) {
     final key = isHub ? 'hub|$label' : 'stop|$label|${bad ? 'bad' : 'ok'}';
     return _iconCache[key];
-  }
-
-  Future<void> _fitBounds() async {
-    final c = _controller;
-    final b = widget.mapData['bounds'];
-    if (c == null || b is! Map) return;
-    final south = (b['south'] as num?)?.toDouble();
-    final north = (b['north'] as num?)?.toDouble();
-    final west = (b['west'] as num?)?.toDouble();
-    final east = (b['east'] as num?)?.toDouble();
-    if (south == null || north == null || west == null || east == null) return;
-    try {
-      await c.animateCamera(CameraUpdate.newLatLngBounds(
-        LatLngBounds(southwest: LatLng(south, west), northeast: LatLng(north, east)),
-        48,
-      ));
-    } catch (_) {}
   }
 
   @override
@@ -356,19 +344,23 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
         .toList();
     final center = data['center'] as Map?;
 
-    final markers = <Marker>{};
+    final pins = <MapPin>[];
     if (hub != null) {
       final lat = (hub['lat'] as num?)?.toDouble();
       final lng = (hub['lng'] as num?)?.toDouble();
       final hubLabel = hub['marker_label']?.toString() ?? 'H';
       if (lat != null && lng != null) {
-        markers.add(Marker(
-          markerId: const MarkerId('hub'),
-          position: LatLng(lat, lng),
-          icon: _iconFor(isHub: true, label: hubLabel, bad: false) ?? BitmapDescriptor.defaultMarker,
-          anchor: const Offset(0.5, 0.5),
-          infoWindow: InfoWindow(title: hub['title']?.toString() ?? hubLabel),
-          zIndexInt: 10,
+        pins.add(MapPin(
+          id: 'hub',
+          lat: lat,
+          lng: lng,
+          iconBytes: _iconFor(isHub: true, label: hubLabel, bad: false),
+          iconWidth: 40,
+          iconHeight: 40,
+          tipAtPoint: false,
+          fallbackColor: const Color(0xFF1E3A8A),
+          title: hub['title']?.toString() ?? hubLabel,
+          zIndex: 10,
         ));
       }
     }
@@ -379,15 +371,17 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
       final label = s['marker_label']?.toString() ?? s['seq']?.toString() ?? '?';
       final bad = s['tone'] == 'bad';
       final seq = (s['seq'] as num?)?.toInt() ?? 0;
-      markers.add(Marker(
-        markerId: MarkerId('stop_${s['seq']}'),
-        position: LatLng(lat, lng),
-        icon: _iconFor(isHub: false, label: label, bad: bad) ??
-            BitmapDescriptor.defaultMarkerWithHue(bad ? BitmapDescriptor.hueRed : BitmapDescriptor.hueGreen),
-        // CHANGE #490: teardrop pin — tip (not center) sits on the stop coord.
-        anchor: const Offset(0.5, 1.0),
+      pins.add(MapPin(
+        id: 'stop_${s['seq']}',
+        lat: lat,
+        lng: lng,
+        iconBytes: _iconFor(isHub: false, label: label, bad: bad),
+        // CHANGE #490: teardrop pin — tip (not centre) sits on the stop coord.
+        tipAtPoint: true,
+        fallbackColor: bad ? const Color(0xFFDC2626) : const Color(0xFF1B7A43),
+        title: label,
         // Earlier stops stay on top when pins overlap.
-        zIndexInt: 1000 - seq,
+        zIndex: 1000 - seq,
         onTap: () => widget.onTapStop(s),
       ));
     }
@@ -411,8 +405,6 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
     RenderLog.write('c463_markers', stops.length.toString());
     RenderLog.write('c463_hub', hub != null ? 1 : 0);
     RenderLog.write('c463_polyline', polylinePoints.length.toString());
-    RenderLog.write('c472_route_map_eager_gestures', 1);
-    RenderLog.write('c473_route_map_one_finger_fixed', 1);
     RenderLog.write('c478_map_scroll_locked', 1);
     RenderLog.write('c478_physics_lock_wired', 1);
     if (usingOsrmPolyline) {
@@ -421,87 +413,47 @@ class _RouteGoogleMapPanelState extends State<RouteGoogleMapPanel> {
     if (usingGooglePolyline) {
       RenderLog.write('c485_google_road_polyline', polylinePoints.length.toString());
       // CHANGE #487: confirms the decoded road_polyline actually reaches the
-      // GoogleMap's `polylines:` set below, not just that it was decoded.
+      // map's line set below, not just that it was decoded.
       RenderLog.write('c487_road_polyline_drawn', polylinePoints.length.toString());
     }
-
-    // CHANGE #492: direction arrows (added #490) removed — they rendered as
-    // a dense chevron band that made the route harder to read. Back to a
-    // single plain polyline; pins are untouched.
     RenderLog.write('c490_pins_teardrop', 1);
     RenderLog.write('c492_arrows_removed', 1);
 
     final centerLat = (center?['lat'] as num?)?.toDouble();
     final centerLng = (center?['lng'] as num?)?.toDouble();
-    final initialTarget = (centerLat != null && centerLng != null)
-        ? LatLng(centerLat, centerLng)
-        : (polylinePoints.isNotEmpty ? polylinePoints.first : const LatLng(0, 0));
 
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(12),
-      child: Listener(
-        // C478 v2: NotificationListener<ScrollNotification> (tried previously)
-        // only observes a scroll AFTER the ancestor SingleChildScrollView has
-        // already moved — it can't prevent it. The real fix is upstream: flip
-        // routeMapTouchLock the instant a finger touches the map, which
-        // admin_customer_screen.dart's outer scroll view reads to switch to
-        // NeverScrollableScrollPhysics for the duration of the touch. Even if
-        // the page's drag recognizer still wins the gesture arena for this
-        // pointer, NeverScrollableScrollPhysics rejects the resulting scroll
-        // offset deltas, so the page stays visually still either way.
-        onPointerDown: (_) => routeMapTouchLock.value = true,
-        onPointerUp: (_) => routeMapTouchLock.value = false,
-        onPointerCancel: (_) => routeMapTouchLock.value = false,
-        // Absorb wheel/trackpad pointer signals over the map box too.
-        onPointerSignal: (_) {},
-        child: SizedBox(
-          height: widget.isDesktop ? 420 : 320,
-          child: GoogleMap(
-            initialCameraPosition: CameraPosition(target: initialTarget, zoom: 13),
-            markers: markers,
-            polylines: {
-              if (polylinePoints.length >= 2)
-                Polyline(
-                  polylineId: const PolylineId('route'),
-                  points: polylinePoints,
-                  color: const Color(0xFF1B7A43),
-                  width: usingRoadPolyline ? 5 : 4,
-                  geodesic: true,
-                  startCap: Cap.roundCap,
-                  endCap: Cap.roundCap,
-                  jointType: JointType.round,
-                ),
-            },
-            onMapCreated: (c) {
-              _controller = c;
-              _fitBounds();
-            },
-            myLocationButtonEnabled: false,
-            mapToolbarEnabled: false,
-            zoomControlsEnabled: true,
-            zoomGesturesEnabled: true,
-            scrollGesturesEnabled: true,
-            rotateGesturesEnabled: false,
-            tiltGesturesEnabled: false,
-            // C473: google_maps_flutter_web ignores gestureRecognizers
-            // entirely — the map is a real embedded DOM element (Google
-            // Maps JS SDK), not a canvas platform view, so Flutter's
-            // gesture arena never sees its touches. The actual fix for the
-            // "two fingers" overlay + page-steals-scroll behaviour is the
-            // JS SDK's own gestureHandling option: 'cooperative' (the
-            // default when embedded in a scrollable page) explicitly lets
-            // one-finger touches pass through to scroll the page and shows
-            // the overlay; 'greedy' makes the map consume all touch/scroll
-            // gestures instead, which is what removes both symptoms.
-            webGestureHandling: WebGestureHandling.greedy,
-            // Kept for parity if this ever ships to Android/iOS, where
-            // gestureRecognizers IS read and Eager wins the gesture arena.
-            gestureRecognizers: <Factory<OneSequenceGestureRecognizer>>{
-              Factory<EagerGestureRecognizer>(() => EagerGestureRecognizer()),
-            }.toSet(),
+    // route_map().bounds, when the RPC sent it.
+    final b = data['bounds'];
+    MapBoundsBox? bounds;
+    if (b is Map) {
+      final south = (b['south'] as num?)?.toDouble();
+      final north = (b['north'] as num?)?.toDouble();
+      final west = (b['west'] as num?)?.toDouble();
+      final east = (b['east'] as num?)?.toDouble();
+      if (south != null && north != null && west != null && east != null) {
+        bounds = MapBoundsBox(south: south, west: west, north: north, east: east);
+      }
+    }
+
+    return AdaptiveMap(
+      pins: pins,
+      lines: [
+        if (polylinePoints.length >= 2)
+          MapLine(
+            id: 'route',
+            points: polylinePoints,
+            color: const Color(0xFF1B7A43),
+            width: usingRoadPolyline ? 5 : 4,
           ),
-        ),
-      ),
+      ],
+      center: (centerLat != null && centerLng != null)
+          ? MapPoint(centerLat, centerLng)
+          : null,
+      fitBounds: bounds,
+      cameraSignature: '${data['route_id']}|${polylinePoints.length}',
+      height: widget.isDesktop ? 420 : 320,
+      touchLock: routeMapTouchLock,
+      logKey: 'c634_route_map',
     );
   }
 }

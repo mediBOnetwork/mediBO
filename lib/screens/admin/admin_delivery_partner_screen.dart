@@ -26,6 +26,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../fulfill/fulfill_lookups.dart';
 import '../../services/admin_date_scope.dart';
 import '../../services/admin_zone_scope.dart';
+import '../../services/map_config.dart'; // C634: map deep links come from config
 import '../../utils/render_log.dart';
 import 'admin_delivery_partners_section.dart';
 
@@ -336,10 +337,15 @@ class _AdminDeliveryPartnerScreenState extends State<AdminDeliveryPartnerScreen>
     );
   }
 
+  // CHANGE #634: the URL is map_config.point_deeplink with {lat}/{lng} filled
+  // in — not a route literal written here. KEYLESS: it deep-links to the Google
+  // Maps app and never touches the Maps JavaScript API.
   Future<void> _openMap(double lat, double lng) async {
     try {
-      await launchUrl(Uri.parse('https://www.google.com/maps?q=$lat,$lng'),
-          mode: LaunchMode.externalApplication);
+      final cfg = MapConfigService.cached ?? await MapConfigService.load();
+      final url = cfg.pointUrl(lat, lng);
+      if (url.isEmpty) return;
+      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
     } catch (_) {}
   }
 

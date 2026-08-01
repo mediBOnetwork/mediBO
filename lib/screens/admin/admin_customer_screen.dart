@@ -20,6 +20,7 @@ import '../../utils/render_log.dart';
 import '../../services/admin_date_scope.dart'; // CHANGE #545
 import '../../services/admin_zone_scope.dart'; // CHANGE #609
 import '../../services/date_labels.dart'; // CHANGE #548
+import '../../services/map_config.dart'; // C634: map deep links from config
 import '../../widgets/route_google_map_panel.dart'; // CHANGE #463
 import '../bulk_upload_screen.dart';
 import '../../services/payment_claims_service.dart';
@@ -7137,8 +7138,13 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
                       claim.locationAddress!.isNotEmpty)
                   ? claim.locationAddress!
                   : '${claim.locationLat!.toStringAsFixed(5)}, ${claim.locationLng!.toStringAsFixed(5)}';
-              final mapsUrl =
-                  'https://www.google.com/maps?q=${claim.locationLat},${claim.locationLng}';
+              // CHANGE #634: from map_config.point_deeplink, not a literal.
+              // Keyless — the Google Maps app link never touches the JS API.
+              // MapConfigService is warmed when the session loads, so `cached`
+              // is populated long before this row can be tapped.
+              final mapsUrl = MapConfigService.cached
+                      ?.pointUrl(claim.locationLat!, claim.locationLng!) ??
+                  '';
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -7149,8 +7155,15 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         InkWell(
-                          onTap: () {
-                            try { html.window.open(mapsUrl, '_blank'); } catch (_) {}
+                          onTap: () async {
+                            // Warmed at session load; the await is only for the
+                            // rare first-paint window before the config lands.
+                            final url = mapsUrl.isNotEmpty
+                                ? mapsUrl
+                                : (await MapConfigService.load()).pointUrl(
+                                    claim.locationLat!, claim.locationLng!);
+                            if (url.isEmpty) return;
+                            try { html.window.open(url, '_blank'); } catch (_) {}
                           },
                           borderRadius: BorderRadius.circular(8),
                           child: Padding(

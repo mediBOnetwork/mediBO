@@ -12,16 +12,19 @@
 // D5 — the road polyline is delivery_runs.road_polyline, decoded with the SAME
 // decoder the Route tab's map uses (decodeEncodedPolyline, exported from
 // route_google_map_panel.dart). No second decoder, no second polyline library.
+//
+// CHANGE #634 — the base map is now AdaptiveMap, so provider/tiles/key come
+// from map_config_get() like every other map surface. Pins, colours and
+// ordering are untouched.
 
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
-import 'package:flutter/foundation.dart' show Factory;
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import '../../utils/render_log.dart';
+import '../../widgets/adaptive_map.dart';
 import '../../widgets/route_google_map_panel.dart' show decodeEncodedPolyline;
 
 /// Parses the backend's `#RRGGBB`. Returns null when absent/malformed so the
@@ -73,8 +76,7 @@ class DeliveryRunMapPanel extends StatefulWidget {
 }
 
 class _DeliveryRunMapPanelState extends State<DeliveryRunMapPanel> {
-  GoogleMapController? _controller;
-  final Map<String, BitmapDescriptor> _iconCache = {};
+  final Map<String, Uint8List> _iconCache = {};
 
   @override
   void initState() {
@@ -87,7 +89,6 @@ class _DeliveryRunMapPanelState extends State<DeliveryRunMapPanel> {
     super.didUpdateWidget(old);
     if (old.stops.length != widget.stops.length || _signature(old.stops) != _signature(widget.stops)) {
       _prepareIcons();
-      WidgetsBinding.instance.addPostFrameCallback((_) => _fitBounds());
     }
   }
 
@@ -108,12 +109,15 @@ class _DeliveryRunMapPanelState extends State<DeliveryRunMapPanel> {
       final label = (s['seq'] as num?)?.toInt().toString() ?? '';
       _iconCache[key] = await _pinIcon(label, color);
     }
+    _iconCache[_kRiderIcon] ??= await _dotIcon(_riderColor);
+    _iconCache[_kMeIcon] ??= await _dotIcon(_meColor);
     if (mounted) setState(() {});
   }
 
   /// Teardrop pin, tip on the coordinate — same shape the Route tab's map uses
-  /// (CHANGE #490), just painted in the colour the backend sent.
-  Future<BitmapDescriptor> _pinIcon(String label, Color bg) async {
+  /// (CHANGE #490), just painted in the colour the backend sent. Returns raw
+  /// PNG bytes so the same art draws on either base map (#634).
+  Future<Uint8List> _pinIcon(String label, Color bg) async {
     const double w = 32.0;
     const double h = 46.0;
     const double scale = 3.0;
@@ -166,61 +170,36 @@ class _DeliveryRunMapPanelState extends State<DeliveryRunMapPanel> {
     final picture = recorder.endRecording();
     final image = await picture.toImage((w * scale).round(), (h * scale).round());
     final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-    return BitmapDescriptor.bytes(bytes!.buffer.asUint8List(), width: w, height: h);
+    return bytes!.buffer.asUint8List();
   }
 
-  List<LatLng> _points() {
-    final pts = <LatLng>[];
-    for (final s in widget.stops) {
-      final lat = (s['lat'] as num?)?.toDouble();
-      final lng = (s['lng'] as num?)?.toDouble();
-      if (lat != null && lng != null) pts.add(LatLng(lat, lng));
-    }
-    // Riders count towards the fit too — an agency whose stops are all handed
-    // out would otherwise have nothing to frame the camera on.
-    for (final e in widget.extraMarkers) {
-      final lat = (e['lat'] as num?)?.toDouble();
-      final lng = (e['lng'] as num?)?.toDouble();
-      if (lat != null && lng != null) pts.add(LatLng(lat, lng));
-    }
-    if (widget.originLat != null && widget.originLng != null) {
-      pts.add(LatLng(widget.originLat!, widget.originLng!));
-    }
-    return pts;
-  }
-
-  Future<void> _fitBounds() async {
-    final c = _controller;
-    final pts = _points();
-    if (c == null || pts.isEmpty) return;
-    if (pts.length == 1) {
-      try {
-        await c.animateCamera(CameraUpdate.newLatLngZoom(pts.first, 14));
-      } catch (_) {}
-      return;
-    }
-    var south = pts.first.latitude, north = pts.first.latitude;
-    var west = pts.first.longitude, east = pts.first.longitude;
-    for (final p in pts) {
-      south = math.min(south, p.latitude);
-      north = math.max(north, p.latitude);
-      west = math.min(west, p.longitude);
-      east = math.max(east, p.longitude);
-    }
-    try {
-      await c.animateCamera(CameraUpdate.newLatLngBounds(
-        LatLngBounds(
-          southwest: LatLng(south, west),
-          northeast: LatLng(north, east),
-        ),
-        48,
-      ));
-    } catch (_) {}
+  /// A small circular dot, used for riders and for the "me" marker — the two
+  /// markers that carry no backend pin_color and must never be mistaken for a
+  /// numbered delivery stop.
+  Future<Uint8List> _dotIcon(Color bg) async {
+    const size = 36.0;
+    const scale = 3.0;
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder, const Rect.fromLTWH(0, 0, size * scale, size * scale));
+    canvas.scale(scale);
+    const centre = Offset(size / 2, size / 2);
+    canvas.drawCircle(centre, size / 2 - 3, Paint()..color = bg);
+    canvas.drawCircle(
+      centre, size / 2 - 3,
+      Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3,
+    );
+    final picture = recorder.endRecording();
+    final image = await picture.toImage((size * scale).round(), (size * scale).round());
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+    return bytes!.buffer.asUint8List();
   }
 
   @override
   Widget build(BuildContext context) {
-    final markers = <Marker>{};
+    final pins = <MapPin>[];
 
     for (var i = 0; i < widget.stops.length; i++) {
       final s = widget.stops[i];
@@ -228,13 +207,15 @@ class _DeliveryRunMapPanelState extends State<DeliveryRunMapPanel> {
       final lng = (s['lng'] as num?)?.toDouble();
       if (lat == null || lng == null) continue;
       final seq = (s['seq'] as num?)?.toInt() ?? (i + 1);
-      markers.add(Marker(
-        markerId: MarkerId('stop_${s['delivery_id'] ?? i}'),
-        position: LatLng(lat, lng),
-        icon: _iconCache[_iconKey(s)] ?? BitmapDescriptor.defaultMarker,
-        anchor: const Offset(0.5, 1.0),
-        zIndexInt: 1000 - seq,
-        infoWindow: InfoWindow(title: s['pharmacy_name']?.toString() ?? ''),
+      pins.add(MapPin(
+        id: 'stop_${s['delivery_id'] ?? i}',
+        lat: lat,
+        lng: lng,
+        iconBytes: _iconCache[_iconKey(s)],
+        tipAtPoint: true,
+        fallbackColor: colorFromBackendHex(s['pin_color']?.toString()),
+        title: s['pharmacy_name']?.toString() ?? '',
+        zIndex: 1000 - seq,
         onTap: widget.onTapStop == null ? null : () => widget.onTapStop!(s),
       ));
     }
@@ -246,26 +227,35 @@ class _DeliveryRunMapPanelState extends State<DeliveryRunMapPanel> {
       final lat = (e['lat'] as num?)?.toDouble();
       final lng = (e['lng'] as num?)?.toDouble();
       if (lat == null || lng == null) continue;
-      markers.add(Marker(
-        markerId: MarkerId('rider_${e['partner_id'] ?? i}'),
-        position: LatLng(lat, lng),
-        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueViolet),
-        infoWindow: InfoWindow(title: e['name']?.toString() ?? ''),
-        zIndexInt: 1500,
+      pins.add(MapPin(
+        id: 'rider_${e['partner_id'] ?? i}',
+        lat: lat,
+        lng: lng,
+        iconBytes: _iconCache[_kRiderIcon],
+        iconWidth: 22,
+        iconHeight: 22,
+        tipAtPoint: false,
+        fallbackColor: _riderColor,
+        title: e['name']?.toString() ?? '',
+        zIndex: 1500,
       ));
     }
 
     if (widget.originLat != null && widget.originLng != null) {
-      markers.add(Marker(
-        markerId: const MarkerId('me'),
-        position: LatLng(widget.originLat!, widget.originLng!),
-        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
-        anchor: const Offset(0.5, 0.5),
-        zIndexInt: 2000,
+      pins.add(MapPin(
+        id: 'me',
+        lat: widget.originLat!,
+        lng: widget.originLng!,
+        iconBytes: _iconCache[_kMeIcon],
+        iconWidth: 22,
+        iconHeight: 22,
+        tipAtPoint: false,
+        fallbackColor: _meColor,
+        zIndex: 2000,
       ));
     }
 
-    List<LatLng> road = const [];
+    List<MapPoint> road = const [];
     if (widget.roadPolyline.isNotEmpty) {
       try {
         road = decodeEncodedPolyline(widget.roadPolyline);
@@ -274,48 +264,34 @@ class _DeliveryRunMapPanelState extends State<DeliveryRunMapPanel> {
       }
     }
 
-    RenderLog.write('c629_delivery_map', markers.length.toString());
+    RenderLog.write('c629_delivery_map', pins.length.toString());
     if (road.length >= 2) {
       RenderLog.write('c629_delivery_road_polyline', road.length.toString());
     }
 
-    final pts = _points();
-    final initial = pts.isNotEmpty ? pts.first : const LatLng(21.2514, 81.6296);
-
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(12),
-      child: SizedBox(
-        height: widget.height,
-        child: GoogleMap(
-          initialCameraPosition: CameraPosition(target: initial, zoom: 12),
-          markers: markers,
-          polylines: {
-            if (road.length >= 2)
-              Polyline(
-                polylineId: const PolylineId('run'),
-                points: road,
-                color: const Color(0xFF1B7A43),
-                width: 5,
-                startCap: Cap.roundCap,
-                endCap: Cap.roundCap,
-                jointType: JointType.round,
-              ),
-          },
-          onMapCreated: (c) {
-            _controller = c;
-            _fitBounds();
-          },
-          myLocationButtonEnabled: false,
-          mapToolbarEnabled: false,
-          zoomControlsEnabled: true,
-          rotateGesturesEnabled: false,
-          tiltGesturesEnabled: false,
-          webGestureHandling: WebGestureHandling.greedy,
-          gestureRecognizers: <Factory<OneSequenceGestureRecognizer>>{
-            Factory<EagerGestureRecognizer>(() => EagerGestureRecognizer()),
-          }.toSet(),
-        ),
-      ),
+    return AdaptiveMap(
+      pins: pins,
+      lines: [
+        if (road.length >= 2)
+          MapLine(
+            id: 'run',
+            points: road,
+            color: const Color(0xFF1B7A43),
+            width: 5,
+          ),
+      ],
+      cameraSignature: '${_signature(widget.stops)}|${widget.extraMarkers.length}|${road.length}',
+      height: widget.height,
+      logKey: 'c634_delivery_map',
     );
   }
 }
+
+// Rider / "me" marker colours. Not derived from any status — these two markers
+// have no backend pin_color because they are not delivery stops. They replace
+// google_maps_flutter's hueViolet / hueAzure defaults, which only existed while
+// the map was hard-wired to Google.
+const Color _riderColor = Color(0xFF7C3AED);
+const Color _meColor = Color(0xFF2563EB);
+const String _kRiderIcon = '__rider__';
+const String _kMeIcon = '__me__';

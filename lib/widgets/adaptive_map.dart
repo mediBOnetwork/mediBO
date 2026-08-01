@@ -281,7 +281,7 @@ class _TileMap extends StatefulWidget {
 class _TileMapState extends State<_TileMap> {
   final fm.MapController _controller = fm.MapController();
   bool _ready = false;
-  String _fittedFor = ' ';
+  String _fittedFor = 'unfitted';
 
   List<ll.LatLng> _points() => [
         for (final p in widget.host.pins) ll.LatLng(p.lat, p.lng),
@@ -367,7 +367,7 @@ class _TileMapState extends State<_TileMap> {
           ),
           onMapReady: () {
             _ready = true;
-            _fittedFor = ' ';
+            _fittedFor = 'unfitted';
             _maybeFit();
           },
         ),
@@ -476,7 +476,7 @@ class _GoogleJsMap extends StatefulWidget {
 class _GoogleJsMapState extends State<_GoogleJsMap> {
   late Future<bool> _js;
   gm.GoogleMapController? _controller;
-  String _fittedFor = ' ';
+  String _fittedFor = 'unfitted';
 
   @override
   void initState() {
@@ -609,7 +609,7 @@ class _GoogleJsMapState extends State<_GoogleJsMap> {
           },
           onMapCreated: (c) {
             _controller = c;
-            _fittedFor = ' ';
+            _fittedFor = 'unfitted';
             _maybeFit();
           },
           myLocationButtonEnabled: false,

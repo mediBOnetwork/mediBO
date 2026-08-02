@@ -198,6 +198,11 @@ class Product {
   /// Pack description, e.g. "Strip of 10 tablets".
   final String packSize;
 
+  /// CHANGE #636 — the dosage form ("Strip", "Vial", "Bottle"), straight from
+  /// MEDICINE.pack_type. Rendered as the small chip under the compact card and
+  /// on the product page. Never derived from the name or the pack size.
+  final String formChip;
+
   /// Maximum Retail Price per pack (the printed consumer price).
   final double mrp;
 
@@ -255,6 +260,7 @@ class Product {
     required this.imageUrl,
     this.imageUrls = const [],
     required this.packSize,
+    this.formChip = '',
     required this.mrp,
     required this.b2bPrice,
     required this.moq,
@@ -284,6 +290,7 @@ class Product {
         imageUrl: imageUrl,
         imageUrls: imageUrls,
         packSize: packSize,
+        formChip: formChip,
         mrp: mrp,
         b2bPrice: b2bPrice,
         gstPercent: gstPercent,
@@ -338,6 +345,7 @@ class Product {
           : (map['pack_size'] as String?)?.isNotEmpty == true
               ? map['pack_size'] as String
               : (map['pack_type'] as String?) ?? '',
+      formChip: (map['pack_type'] as String?)?.trim() ?? '',
       mrp: mrp,
       b2bPrice: b2bPrice,
       gstPercent: (map['gst_percent'] as num?)?.toDouble() ?? 12.0,
@@ -370,6 +378,7 @@ class Product {
         'imageUrl': imageUrl,
         'imageUrls': imageUrls,
         'packSize': packSize,
+        'formChip': formChip,
         'mrp': mrp,
         'b2bPrice': b2bPrice,
         'gstPercent': gstPercent,
@@ -400,6 +409,7 @@ class Product {
               .toList() ??
           [],
       packSize: (map['packSize'] as String?) ?? '',
+      formChip: (map['formChip'] as String?) ?? '',
       mrp: (map['mrp'] as num?)?.toDouble() ?? 0.0,
       b2bPrice: (map['b2bPrice'] as num?)?.toDouble() ?? 0.0,
       gstPercent: (map['gstPercent'] as num?)?.toDouble() ?? 12.0,
@@ -436,6 +446,7 @@ class Product {
       imageUrl: imageUrl,
       imageUrls: imageUrl.isNotEmpty ? [imageUrl] : [],
       packSize: packSize.isNotEmpty ? packSize : packType,
+      formChip: packType,
       mrp: mrp,
       b2bPrice: mrp,
       gstPercent: (m['gst_percent'] as num?)?.toDouble() ?? 12.0,

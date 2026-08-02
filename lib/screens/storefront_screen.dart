@@ -17,7 +17,7 @@ import '../theme.dart';
 import '../util.dart';
 import '../utils/render_log.dart';
 import '../widgets/animations.dart';
-import '../widgets/product_card.dart';
+import '../widgets/compact_product_card.dart';
 
 const double _kMaxContent = 1200;
 
@@ -1453,13 +1453,20 @@ class _ProductsSection extends StatelessWidget {
           addRepaintBoundaries: true,
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
             crossAxisCount: count,
-            mainAxisExtent: 365,
-            crossAxisSpacing: 16,
-            mainAxisSpacing: 16,
+            // CHANGE #636 — the extent is the card's own constant, summed from
+            // the parts it lays out with. The old hardcoded 365 was duplicated
+            // here and in the skeleton, so a taller card overflowed silently.
+            mainAxisExtent: CompactProductCard.extent,
+            crossAxisSpacing: 12,
+            mainAxisSpacing: 14,
           ),
           itemCount: items.length,
           itemBuilder: (context, i) {
-            final card = ProductCard(product: items[i], isBestSeller: i < 3);
+            final card = CompactProductCard(
+              product: items[i],
+              onTap: () => Navigator.of(context)
+                  .pushNamed('/product/${items[i].id}'),
+            );
             // First page: stagger entrance on initial load.
             if (i < MedicineRepository.pageSize) {
               return EntranceAnimator(
@@ -1934,12 +1941,14 @@ class _SkeletonGrid extends StatelessWidget {
             addRepaintBoundaries: true,
             gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: count,
-              mainAxisExtent: 365,
-              crossAxisSpacing: 16,
-              mainAxisSpacing: 16,
+              // Same extent and spacing as the real grid — the skeleton→content
+              // swap must not move a single pixel.
+              mainAxisExtent: CompactProductCard.extent,
+              crossAxisSpacing: 12,
+              mainAxisSpacing: 14,
             ),
             itemCount: count * 2,
-            itemBuilder: (context, i) => const _SkeletonCard(),
+            itemBuilder: (context, i) => const CompactCardSkeleton(),
           );
         },
       ),
@@ -1972,51 +1981,6 @@ class _SkeletonTile extends StatelessWidget {
   }
 }
 
-class _SkeletonCard extends StatelessWidget {
-  const _SkeletonCard();
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Brand.border, width: 0.5),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.06),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: const [
-          SizedBox(
-            width: double.infinity,
-            height: 148,
-            child: ColoredBox(color: Brand.border),
-          ),
-          Padding(
-            padding: EdgeInsets.fromLTRB(12, 12, 12, 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                SkeletonBox(width: 130, height: 14),
-                SizedBox(height: 8),
-                SkeletonBox(width: 90, height: 11),
-                SizedBox(height: 10),
-                SkeletonBox(width: 100, height: 11),
-                SizedBox(height: 14),
-                SkeletonBox(width: 70, height: 16),
-                SizedBox(height: 12),
-                SkeletonBox(width: double.infinity, height: 38, radius: 10),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
+// CHANGE #636 — _SkeletonCard removed. The grid's skeleton is now
+// CompactCardSkeleton, which is built from the SAME constants as the real
+// compact card, so the two can no longer drift apart.

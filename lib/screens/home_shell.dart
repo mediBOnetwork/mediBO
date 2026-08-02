@@ -16,6 +16,7 @@ import '../view_as_state.dart';
 import '../utils/render_log.dart';
 import '../utils/responsive.dart';
 import '../widgets/animations.dart';
+import '../widgets/cart_pill.dart'; // C636
 import 'admin/admin_add_medicine_screen.dart';
 import 'admin/admin_manage_admins_screen.dart';
 import 'admin/admin_customer_screen.dart';
@@ -793,25 +794,21 @@ class _HomeShellState extends State<HomeShell> {
               ],
             ),
           ),
-          if (!isAdmin && _index == 0 && AppState.of(context).distinctItems > 0)
+          // CHANGE #636 — the floating cart pill replaces the sticky cart bar.
+          //
+          // The `distinctItems > 0` gate that used to live here is gone on
+          // purpose. It was the shell counting the cart to decide whether a
+          // cart control exists — the backend already answers that
+          // (`render.pill.show`) — and because it read AppState at the shell
+          // level, every cart write rebuilt the entire HomeShell subtree.
+          // CartPill reads the cart itself, so a write now repaints one pill.
+          if (!isAdmin && _index == 0)
             Positioned(
               bottom: 16,
               left: 0,
               right: 0,
-              child: Builder(
-                builder: (ctx) {
-                  final sw = MediaQuery.sizeOf(ctx).width;
-                  return Center(
-                    child: SizedBox(
-                      width: sw * 0.90,
-                      child: RepaintBoundary(
-                        child: _StickyCartBar(
-                          onTap: () => _openCart(),
-                        ),
-                      ),
-                    ),
-                  );
-                },
+              child: RepaintBoundary(
+                child: CartPill(onTap: () => _openCart()),
               ),
             ),
           if (!isAdmin)
@@ -894,23 +891,14 @@ class _HomeShellState extends State<HomeShell> {
               ),
             ],
           ),
-          if (!isAdmin && _index == 0 && AppState.of(context).distinctItems > 0)
+          // CHANGE #636 — same pill on desktop, same reasoning as mobile above.
+          if (!isAdmin && _index == 0)
             Positioned(
               left: 0,
               right: 0,
               bottom: 16,
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 560),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: RepaintBoundary(
-                      child: _WebDiscountBar(
-                        onTap: () => _openCart(),
-                      ),
-                    ),
-                  ),
-                ),
+              child: RepaintBoundary(
+                child: CartPill(onTap: () => _openCart()),
               ),
             ),
           if (!isAdmin) ...[

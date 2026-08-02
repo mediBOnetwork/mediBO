@@ -41,6 +41,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pharma_b2b/app_state.dart';
 import 'package:pharma_b2b/models/cart_model.dart';
 import 'package:pharma_b2b/models/home_sections.dart';
+import 'package:pharma_b2b/models/storefront_p3.dart';
 import 'package:pharma_b2b/widgets/home_sections_view.dart';
 
 /// One rail card — the exact shape storefront_home_v2() sends.
@@ -194,7 +195,9 @@ Future<_Taps> _pump(WidgetTester tester, Map<String, dynamic> payload) async {
             key: ValueKey('feed-${_pumpSeq++}'),
             loader: () async => HomeSections.fromMap(payload),
             onCategoryTap: taps.categories.add,
-            onCompanyTap: taps.companies.add,
+            // #638 — this file covers the sections themselves; the strip has
+            // its own tests in company_notify_test.dart.
+            notificationsLoader: () async => BackInStock.empty,
           ),
         ),
       ),
@@ -381,14 +384,21 @@ void main() {
           reason: 'the raw category name is what the chips use');
     });
 
-    testWidgets('a company tile hands back the label for the search fallback',
+    // CHANGE #638 deliberately changed this protected behaviour: a company
+    // tile used to hand its LABEL back for a search prefill, because no
+    // company listing existed. One does now, so the tile opens /company/<key>
+    // and the search fallback is gone.
+    testWidgets('a company tile opens /company/<key>, url-encoded',
         (tester) async {
       final taps = await _pump(tester, _payload());
 
       await tester.tap(find.text('SUN PHARMACEUTICAL INDUSTRIES LTD'));
       await tester.pumpAndSettle();
 
-      expect(taps.companies, ['SUN PHARMACEUTICAL INDUSTRIES LTD']);
+      expect(taps.routes, contains('/company/sun%20pharmaceutical%20industries'),
+          reason: 'the backend key, encoded — never the display label');
+      expect(taps.companies, isEmpty,
+          reason: 'the #637 search-prefill fallback is gone');
     });
 
     testWidgets('See-all uses the section is own destination', (tester) async {

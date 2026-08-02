@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../data/medicine_repository.dart';
 import '../models/home_sections.dart';
+import '../models/storefront_p3.dart';
 import 'animations.dart';
 import 'compact_product_card.dart';
 
@@ -12,21 +15,23 @@ import 'compact_product_card.dart';
 /// named. It does not sort, filter, re-title, or decide which sections a
 /// viewer gets — reordering the home page is an UPDATE in Postgres.
 ///
-/// Navigation is injected rather than hardcoded: category and company taps go
-/// back up to HomeShell, which owns the category/search state. Only the
-/// product route is pushed directly, because `/product/:id` is a real named
-/// route (CHANGE #636) and the card already owns that contract.
+/// Category taps go back up to HomeShell, which owns the category state and
+/// its URL. Product and company taps push their own named routes
+/// (`/product/:id` from CHANGE #636, `/company/:key` from CHANGE #638),
+/// because those are real routes with their own screens.
 class HomeSectionsView extends StatefulWidget {
-  /// Test seam: supply the payload instead of calling the RPC. Same shape as
-  /// [ProductDetailScreen.loader].
+  /// Test seam: supply the payload instead of calling the RPC.
   final Future<HomeSections> Function()? loader;
 
   /// A category tile / See-all(category) was tapped. HomeShell turns this into
-  /// its existing category selection + /c/<slug> URL push.
+  /// its existing category selection and the matching URL push.
   final ValueChanged<String> onCategoryTap;
 
-  /// A company tile was tapped. HomeShell prefills and submits a search.
-  final ValueChanged<String> onCompanyTap;
+  /// Test seam: the back-in-stock strip payload.
+  final Future<BackInStock> Function()? notificationsLoader;
+
+  /// Test seam: what `stock_notify_seen` does. Production calls the RPC.
+  final Future<void> Function(List<int> ids)? onSeen;
 
   /// Rendered as the last item of the feed. The home page keeps its trust
   /// badges and footer this way without a second scrollable — the feed is one
@@ -37,7 +42,8 @@ class HomeSectionsView extends StatefulWidget {
     super.key,
     this.loader,
     required this.onCategoryTap,
-    required this.onCompanyTap,
+    this.notificationsLoader,
+    this.onSeen,
     this.footer,
   });
 
@@ -58,7 +64,8 @@ class HomeSectionsView extends StatefulWidget {
 
 class _HomeSectionsViewState extends State<HomeSectionsView> {
   HomeSections? _data;
-  bool _loading = false;
+  BackInStock _backInStock = BackInStock.empty;
+  bool _seenSent = false;
 
   @override
   void initState() {
@@ -66,25 +73,64 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
     final memo = HomeSectionsView._memo;
     if (memo != null) {
       _data = memo;
-    } else {
-      _load();
     }
+    // The strip is per-viewer and clears once seen, so it is always fetched
+    // fresh — it is never served from the sections memo.
+    _load(sectionsFromMemo: memo != null);
   }
 
-  Future<void> _load() async {
-    setState(() => _loading = true);
-    final load = widget.loader ?? () => MedicineRepository().fetchHomeSections();
-    HomeSections res;
-    try {
-      res = await load();
-    } catch (_) {
-      res = HomeSections.failed;
+  Future<void> _load({bool sectionsFromMemo = false}) async {
+    final loadSections =
+        widget.loader ?? () => MedicineRepository().fetchHomeSections();
+    final loadNotifs = widget.notificationsLoader ??
+        () => MedicineRepository().myStockNotifications();
+
+    // Labels are needed by the Notify control on any out-of-stock card, and
+    // cards carry none of their own. Fetched alongside, never per card.
+    if (widget.notificationsLoader == null) {
+      unawaited(MedicineRepository().loadStorefrontLabels());
     }
+
+    HomeSections sections;
+    BackInStock strip;
+    try {
+      final results = await Future.wait([
+        sectionsFromMemo
+            ? Future.value(HomeSectionsView._memo!)
+            : loadSections(),
+        loadNotifs(),
+      ]);
+      sections = results[0] as HomeSections;
+      strip = results[1] as BackInStock;
+    } catch (_) {
+      sections = sectionsFromMemo
+          ? HomeSectionsView._memo!
+          : HomeSections.failed;
+      strip = BackInStock.empty;
+    }
+
     if (!mounted) return;
-    if (res.ok) HomeSectionsView._memo = res;
+    if (sections.ok) HomeSectionsView._memo = sections;
     setState(() {
-      _data = res;
-      _loading = false;
+      _data = sections;
+      _backInStock = strip;
+    });
+
+    _reportSeen();
+  }
+
+  /// The strip has been built, so it has been seen. Fire-and-forget: the ids
+  /// go back exactly as the backend sent them, and a failure is silent because
+  /// the user has already been shown the products.
+  void _reportSeen() {
+    if (_seenSent || !_backInStock.show) return;
+    _seenSent = true;
+    final ids = _backInStock.ids;
+    if (ids.isEmpty) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final report =
+          widget.onSeen ?? (list) => MedicineRepository().stockNotifySeen(list);
+      unawaited(report(ids));
     });
   }
 
@@ -98,23 +144,30 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
 
     // ok:false — the search bar and chips above this widget stay put; this
     // block is the only thing that changes. Never a blank page, never a throw.
-    if (!d.ok) return _Retry(onRetry: _load);
+    if (!d.ok) return _Retry(onRetry: () => _load());
+
+    // The strip sits ABOVE Best Sellers, and only when the backend sent
+    // products for it.
+    final strip = _backInStock.show ? 1 : 0;
 
     return RefreshIndicator(
-      onRefresh: _load,
+      onRefresh: () => _load(),
       child: ListView.builder(
         key: const PageStorageKey('home-sections'),
         // AlwaysScrollable so the pull gesture works even on a short feed.
         physics: const AlwaysScrollableScrollPhysics(
             parent: BouncingScrollPhysics()),
         padding: const EdgeInsets.only(top: 8, bottom: 96),
-        itemCount: d.sections.length + (widget.footer == null ? 0 : 1),
+        itemCount: strip + d.sections.length + (widget.footer == null ? 0 : 1),
         itemBuilder: (_, i) {
-          if (i >= d.sections.length) return widget.footer!;
+          if (strip == 1 && i == 0) {
+            return _StripBlock(strip: _backInStock);
+          }
+          final si = i - strip;
+          if (si >= d.sections.length) return widget.footer!;
           return _SectionBlock(
-            section: d.sections[i],
+            section: d.sections[si],
             onCategoryTap: widget.onCategoryTap,
-            onCompanyTap: widget.onCompanyTap,
           );
         },
       ),
@@ -127,12 +180,10 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
 class _SectionBlock extends StatelessWidget {
   final HomeSection section;
   final ValueChanged<String> onCategoryTap;
-  final ValueChanged<String> onCompanyTap;
 
   const _SectionBlock({
     required this.section,
     required this.onCategoryTap,
-    required this.onCompanyTap,
   });
 
   @override
@@ -159,21 +210,80 @@ class _SectionBlock extends StatelessWidget {
                 valueOf: (t) => t.key,
                 onTap: onCategoryTap,
               ),
-            // A company tile hands back `label`, because there is no
-            // company-filtered listing to send `key` to: the fallback is a
-            // search, and the searchable string is the printed company name.
+            // CHANGE #638 — a company tile now opens the real company page at
+            // /company/<key>, so it hands back `key` again. The #637
+            // search-prefill fallback is gone: it existed only because no
+            // company listing existed yet, and a name search was never the
+            // same thing as a company filter.
             HomeSectionLayout.brandGrid => _TileGrid(
                 tiles: section.tiles,
                 crossAxisCount: 3,
                 labelSize: 12,
                 centered: true,
-                valueOf: (t) => t.label,
-                onTap: onCompanyTap,
+                valueOf: (t) => t.key,
+                onTap: (key) => Navigator.of(context)
+                    .pushNamed('/company/${Uri.encodeComponent(key)}'),
               ),
             // Unreachable: unknown layouts are dropped at parse time. Kept so
             // this switch stays exhaustive if the enum grows.
             HomeSectionLayout.unknown => const SizedBox.shrink(),
           },
+        ],
+      ),
+    );
+  }
+}
+
+/// CHANGE #638 — the back-in-stock strip, above Best Sellers.
+///
+/// Title and products both come from `my_stock_notifications()`; the app does
+/// not decide who sees this or what is in it. It renders only when that
+/// payload carried products.
+class _StripBlock extends StatelessWidget {
+  final BackInStock strip;
+  const _StripBlock({required this.strip});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Text(
+              strip.title,
+              style: const TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.w600,
+                height: 1.25,
+                color: Color(0xFF111827),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: CompactProductCard.extent,
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              physics: const BouncingScrollPhysics(),
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              itemExtent: _Rail.cardW + 12,
+              itemCount: strip.items.length,
+              itemBuilder: (context, i) {
+                final p = strip.items[i];
+                return Padding(
+                  padding: const EdgeInsets.only(right: 12),
+                  child: CompactProductCard(
+                    product: p,
+                    onTap: () =>
+                        Navigator.of(context).pushNamed('/product/${p.id}'),
+                  ),
+                );
+              },
+            ),
+          ),
         ],
       ),
     );

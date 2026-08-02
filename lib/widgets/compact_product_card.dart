@@ -4,6 +4,7 @@ import '../app_state.dart';
 import '../data/medicine_repository.dart';
 import '../models/product.dart';
 import 'animations.dart';
+import 'notify_control.dart';
 import 'product_image.dart';
 
 /// CHANGE #636 — the Plazza-style compact product card.
@@ -82,7 +83,21 @@ class CompactProductCard extends StatelessWidget {
           children: [
             // Dimming the sold-out state is a visual treatment of the
             // backend's own verdict, not a second opinion about it.
-            Opacity(opacity: soldOut ? 0.45 : 1.0, child: card),
+            //
+            // CHANGE #638 — the Notify control sits ABOVE the dim layer. It is
+            // the one thing a sold-out card is still for, so it must not be
+            // greyed out along with the content it belongs to.
+            Stack(
+              children: [
+                Opacity(opacity: soldOut ? 0.45 : 1.0, child: card),
+                if (soldOut)
+                  Positioned(
+                    right: CompactProductCard._cardPad,
+                    bottom: CompactProductCard._cardPad,
+                    child: NotifyControl(productId: product.id),
+                  ),
+              ],
+            ),
             const SizedBox(height: 8),
             SizedBox(
               height: _chipH,
@@ -185,9 +200,8 @@ class _Card extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 6),
-                // Sold out and no notify path exists in this app, so the
-                // control is hidden rather than showing a button that does
-                // nothing. (Spec: wire Notify if present, else hide.)
+                // Sold out: the row leaves the space empty and the Notify
+                // control is overlaid above the dim layer by the parent.
                 if (!soldOut) CompactCartControl(product: product),
               ],
             ),

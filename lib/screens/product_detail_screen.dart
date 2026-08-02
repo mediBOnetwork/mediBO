@@ -5,6 +5,7 @@ import '../data/medicine_repository.dart';
 import '../models/product_detail.dart';
 import '../widgets/animations.dart';
 import '../widgets/compact_product_card.dart';
+import '../widgets/notify_control.dart';
 import '../widgets/product_image.dart';
 
 /// CHANGE #636 — the full-page product detail screen (PDP).
@@ -28,10 +29,18 @@ class ProductDetailScreen extends StatefulWidget {
   /// protected suite uses.
   final Future<ProductDetail> Function(String productId)? loader;
 
+  /// CHANGE #638 — test seams for the stock-notify wiring. Production reads
+  /// `stock_notify_status` once on load and calls `stock_notify_request` on
+  /// tap; there is no polling.
+  final Future<bool> Function(String productId)? notifyStatusLoader;
+  final NotifyRequest? notifyRequest;
+
   const ProductDetailScreen({
     super.key,
     required this.productId,
     this.loader,
+    this.notifyStatusLoader,
+    this.notifyRequest,
   });
 
   @override
@@ -41,6 +50,7 @@ class ProductDetailScreen extends StatefulWidget {
 class _ProductDetailScreenState extends State<ProductDetailScreen> {
   ProductDetail? _data;
   bool _loading = true;
+  bool _subscribed = false;
 
   @override
   void initState() {
@@ -72,6 +82,18 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
       _data = res;
       _loading = false;
     });
+
+    // Only ask about a subscription for a product that cannot be bought —
+    // that is the only state where the control exists. Read ONCE.
+    final av = res.availability;
+    final oos = res.ok && (av != null ? !av.canAdd : !res.buyable);
+    if (!oos) return;
+
+    final status = widget.notifyStatusLoader ??
+        (id) => MedicineRepository().stockNotifyStatus(id);
+    final subscribed = await status(widget.productId);
+    if (!mounted) return;
+    setState(() => _subscribed = subscribed);
   }
 
   @override
@@ -94,8 +116,13 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
           : (d == null || !d.ok)
               ? _NotFound(data: d)
               : _Body(data: d),
-      bottomNavigationBar:
-          (!_loading && d != null && d.ok) ? _StickyBar(data: d) : null,
+      bottomNavigationBar: (!_loading && d != null && d.ok)
+          ? _StickyBar(
+              data: d,
+              subscribed: _subscribed,
+              notifyRequest: widget.notifyRequest,
+            )
+          : null,
     );
   }
 }
@@ -293,30 +320,49 @@ class _CarouselState extends State<_Carousel> {
   }
 }
 
+/// CHANGE #638 — ONE price source.
+///
+/// This row used to print `price.mrp_label` big while every card in the app
+/// printed `pricing.price_display`. Same product, two renderings of one
+/// number, and nothing kept them honest — the moment a discount existed they
+/// would have disagreed. The page now reads the card's block.
 class _PriceRow extends StatelessWidget {
   final ProductDetail data;
   const _PriceRow({required this.data});
 
   @override
   Widget build(BuildContext context) {
-    if (!data.hasMrp) return const SizedBox.shrink();
+    final pr = data.pricing;
+    // has_price is explicit absence: no MRP at all, so show no price rather
+    // than a fabricated ₹0.00.
+    if (pr == null || !pr.hasPrice) return const SizedBox.shrink();
+
     return Row(
       crossAxisAlignment: CrossAxisAlignment.baseline,
       textBaseline: TextBaseline.alphabetic,
       children: [
         Text(
-          data.mrpLabel,
+          pr.priceDisplay,
           style: const TextStyle(
             fontSize: 24,
             fontWeight: FontWeight.w800,
             color: Color(0xFF111827),
           ),
         ),
-        const SizedBox(width: 8),
-        Text(
-          data.mrpNote,
-          style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
-        ),
+        // The struck MRP appears only when the backend says there IS a
+        // discount — otherwise it would strike through the same number.
+        if (pr.hasDiscount) ...[
+          const SizedBox(width: 8),
+          Text(
+            pr.mrpDisplay,
+            style: const TextStyle(
+              fontSize: 13,
+              color: Color(0xFF9CA3AF),
+              decoration: TextDecoration.lineThrough,
+              decorationColor: Color(0xFF9CA3AF),
+            ),
+          ),
+        ],
         if (data.hasGst) ...[
           const SizedBox(width: 8),
           _Chip(
@@ -588,7 +634,14 @@ class _SimilarTile extends StatelessWidget {
 
 class _StickyBar extends StatelessWidget {
   final ProductDetail data;
-  const _StickyBar({required this.data});
+  final bool subscribed;
+  final NotifyRequest? notifyRequest;
+
+  const _StickyBar({
+    required this.data,
+    required this.subscribed,
+    required this.notifyRequest,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -600,6 +653,7 @@ class _StickyBar extends StatelessWidget {
     final cart = AppState.of(context);
     final qty = cart.quantityOf(data.id);
     final canAdd = av?.canAdd ?? data.buyable;
+    final pr = data.pricing;
 
     return SafeArea(
       top: false,
@@ -612,14 +666,15 @@ class _StickyBar extends StatelessWidget {
         ),
         child: Row(
           children: [
-            if (data.hasMrp) ...[
+            // Same price source as the row above and as every card.
+            if (pr != null && pr.hasPrice) ...[
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     Text(
-                      data.mrpLabel,
+                      pr.priceDisplay,
                       style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w800,
@@ -638,6 +693,18 @@ class _StickyBar extends StatelessWidget {
               ),
               const SizedBox(width: 12),
             ],
+            // CHANGE #638 — an unbuyable product offers Notify instead of a
+            // dead disabled button.
+            if (!canAdd)
+              NotifyControl(
+                productId: data.id,
+                initiallySubscribed: subscribed,
+                compact: false,
+                notifyLabel: data.label('card_notify_label'),
+                subscribedLabel: data.label('notify_subscribed_label'),
+                request: notifyRequest,
+              )
+            else
             SizedBox(
               width: 170,
               height: 46,

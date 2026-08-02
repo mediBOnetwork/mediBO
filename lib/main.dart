@@ -28,7 +28,8 @@ import 'screens/public/public_order_page.dart';
 import 'screens/public/track_page.dart'; // C629: /track/<qr_token>
 import 'screens/delivery/delivery_register_screen.dart'; // C631: PART A
 import 'screens/code_resolver_page.dart';
-import 'screens/product_detail_screen.dart'; // C636: /product/<id>
+import 'screens/product_detail_screen.dart'; // C636: /product/:id
+import 'screens/company_screen.dart'; // C638: /company/:key
 import 'screens/inquiry_link_page.dart';
 import 'screens/dispute_link_page.dart';
 import 'screens/about_screen.dart';
@@ -391,6 +392,36 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
                         const Duration(milliseconds: 220),
                     pageBuilder: (_, __, ___) =>
                         ProductDetailScreen(productId: id),
+                    transitionsBuilder: (_, anim, __, child) => FadeTransition(
+                      opacity: anim,
+                      child: SlideTransition(
+                        position: Tween<Offset>(
+                          begin: const Offset(0, 0.02),
+                          end: Offset.zero,
+                        ).animate(CurvedAnimation(
+                            parent: anim, curve: Curves.easeOutCubic)),
+                        child: child,
+                      ),
+                    ),
+                  );
+                }
+              }
+              // CHANGE #638 — a company's catalogue. The key is a normalised
+              // company name from the backend ("sun pharmaceutical
+              // industries"), URL-encoded because it contains spaces. It is
+              // passed through untouched: the app does not know what a valid
+              // company key looks like and must not acquire an opinion.
+              if (name.startsWith('/company/')) {
+                final raw =
+                    name.substring('/company/'.length).split('?').first;
+                if (raw.isNotEmpty) {
+                  final key = Uri.decodeComponent(raw);
+                  return PageRouteBuilder(
+                    settings: settings,
+                    transitionDuration: const Duration(milliseconds: 260),
+                    reverseTransitionDuration:
+                        const Duration(milliseconds: 220),
+                    pageBuilder: (_, __, ___) => CompanyScreen(companyKey: key),
                     transitionsBuilder: (_, anim, __, child) => FadeTransition(
                       opacity: anim,
                       child: SlideTransition(

@@ -18,6 +18,7 @@ import '../util.dart';
 import '../utils/render_log.dart';
 import '../widgets/animations.dart';
 import '../widgets/compact_product_card.dart';
+import '../widgets/home_sections_view.dart'; // C637
 
 const double _kMaxContent = 1200;
 
@@ -307,7 +308,17 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   /// Search (query.isNotEmpty) always returns false → shows all items.
   bool get _onlyBuyable => widget.query.isEmpty;
 
+  /// CHANGE #637 — home is the sectioned feed, which fetches its own payload.
+  /// No search, no category filter.
+  bool get _isHome => widget.query.trim().isEmpty && widget.category == 'All';
+
   Future<void> _resetAndLoad() async {
+    // Home does not render the paged grid any more, so fetching a page of
+    // storefront_page() for it would be a round trip nobody displays.
+    if (_isHome) {
+      widget.onLoadingChanged?.call(false);
+      return;
+    }
     final token = ++_loadToken;
     final sw = Stopwatch()..start();
     widget.onLoadingChanged?.call(true);
@@ -564,6 +575,44 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // CHANGE #637 — HOME is now the sectioned feed from storefront_home_v2().
+    // Category listing and search results still render _ProductsSection below,
+    // unchanged; the only discriminator was always these two values.
+    //
+    // Home returns the feed as the ONE scrollable rather than nesting it in
+    // the SingleChildScrollView: a shrink-wrapped list inside another scroll
+    // view builds every section eagerly, which is exactly the jank this change
+    // is meant to avoid. The trust badges and footer ride along as the feed's
+    // last item so home keeps them.
+    if (_isHome) {
+      return MouseRegion(
+        onEnter: (_) { if (kIsWeb) _focusNode.requestFocus(); },
+        child: Focus(
+          focusNode: _focusNode,
+          onKeyEvent: _onKeyEvent,
+          child: HomeSectionsView(
+            onCategoryTap: (c) => widget.onCategorySelected(c),
+            // No company-filtered listing or RPC exists, so a company tile
+            // prefills and submits the search the shell already owns.
+            onCompanyTap: (label) => widget.onSuggestionTap(label),
+            footer: Column(
+              children: [
+                const _TrustBadges(),
+                _Footer(
+                  categories: _categoryNames,
+                  onCategory: widget.onCategorySelected,
+                  onSearch: widget.onFooterSearch,
+                  onBulkUpload: widget.onFooterBulkUpload,
+                  onOrders: widget.onFooterOrders,
+                  onCart: widget.onFooterCart,
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
     return MouseRegion(
       onEnter: (_) { if (kIsWeb) _focusNode.requestFocus(); },
       child: Focus(

@@ -200,6 +200,10 @@ Current files and what they hold down:
   headings come from the storefront_ui_label table (not Dart literals), absence
   is explicit (has_mrp/has_gst/has_supplier_label/my_history.has), ok:false
   renders the backend's not-found page instead of throwing.
+- `home_sections_test.dart` — the home feed is one RPC rendered in payload
+  order: unknown layouts and empty sections are skipped silently (forward
+  compat), the green accent is located inside the title rather than guessed,
+  and taps carry the backend's own key (category) / label (company search).
 - `compact_card_test.dart` — the compact card computes nothing: price, struck
   MRP, ribbon and ADD label are backend strings, a ribbon appears only when the
   payload sent one, out-of-stock is can_add:false (never a stock number), and

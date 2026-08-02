@@ -18,6 +18,7 @@ import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../fulfill/barcode_count_logic.dart';
 import '../../fulfill/fulfill_lookups.dart';
 import '../../services/admin_date_scope.dart';
 import '../../utils/render_log.dart';
@@ -31,32 +32,10 @@ Color get _kBlack    => FulfillLookups.instance.color('c_ff000000', const Color(
 Color get _kTileBg   => FulfillLookups.instance.color('c_fff3f4f6');
 Color get _kTileIcon => FulfillLookups.instance.color('c_ffd1d5db');
 
-/// The item currently STAGED (scanned but not yet committed). Every field is a
-/// value barcode_lookup returned — none of it is derived here.
-class _Staged {
-  final String barcode;
-  final int productId;
-  final String name;
-  final String imageUrl;
-  final String packLabel;
-  final String company;
-  final String progressLabel;
-  final String bagLabel;
-  final bool bagWarning;
-  /// Staged, not counted. Starts at 1 on the scan that created it (B2).
-  int qty = 1;
-  _Staged({
-    required this.barcode,
-    required this.productId,
-    required this.name,
-    required this.imageUrl,
-    required this.packLabel,
-    required this.company,
-    required this.progressLabel,
-    required this.bagLabel,
-    required this.bagWarning,
-  });
-}
+// CHANGE #635: the staged item and the whole scan → stage → commit state machine
+// now live in fulfill/barcode_count_logic.dart (BarcodeStaged / BarcodeCountLogic),
+// so test/protected/barcode_count_test.dart can drive them without a camera. This
+// file is the renderer.
 
 // CHANGE #627: the screen has two MODES, and which one it is in is decided by
 // the constructor the caller uses — never inferred from an empty string.
@@ -110,20 +89,17 @@ class _BarcodeCountScreenState extends State<BarcodeCountScreen> {
   /// C6: generated ONCE when the screen opens, reused for every scan.
   late final String _sessionKey;
 
-  _Staged? _staged;
+  /// CHANGE #635 — all scan/stage/commit state and both RPC calls live here.
+  late final BarcodeCountLogic _logic;
 
-  // ok:false payload from barcode_lookup — backend title + message, verbatim.
-  String _errTitle = '';
-  String _errMessage = '';
-
-  // Bottom bar — every field comes from an RPC response.
-  int _countedQty = 0;
-  String _progressLabel = '';
-  bool _isOver = false;
-  int _overQty = 0;
-
-  bool _busy = false;
-  bool _anyCommitted = false;
+  BarcodeStaged? get _staged => _logic.staged;
+  String get _errTitle => _logic.errTitle;
+  String get _errMessage => _logic.errMessage;
+  int get _countedQty => _logic.countedQty;
+  String get _progressLabel => _logic.progressLabel;
+  bool get _isOver => _logic.isOver;
+  int get _overQty => _logic.overQty;
+  bool get _busy => _logic.busy;
 
   // Dart-side scan throttle on top of the controller's own detectionTimeoutMs,
   // so one barcode held in front of the lens does not spam +1.
@@ -139,6 +115,21 @@ class _BarcodeCountScreenState extends State<BarcodeCountScreen> {
     _sessionKey = widget.isPack
         ? 'packbc:${widget.orderId}|$ms'
         : 'barcode:${widget.supplierName}|${widget.stage}|$ms';
+    _logic = BarcodeCountLogic(
+      isPack: widget.isPack,
+      supplierName: widget.supplierName,
+      stage: widget.stage,
+      orderId: widget.orderId,
+      sessionKey: _sessionKey,
+      rpc: (fn, params) =>
+          Supabase.instance.client.rpc(fn, params: params),
+      dateYmd: () => _dateYmd,
+      errorText: (e) => FulfillLookups.instance.errorText(e) ?? '',
+      messageForCode: (code) => FulfillLookups.instance.message(code) ?? '',
+      onChanged: () {
+        if (mounted) setState(() {});
+      },
+    );
     _ctrl = MobileScannerController(
       detectionSpeed: DetectionSpeed.normal,
       detectionTimeoutMs: 700,
@@ -174,205 +165,74 @@ class _BarcodeCountScreenState extends State<BarcodeCountScreen> {
   }
 
   Future<void> _handleCode(String code) async {
-    if (_busy) return;
-    final staged = _staged;
-
-    // B2: the SAME barcode again just increments the staged qty. No RPC.
-    if (staged != null && staged.barcode == code) {
-      setState(() => staged.qty += 1);
-      RenderLog.write('c624_barcode_count', 'stage=increment;qty=${staged.qty}');
+    // CHANGE #635 — every decision below (same-code increment, auto-commit of the
+    // previous stage, the RPC calls themselves) lives in BarcodeCountLogic.
+    final before = _logic.staged;
+    final wasSameCode = before != null && before.barcode == code;
+    await _logic.handleCode(code);
+    if (wasSameCode) {
+      RenderLog.write('c624_barcode_count',
+          'stage=increment;qty=${_logic.staged?.qty}');
       return;
     }
-
-    // C2: a DIFFERENT barcode auto-commits what is staged, then stages the new one.
-    if (staged != null) {
-      await _commit();
-      if (!mounted) return;
-    }
-    await _lookup(code);
-  }
-
-  Future<void> _lookup(String code) async {
-    setState(() => _busy = true);
-    try {
-      // CHANGE #627: Pack is order-scoped and has no supplier, stage, date or
-      // bag. Supplier Shop / Warehouse keep calling barcode_lookup exactly as
-      // they did in #624.
-      final raw = widget.isPack
-          ? await Supabase.instance.client.rpc('pack_barcode_lookup', params: {
-              'p_order_id': widget.orderId,
-              'p_barcode': code,
-            })
-          : await Supabase.instance.client.rpc('barcode_lookup', params: {
-              'p_supplier': widget.supplierName,
-              'p_barcode': code,
-              'p_stage': widget.stage,
-              'p_date': _dateYmd,
-            });
-      if (!mounted) return;
-      final res = raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
-
-      if (res['ok'] != true) {
-        // B1: render the backend's own title + message. Nothing is staged.
-        // In Pack this also covers `unfulfillable` — an item we could not source,
-        // which is not being packed and so cannot be counted.
-        if (widget.isPack) {
-          RenderLog.write('c627_pack_barcode',
-              'lookup=refused;error=${res['error'] ?? ''}');
-        }
-        RenderLog.write('c624_barcode_count',
-            'lookup=refused;error=${res['error'] ?? ''}');
-        setState(() {
-          _staged = null;
-          _errTitle = res['title']?.toString() ?? '';
-          _errMessage = res['message']?.toString() ?? '';
-        });
-        return;
+    final s = _logic.staged;
+    if (s == null) {
+      if (widget.isPack) {
+        RenderLog.write('c627_pack_barcode', 'lookup=refused');
       }
-
-      final s = _Staged(
-        barcode: code,
-        productId: (res['product_id'] as num?)?.toInt() ?? 0,
-        name: res['product_name']?.toString() ?? '',
-        imageUrl: res['image_url']?.toString() ?? '',
-        packLabel: res['pack_label']?.toString() ?? '',
-        company: res['company']?.toString() ?? '',
-        progressLabel: res['progress_label']?.toString() ?? '',
-        // A2: there is no bag in Pack. pack_barcode_lookup returns no bag
-        // fields at all, and this guard makes that explicit rather than
-        // relying on the key being absent.
-        bagLabel: widget.isPack ? '' : (res['bag_label']?.toString() ?? ''),
-        bagWarning: widget.isPack ? false : res['bag_warning'] == true,
-      );
+      RenderLog.write('c624_barcode_count', 'lookup=refused');
+    } else {
       if (widget.isPack) {
         RenderLog.write('c627_pack_barcode',
             'lookup=ok;product=${s.productId};progress=${s.progressLabel};bag=none');
       }
       RenderLog.write('c624_barcode_count',
           'lookup=ok;product=${s.productId};progress=${s.progressLabel};bag_warning=${s.bagWarning}');
-      setState(() {
-        _staged = s;
-        _errTitle = '';
-        _errMessage = '';
-        _countedQty = (res['counted_qty'] as num?)?.toInt() ?? _countedQty;
-        _progressLabel = s.progressLabel;
-        _isOver = false;
-        _overQty = 0;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _staged = null;
-        _errTitle = '';
-        _errMessage = FulfillLookups.instance.errorText(e) ?? '';
-      });
-    } finally {
-      if (mounted) setState(() => _busy = false);
     }
   }
 
-  // ── commit ────────────────────────────────────────────────────────────────
-
-  /// C3. Returns without a round trip when the staged qty is 0 (C4).
   Future<void> _commit() async {
-    final s = _staged;
-    if (s == null || _busy) return;
-
-    if (s.qty <= 0) {
+    final s = _logic.staged;
+    if (s == null) return;
+    final qty = s.qty;
+    if (qty <= 0) {
       RenderLog.write('c624_barcode_count', 'commit=skipped_zero');
-      setState(() => _staged = null);
+      await _logic.commit();
       return;
     }
-
-    setState(() => _busy = true);
-    try {
-      // CHANGE #627: Pack commits through pack_barcode_submit_scan, which writes
-      // to pack_clip_mentions and applies via pack_set_counted — the SAME
-      // function Pack's voice count uses. Supplier Shop / Warehouse are
-      // untouched and still call barcode_submit_scan.
-      final raw = widget.isPack
-          ? await Supabase.instance.client
-              .rpc('pack_barcode_submit_scan', params: {
-              'p_order_id': widget.orderId,
-              'p_product_id': s.productId,
-              'p_qty': s.qty,
-              'p_session_key': _sessionKey,
-            })
-          : await Supabase.instance.client.rpc('barcode_submit_scan', params: {
-              'p_supplier': widget.supplierName,
-              'p_product_id': s.productId,
-              'p_qty': s.qty,
-              'p_stage': widget.stage,
-              'p_date': _dateYmd,
-              'p_session_key': _sessionKey,
-            });
-      if (!mounted) return;
-      final res = raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
-
-      if (res['ok'] != true) {
-        if (widget.isPack) {
-          RenderLog.write('c627_pack_barcode',
-              'commit=refused;error=${res['error'] ?? ''}');
-        }
-        RenderLog.write('c624_barcode_count',
-            'commit=refused;error=${res['error'] ?? ''}');
-        setState(() {
-          _errTitle = '';
-          _errMessage = res['message']?.toString() ??
-              (FulfillLookups.instance.message(res['error']?.toString()) ?? '');
-          _staged = null;
-        });
-        return;
-      }
-
-      // C5: bottom bar is whatever the commit response says it is.
+    final committedBefore = _logic.anyCommitted;
+    await _logic.commit();
+    if (!_logic.anyCommitted && !committedBefore) {
       if (widget.isPack) {
-        RenderLog.write('c627_pack_barcode',
-            'commit=ok;qty=${s.qty};counted=${res['counted_qty']};over=${res['over_qty']}');
+        RenderLog.write('c627_pack_barcode', 'commit=refused');
       }
-      RenderLog.write('c624_barcode_count',
-          'commit=ok;qty=${s.qty};counted=${res['counted_qty']};over=${res['over_qty']}');
-      _anyCommitted = true;
-      setState(() {
-        _staged = null;
-        _errTitle = '';
-        _errMessage = '';
-        _countedQty = (res['counted_qty'] as num?)?.toInt() ?? 0;
-        _progressLabel = res['progress_label']?.toString() ?? '';
-        _isOver = res['is_over'] == true;
-        _overQty = (res['over_qty'] as num?)?.toInt() ?? 0;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _errTitle = '';
-        _errMessage = FulfillLookups.instance.errorText(e) ?? '';
-        _staged = null;
-      });
-    } finally {
-      if (mounted) setState(() => _busy = false);
+      RenderLog.write('c624_barcode_count', 'commit=refused');
+      return;
     }
+    if (widget.isPack) {
+      RenderLog.write('c627_pack_barcode',
+          'commit=ok;qty=$qty;counted=${_logic.countedQty};over=${_logic.overQty}');
+    }
+    RenderLog.write('c624_barcode_count',
+        'commit=ok;qty=$qty;counted=${_logic.countedQty};over=${_logic.overQty}');
   }
 
   // B3/B4: image tap zones. Down to 0 but never below; at 0 the product stays
   // on screen so a mis-tap is undone by tapping right again.
   void _bump(int delta) {
-    final s = _staged;
-    if (s == null) return;
-    final next = s.qty + delta;
-    if (next < 0) return;
-    setState(() => s.qty = next);
-    RenderLog.write('c624_barcode_count', 'tap=$delta;qty=${s.qty}');
+    _logic.bump(delta);
+    RenderLog.write('c624_barcode_count', 'tap=$delta;qty=${_logic.staged?.qty}');
   }
 
   Future<void> _closeScreen() async {
     // A staged item is flushed on the way out, through the same zero-guarded
     // commit path — so nothing counted is silently lost, and a qty tapped down
     // to 0 still writes nothing.
-    if (_staged != null) await _commit();
+    if (_logic.staged != null) await _commit();
     if (!mounted) return;
-    Navigator.of(context).pop(_anyCommitted);
+    Navigator.of(context).pop(_logic.anyCommitted);
   }
+
 
   // ── build ─────────────────────────────────────────────────────────────────
 
@@ -445,7 +305,7 @@ class _BarcodeCountScreenState extends State<BarcodeCountScreen> {
     );
   }
 
-  Widget _buildHeadline(FulfillLookups lk, _Staged? s) {
+  Widget _buildHeadline(FulfillLookups lk, BarcodeStaged? s) {
     if (s == null) {
       final hasError = _errTitle.isNotEmpty || _errMessage.isNotEmpty;
       return Padding(
@@ -525,7 +385,7 @@ class _BarcodeCountScreenState extends State<BarcodeCountScreen> {
     );
   }
 
-  Widget _buildImageArea(FulfillLookups lk, _Staged? s) {
+  Widget _buildImageArea(FulfillLookups lk, BarcodeStaged? s) {
     final image = (s == null || s.imageUrl.isEmpty)
         ? Container(
             color: _kTileBg,

@@ -41,6 +41,105 @@ Map<String, dynamic> fwGetStateParams({
       'p_stage': stage,
     };
 
+// ════════════════════════════════════════════════════════════════════════════
+// CHANGE #635 — count_locked, verbatim.
+// ════════════════════════════════════════════════════════════════════════════
+
+/// Is counting locked for this fw_get_state item?
+///
+/// fw_get_state already answers this. It emits `count_locked` per item, resolved
+/// server-side to the flag that actually governs the stage being viewed:
+///
+///   shop view      → collect_locked
+///   warehouse view → received_locked
+///
+/// The client used to OR the two raw flags together instead. That is the app
+/// deciding: on a supplier whose shop lines were locked but whose warehouse
+/// lines were not, the OR locked entry on BOTH stages, because it could not tell
+/// which flag applied to the screen the operator was looking at. The backend can
+/// and does tell — read its answer.
+///
+/// The legacy OR survives only as a fallback for payloads that predate the field
+/// (get_receiving_box still returns collect_locked alone). When `count_locked` is
+/// present it always wins; the fallback is never consulted.
+bool countLockedOf(Map<String, dynamic> item) {
+  final v = item['count_locked'];
+  if (v != null) return v == true;
+  return item['collect_locked'] == true || item['received_locked'] == true;
+}
+
+/// CHANGE #635 — the four display values a fw_get_state / merged_items row owns.
+///
+/// Every field here is READ, never composed. There is deliberately no fallback
+/// that invents text: an empty `qty_label` renders as empty, because the
+/// alternative (falling back to qtyWithPack, or to "$counted/$ordered") is the
+/// app answering "what do I show?" and is exactly how the two layouts drifted
+/// apart before #355.
+class ShopItemDisplay {
+  final String qtyLabel;
+  final String statusLabel;
+  final String statusTone;
+  final Map<String, String>? statusColors;
+  final bool countLocked;
+
+  const ShopItemDisplay({
+    required this.qtyLabel,
+    required this.statusLabel,
+    required this.statusTone,
+    required this.statusColors,
+    required this.countLocked,
+  });
+}
+
+ShopItemDisplay shopItemDisplayOf(Map<String, dynamic> m) {
+  final colors = m['status_colors'];
+  return ShopItemDisplay(
+    qtyLabel: m['qty_label']?.toString() ?? '',
+    statusLabel: m['status_label']?.toString() ?? '',
+    statusTone: m['status_tone']?.toString() ?? '',
+    statusColors: colors is Map
+        ? {
+            'bg': colors['bg']?.toString() ?? '',
+            'fg': colors['fg']?.toString() ?? '',
+          }
+        : null,
+    countLocked: countLockedOf(m),
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// CHANGE #635 — Pack hold-to-undo contract.
+//
+// Pack's 5-second hold-to-undo is spelled out in TWO places in the screen
+// (_performUndo for the swipe flow, _doUndo for the accordion flow), and both
+// hand-wrote the same RPC name and the same params map. A divergence between
+// them is invisible until a packer holds the wrong one: dropping p_qty picks
+// PostgREST's 2-arg legacy overload, which marks the line unpacked but leaves
+// packed_qty stale, so the row reads "0 packed" while still counting as packed.
+//
+// One definition, both call sites, one test.
+// ════════════════════════════════════════════════════════════════════════════
+
+/// The RPC Pack's undo calls. NOT pack_undo_item — that function exists in the
+/// database but nothing in this app has ever called it; Pack undoes by marking
+/// the line unpacked through the same function that packed it.
+const String kPackUndoRpc = 'pack_mark_item';
+
+/// May this line be undone? Backend-owned: pack_get_queue emits `is_done` using
+/// the packed-AND-counted rule, and the client must not re-derive it from
+/// packed/packed_qty (which is what disagreed with the bag quick-view before).
+bool packUndoAllowed(Map<String, dynamic> item) => item['is_done'] == true;
+
+/// The exact params [kPackUndoRpc] must be called with to undo a packed line.
+///
+/// `p_qty: null` is load-bearing and must be PRESENT-with-null, never omitted:
+/// it selects the 3-arg overload, which is the only one that clears packed_qty.
+Map<String, dynamic> packUndoParams(String orderItemId) => {
+      'p_order_item_id': orderItemId,
+      'p_packed': false,
+      'p_qty': null,
+    };
+
 /// Backend-owned progress fields for the box header. Renders progress.label
 /// verbatim; the counted/total fallback only applies before the first
 /// fw_get_state response has landed (e.g. mid-load).

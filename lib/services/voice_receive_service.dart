@@ -6,6 +6,9 @@ import 'package:http/http.dart' as http;
 import 'package:record/record.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../utils/render_log.dart';
+import 'recorder_window_policy.dart';
+
+export 'recorder_window_policy.dart' show RecorderWindowPolicy, WindowOutcome;
 
 class MicPermissionException implements Exception {
   final String message;
@@ -325,6 +328,10 @@ class ContinuousVoiceSession {
   // registration (e.g. _VoiceCaps.onClipSaved), since without a per-window hook a long
   // continuous session would never register against a server-side usage cap.
   final void Function(String path, int seconds, int recordingSeq)? onClipUploaded;
+  // CHANGE #635: every window lifecycle judgement (may we open another window,
+  // is this closed window worth submitting, was it counted/silent/failed, does
+  // the operator see a toast) lives here, not inline in the plumbing below.
+  final RecorderWindowPolicy policy;
   static const int windowSec = 24;
 
   final String sessionKey;
@@ -350,6 +357,7 @@ class ContinuousVoiceSession {
     this.expectedProvider,
     this.onWindowError,
     this.onClipUploaded,
+    this.policy = const RecorderWindowPolicy(),
   }) : sessionKey = '$supplierName|$stage|${DateTime.now().millisecondsSinceEpoch}';
 
   double get elapsedSec => _clock.elapsedMilliseconds / 1000.0;
@@ -373,14 +381,24 @@ class ContinuousVoiceSession {
       // If stopAndFinalize raced us and set _stopping while we were mid-stop, don't restart
       // the recorder — but the clip we already captured is real audio and must still be
       // dispatched; stopAndFinalize awaits _activeRotation instead of stopping again.
-      if (!_stopping) {
+      if (policy.shouldStartNewWindow(stopping: _stopping)) {
         await _svc.start();
         _windowStartSec = elapsedSec; // true start of the NEXT window
+        // CHANGE #635: Stop can land DURING the await above, and the old code only
+        // checked before it. The window we just opened then outlived the session —
+        // stopAndFinalize had already taken its `_activeRotation != null` branch and
+        // would never come back to close it, so the mic stayed hot and the window was
+        // never flushed. Re-ask the policy now that start() has resolved and discard
+        // the window we should not have opened (cancel, not stop: nothing in it is
+        // worth an upload, and cancel skips the blob fetch entirely).
+        if (!policy.shouldStartNewWindow(stopping: _stopping)) {
+          await _svc.cancel();
+          RenderLog.write('c635_window_discarded', 'reason=stop_raced_start;seq=${seq + 1}');
+        }
       }
       if (clip == null) return;
       final durationSec = (windowEndSec - offset).round().clamp(1, 3600);
-      final fut = _dispatch(clip.bytes, clip.mime, clip.ext, seq, offset, durationSec)
-          .catchError((Object e, StackTrace st) => onWindowError?.call(e, st));
+      final fut = _dispatch(clip.bytes, clip.mime, clip.ext, seq, offset, durationSec);
       _inFlight.add(fut);
       unawaited(fut.whenComplete(() => _inFlight.remove(fut)));
     }()
@@ -391,26 +409,56 @@ class ContinuousVoiceSession {
     return done.future;
   }
 
-  Future<void> _dispatch(Uint8List bytes, String mime, String ext, int seq, double offsetSec, int durationSec) async {
-    final clipPath = await _svc.uploadClip(bytes, supplierName, seq, ext);
-    onClipUploaded?.call(clipPath, durationSec, seq);
-    final result = await _svc.transcribe(
-      bytes, mime,
-      expected: expectedProvider?.call(),
-      sessionKey: sessionKey,
-      recordingSeq: seq,
-      windowOffsetSec: offsetSec,
-      stage: stage,
+  /// Runs one closed window through upload → transcribe → write, then classifies
+  /// the result. CHANGE #635: this never throws and never propagates. It reports
+  /// through [onWindowError] only for [WindowOutcome.error] — a window that
+  /// uploaded and registered cleanly but produced an empty transcript or zero
+  /// mentions is ordinary silence between spoken items, and used to surface the
+  /// same red toast as a genuine upload failure.
+  Future<WindowOutcome> _dispatch(Uint8List bytes, String mime, String ext, int seq,
+      double offsetSec, int durationSec) async {
+    Object? err;
+    StackTrace? errSt;
+    String transcript = '';
+    int mentionCount = 0;
+    try {
+      final clipPath = await _svc.uploadClip(bytes, supplierName, seq, ext);
+      onClipUploaded?.call(clipPath, durationSec, seq);
+      final result = await _svc.transcribe(
+        bytes, mime,
+        expected: expectedProvider?.call(),
+        sessionKey: sessionKey,
+        recordingSeq: seq,
+        windowOffsetSec: offsetSec,
+        stage: stage,
+      );
+      transcript = result.transcript;
+      mentionCount = result.mentions.length;
+      await _svc.insertMentions(
+        mentions: result.mentions,
+        supplierName: supplierName,
+        clipPath: clipPath,
+        recordingSeq: seq,
+        orderItems: orderItemsProvider(),
+        sessionKey: sessionKey,
+        stage: stage,
+      );
+    } catch (e, st) {
+      err = e;
+      errSt = st;
+    }
+    final outcome = policy.classifyWindowResult(
+      error: err,
+      transcript: transcript,
+      mentionCount: mentionCount,
     );
-    await _svc.insertMentions(
-      mentions: result.mentions,
-      supplierName: supplierName,
-      clipPath: clipPath,
-      recordingSeq: seq,
-      orderItems: orderItemsProvider(),
-      sessionKey: sessionKey,
-      stage: stage,
-    );
+    if (policy.shouldShowFailureToast(outcome)) {
+      onWindowError?.call(err ?? VoiceReceiveException('window failed'),
+          errSt ?? StackTrace.current);
+    } else if (outcome == WindowOutcome.silent) {
+      RenderLog.write('c635_window_silent', 'seq=$seq;dur=${durationSec}s;stage=$stage');
+    }
+    return outcome;
   }
 
   /// Marks the moment [bagNo] became the owning bag on this session's clock. Call only
@@ -433,14 +481,25 @@ class ContinuousVoiceSession {
       // rather than racing a second stop() call on the same recorder.
       await _activeRotation;
     } else if (_svc.wasStarted) {
-      final seq = _nextSeq++;
       final offset = _windowStartSec;
       final windowEndSec = elapsedSec;
-      final clip = await _svc.stop();
-      if (clip != null) {
-        final durationSec = (windowEndSec - offset).round().clamp(1, 3600);
-        _inFlight.add(_dispatch(clip.bytes, clip.mime, clip.ext, seq, offset, durationSec)
-            .catchError((Object e, StackTrace st) => onWindowError?.call(e, st)));
+      final openWindowSec = windowEndSec - offset;
+      // CHANGE #635: flush the currently-open window ONLY, and only if it is real
+      // audio. When Stop lands a beat after a rotation, the open window is the ~1 s
+      // stub that rotation just started (live: 2.webm, 11 KB, 1 s, finalized 80 ms
+      // after window 1). Uploading + transcribing that stub bought nothing and its
+      // failures reached the operator as a red toast on a successful count.
+      if (!policy.shouldSubmitWindow(durationSec: openWindowSec, atStop: true)) {
+        await _svc.cancel();
+        RenderLog.write('c635_stop_artifact_dropped',
+            'seq=$_nextSeq;dur=${openWindowSec.toStringAsFixed(2)}s;stage=$stage');
+      } else {
+        final seq = _nextSeq++;
+        final clip = await _svc.stop();
+        if (clip != null) {
+          final durationSec = openWindowSec.round().clamp(1, 3600);
+          _inFlight.add(_dispatch(clip.bytes, clip.mime, clip.ext, seq, offset, durationSec));
+        }
       }
     }
     _clock.stop();
@@ -496,6 +555,8 @@ class PackVoiceSession {
   final String? Function(int productId, List<Map<String, dynamic>> items) resolveProductName;
   final void Function(Object error, StackTrace st)? onWindowError;
   final void Function(String path, int seconds, int recordingSeq)? onClipUploaded;
+  /// CHANGE #635 — same window lifecycle policy object as ContinuousVoiceSession.
+  final RecorderWindowPolicy policy;
   static const int windowSec = 24;
 
   final String sessionKey;
@@ -516,6 +577,7 @@ class PackVoiceSession {
     this.expectedProvider,
     this.onWindowError,
     this.onClipUploaded,
+    this.policy = const RecorderWindowPolicy(),
   }) : sessionKey = newVoiceSessionKey(orderId, 'pack');
 
   double get elapsedSec => _clock.elapsedMilliseconds / 1000.0;
@@ -538,14 +600,19 @@ class PackVoiceSession {
       final windowEndSec = elapsedSec;
       // Same race guard as ContinuousVoiceSession._rotate: if stopAndFinalize raced us
       // mid-stop, don't restart the recorder, but still dispatch the clip we captured.
-      if (!_stopping) {
+      if (policy.shouldStartNewWindow(stopping: _stopping)) {
         await _svc.start();
         _windowStartSec = elapsedSec;
+        // CHANGE #635 — see ContinuousVoiceSession._rotate: Stop can land while
+        // start() is still in flight, leaving a window nobody will ever close.
+        if (!policy.shouldStartNewWindow(stopping: _stopping)) {
+          await _svc.cancel();
+          RenderLog.write('c635_window_discarded', 'reason=stop_raced_start;stage=pack;seq=${seq + 1}');
+        }
       }
       if (clip == null) return;
       final durationSec = (windowEndSec - offset).round().clamp(1, 3600);
-      final fut = _dispatch(clip.bytes, clip.mime, clip.ext, seq, offset, durationSec)
-          .catchError((Object e, StackTrace st) => onWindowError?.call(e, st));
+      final fut = _dispatch(clip.bytes, clip.mime, clip.ext, seq, offset, durationSec);
       _inFlight.add(fut);
       unawaited(fut.whenComplete(() => _inFlight.remove(fut)));
     }()
@@ -556,7 +623,41 @@ class PackVoiceSession {
     return done.future;
   }
 
-  Future<void> _dispatch(Uint8List bytes, String mime, String ext, int seq, double offsetSec, int durationSec) async {
+  /// CHANGE #635 — never throws; classifies and reports exactly like
+  /// ContinuousVoiceSession._dispatch. Silence is not an error.
+  Future<WindowOutcome> _dispatch(Uint8List bytes, String mime, String ext, int seq,
+      double offsetSec, int durationSec) async {
+    Object? err;
+    StackTrace? errSt;
+    String transcript = '';
+    int mentionCount = 0;
+    try {
+      await _dispatchInner(bytes, mime, ext, seq, offsetSec, durationSec,
+          onTranscribed: (t, n) {
+        transcript = t;
+        mentionCount = n;
+      });
+    } catch (e, st) {
+      err = e;
+      errSt = st;
+    }
+    final outcome = policy.classifyWindowResult(
+      error: err,
+      transcript: transcript,
+      mentionCount: mentionCount,
+    );
+    if (policy.shouldShowFailureToast(outcome)) {
+      onWindowError?.call(err ?? VoiceReceiveException('window failed'),
+          errSt ?? StackTrace.current);
+    } else if (outcome == WindowOutcome.silent) {
+      RenderLog.write('c635_window_silent', 'seq=$seq;dur=${durationSec}s;stage=pack');
+    }
+    return outcome;
+  }
+
+  Future<void> _dispatchInner(Uint8List bytes, String mime, String ext, int seq,
+      double offsetSec, int durationSec,
+      {required void Function(String transcript, int mentionCount) onTranscribed}) async {
     final clipPath = await _svc.uploadClip(bytes, orderId, seq, ext);
     onClipUploaded?.call(clipPath, durationSec, seq);
     final result = await _svc.transcribe(
@@ -568,6 +669,7 @@ class PackVoiceSession {
       windowOffsetSec: offsetSec,
       stage: 'pack',
     );
+    onTranscribed(result.transcript, result.mentions.length);
     if (result.mentions.isEmpty) return;
     final items = orderItemsProvider();
     final mentionsPayload = <Map<String, dynamic>>[];
@@ -605,14 +707,21 @@ class PackVoiceSession {
     if (_activeRotation != null) {
       await _activeRotation;
     } else if (_svc.wasStarted) {
-      final seq = _nextSeq++;
       final offset = _windowStartSec;
       final windowEndSec = elapsedSec;
-      final clip = await _svc.stop();
-      if (clip != null) {
-        final durationSec = (windowEndSec - offset).round().clamp(1, 3600);
-        _inFlight.add(_dispatch(clip.bytes, clip.mime, clip.ext, seq, offset, durationSec)
-            .catchError((Object e, StackTrace st) => onWindowError?.call(e, st)));
+      final openWindowSec = windowEndSec - offset;
+      // CHANGE #635 — flush the open window only, and never the sub-2s stop artifact.
+      if (!policy.shouldSubmitWindow(durationSec: openWindowSec, atStop: true)) {
+        await _svc.cancel();
+        RenderLog.write('c635_stop_artifact_dropped',
+            'seq=$_nextSeq;dur=${openWindowSec.toStringAsFixed(2)}s;stage=pack');
+      } else {
+        final seq = _nextSeq++;
+        final clip = await _svc.stop();
+        if (clip != null) {
+          final durationSec = openWindowSec.round().clamp(1, 3600);
+          _inFlight.add(_dispatch(clip.bytes, clip.mime, clip.ext, seq, offset, durationSec));
+        }
       }
     }
     _clock.stop();

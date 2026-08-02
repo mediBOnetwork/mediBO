@@ -179,3 +179,24 @@ Gemini never generates or normalizes company names — it extracts verbatim text
 
 ## OCR NAMING RULE (ABSOLUTE, PERMANENT)
 All OCR in mediBO returns VERBATIM text exactly as printed — never official names, never expansions, never corrections, never parent/group companies, never world knowledge. The review modal and stored records carry verbatim seen text only. Run scripts/test_ocr_verbatim.sh after every gemini-ocr change; deploy fails if it fails. NEVER remove this rule or the script.
+
+## PROTECTED TEST SUITE (CHANGE #635 — never remove)
+Before EVERY deploy, run `flutter test test/protected/` in addition to the
+change's own focused test. A protected test may only be modified when the CHANGE
+explicitly changes that protected behaviour — never to make an unrelated change
+pass. New fragile flows get a new file here.
+
+Current files and what they hold down:
+- `recorder_policy_test.dart` — voice window lifecycle: Stop opens no new window,
+  the sub-2s stop artifact is never submitted, silence is not an error toast.
+- `barcode_count_test.dart` — scan/stage/commit: backend strings verbatim, tap
+  zones, qty 0 keeps the item and writes nothing, Pack never crosses into the
+  supplier ledger.
+- `supplier_shop_state_test.dart` — fw_get_state: qty_label/status_label/
+  status_tone rendered verbatim, count_locked (not a client-side OR) blocks entry.
+- `pack_screen_test.dart` — pack_get_queue chips + can_mark_ready verbatim,
+  pack_button (from pack_list_orders) verbatim, hold-to-undo's RPC contract.
+
+The suite runs on the Dart VM in ~2s. Keep it that way: no network, no goldens,
+no Supabase, no camera — mock RPC payloads inline. If a widget resists mocking,
+extract its decisions into a pure class and test that.

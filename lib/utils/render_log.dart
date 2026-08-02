@@ -1,8 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
-// ignore: avoid_web_libraries_in_flutter
-import 'dart:html' as html;
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+// CHANGE #635: dart:html reached this file directly, which made every library
+// that imports RenderLog — including the pure logic in fulfill/ — impossible to
+// load on the Dart VM, so unit tests could not import them at all. The four DOM
+// calls now sit behind a conditional import: identical code on web, no-ops off it.
+import 'render_log_dom_stub.dart'
+    if (dart.library.html) 'render_log_dom.dart' as dom;
 
 /// Lightweight render-state logger for verifying what actually rendered in a
 /// Flutter web (canvas) app. Writes to:
@@ -36,16 +41,17 @@ class RenderLog {
   // cvKey: flutter.supabase.auth.token-code-verifier (PKCE code-verifier; absent for password).
   static String authStorageInfo() {
     try {
-      final ls = html.window.localStorage;
-      final lsKeys = ls.keys
+      final lsKeys = dom
+          .localStorageKeys()
           .where((k) => k.contains('auth-token') || k.contains('auth.token'))
           .toList();
       final lskeys = lsKeys.isEmpty ? 'none' : lsKeys.join(',');
       const durableKeyDirect = 'sb-swojhmarmaijkshsbeih-auth-token';
       const durableKeyShared = 'flutter.sb-swojhmarmaijkshsbeih-auth-token';
       const cvKeyName = 'flutter.supabase.auth.token-code-verifier';
-      final durablePresent = ls.keys.any((k) => k == durableKeyDirect || k == durableKeyShared);
-      final cvPresent = ls.keys.any((k) => k == cvKeyName);
+      final allKeys = dom.localStorageKeys();
+      final durablePresent = allKeys.any((k) => k == durableKeyDirect || k == durableKeyShared);
+      final cvPresent = allKeys.any((k) => k == cvKeyName);
       return 'lskeys=$lskeys; durableKey=${durablePresent ? 'present' : 'absent'}; cvKey=${cvPresent ? 'present' : 'absent'}';
     } catch (_) {
       return 'lskeys=err; durableKey=err; cvKey=err';
@@ -87,7 +93,7 @@ class RenderLog {
   /// request was dropped — the keys then land on the next page load.
   static void adoptJsNotes() {
     try {
-      final raw = html.window.localStorage['medibo_nav_log'];
+      final raw = dom.localStorageGet('medibo_nav_log');
       if (raw == null || raw.isEmpty) return;
       final decoded = jsonDecode(raw);
       if (decoded is! Map) return;
@@ -110,8 +116,8 @@ class RenderLog {
   static void _writeToDOM() {
     try {
       final text = _log.entries.map((e) => '${e.key}=${e.value}').join('\n');
-      html.document.getElementById('medibo-render-log')?.text = text;
-      html.window.localStorage['medibo_render_log'] = text;
+      dom.setElementText('medibo-render-log', text);
+      dom.localStorageSet('medibo_render_log', text);
     } catch (_) {}
   }
 

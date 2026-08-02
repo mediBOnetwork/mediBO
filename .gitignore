@@ -46,3 +46,6 @@ scripts/*.json
 
 # Claude Code worktrees (per-change isolated checkouts) — never track these
 .claude/worktrees/
+build/native_assets/
+build/test_cache/
+build/unit_test_assets/

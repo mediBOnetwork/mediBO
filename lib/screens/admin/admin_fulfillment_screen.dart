@@ -129,6 +129,11 @@ class _VoiceCaps {
     required String path,
     required int seconds,
     required void Function() onLocked,
+    // CHANGE #635: voice_clip_register answering ok:false for anything OTHER than
+    // the daily cap means the usage ledger refused a clip we already uploaded —
+    // a real failure the operator must see. It used to be swallowed silently.
+    // daily_cap keeps its own limit sheet via onLocked and must NOT also toast.
+    void Function()? onRegisterFailed,
     String? sessionKey,
     String? stage, // §0.12: 'shop'|'warehouse'; omit for pack context
   }) async {
@@ -153,6 +158,12 @@ class _VoiceCaps {
         _remainingToday = 0;
         _remainingLabel = res['remaining_label']?.toString() ?? _remainingLabel;
         onLocked();
+      } else {
+        // CHANGE #635 — ok:false, not the cap. The clip is in storage but the
+        // ledger rejected it; surface it rather than losing it silently.
+        RenderLog.write('c635_register_failed',
+            'supplier=$supplier;error=${res['error'] ?? 'unknown'}');
+        onRegisterFailed?.call();
       }
     } catch (_) {}
   }
@@ -316,7 +327,9 @@ class _MergedProduct {
       mergedDateChip = itemDateChip(r);
       if (mergedDateChip != null) break;
     }
-    final colors = m['status_colors'];
+    // CHANGE #635: the backend-owned display strings come through ONE reader,
+    // shared with test/protected/supplier_shop_state_test.dart.
+    final display = shopItemDisplayOf(m);
     final issueChip = m['issue_chip'];
     final confirmGate = m['confirm_gate'];
     return _MergedProduct(
@@ -338,12 +351,10 @@ class _MergedProduct {
       mergedIssueQty: (m['issue_qty'] as num?)?.toInt() ?? 0,
       showDateChip: mergedDateChip != null,
       dateChip: mergedDateChip,
-      statusLabel: m['status_label']?.toString() ?? '',
-      statusTone: m['status_tone']?.toString() ?? '',
-      statusColors: colors is Map
-          ? {'bg': colors['bg']?.toString() ?? '', 'fg': colors['fg']?.toString() ?? ''}
-          : null,
-      qtyLabel: m['qty_label']?.toString() ?? '',
+      statusLabel: display.statusLabel,
+      statusTone: display.statusTone,
+      statusColors: display.statusColors,
+      qtyLabel: display.qtyLabel,
       issueChip: issueChip is Map ? Map<String, dynamic>.from(issueChip) : null,
       lines: lines,
       isDisputeCandidate: m['is_dispute_candidate'] is bool ? m['is_dispute_candidate'] as bool : null,
@@ -1187,8 +1198,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       ((item['ordered_qty'] ?? item['ordered']) as num?)?.toInt() ?? 1;
   static int recQtyOf(Map<String, dynamic> item) =>
       ((item['received_qty'] as num?) ?? 0).toInt();
-  static bool lockedOf(Map<String, dynamic> item) =>
-      item['collect_locked'] == true || item['received_locked'] == true;
+  // CHANGE #635: fw_get_state resolves the stage-correct lock flag itself and
+  // returns it as count_locked. See countLockedOf — the old OR of the two raw
+  // flags was the app answering a question the backend had already answered.
+  static bool lockedOf(Map<String, dynamic> item) => countLockedOf(item);
   // RC3: mode is top-level in fw_get_state response, never per-item
   // #333: backend now returns 'stage' (not 'mode'); keep 'mode' as fallback for legacy shapes
   static String? supplierModeOf(Map<String, dynamic> stateRes) =>
@@ -2374,7 +2387,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
             ctxStr: capCtx, supplier: supplier332, path: path, seconds: seconds,
             sessionKey: _sessionKey,
             stage: stage,
-            onLocked: () { if (mounted) _showSnack(FulfillLookups.instance.message('daily_voice_limit') ?? ''); }).ignore();
+            onLocked: () { if (mounted) _showSnack(FulfillLookups.instance.message('daily_voice_limit') ?? ''); },
+            // CHANGE #635 — same backend-owned copy as any other real window failure.
+            onRegisterFailed: () { if (mounted) _showSnack(FulfillLookups.instance.message('window_save_failed') ?? ''); }).ignore();
       },
     );
     try {
@@ -11601,7 +11616,8 @@ class _PackingScreenState extends State<_PackingScreen>
   // done in the list sheet while the bag quick-view (which read raw item['packed'])
   // disagreed. The backend rule additionally requires pack_counted_qty to be
   // non-null and >= packable_qty.
-  bool _isItemDone(Map<String, dynamic> item) => item['is_done'] == true;
+  // CHANGE #635: shared with packUndoParams' caller-side gate — one definition.
+  bool _isItemDone(Map<String, dynamic> item) => packUndoAllowed(item);
 
   // CHANGE #537: navigation counters are backend-owned everywhere — pack_get_queue's
   // nav{} on load, pack_mark_item's nav{} after every pack/undo. Both use the SAME
@@ -11893,10 +11909,10 @@ class _PackingScreenState extends State<_PackingScreen>
     setState(() => _marking = true);
     final itemId = item['order_item_id']?.toString() ?? '';
     try {
-      // #368 bug#1: pass p_qty:null so the 3-arg overload runs and actually clears
-      // packed_qty (the 2-arg legacy overload left it stale).
-      final dynamic res = await Supabase.instance.client.rpc('pack_mark_item',
-          params: {'p_order_item_id': itemId, 'p_packed': false, 'p_qty': null});
+      // CHANGE #635: one definition of the undo contract, shared with _doUndo.
+      // p_qty:null selects the 3-arg overload, the only one that clears packed_qty.
+      final dynamic res = await Supabase.instance.client
+          .rpc(kPackUndoRpc, params: packUndoParams(itemId));
       if (!mounted) return;
       setState(() {
         _items[index] = {...item, 'packed': false, 'packed_qty': 0};
@@ -11979,11 +11995,9 @@ class _PackingScreenState extends State<_PackingScreen>
     setState(() => _marking = true);
     final itemId = item['order_item_id']?.toString() ?? '';
     try {
-      // #368 bug#1: pass p_qty:null so the 3-arg overload clears packed_qty.
-      final dynamic res = await Supabase.instance.client.rpc(
-        'pack_mark_item',
-        params: {'p_order_item_id': itemId, 'p_packed': false, 'p_qty': null},
-      );
+      // CHANGE #635: shared undo contract — see _performUndo.
+      final dynamic res = await Supabase.instance.client
+          .rpc(kPackUndoRpc, params: packUndoParams(itemId));
       if (!mounted) return;
       setState(() {
         _items[index] = {...item, 'packed': false, 'packed_qty': 0};

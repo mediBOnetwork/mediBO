@@ -810,6 +810,20 @@ class CartModel extends ChangeNotifier {
   String label(String key) =>
       ((render['labels'] as Map?)?[key] ?? '').toString();
 
+  /// CHANGE #636 — the floating cart pill, rendered entirely by cart_render().
+  ///
+  /// `show` is the BACKEND's answer to "is there a pill right now?". The app
+  /// never counts items to decide that: a client-side `distinctItems > 0` is a
+  /// second answer to a question the cart payload already answers, and the two
+  /// disagree for exactly as long as a write is in flight.
+  Map<String, dynamic> get pill =>
+      (render['pill'] as Map?)?.cast<String, dynamic>() ?? const {};
+
+  bool get pillShow => pill['show'] == true;
+  String get pillItemsLabel => (pill['items_label'] ?? '').toString();
+  String get pillCta => (pill['cta'] ?? '').toString();
+  String get pillImage => (pill['image'] ?? '').toString();
+
   /// #615 — the one figure the customer pays, as the SERVER computed it:
   /// sum(qty × MRP). `grand_total` in the render block, `mrp_total` /
   /// `subtotal` / `net_payable` at the top level are all the same number by
@@ -861,19 +875,32 @@ class CartModel extends ChangeNotifier {
   // CHANGE #610 — the four stepper actions are debounced (one RPC per burst);
   // everything else writes straight away, because none of it can burst.
 
-  void add(Product product) {
-    final current = quantityOf(product.id);
-    _requestQty(product.id, current > 0 ? current + 1 : 1);
-  }
+  void add(Product product) => addId(product.id);
 
   void setQuantity(Product product, int qty) => _requestQty(product.id, qty);
 
-  void increment(Product product) =>
-      _requestQty(product.id, quantityOf(product.id) + 1);
+  void increment(Product product) => incrementId(product.id);
 
   /// Decrement. Quantity 0 removes the line server-side.
-  void decrement(Product product) =>
-      _requestQty(product.id, quantityOf(product.id) - 1);
+  void decrement(Product product) => decrementId(product.id);
+
+  // CHANGE #636 — id-keyed variants for screens that render a backend payload
+  // and never build a Product (the product page renders product_detail()).
+  // These are the single implementation; the Product-based calls above
+  // delegate here, so both routes share one debounce and one write path and
+  // cannot drift apart.
+
+  void addId(String productId) {
+    final current = quantityOf(productId);
+    _requestQty(productId, current > 0 ? current + 1 : 1);
+  }
+
+  void incrementId(String productId) =>
+      _requestQty(productId, quantityOf(productId) + 1);
+
+  /// Decrement. Quantity 0 removes the line server-side.
+  void decrementId(String productId) =>
+      _requestQty(productId, quantityOf(productId) - 1);
 
   /// Bulk-upload add. Awaits its write so cart_items.id assignment order
   /// matches the bulk-upload list order (CHANGE #413) rather than racing.

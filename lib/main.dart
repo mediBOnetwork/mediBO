@@ -28,6 +28,7 @@ import 'screens/public/public_order_page.dart';
 import 'screens/public/track_page.dart'; // C629: /track/<qr_token>
 import 'screens/delivery/delivery_register_screen.dart'; // C631: PART A
 import 'screens/code_resolver_page.dart';
+import 'screens/product_detail_screen.dart'; // C636: /product/<id>
 import 'screens/inquiry_link_page.dart';
 import 'screens/dispute_link_page.dart';
 import 'screens/about_screen.dart';
@@ -371,6 +372,39 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
             // Public order view    — no auth required, handles /order/<token>
             onGenerateRoute: (settings) {
               final name = settings.name ?? '';
+              // CHANGE #636 — the product detail page is a real route, so it
+              // gets a shareable URL and a real back stack (a similar-product
+              // tile pushes its own page rather than replacing this one).
+              //
+              // Declared here rather than in `routes:` because that map is
+              // flat and cannot carry a path parameter. It must stay ABOVE the
+              // trailing /:code guard, which is documented as last.
+              if (name.startsWith('/product/')) {
+                final id = name.substring('/product/'.length).split('?').first;
+                if (id.isNotEmpty) {
+                  return PageRouteBuilder(
+                    settings: settings,
+                    // Butter rule: under 300ms. Hero flies the card image in
+                    // over the top of this fade.
+                    transitionDuration: const Duration(milliseconds: 260),
+                    reverseTransitionDuration:
+                        const Duration(milliseconds: 220),
+                    pageBuilder: (_, __, ___) =>
+                        ProductDetailScreen(productId: id),
+                    transitionsBuilder: (_, anim, __, child) => FadeTransition(
+                      opacity: anim,
+                      child: SlideTransition(
+                        position: Tween<Offset>(
+                          begin: const Offset(0, 0.02),
+                          end: Offset.zero,
+                        ).animate(CurvedAnimation(
+                            parent: anim, curve: Curves.easeOutCubic)),
+                        child: child,
+                      ),
+                    ),
+                  );
+                }
+              }
               if (name.startsWith('/order/')) {
                 final token = name.substring('/order/'.length).split('?').first;
                 if (token.isNotEmpty) {

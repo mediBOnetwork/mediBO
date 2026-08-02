@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/product.dart';
+import '../models/product_detail.dart';
 
 /// A therapeutic_class plus how many medicines it holds — powers the
 /// dynamic category tiles and their count badges.
@@ -351,6 +352,24 @@ class MedicineRepository {
           ? Product.fromMap(Map<String, dynamic>.from(item))
           : null,
     );
+  }
+
+  /// CHANGE #636 — the product page is ONE RPC.
+  ///
+  /// `product_detail()` returns the whole page render-ready: header, images,
+  /// price, the same `availability` verdict the storefront card shows, the
+  /// overview rows, the sections, the similar rail and every user-facing label.
+  /// There is deliberately no second call to reconcile buy-state against
+  /// content — one payload cannot disagree with itself.
+  ///
+  /// An unparseable id and a non-Map response both render the backend's own
+  /// not-found page rather than throwing.
+  Future<ProductDetail> fetchProductDetail(String productId) async {
+    final id = int.tryParse(productId);
+    if (id == null) return ProductDetail.notFound(const {});
+    final res = await _rpc('product_detail', params: {'p_product_id': id});
+    if (res is! Map) return ProductDetail.notFound(const {});
+    return ProductDetail.fromMap(Map<String, dynamic>.from(res));
   }
 
   /// Loads one page of medicines, optionally filtered by [category] and [query].

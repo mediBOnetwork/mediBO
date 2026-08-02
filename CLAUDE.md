@@ -196,6 +196,14 @@ Current files and what they hold down:
   status_tone rendered verbatim, count_locked (not a client-side OR) blocks entry.
 - `pack_screen_test.dart` — pack_get_queue chips + can_mark_ready verbatim,
   pack_button (from pack_list_orders) verbatim, hold-to-undo's RPC contract.
+- `product_detail_test.dart` — the product page is ONE RPC printed verbatim:
+  headings come from the storefront_ui_label table (not Dart literals), absence
+  is explicit (has_mrp/has_gst/has_supplier_label/my_history.has), ok:false
+  renders the backend's not-found page instead of throwing.
+- `compact_card_test.dart` — the compact card computes nothing: price, struck
+  MRP, ribbon and ADD label are backend strings, a ribbon appears only when the
+  payload sent one, out-of-stock is can_add:false (never a stock number), and
+  the grid extent stays derived from the card's own constants.
 
 The suite runs on the Dart VM in ~2s. Keep it that way: no network, no goldens,
 no Supabase, no camera — mock RPC payloads inline. If a widget resists mocking,

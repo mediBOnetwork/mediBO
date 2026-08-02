@@ -306,6 +306,48 @@ class Product {
         availability: a,
       );
 
+  /// CHANGE #637 — one card from `storefront_home_v2()`.
+  ///
+  /// The home feed sends an already-narrowed card, NOT a raw MEDICINE row, so
+  /// the keys differ from [Product.fromMap]: `name`/`company`/`image`/
+  /// `pack_label`/`form_chip` rather than `product_name`/`marketer`/
+  /// `image_url_1`/`pack_size`/`pack_type`. This factory exists so
+  /// [CompactProductCard] can be reused verbatim instead of forked — it is a
+  /// field mapping and nothing else.
+  ///
+  /// The two blocks the card actually renders — `availability` and `pricing` —
+  /// are the same ones `storefront_page()` sends, parsed by the same parsers,
+  /// so a home rail and the category grid can never disagree about a product.
+  ///
+  /// Fields the card never reads (composition, category, schedule, stock) are
+  /// filled with empty values rather than invented: the home payload does not
+  /// carry them, and guessing them here would be the app deciding.
+  factory Product.fromHomeCard(Map<String, dynamic> map) {
+    final pricing = Pricing.fromMap(map['pricing']);
+    return Product(
+      id: map['id']?.toString() ?? '',
+      name: (map['name'] as String?) ?? '',
+      genericName: '',
+      manufacturer: (map['company'] as String?) ?? '',
+      category: 'Other',
+      therapeuticClass: '',
+      imageUrl: (map['image'] as String?)?.trim() ?? '',
+      packSize: (map['pack_label'] as String?) ?? '',
+      formChip: (map['form_chip'] as String?)?.trim() ?? '',
+      mrp: pricing?.mrp ?? 0,
+      b2bPrice: pricing?.salePrice ?? 0,
+      moq: 1,
+      stock: 0,
+      buyable: map['buyable'] as bool?,
+      schedule: 'OTC',
+      requiresPrescription: false,
+      discount: 0.0,
+      availability: Availability.fromMap(map['availability']),
+      pricing: pricing,
+      mrpText: (map['mrp_label'] ?? '').toString(),
+    );
+  }
+
   /// Builds a [Product] from a `MEDICINE` row returned by Supabase.
   factory Product.fromMap(Map<String, dynamic> map) {
     // MRP is stored as text "₹59.06" — strip symbol/commas then parse.

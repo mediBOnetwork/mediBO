@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../models/home_sections.dart';
 import '../models/product.dart';
 import '../models/product_detail.dart';
 
@@ -352,6 +353,25 @@ class MedicineRepository {
           ? Product.fromMap(Map<String, dynamic>.from(item))
           : null,
     );
+  }
+
+  /// CHANGE #637 — the whole home feed is ONE RPC.
+  ///
+  /// `storefront_home_v2()` returns the ordered sections with their titles,
+  /// subtitles, See-all destinations and items already chosen. The app renders
+  /// them in order; it never decides which sections exist or how they are
+  /// sorted.
+  ///
+  /// A throw or a non-Map response becomes [HomeSections.failed] so the screen
+  /// can show its quiet retry block instead of a blank page.
+  Future<HomeSections> fetchHomeSections({int items = 12}) async {
+    try {
+      final res = await _rpc('storefront_home_v2', params: {'p_items': items});
+      if (res is! Map) return HomeSections.failed;
+      return HomeSections.fromMap(Map<String, dynamic>.from(res));
+    } catch (_) {
+      return HomeSections.failed;
+    }
   }
 
   /// CHANGE #636 — the product page is ONE RPC.

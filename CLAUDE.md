@@ -200,6 +200,12 @@ Current files and what they hold down:
   headings come from the storefront_ui_label table (not Dart literals), absence
   is explicit (has_mrp/has_gst/has_supplier_label/my_history.has), ok:false
   renders the backend's not-found page instead of throwing.
+- `company_notify_test.dart` — company page renders label/count_label verbatim
+  and pages by offset while the BACKEND says has_more (appending never
+  duplicates); company_not_found is an empty state; an out-of-stock card offers
+  Notify, whose toast and subscribed state come only from the RPC; the
+  back-in-stock strip reports exactly the ids it showed; and the PDP price is
+  pricing.price_display — the same block every card reads.
 - `home_sections_test.dart` — the home feed is one RPC rendered in payload
   order: unknown layouts and empty sections are skipped silently (forward
   compat), the green accent is located inside the title rather than guessed,

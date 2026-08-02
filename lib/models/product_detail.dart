@@ -1,4 +1,4 @@
-import 'product.dart' show Availability;
+import 'product.dart' show Availability, Pricing;
 
 /// CHANGE #636 — the `product_detail(p_product_id)` payload, parsed and nothing
 /// more.
@@ -36,6 +36,15 @@ class ProductDetail {
   // buy state — the SAME verdict the storefront card renders
   final Availability? availability;
 
+  /// CHANGE #638 — the SAME price block the cards render.
+  ///
+  /// The page used to print `price.mrp_label` big while every card printed
+  /// `pricing.price_display`. Two renderings of one number is exactly the
+  /// shape of bug this codebase keeps paying for, so the page now reads the
+  /// card's source. `price.mrp_label` stays in the payload but is no longer
+  /// the headline.
+  final Pricing? pricing;
+
   // stock
   final bool buyable;
   final bool hasSupplierLabel;
@@ -64,6 +73,7 @@ class ProductDetail {
     required this.hasGst,
     required this.gstLabel,
     required this.availability,
+    required this.pricing,
     required this.buyable,
     required this.hasSupplierLabel,
     required this.supplierLabel,
@@ -118,6 +128,7 @@ class ProductDetail {
       hasGst: price['has_gst'] == true,
       gstLabel: _s(price['gst_label']),
       availability: Availability.fromMap(m['availability']),
+      pricing: Pricing.fromMap(m['pricing']),
       buyable: stock['buyable'] == true,
       hasSupplierLabel: stock['has_supplier_label'] == true,
       supplierLabel: _s(stock['supplier_label']),
@@ -165,6 +176,7 @@ class ProductDetail {
         hasGst: false,
         gstLabel: '',
         availability: null,
+        pricing: null,
         buyable: false,
         hasSupplierLabel: false,
         supplierLabel: '',

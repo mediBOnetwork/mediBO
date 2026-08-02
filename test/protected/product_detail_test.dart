@@ -81,6 +81,19 @@ Map<String, dynamic> _payload({
         'gst_label': hasGst ? 'GST 12%' : '',
         'scheme': false,
       },
+      // CHANGE #638 — the page reads THIS block for its price, the same one
+      // every card reads. `price.mrp_label` above is still sent but is no
+      // longer the headline.
+      'pricing': {
+        'mrp': 2597.0,
+        'sale_price': 2597.0,
+        'discount_pct': 0,
+        'mrp_display': '₹2,597.00',
+        'price_display': '₹2,597.00',
+        'discount_label': '',
+        'has_price': hasMrp,
+        'has_discount': false,
+      },
       'availability': {
         'is_available': true,
         'can_add': true,
@@ -163,11 +176,13 @@ void main() {
         (tester) async {
       await _pump(tester, _payload());
 
-      // The price row and the sticky buy bar both show the price, and both
-      // print the same two payload strings rather than reformatting them.
+      // CHANGE #638 — the price row and the sticky buy bar both read
+      // pricing.price_display, the SAME block the cards read. One price
+      // source everywhere.
       expect(find.text('₹2,597.00'), findsNWidgets(2),
-          reason: 'mrp_label verbatim, in the price row and the sticky bar');
-      expect(find.text('MRP'), findsNWidgets(2), reason: 'mrp_note verbatim');
+          reason: 'price_display verbatim, in the price row and the sticky bar');
+      expect(find.text('MRP'), findsOneWidget,
+          reason: 'mrp_note survives only under the sticky bar price');
       expect(find.text('GST 12%'), findsOneWidget, reason: 'gst_label verbatim');
     });
 

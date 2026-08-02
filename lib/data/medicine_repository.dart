@@ -7,6 +7,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/home_sections.dart';
 import '../models/product.dart';
 import '../models/product_detail.dart';
+import '../models/storefront_p3.dart';
+import 'storefront_labels.dart';
 
 /// A therapeutic_class plus how many medicines it holds — powers the
 /// dynamic category tiles and their count badges.
@@ -353,6 +355,95 @@ class MedicineRepository {
           ? Product.fromMap(Map<String, dynamic>.from(item))
           : null,
     );
+  }
+
+  /// CHANGE #638 — one page of a company's catalogue.
+  ///
+  /// Paging is by `p_offset`; `has_more` is the backend's own answer, never
+  /// inferred from the page size.
+  Future<CompanyPage> fetchCompanyPage(
+    String key, {
+    int offset = 0,
+    int limit = 24,
+  }) async {
+    try {
+      final res = await _rpc('storefront_company_page', params: {
+        'p_key': key,
+        'p_offset': offset,
+        'p_limit': limit,
+      });
+      if (res is! Map) return CompanyPage.failed;
+      return CompanyPage.fromMap(Map<String, dynamic>.from(res));
+    } catch (_) {
+      return CompanyPage.failed;
+    }
+  }
+
+  /// CHANGE #638 — subscribe to a back-in-stock alert.
+  Future<NotifyResult> stockNotifyRequest(String productId) async {
+    final id = int.tryParse(productId);
+    if (id == null) return NotifyResult.failed;
+    try {
+      final res =
+          await _rpc('stock_notify_request', params: {'p_product_id': id});
+      if (res is! Map) return NotifyResult.failed;
+      return NotifyResult.fromMap(Map<String, dynamic>.from(res));
+    } catch (_) {
+      return NotifyResult.failed;
+    }
+  }
+
+  /// Whether this viewer is already subscribed. Read once on product-page
+  /// load — there is deliberately no polling.
+  Future<bool> stockNotifyStatus(String productId) async {
+    final id = int.tryParse(productId);
+    if (id == null) return false;
+    try {
+      final res =
+          await _rpc('stock_notify_status', params: {'p_product_id': id});
+      return res is Map && res['subscribed'] == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// The back-in-stock strip. Returns [BackInStock.empty] on any failure, so a
+  /// dead call simply means no strip.
+  Future<BackInStock> myStockNotifications() async {
+    try {
+      final res = await _rpc('my_stock_notifications');
+      if (res is! Map) return BackInStock.empty;
+      return BackInStock.fromMap(Map<String, dynamic>.from(res));
+    } catch (_) {
+      return BackInStock.empty;
+    }
+  }
+
+  /// Marks the shown strip items seen. Fire-and-forget: the strip has already
+  /// been rendered, and a failure here must never surface to the user.
+  Future<void> stockNotifySeen(List<int> productIds) async {
+    if (productIds.isEmpty) return;
+    try {
+      await _rpc('stock_notify_seen', params: {'p_product_ids': productIds});
+    } catch (_) {
+      // Intentionally silent.
+    }
+  }
+
+  /// CHANGE #638 — loads the storefront label set into [StorefrontLabels].
+  ///
+  /// Cards carry no labels of their own, so this is fetched once rather than
+  /// per tile. A failure leaves whatever is already cached in place.
+  Future<void> loadStorefrontLabels() async {
+    try {
+      final res = await _rpc('storefront_labels');
+      if (res is! Map) return;
+      StorefrontLabels.adopt(
+        res.map((k, v) => MapEntry(k.toString(), v?.toString() ?? '')),
+      );
+    } catch (_) {
+      // Keep the existing labels.
+    }
   }
 
   /// CHANGE #637 — the whole home feed is ONE RPC.

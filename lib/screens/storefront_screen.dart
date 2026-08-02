@@ -592,9 +592,8 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
           onKeyEvent: _onKeyEvent,
           child: HomeSectionsView(
             onCategoryTap: (c) => widget.onCategorySelected(c),
-            // No company-filtered listing or RPC exists, so a company tile
-            // prefills and submits the search the shell already owns.
-            onCompanyTap: (label) => widget.onSuggestionTap(label),
+            // CHANGE #638 — company tiles now push /company/<key> themselves;
+            // the search-prefill fallback is gone.
             footer: Column(
               children: [
                 const _TrustBadges(),

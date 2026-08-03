@@ -18,6 +18,7 @@ import '../widgets/animations.dart';
 import '../widgets/bill_actions_row.dart';
 import '../widgets/bill_viewer.dart';
 import '../widgets/cust_pay_panel.dart';
+import '../widgets/customer_order_item_card.dart'; // #641: the Items-tab card
 
 // ─── Data models ─────────────────────────────────────────────────────────────
 
@@ -134,6 +135,13 @@ class _DbLine {
   final String statusBg;
   final String statusFg;
 
+  // ── CHANGE #641 — the rich item fields ────────────────────────────────────
+  /// Everything the Items card renders: image, company, pack, qty/rate/line
+  /// labels and the status chip, all decided and formatted server-side. Parsed
+  /// by `CustomerOrderItem.fromPayload`, which is the single parser for both
+  /// `lines` and `unfulfilled_lines`.
+  final CustomerOrderItem item;
+
   const _DbLine({
     required this.name,
     required this.price,
@@ -144,6 +152,7 @@ class _DbLine {
     this.statusText = '',
     this.statusBg = '',
     this.statusFg = '',
+    this.item = const CustomerOrderItem(),
   });
 
   /// #572 — line_total arrives resolved. The old parser fell back to
@@ -163,6 +172,8 @@ class _DbLine {
       statusText: (j['status_text'] ?? '').toString(),
       statusBg: (colors['bg'] ?? '').toString(),
       statusFg: (colors['fg'] ?? '').toString(),
+      // #641 — the rich half of the same row, parsed in exactly one place.
+      item: CustomerOrderItem.fromPayload(j),
     );
   }
 }
@@ -805,7 +816,29 @@ class _ItemsTabState extends State<_ItemsTab> {
         ';unf:${order.unfulfilledCount};unf_rows:${order.unfulfilledLines.length}'
         ';total_items:${order.totalItemCount};open:${_unfulfilledOpen ? 1 : 0}');
 
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+    // CHANGE #641 — prove the RICH fields actually arrived, on the real device,
+    // from the real payload. Counting rows is not enough: the regression was a
+    // card rendering without image/company/pack, which a row count cannot see.
+    // Reports the first line's field presence plus how many lines carry each.
+    if (order.lines.isNotEmpty) {
+      final f = order.lines.first.item;
+      RenderLog.write(
+          'c641_rich_items',
+          'order:${order.number};rows:${order.lines.length}'
+          ';uniq_names:${order.lines.map((l) => l.item.name).toSet().length}'
+          ';img:${order.lines.where((l) => l.item.imageUrl.isNotEmpty).length}'
+          ';co:${order.lines.where((l) => l.item.company.isNotEmpty).length}'
+          ';pack:${order.lines.where((l) => l.item.packLabel.isNotEmpty).length}'
+          ';qty:${order.lines.where((l) => l.item.qtyLabel.isNotEmpty).length}'
+          ';first_qty:${f.qtyLabel};first_rate:${f.rateLabel}'
+          ';first_line:${f.lineLabel};first_status:${f.statusLabel}'
+          ';first_tone:${f.statusTone}');
+    }
+
+    // #641 — stretch, not start: the tab body is the card's full content width,
+    // and every item card fills it. `start` was what let the cards shrink-wrap
+    // to their text on desktop.
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       // B1 — the items we WILL supply.
       ...order.lines.map(_itemRow),
       // B2/B3 — the section exists only because the backend said so. When
@@ -851,7 +884,7 @@ class _ItemsTabState extends State<_ItemsTab> {
         if (_unfulfilledOpen)
           Padding(
             padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
               if (order.unfulfilledNote.isNotEmpty) ...[
                 Text(order.unfulfilledNote,
                     style: const TextStyle(
@@ -871,83 +904,15 @@ class _ItemsTabState extends State<_ItemsTab> {
   // field already carries the reason ("No supplier available"), so there is no
   // second code path and no chance of the two drifting apart.
 
-  Widget _itemRow(_DbLine l) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(l.name,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-                fontSize: 13.5,
-                fontWeight: FontWeight.w700,
-                color: Color(0xFF111827))),
-        const SizedBox(height: 6),
-        Wrap(
-            crossAxisAlignment: WrapCrossAlignment.center,
-            spacing: 10,
-            runSpacing: 4,
-            children: [
-              // The quantity as the backend counted it. No unit word is glued
-              // on here — `lines` carries no qty_label, and inventing "Units"
-              // in Dart is exactly the kind of string this repo forbids.
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                decoration: BoxDecoration(
-                    color: const Color(0xFFF3F4F6),
-                    borderRadius: BorderRadius.circular(6)),
-                child: Text('${l.quantity}',
-                    style: const TextStyle(
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFF374151))),
-              ),
-              if (l.priceDisplay.isNotEmpty)
-                Text(l.priceDisplay,
-                    style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
-              if (l.lineTotalDisplay.isNotEmpty)
-                Text(l.lineTotalDisplay,
-                    style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        color: Color(0xFF111827))),
-              if (l.statusText.isNotEmpty)
-                _LineStatusChip(text: l.statusText, bg: l.statusBg, fg: l.statusFg),
-            ]),
-      ]),
-    );
-  }
-}
-
-/// #625 — words and both colours arrive together on the line. Recolouring a
-/// status is an UPDATE in `unfulfilled_copy`, never a deploy.
-class _LineStatusChip extends StatelessWidget {
-  final String text;
-  final String bg;
-  final String fg;
-  const _LineStatusChip(
-      {required this.text, required this.bg, required this.fg});
-
-  @override
-  Widget build(BuildContext context) {
-    final fgColor = _hexColor(fg, fallback: const Color(0xFF374151));
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-      decoration: BoxDecoration(
-        color: _hexColor(bg, fallback: const Color(0xFFF3F4F6)),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Text(text,
-          style: TextStyle(
-              fontSize: 10.5, fontWeight: FontWeight.w700, color: fgColor)),
-    );
-  }
+  /// CHANGE #641 — the rich card, restored on EVERY width.
+  ///
+  /// The regression this fixes was not the styling, it was the sizing: the card
+  /// Container carried no width, so inside a `CrossAxisAlignment.start` Column
+  /// it shrank to its widest child. On a phone the name is wide enough that the
+  /// card looked full-bleed anyway; on desktop the same widget visibly
+  /// collapsed to a stub. The card now states `width: double.infinity` and
+  /// lives in its own file so a widget test can drive it directly.
+  Widget _itemRow(_DbLine l) => CustomerOrderItemCard(item: l.item);
 }
 
 // ─── Bill tab ───────────────────────────────────────────────────────────────

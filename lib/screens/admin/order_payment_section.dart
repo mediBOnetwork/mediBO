@@ -150,7 +150,11 @@ class _OrderPaymentSectionState extends State<OrderPaymentSection> {
     final ocrAmt = claim['ocr_amount'] as num?;
     final claimedAmt = claim['claimed_amount'] as num?;
     final utr = claim['utr'] as String?;
-    final screenshotPath = claim['screenshot_path'] as String?;
+    // #643 — admin_order_payment_view emits 'file_path' (and now 'bucket').
+    // This read was 'screenshot_path', a key no RPC has ever returned, so the
+    // proof silently never rendered here. Old key kept as a fallback.
+    final screenshotPath = (claim['file_path'] ?? claim['screenshot_path']) as String?;
+    final screenshotBucket = claim['bucket'] as String?;
     final appAmt = claim['app_amount'] as num?;
     final amountMatch = claim['amount_match'] as bool?;
     final isActing = _actingOnClaim == claimId;
@@ -195,7 +199,7 @@ class _OrderPaymentSectionState extends State<OrderPaymentSection> {
           if (utr != null && utr.isNotEmpty) _infoRow('UTR', utr),
           if (screenshotPath != null && screenshotPath.isNotEmpty) ...[
             const SizedBox(height: 8),
-            _SignedScreenshot(filePath: screenshotPath),
+            _SignedScreenshot(filePath: screenshotPath, bucket: screenshotBucket),
           ],
           if (status == 'claimed') ...[
             const SizedBox(height: 12),
@@ -288,7 +292,9 @@ class _OrderPaymentSectionState extends State<OrderPaymentSection> {
 
 class _SignedScreenshot extends StatefulWidget {
   final String filePath;
-  const _SignedScreenshot({required this.filePath});
+  /// #643 — the bucket named by admin_order_payment_view, used verbatim.
+  final String? bucket;
+  const _SignedScreenshot({required this.filePath, this.bucket});
 
   @override
   State<_SignedScreenshot> createState() => _SignedScreenshotState();
@@ -300,7 +306,8 @@ class _SignedScreenshotState extends State<_SignedScreenshot> {
   @override
   void initState() {
     super.initState();
-    _urlFuture = PaymentClaimsService.signedScreenshotUrl(widget.filePath);
+    _urlFuture = PaymentClaimsService.signedScreenshotUrl(widget.filePath,
+        bucket: widget.bucket);
   }
 
   @override

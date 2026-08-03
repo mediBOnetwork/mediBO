@@ -319,7 +319,9 @@ class _ClaimCard extends StatelessWidget {
           const SizedBox(height: 12),
 
           // Screenshot
-          if (filePath.isNotEmpty) _ScreenshotThumbnail(filePath: filePath),
+          if (filePath.isNotEmpty)
+            _ScreenshotThumbnail(
+                filePath: filePath, bucket: claim['bucket'] as String?),
           if (filePath.isNotEmpty) const SizedBox(height: 12),
 
           // Orders section (only for claimed)
@@ -535,7 +537,9 @@ class _StatusChip extends StatelessWidget {
 
 class _ScreenshotThumbnail extends StatefulWidget {
   final String filePath;
-  const _ScreenshotThumbnail({required this.filePath});
+  /// #643 — the bucket named by admin_payment_claims, used verbatim.
+  final String? bucket;
+  const _ScreenshotThumbnail({required this.filePath, this.bucket});
 
   @override
   State<_ScreenshotThumbnail> createState() => _ScreenshotThumbnailState();
@@ -547,7 +551,8 @@ class _ScreenshotThumbnailState extends State<_ScreenshotThumbnail> {
   @override
   void initState() {
     super.initState();
-    _urlFuture = PaymentClaimsService.signedScreenshotUrl(widget.filePath);
+    _urlFuture = PaymentClaimsService.signedScreenshotUrl(widget.filePath,
+        bucket: widget.bucket);
   }
 
   @override

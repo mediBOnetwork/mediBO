@@ -16,6 +16,7 @@ import '../utils/render_log.dart';
 import '../utils/safe_parse.dart';
 import '../utils/toast.dart';
 import 'fullscreen_image.dart';
+import 'pay_qr_card.dart';
 import 'upi_pay_sheet.dart';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -863,49 +864,6 @@ class _StatCard extends StatelessWidget {
 }
 
 // ── Copy row (public — reused in UPI fallback dialog) ─────────────────────────
-
-class C330CopyRow extends StatelessWidget {
-  final String label;
-  final String? value;
-
-  const C330CopyRow({super.key, required this.label, this.value});
-
-  @override
-  Widget build(BuildContext context) {
-    final v = (value ?? '').trim();
-    if (v.isEmpty) return const SizedBox.shrink();
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-        Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(label,
-                style: const TextStyle(
-                    fontSize: 11, color: Color(0xFF9CA3AF))),
-            const SizedBox(height: 2),
-            Text(v,
-                style: const TextStyle(
-                    fontSize: 14, color: Color(0xFF111827))),
-          ]),
-        ),
-        IconButton(
-          visualDensity: VisualDensity.compact,
-          padding: EdgeInsets.zero,
-          constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-          icon: const Icon(Icons.copy, size: 18, color: Color(0xFF2E7D32)),
-          onPressed: () {
-            Clipboard.setData(ClipboardData(text: v));
-            ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(
-              content: Text('Copied: $v',
-                  maxLines: 1, overflow: TextOverflow.ellipsis),
-              duration: const Duration(seconds: 1),
-            ));
-          },
-        ),
-      ]),
-    );
-  }
-}
 
 // ── Payment card (public — used in all three tabs) ────────────────────────────
 

@@ -215,6 +215,28 @@ Current files and what they hold down:
   payload sent one, out-of-stock is can_add:false (never a stock number), and
   the grid extent stays derived from the card's own constants.
 
+- `stock_update_form_test.dart` — the public /stock-update/<token> page renders
+  items in payload order (fixture is deliberately non-alphabetical), draws the
+  two buttons from buttons[] with still_oos LEFT / back_in_stock RIGHT and
+  their own tones, keeps one answer per item, and submits
+  [{product_id, back_in_stock}] for ANSWERED items only — an untouched item is
+  omitted, never defaulted to "still out of stock". Expired renders the
+  backend's copy instead of throwing.
+- `inquiry_prestate_test.dart` — the auto-tick, on the ONE widget all three
+  inquiry surfaces share: prestate 'Available' arrives pre-selected AND stays
+  editable, prestate null arrives unselected, a submitted answer outranks the
+  tick and a live tap outranks both, and items render in payload order (no
+  client sort).
+- `cart_unavailable_test.dart` — the cart's red state is the backend's flag:
+  per-line unavailable/qty_locked are carried through untouched,
+  unavailable_badge prints verbatim (never pluralised in Dart), the badge is
+  absent at count 0, re-rendering after a removal clears both because the
+  SERVER recomputed them, and CartOrderRefusal treats only
+  error:'unavailable_in_cart' as that refusal, keeping its message verbatim.
+
 The suite runs on the Dart VM in ~2s. Keep it that way: no network, no goldens,
 no Supabase, no camera — mock RPC payloads inline. If a widget resists mocking,
 extract its decisions into a pure class and test that.
+(Set `RenderLog.flushEnabled = false` in setUpAll for any test that renders a
+widget calling RenderLog.write — its 800 ms debounce is a real Timer and would
+otherwise outlive the test and try to reach Supabase.)

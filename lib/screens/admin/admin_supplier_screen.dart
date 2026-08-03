@@ -2378,6 +2378,16 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       if (mounted) {
         setState(() {
           _inquiryItems = rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
+          // CHANGE #639 — prestate arrives pre-ticked, so it must also be in
+          // the selection map: the chip is shown selected and admin submit
+          // sends _adminSelections. Showing a tick that submit would drop is
+          // the screen disagreeing with itself. An explicit choice wins.
+          for (final i in _inquiryItems) {
+            final pre = (i['prestate'] ?? '').toString();
+            if (pre.isEmpty) continue;
+            _adminSelections.putIfAbsent(
+                (i['inquiry_id'] as num).toInt(), () => pre);
+          }
           _inquiryItemsLoading = false;
         });
         RenderLog.write('inquiry_items_loaded', '${supplierName}_${_inquiryItems.length}');

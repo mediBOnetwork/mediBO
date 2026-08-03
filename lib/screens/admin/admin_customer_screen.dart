@@ -17,6 +17,8 @@ import 'package:pharma_b2b/utils/toast.dart';
 
 import '../../utils/download_bytes.dart'; // CHANGE #463
 import '../../utils/render_log.dart';
+import '../../fulfill/fulfill_lookups.dart'; // C639: backend-owned entry label
+import 'demand_preview_sheet.dart'; // C639 PART D
 import '../../services/admin_date_scope.dart'; // CHANGE #545
 import '../../services/admin_zone_scope.dart'; // CHANGE #609
 import '../../services/date_labels.dart'; // CHANGE #548
@@ -645,6 +647,12 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     // admin_customer_orders, which applies the saved scope itself.
     AdminZoneScope.instance.addListener(_onZoneScopeChanged);
     AdminZoneScope.instance.ensureLoaded();
+    // CHANGE #639 — the copy catalog that owns the Demand preview entry's
+    // label. ensureLoaded() is idempotent and shared with the fulfillment tab;
+    // the rebuild once it lands is what makes the entry appear.
+    FulfillLookups.instance.ensureLoaded().then((_) {
+      if (mounted) setState(() {});
+    });
     _load();
     _subscribeRealtime();
     _loadSLeadsTotal();
@@ -1891,6 +1899,35 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                             fontSize: 13,
                             fontWeight: FontWeight.w600,
                             color: Color(0xFF374151))),
+                  ],
+                  // CHANGE #639 PART D — the Demand preview entry. Its label
+                  // lives in the fw_ui_label catalog, so rewording it is an
+                  // UPDATE rather than a rebuild; while the catalog has not
+                  // loaded ui() returns '' and the entry simply is not drawn,
+                  // rather than falling back to an English literal here.
+                  if (FulfillLookups.instance
+                      .ui('c639_demand_preview_entry')
+                      .isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: OutlinedButton.icon(
+                        onPressed: () => DemandPreviewSheet.show(context),
+                        icon: const Icon(Icons.insights_outlined, size: 16),
+                        label: Text(FulfillLookups.instance
+                            .ui('c639_demand_preview_entry')),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFF1B7A43),
+                          side: const BorderSide(color: Color(0xFF1B7A43)),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8)),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 10),
+                          textStyle: const TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    ),
                   ],
                 ],
               ),

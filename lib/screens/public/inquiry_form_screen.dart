@@ -144,6 +144,18 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
       setState(() {
         _supplierName = data['supplier_name'] as String?;
         _items = items;
+        // CHANGE #639 — an item the backend pre-ticked (prestate) is shown
+        // SELECTED, so it must also count as answered: it has to submit, and
+        // it has to satisfy the "all fields are required" gate below.
+        // Rendering it ticked but treating it as unanswered would be the
+        // screen showing one thing and sending another. A tap the supplier
+        // already made this session always wins (putIfAbsent).
+        for (final i in items) {
+          if (i['locked'] == true) continue;
+          final pre = (i['prestate'] as String?) ?? '';
+          if (pre.isEmpty) continue;
+          _selections.putIfAbsent((i['inquiry_id'] as num).toInt(), () => pre);
+        }
         _submitted = data['submitted'] == true;
         _submittedItems = submittedItems;
         _newItemsAdded = newlyAppeared;

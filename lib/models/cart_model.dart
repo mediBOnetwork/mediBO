@@ -32,12 +32,62 @@ class CartLine {
   /// locally formatted fallback).
   String ds(String key) => (display[key] ?? '').toString();
 
+  /// CHANGE #639 — cart_render() decides whether a line is unavailable and
+  /// whether its quantity is locked. Both are read straight off the payload.
+  /// Nothing here re-derives them from a stock number or a second availability
+  /// call: two answers to "can this be ordered?" is exactly the disagreement
+  /// that empties carts.
+  bool get unavailable => display['unavailable'] == true;
+  bool get qtyLocked => display['qty_locked'] == true;
+
   /// CHANGE #615 — a cart line is worth qty × MRP and nothing else. There is no
   /// sale price, no GST and no discount left to fold in, so `mrp` is the only
   /// number this can be built from. The BILLED figure is still the server's
   /// (`line_mrp` / `line_mrp_display`); this exists only for the transient
   /// sample overlay, which is never billed.
   double get lineTotal => product.mrp * quantity;
+}
+
+/// CHANGE #639 — place_order_v2()'s refusal, read rather than interpreted.
+///
+/// Extracted from the cart screen because that screen needs five inherited
+/// states and a live Supabase client to mount, and the protected suite must
+/// stay network-free (CLAUDE.md: "If a widget resists mocking, extract its
+/// decisions into a pure class and test that").
+///
+/// There is exactly one decision here — "is this the unavailable-in-cart
+/// refusal?" — and it is answered by the backend's own error code. The message
+/// is carried through untouched; nothing is worded, counted or pluralised.
+class CartOrderRefusal {
+  final bool isUnavailableInCart;
+  final String message;
+  final int count;
+  final List<Map<String, dynamic>> items;
+
+  const CartOrderRefusal({
+    required this.isUnavailableInCart,
+    required this.message,
+    required this.count,
+    required this.items,
+  });
+
+  factory CartOrderRefusal.from(Map<String, dynamic> res) {
+    if (res['error'] != 'unavailable_in_cart') {
+      return const CartOrderRefusal(
+          isUnavailableInCart: false, message: '', count: 0, items: []);
+    }
+    return CartOrderRefusal(
+      isUnavailableInCart: true,
+      // Verbatim. An absent message renders nothing rather than a local
+      // substitute sentence.
+      message: (res['message'] ?? '').toString(),
+      count: (res['count'] as num?)?.toInt() ?? 0,
+      items: ((res['items'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => e.cast<String, dynamic>())
+          .toList(),
+    );
+  }
 }
 
 /// A placed purchase order, kept in memory for the Orders screen.
@@ -763,6 +813,15 @@ class CartModel extends ChangeNotifier {
 
   // ── Server-rendered display strings (CHANGE #559 rule 3) ──────────────────
   // Never computed or formatted in Dart.
+  /// CHANGE #639 — how many lines cart_render() flagged, and the chip it
+  /// worded for them. `unavailable_badge` is absent from the payload when the
+  /// count is 0, so '' here means "no chip", not "a chip with no words". The
+  /// app never counts the flagged lines itself: after a removal the server
+  /// recomputes both, and re-rendering the new payload clears them.
+  int get unavailableCount =>
+      (_cart['unavailable_count'] as num?)?.toInt() ?? 0;
+  String get unavailableBadge => (_cart['unavailable_badge'] ?? '').toString();
+
   String? get badge => _cart['badge']?.toString();
   String? get header => _cart['header']?.toString();
   String? get ctaLabel => _cart['cta_label']?.toString();

@@ -273,6 +273,18 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
         _inquired = inquired;
         _expired  = expired;
         _receipt  = receipt;
+        // CHANGE #639 — a pre-ticked item (prestate) renders SELECTED, so it
+        // has to be in the selection map too: p_selected is what the backend
+        // reads to decide the submit button's state, and a chip shown ticked
+        // that the server has never heard of is the screen disagreeing with
+        // itself. An answer the supplier already tapped wins.
+        for (final i in pending) {
+          if (i['prestate'] == null) continue;
+          final pre = i['prestate'].toString();
+          if (pre.isEmpty) continue;
+          _supplierSelections.putIfAbsent(
+              (i['inquiry_id'] as num).toInt(), () => pre);
+        }
         // CHANGE #606 — labels, counts, the submit gate and the don't-stock
         // answer string, all decided backend-side.
         _labels = (payload['labels'] as Map?)?.cast<String, dynamic>() ?? const {};

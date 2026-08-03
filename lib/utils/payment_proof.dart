@@ -21,9 +21,41 @@
 // This file imports no dart:html and no Supabase, so the whole decision path is
 // reachable from a plain VM test. The live Supabase call is injected.
 
+/// CHANGE #644 — how big a render to ask the STORAGE layer for.
+///
+/// Proofs are raw phone-camera photos: the cash proofs in this project run
+/// 2–5 MB (largest measured 5.03 MB). Asking for the original meant the
+/// customer's browser had to pull and decode several megabytes before anything
+/// appeared, which is why the card fell through to "Couldn't load proof — tap
+/// to retry" on a phone while the same image rendered for admin on a desk.
+///
+/// [resizeContain] is not optional. Supabase's transform scales only the
+/// dimension you give it and leaves the other at its original size, so a
+/// 3456x4608 photo asked for `width: 480` comes back 480x4608 — an
+/// aspect-ratio-broken sliver that renders as an effectively blank thumbnail.
+/// bill_viewer.dart learned this the hard way in #469; the same trap applies
+/// here.
+class ProofTransform {
+  final int width;
+  final int quality;
+  const ProofTransform({required this.width, required this.quality});
+
+  /// The card preview — small enough to appear immediately on mobile data.
+  static const ProofTransform preview = ProofTransform(width: 480, quality: 70);
+
+  /// The fullscreen view — sharp, still an order of magnitude under the
+  /// original.
+  static const ProofTransform full = ProofTransform(width: 1600, quality: 80);
+
+  @override
+  String toString() => 'w=$width,q=$quality';
+}
+
 /// Signs one object. Implementations MUST use an authenticated storage call.
+/// [transform] null means "the original bytes" — avoid it for anything a phone
+/// has to render.
 typedef ProofSigner = Future<String> Function(
-    String bucket, String path, int expiresInSeconds);
+    String bucket, String path, int expiresInSeconds, ProofTransform? transform);
 
 /// Diagnostic sink — RenderLog in production, a list in tests.
 typedef ProofLogger = void Function(String key, String value);
@@ -41,7 +73,12 @@ class ProofLoadResult {
     required this.bucket,
     required this.path,
     this.error,
+    this.fullUrl,
   });
+
+  /// A larger render for the fullscreen view. Null when only a preview was
+  /// requested.
+  final String? fullUrl;
 
   bool get ok => url != null;
 }
@@ -72,6 +109,8 @@ class PaymentProofLoader {
   Future<ProofLoadResult> load({
     required String? payloadBucket,
     required String path,
+    ProofTransform? transform = ProofTransform.preview,
+    ProofTransform? alsoSign,
   }) async {
     final bucket = (payloadBucket ?? '').trim();
     final p = path.trim();
@@ -85,9 +124,19 @@ class PaymentProofLoader {
     }
 
     try {
-      final url = await signer(bucket, p, kSignedUrlTtlSeconds).timeout(timeout);
-      logger?.call('c643_proof_signed_ok', 'bucket=$bucket');
-      return ProofLoadResult(url: url, bucket: bucket, path: p);
+      // Both renders are signed in ONE round trip so tapping through to
+      // fullscreen does not pay a second latency hit.
+      final urls = await Future.wait([
+        signer(bucket, p, kSignedUrlTtlSeconds, transform),
+        if (alsoSign != null) signer(bucket, p, kSignedUrlTtlSeconds, alsoSign),
+      ]).timeout(timeout);
+      logger?.call('c643_proof_signed_ok',
+          'bucket=$bucket;transform=${transform ?? "original"}');
+      return ProofLoadResult(
+          url: urls.first,
+          fullUrl: urls.length > 1 ? urls[1] : null,
+          bucket: bucket,
+          path: p);
     } catch (e) {
       // PART B — the message, the bucket and the path, every time. This failure
       // used to be silent on screen AND in the logs.

@@ -24,7 +24,9 @@ import '../utils/safe_parse.dart';
 import '../utils/toast.dart';
 import 'fullscreen_image.dart';
 import 'native_signed_image.dart';
-import 'sup_pay_panel.dart' show C330CopyRow;
+// #642 — C330CopyRow moved here from sup_pay_panel.dart so the QR card can be
+// pumped in a test without that file's transitive dart:html import.
+import 'pay_qr_card.dart';
 import 'upi_pay_sheet.dart' show buildUpiUri;
 
 class CustPayPanel extends StatefulWidget {
@@ -346,6 +348,10 @@ class _CustPayPanelState extends State<CustPayPanel> {
         orderId: widget.orderId,
         amount: amount,
         kind: kind,
+        // #642 — the whole qr_sheet; the sheet picks its branch by `kind`.
+        qrSheet: upi['qr_sheet'] is Map
+            ? (upi['qr_sheet'] as Map).cast<String, dynamic>()
+            : const <String, dynamic>{},
       ),
     );
   }
@@ -592,6 +598,10 @@ class CustPaySheet extends StatefulWidget {
   // RepaintBoundary.toImage — instant, no network. Replaces CHANGE #486's
   // payment-qr-image server render (cold-start + resvg latency).
   final void Function(Uint8List bytes, String filename)? downloadBytesSink;
+  /// #642 — `payment.upi.qr_sheet`, whole. The sheet picks its own branch by
+  /// [kind] and prints the strings inside verbatim. Defaults to empty so the
+  /// three legacy tests that construct this widget still compile.
+  final Map<String, dynamic> qrSheet;
   const CustPaySheet({
     super.key,
     required this.qrData,
@@ -601,6 +611,7 @@ class CustPaySheet extends StatefulWidget {
     required this.orderId,
     required this.amount,
     required this.kind,
+    this.qrSheet = const <String, dynamic>{},
     this.fetchWaNumbers,
     this.sendQr,
     this.downloadBytesSink,
@@ -627,9 +638,26 @@ class _CustPaySheetState extends State<CustPaySheet> {
     super.dispose();
   }
 
-  String get _amountLabel => widget.amount == widget.amount.truncateToDouble()
-      ? '₹${widget.amount.toInt()}'
-      : '₹${widget.amount.toStringAsFixed(2)}';
+  /// #642 — the sheet's copy, straight off `qr_sheet.<kind>`.
+  ///
+  /// The `_amountLabel` getter that used to live here formatted the amount from
+  /// a raw double in Dart (`₹10770.73`) and was printed NEXT TO `pay_label`,
+  /// which already contained the backend's own `₹10,770.73`. Both the getter
+  /// and that line are gone.
+  ///
+  /// If `qr_sheet` is absent (a payload older than #642), `title` falls back to
+  /// `pay_label` — still a backend string, never a literal composed here.
+  PayQrSheetCopy get _copy {
+    final c = PayQrSheetCopy.forKind(widget.qrSheet, widget.kind);
+    if (c.title.isNotEmpty) return c;
+    return PayQrSheetCopy(
+      title: widget.payLabel,
+      subtitle: c.subtitle,
+      amountLabel: c.amountLabel,
+      vpaLabel: c.vpaLabel,
+      payeeLabel: c.payeeLabel,
+    );
+  }
 
   // Download — capture the QR card already rendered on screen (header + QR +
   // UPI ID + Banking Name) via RepaintBoundary.toImage. Instant and offline:
@@ -769,11 +797,10 @@ class _CustPaySheetState extends State<CustPaySheet> {
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20),
           child: Row(children: [
-            Expanded(
-              child: Text('${widget.payLabel} — mediBO',
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-                  maxLines: 2, overflow: TextOverflow.ellipsis),
-            ),
+            // #642 — the heading is qr_sheet.<kind>.title, VERBATIM. It used to
+            // be '${payLabel} — mediBO': the app gluing the payee name onto a
+            // backend string that already carried the amount.
+            Expanded(child: PayQrSheetTitle(title: _copy.title)),
             IconButton(
               icon: const Icon(Icons.close, size: 20),
               onPressed: () => Navigator.of(context).pop(),
@@ -787,37 +814,17 @@ class _CustPaySheetState extends State<CustPaySheet> {
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
               // ── Captured for "Download QR" — header + QR + UPI ID + Banking
               // Name, exactly as shown here (see _downloadSheetQr) ──────────
+              // #642 — subtitle verbatim, and both row labels off the payload.
+              // The line here used to be 'mediBO — ${payLabel} $_amountLabel',
+              // which printed the amount a SECOND time (and in a different
+              // format: ₹10770.73 vs the payload's ₹10,770.73).
               RepaintBoundary(
                 key: _qrCardKey,
-                child: Container(
-                  color: Colors.white,
-                  padding: const EdgeInsets.all(4),
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                    Text('mediBO — ${widget.payLabel} $_amountLabel',
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-                    const SizedBox(height: 14),
-                    Center(
-                      child: Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: const Color(0xFFE5E7EB)),
-                        ),
-                        child: QrImageView(
-                          data: widget.qrData,
-                          version: QrVersions.auto,
-                          size: 220,
-                          errorCorrectionLevel: QrErrorCorrectLevel.M,
-                          backgroundColor: Colors.white,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    C330CopyRow(label: 'UPI ID', value: widget.vpa),
-                    C330CopyRow(label: 'Banking Name', value: widget.bankingName),
-                  ]),
+                child: PayQrCard(
+                  copy: _copy,
+                  qrData: widget.qrData,
+                  vpa: widget.vpa,
+                  payee: widget.bankingName,
                 ),
               ),
               const SizedBox(height: 4),

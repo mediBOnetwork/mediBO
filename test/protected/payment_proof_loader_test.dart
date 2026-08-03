@@ -1,4 +1,4 @@
-// PROTECTED — CHANGE #643.
+// PROTECTED — CHANGE #643, extended by #644.
 //
 // See CLAUDE.md: runs before EVERY deploy; editable only by a CHANGE that
 // deliberately changes payment-proof loading, never to make an unrelated change
@@ -25,6 +25,10 @@
 //      took a live DB session to find.
 //   5. A missing bucket is REPORTED, not guessed.
 //   6. A retry actually re-requests (PART C) — a failed load is not cached.
+//   7. (#644) The card asks storage for a RESIZED render, never the original.
+//      Cash proofs are raw phone photos — 2.01 MB for the ₹3,500 claim on
+//      CPO020826CHAO1, up to 5.03 MB across the bucket. Pulling the original
+//      is what actually made the image fail to load on a phone.
 //
 // Pure VM test: no Supabase, no dart:html, no network. The signer is injected.
 
@@ -37,9 +41,10 @@ class _SignCall {
   final String bucket;
   final String path;
   final int expiresIn;
-  _SignCall(this.bucket, this.path, this.expiresIn);
+  final ProofTransform? transform;
+  _SignCall(this.bucket, this.path, this.expiresIn, this.transform);
   @override
-  String toString() => 'sign($bucket, $path, $expiresIn)';
+  String toString() => 'sign($bucket, $path, $expiresIn, $transform)';
 }
 
 /// Records every call and returns a signed-looking URL. Note the shape: a
@@ -50,13 +55,19 @@ class _FakeSigner {
   final bool fail;
   _FakeSigner({this.fail = false});
 
-  Future<String> call(String bucket, String path, int expiresIn) async {
-    calls.add(_SignCall(bucket, path, expiresIn));
+  Future<String> call(
+      String bucket, String path, int expiresIn, ProofTransform? transform) async {
+    calls.add(_SignCall(bucket, path, expiresIn, transform));
     if (fail) {
       throw Exception('StorageException(statusCode: 400, error: Bad Request)');
     }
+    // Mirrors the real thing: a transformed render carries its width/quality
+    // in the URL, so a preview and a full render are genuinely different URLs.
+    final t = transform == null
+        ? ''
+        : '&width=${transform.width}&quality=${transform.quality}&resize=contain';
     return 'https://swojhmarmaijkshsbeih.supabase.co/storage/v1/'
-        'object/sign/$bucket/$path?token=fake';
+        'object/sign/$bucket/$path?token=fake$t';
   }
 }
 
@@ -188,11 +199,65 @@ void main() {
     expect(log.joined, contains('c643_proof_no_bucket'));
   });
 
+  // ── CHANGE #644 — the size fix ────────────────────────────────────────────
+  //
+  // Cash proofs are raw phone-camera photos: 2.01 MB for the ₹3,500 claim on
+  // CPO020826CHAO1, up to 5.03 MB across the bucket. Requesting the ORIGINAL
+  // meant the customer's browser pulled and decoded megabytes before anything
+  // appeared, and fell through to the retry box on a phone. The card must ask
+  // storage for a small render instead.
+
+  test('the card asks for a RESIZED render, never the original', () async {
+    final signer = _FakeSigner();
+    final loader = PaymentProofLoader(signer: signer.call);
+
+    await loader.load(
+        payloadBucket: _cashEntry['bucket'], path: _cashEntry['screenshot']!);
+
+    final t = signer.calls.single.transform;
+    expect(t, isNotNull,
+        reason: 'a null transform means the original 2-5 MB file');
+    expect(t!.width, 480, reason: 'card preview must be small');
+    expect(t.quality, 70);
+  });
+
+  test('fullscreen gets a bigger render, signed in the SAME round trip',
+      () async {
+    final signer = _FakeSigner();
+    final loader = PaymentProofLoader(signer: signer.call);
+
+    final res = await loader.load(
+      payloadBucket: _cashEntry['bucket'],
+      path: _cashEntry['screenshot']!,
+      transform: ProofTransform.preview,
+      alsoSign: ProofTransform.full,
+    );
+
+    expect(signer.calls, hasLength(2),
+        reason: 'both renders signed together — tapping through must not pay '
+            'a second latency hit');
+    expect(signer.calls.map((c) => c.transform!.width).toList(), [480, 1600]);
+    expect(res.url, isNot(equals(res.fullUrl)));
+    expect(res.fullUrl, isNotNull);
+    // Still the same bucket for both, still signed.
+    expect(signer.calls.map((c) => c.bucket).toSet(), {'whatsapp-media'});
+    expect(res.fullUrl, contains('/object/sign/'));
+  });
+
+  test('the full render is still far smaller than the original', () {
+    // 1600px @ q80 against a 3456x4608 phone photo. The point of the constants
+    // is that NEITHER render is the original.
+    expect(ProofTransform.preview.width, lessThan(ProofTransform.full.width));
+    expect(ProofTransform.full.width, lessThanOrEqualTo(1600));
+    expect(ProofTransform.preview.quality, lessThanOrEqualTo(80));
+  });
+
   test('retry re-requests — a failed load is not cached', () async {
     // Fails first, succeeds on the retry: exactly the "backend was fixed, now
     // tap retry" case that must work without a reinstall.
     var attempts = 0;
-    Future<String> flaky(String bucket, String path, int ttl) async {
+    Future<String> flaky(
+        String bucket, String path, int ttl, ProofTransform? t) async {
       attempts++;
       if (attempts == 1) throw Exception('403 Unauthorized');
       return 'https://x/storage/v1/object/sign/$bucket/$path?token=ok';

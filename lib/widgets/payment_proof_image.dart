@@ -16,8 +16,22 @@ import 'native_signed_image.dart';
 /// both proof buckets are private. It is never `getPublicUrl`.
 
 /// The production signer: an authenticated Supabase Storage call.
-Future<String> liveProofSigner(String bucket, String path, int expiresIn) =>
-    Supabase.instance.client.storage.from(bucket).createSignedUrl(path, expiresIn);
+///
+/// #644 — when a [ProofTransform] is given, the RESIZE happens server-side and
+/// the browser only ever receives the small render. `resize: contain` is
+/// mandatory: without it Supabase scales the given dimension only and leaves
+/// the other at full size, producing an aspect-ratio-broken sliver (see #469).
+Future<String> liveProofSigner(
+    String bucket, String path, int expiresIn, ProofTransform? transform) {
+  final storage = Supabase.instance.client.storage.from(bucket);
+  if (transform == null) return storage.createSignedUrl(path, expiresIn);
+  return storage.createSignedUrl(path, expiresIn,
+      transform: TransformOptions(
+        width: transform.width,
+        quality: transform.quality,
+        resize: ResizeMode.contain,
+      ));
+}
 
 /// The production loader — live signer, RenderLog as the diagnostic sink.
 final PaymentProofLoader livePaymentProofLoader = PaymentProofLoader(
@@ -53,7 +67,15 @@ class PaymentProofImage extends StatefulWidget {
 
 class _PaymentProofImageState extends State<PaymentProofImage> {
   String? _url;
+  String? _fullUrl;
   bool _error = false;
+
+  /// #644 — safety net. Supabase image transforms are a project-level feature;
+  /// bill_viewer.dart has used them in production since #469, so they work
+  /// here. But if a transformed render ever fails, the original is better than
+  /// a retry box, so the first image error retries once WITHOUT the transform
+  /// before giving up.
+  bool _triedOriginal = false;
 
   /// PART C — bumped on EVERY attempt, and folded into both the widget Key and
   /// the NativeSignedImage cacheKey. A failed load must not be cached: the next
@@ -76,12 +98,20 @@ class _PaymentProofImageState extends State<PaymentProofImage> {
     if (old.path != widget.path || old.bucket != widget.bucket) _load();
   }
 
-  Future<void> _load() async {
-    final res = await _loader.load(payloadBucket: widget.bucket, path: widget.path);
+  Future<void> _load({bool original = false}) async {
+    // #644 — a small preview for the card, a larger render for fullscreen.
+    // Never the original: these are 2–5 MB phone photos.
+    final res = await _loader.load(
+      payloadBucket: widget.bucket,
+      path: widget.path,
+      transform: original ? null : ProofTransform.preview,
+      alsoSign: original || !widget.tapToEnlarge ? null : ProofTransform.full,
+    );
     if (!mounted) return;
     setState(() {
       _attempt++;
       _url = res.url;
+      _fullUrl = res.fullUrl;
       _error = !res.ok;
     });
   }
@@ -90,6 +120,7 @@ class _PaymentProofImageState extends State<PaymentProofImage> {
     setState(() {
       _error = false;
       _url = null;
+      _triedOriginal = false; // a fresh tap starts again from the small render
     });
     _load();
   }
@@ -141,13 +172,24 @@ class _PaymentProofImageState extends State<PaymentProofImage> {
       key: ValueKey('${widget.bucket}/${widget.path}/$_attempt'),
       url: url,
       cacheKey: '${widget.bucket}-${widget.path.hashCode}-$_attempt',
-      onTap: widget.tapToEnlarge ? () => openFullscreenImage(context, url) : null,
+      onTap: widget.tapToEnlarge
+          ? () => openFullscreenImage(context, _fullUrl ?? url)
+          : null,
       onError: () {
-        // A signed URL that still fails to paint (expired, CORS, deleted object)
-        // is the same failure to the customer — show retry, and say so.
-        RenderLog.write('c643_proof_img_err',
-            'bucket=${widget.bucket};path=${widget.path}');
-        if (mounted && !_error) setState(() => _error = true);
+        if (!mounted) return;
+        // A signed URL that still fails to paint (expired, CORS, deleted
+        // object, or a transform the project cannot serve).
+        RenderLog.write('c644_proof_img_err',
+            'bucket=${widget.bucket};path=${widget.path}'
+            ';tried_original=${_triedOriginal ? 1 : 0}');
+        if (!_triedOriginal) {
+          // Fall back to the un-transformed object once before giving up.
+          _triedOriginal = true;
+          setState(() => _url = null);
+          _load(original: true);
+          return;
+        }
+        if (!_error) setState(() => _error = true);
       },
     );
 

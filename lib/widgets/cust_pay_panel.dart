@@ -18,7 +18,6 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../utils/bill_mime.dart';
 import '../utils/download_bytes.dart';
-import '../utils/payment_proof.dart';
 import '../utils/render_log.dart';
 import '../utils/safe_parse.dart';
 import '../utils/toast.dart';
@@ -27,6 +26,7 @@ import 'native_signed_image.dart';
 // #642 — C330CopyRow moved here from sup_pay_panel.dart so the QR card can be
 // pumped in a test without that file's transitive dart:html import.
 import 'pay_qr_card.dart';
+import 'payment_proof_image.dart';
 import 'upi_pay_sheet.dart' show buildUpiUri;
 
 class CustPayPanel extends StatefulWidget {
@@ -1130,8 +1130,10 @@ class _CustPaymentDetailCard extends StatelessWidget {
         if (path.isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(top: 8),
-            child: _PaymentProofImage(
-              bucket: resolvePaymentProofBucket(payment['bucket']?.toString(), path),
+            // #643 — the payload's bucket, verbatim. The app no longer derives
+            // it from the path prefix; every proof payload now names it.
+            child: PaymentProofImage(
+              bucket: payment['bucket']?.toString(),
               path: path,
             ),
           ),
@@ -1166,106 +1168,5 @@ class _CustPaymentDetailCard extends StatelessWidget {
         ),
       ),
     );
-  }
-}
-
-// ── Proof image — signed URL, bounded (never an unbounded spinner) ─────────
-
-class _PaymentProofImage extends StatefulWidget {
-  final String bucket;
-  final String path;
-  const _PaymentProofImage({required this.bucket, required this.path});
-
-  @override
-  State<_PaymentProofImage> createState() => _PaymentProofImageState();
-}
-
-class _PaymentProofImageState extends State<_PaymentProofImage> {
-  String? _url;
-  bool _error = false;
-  int _attempt = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    RenderLog.write('c474_pay_img_widget', 1);
-    _load();
-  }
-
-  Future<void> _load() async {
-    try {
-      final url = await Supabase.instance.client.storage
-          .from(widget.bucket)
-          .createSignedUrl(widget.path, 3600)
-          .timeout(const Duration(seconds: 8));
-      if (mounted) setState(() { _url = url; _error = false; _attempt++; });
-    } catch (e) {
-      RenderLog.write('c474_cust_sign_err_msg', 'bucket=${widget.bucket};path=${widget.path};err=$e');
-      if (mounted) setState(() => _error = true);
-    }
-  }
-
-  void _retry() {
-    setState(() { _error = false; _url = null; });
-    _load();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final box = BoxDecoration(
-      color: const Color(0xFFF3F4F6),
-      borderRadius: BorderRadius.circular(8),
-      border: Border.all(color: const Color(0xFFE5E7EB)),
-    );
-    if (_error) {
-      return GestureDetector(
-        onTap: _retry,
-        child: Container(
-          width: double.infinity, height: 120,
-          decoration: box,
-          child: const Center(
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              Icon(Icons.refresh, size: 20, color: Color(0xFF9CA3AF)),
-              SizedBox(height: 4),
-              Text("Couldn't load proof — tap to retry",
-                  style: TextStyle(fontSize: 11.5, color: Color(0xFF6B7280)), textAlign: TextAlign.center),
-            ]),
-          ),
-        ),
-      );
-    }
-    final url = _url;
-    if (url == null) {
-      return Container(
-        width: double.infinity, height: 120,
-        decoration: box,
-        child: const Center(child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))),
-      );
-    }
-    // CHANGE #480 — proof preview enlarged to match the admin card: a portrait
-    // 4:3 estimate off the available width, clamped to 60% of screen height so
-    // the selfie/screenshot is clearly readable (was a fixed 140 px).
-    RenderLog.write('c480_pay_card_photo', 1);
-    return LayoutBuilder(builder: (lCtx, constraints) {
-      final w = constraints.maxWidth;
-      final maxH = MediaQuery.of(lCtx).size.height * 0.6;
-      final h = (w * 1.33).clamp(240.0, maxH);
-      return ClipRRect(
-        borderRadius: BorderRadius.circular(8),
-        child: SizedBox(
-          width: double.infinity,
-          height: h,
-          child: NativeSignedImage(
-            key: ValueKey('${widget.bucket}/${widget.path}/$_attempt'),
-            url: url,
-            cacheKey: '${widget.bucket}-${widget.path.hashCode}-$_attempt',
-            onTap: () => openFullscreenImage(context, url),
-            onError: () {
-              if (mounted && !_error) setState(() => _error = true);
-            },
-          ),
-        ),
-      );
-    });
   }
 }

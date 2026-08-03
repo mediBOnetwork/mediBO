@@ -1,6 +1,6 @@
 // CHANGE #211 — Payment claims service (admin UPI payment verification)
 import 'package:supabase_flutter/supabase_flutter.dart';
-import '../utils/payment_proof.dart';
+import '../widgets/payment_proof_image.dart' show livePaymentProofLoader;
 import '../utils/render_log.dart';
 
 class PaymentClaimsService {
@@ -92,23 +92,15 @@ class PaymentClaimsService {
     return Map<String, dynamic>.from(res as Map);
   }
 
-  // CHANGE #474 — bucket is no longer hard-coded to 'whatsapp-media': admin's
-  // RPC omits it (derived here via resolvePaymentProofBucket), customer's RPC
-  // supplies it directly (pass it through as `bucket`). Bounded by an 8s
-  // timeout so a slow/broken sign never leaves the caller waiting forever.
+  // CHANGE #643 — one loader for every proof in the app. `bucket` is the
+  // payload's own field and is used verbatim; #474's derive-from-path-prefix
+  // guess is gone now that admin_payment_claims and admin_order_payment_view
+  // both return it. A missing bucket is reported, never guessed.
   static Future<String?> signedScreenshotUrl(String filePath, {String? bucket}) async {
-    try {
-      final resolved = resolvePaymentProofBucket(bucket, filePath);
-      final url = await _client.storage
-          .from(resolved)
-          .createSignedUrl(filePath, 3600)
-          .timeout(const Duration(seconds: 8));
-      RenderLog.write('c211_screenshot_signed_ok', 1);
-      return url;
-    } catch (e) {
-      RenderLog.write('c211_screenshot_signed_err', 1);
-      RenderLog.write('c474_sign_err_msg', 'bucket=${bucket ?? "(derived)"};path=$filePath;err=$e');
-      return null;
-    }
+    final res = await livePaymentProofLoader.load(
+        payloadBucket: bucket, path: filePath);
+    RenderLog.write(
+        res.ok ? 'c211_screenshot_signed_ok' : 'c211_screenshot_signed_err', 1);
+    return res.url;
   }
 }

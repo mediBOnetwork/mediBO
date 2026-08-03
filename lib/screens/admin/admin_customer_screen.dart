@@ -6477,7 +6477,7 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
     for (final claim in claims) {
       if (claim.filePath == null || claim.filePath!.isEmpty) continue;
       if (_signedUrls.containsKey(claim.claimId)) continue;
-      await _signOneClaimProof(claim.claimId, claim.filePath!);
+      await _signOneClaimProof(claim.claimId, claim.filePath!, claim.storageBucket);
     }
     if (mounted) {
       RenderLog.write('c225_signed_urls_fix', 1);
@@ -6497,10 +6497,11 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
   // _signedUrlErrors (never leaves the caller on an unbounded spinner).
   // A fresh viewType per attempt lets a retry re-register the platform view
   // (Flutter web throws if the same viewType is registered twice).
-  Future<void> _signOneClaimProof(String claimId, String filePath) async {
+  Future<void> _signOneClaimProof(String claimId, String filePath, String? storageBucket) async {
     RenderLog.write('c474_pay_img_widget', 1);
     try {
-      final url = await PaymentClaimsService.signedScreenshotUrl(filePath);
+      final url = await PaymentClaimsService.signedScreenshotUrl(filePath,
+          bucket: storageBucket);
       if (url == null) {
         if (mounted) setState(() => _signedUrlErrors.add(claimId));
         return;
@@ -6548,7 +6549,7 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
       _signedUrls.remove(claim.claimId);
       _imgViewTypes.remove(claim.claimId);
     });
-    _signOneClaimProof(claim.claimId, path);
+    _signOneClaimProof(claim.claimId, path, claim.storageBucket);
   }
 
   List<PaymentClaim> _parseClaims(Map<String, dynamic> d) {
@@ -7543,6 +7544,10 @@ class PaymentClaim {
   final String? payeeName;
   final String? payeeVpa;
   final String? filePath;
+  /// #643 — the STORAGE bucket this proof lives in, named by
+  /// admin_order_payment_view. Distinct from [bucket], which is the
+  /// advance/rest grouping — an unfortunate collision, hence the longer name.
+  final String? storageBucket;
   final String  status;
   final bool    linked;
   final String  bucket;          // advance | rest | unassigned | inactive
@@ -7569,6 +7574,7 @@ class PaymentClaim {
     required this.status,
     required this.linked,
     required this.bucket,
+    this.storageBucket,
     this.matchesAdvance,
     this.matchesRest,
     this.verifyReason,
@@ -7604,6 +7610,7 @@ class PaymentClaim {
       status:         m['status']         as String? ?? '',
       linked:         m['linked']         as bool?   ?? false,
       bucket:         bucket,
+      storageBucket:  m['bucket'] as String?,
       matchesAdvance: m['matches_advance'] as bool?,
       matchesRest:    m['matches_rest']   as bool?,
       verifyReason:   m['verify_reason']  as String?,

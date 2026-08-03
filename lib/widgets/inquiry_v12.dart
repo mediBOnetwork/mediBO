@@ -157,9 +157,25 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
     return f is Map && f[key] == true;
   }
 
+  /// CHANGE #639 — three sources, in falling priority, and none of them is a
+  /// guess made here:
+  ///   1. the user's own tap this session (answerOverrides)
+  ///   2. `answer` — what this supplier already submitted
+  ///   3. `prestate` — the backend's auto-tick: "your zone state already says
+  ///      Available for this item", so the chip arrives SELECTED.
+  ///
+  /// prestate only pre-selects; it never locks. The item is not `is_locked`,
+  /// so its chips stay tappable and the supplier can overrule the tick. A null
+  /// prestate means nothing is selected and the supplier answers manually.
   String? _currentAnswer(Map<String, dynamic> item) {
     final id = (item['inquiry_id'] as num).toInt();
-    return widget.answerOverrides[id] ?? item['answer'] as String?;
+    final override = widget.answerOverrides[id];
+    if (override != null) return override;
+    final answered = item['answer'] as String?;
+    if (answered != null && answered.isNotEmpty) return answered;
+    final pre = item['prestate'] as String?;
+    if (pre != null && pre.isNotEmpty) return pre;
+    return null;
   }
 
   // ── Popup (bottom-center toast) ────────────────────────────────────────────

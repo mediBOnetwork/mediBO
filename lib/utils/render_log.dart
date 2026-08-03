@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 // CHANGE #635: dart:html reached this file directly, which made every library
@@ -121,7 +122,16 @@ class RenderLog {
     } catch (_) {}
   }
 
+  /// CHANGE #639 — test seam. The 800 ms debounce below is a real Timer, and a
+  /// widget test that renders anything calling [write] would end with a timer
+  /// still pending (which the test binding treats as a failure) and would try
+  /// to reach Supabase from the VM. The protected suite turns this off; nothing
+  /// in production ever does, so the live flush is unchanged.
+  @visibleForTesting
+  static bool flushEnabled = true;
+
   static void _scheduleSupabaseFlush(String? buildHash) {
+    if (!flushEnabled) return;
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 800), () => _flushToSupabase(buildHash));
   }

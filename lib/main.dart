@@ -22,6 +22,7 @@ import 'models/inquiry_lock_model.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/home_shell.dart';
 import 'screens/public/inquiry_form_screen.dart';
+import 'screens/public/stock_update_form_screen.dart'; // C639: /stock-update/<token>
 import 'pages/dispute_token_page.dart';
 import 'screens/public/dispute_form_screen.dart';
 import 'screens/public/public_order_page.dart';
@@ -454,6 +455,19 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
                   return MaterialPageRoute(
                     settings: settings,
                     builder: (_) => TrackPage(token: token),
+                  );
+                }
+              }
+              // CHANGE #639 — the stock-update link the 5pm sweep sends over
+              // WhatsApp. Public, exactly like /inquiry/<token>: the token IS
+              // the authorisation. Declared above the trailing /:code guard.
+              if (name.startsWith('/stock-update/')) {
+                final token =
+                    name.substring('/stock-update/'.length).split('?').first;
+                if (token.isNotEmpty) {
+                  return MaterialPageRoute(
+                    settings: settings,
+                    builder: (_) => StockUpdateFormScreen(token: token),
                   );
                 }
               }

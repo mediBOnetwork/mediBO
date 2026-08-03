@@ -36,6 +36,12 @@ class _CartScreenState extends State<CartScreen> {
   // Order while it is there, and shows unresolved_note as a quiet note that
   // deliberately does NOT block (those are lines the backend could not check
   // and kept on purpose).
+  /// CHANGE #639 — lets _placeOrder scroll the list to the first line
+  /// cart_render() flagged when place_order_v2() rejects the cart. Only one
+  /// _ItemList is ever mounted (the wide and narrow layouts are exclusive
+  /// branches of the same LayoutBuilder), so one key is enough.
+  final GlobalKey<_ItemListState> _itemListKey = GlobalKey<_ItemListState>();
+
   final Map<String, Availability> _lineAvailability = {};
   String? _blockingLabel;
   String? _unresolvedNote;
@@ -434,6 +440,23 @@ class _CartScreenState extends State<CartScreen> {
       if (res is! Map) throw StateError('place_order_v2 returned no payload');
       final placed = res.cast<String, dynamic>();
 
+      // CHANGE #639 — place_order_v2() refuses a cart that still holds
+      // unavailable lines. Its own message is shown verbatim (this file words
+      // nothing), the cart is re-read so the red flags and the chip match what
+      // the server just decided, and the list scrolls to the first offending
+      // line so the buyer can see what to remove.
+      final refusal = CartOrderRefusal.from(placed);
+      if (refusal.isUnavailableInCart) {
+        RenderLog.write('c639_order_blocked_unavailable', refusal.count);
+        await cart.refresh();
+        if (!mounted) return;
+        if (refusal.message.isNotEmpty) {
+          showToast(context, refusal.message, isError: true);
+        }
+        _itemListKey.currentState?.scrollToFirstUnavailable();
+        return;
+      }
+
       final displayCode = (placed['order_code'] ?? '').toString();
       final amountDisplay = (placed['amount_display'] ?? '').toString();
 
@@ -596,6 +619,16 @@ class _CartScreenState extends State<CartScreen> {
         _unresolvedNote == null ? null : _UnresolvedNote(note: _unresolvedNote!);
     final blocked = blocking != null;
 
+    // CHANGE #639 — the chip cart_render() worded for its flagged lines. It
+    // appears only while the BACKEND reports a non-zero count, and its text is
+    // printed verbatim: nothing here counts lines or pluralises "item(s)".
+    // After a removal the next payload carries a smaller count (or drops the
+    // badge entirely), so re-rendering clears it with no local bookkeeping.
+    final unavailableChip =
+        cart.unavailableCount > 0 && cart.unavailableBadge.isNotEmpty
+            ? _UnavailableChip(text: cart.unavailableBadge)
+            : null;
+
     return LayoutBuilder(
       builder: (context, constraints) {
         final wide = constraints.maxWidth >= 600;
@@ -607,6 +640,7 @@ class _CartScreenState extends State<CartScreen> {
               if (banner != null) banner,
               ?availBanner,
               ?unresolvedNote,
+              ?unavailableChip,
               Expanded(
                 child: Center(
                   child: ConstrainedBox(
@@ -619,6 +653,7 @@ class _CartScreenState extends State<CartScreen> {
                           Expanded(
                             flex: 3,
                             child: _ItemList(
+                              key: _itemListKey,
                               cart: cart,
                               externalSearchQuery: widget.externalSearchQuery,
                               viewAsChecked: cart.isViewAs ? _viewAsChecked : null,
@@ -653,8 +688,10 @@ class _CartScreenState extends State<CartScreen> {
             if (banner != null) banner,
             ?availBanner,
             ?unresolvedNote,
+            ?unavailableChip,
             Expanded(
               child: _ItemList(
+                key: _itemListKey,
                 cart: cart,
                 externalSearchQuery: widget.externalSearchQuery,
                 viewAsChecked: cart.isViewAs ? _viewAsChecked : null,
@@ -759,6 +796,51 @@ class _UnresolvedNote extends StatelessWidget {
 
 // ─── Sample banner ────────────────────────────────────────────────────────────
 
+/// CHANGE #639 — the chip for `unavailable_badge`. It prints ONE backend
+/// string and holds no logic: no count, no pluralisation, no wording. It is
+/// built only when cart_render() reported a non-zero `unavailable_count`.
+class _UnavailableChip extends StatelessWidget {
+  final String text;
+  const _UnavailableChip({required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Container(
+          key: const ValueKey('c639_unavailable_badge'),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFEE2E2),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: const Color(0xFFFCA5A5)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.error_outline,
+                  size: 15, color: Color(0xFF991B1B)),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  text,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: Color(0xFF991B1B),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _SampleBanner extends StatelessWidget {
   final CartModel cart;
   const _SampleBanner({required this.cart});
@@ -853,6 +935,7 @@ class _ItemList extends StatefulWidget {
   /// from cart_availability(). Empty until the first fetch answers.
   final Map<String, Availability> lineAvailability;
   const _ItemList({
+    super.key,
     required this.cart,
     this.externalSearchQuery,
     this.viewAsChecked,
@@ -869,6 +952,53 @@ class _ItemListState extends State<_ItemList> {
       widget.externalSearchQuery ?? '';
 
   bool _showRemoved = false;
+
+  /// CHANGE #639 — used to bring the first line cart_render() flagged into
+  /// view when place_order_v2() refuses the cart.
+  final ScrollController _scrollController = ScrollController();
+  final GlobalKey _firstUnavailableKey = GlobalKey();
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  /// Scrolls to the first unavailable line. Which line that is comes from the
+  /// payload's own flag — this never re-derives availability.
+  ///
+  /// Two steps because the list is lazily built: an approximate jump first, so
+  /// the target actually gets built when it started far off-screen, then
+  /// ensureVisible on the real element to land it exactly.
+  Future<void> scrollToFirstUnavailable() async {
+    final lines = _filteredLines;
+    final idx = lines.indexWhere((l) => l.unavailable);
+    if (idx < 0) return;
+
+    if (_scrollController.hasClients) {
+      const approxCardExtent = 132.0;
+      final target = (idx * approxCardExtent)
+          .clamp(0.0, _scrollController.position.maxScrollExtent);
+      await _scrollController.animateTo(
+        target,
+        duration: const Duration(milliseconds: 320),
+        curve: Curves.easeOutCubic,
+      );
+    }
+    if (!mounted) return;
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+    final ctx = _firstUnavailableKey.currentContext;
+    if (ctx != null) {
+      await Scrollable.ensureVisible(
+        ctx,
+        alignment: 0.1,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+      );
+    }
+    RenderLog.write('c639_scrolled_to_unavailable', idx);
+  }
 
   List<CartLine> get _filteredLines {
     final q = _effectiveQuery.trim();
@@ -925,8 +1055,13 @@ class _ItemListState extends State<_ItemList> {
       if (_showRemoved) afterCount += removed.length;
     }
 
+    // CHANGE #639 — index of the first line the BACKEND flagged, so the
+    // scroll-to target can be tagged as it is built.
+    final firstUnavailable = filtered.indexWhere((l) => l.unavailable);
+
     return ListView.builder(
       physics: platformScrollPhysics(),
+      controller: _scrollController,
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
       cacheExtent: 400,
       itemCount: filtered.length + afterCount,
@@ -936,6 +1071,7 @@ class _ItemListState extends State<_ItemList> {
           return RepaintBoundary(
             key: ValueKey(line.product.id),
             child: _CartItemCard(
+              key: i == firstUnavailable ? _firstUnavailableKey : null,
               line: line,
               cart: widget.cart,
               viewAsChecked: widget.viewAsChecked != null
@@ -984,6 +1120,7 @@ class _CartItemCard extends StatelessWidget {
   /// the fetch answers, or when the RPC failed (fail open — no local guess).
   final Availability? availability;
   const _CartItemCard({
+    super.key,
     required this.line,
     required this.cart,
     this.viewAsChecked,
@@ -1081,6 +1218,31 @@ class _CartItemCard extends StatelessWidget {
                                 materialTapTargetSize:
                                     MaterialTapTargetSize.shrinkWrap,
                                 visualDensity: VisualDensity.compact,
+                              ),
+                            )
+                          // CHANGE #639 — a line cart_render() flagged gets a
+                          // prominent RED remove control instead of the quiet
+                          // grey one. Same remove flow, same RPC; only the
+                          // emphasis changes, because this is the one action
+                          // that clears the block.
+                          else if (line.unavailable)
+                            GestureDetector(
+                              key: const ValueKey('c639_remove_unavailable'),
+                              onTap: () => cart.remove(p),
+                              child: Container(
+                                width: 30,
+                                height: 30,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: const Color(0xFFFEE2E2),
+                                  border: Border.all(
+                                      color: const Color(0xFFDC2626),
+                                      width: 1.2),
+                                ),
+                                child: const Center(
+                                  child: Icon(Icons.close,
+                                      size: 17, color: Color(0xFFDC2626)),
+                                ),
                               ),
                             )
                           else
@@ -1281,10 +1443,14 @@ class _CartItemCard extends StatelessWidget {
                     // reported. The product card already read quantityOf(),
                     // which is why the catalog stepper felt instant and this
                     // one did not.
+                    // CHANGE #639 — qty_locked comes from cart_render(); the
+                    // stepper is disabled and tinted red on the strength of
+                    // the backend's flag, never on a local stock check.
                     _CartStepper(
                       product: p,
                       quantity: cart.quantityOf(p.id),
                       cart: cart,
+                      locked: line.qtyLocked,
                     ),
                   ],
                 ),
@@ -1353,10 +1519,17 @@ class _CartStepper extends StatefulWidget {
   final Product product;
   final int quantity;
   final CartModel cart;
+
+  /// CHANGE #639 — `qty_locked` from cart_render(). When true both tap zones
+  /// are dead and the control is tinted red. This is the backend's answer,
+  /// carried through; the stepper never decides it.
+  final bool locked;
+
   const _CartStepper({
     required this.product,
     required this.quantity,
     required this.cart,
+    this.locked = false,
   });
 
   static String _unit(String packSize) {
@@ -1393,6 +1566,13 @@ class _CartStepperState extends State<_CartStepper> {
     final qty = widget.quantity;
     final increasing = _increasing;
 
+    // CHANGE #639 — the red state for a locked line.
+    final locked = widget.locked;
+    const lockedBg = Color(0xFFFEE2E2);
+    const lockedEdge = Color(0xFFDC2626);
+    const lockedInk = Color(0xFF991B1B);
+    final ink = locked ? lockedInk : const Color(0xFF1a1a1a);
+
     return SizedBox(
       width: 150,
       height: 56,
@@ -1402,21 +1582,22 @@ class _CartStepperState extends State<_CartStepper> {
           Positioned.fill(
             child: Container(
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: locked ? lockedBg : Colors.white,
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFFE5E7EB)),
+                border: Border.all(
+                    color: locked ? lockedEdge : const Color(0xFFE5E7EB)),
               ),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   // Minus visual
-                  const SizedBox(
+                  SizedBox(
                     width: 44,
                     child: Center(
                       child: Text(
                         '−',
                         style: TextStyle(
-                          color: Color(0xFF1a1a1a),
+                          color: ink,
                           fontSize: 22,
                           fontWeight: FontWeight.w600,
                           height: 1,
@@ -1454,9 +1635,9 @@ class _CartStepperState extends State<_CartStepper> {
                               child: Text(
                                 '$qty',
                                 key: ValueKey<int>(qty),
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontWeight: FontWeight.w700,
-                                  color: Color(0xFF1a1a1a),
+                                  color: ink,
                                   fontSize: 15,
                                   height: 1,
                                 ),
@@ -1466,9 +1647,9 @@ class _CartStepperState extends State<_CartStepper> {
                           const SizedBox(width: 4),
                           Text(
                             unit,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 13,
-                              color: Color(0xFF1a1a1a),
+                              color: ink,
                               fontWeight: FontWeight.w600,
                               height: 1,
                             ),
@@ -1477,12 +1658,12 @@ class _CartStepperState extends State<_CartStepper> {
                       ),
                     ),
                   ),
-                  // Plus visual — green right side
+                  // Plus visual — green right side, RED when the line is locked
                   Container(
                     width: 44,
-                    decoration: const BoxDecoration(
-                      color: Brand.green,
-                      borderRadius: BorderRadius.only(
+                    decoration: BoxDecoration(
+                      color: locked ? lockedEdge : Brand.green,
+                      borderRadius: const BorderRadius.only(
                         topRight: Radius.circular(7),
                         bottomRight: Radius.circular(7),
                       ),
@@ -1508,14 +1689,16 @@ class _CartStepperState extends State<_CartStepper> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // Zone 1: minus (44px)
+                // Zone 1: minus (44px) — dead while the backend says locked
                 SizedBox(
                   width: 44,
                   child: MouseRegion(
-                    cursor: SystemMouseCursors.click,
+                    cursor: locked
+                        ? SystemMouseCursors.basic
+                        : SystemMouseCursors.click,
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
-                      onTap: widget.cart.isPending(widget.product.id)
+                      onTap: (locked || widget.cart.isPending(widget.product.id))
                           ? null
                           : () => widget.cart.decrement(widget.product),
                     ),
@@ -1523,14 +1706,16 @@ class _CartStepperState extends State<_CartStepper> {
                 ),
                 // Zone 2: center display (no action)
                 const Expanded(child: SizedBox()),
-                // Zone 3: plus (44px)
+                // Zone 3: plus (44px) — dead while the backend says locked
                 SizedBox(
                   width: 44,
                   child: MouseRegion(
-                    cursor: SystemMouseCursors.click,
+                    cursor: locked
+                        ? SystemMouseCursors.basic
+                        : SystemMouseCursors.click,
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
-                      onTap: widget.cart.isPending(widget.product.id)
+                      onTap: (locked || widget.cart.isPending(widget.product.id))
                           ? null
                           : () => widget.cart.increment(widget.product),
                     ),

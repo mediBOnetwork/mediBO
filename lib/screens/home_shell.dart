@@ -25,8 +25,11 @@ import 'admin/admin_dashboard_screen.dart';
 import 'admin/admin_delivery_partner_screen.dart';
 import 'admin/admin_mr_screen.dart';
 import 'admin/admin_alert_overlay.dart';
+import 'admin/admin_nav_entries.dart';
 import 'admin/admin_shell.dart';
 import '../features/whatsapp/ui/wa_home_screen.dart';
+import '../features/whatsapp/ui/wa_templates_screen.dart';
+import 'admin/wa_campaigns_screen.dart';
 import '../features/bags/bags_screen.dart';
 import 'admin/admin_supplier_screen.dart';
 import 'admin/admin_fulfillment_screen.dart';
@@ -389,6 +392,19 @@ class _HomeShellState extends State<HomeShell> {
       case 'whatsapp':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const WaHomeScreen()));
+        break;
+      // #645/#646 shipped these screens but only wired them into
+      // admin_shell.dart's wide-viewport link row, so on a phone there was no
+      // way in at all. They are NOT gated on _amISuper here: both screens call
+      // RPCs that gate on get_my_role() and render the backend's
+      // not_authorized answer themselves.
+      case 'wa_templates':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const WaTemplatesScreen()));
+        break;
+      case 'wa_campaigns':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const WaCampaignsScreen()));
         break;
       case 'manage_admins':
         if (_amISuper) {
@@ -1123,59 +1139,12 @@ class _MobileProfileAvatar extends StatelessWidget {
             const SizedBox(height: 16),
             const Divider(),
             Builder(builder: (_) { RenderLog.write('c473_profile_menu_built', 1); return const SizedBox.shrink(); }),
-            _SheetTile(icon: Icons.person_outline, label: 'View Profile', onTap: () {
+            AdminSheetTile(icon: Icons.person_outline, label: 'View Profile', onTap: () {
               Navigator.pop(context);
               Navigator.push(context, MaterialPageRoute(builder: (_) => const ProfileScreen()));
             }),
-            if (isSuperAdmin)
-              _SheetTile(
-                icon: Icons.admin_panel_settings_outlined,
-                label: 'Manage Admins',
-                color: const Color(0xFF1B7A43),
-                onTap: () { Navigator.pop(context); nav('manage_admins'); },
-              ),
-            if (isSuperAdmin)
-              Builder(builder: (_) {
-                RenderLog.write('c209_upi_tile_rendered', 1);
-                return _SheetTile(
-                  icon: Icons.qr_code_outlined,
-                  label: 'Payment and Partner',
-                  color: const Color(0xFF1B7A43),
-                  onTap: () { Navigator.pop(context); nav('payment_upi'); },
-                );
-              }),
-            _SheetTile(
-              icon: Icons.add_business_outlined,
-              label: 'Add Supplier',
-              onTap: () { Navigator.pop(context); nav('add_supplier'); },
-            ),
-            _SheetTile(
-              icon: Icons.person_add_outlined,
-              label: 'Add Customer',
-              onTap: () { Navigator.pop(context); nav('add_customer'); },
-            ),
-            Builder(builder: (_) { RenderLog.write('c206_dropdown_addmed', 1); return const SizedBox.shrink(); }),
-            _SheetTile(
-              icon: Icons.medication_outlined,
-              label: 'Add Medicine',
-              onTap: () { Navigator.pop(context); nav('add_medicine'); },
-            ),
-            _SheetTile(
-              icon: Icons.badge_outlined,
-              label: 'MR Registrations',
-              onTap: () { Navigator.pop(context); nav('mr'); },
-            ),
-            _SheetTile(
-              icon: Icons.business_outlined,
-              label: 'Company Registrations',
-              onTap: () { Navigator.pop(context); nav('companies'); },
-            ),
-            _SheetTile(
-              icon: Icons.delivery_dining_outlined,
-              label: 'Delivery Partners',
-              onTap: () { Navigator.pop(context); nav('delivery_partners'); },
-            ),
-            _SheetTile(
+            AdminProfileMenuTiles(isSuperAdmin: isSuperAdmin, nav: nav),
+            AdminSheetTile(
               icon: Icons.qr_code_2,
               label: 'Bags',
               onTap: () {
@@ -1185,7 +1154,7 @@ class _MobileProfileAvatar extends StatelessWidget {
               },
             ),
             const Divider(),
-            _SheetTile(
+            AdminSheetTile(
               icon: Icons.logout,
               label: 'Logout',
               color: const Color(0xFFDC2626),
@@ -1193,30 +1162,6 @@ class _MobileProfileAvatar extends StatelessWidget {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _SheetTile extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final Color color;
-  final VoidCallback onTap;
-  const _SheetTile({required this.icon, required this.label, required this.onTap, this.color = const Color(0xFF374151)});
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 12),
-        child: Row(children: [
-          Icon(icon, size: 20, color: color),
-          const SizedBox(width: 12),
-          Text(label, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: color)),
-        ]),
       ),
     );
   }
@@ -3683,6 +3628,22 @@ class _DesktopProfileButton extends StatelessWidget {
               Text('Delivery Partners', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
             ]),
           ),
+          const PopupMenuItem(
+            value: 'wa_templates',
+            child: Row(children: [
+              Icon(Icons.description_outlined, size: 16, color: Color(0xFF374151)),
+              SizedBox(width: 10),
+              Text('WhatsApp Templates', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
+            ]),
+          ),
+          const PopupMenuItem(
+            value: 'wa_campaigns',
+            child: Row(children: [
+              Icon(Icons.campaign_outlined, size: 16, color: Color(0xFF374151)),
+              SizedBox(width: 10),
+              Text('WhatsApp Campaigns', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
+            ]),
+          ),
           const PopupMenuDivider(),
         ],
         PopupMenuItem(
@@ -4029,15 +3990,21 @@ class _AdminDesktopHeader extends StatelessWidget {
             ),
           ),
           const Spacer(),
-          _DesktopNavLink(label: 'Dashboard', icon: Icons.dashboard_outlined, selected: false, onTap: () => onSection(0)),
-          const SizedBox(width: 2),
-          _DesktopNavLink(label: 'WhatsApp', icon: Icons.forum_outlined, selected: false, onTap: () => onSection(1)),
-          const SizedBox(width: 2),
-          _DesktopNavLink(label: 'Customers', icon: Icons.people_outline, selected: false, onTap: () => onSection(2)),
-          const SizedBox(width: 2),
-          _DesktopNavLink(label: 'Suppliers', icon: Icons.inventory_2_outlined, selected: false, onTap: () => onSection(3)),
-          const SizedBox(width: 2),
-          _DesktopNavLink(label: 'Fulfillment', icon: Icons.local_shipping_outlined, selected: false, onTap: () => onSection(4)),
+          // Rendered from kAdminTopNav so the row's contents are enumerable —
+          // a nav entry added to one surface and forgotten in the others is
+          // exactly how the WhatsApp screens ended up unreachable.
+          for (var i = 0; i < kAdminTopNav.length; i++) ...[
+            _DesktopNavLink(
+              label: kAdminTopNav[i].label,
+              icon: kAdminTopNav[i].icon,
+              selected: false,
+              onTap: () => onSection(i),
+            ),
+            const SizedBox(width: 2),
+          ],
+          // Overflow rather than two more links: at the 900 px where this shell
+          // begins, the row has no room left.
+          AdminMoreNavMenu(onNav: onAdminNav),
           const SizedBox(width: 8),
           _DesktopProfileButton(onLogin: () {}, onAdminNav: onAdminNav, isSuperAdmin: isSuperAdmin),
           const SizedBox(width: 24),
@@ -4088,11 +4055,15 @@ class _AdminMobileBottomBar extends StatelessWidget {
           height: 56,
           child: Row(
             children: [
-              _AdminNavItem(icon: Icons.dashboard_outlined, label: 'Dashboard', selected: _activeSection == 0, onTap: () => onSection(0)),
-              _AdminNavItem(icon: Icons.forum_outlined, label: 'WhatsApp', selected: _activeSection == 1, onTap: () => onSection(1)),
-              _AdminNavItem(icon: Icons.people_outline, label: 'Customers', selected: _activeSection == 2, onTap: () => onSection(2)),
-              _AdminNavItem(icon: Icons.inventory_2_outlined, label: 'Suppliers', selected: _activeSection == 3, onTap: () => onSection(3)),
-              _AdminNavItem(icon: Icons.local_shipping_outlined, label: 'Fulfill', selected: _activeSection == 4, onTap: () => onSection(4)),
+              // Rendered from kAdminBottomNav, which is capped at five tabs.
+              // New destinations belong in the profile sheet, not here.
+              for (var i = 0; i < kAdminBottomNav.length; i++)
+                _AdminNavItem(
+                  icon: kAdminBottomNav[i].icon,
+                  label: kAdminBottomNav[i].label,
+                  selected: _activeSection == i,
+                  onTap: () => onSection(i),
+                ),
             ],
           ),
         ),

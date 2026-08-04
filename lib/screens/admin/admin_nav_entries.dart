@@ -42,12 +42,28 @@ const kAdminBottomNav = <AdminNavEntry>[
   AdminNavEntry('Fulfill', Icons.local_shipping_outlined),
 ];
 
-/// Destinations that do not fit the top row, shown in its "More" popup.
+/// Destinations that do not fit the top row, shown in its "More" popup AND —
+/// as the same list, not a second copy — in the mobile profile sheet via
+/// [AdminProfileMenuTiles]. Between those two surfaces every entry here is
+/// reachable at every viewport.
+///
+/// All five WhatsApp screens live here rather than in [kAdminTopNav]. The top
+/// row is already at its ceiling: see that list's comment — at 900 px it plus
+/// the logo and the profile chip needs nearly the whole width, and even at
+/// 1024 px five more links of this length clip rather than wrap.
+///
+/// Every entry MUST have a `route`, and that key MUST have a case in
+/// `_handleAdminNav` in home_shell.dart. A key with no case renders a perfect
+/// row that does nothing on tap — the #645/#646 bug, three deploys deep.
 const kAdminOverflowNav = <AdminNavEntry>[
   AdminNavEntry('WhatsApp Templates', Icons.description_outlined,
       route: 'wa_templates'),
   AdminNavEntry('WhatsApp Campaigns', Icons.campaign_outlined,
       route: 'wa_campaigns'),
+  AdminNavEntry('Segments', Icons.filter_alt_outlined, route: 'wa_segments'),
+  AdminNavEntry('Sequences', Icons.timeline_outlined, route: 'wa_drips'),
+  AdminNavEntry('WhatsApp Ops', Icons.settings_suggest_outlined,
+      route: 'wa_ops'),
 ];
 
 /// The wide shell's "More" popup, sitting after Fulfillment in the top row.
@@ -180,20 +196,23 @@ class AdminProfileMenuTiles extends StatelessWidget {
           label: 'Delivery Partners',
           onTap: () { Navigator.pop(context); nav('delivery_partners'); },
         ),
-        // #645/#646 shipped these two screens but wired them only into
+        // #645/#646 shipped the WhatsApp screens but wired them only into
         // admin_shell.dart's wide-viewport link row, so a phone had no way in.
-        // Neither is gated on isSuperAdmin: both screens' RPCs gate on
-        // get_my_role() and render the backend's not_authorized answer.
-        AdminSheetTile(
-          icon: Icons.description_outlined,
-          label: 'WhatsApp Templates',
-          onTap: () { Navigator.pop(context); nav('wa_templates'); },
-        ),
-        AdminSheetTile(
-          icon: Icons.campaign_outlined,
-          label: 'WhatsApp Campaigns',
-          onTap: () { Navigator.pop(context); nav('wa_campaigns'); },
-        ),
+        //
+        // These rows are now GENERATED from [kAdminOverflowNav] rather than
+        // hand-written, so the popup and the sheet cannot drift: adding a
+        // WhatsApp screen to that one list reaches both viewports at once, and
+        // a label added to only one surface is no longer possible.
+        //
+        // None is gated on isSuperAdmin: every one of these screens calls RPCs
+        // that gate on get_my_role() and renders the backend's not_authorized
+        // answer itself.
+        for (final e in kAdminOverflowNav)
+          AdminSheetTile(
+            icon: e.icon,
+            label: e.label,
+            onTap: () { Navigator.pop(context); nav(e.route ?? ''); },
+          ),
       ],
     );
   }

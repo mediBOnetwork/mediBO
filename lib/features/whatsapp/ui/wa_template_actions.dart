@@ -43,6 +43,87 @@ Future<void> waSubmitTemplate(
   }
 }
 
+// ── why Submit is off ────────────────────────────────────────────────────────
+
+/// Opened by tapping the disabled Submit button.
+///
+/// Answers the question a greyed-out button cannot: what is stopping this, and
+/// what do I do about it. Every line is wa_template_submit_blockers' own
+/// wording — the sheet adds no heading and no summary of its own, so there is
+/// nothing here that can disagree with the button's state.
+///
+/// [gate] is wa_template_submit_blockers, [similar] is wa_template_similar.
+/// Either may be null (never asked, or the RPC refused), in which case that
+/// part is simply absent rather than replaced with an invented explanation.
+Future<void> waSubmitBlockersSheet(
+  BuildContext context,
+  Map<String, dynamic>? gate,
+  Map<String, dynamic>? similar,
+) async {
+  final why = (gate?['why_label'] ?? '').toString();
+  final blockers = (gate?['blockers'] as List?) ?? const [];
+  // Warnings are listed apart from the blockers because they do NOT block:
+  // Meta approves templates that carry them.
+  final warnings = [
+    for (final w in (gate?['warnings'] as List?) ?? const [])
+      if (w.toString().isNotEmpty) w.toString(),
+  ];
+  final dupBlocking = similar?['blocking'] == true;
+  final dupSummary = (similar?['summary'] ?? '').toString();
+  final dupRows = (similar?['rows'] as List?) ?? const [];
+
+  await showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: Colors.white,
+    isScrollControlled: true,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+    ),
+    builder: (ctx) => SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (why.isNotEmpty) ...[
+              Text(
+                why,
+                style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF111827)),
+              ),
+              const SizedBox(height: 16),
+            ],
+            if (blockers.isNotEmpty) WaIssueList(issues: blockers),
+            if (dupBlocking && dupSummary.isNotEmpty) ...[
+              WaBanner(body: dupSummary, tone: similar?['tone']),
+              if (dupRows.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final r in dupRows)
+                      if (r is Map)
+                        WaChip(
+                            label: (r['label'] ?? '').toString(),
+                            tone: r['tone']),
+                  ],
+                ),
+              ],
+              const SizedBox(height: 12),
+            ],
+            if (warnings.isNotEmpty)
+              WaBanner(tone: 'warn', lines: warnings),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
 // ── test send ────────────────────────────────────────────────────────────────
 
 Future<void> waTestSendDialog(

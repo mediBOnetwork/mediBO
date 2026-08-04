@@ -47,15 +47,28 @@ class WaTone {
 
   /// Unknown / null / misspelled tones render grey. Never throws — a new Meta
   /// status arriving with a tone we have never seen must still paint.
+  ///
+  /// Two vocabularies arrive from the backend and both mean the same thing:
+  /// wa_templates_screen() sends colour words (green/yellow/red), while the
+  /// submit-gate, media-header, duplicate and policy RPCs send severity words
+  /// (good/warn/bad/muted). They are folded together here rather than at each
+  /// call site, so a payload switching vocabulary can never repaint a section.
   static WaTone of(Object? tone) {
     switch ((tone ?? '').toString().toLowerCase()) {
       case 'green':
+      case 'good':
         return _green;
       case 'yellow':
       case 'amber':
+      case 'warn':
         return _yellow;
       case 'red':
+      case 'bad':
         return _red;
+      case 'grey':
+      case 'gray':
+      case 'muted':
+        return _grey;
       default:
         return _grey;
     }
@@ -94,17 +107,25 @@ class WaChip extends StatelessWidget {
             Icon(icon, size: 13, color: t.fg),
             const SizedBox(width: 5),
           ],
-          Text(
-            label,
-            style: TextStyle(
-                fontSize: 12, fontWeight: FontWeight.w500, color: t.fg),
+          // Flexible, because these labels are backend sentences, not words.
+          // The duplicate check sends "order_sent (en) — 82% similar" and the
+          // policy review sends a whole verdict; a fixed-width Row overflows on
+          // the first one that is longer than its column.
+          Flexible(
+            child: Text(
+              label,
+              style: TextStyle(
+                  fontSize: 12, fontWeight: FontWeight.w500, color: t.fg),
+            ),
           ),
           if (value != null) ...[
             const SizedBox(width: 6),
-            Text(
-              value!,
-              style: TextStyle(
-                  fontSize: 12, fontWeight: FontWeight.w700, color: t.fg),
+            Flexible(
+              child: Text(
+                value!,
+                style: TextStyle(
+                    fontSize: 12, fontWeight: FontWeight.w700, color: t.fg),
+              ),
             ),
           ],
         ],
@@ -186,6 +207,73 @@ class WaBanner extends StatelessWidget {
       ),
     );
   }
+}
+
+/// A list of {issue, fix} rows, printed verbatim.
+///
+/// Shared by the submit-blockers sheet and the AI policy verdict, because both
+/// answer the same question in the same shape: what is wrong, and what to do
+/// about it. `severity` is optional and, when present, is rendered as a WaChip
+/// in its own tone — the row never decides a severity of its own, and never
+/// reorders or de-duplicates: the backend already sent them in the order it
+/// wants them read.
+class WaIssueList extends StatelessWidget {
+  final List<dynamic> issues;
+
+  /// Key holding the severity word, when the payload carries one. The policy
+  /// verdict sends `severity`; the submit blockers send none.
+  final String severityKey;
+
+  const WaIssueList({
+    super.key,
+    required this.issues,
+    this.severityKey = 'severity',
+  });
+
+  @override
+  Widget build(BuildContext context) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final raw in issues)
+            if (raw is Map)
+              Builder(builder: (_) {
+                final m = raw.cast<String, dynamic>();
+                final severity = (m[severityKey] ?? '').toString();
+                final issue = (m['issue'] ?? '').toString();
+                final fix = (m['fix'] ?? '').toString();
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (severity.isNotEmpty) ...[
+                        WaChip(label: severity, tone: severity),
+                        const SizedBox(height: 6),
+                      ],
+                      if (issue.isNotEmpty)
+                        Text(
+                          issue,
+                          style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF111827)),
+                        ),
+                      if (fix.isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          fix,
+                          style: const TextStyle(
+                              fontSize: 13, color: Color(0xFF6B7280)),
+                        ),
+                      ],
+                    ],
+                  ),
+                );
+              }),
+        ],
+      );
 }
 
 /// The WhatsApp bubble.

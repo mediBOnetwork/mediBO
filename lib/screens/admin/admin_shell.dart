@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 
 import '../../features/whatsapp/ui/wa_home_screen.dart';
+import 'wa_campaigns_screen.dart';
 import '../../services/admin_date_scope.dart';
 import '../../services/fcm_service.dart';
 import '../../theme.dart';
@@ -169,6 +170,13 @@ class _AdminShellState extends State<AdminShell> with WidgetsBindingObserver {
       case 'whatsapp':
         Navigator.of(ctx).push(
           MaterialPageRoute(builder: (_) => const WaHomeScreen()),
+        );
+        return;
+      // CHANGE — campaign console. Sits beside WhatsApp and the template
+      // manager: templates are what may be sent, campaigns are who gets them.
+      case 'wa_campaigns':
+        Navigator.of(ctx).push(
+          MaterialPageRoute(builder: (_) => const WaCampaignsScreen()),
         );
         return;
       case 'manage_admins':
@@ -338,6 +346,13 @@ class _AdminShellState extends State<AdminShell> with WidgetsBindingObserver {
                     color: Color(0xFF1B7A43)),
               ),
               const PopupMenuItem(
+                value: 'wa_campaigns',
+                child: _PopupRow(
+                    icon: Icons.campaign_outlined,
+                    label: 'WA Campaigns',
+                    color: Color(0xFF1B7A43)),
+              ),
+              const PopupMenuItem(
                 value: 'add_supplier',
                 child: _PopupRow(
                     icon: Icons.add_business_outlined, label: 'Add Supplier'),
@@ -459,6 +474,8 @@ class _AdminNewDesktopHeader extends StatelessWidget {
           _BillsNavLink(count: pendingBillsCount, onTap: () => onNav('bills')),
           const SizedBox(width: 2),
           _DesktopNavLink(label: 'WhatsApp', icon: Icons.forum_outlined, selected: false, onTap: () => onNav('whatsapp')),
+          const SizedBox(width: 2),
+          _DesktopNavLink(label: 'WA Campaigns', icon: Icons.campaign_outlined, selected: false, onTap: () => onNav('wa_campaigns')),
           if (isSuperAdmin) ...[
             const SizedBox(width: 2),
             _DesktopNavLink(label: 'Payment / UPI', icon: Icons.qr_code_outlined, selected: false, onTap: () => onNav('payment_upi')),

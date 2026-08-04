@@ -35,6 +35,7 @@ import 'screens/product_detail_screen.dart'; // C636: /product/:id
 import 'screens/company_screen.dart'; // C638: /company/:key
 import 'screens/inquiry_link_page.dart';
 import 'screens/dispute_link_page.dart';
+import 'features/whatsapp/ui/wa_templates_screen.dart'; // admin WhatsApp templates
 import 'screens/about_screen.dart';
 import 'screens/contact_screen.dart';
 import 'screens/legal_pages.dart';
@@ -571,6 +572,10 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
               // screen asks for a sign-in rather than inventing an anonymous
               // path.
               '/delivery-register': (_) => const DeliveryRegisterScreen(),
+              // Admin > WhatsApp > Templates. wa_templates_screen() refuses
+              // non-admin callers itself, so the screen renders its own
+              // not-authorized state rather than the route guessing a role.
+              '/admin/wa-templates': (_) => const WaTemplatesScreen(),
               '/about-app':    (_) => const AboutScreen(),
               '/contact':      (_) => const ContactScreen(),
               '/terms':        (_) => const TermsScreen(),

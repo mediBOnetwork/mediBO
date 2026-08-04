@@ -353,6 +353,13 @@ class _AdminShellState extends State<AdminShell> with WidgetsBindingObserver {
                     color: Color(0xFF1B7A43)),
               ),
               const PopupMenuItem(
+                value: 'wa_templates',
+                child: _PopupRow(
+                    icon: Icons.description_outlined,
+                    label: 'WhatsApp Templates',
+                    color: Color(0xFF1B7A43)),
+              ),
+              const PopupMenuItem(
                 value: 'wa_campaigns',
                 child: _PopupRow(
                     icon: Icons.campaign_outlined,

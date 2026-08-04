@@ -31,6 +31,8 @@ import '../features/whatsapp/ui/wa_home_screen.dart';
 import '../features/whatsapp/ui/wa_templates_screen.dart';
 import 'admin/wa_campaigns_screen.dart';
 import 'admin/wa_ops_screen.dart';
+import 'admin/wa_drips_screen.dart';
+import 'admin/wa_segments_screen.dart';
 import '../features/bags/bags_screen.dart';
 import 'admin/admin_supplier_screen.dart';
 import 'admin/admin_fulfillment_screen.dart';
@@ -414,6 +416,16 @@ class _HomeShellState extends State<HomeShell> {
       case 'wa_ops':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const WaOpsScreen()));
+        break;
+      // Same gating as the ones above: both screens call RPCs that check the
+      // caller's role and render the backend's own refusal.
+      case 'wa_segments':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const WaSegmentsScreen()));
+        break;
+      case 'wa_drips':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const WaDripsScreen()));
         break;
       case 'manage_admins':
         if (_amISuper) {

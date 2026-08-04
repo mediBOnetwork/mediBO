@@ -52,6 +52,10 @@ class WaCampaignBuilderScreen extends StatefulWidget {
   final WaCampaignDryRunRpc? dryRunRpc;
   final WaCampaignScheduleRpc? scheduleRpc;
 
+  /// Saved segments come from their own screen's RPC. A failure here costs the
+  /// builder one row of chips, never the form.
+  final WaAudiencesScreenRpc? audiencesRpc;
+
   const WaCampaignBuilderScreen({
     super.key,
     this.campaign,
@@ -64,6 +68,7 @@ class WaCampaignBuilderScreen extends StatefulWidget {
     this.estimateRpc,
     this.dryRunRpc,
     this.scheduleRpc,
+    this.audiencesRpc,
   });
 
   @override
@@ -77,16 +82,37 @@ class _WaCampaignBuilderScreenState extends State<WaCampaignBuilderScreen> {
   final _throttleCtrl = TextEditingController(text: '60');
   final _needsCtrl = TextEditingController();
 
+  // Budget / control group / repeat. Every one of these is INPUT — none of them
+  // is consulted to decide anything on this screen. Whether a ₹500 cap is
+  // reached, whether a 20% control group is even allowed on this audience, when
+  // the next weekly run falls: all three are the backend's answers, arriving
+  // back as budget_label, holdout_taken and repeat_label.
+  final _budgetCtrl = TextEditingController();
+  final _repeatIntervalCtrl = TextEditingController(text: '1');
+  final _repeatDomCtrl = TextEditingController();
+  final _repeatMaxRunsCtrl = TextEditingController();
+  double _holdoutPct = 0;
+  String _repeatKind = 'none';
+  final Set<int> _repeatDays = <int>{};
+  DateTime? _repeatUntil;
+
   List<Map<String, dynamic>> _templates = const [];
   List<Map<String, dynamic>> _tokens = const [];
+  List<Map<String, dynamic>> _savedSegments = const [];
   bool _loading = true;
   String? _loadError;
 
+  /// Sentences the last save handed back. Neither blocks anything; both are
+  /// printed word for word and cleared on the next save.
+  String _blankWarning = '';
+  String _holdoutNote = '';
+
   Map<String, dynamic>? _template;
 
-  // Step 2 — segment XOR trigger. Exactly one of these is ever non-null.
+  // Step 2 — saved segment XOR segment XOR trigger. At most one is non-null.
   String? _audienceKey;
   String? _triggerKey;
+  String? _savedAudienceId;
 
   /// One row per placeholder. `token` is a key from wa_template_tokens();
   /// `text` is used when that key is the fixed-text option.
@@ -110,6 +136,14 @@ class _WaCampaignBuilderScreenState extends State<WaCampaignBuilderScreen> {
     if (c != null) {
       _campaignId = (c['id'] ?? '').toString();
       _nameCtrl.text = (c['name'] ?? '').toString();
+      // Hydrate from the row's RAW values, never from its labels. budget_label
+      // is a sentence for reading; budget_inr is the number the field edits.
+      final budget = (c['budget_inr'] ?? '').toString();
+      if (budget.isNotEmpty && budget != '0') _budgetCtrl.text = budget;
+      _holdoutPct =
+          (num.tryParse((c['holdout_pct'] ?? '').toString()) ?? 0).toDouble();
+      final kind = (c['repeat_kind'] ?? '').toString();
+      if (kind.isNotEmpty) _repeatKind = kind;
     }
     _load();
   }
@@ -120,6 +154,10 @@ class _WaCampaignBuilderScreenState extends State<WaCampaignBuilderScreen> {
     _linkCtrl.dispose();
     _throttleCtrl.dispose();
     _needsCtrl.dispose();
+    _budgetCtrl.dispose();
+    _repeatIntervalCtrl.dispose();
+    _repeatDomCtrl.dispose();
+    _repeatMaxRunsCtrl.dispose();
     super.dispose();
   }
 
@@ -131,6 +169,18 @@ class _WaCampaignBuilderScreenState extends State<WaCampaignBuilderScreen> {
     try {
       final screen = await (widget.templatesRpc ?? waTemplatesScreen)();
       final tokens = await (widget.tokensRpc ?? waTemplateTokens)();
+      // Saved segments are a convenience, not a requirement: if this RPC is
+      // unhappy the builder still opens with the built-in segments and triggers.
+      List<Map<String, dynamic>> segments = const [];
+      try {
+        final aud = await (widget.audiencesRpc ?? waAudiencesScreen)();
+        if (waPayloadError(aud) == null) {
+          segments = ((aud['rows'] as List?) ?? const [])
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList();
+        }
+      } catch (_) {}
       if (!mounted) return;
       if (screen['ok'] != true) {
         setState(() {
@@ -151,6 +201,7 @@ class _WaCampaignBuilderScreenState extends State<WaCampaignBuilderScreen> {
             .whereType<Map>()
             .map((e) => Map<String, dynamic>.from(e))
             .toList();
+        _savedSegments = segments;
         _loading = false;
       });
       // Editing an existing campaign: reload the template it already uses so
@@ -217,12 +268,24 @@ class _WaCampaignBuilderScreenState extends State<WaCampaignBuilderScreen> {
       params[needsKey] = int.tryParse(raw) ?? raw;
     }
 
+    // A saved segment is a THIRD kind of audience, not a variant of the second:
+    // audience_kind is the literal 'saved' and the only param is the segment's
+    // id. The rules behind that id live in the segment, so the campaign never
+    // carries a copy of them that could drift.
+    String? audienceKind = _triggerKey != null ? null : _audienceKey;
+    if (_triggerKey == null && _savedAudienceId != null) {
+      audienceKind = 'saved';
+      params
+        ..clear()
+        ..['audience_id'] = _savedAudienceId;
+    }
+
     try {
       final res = await (widget.saveRpc ?? waCampaignSave)({
         'p_id': _campaignId,
         'p_name': _nameCtrl.text.trim(),
         'p_template_id': (_template?['id'] ?? '').toString(),
-        'p_audience_kind': _triggerKey != null ? null : _audienceKey,
+        'p_audience_kind': audienceKind,
         'p_audience_params': params,
         'p_variable_map': _vars.map((v) => v.value(_tokens)).toList(),
         'p_link_target': _linkCtrl.text.trim().isEmpty
@@ -231,6 +294,22 @@ class _WaCampaignBuilderScreenState extends State<WaCampaignBuilderScreen> {
         'p_trigger_kind': _triggerKey,
         'p_scheduled_at': null,
         'p_throttle': int.tryParse(_throttleCtrl.text.trim()) ?? 60,
+        // Empty budget field == no cap. Not 0 — 0 would be a cap of nothing.
+        'p_budget_inr': _budgetCtrl.text.trim().isEmpty
+            ? null
+            : num.tryParse(_budgetCtrl.text.trim()),
+        'p_holdout_pct': _holdoutPct.round(),
+        'p_repeat_kind': _repeatKind,
+        'p_repeat_interval': int.tryParse(_repeatIntervalCtrl.text.trim()),
+        // Sent as the form holds them, whatever kind is selected. Which of
+        // these matter for 'weekly' vs 'monthly' is the backend's call, not a
+        // second opinion assembled here.
+        'p_repeat_days_of_week': _repeatDays.isEmpty
+            ? null
+            : (_repeatDays.toList()..sort()),
+        'p_repeat_day_of_month': int.tryParse(_repeatDomCtrl.text.trim()),
+        'p_repeat_until': _repeatUntil?.toUtc().toIso8601String(),
+        'p_repeat_max_runs': int.tryParse(_repeatMaxRunsCtrl.text.trim()),
       });
       if (!mounted) return;
 
@@ -244,8 +323,23 @@ class _WaCampaignBuilderScreenState extends State<WaCampaignBuilderScreen> {
       }
 
       final campaign = (res['campaign'] as Map?) ?? const {};
+      final blank = int.tryParse((res['blank_values'] ?? '').toString()) ?? 0;
+      final taken = int.tryParse((res['holdout_taken'] ?? '').toString()) ?? 0;
       setState(() {
         _campaignId = (campaign['id'] ?? _campaignId ?? '').toString();
+        // blank_values > 0 means some recipients resolve a variable to nothing.
+        // The send is still allowed — the backend said ok — so this is a
+        // banner, not a gate.
+        _blankWarning = blank > 0
+            ? (res['blank_warning'] ?? campaign['blank_warning'] ?? '')
+                .toString()
+            : '';
+        // Asked for a control group and got none. The backend refuses on a
+        // small audience and says why; that sentence is the whole explanation
+        // and this file adds nothing to it.
+        _holdoutNote = (_holdoutPct > 0 && taken == 0)
+            ? (res['message'] ?? '').toString()
+            : '';
         _saving = false;
       });
       // ALWAYS preflight after a save. A save that succeeded is not a campaign
@@ -419,6 +513,11 @@ class _WaCampaignBuilderScreenState extends State<WaCampaignBuilderScreen> {
           _card('3 · Variables', [_variablesStep()]),
           _card('4 · Tracking link', [_linkStep()]),
           _card('5 · Schedule', [_scheduleStep()]),
+          _card('Budget', [_budgetStep()]),
+          _card('Hold back', [_holdoutStep()]),
+          _card('Repeat', [_repeatStep()]),
+          WaWarnBanner(text: _blankWarning),
+          WaWarnBanner(text: _holdoutNote),
           if (_preflightRan) _preflightCard(),
           const SizedBox(height: 12),
           Row(
@@ -574,6 +673,44 @@ class _WaCampaignBuilderScreenState extends State<WaCampaignBuilderScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (_savedSegments.isNotEmpty) ...[
+          const Text('Saved segment',
+              style: TextStyle(
+                  fontSize: 11.5, fontWeight: FontWeight.w600, color: _kMuted)),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final s in _savedSegments)
+                ChoiceChip(
+                  // name and match_label are the segment's own words. The chip
+                  // never states how many people match — `matches` is a live
+                  // count on the segments screen, and a stale copy pinned here
+                  // would be a second answer to it.
+                  label: Text(
+                    [
+                      (s['name'] ?? '').toString(),
+                      (s['match_label'] ?? '').toString(),
+                    ].where((e) => e.isNotEmpty).join(' · '),
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  selected: _savedAudienceId == (s['id'] ?? '').toString(),
+                  onSelected: (_) => setState(() {
+                    _savedAudienceId = (s['id'] ?? '').toString();
+                    _audienceKey = null;
+                    _triggerKey = null;
+                    _needsCtrl.clear();
+                    _preflightRan = false;
+                  }),
+                  selectedColor: const Color(0xFFD1FAE5),
+                  backgroundColor: const Color(0xFFF9FAFB),
+                  side: const BorderSide(color: _kBorder),
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+        ],
         const Text('Segment',
             style: TextStyle(
                 fontSize: 11.5, fontWeight: FontWeight.w600, color: _kMuted)),
@@ -595,6 +732,7 @@ class _WaCampaignBuilderScreenState extends State<WaCampaignBuilderScreen> {
                   // leaving both selected would show an audience that is not
                   // the one that sends.
                   _triggerKey = null;
+                  _savedAudienceId = null;
                   _needsCtrl.clear();
                 }),
                 selectedColor: const Color(0xFFD1FAE5),
@@ -620,6 +758,7 @@ class _WaCampaignBuilderScreenState extends State<WaCampaignBuilderScreen> {
                 onSelected: (_) => setState(() {
                   _triggerKey = (t['key'] ?? '').toString();
                   _audienceKey = null;
+                  _savedAudienceId = null;
                   _needsCtrl.clear();
                 }),
                 selectedColor: const Color(0xFFD1FAE5),
@@ -784,6 +923,150 @@ class _WaCampaignBuilderScreenState extends State<WaCampaignBuilderScreen> {
           ],
         ],
       );
+
+  // Budget ─────────────────────────────────────────────────────────────────
+  /// One optional number. What it buys, when it is reached and what happens
+  /// then are all the backend's; this field only carries the cap up.
+  Widget _budgetStep() => TextField(
+        controller: _budgetCtrl,
+        keyboardType: TextInputType.number,
+        decoration: _dec('₹'),
+        onChanged: (_) => _preflightRan = false,
+      );
+
+  // Hold back ──────────────────────────────────────────────────────────────
+  /// 0–50%. The slider states an INTENTION; holdout_taken in the save response
+  /// states what actually happened, and when those disagree the backend's
+  /// message is printed instead of a number this file made up.
+  Widget _holdoutStep() => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Slider(
+            value: _holdoutPct.clamp(0, 50),
+            min: 0,
+            max: 50,
+            divisions: 50,
+            activeColor: _kGreen,
+            label: '${_holdoutPct.round()}',
+            onChanged: (v) => setState(() {
+              _holdoutPct = v;
+              _preflightRan = false;
+            }),
+          ),
+          Text('${_holdoutPct.round()}',
+              style: const TextStyle(
+                  fontSize: 13, fontWeight: FontWeight.w700, color: _kText)),
+        ],
+      );
+
+  // Repeat ─────────────────────────────────────────────────────────────────
+  /// The four kinds are the values p_repeat_kind accepts, printed as
+  /// themselves. Weekday numbers are the backend's convention (0 = Sunday) and
+  /// are sent as numbers, never as the day names drawn beside them.
+  Widget _repeatStep() {
+    const kinds = ['none', 'daily', 'weekly', 'monthly'];
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            for (final k in kinds)
+              ChoiceChip(
+                label: Text(k, style: const TextStyle(fontSize: 12)),
+                selected: _repeatKind == k,
+                onSelected: (_) => setState(() {
+                  _repeatKind = k;
+                  _preflightRan = false;
+                }),
+                selectedColor: const Color(0xFFD1FAE5),
+                backgroundColor: const Color(0xFFF9FAFB),
+                side: const BorderSide(color: _kBorder),
+              ),
+          ],
+        ),
+        if (_repeatKind != 'none') ...[
+          const SizedBox(height: 12),
+          TextField(
+            controller: _repeatIntervalCtrl,
+            keyboardType: TextInputType.number,
+            decoration: _dec('Every'),
+          ),
+        ],
+        if (_repeatKind == 'weekly') ...[
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (var d = 0; d < dayNames.length; d++)
+                FilterChip(
+                  label: Text(dayNames[d],
+                      style: const TextStyle(fontSize: 12)),
+                  selected: _repeatDays.contains(d),
+                  onSelected: (on) => setState(() {
+                    if (on) {
+                      _repeatDays.add(d);
+                    } else {
+                      _repeatDays.remove(d);
+                    }
+                  }),
+                  selectedColor: const Color(0xFFD1FAE5),
+                  backgroundColor: const Color(0xFFF9FAFB),
+                  side: const BorderSide(color: _kBorder),
+                ),
+            ],
+          ),
+        ],
+        if (_repeatKind == 'monthly') ...[
+          const SizedBox(height: 12),
+          TextField(
+            controller: _repeatDomCtrl,
+            keyboardType: TextInputType.number,
+            decoration: _dec('Day of month'),
+          ),
+        ],
+        if (_repeatKind != 'none') ...[
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () async {
+                    final now = DateTime.now();
+                    final d = await showDatePicker(
+                      context: context,
+                      initialDate: _repeatUntil ?? now,
+                      firstDate: now,
+                      lastDate: now.add(const Duration(days: 730)),
+                    );
+                    if (d != null) setState(() => _repeatUntil = d);
+                  },
+                  icon: const Icon(Icons.event_outlined, size: 15),
+                  label: Text(
+                    _repeatUntil == null
+                        ? 'Until'
+                        : _repeatUntil!.toIso8601String().substring(0, 10),
+                    style: const TextStyle(fontSize: 12.5),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: TextField(
+                  controller: _repeatMaxRunsCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: _dec('Max runs'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ],
+    );
+  }
 
   Widget _preflightCard() => Container(
         width: double.infinity,

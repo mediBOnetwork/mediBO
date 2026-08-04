@@ -31,3 +31,14 @@ void listenPopState(void Function(String path) handler) {
     handler(html.window.location.pathname ?? '/');
   });
 }
+
+// Hard navigation that REPLACES the current history entry.
+//
+// Used by /r/<code> (WhatsApp tracking links). replace(), not assign(): the
+// resolver page must not stay in the back stack, or Back from the destination
+// lands on the resolver, which immediately redirects forward again — a loop the
+// customer cannot escape without closing the tab.
+//
+// Also a full page load rather than a Navigator push, because the target is an
+// arbitrary URL from the database and may well be off this origin.
+void replaceLocation(String url) => html.window.location.replace(url);

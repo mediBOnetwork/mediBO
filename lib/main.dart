@@ -29,6 +29,8 @@ import 'screens/public/public_order_page.dart';
 import 'screens/public/track_page.dart'; // C629: /track/<qr_token>
 import 'screens/delivery/delivery_register_screen.dart'; // C631: PART A
 import 'screens/code_resolver_page.dart';
+import 'screens/public/wa_link_redirect_page.dart'; // /r/:code — campaign links
+import 'screens/admin/wa_campaigns_screen.dart'; // /admin/wa-campaigns
 import 'screens/product_detail_screen.dart'; // C636: /product/:id
 import 'screens/company_screen.dart'; // C638: /company/:key
 import 'screens/inquiry_link_page.dart';
@@ -470,6 +472,30 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
                     builder: (_) => StockUpdateFormScreen(token: token),
                   );
                 }
+              }
+              // CHANGE — /r/<code>: the short tracking link inside a WhatsApp
+              // campaign message. PUBLIC and anonymous — it is opened from the
+              // WhatsApp in-app browser with no session, and wa_link_click() is
+              // granted to anon for exactly that reason. Click and revenue
+              // attribution for every campaign depends on this route existing,
+              // so it is declared above the trailing /:code guard.
+              if (name.startsWith('/r/')) {
+                final code = name.substring('/r/'.length).split('?').first;
+                if (code.isNotEmpty) {
+                  return MaterialPageRoute(
+                    settings: settings,
+                    builder: (_) => WaLinkRedirectPage(code: code),
+                  );
+                }
+              }
+              // CHANGE — the campaign console. Admin-gated by the RPC itself
+              // (wa_campaigns_screen returns not_authorized), not by a role
+              // check in this file.
+              if (name == '/admin/wa-campaigns') {
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => const WaCampaignsScreen(),
+                );
               }
               if (name.startsWith('/inquiry/')) {
                 final token = name.substring('/inquiry/'.length).split('?').first;

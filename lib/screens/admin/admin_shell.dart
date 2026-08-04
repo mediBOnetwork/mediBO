@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 
 import '../../features/whatsapp/ui/wa_home_screen.dart';
+import '../../features/whatsapp/ui/wa_templates_screen.dart';
 import 'wa_campaigns_screen.dart';
 import '../../services/admin_date_scope.dart';
 import '../../services/fcm_service.dart';
@@ -170,6 +171,12 @@ class _AdminShellState extends State<AdminShell> with WidgetsBindingObserver {
       case 'whatsapp':
         Navigator.of(ctx).push(
           MaterialPageRoute(builder: (_) => const WaHomeScreen()),
+        );
+        return;
+      // The template manager: what may be sent, and the Meta verdict on each.
+      case 'wa_templates':
+        Navigator.of(ctx).push(
+          MaterialPageRoute(builder: (_) => const WaTemplatesScreen()),
         );
         return;
       // CHANGE — campaign console. Sits beside WhatsApp and the template
@@ -474,6 +481,8 @@ class _AdminNewDesktopHeader extends StatelessWidget {
           _BillsNavLink(count: pendingBillsCount, onTap: () => onNav('bills')),
           const SizedBox(width: 2),
           _DesktopNavLink(label: 'WhatsApp', icon: Icons.forum_outlined, selected: false, onTap: () => onNav('whatsapp')),
+          const SizedBox(width: 2),
+          _DesktopNavLink(label: 'Templates', icon: Icons.description_outlined, selected: false, onTap: () => onNav('wa_templates')),
           const SizedBox(width: 2),
           _DesktopNavLink(label: 'WA Campaigns', icon: Icons.campaign_outlined, selected: false, onTap: () => onNav('wa_campaigns')),
           if (isSuperAdmin) ...[

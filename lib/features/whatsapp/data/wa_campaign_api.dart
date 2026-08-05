@@ -33,6 +33,38 @@ typedef WaCampaignEstimateRpc = Future<Map<String, dynamic>> Function(int recipi
 typedef WaLinkClickRpc = Future<Map<String, dynamic>> Function(String code);
 typedef WaCampaignSaveRpc = Future<Map<String, dynamic>> Function(Map<String, dynamic> params);
 
+// CHANGE — budget, control group, repeat, saved segments and drip sequences.
+//
+// Same rule as above: verified parameter names, no reshaping. Note
+// wa_campaign_holdout takes p_campaign_id (like preflight and dry_run), while
+// wa_drip_action takes p_id (like wa_campaign_action). They are not uniform and
+// were not guessed.
+typedef WaCampaignHoldoutRpc = Future<Map<String, dynamic>> Function(String id);
+typedef WaAudiencesScreenRpc = Future<Map<String, dynamic>> Function();
+typedef WaAudienceSaveRpc = Future<Map<String, dynamic>> Function(Map<String, dynamic> params);
+typedef WaAudienceDeleteRpc = Future<Map<String, dynamic>> Function(String id);
+typedef WaDripsScreenRpc = Future<Map<String, dynamic>> Function();
+typedef WaDripSaveRpc = Future<Map<String, dynamic>> Function(Map<String, dynamic> params);
+typedef WaDripStepSaveRpc = Future<Map<String, dynamic>> Function(Map<String, dynamic> params);
+typedef WaDripActionRpc = Future<Map<String, dynamic>> Function(String id, String action);
+
+/// Not every payload in this family carries an `ok` key: wa_audiences_screen
+/// and wa_drips_screen return their rows bare, and only speak up with
+/// {error, message} when something is wrong. Treating a missing `ok` as a
+/// failure would blank two working screens, so absence is not an answer here —
+/// only an explicit `error`, or an explicit `ok:false`, is.
+///
+/// The returned string is the backend's own sentence, rendered verbatim.
+String? waPayloadError(Map<String, dynamic> res) {
+  if (res['error'] != null) {
+    return (res['message'] ?? res['error']).toString();
+  }
+  if (res.containsKey('ok') && res['ok'] != true) {
+    return (res['message'] ?? res['error'] ?? '').toString();
+  }
+  return null;
+}
+
 Map<String, dynamic> _asMap(dynamic res) =>
     res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
 
@@ -76,7 +108,34 @@ Future<Map<String, dynamic>> waCampaignEstimate(int recipients, String category)
 Future<Map<String, dynamic>> waLinkClick(String code) async =>
     _asMap(await _db.rpc('wa_link_click', params: {'p_code': code}));
 
-/// `params` is passed straight through: the builder assembles the ten arguments
+/// `params` is passed straight through: the builder assembles the arguments
 /// and this wrapper does not second-guess which of them may be null.
 Future<Map<String, dynamic>> waCampaignSave(Map<String, dynamic> params) async =>
     _asMap(await _db.rpc('wa_campaign_save', params: params));
+
+// ── budget / control group / repeat / segments / sequences ──────────────────
+
+Future<Map<String, dynamic>> waCampaignHoldout(String id) async =>
+    _asMap(await _db.rpc('wa_campaign_holdout', params: {'p_campaign_id': id}));
+
+Future<Map<String, dynamic>> waAudiencesScreen() async =>
+    _asMap(await _db.rpc('wa_audiences_screen'));
+
+Future<Map<String, dynamic>> waAudienceSave(Map<String, dynamic> params) async =>
+    _asMap(await _db.rpc('wa_audience_save', params: params));
+
+Future<Map<String, dynamic>> waAudienceDelete(String id) async =>
+    _asMap(await _db.rpc('wa_audience_delete', params: {'p_id': id}));
+
+Future<Map<String, dynamic>> waDripsScreen() async =>
+    _asMap(await _db.rpc('wa_drips_screen'));
+
+Future<Map<String, dynamic>> waDripSave(Map<String, dynamic> params) async =>
+    _asMap(await _db.rpc('wa_drip_save', params: params));
+
+Future<Map<String, dynamic>> waDripStepSave(Map<String, dynamic> params) async =>
+    _asMap(await _db.rpc('wa_drip_step_save', params: params));
+
+Future<Map<String, dynamic>> waDripAction(String id, String action) async =>
+    _asMap(await _db.rpc('wa_drip_action',
+        params: {'p_id': id, 'p_action': action}));

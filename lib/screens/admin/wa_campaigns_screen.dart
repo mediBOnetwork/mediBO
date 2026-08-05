@@ -45,6 +45,7 @@ class WaCampaignsScreen extends StatefulWidget {
   final WaCampaignDryRunRpc? dryRunRpc;
   final WaCampaignScheduleRpc? scheduleRpc;
   final WaCampaignActionRpc? actionRpc;
+  final WaCampaignHoldoutRpc? holdoutRpc;
 
   // Handed to the builder when Edit / New is tapped.
   final WaTemplatesScreenRpc? templatesRpc;
@@ -52,6 +53,7 @@ class WaCampaignsScreen extends StatefulWidget {
   final WaCampaignSaveRpc? saveRpc;
   final WaCampaignPreflightRpc? preflightRpc;
   final WaCampaignEstimateRpc? estimateRpc;
+  final WaAudiencesScreenRpc? audiencesRpc;
 
   const WaCampaignsScreen({
     super.key,
@@ -60,11 +62,13 @@ class WaCampaignsScreen extends StatefulWidget {
     this.dryRunRpc,
     this.scheduleRpc,
     this.actionRpc,
+    this.holdoutRpc,
     this.templatesRpc,
     this.tokensRpc,
     this.saveRpc,
     this.preflightRpc,
     this.estimateRpc,
+    this.audiencesRpc,
   });
 
   @override
@@ -135,6 +139,7 @@ class _WaCampaignsScreenState extends State<WaCampaignsScreen> {
           estimateRpc: widget.estimateRpc,
           dryRunRpc: widget.dryRunRpc,
           scheduleRpc: widget.scheduleRpc,
+          audiencesRpc: widget.audiencesRpc,
         ),
       ),
     );
@@ -375,6 +380,14 @@ class _WaCampaignsScreenState extends State<WaCampaignsScreen> {
                       campaignId: (c['id'] ?? '').toString(),
                       campaignName: (c['name'] ?? '').toString(),
                       detailRpc: widget.detailRpc,
+                      holdoutRpc: widget.holdoutRpc,
+                      // holdout_pct above zero is the backend saying a control
+                      // group exists to measure. The section is not offered on
+                      // a campaign that never held anyone back.
+                      hasHoldout:
+                          (num.tryParse((c['holdout_pct'] ?? '').toString()) ??
+                                  0) >
+                              0,
                       onResendFailed: () => _runAction(c, 'resend_failed'),
                       canResendFailed: c['can_resend_failed'] == true,
                     );
@@ -542,13 +555,26 @@ class _CampaignCard extends StatelessWidget {
             children: [
               if (_s('template').isNotEmpty) WaPlainChip(label: _s('template')),
               if (_s('category').isNotEmpty) WaPlainChip(label: _s('category')),
+              // A repeating campaign spawns a child row per run. is_repeat_child
+              // is the backend's answer to "is this one of them?" — the app does
+              // not infer it from runs_done being above zero, because the parent
+              // carries runs_done too.
+              if (c['is_repeat_child'] == true)
+                WaPlainChip(label: 'run ${c['runs_done'] ?? ''}'),
             ],
           ),
           const SizedBox(height: 8),
           _metaRow(Icons.people_outline, _s('audience_label')),
           _metaRow(Icons.event_outlined, _s('schedule_label')),
+          _metaRow(Icons.repeat_outlined, _s('repeat_label')),
+          _metaRow(Icons.shield_outlined, _s('holdout_label')),
           _metaRow(Icons.send_outlined, _s('summary_label')),
           _metaRow(Icons.trending_up, _s('result_label')),
+          _budgetBlock(),
+          // blank_values counts recipients whose variables resolved to nothing.
+          // It is a warning, never a block: the backend already decided those
+          // messages may go, and blank_warning is its sentence about them.
+          WaWarnBanner(text: _blankValues > 0 ? _s('blank_warning') : ''),
           const SizedBox(height: 10),
           const Divider(height: 1, color: _kBorder),
           const SizedBox(height: 8),
@@ -579,6 +605,33 @@ class _CampaignCard extends StatelessWidget {
                     danger: true),
             ],
           ),
+        ],
+      ),
+    );
+  }
+
+  int get _blankValues =>
+      int.tryParse((c['blank_values'] ?? '').toString()) ?? 0;
+
+  /// budget_label is the whole sentence ("₹412 of ₹1,000 spent"); budget_tone
+  /// says whether that is fine, tight or over; budget_pct fills the bar. Not one
+  /// of the three is derived from the others here — a campaign with no cap sends
+  /// an empty label and this block disappears.
+  Widget _budgetBlock() {
+    final label = _s('budget_label');
+    if (label.isEmpty) return const SizedBox.shrink();
+    final pct = num.tryParse((c['budget_pct'] ?? '').toString());
+    final tone = c['budget_tone']?.toString();
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          WaToneChip(label: label, tone: tone),
+          if (pct != null) ...[
+            const SizedBox(height: 6),
+            WaToneBar(pct: pct, tone: tone),
+          ],
         ],
       ),
     );
@@ -1039,6 +1092,8 @@ Future<void> showWaRecipientLog(
   required String campaignId,
   required String campaignName,
   WaCampaignDetailRpc? detailRpc,
+  WaCampaignHoldoutRpc? holdoutRpc,
+  bool hasHoldout = false,
   VoidCallback? onResendFailed,
   bool canResendFailed = false,
 }) {
@@ -1053,6 +1108,8 @@ Future<void> showWaRecipientLog(
       campaignId: campaignId,
       campaignName: campaignName,
       detailRpc: detailRpc,
+      holdoutRpc: holdoutRpc,
+      hasHoldout: hasHoldout,
       onResendFailed: onResendFailed,
       canResendFailed: canResendFailed,
     ),
@@ -1063,6 +1120,8 @@ class _RecipientLogSheet extends StatefulWidget {
   final String campaignId;
   final String campaignName;
   final WaCampaignDetailRpc? detailRpc;
+  final WaCampaignHoldoutRpc? holdoutRpc;
+  final bool hasHoldout;
   final VoidCallback? onResendFailed;
   final bool canResendFailed;
 
@@ -1070,6 +1129,8 @@ class _RecipientLogSheet extends StatefulWidget {
     required this.campaignId,
     required this.campaignName,
     this.detailRpc,
+    this.holdoutRpc,
+    this.hasHoldout = false,
     this.onResendFailed,
     this.canResendFailed = false,
   });
@@ -1196,6 +1257,14 @@ class _RecipientLogSheetState extends State<_RecipientLogSheet> {
                 ],
               ),
             ),
+            if (widget.hasHoldout)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                child: WaHoldoutSection(
+                  campaignId: widget.campaignId,
+                  holdoutRpc: widget.holdoutRpc,
+                ),
+              ),
             SizedBox(
               height: 38,
               child: ListView(
@@ -1238,6 +1307,169 @@ class _RecipientLogSheetState extends State<_RecipientLogSheet> {
           ],
         );
       },
+    );
+  }
+}
+
+// ── control group ───────────────────────────────────────────────────────────
+
+/// The held-back slice, measured. wa_campaign_holdout() compares the people who
+/// received the campaign against the people deliberately not sent to, over its
+/// own measure_days window, and returns `summary` as the finished sentence plus
+/// `lift_pct` as the one number worth reading.
+///
+/// Nothing here is arithmetic. order_pct, revenue and lift_pct arrive computed;
+/// if this file divided orders by people it would publish a second answer to a
+/// question the backend has already answered from the same rows.
+class WaHoldoutSection extends StatefulWidget {
+  final String campaignId;
+  final WaCampaignHoldoutRpc? holdoutRpc;
+
+  const WaHoldoutSection({
+    super.key,
+    required this.campaignId,
+    this.holdoutRpc,
+  });
+
+  @override
+  State<WaHoldoutSection> createState() => _WaHoldoutSectionState();
+}
+
+class _WaHoldoutSectionState extends State<WaHoldoutSection> {
+  Map<String, dynamic>? _res;
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final res =
+          await (widget.holdoutRpc ?? waCampaignHoldout)(widget.campaignId);
+      if (!mounted) return;
+      final err = waPayloadError(res);
+      setState(() {
+        _loading = false;
+        _error = err;
+        _res = err == null ? res : null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = e.toString();
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 12),
+        child: SizedBox(
+          height: 16,
+          width: 16,
+          child: CircularProgressIndicator(
+              strokeWidth: 2, valueColor: AlwaysStoppedAnimation(_kGreen)),
+        ),
+      );
+    }
+    if (_error != null) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Text(_error!,
+            style: const TextStyle(fontSize: 12.5, color: _kMuted)),
+      );
+    }
+
+    final res = _res ?? const {};
+    final summary = (res['summary'] ?? '').toString();
+    final lift = (res['lift_pct'] ?? '').toString();
+    final sent = (res['sent_group'] as Map?) ?? const {};
+    final held = (res['holdout_group'] as Map?) ?? const {};
+    final measuredFrom = (res['measured_from'] ?? '').toString();
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF9FAFB),
+        border: Border.all(color: _kBorder),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Control group',
+              style: TextStyle(
+                  fontSize: 13, fontWeight: FontWeight.w700, color: _kText)),
+          if (summary.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(summary,
+                style: const TextStyle(
+                    fontSize: 12.5, height: 1.4, color: _kMuted)),
+          ],
+          if (lift.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Text(lift,
+                style: const TextStyle(
+                    fontSize: 26, fontWeight: FontWeight.w700, color: _kGreen)),
+          ],
+          const SizedBox(height: 10),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(child: _group('Sent', sent)),
+              const SizedBox(width: 12),
+              Expanded(child: _group('Held back', held)),
+            ],
+          ),
+          if (measuredFrom.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(measuredFrom,
+                style: const TextStyle(fontSize: 11.5, color: _kMuted)),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// `caption` is the column heading. Every VALUE below it is the backend's.
+  Widget _group(String caption, Map group) {
+    Widget line(String k) {
+      final v = (group[k] ?? '').toString();
+      if (v.isEmpty) return const SizedBox.shrink();
+      return Padding(
+        padding: const EdgeInsets.only(top: 3),
+        child: Text(v,
+            style: const TextStyle(
+                fontSize: 13, fontWeight: FontWeight.w600, color: _kText)),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: _kCard,
+        border: Border.all(color: _kBorder),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(caption,
+              style: const TextStyle(
+                  fontSize: 11.5, fontWeight: FontWeight.w600, color: _kMuted)),
+          line('people'),
+          line('order_pct'),
+          line('revenue'),
+        ],
+      ),
     );
   }
 }

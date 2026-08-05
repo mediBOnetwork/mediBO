@@ -78,7 +78,10 @@ class WaTemplateEditorScreen extends StatefulWidget {
   /// Test seam for the OS file dialog, same idea as WaTemplateApi.rpcTransport:
   /// a widget test can hand a file in without a picker or a filesystem.
   @visibleForTesting
-  static Future<WaPickedFile?> Function(List<String> extensions)? filePicker;
+  /// Seam for the tests. `mime` is the selected format's own mime list, so the
+  /// dialog can filter on what Meta accepts rather than on a guess made here.
+  static Future<WaPickedFile?> Function(List<String> extensions, String mime)?
+      filePicker;
 
   @override
   State<WaTemplateEditorScreen> createState() => _WaTemplateEditorScreenState();
@@ -472,9 +475,13 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
 
   // ── media header ───────────────────────────────────────────────────────────
 
+  /// Re-fetched whenever the id changes — the spec's can_upload, upload_label
+  /// and blocked_reason are answers ABOUT this template, not global constants,
+  /// so a spec fetched while the template was unsaved is stale the moment it
+  /// saves.
   Future<void> _loadMediaSpec() async {
     try {
-      final res = await WaTemplateApi.mediaSpec();
+      final res = await WaTemplateApi.mediaSpec(_id);
       if (!mounted || WaTemplateApi.isError(res, 'formats')) return;
       setState(() => _mediaSpec = res);
     } catch (_) {}
@@ -519,9 +526,17 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
     });
   }
 
-  /// The extensions come from the format's own `accepts`, so the dialog offers
-  /// what Meta accepts. Nothing is rejected here: an oversized or wrong-typed
-  /// file is uploaded and refused by the RPC, in the RPC's own words.
+  /// The extensions and the mime filter both come from the format's own spec,
+  /// so the dialog offers exactly what Meta accepts.
+  ///
+  /// Size is the one thing checked before the bytes move: a 100 MB video has
+  /// to travel to storage before the RPC can refuse it, and paying for that
+  /// upload only to be told no is the wrong order. The refusal is still the
+  /// BACKEND's sentence, not one written here — wa_template_set_header_media
+  /// returns its `too_big` message before it touches a single row (it returns
+  /// above the UPDATE and above the job insert), so asking it is free and
+  /// changes nothing. Nothing else is judged here: a wrong-typed file goes up
+  /// and the RPC refuses it in its own words, exactly as before.
   Future<void> _pickAndUpload(Map<String, dynamic> format) async {
     if (_id.isEmpty) return;
     final exts = [
@@ -529,7 +544,7 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
         if (e.trim().isNotEmpty) e.trim().toLowerCase(),
     ];
     final pick = WaTemplateEditorScreen.filePicker ?? _pickFromDevice;
-    final picked = await pick(exts);
+    final picked = await pick(exts, (format['mime'] ?? '').toString());
     if (picked == null || !mounted) return;
 
     setState(() {
@@ -543,6 +558,25 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
       final mime = _mimeFor(ext);
       final path =
           'whatsapp/tpl_${_id}_${DateTime.now().millisecondsSinceEpoch}.$ext';
+
+      final maxMb = num.tryParse((format['max_mb'] ?? '').toString());
+      final tooBig =
+          maxMb != null && picked.bytes.length > maxMb * 1024 * 1024;
+      if (tooBig) {
+        final refusal = await WaTemplateApi.setHeaderMedia(
+          id: _id,
+          storagePath: path,
+          mime: mime,
+          bytes: picked.bytes.length,
+        );
+        if (!mounted) return;
+        setState(() {
+          _uploading = false;
+          _uploadMessage = WaTemplateApi.errorMessage(refusal);
+        });
+        return;
+      }
+
       await WaTemplateApi.uploadMedia(
           path: path, bytes: picked.bytes, mime: mime);
       final res = await WaTemplateApi.setHeaderMedia(
@@ -588,7 +622,8 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
     }
   }
 
-  static Future<WaPickedFile?> _pickFromDevice(List<String> extensions) async {
+  static Future<WaPickedFile?> _pickFromDevice(
+      List<String> extensions, String mime) async {
     final res = await FilePicker.pickFiles(
       type: extensions.isEmpty ? FileType.any : FileType.custom,
       allowedExtensions: extensions.isEmpty ? null : extensions,
@@ -729,8 +764,14 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
       // placeholder the admin deleted is not still claimed in the map, and a
       // key the picker never provided can never appear in it.
       _recountTokens();
+      // _id, not widget.template — after the first save of a NEW template the
+      // widget's map still has no id, so reading it there would send null a
+      // second time and create a duplicate. Save-and-continue makes that
+      // second save an ordinary thing to do.
+      final saveId =
+          _id.isEmpty ? (widget.template?['id'])?.toString() : _id;
       final res = await WaTemplateApi.save(
-        id: widget.template?['id']?.toString(),
+        id: saveId,
         name: _name.text,
         language: _language,
         category: _category,
@@ -759,6 +800,10 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
       // moment the gate has a row to read.
       if (saved != null) _id = (saved['id'] ?? '').toString();
       await _refreshGate();
+      if (!mounted) return;
+      // The spec's can_upload/blocked_reason are answers about THIS id, so a
+      // save that mints one makes the previous answer stale.
+      await _loadMediaSpec();
       if (!mounted) return;
 
       if (thenSubmit && saved != null) {
@@ -981,7 +1026,6 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
   /// come from wa_template_media_spec — none of it is written here.
   Widget _buildHeaderSection(WaCopy copy) {
     final formats = (_mediaSpec?['formats'] as List?) ?? const [];
-    final blockedReason = (_mediaSpec?['blocked_reason'] ?? '').toString();
     final rules = [
       for (final r in (_mediaSpec?['rules'] as List?) ?? const [])
         if (r.toString().isNotEmpty) r.toString(),
@@ -991,10 +1035,6 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (blockedReason.isNotEmpty) ...[
-          WaBanner(body: blockedReason, tone: 'muted'),
-          const SizedBox(height: 8),
-        ],
         if (formats.isNotEmpty) ...[
           Wrap(
             spacing: 8,
@@ -1005,13 +1045,14 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
                   Builder(builder: (_) {
                     final m = f.cast<String, dynamic>();
                     final value = (m['value'] ?? '').toString().toUpperCase();
-                    // blocked_reason turns the MEDIA formats off. Text is
-                    // always available — it needs nothing from Meta.
-                    final off = blockedReason.isNotEmpty && value != 'TEXT';
+                    // Every format stays selectable even when the sample
+                    // cannot be uploaded yet. Choosing one is how the admin
+                    // reaches the reason and the Save that clears it — greying
+                    // the choice out is what hid the explanation before.
                     return _FormatChoice(
                       label: (m['label'] ?? '').toString(),
                       selected: value == _headerFormat,
-                      enabled: !off,
+                      enabled: true,
                       onTap: () {
                         setState(() => _headerFormat = value);
                         _schedule();
@@ -1058,6 +1099,18 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
         if (s.isNotEmpty) s,
     ];
 
+    // Every one of these is the backend's answer about THIS template. The old
+    // version asked `_id.isEmpty` itself and then said nothing about it, which
+    // is how the picker came to be greyed out with no reason on screen.
+    final canUpload = _mediaSpec?['can_upload'] == true;
+    final templateSaved = _mediaSpec?['template_saved'] == true;
+    final uploadLabel = (_mediaSpec?['upload_label'] ?? '').toString();
+    final blockedReason = (_mediaSpec?['blocked_reason'] ?? '').toString();
+    // Re-upload is a SECOND way to do what the primary button already does, so
+    // it appears only once there is something to replace.
+    final hasSample = h?['has_sample'] == true;
+    final showReupload = hasSample || expired;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -1070,22 +1123,62 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
                   width: 18,
                   height: 18,
                   child: CircularProgressIndicator(strokeWidth: 2))
-              : Align(
-                  alignment: Alignment.centerLeft,
-                  child: OutlinedButton(
-                    // Nothing can be uploaded against a row that does not
-                    // exist yet, so the action waits for the first save.
-                    onPressed: (format == null || _id.isEmpty)
-                        ? null
-                        : () => _pickAndUpload(format),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: const Color(0xFF1B7A43),
-                      side: const BorderSide(color: Color(0xFF1B7A43)),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8)),
-                    ),
-                    child: const Text('Re-upload'),
-                  ),
+              : Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // ONE primary control, always present, always captioned by
+                    // the backend. Disabled still says what it is for.
+                    if (uploadLabel.isNotEmpty)
+                      ElevatedButton(
+                        onPressed: (!canUpload || format == null)
+                            ? null
+                            : () => _pickAndUpload(format),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF1B7A43),
+                          foregroundColor: Colors.white,
+                          disabledBackgroundColor: const Color(0xFFD1D5DB),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8)),
+                        ),
+                        child: Text(uploadLabel),
+                      ),
+                    // The reason sits directly beneath the control it explains.
+                    if (!canUpload && blockedReason.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      WaBanner(body: blockedReason, tone: 'warn'),
+                    ],
+                    // Saving is the one thing that unblocks an unsaved
+                    // template, so it is offered here rather than making the
+                    // admin find Save and come back.
+                    if (!templateSaved) ...[
+                      const SizedBox(height: 8),
+                      OutlinedButton(
+                        onPressed: _busy ? null : _saveAndContinue,
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFF1B7A43),
+                          side: const BorderSide(color: Color(0xFF1B7A43)),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8)),
+                        ),
+                        child: const Text('Save and continue'),
+                      ),
+                    ],
+                    if (showReupload) ...[
+                      const SizedBox(height: 8),
+                      OutlinedButton(
+                        onPressed: (!canUpload || format == null)
+                            ? null
+                            : () => _pickAndUpload(format),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFF1B7A43),
+                          side: const BorderSide(color: Color(0xFF1B7A43)),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8)),
+                        ),
+                        child: const Text('Re-upload'),
+                      ),
+                    ],
+                  ],
                 ),
         ),
         if (_uploadMessage.isNotEmpty) ...[
@@ -1094,6 +1187,21 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
         ],
       ],
     );
+  }
+
+  /// Save, then re-ask the spec with the id the save just produced, so the
+  /// picker becomes available without leaving the screen. A save that fails
+  /// lint surfaces the blocker sheet — the error is never swallowed.
+  Future<void> _saveAndContinue() async {
+    await _save();
+    if (!mounted) return;
+    if (_id.isEmpty || _errors.isNotEmpty) {
+      await waSubmitBlockersSheet(context, _gate, _similar);
+      return;
+    }
+    await _loadMediaSpec();
+    if (!mounted) return;
+    await _refreshHeaderStatus();
   }
 
   List<Widget> _categoryNote() {

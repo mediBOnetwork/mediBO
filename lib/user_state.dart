@@ -8,6 +8,7 @@ import 'screens/auth/google_flow.dart';
 import 'services/gis_auth.dart';
 import 'services/delivery_role_state.dart'; // C629: is this login a delivery account?
 import 'services/force_logout_guard.dart'; // WhatsApp "Log Out" -> instant local sign-out
+import 'services/force_logout_realtime.dart'; // WhatsApp "Log Out" -> live INSERT -> instant sign-out
 import 'services/fulfill_realtime.dart'; // C355: app-level realtime auth + subscription
 import 'services/map_config.dart'; // C634: one backend-owned map config, session-cached
 import 'utils/render_log.dart';
@@ -112,9 +113,26 @@ class AuthNotifier extends ChangeNotifier {
   /// The single asker/actor for the WhatsApp force-logout. The RPC and the
   /// logout action are wired to real methods here; the guard owns only the
   /// debounce and the "true -> act, anything else -> nothing" decision.
+  ///
+  /// [onAnswer] also hands the must_log_out payload to [_armForceLogoutRealtime]
+  /// so the SAME RPC that runs the start/resume/navigation check also (re)opens
+  /// the live channel — one call, both jobs.
   late final ForceLogoutGuard _forceLogout = ForceLogoutGuard(
     rpc: _mustLogOutRpc,
     onForceLogout: _applyForcedLogout,
+    onAnswer: _armForceLogoutRealtime,
+  );
+
+  /// The live half of the same policy: an open Realtime subscription that signs
+  /// the device out the INSTANT the backend records a WhatsApp logout, instead
+  /// of waiting for the next start/resume/navigation check. Pure and injected —
+  /// the channel is opened by [_openForceLogoutChannel]; the logout it runs is
+  /// the SAME [_applyForcedLogout] the guard uses (reused, never duplicated);
+  /// and a reconnect re-asks the guard once.
+  late final ForceLogoutRealtime _forceLogoutLive = ForceLogoutRealtime(
+    open: _openForceLogoutChannel,
+    onForceLogout: _applyForcedLogout,
+    onReconnect: () => unawaited(checkForcedLogout()),
   );
 
   /// The backend's reason for the last forced logout, verbatim. Empty when
@@ -153,6 +171,101 @@ class AuthNotifier extends ChangeNotifier {
     RenderLog.write('force_logout', 'applied');
     await signOut();
     notifyListeners();
+  }
+
+  /// The must_log_out answer also names the table and the exact per-user filter
+  /// to watch for an INSTANT logout. (Re)arm that live subscription here, using
+  /// ONLY what the RPC returned — the table, the filter string and the message
+  /// fallback are never constructed in Dart.
+  void _armForceLogoutRealtime(Map<String, dynamic> res) {
+    final table = (res['watch_table'] as String?) ?? '';
+    final filter = (res['watch_filter'] as String?) ?? '';
+    final message = (res['message'] as String?) ?? '';
+    if (table.isEmpty || filter.isEmpty) return;
+    _forceLogoutLive.watch(
+      table: table,
+      filter: filter,
+      fallbackMessage: message,
+    );
+  }
+
+  /// Opens the real Supabase channel for the force-logout subscription and hands
+  /// [ForceLogoutRealtime] a transport-neutral handle. The backend's
+  /// [watchFilter] (e.g. `user_id=eq.<the-uuid>`) is split into the (column, op,
+  /// value) the SDK's PostgresChangeFilter needs — every part comes from the
+  /// returned string; nothing is hardcoded. A filter we cannot read opens
+  /// nothing (an unreadable filter is never a licence to sign anyone out).
+  ForceLogoutSubscription _openForceLogoutChannel(
+    String table,
+    String watchFilter,
+    void Function(Map<String, dynamic> row) onInsert,
+    void Function(ForceLogoutChannelStatus status) onStatus,
+  ) {
+    final pgFilter = _postgresFilterFrom(watchFilter);
+    if (pgFilter == null) {
+      RenderLog.write('force_logout_live', 'bad_filter');
+      return ForceLogoutSubscription(() {});
+    }
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    final channel = Supabase.instance.client
+        .channel('force_logout_$ts')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: table,
+          filter: pgFilter,
+          // A real INSERT for this user — the ONE thing that signs out.
+          callback: (payload) => onInsert(payload.newRecord),
+        )
+        .subscribe((status, [error]) {
+          switch (status) {
+            case RealtimeSubscribeStatus.subscribed:
+              onStatus(ForceLogoutChannelStatus.subscribed);
+              break;
+            case RealtimeSubscribeStatus.channelError:
+              onStatus(ForceLogoutChannelStatus.error);
+              break;
+            case RealtimeSubscribeStatus.timedOut:
+              onStatus(ForceLogoutChannelStatus.timedOut);
+              break;
+            case RealtimeSubscribeStatus.closed:
+              onStatus(ForceLogoutChannelStatus.closed);
+              break;
+          }
+        });
+    RenderLog.write('force_logout_live', 'subscribed');
+    return ForceLogoutSubscription(() {
+      try {
+        channel.unsubscribe();
+      } catch (_) {}
+    });
+  }
+
+  /// Parse a single PostgREST `column=op.value` filter (as returned by the
+  /// backend) into a PostgresChangeFilter. Generic and string-driven: the
+  /// column, operator and value all come from [raw]; none is hardcoded. Returns
+  /// null for anything that is not one readable `col=op.value` clause.
+  static PostgresChangeFilter? _postgresFilterFrom(String raw) {
+    final eq = raw.indexOf('=');
+    if (eq <= 0 || eq >= raw.length - 1) return null;
+    final column = raw.substring(0, eq);
+    final rest = raw.substring(eq + 1); // "op.value"
+    final dot = rest.indexOf('.');
+    if (dot <= 0 || dot >= rest.length - 1) return null;
+    final op = rest.substring(0, dot);
+    final value = rest.substring(dot + 1);
+    const ops = <String, PostgresChangeFilterType>{
+      'eq': PostgresChangeFilterType.eq,
+      'neq': PostgresChangeFilterType.neq,
+      'lt': PostgresChangeFilterType.lt,
+      'lte': PostgresChangeFilterType.lte,
+      'gt': PostgresChangeFilterType.gt,
+      'gte': PostgresChangeFilterType.gte,
+      'in': PostgresChangeFilterType.inFilter,
+    };
+    final type = ops[op];
+    if (type == null) return null;
+    return PostgresChangeFilter(type: type, column: column, value: value);
   }
 
   // Fire-and-forget tracer — writes one row per event to auth_debug_log via RPC.
@@ -357,6 +470,13 @@ class AuthNotifier extends ChangeNotifier {
     _sessionFetchError = false;
     _profileChannel?.unsubscribe();
     _profileChannel = null;
+    // The WhatsApp force-logout live channel belongs to the credential that just
+    // went away — drop it, and reset the guard's debounce so the NEXT sign-in
+    // re-checks must_log_out AND re-subscribes fresh. Without the reset, a
+    // sign-out-then-in inside the 20s window would leave the new user with no
+    // live channel (requirement 4: re-subscribe after any new sign-in).
+    _forceLogoutLive.stop();
+    _forceLogout.reset();
     FulfillRealtime.instance.onAuthInactive(); // C355: drop the app-level socket
     // CHANGE #629: the delivery answer belongs to the credential that just went
     // away. A stale "yes" would open the rider interface for the next login.
@@ -554,6 +674,7 @@ class AuthNotifier extends ChangeNotifier {
   void dispose() {
     _sub.cancel();
     _profileChannel?.unsubscribe();
+    _forceLogoutLive.stop();
     super.dispose();
   }
 }

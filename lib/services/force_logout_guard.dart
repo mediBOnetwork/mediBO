@@ -23,16 +23,25 @@ class ForceLogoutGuard {
   ForceLogoutGuard({
     required Future<Map<String, dynamic>?> Function() rpc,
     required Future<void> Function(String message) onForceLogout,
+    void Function(Map<String, dynamic> answer)? onAnswer,
     int Function()? nowMs,
     int debounceMs = 20000,
   })  : _rpc = rpc,
         _onForceLogout = onForceLogout,
+        _onAnswer = onAnswer,
         _nowMs = nowMs ?? _wallClock,
         _debounceMs = debounceMs;
 
   /// Asks the backend. Returns the parsed payload, or null when there is no
   /// usable answer.
   final Future<Map<String, dynamic>?> Function() _rpc;
+
+  /// Optional sink for the FULL answer, called on every non-null response before
+  /// the logout decision. The same must_log_out payload also names the table and
+  /// filter to subscribe to for an INSTANT logout, so one RPC feeds both the
+  /// immediate check and the live channel — no second call. Never fired on an
+  /// error or a null answer.
+  final void Function(Map<String, dynamic> answer)? _onAnswer;
 
   /// Runs the actual sign-out: revoke the local credential, clear cached
   /// account state and route to login, showing [message] verbatim. Called at
@@ -74,6 +83,7 @@ class ForceLogoutGuard {
     try {
       final res = await _rpc();
       if (res == null) return;                 // no answer -> do nothing
+      _onAnswer?.call(res);                    // hand watch_table/watch_filter on
       if (res['must_log_out'] != true) return; // not true  -> do nothing
       // message is string|null in the payload; never invent one in Dart.
       final message = (res['message'] as String?) ?? '';
@@ -83,5 +93,14 @@ class ForceLogoutGuard {
     } finally {
       _inFlight = false;
     }
+  }
+
+  /// Forget the last-checked timestamp so the very next [check] runs fresh,
+  /// bypassing the debounce window. Used when the account changes (sign-out or a
+  /// different user signs in): the new session must be free to re-ask — and
+  /// re-arm the live channel — immediately, rather than inherit the previous
+  /// session's "asked recently" state. Additive: it never signs anyone out.
+  void reset() {
+    _lastCheckMs = 0;
   }
 }

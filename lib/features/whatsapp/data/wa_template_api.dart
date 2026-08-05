@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -25,6 +27,15 @@ class WaTemplateApi {
   static Future<dynamic> Function(String fn, Map<String, dynamic> body)?
       fnTransport;
 
+  /// Test seam for the storage upload behind the media header.
+  @visibleForTesting
+  static Future<void> Function(
+      String bucket, String path, Uint8List bytes, String mime)? uploadTransport;
+
+  /// The bucket the sample file is uploaded to. The RPC defaults to the same
+  /// name server-side; it is named once here so the two cannot drift.
+  static const String mediaBucket = 'whatsapp-media';
+
   // ── plumbing ───────────────────────────────────────────────────────────────
 
   /// An RPC returning `jsonb` arrives as a Map; one declared RETURNS TABLE
@@ -35,6 +46,21 @@ class WaTemplateApi {
     if (data is Map) return data.cast<String, dynamic>();
     return const <String, dynamic>{};
   }
+
+  /// True when [res] is an error ENVELOPE rather than a payload.
+  ///
+  /// Detected by the ABSENCE of the payload's own required field, never by the
+  /// presence of `error`. wa_template_header_status and wa_policy_review_latest
+  /// both carry a nullable `error` INSIDE their success payload — the upload /
+  /// review failure text — so "has an error key" would misread every healthy
+  /// response as a failure and blank the section.
+  static bool isError(Map<String, dynamic> res, String requiredKey) =>
+      res[requiredKey] == null && (res['error'] ?? '').toString().isNotEmpty;
+
+  /// The backend's own sentence for a refusal. Empty when it sent none — the
+  /// caller then changes nothing rather than inventing wording.
+  static String errorMessage(Map<String, dynamic> res) =>
+      (res['message'] ?? '').toString();
 
   static Future<Map<String, dynamic>> _rpc(
     String fn, [
@@ -83,6 +109,77 @@ class WaTemplateApi {
         'p_components': components,
         'p_vars': vars,
       });
+
+  // ── submit gate ────────────────────────────────────────────────────────────
+
+  /// {can_submit, count, why_label, blockers:[{issue,fix}], warnings:[]}
+  ///
+  /// Reads the SAVED row, so it only has an answer once the template has an id.
+  /// This is the single source of "may I submit" — the editor never adds a
+  /// reason of its own on top.
+  static Future<Map<String, dynamic>> submitBlockers(String id) =>
+      _rpc('wa_template_submit_blockers', {'p_template_id': id});
+
+  // ── media header ───────────────────────────────────────────────────────────
+
+  /// {header_format, has_sample, file_label, size_label, expires_label,
+  ///  expired, status, status_label, tone, error, can_submit, blocker}
+  static Future<Map<String, dynamic>> headerStatus(String id) =>
+      _rpc('wa_template_header_status', {'p_template_id': id});
+
+  /// {formats:[{value,label,accepts,max_mb,needs_sample}], rules:[], blocked_reason}
+  static Future<Map<String, dynamic>> mediaSpec() =>
+      _rpc('wa_template_media_spec');
+
+  /// {ok, job_id, format, message} | {error, message}
+  static Future<Map<String, dynamic>> setHeaderMedia({
+    required String id,
+    required String storagePath,
+    required String mime,
+    required int bytes,
+  }) =>
+      _rpc('wa_template_set_header_media', {
+        'p_template_id': id,
+        'p_storage_path': storagePath,
+        'p_mime': mime,
+        'p_bytes': bytes,
+      });
+
+  /// Puts the sample file in storage. Nothing here checks the size or the type
+  /// — wa_template_set_header_media refuses with its own message if it must.
+  static Future<void> uploadMedia({
+    required String path,
+    required Uint8List bytes,
+    required String mime,
+  }) async {
+    final t = uploadTransport;
+    if (t != null) return t(mediaBucket, path, bytes, mime);
+    await Supabase.instance.client.storage.from(mediaBucket).uploadBinary(
+          path,
+          bytes,
+          fileOptions: FileOptions(contentType: mime, upsert: true),
+        );
+  }
+
+  // ── duplicate check ────────────────────────────────────────────────────────
+
+  /// {rows:[{name,language,status,pct,label,tone}], top_pct, tone, blocking, summary}
+  static Future<Map<String, dynamic>> similar(String body, String? excludeId) =>
+      _rpc('wa_template_similar', {
+        'p_body': body,
+        'p_exclude_id': excludeId,
+      });
+
+  // ── AI policy review ───────────────────────────────────────────────────────
+
+  /// {ok, review_id, message} | {error, message}
+  static Future<Map<String, dynamic>> policyReviewStart(String id) =>
+      _rpc('wa_policy_review_start', {'p_template_id': id});
+
+  /// {status, label, tone, verdict:{risk, verdict_label,
+  ///  likely_rejection_reason, category_advice, issues:[], suggested_body}}
+  static Future<Map<String, dynamic>> policyReviewLatest(String id) =>
+      _rpc('wa_policy_review_latest', {'p_template_id': id});
 
   // ── writes ─────────────────────────────────────────────────────────────────
 

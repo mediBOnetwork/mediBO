@@ -1,11 +1,25 @@
 import 'dart:async';
+import 'dart:typed_data';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 import '../data/wa_template_api.dart';
+import 'wa_template_actions.dart';
 import 'wa_template_bits.dart';
+
+/// A file the admin chose, reduced to the three things the upload needs.
+///
+/// Nothing here judges the file. Its size and type go to the backend as they
+/// are — wa_template_set_header_media refuses with its own sentence if Meta
+/// would not accept it.
+class WaPickedFile {
+  final String name;
+  final Uint8List bytes;
+  const WaPickedFile({required this.name, required this.bytes});
+}
 
 /// Create / edit a WhatsApp template.
 ///
@@ -47,6 +61,24 @@ class WaTemplateEditorScreen extends StatefulWidget {
   @visibleForTesting
   static Duration debounce = const Duration(milliseconds: 400);
 
+  /// Debounce before the duplicate check. Longer than the lint debounce because
+  /// wa_template_similar scans every other template.
+  @visibleForTesting
+  static Duration similarDebounce = const Duration(milliseconds: 600);
+
+  /// How often, and for how long, the media-header and policy-review jobs are
+  /// polled. Both stop at the deadline rather than hanging on a job that never
+  /// finishes.
+  @visibleForTesting
+  static Duration pollInterval = const Duration(seconds: 2);
+  @visibleForTesting
+  static Duration pollTimeout = const Duration(seconds: 30);
+
+  /// Test seam for the OS file dialog, same idea as WaTemplateApi.rpcTransport:
+  /// a widget test can hand a file in without a picker or a filesystem.
+  @visibleForTesting
+  static Future<WaPickedFile?> Function(List<String> extensions)? filePicker;
+
   @override
   State<WaTemplateEditorScreen> createState() => _WaTemplateEditorScreenState();
 }
@@ -77,6 +109,36 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
   bool _checking = false;
   bool _busy = false;
 
+  /// The saved row's id. Starts empty for a new template and is filled in by
+  /// the first successful save — every gate below reads the SAVED row, so none
+  /// of them has an answer before there is one.
+  String _id = '';
+
+  /// wa_template_submit_blockers(). Null means "not asked yet", which is NOT
+  /// the same as "may not submit" — see [_gateBlocks].
+  Map<String, dynamic>? _gate;
+
+  Map<String, dynamic>? _mediaSpec;
+  Map<String, dynamic>? _headerStatus;
+  String _headerFormat = 'TEXT';
+
+  /// Whether the saved row's header format has been adopted from
+  /// wa_template_header_status yet. After the first load the picker owns it.
+  bool _headerSeeded = false;
+  bool _uploading = false;
+
+  /// The backend's own refusal sentence from the last upload attempt, printed
+  /// verbatim. Empty when there is nothing to say.
+  String _uploadMessage = '';
+  Timer? _headerPoll;
+
+  Timer? _similarDebounce;
+  Map<String, dynamic>? _similar;
+
+  Map<String, dynamic>? _policy;
+  bool _policyBusy = false;
+  Timer? _policyPoll;
+
   // ── payload accessors ──────────────────────────────────────────────────────
 
   WaCopy get _copy =>
@@ -98,6 +160,28 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
   String get _metaId => (widget.template?['meta_id'] ?? '').toString();
   bool get _nameLocked => _metaId.isNotEmpty;
   bool get _blocked => _errors.isNotEmpty;
+
+  // ── the submit gate ────────────────────────────────────────────────────────
+  //
+  // Every one of these is an explicit `== false` / `== true` against a backend
+  // field. An absent answer never blocks: before the RPC has replied, or when
+  // there is no saved row to ask about, the editor behaves exactly as it did
+  // before the gate existed. Blocking on a missing field would grey Submit out
+  // for a reason nobody could read — the very bug this screen is fixing.
+
+  bool get _gateBlocks => _gate?['can_submit'] == false;
+  bool get _dupBlocks => _similar?['blocking'] == true;
+  bool get _submitBlocked => _blocked || _gateBlocks || _dupBlocks;
+
+  /// Why Submit is off, in the backend's words. Rendered under the button.
+  List<String> get _submitReasons {
+    final why = (_gate?['why_label'] ?? '').toString();
+    final dup = (_similar?['summary'] ?? '').toString();
+    return [
+      if (_gateBlocks && why.isNotEmpty) why,
+      if (_dupBlocks && dup.isNotEmpty) dup,
+    ];
+  }
 
   @override
   void initState() {
@@ -122,12 +206,25 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
     for (final c in [_name, _header, _body, _footer]) {
       c.addListener(_schedule);
     }
+    // The duplicate check depends only on the body, so it runs on its own,
+    // slower debounce rather than riding the lint round-trip.
+    _body.addListener(_scheduleSimilar);
     if (seed.isNotEmpty) _schedule();
+
+    _id = (t?['id'] ?? '').toString();
+    _loadMediaSpec();
+    _refreshGate();
+    _refreshHeaderStatus();
+    _refreshPolicy();
+    if (_body.text.trim().isNotEmpty) _scheduleSimilar();
   }
 
   @override
   void dispose() {
     _debounce?.cancel();
+    _similarDebounce?.cancel();
+    _headerPoll?.cancel();
+    _policyPoll?.cancel();
     for (final c in [_name, _header, _body, _footer]) {
       c.dispose();
     }
@@ -143,6 +240,7 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
   /// starter is chosen.
   void _loadComponents(List<dynamic> components, List<dynamic> tokenMap) {
     _header.text = '';
+    _headerFormat = 'TEXT';
     _body.text = '';
     _footer.text = '';
     for (final c in [..._examples, ..._buttonText, ..._buttonValue]) {
@@ -162,6 +260,10 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
       switch ((c['type'] ?? '').toString().toUpperCase()) {
         case 'HEADER':
           _header.text = (c['text'] ?? '').toString();
+          // A header with no format is a text header — that is Meta's own
+          // default, mirrored by wa_template_header_status's coalesce.
+          _headerFormat =
+              (c['format'] ?? 'TEXT').toString().toUpperCase();
           break;
         case 'BODY':
           _body.text = (c['text'] ?? '').toString();
@@ -211,7 +313,12 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
   /// lint and the bubble can never describe a different template than the save.
   List<Map<String, dynamic>> _componentsNow() {
     final list = <Map<String, dynamic>>[];
-    if (_header.text.trim().isNotEmpty) {
+    if (_headerFormat != 'TEXT') {
+      // A media header carries no text — the sample file IS the header. The
+      // handle Meta issues for it lives on the row, put there by
+      // wa_template_set_header_media, so it is never sent from here.
+      list.add({'type': 'HEADER', 'format': _headerFormat});
+    } else if (_header.text.trim().isNotEmpty) {
       list.add({'type': 'HEADER', 'format': 'TEXT', 'text': _header.text});
     }
     final body = <String, dynamic>{'type': 'BODY', 'text': _body.text};
@@ -293,6 +400,216 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
     }
   }
 
+  // ── submit gate ────────────────────────────────────────────────────────────
+  //
+  // Each of these refuses to change anything when the RPC sends an error
+  // envelope. A refusal must not blank a section that was showing a good
+  // answer a moment ago.
+
+  Future<void> _refreshGate() async {
+    if (_id.isEmpty) return;
+    try {
+      final res = await WaTemplateApi.submitBlockers(_id);
+      if (!mounted || WaTemplateApi.isError(res, 'can_submit')) return;
+      setState(() => _gate = res);
+      try {
+        RenderLog.write('wa_tpl_gate', 'can:${res['can_submit']} n:${res['count']}');
+      } catch (_) {}
+    } catch (_) {}
+  }
+
+  // ── media header ───────────────────────────────────────────────────────────
+
+  Future<void> _loadMediaSpec() async {
+    try {
+      final res = await WaTemplateApi.mediaSpec();
+      if (!mounted || WaTemplateApi.isError(res, 'formats')) return;
+      setState(() => _mediaSpec = res);
+    } catch (_) {}
+  }
+
+  Future<void> _refreshHeaderStatus() async {
+    if (_id.isEmpty) return;
+    try {
+      final res = await WaTemplateApi.headerStatus(_id);
+      // 'header_format' is the required field, NOT the absence of 'error':
+      // this payload carries its own nullable `error` (the upload's failure
+      // text) inside a perfectly healthy response.
+      if (!mounted || WaTemplateApi.isError(res, 'header_format')) return;
+      setState(() {
+        _headerStatus = res;
+        // The saved row's header format is the BACKEND's answer, so it is
+        // taken from here rather than inferred from the components the editor
+        // happens to be holding. Adopted once, on first load: after that the
+        // admin's choice in the picker is the live one.
+        if (!_headerSeeded) {
+          _headerSeeded = true;
+          _headerFormat =
+              (res['header_format'] ?? _headerFormat).toString().toUpperCase();
+        }
+      });
+    } catch (_) {}
+  }
+
+  /// Meta issues the sample handle asynchronously, so the row is polled until
+  /// it stops saying 'pending' or the deadline passes — never forever.
+  void _startHeaderPoll() {
+    _headerPoll?.cancel();
+    var waited = Duration.zero;
+    _headerPoll = Timer.periodic(WaTemplateEditorScreen.pollInterval, (t) async {
+      waited += WaTemplateEditorScreen.pollInterval;
+      await _refreshHeaderStatus();
+      final status = (_headerStatus?['status'] ?? '').toString();
+      if (status != 'pending' || waited >= WaTemplateEditorScreen.pollTimeout) {
+        t.cancel();
+        await _refreshGate();
+      }
+    });
+  }
+
+  /// The extensions come from the format's own `accepts`, so the dialog offers
+  /// what Meta accepts. Nothing is rejected here: an oversized or wrong-typed
+  /// file is uploaded and refused by the RPC, in the RPC's own words.
+  Future<void> _pickAndUpload(Map<String, dynamic> format) async {
+    if (_id.isEmpty) return;
+    final exts = [
+      for (final e in (format['accepts'] ?? '').toString().split(','))
+        if (e.trim().isNotEmpty) e.trim().toLowerCase(),
+    ];
+    final pick = WaTemplateEditorScreen.filePicker ?? _pickFromDevice;
+    final picked = await pick(exts);
+    if (picked == null || !mounted) return;
+
+    setState(() {
+      _uploading = true;
+      _uploadMessage = '';
+    });
+    try {
+      final ext = picked.name.contains('.')
+          ? picked.name.split('.').last.toLowerCase()
+          : '';
+      final mime = _mimeFor(ext);
+      final path =
+          'whatsapp/tpl_${_id}_${DateTime.now().millisecondsSinceEpoch}.$ext';
+      await WaTemplateApi.uploadMedia(
+          path: path, bytes: picked.bytes, mime: mime);
+      final res = await WaTemplateApi.setHeaderMedia(
+        id: _id,
+        storagePath: path,
+        mime: mime,
+        bytes: picked.bytes.length,
+      );
+      if (!mounted) return;
+      setState(() {
+        _uploading = false;
+        // Accepted or refused, the sentence shown is the backend's.
+        _uploadMessage = WaTemplateApi.errorMessage(res);
+      });
+      if (res['ok'] == true) {
+        await _refreshHeaderStatus();
+        _startHeaderPoll();
+      }
+    } catch (_) {
+      if (mounted) setState(() => _uploading = false);
+    }
+  }
+
+  /// A file name is not a MIME type, and the browser hands over only the name.
+  /// These are the extensions wa_template_media_spec itself lists; anything
+  /// else goes up as generic binary for the RPC to refuse. This decides
+  /// nothing about whether the file is allowed.
+  static String _mimeFor(String ext) {
+    switch (ext) {
+      case 'jpg':
+      case 'jpeg':
+        return 'image/jpeg';
+      case 'png':
+        return 'image/png';
+      case 'pdf':
+        return 'application/pdf';
+      case 'mp4':
+        return 'video/mp4';
+      case '3gp':
+        return 'video/3gpp';
+      default:
+        return 'application/octet-stream';
+    }
+  }
+
+  static Future<WaPickedFile?> _pickFromDevice(List<String> extensions) async {
+    final res = await FilePicker.pickFiles(
+      type: extensions.isEmpty ? FileType.any : FileType.custom,
+      allowedExtensions: extensions.isEmpty ? null : extensions,
+      withData: true,
+    );
+    final file = (res?.files.isNotEmpty ?? false) ? res!.files.first : null;
+    final bytes = file?.bytes;
+    if (file == null || bytes == null) return null;
+    return WaPickedFile(name: file.name, bytes: bytes);
+  }
+
+  // ── duplicate check ────────────────────────────────────────────────────────
+
+  void _scheduleSimilar() {
+    _similarDebounce?.cancel();
+    _similarDebounce =
+        Timer(WaTemplateEditorScreen.similarDebounce, _refreshSimilar);
+  }
+
+  Future<void> _refreshSimilar() async {
+    try {
+      final res = await WaTemplateApi.similar(
+          _body.text, _id.isEmpty ? null : _id);
+      if (!mounted || WaTemplateApi.isError(res, 'summary')) return;
+      setState(() => _similar = res);
+    } catch (_) {}
+  }
+
+  // ── AI policy review ───────────────────────────────────────────────────────
+
+  Future<void> _refreshPolicy() async {
+    if (_id.isEmpty) return;
+    try {
+      final res = await WaTemplateApi.policyReviewLatest(_id);
+      // Same trap as the header: a healthy verdict carries a null `error`.
+      if (!mounted || WaTemplateApi.isError(res, 'status')) return;
+      setState(() => _policy = res);
+    } catch (_) {}
+  }
+
+  Future<void> _startPolicyReview() async {
+    if (_id.isEmpty) return;
+    setState(() => _policyBusy = true);
+    try {
+      final res = await WaTemplateApi.policyReviewStart(_id);
+      if (!mounted) return;
+      if (res['ok'] != true) {
+        final msg = WaTemplateApi.errorMessage(res);
+        if (msg.isNotEmpty) showToast(context, msg, isError: true);
+        setState(() => _policyBusy = false);
+        return;
+      }
+      await _refreshPolicy();
+      _startPolicyPoll();
+    } catch (_) {
+      if (mounted) setState(() => _policyBusy = false);
+    }
+  }
+
+  void _startPolicyPoll() {
+    _policyPoll?.cancel();
+    var waited = Duration.zero;
+    _policyPoll = Timer.periodic(WaTemplateEditorScreen.pollInterval, (t) async {
+      waited += WaTemplateEditorScreen.pollInterval;
+      await _refreshPolicy();
+      final status = (_policy?['status'] ?? '').toString();
+      if (status != 'pending' || waited >= WaTemplateEditorScreen.pollTimeout) {
+        t.cancel();
+        if (mounted) setState(() => _policyBusy = false);
+      }
+    });
+  }
+
   // ── starters / tokens ──────────────────────────────────────────────────────
 
   void _applyStarter(Map<String, dynamic> s) {
@@ -362,6 +679,12 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
       }
 
       final saved = (res['template'] as Map?)?.cast<String, dynamic>();
+      // A new template only has an id from here on, which is also the first
+      // moment the gate has a row to read.
+      if (saved != null) _id = (saved['id'] ?? '').toString();
+      await _refreshGate();
+      if (!mounted) return;
+
       if (thenSubmit && saved != null) {
         final id = (saved['id'] ?? '').toString();
         final sub = await WaTemplateApi.submit(id);
@@ -417,9 +740,12 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
       bottomNavigationBar: _ActionBar(
         copy: copy,
         blocked: _blocked,
+        submitBlocked: _submitBlocked,
+        reasons: _submitReasons,
         busy: _busy,
         onSave: () => _save(),
         onSubmit: () => _save(thenSubmit: true),
+        onWhyBlocked: () => waSubmitBlockersSheet(context, _gate, _similar),
       ),
       body: LayoutBuilder(
         builder: (context, box) {
@@ -526,8 +852,7 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
         const SizedBox(height: 24),
 
         // ── header / body / footer ──────────────────────────────────────
-        _Field(
-            label: copy['header_label'], controller: _header, maxLines: 1),
+        _buildHeaderSection(copy),
         const SizedBox(height: 16),
         _Field(label: copy['body_label'], controller: _body, maxLines: 6),
 
@@ -570,6 +895,137 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
 
         const SizedBox(height: 24),
         _buildButtons(copy),
+      ],
+    );
+  }
+
+  // ── header section ─────────────────────────────────────────────────────────
+
+  Map<String, dynamic>? _formatSpec(String value) {
+    for (final f in (_mediaSpec?['formats'] as List?) ?? const []) {
+      if (f is Map && (f['value'] ?? '').toString().toUpperCase() == value) {
+        return f.cast<String, dynamic>();
+      }
+    }
+    return null;
+  }
+
+  /// The format picker plus whichever header the chosen format needs. The list
+  /// of formats, their labels, what they accept and how big they may be all
+  /// come from wa_template_media_spec — none of it is written here.
+  Widget _buildHeaderSection(WaCopy copy) {
+    final formats = (_mediaSpec?['formats'] as List?) ?? const [];
+    final blockedReason = (_mediaSpec?['blocked_reason'] ?? '').toString();
+    final rules = [
+      for (final r in (_mediaSpec?['rules'] as List?) ?? const [])
+        if (r.toString().isNotEmpty) r.toString(),
+    ];
+    final isText = _headerFormat == 'TEXT';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (blockedReason.isNotEmpty) ...[
+          WaBanner(body: blockedReason, tone: 'muted'),
+          const SizedBox(height: 8),
+        ],
+        if (formats.isNotEmpty) ...[
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final f in formats)
+                if (f is Map)
+                  Builder(builder: (_) {
+                    final m = f.cast<String, dynamic>();
+                    final value = (m['value'] ?? '').toString().toUpperCase();
+                    // blocked_reason turns the MEDIA formats off. Text is
+                    // always available — it needs nothing from Meta.
+                    final off = blockedReason.isNotEmpty && value != 'TEXT';
+                    return _FormatChoice(
+                      label: (m['label'] ?? '').toString(),
+                      selected: value == _headerFormat,
+                      enabled: !off,
+                      onTap: () {
+                        setState(() => _headerFormat = value);
+                        _schedule();
+                        if (value != 'TEXT') _refreshHeaderStatus();
+                      },
+                    );
+                  }),
+            ],
+          ),
+          const SizedBox(height: 12),
+        ],
+        if (isText)
+          _Field(label: copy['header_label'], controller: _header, maxLines: 1)
+        else ...[
+          _buildMediaHeader(),
+          if (rules.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            WaBanner(tone: 'muted', lines: rules),
+          ],
+        ],
+      ],
+    );
+  }
+
+  /// The sample file's state, exactly as wa_template_header_status describes
+  /// it. `expired` or a `blocker` repaints it in the bad tone — that override
+  /// is the one place this widget insists, because a stale sample looks fine
+  /// until Meta rejects the submission.
+  Widget _buildMediaHeader() {
+    final h = _headerStatus;
+    final expired = h?['expired'] == true;
+    final blocker = (h?['blocker'] ?? '').toString();
+    final bad = expired || blocker.isNotEmpty;
+    final format = _formatSpec(_headerFormat);
+
+    final lines = [
+      for (final s in [
+        blocker,
+        (h?['error'] ?? '').toString(),
+        (h?['file_label'] ?? '').toString(),
+        (h?['size_label'] ?? '').toString(),
+        (h?['expires_label'] ?? '').toString(),
+      ])
+        if (s.isNotEmpty) s,
+    ];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        WaBanner(
+          title: (h?['status_label'] ?? '').toString(),
+          tone: bad ? 'bad' : h?['tone'],
+          lines: lines,
+          action: _uploading
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2))
+              : Align(
+                  alignment: Alignment.centerLeft,
+                  child: OutlinedButton(
+                    // Nothing can be uploaded against a row that does not
+                    // exist yet, so the action waits for the first save.
+                    onPressed: (format == null || _id.isEmpty)
+                        ? null
+                        : () => _pickAndUpload(format),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFF1B7A43),
+                      side: const BorderSide(color: Color(0xFF1B7A43)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8)),
+                    ),
+                    child: const Text('Re-upload'),
+                  ),
+                ),
+        ),
+        if (_uploadMessage.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          WaBanner(body: _uploadMessage, tone: 'muted'),
+        ],
       ],
     );
   }
@@ -709,6 +1165,118 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
             title: copy['warnings_title'],
             tone: 'yellow',
             lines: _warnings.map((e) => e.toString()).toList(),
+          ),
+        ],
+
+        // ── duplicate check ────────────────────────────────────────────
+        ..._buildDuplicate(),
+
+        // ── AI policy review ───────────────────────────────────────────
+        const SizedBox(height: 16),
+        _buildPolicy(),
+      ],
+    );
+  }
+
+  /// wa_template_similar's own summary, in its own tone, over its own rows.
+  /// The percentages, the wording and the verdict about what counts as too
+  /// close are all the backend's — this only prints them.
+  List<Widget> _buildDuplicate() {
+    final s = _similar;
+    if (s == null) return const [];
+    final summary = (s['summary'] ?? '').toString();
+    final rows = (s['rows'] as List?) ?? const [];
+    if (summary.isEmpty && rows.isEmpty) return const [];
+    return [
+      const SizedBox(height: 12),
+      WaBanner(body: summary, tone: s['tone']),
+      if (rows.isNotEmpty) ...[
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final r in rows)
+              if (r is Map)
+                WaChip(
+                  label: (r['label'] ?? '').toString(),
+                  tone: r['tone'],
+                ),
+          ],
+        ),
+      ],
+    ];
+  }
+
+  /// The pre-submit review. Everything shown is the verdict's own wording;
+  /// "Use this wording" appears only when the backend actually supplied a
+  /// rewrite, never as an empty gesture.
+  Widget _buildPolicy() {
+    final p = _policy;
+    final verdict = (p?['verdict'] as Map?)?.cast<String, dynamic>();
+    final suggested = (verdict?['suggested_body'] ?? '').toString();
+    final label = (p?['label'] ?? '').toString();
+
+    final detail = [
+      for (final s in [
+        (verdict?['verdict_label'] ?? '').toString(),
+        (verdict?['category_advice'] ?? '').toString(),
+        (verdict?['likely_rejection_reason'] ?? '').toString(),
+      ])
+        if (s.isNotEmpty) s,
+    ];
+    final issues = (verdict?['issues'] as List?) ?? const [];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Align(
+          alignment: Alignment.centerLeft,
+          child: OutlinedButton(
+            onPressed:
+                (_id.isEmpty || _policyBusy) ? null : _startPolicyReview,
+            style: OutlinedButton.styleFrom(
+              foregroundColor: const Color(0xFF1B7A43),
+              side: const BorderSide(color: Color(0xFF1B7A43)),
+              shape:
+                  RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            child: const Text('Check before submitting'),
+          ),
+        ),
+        if (label.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: WaChip(label: label, tone: p?['tone']),
+          ),
+        ],
+        if (detail.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          WaBanner(tone: p?['tone'], lines: detail),
+        ],
+        if (issues.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          WaIssueList(issues: issues),
+        ],
+        if (suggested.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton(
+              onPressed: () {
+                _body.text = suggested;
+                _schedule();
+                _scheduleSimilar();
+              },
+              style: OutlinedButton.styleFrom(
+                foregroundColor: const Color(0xFF1B7A43),
+                side: const BorderSide(color: Color(0xFF1B7A43)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8)),
+              ),
+              child: const Text('Use this wording'),
+            ),
           ),
         ],
       ],
@@ -853,6 +1421,54 @@ class _Dropdown extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// One option in the header-format picker. `label` is the backend's.
+class _FormatChoice extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  const _FormatChoice({
+    required this.label,
+    required this.selected,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final fg = !enabled
+        ? const Color(0xFF9CA3AF)
+        : selected
+            ? Colors.white
+            : const Color(0xFF1B7A43);
+    return InkWell(
+      onTap: enabled ? onTap : null,
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+        decoration: BoxDecoration(
+          color: !enabled
+              ? const Color(0xFFF3F4F6)
+              : selected
+                  ? const Color(0xFF1B7A43)
+                  : Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+              color: enabled
+                  ? const Color(0xFF1B7A43)
+                  : const Color(0xFFE5E7EB)),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+              fontSize: 13, fontWeight: FontWeight.w500, color: fg),
+        ),
+      ),
     );
   }
 }
@@ -1039,17 +1655,31 @@ class _ButtonRow extends StatelessWidget {
 
 class _ActionBar extends StatelessWidget {
   final WaCopy copy;
+
+  /// The lint's verdict — still what Save obeys.
   final bool blocked;
+
+  /// The lint OR the submit gate OR the duplicate check. Only Submit obeys
+  /// this: a draft that Meta would reject is still worth saving.
+  final bool submitBlocked;
+
+  /// Why Submit is off, in the backend's words. Empty when it is on.
+  final List<String> reasons;
+
   final bool busy;
   final VoidCallback onSave;
   final VoidCallback onSubmit;
+  final VoidCallback onWhyBlocked;
 
   const _ActionBar({
     required this.copy,
     required this.blocked,
+    required this.submitBlocked,
+    required this.reasons,
     required this.busy,
     required this.onSave,
     required this.onSubmit,
+    required this.onWhyBlocked,
   });
 
   @override
@@ -1061,7 +1691,11 @@ class _ActionBar extends StatelessWidget {
         ),
         child: SafeArea(
           top: false,
-          child: Row(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+          Row(
             children: [
               Expanded(
                 child: SizedBox(
@@ -1081,29 +1715,54 @@ class _ActionBar extends StatelessWidget {
               ),
               const SizedBox(width: 12),
               Expanded(
-                child: SizedBox(
-                  height: 46,
-                  child: ElevatedButton(
-                    onPressed: (blocked || busy) ? null : onSubmit,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF1B7A43),
-                      foregroundColor: Colors.white,
-                      disabledBackgroundColor: const Color(0xFFD1D5DB),
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8)),
+                // A disabled button that simply does nothing is the bug this
+                // screen is fixing. It stays disabled — but the tap is caught
+                // above it and answers the only question worth asking: why?
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: (submitBlocked && !busy) ? onWhyBlocked : null,
+                  child: IgnorePointer(
+                    ignoring: submitBlocked && !busy,
+                    child: SizedBox(
+                      height: 46,
+                      child: ElevatedButton(
+                        onPressed: (submitBlocked || busy) ? null : onSubmit,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF1B7A43),
+                          foregroundColor: Colors.white,
+                          disabledBackgroundColor: const Color(0xFFD1D5DB),
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8)),
+                        ),
+                        child: busy
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2, color: Colors.white),
+                              )
+                            : Text(copy['submit']),
+                      ),
                     ),
-                    child: busy
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                                strokeWidth: 2, color: Colors.white),
-                          )
-                        : Text(copy['submit']),
                   ),
                 ),
               ),
+            ],
+          ),
+          // The reason, directly under the button that is off, in the warn
+          // tone. Printed exactly as the backend worded it.
+          for (final reason in reasons)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                reason,
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                    color: WaTone.of('warn').fg),
+              ),
+            ),
             ],
           ),
         ),

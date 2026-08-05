@@ -92,6 +92,13 @@ typedef WaWabaStatusRpc = Future<Map<String, dynamic>> Function();
 typedef WaWabaRefreshRpc = Future<Map<String, dynamic>> Function();
 typedef WaContactLedgerRpc = Future<Map<String, dynamic>> Function(
     int days, String? phone);
+// zones_contact_screen()  zone_contact_save(p_zone_id, p_phone, p_label)
+// p_label defaults to null; an empty p_phone clears the number and the zone
+// falls back to the default zone's. The save RPC validates the number itself
+// and returns the reason it refuses — this file never reads a phone.
+typedef ZonesContactScreenRpc = Future<Map<String, dynamic>> Function();
+typedef ZoneContactSaveRpc = Future<Map<String, dynamic>> Function(
+    Map<String, dynamic> params);
 
 Map<String, dynamic> _asMap(dynamic res) =>
     res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
@@ -114,6 +121,13 @@ Future<Map<String, dynamic>> waWabaRefresh() async =>
 Future<Map<String, dynamic>> waContactLedger(int days, String? phone) async =>
     _asMap(await _db
         .rpc('wa_contact_ledger', params: {'p_days': days, 'p_phone': phone}));
+
+Future<Map<String, dynamic>> zonesContactScreen() async =>
+    _asMap(await _db.rpc('zones_contact_screen'));
+
+Future<Map<String, dynamic>> zoneContactSave(
+        Map<String, dynamic> params) async =>
+    _asMap(await _db.rpc('zone_contact_save', params: params));
 
 /// Backend ops tone -> WaToneChip palette token.
 ///
@@ -153,6 +167,8 @@ class WaOpsScreen extends StatefulWidget {
   final WaWabaStatusRpc? wabaStatusRpc;
   final WaWabaRefreshRpc? wabaRefreshRpc;
   final WaContactLedgerRpc? ledgerRpc;
+  final ZonesContactScreenRpc? zonesRpc;
+  final ZoneContactSaveRpc? zoneSaveRpc;
 
   /// How long Refresh waits between queueing the Meta fetch and re-reading it.
   /// Three seconds in production (the edge function has to come back); tests
@@ -166,6 +182,8 @@ class WaOpsScreen extends StatefulWidget {
     this.wabaStatusRpc,
     this.wabaRefreshRpc,
     this.ledgerRpc,
+    this.zonesRpc,
+    this.zoneSaveRpc,
     this.refreshDelay = const Duration(seconds: 3),
   });
 
@@ -217,6 +235,15 @@ class _WaOpsScreenState extends State<WaOpsScreen> {
             text: 'Who we have messaged',
           ),
           _ContactLedgerSection(ledgerRpc: widget.ledgerRpc),
+          const SizedBox(height: 22),
+          _SectionHeading(
+            icon: Icons.call_outlined,
+            text: 'Zone contact numbers',
+          ),
+          _ZoneContactSection(
+            screenRpc: widget.zonesRpc,
+            saveRpc: widget.zoneSaveRpc,
+          ),
         ],
       ),
     );
@@ -1092,6 +1119,297 @@ class _LedgerRow extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+// ── SECTION D — zone contact numbers ─────────────────────────────────────────
+//
+// One WhatsApp number sends every message, but each zone carries its OWN number
+// that customers are told to CALL, resolved per customer as the zone_phone value
+// in a template. This panel is a thin editor over zones_contact_screen /
+// zone_contact_save.
+//
+// It decides nothing: `note`, `status_label`, `tone`, `default_note` and every
+// save `message` are the backend's own strings, printed verbatim. The phone is
+// NEVER validated here — an empty value is a legitimate save meaning "use the
+// default zone's number", and the RPC returns the reason whenever it refuses.
+// The two field captions ("Number", "Label") are the only words this section
+// owns; the default marker is an icon, not a coined label.
+
+class _ZoneContactSection extends StatefulWidget {
+  final ZonesContactScreenRpc? screenRpc;
+  final ZoneContactSaveRpc? saveRpc;
+  const _ZoneContactSection({this.screenRpc, this.saveRpc});
+
+  @override
+  State<_ZoneContactSection> createState() => _ZoneContactSectionState();
+}
+
+class _ZoneContactSectionState extends State<_ZoneContactSection> {
+  Map<String, dynamic>? _payload;
+  bool _loading = true;
+  String? _error;
+
+  /// Zone ids with a save in flight — their Save button is disabled so a second
+  /// tap cannot race the first.
+  final _saving = <int>{};
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final res = await (widget.screenRpc ?? zonesContactScreen)();
+      if (!mounted) return;
+      // not_authorized is a payload, not an exception — print what it said.
+      if (_isError(res)) {
+        setState(() {
+          _loading = false;
+          _error = _errorText(res);
+        });
+        return;
+      }
+      setState(() {
+        _payload = res;
+        _loading = false;
+      });
+      try {
+        RenderLog.write(
+            'wa_ops_zones', 'rows=${(res['rows'] as List?)?.length ?? 0}');
+      } catch (_) {}
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = e.toString();
+      });
+    }
+  }
+
+  List<Map<String, dynamic>> get _rows =>
+      ((_payload?['rows'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+
+  /// Send, await, show the backend's `message`, then re-read. An `{error: ...}`
+  /// shows its message and changes nothing — no re-read, so the fields the admin
+  /// typed stay exactly as typed. An empty phone is submitted like any other
+  /// value; this file blocks nothing.
+  Future<void> _save(int zoneId, String phone, String label) async {
+    if (_saving.contains(zoneId)) return;
+    setState(() => _saving.add(zoneId));
+    try {
+      final res = await (widget.saveRpc ?? zoneContactSave)({
+        'p_zone_id': zoneId,
+        'p_phone': phone,
+        'p_label': label,
+      });
+      if (!mounted) return;
+      setState(() => _saving.remove(zoneId));
+      _tell(_errorText(res));
+      if (!_isError(res)) await _load();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _saving.remove(zoneId));
+      _tell(e.toString());
+    }
+  }
+
+  void _tell(String message) {
+    if (message.isEmpty || !mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const _Loading();
+    if (_error != null) return _ErrorBlock(message: _error!, onRetry: _load);
+
+    final note = (_payload?['note'] ?? '').toString();
+    final defaultNote = (_payload?['default_note'] ?? '').toString();
+    final rows = _rows;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (note.isNotEmpty) _NoteBlock(note),
+        for (final r in rows)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: _ZoneContactCard(
+              key: ValueKey('wa_ops_zone:${r['zone_id']}'),
+              row: r,
+              busy: _saving.contains((r['zone_id'] as num?)?.toInt() ?? -1),
+              onSave: (phone, label) => _save(
+                  (r['zone_id'] as num?)?.toInt() ?? 0, phone, label),
+            ),
+          ),
+        if (defaultNote.isNotEmpty) _NoteBlock(defaultNote, topGap: 2),
+      ],
+    );
+  }
+}
+
+/// One zone. The phone and label fields are the current values, editable in
+/// place; the card holds no answer of its own beyond what the admin is typing.
+class _ZoneContactCard extends StatefulWidget {
+  final Map<String, dynamic> row;
+  final bool busy;
+  final void Function(String phone, String label) onSave;
+
+  const _ZoneContactCard({
+    super.key,
+    required this.row,
+    required this.busy,
+    required this.onSave,
+  });
+
+  @override
+  State<_ZoneContactCard> createState() => _ZoneContactCardState();
+}
+
+class _ZoneContactCardState extends State<_ZoneContactCard> {
+  late final TextEditingController _phone;
+  late final TextEditingController _label;
+
+  @override
+  void initState() {
+    super.initState();
+    _phone = TextEditingController(
+        text: (widget.row['contact_phone'] ?? '').toString());
+    _label = TextEditingController(
+        text: (widget.row['contact_label'] ?? '').toString());
+  }
+
+  @override
+  void dispose() {
+    _phone.dispose();
+    _label.dispose();
+    super.dispose();
+  }
+
+  String _s(String k) => (widget.row[k] ?? '').toString();
+
+  @override
+  Widget build(BuildContext context) {
+    final row = widget.row;
+    final isDefault = row['is_default'] == true;
+    final isActive = row['is_active'] != false;
+    final customers = (row['customers'] ?? 0).toString();
+
+    final card = Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: _kCard,
+        border: Border.all(color: _kBorder),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Expanded(
+              child: Text(_s('name'),
+                  style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: _kText)),
+            ),
+            const SizedBox(width: 6),
+            WaPlainChip(label: _s('code')),
+            // The default marker is an icon, not a coined word — the app owns no
+            // "Default" label. status_label already narrates the fallback.
+            if (isDefault) ...[
+              const SizedBox(width: 6),
+              Container(
+                key: Key('wa_ops_zone_default:${row['zone_id']}'),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+                decoration: BoxDecoration(
+                  color: _toneWash('blue'),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(Icons.star, size: 13, color: _toneInk('blue')),
+              ),
+            ],
+          ]),
+          const SizedBox(height: 6),
+          Row(children: [
+            const Icon(Icons.people_outline, size: 13, color: _kMuted),
+            const SizedBox(width: 5),
+            Text(customers,
+                style: const TextStyle(fontSize: 11.5, color: _kMuted)),
+          ]),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: WaToneChip(
+                label: _s('status_label'),
+                tone: _chipTone(row['tone']?.toString())),
+          ),
+          const Divider(height: 22, color: _kBorder),
+          TextField(
+            key: Key('wa_ops_zone_phone:${row['zone_id']}'),
+            controller: _phone,
+            keyboardType: TextInputType.phone,
+            decoration: const InputDecoration(
+              isDense: true,
+              labelText: 'Number',
+              labelStyle: TextStyle(fontSize: 13, color: _kMuted),
+              contentPadding:
+                  EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+              border: OutlineInputBorder(),
+            ),
+            style: const TextStyle(fontSize: 13, color: _kText),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            key: Key('wa_ops_zone_label:${row['zone_id']}'),
+            controller: _label,
+            decoration: const InputDecoration(
+              isDense: true,
+              labelText: 'Label',
+              labelStyle: TextStyle(fontSize: 13, color: _kMuted),
+              contentPadding:
+                  EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+              border: OutlineInputBorder(),
+            ),
+            style: const TextStyle(fontSize: 13, color: _kText),
+          ),
+          const SizedBox(height: 10),
+          Align(
+            alignment: Alignment.centerRight,
+            // Save carries no word — the app owns none here; the icon is the
+            // affordance and the backend's returned message is the result.
+            child: ElevatedButton(
+              key: Key('wa_ops_zone_save:${row['zone_id']}'),
+              onPressed:
+                  widget.busy ? null : () => widget.onSave(_phone.text, _label.text),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _kGreen,
+                foregroundColor: Colors.white,
+                elevation: 0,
+                minimumSize: const Size(0, 40),
+                padding: const EdgeInsets.symmetric(horizontal: 18),
+              ),
+              child: const Icon(Icons.check, size: 18),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    // An inactive zone renders dimmed — visual only, still fully editable.
+    return isActive ? card : Opacity(opacity: 0.5, child: card);
   }
 }
 

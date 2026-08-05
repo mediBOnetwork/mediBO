@@ -261,6 +261,13 @@ class _EventRoutesSectionState extends State<_EventRoutesSection> {
   /// Purely a disclosure state — it decides nothing about the data.
   final _overridden = <String>{};
 
+  /// The audience the admin has narrowed to, empty means show every section.
+  /// Selecting a section's own chip again clears it back to all — that is why
+  /// there is no invented "All" label anywhere: the chips are the backend's
+  /// audience labels and nothing else. It decides nothing about the data, only
+  /// which of the already-grouped sections are on screen.
+  String _audienceFilter = '';
+
   /// Event keys with a save in flight — their controls are disabled so a second
   /// tap cannot race the first.
   final _saving = <String>{};
@@ -357,30 +364,101 @@ class _EventRoutesSectionState extends State<_EventRoutesSection> {
     final note = (_payload?['note'] ?? '').toString();
     final rows = _rows;
 
+    // Group by audience, keeping the order the rows arrived in. The backend
+    // already ordered them by audience_sort (then within each group), so
+    // first-appearance order IS audience_sort — nothing is sorted here, and no
+    // user-type name is spelled out: the header and the chip are audience_label.
+    final order = <String>[];
+    final labels = <String, String>{};
+    final grouped = <String, List<Map<String, dynamic>>>{};
+    for (final r in rows) {
+      final aud = (r['audience'] ?? '').toString();
+      if (!grouped.containsKey(aud)) {
+        grouped[aud] = [];
+        order.add(aud);
+        labels[aud] = (r['audience_label'] ?? '').toString();
+      }
+      grouped[aud]!.add(r);
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (note.isNotEmpty) _NoteBlock(note),
-        for (final r in rows)
+        // The filter row: one chip per audience present, in the same order. A
+        // user type with no routes never reaches this list, so it shows no chip
+        // and no section.
+        if (order.length > 1)
           Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: _EventRouteCard(
-              row: r,
-              approved: _approved,
-              overridden: _overridden.contains((r['event_key'] ?? '').toString()),
-              busy: _saving.contains((r['event_key'] ?? '').toString()),
-              bypass: r['bypass_send_window'] == true,
-              onOverride: () => setState(() =>
-                  _overridden.add((r['event_key'] ?? '').toString())),
-              onPickTemplate: (id) => _save(
-                  (r['event_key'] ?? '').toString(), {'p_template_id': id}),
-              onEnabled: (v) => _save(
-                  (r['event_key'] ?? '').toString(), {'p_enabled': v}),
-              onBypass: (v) => _save(
-                  (r['event_key'] ?? '').toString(), {'p_bypass_window': v}),
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Wrap(
+              children: [
+                for (final aud in order) _audienceChip(aud, labels[aud] ?? ''),
+              ],
             ),
           ),
+        for (final aud in order)
+          if (_audienceFilter.isEmpty || _audienceFilter == aud) ...[
+            Padding(
+              key: Key('wa_ops_aud_header:$aud'),
+              padding: const EdgeInsets.only(top: 2, bottom: 8),
+              child: Text(
+                labels[aud] ?? '',
+                style: const TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w700,
+                    color: _kText),
+              ),
+            ),
+            for (final r in grouped[aud]!)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: _EventRouteCard(
+                  row: r,
+                  approved: _approved,
+                  overridden:
+                      _overridden.contains((r['event_key'] ?? '').toString()),
+                  busy: _saving.contains((r['event_key'] ?? '').toString()),
+                  bypass: r['bypass_send_window'] == true,
+                  onOverride: () => setState(() =>
+                      _overridden.add((r['event_key'] ?? '').toString())),
+                  onPickTemplate: (id) => _save(
+                      (r['event_key'] ?? '').toString(), {'p_template_id': id}),
+                  onEnabled: (v) => _save(
+                      (r['event_key'] ?? '').toString(), {'p_enabled': v}),
+                  onBypass: (v) => _save(
+                      (r['event_key'] ?? '').toString(), {'p_bypass_window': v}),
+                ),
+              ),
+          ],
       ],
+    );
+  }
+
+  /// One filter chip, captioned with the backend's audience_label. Tapping the
+  /// selected one again clears the filter — so "all" needs no label of its own.
+  Widget _audienceChip(String aud, String label) {
+    final selected = _audienceFilter == aud;
+    return GestureDetector(
+      key: Key('wa_ops_aud_chip:$aud'),
+      onTap: () =>
+          setState(() => _audienceFilter = selected ? '' : aud),
+      child: Container(
+        margin: const EdgeInsets.only(right: 6, bottom: 6),
+        padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 14),
+        decoration: BoxDecoration(
+          color: selected ? _kGreen : const Color(0xFFF3F4F6),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 12.5,
+            fontWeight: FontWeight.w700,
+            color: selected ? Colors.white : _kMuted,
+          ),
+        ),
+      ),
     );
   }
 }

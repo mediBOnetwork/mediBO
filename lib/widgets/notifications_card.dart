@@ -797,6 +797,8 @@ class _PreviewSheet extends StatelessWidget {
     final previousLabel = (pair['previous_label'] ?? '').toString();
     final previousAt = (pair['previous_at'] ?? '').toString();
     final previousBody = (pair['previous_body'] ?? '').toString();
+    final previousPlain = (pair['previous_plain'] ?? '').toString();
+    final previousSegments = (pair['previous_segments'] as List?) ?? const [];
 
     return SafeArea(
       top: false,
@@ -866,7 +868,14 @@ class _PreviewSheet extends StatelessWidget {
                 const SizedBox(height: 6),
                 _ChatBackdrop(
                   child: _DeliveredBubble(
-                    preview: {'body_rendered': previousBody},
+                    // Shaped like a preview payload so one bubble paints both:
+                    // previous_segments are the styled runs, previous_plain the
+                    // marker-stripped fallback, previous_body the last resort.
+                    preview: {
+                      'body_segments': previousSegments,
+                      'body_plain': previousPlain,
+                      'body_rendered': previousBody,
+                    },
                   ),
                 ),
               ],
@@ -918,7 +927,16 @@ class _DeliveredBubble extends StatelessWidget {
     final format = (header?['format'] ?? '').toString().toUpperCase();
     final textHeader =
         format == 'TEXT' ? (header?['text'] ?? '').toString() : '';
-    final body = (preview['body_rendered'] ?? preview['body'] ?? '').toString();
+    // WhatsApp renders *bold*, _italic_ and ~strike~; the customer never sees a
+    // literal marker. The backend already split the message into styled
+    // segments, so the bubble paints them and never parses asterisks. body_plain
+    // is the marker-stripped fallback, body_rendered the last resort.
+    final bodySegments = (preview['body_segments'] as List?) ?? const [];
+    final bodyPlain = (preview['body_plain'] ?? '').toString();
+    final body = bodyPlain.isNotEmpty
+        ? bodyPlain
+        : (preview['body_rendered'] ?? preview['body'] ?? '').toString();
+    final footerSegments = (preview['footer_segments'] as List?) ?? const [];
     final footer = (preview['footer'] ?? '').toString();
     final showMedia = header != null && format.isNotEmpty && format != 'TEXT';
     final buttons = [
@@ -957,15 +975,34 @@ class _DeliveredBubble extends StatelessWidget {
                       ),
                       const SizedBox(height: 6),
                     ],
-                    Text(
-                      body,
-                      style: const TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w400,
-                          height: 1.35,
-                          color: Color(0xFF111827)),
-                    ),
-                    if (footer.isNotEmpty) ...[
+                    if (bodySegments.isNotEmpty)
+                      _segmentText(
+                        bodySegments,
+                        const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w400,
+                            height: 1.35,
+                            color: Color(0xFF111827)),
+                      )
+                    else
+                      Text(
+                        body,
+                        style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w400,
+                            height: 1.35,
+                            color: Color(0xFF111827)),
+                      ),
+                    if (footerSegments.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      _segmentText(
+                        footerSegments,
+                        const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w400,
+                            color: Color(0xFF6B7280)),
+                      ),
+                    ] else if (footer.isNotEmpty) ...[
                       const SizedBox(height: 6),
                       Text(
                         footer,
@@ -988,6 +1025,29 @@ class _DeliveredBubble extends StatelessWidget {
       ],
     );
   }
+
+  /// Paints already-split segments: one TextSpan each, bold / italic / strike
+  /// exactly as the backend flagged them. No markup is parsed here — the split
+  /// happened server-side, so a `*` never reaches the customer as a `*`.
+  Widget _segmentText(List<dynamic> segments, TextStyle base) => Text.rich(
+        TextSpan(
+          children: [
+            for (final s in segments)
+              if (s is Map)
+                TextSpan(
+                  text: (s['text'] ?? '').toString(),
+                  style: base.copyWith(
+                    fontWeight: s['bold'] == true ? FontWeight.bold : null,
+                    fontStyle: s['italic'] == true ? FontStyle.italic : null,
+                    decoration: s['strike'] == true
+                        ? TextDecoration.lineThrough
+                        : null,
+                  ),
+                ),
+          ],
+        ),
+        style: base,
+      );
 }
 
 /// The media header inside the bubble: a private-bucket sample is signed from

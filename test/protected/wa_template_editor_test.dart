@@ -18,22 +18,23 @@
 //   3. Choosing a starter fills name, category and components together. Half a
 //      starter is worse than none: the name would no longer describe the body.
 //
-//   4. Inserting a value drops that value's OWN `insert_as` string at the
-//      cursor — never a number the editor picked, and never appended to the
-//      end. Numbering is the backend's job at save time, from p_token_map.
+//   4. Inserting a value asks wa_body_insert_token to drop a NUMBERED variable
+//      ({{1}}) at the cursor — never a named one, never appended to the end.
+//      The editor picks no number and builds no placeholder; it writes back the
+//      body, caret and token_map the RPC returns, together.
 //
-//      CHANGED by the value-picker CHANGE, deliberately. This test used to
-//      assert the editor appended the next {{n}} from a fixed nine-value list
-//      (wa_template_tokens). That list could not grow, so a value it did not
-//      carry — a delivery person's name — could not be inserted at all, and
-//      typing a bare {{2}} instead sent the customer a message that literally
-//      read "{{2}}". The editor now renders WaTokenPicker, which loads the
-//      live, editable set from wa_tokens_screen().
+//      CHANGED by the numbered-variable CHANGE, deliberately. This test twice
+//      before asserted the wrong thing: first that the editor appended the next
+//      {{n}} from a fixed nine-value list, then that it dropped the value's
+//      NAMED `insert_as` ({{customer_name}}) at the cursor. Both were bugs —
+//      Meta accepts numbered variables only, so a named one reached the
+//      pharmacy as the literal characters "{{customer_name}}". Numbering is now
+//      wa_body_insert_token's job, at insert time.
 //
-//   5. A legacy numbered body ({{1}}, from a starter or an already-saved
-//      template) is migrated to named placeholders using its OWN token_map,
-//      once the picker's rows arrive. The mapping is read, never guessed, so
-//      the sentence itself is untouched.
+//   5. A body is ALWAYS numbered — that is the only form Meta accepts, and the
+//      form the backend stores. Loading a starter or a saved template keeps its
+//      {{1}} verbatim and adopts its token_map as-is: nothing is converted to
+//      named placeholders, nothing is re-derived from the text.
 //
 // Fixture mirrors the real wa_templates_screen() sub-payloads (starters,
 // categories, languages, button_spec) and wa_tokens_screen(), taken off the
@@ -51,15 +52,6 @@ import 'package:pharma_b2b/utils/render_log.dart';
 /// The real "Payment pending" starter, verbatim from wa_template_starters().
 const _paymentPendingBody =
     'Hi {{1}}, payment for order {{2}} is still pending. Amount due {{3}}. Please complete it to avoid a delay in dispatch.';
-
-/// The same starter once the editor has swapped the legacy {{n}} for the NAMED
-/// placeholders the picker deals in. token_map decides which number was which,
-/// so the migration reads the starter's own mapping rather than guessing. This
-/// is what lets an admin see "customer name" instead of "{{1}}" — and it is why
-/// a stray hand-typed {{2}} no longer resolves to anything.
-const _paymentPendingNamed =
-    'Hi {{customer_name}}, payment for order {{order_code}} is still pending. '
-    'Amount due {{amount}}. Please complete it to avoid a delay in dispatch.';
 
 const _starters = [
   {
@@ -245,6 +237,40 @@ void _stub({
       // the editor must not call it any more.
       case 'wa_tokens_screen':
         return _tokensScreen();
+      // Numbering lives entirely in these two. The editor sends the body, the
+      // caret and the map; it never picks a number itself. This stub mirrors
+      // wa_body_insert_token: it drops {{n}} at the caret, reusing the number a
+      // value already has and appending a fresh one otherwise.
+      case 'wa_body_insert_token':
+        {
+          final body = (params['p_body'] ?? '').toString();
+          final cursor = (params['p_cursor'] as num?)?.toInt() ?? body.length;
+          final map = [
+            for (final k in (params['p_token_map'] as List?) ?? const [])
+              k.toString()
+          ];
+          final key = (params['p_key'] ?? '').toString();
+          final existing = map.indexOf(key);
+          final n = existing >= 0 ? existing + 1 : (map..add(key)).length;
+          final ins = '{{$n}}';
+          final at = cursor.clamp(0, body.length);
+          return {
+            'body': body.substring(0, at) + ins + body.substring(at),
+            'cursor': at + ins.length,
+            'inserted': ins,
+            'token_map': map,
+            'label': key,
+            'preview_value': '',
+          };
+        }
+      // A body the editor already holds is numbered and gap-free, so renumber
+      // reports nothing to change.
+      case 'wa_body_renumber':
+        return {
+          'body': params['p_body'],
+          'token_map': params['p_token_map'],
+          'changed': false,
+        };
       default:
         return const <String, dynamic>{};
     }
@@ -367,10 +393,11 @@ void main() {
 
     // name — from the starter, not typed.
     expect(find.text('payment_pending'), findsWidgets);
-    // components — the starter's body, with its legacy {{n}} migrated to the
-    // named placeholders via the starter's own token_map. Nothing else in the
-    // sentence moved.
-    expect(find.text(_paymentPendingNamed), findsOneWidget);
+    // components — the starter's body, kept NUMBERED exactly as stored. Meta
+    // accepts only numbered variables, so there is nothing to convert; a named
+    // placeholder on screen would be the bug.
+    expect(find.text(_paymentPendingBody), findsOneWidget);
+    expect(find.textContaining('{{customer_name}}'), findsNothing);
     // category — the starter said MARKETING, so the dropdown moved off UTILITY
     // and the MARKETING cost note is now on screen.
     expect(find.text('Marketing'), findsWidgets);
@@ -381,7 +408,7 @@ void main() {
     expect(find.text('₹4,500.00'), findsWidgets);
   });
 
-  testWidgets('inserting a value drops its insert_as at the cursor',
+  testWidgets('inserting a value drops a NUMBERED variable at the cursor',
       (tester) async {
     _stub();
     await _pump(tester);
@@ -406,22 +433,21 @@ void main() {
     await tester.tap(find.text('Customer name'));
     await tester.pumpAndSettle();
 
-    // The backend's own insert_as, dropped where the caret was — not appended
-    // to the end, and not a number the editor picked.
-    expect(body.text, 'Hi {{customer_name}}, your order is on its way.');
-    expect(body.selection.baseOffset, 3 + '{{customer_name}}'.length);
+    // wa_body_insert_token dropped {{1}} where the caret was — not appended to
+    // the end, and NOT the named {{customer_name}} Meta would send literally.
+    expect(body.text, 'Hi {{1}}, your order is on its way.');
+    expect(body.selection.baseOffset, 3 + '{{1}}'.length);
+    expect(find.textContaining('{{customer_name}}'), findsNothing);
 
-    // A second value goes in at the new caret, still not at the end.
+    // A second value goes in at the new caret, gets the next number, still not
+    // at the end.
     await tester.tap(find.text('Delivery person'));
     await tester.pumpAndSettle();
-    expect(body.text,
-        'Hi {{customer_name}}{{rider_name}}, your order is on its way.');
-    expect(body.text.endsWith('{{rider_name}}'), isFalse);
+    expect(body.text, 'Hi {{1}}{{2}}, your order is on its way.');
+    expect(body.text.endsWith('{{2}}'), isFalse);
 
-    // Nothing here invented a number. {{n}} is assigned by the backend at save
-    // time from p_token_map, which is what stops "{{2}}" reaching a customer.
-    expect(body.text.contains('{{1}}'), isFalse);
-    expect(body.text.contains('{{2}}'), isFalse);
+    // The numbers came from the backend, never assembled here.
+    expect(find.textContaining('{{rider_name}}'), findsNothing);
   });
 
   testWidgets('the name field locks once Meta has the template',

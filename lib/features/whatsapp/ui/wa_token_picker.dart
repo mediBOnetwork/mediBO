@@ -14,21 +14,23 @@ import 'wa_template_bits.dart';
 /// from wa_tokens_screen(): the labels, the examples, the group headings, the
 /// coverage warnings and the insert text itself.
 ///
-/// Nothing in this file decides anything about a value. It does not build
-/// "{{" + key + "}}" (that is `insert_as`, from the backend), it does not judge
-/// whether a field name is real (wa_token_save says so), and it does not word
-/// the coverage warning (that is `coverage_label`).
+/// Nothing in this file decides anything about a value. It does not build a
+/// placeholder, it does not pick a number, it does not judge whether a field
+/// name is real (wa_token_save says so), and it does not word the coverage
+/// warning (that is `coverage_label`).
+///
+/// A row's `insert_as` is never read. It carried a NAMED placeholder
+/// ({{customer_name}}), and Meta accepts numbered variables only — a named one
+/// went out to the pharmacy as those literal characters. The picker now reports
+/// the KEY alone and wa_body_insert_token decides where the text goes and what
+/// number it gets.
 class WaTokenPicker extends StatefulWidget {
-  /// Called with the row the admin picked. The editor inserts `insert_as` at
-  /// the cursor — the picker never touches the body controller itself.
-  final void Function(Map<String, dynamic> row) onInsert;
+  /// The KEY of the value the admin picked — never a placeholder, never a
+  /// number. The editor hands it to wa_body_insert_token, which is what turns
+  /// it into {{n}} at the caret. The picker never touches the body controller.
+  final void Function(String key) onInsert;
 
-  /// Every row the backend knows about, unfiltered. The editor keeps this to
-  /// turn body text back into the list of keys it sends as p_token_map, so a
-  /// key it never provided can never be sent.
-  final void Function(List<dynamic> rows) onRows;
-
-  const WaTokenPicker({super.key, required this.onInsert, required this.onRows});
+  const WaTokenPicker({super.key, required this.onInsert});
 
   /// Debounce before a search round-trip. Test seam.
   @visibleForTesting
@@ -51,10 +53,6 @@ class _WaTokenPickerState extends State<WaTokenPicker> {
   Map<String, dynamic> _payload = const {};
   List<dynamic> _rows = const [];
 
-  /// The unfiltered set, kept so an AI match can be resolved to its insert_as
-  /// even while the list is showing a search.
-  List<dynamic> _allRows = const [];
-
   bool _loading = true;
   String _error = '';
 
@@ -69,7 +67,7 @@ class _WaTokenPickerState extends State<WaTokenPicker> {
   @override
   void initState() {
     super.initState();
-    _load(null, remember: true);
+    _load(null);
   }
 
   @override
@@ -91,7 +89,7 @@ class _WaTokenPickerState extends State<WaTokenPicker> {
 
   // ── load / search ──────────────────────────────────────────────────────────
 
-  Future<void> _load(String? search, {bool remember = false}) async {
+  Future<void> _load(String? search) async {
     if (mounted) setState(() => _loading = true);
     try {
       final res = await WaTemplateApi.tokensScreen(search);
@@ -108,9 +106,7 @@ class _WaTokenPickerState extends State<WaTokenPicker> {
         _rows = (res['rows'] as List?) ?? const [];
         _error = '';
         _loading = false;
-        if (remember) _allRows = _rows;
       });
-      if (remember) widget.onRows(_allRows);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -121,19 +117,17 @@ class _WaTokenPickerState extends State<WaTokenPicker> {
   }
 
   /// Re-reads the full list after a create / edit / toggle / delete so the
-  /// editor's insert_as -> key map never lags behind the backend.
+  /// chips never lag behind the backend.
   Future<void> _reloadAll() async {
     final res = await WaTemplateApi.tokensScreen(null);
     if (!mounted) return;
     final rows = (res['rows'] as List?) ?? const [];
     setState(() {
-      _allRows = rows;
       if (!_searching) {
         _payload = res;
         _rows = rows;
       }
     });
-    widget.onRows(_allRows);
     if (_searching) await _load(_search.text.trim());
   }
 
@@ -209,16 +203,12 @@ class _WaTokenPickerState extends State<WaTokenPicker> {
     }
   }
 
-  /// Inserts an AI match by looking its key up among the rows the backend gave
-  /// us. A key we were never given is not inserted — there is no insert text to
-  /// invent for it.
+  /// Reports an AI match by key. Whether that key still names a real value is
+  /// wa_body_insert_token's call — it refuses an unknown one with its own
+  /// message — so nothing is filtered out here.
   void _insertByKey(String key) {
-    for (final r in [..._allRows, ..._rows]) {
-      if (r is Map && (r['key'] ?? '').toString() == key) {
-        widget.onInsert(r.cast<String, dynamic>());
-        return;
-      }
-    }
+    if (key.isEmpty) return;
+    widget.onInsert(key);
   }
 
   Future<void> _createFromProposal(Map<String, dynamic> p) async {
@@ -243,11 +233,7 @@ class _WaTokenPickerState extends State<WaTokenPicker> {
       return;
     }
 
-    widget.onInsert({
-      'key': (res['key'] ?? p['key'] ?? '').toString(),
-      'insert_as': (res['insert_as'] ?? '').toString(),
-      'example': (p['example'] ?? '').toString(),
-    });
+    widget.onInsert((res['key'] ?? p['key'] ?? '').toString());
 
     final warning = (res['warning'] ?? '').toString();
     if (warning.isNotEmpty) {
@@ -362,7 +348,7 @@ class _WaTokenPickerState extends State<WaTokenPicker> {
           )
         else if (_error.isNotEmpty)
           WaErrorState(
-              message: _error, onRetry: () => _load(null, remember: true))
+              message: _error, onRetry: () => _load(null))
         else if (_rows.isEmpty)
           _emptyState()
         else
@@ -470,7 +456,7 @@ class _WaTokenPickerState extends State<WaTokenPicker> {
           for (final row in byGroup[g]!)
             _ValueTile(
               row: row,
-              onInsert: () => widget.onInsert(row),
+              onInsert: () => _insertByKey((row['key'] ?? '').toString()),
               onEdit: () => _openForm(row: row),
               onToggle: () => _toggle(row),
               onDelete: () => _delete(row),
@@ -1022,44 +1008,9 @@ class _WaValueFormState extends State<WaValueForm> {
       );
 }
 
-/// Turns body text back into the list of value keys it uses.
-///
-/// This is the ONLY thing that decides what goes in p_token_map, and it can
-/// only ever emit keys the picker actually provided — an unknown {{...}} an
-/// admin typed by hand has no key here, so none is sent for it.
-class WaTokenMap {
-  WaTokenMap._();
-
-  /// Keys in the order their placeholders appear in [body]. A value used twice
-  /// is listed once: the backend gives every occurrence the same {{n}}.
-  static List<String> fromBody(String body, Map<String, String> insertAsToKey) {
-    final hits = <MapEntry<int, String>>[];
-    insertAsToKey.forEach((insertAs, key) {
-      if (insertAs.isEmpty) return;
-      var at = body.indexOf(insertAs);
-      while (at != -1) {
-        hits.add(MapEntry(at, key));
-        at = body.indexOf(insertAs, at + insertAs.length);
-      }
-    });
-    hits.sort((a, b) => a.key.compareTo(b.key));
-
-    final out = <String>[];
-    for (final h in hits) {
-      if (!out.contains(h.value)) out.add(h.value);
-    }
-    return out;
-  }
-
-  /// insert_as -> key, built from the rows the backend returned.
-  static Map<String, String> indexOf(List<dynamic> rows) {
-    final m = <String, String>{};
-    for (final r in rows) {
-      if (r is! Map) continue;
-      final insertAs = (r['insert_as'] ?? '').toString();
-      final key = (r['key'] ?? '').toString();
-      if (insertAs.isNotEmpty && key.isNotEmpty) m[insertAs] = key;
-    }
-    return m;
-  }
-}
+// WaTokenMap used to live here. It scanned the body for each row's `insert_as`
+// and rebuilt p_token_map from what it found — the last piece of Dart that
+// decided which value fed which variable. wa_body_insert_token and
+// wa_body_renumber return the map themselves now, so there is nothing left to
+// derive: the editor stores what they hand back and passes it straight to
+// wa_template_save.

@@ -192,10 +192,10 @@ class WaTemplateApi {
   /// {ok, template} | {error:'invalid', issues[]} |
   /// {error:'bad_name'|'pending_review'|'not_found'|'not_authorized', message}
   ///
-  /// `tokenMap` is the list of value KEYS this template uses, in the order the
-  /// placeholders appear in the body. The backend turns the named placeholders
-  /// ({{customer_name}}) into the numbered ones Meta wants ({{1}}) using it, so
-  /// the mapping is decided in exactly one place — not here.
+  /// `tokenMap` is the list of value KEYS this template uses, positionally: the
+  /// key at index 0 is what {{1}} in the body means. It is NOT derived from the
+  /// body text here — it is the map wa_body_insert_token / wa_body_renumber
+  /// handed back, passed straight through. See [bodyInsertToken].
   static Future<Map<String, dynamic>> save({
     String? id,
     required String name,
@@ -221,6 +221,51 @@ class WaTemplateApi {
   static Future<Map<String, dynamic>> deleteLocal(String id) =>
       _rpc('wa_template_delete_local', {'p_id': id});
 
+  // ── the body's numbered variables ──────────────────────────────────────────
+  //
+  // Meta accepts NUMBERED variables only — {{1}}, {{2}}. A named one is literal
+  // text, so a template carrying {{customer_name}} sends a pharmacy a message
+  // that reads, character for character, "{{customer_name}}". Choosing the
+  // number is therefore not a formatting nicety, it is the whole correctness of
+  // the message, and both RPCs below own it end to end. Nothing in this app
+  // counts placeholders, picks the next free number, or rebuilds the map.
+
+  /// Inserts value [key] into [body] at [cursor].
+  ///
+  /// {body, cursor, inserted, token_map, label, preview_value} | {error, message}
+  ///
+  /// The RPC picks the next free number, REUSES the number the value already
+  /// has when it appears in the message twice, and returns the caret position
+  /// after the inserted text. [tokenMap] is the map as it stands now; the
+  /// returned `token_map` replaces it.
+  static Future<Map<String, dynamic>> bodyInsertToken({
+    required String body,
+    required int cursor,
+    required String key,
+    required List<dynamic> tokenMap,
+  }) =>
+      _rpc('wa_body_insert_token', {
+        'p_body': body,
+        'p_cursor': cursor,
+        'p_key': key,
+        'p_token_map': tokenMap,
+      });
+
+  /// Closes the gap a deleted variable leaves behind. {body, token_map, changed}
+  ///
+  /// Deleting {{1}} out of the middle leaves {{2}},{{3}} — and Meta rejects a
+  /// template whose numbering has a hole. This renumbers to {{1}},{{2}} and
+  /// rebuilds the map to match. `changed:false` means the body was already
+  /// correct and nothing should be replaced.
+  static Future<Map<String, dynamic>> bodyRenumber(
+    String body,
+    List<dynamic> tokenMap,
+  ) =>
+      _rpc('wa_body_renumber', {
+        'p_body': body,
+        'p_token_map': tokenMap,
+      });
+
   // ── values (the {{...}} picker) ────────────────────────────────────────────
   //
   // wa_template_tokens() is deliberately NOT called from this file. It returned
@@ -232,8 +277,12 @@ class WaTemplateApi {
   /// The whole picker in one payload: rows[], search, sample_from, empty_copy,
   /// source_kinds[], formats[]. A null `search` loads everything.
   ///
-  /// Every row arrives render-ready — label, example, insert_as, source_label,
+  /// Every row arrives render-ready — label, example, source_label,
   /// coverage_label and coverage_tone are all decided by the backend.
+  ///
+  /// A row's `insert_as` is deliberately NOT used. It held a NAMED placeholder
+  /// ({{customer_name}}), which Meta treats as literal text — the pharmacy
+  /// received those characters. wa_body_insert_token does the inserting now.
   static Future<Map<String, dynamic>> tokensScreen([String? search]) =>
       _rpc('wa_tokens_screen', {'p_search': search});
 

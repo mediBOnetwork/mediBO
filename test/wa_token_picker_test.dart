@@ -166,7 +166,7 @@ void main() {
   Future<void> pumpPicker(
     WidgetTester tester,
     MockRpc mock, {
-    void Function(Map<String, dynamic>)? onInsert,
+    void Function(String key)? onInsert,
   }) async {
     WaTemplateApi.rpcTransport = mock.call;
     await tester.pumpWidget(MaterialApp(
@@ -174,7 +174,6 @@ void main() {
         body: SingleChildScrollView(
           child: WaTokenPicker(
             onInsert: onInsert ?? (_) {},
-            onRows: (_) {},
           ),
         ),
       ),
@@ -387,31 +386,13 @@ void main() {
     expect(find.text('orders has no column rider_phone'), findsOneWidget);
   });
 
-  // ── the pure mapping ───────────────────────────────────────────────────────
-
-  test('WaTokenMap reads keys in body order and never invents one', () {
-    final index = WaTokenMap.indexOf(defaultRows);
-
-    expect(
-      WaTokenMap.fromBody('Hi {{customer_name}}, {{rider_name}} is coming', index),
-      ['customer_name', 'rider_name'],
-    );
-
-    // Order follows the TEXT, not the payload.
-    expect(
-      WaTokenMap.fromBody('{{rider_name}} then {{customer_name}}', index),
-      ['rider_name', 'customer_name'],
-    );
-
-    // A placeholder the picker never provided contributes no key.
-    expect(WaTokenMap.fromBody('Hi {{2}} and {{made_up}}', index), isEmpty);
-
-    // Used twice, listed once — every occurrence becomes the same {{n}}.
-    expect(
-      WaTokenMap.fromBody('{{customer_name}} x {{customer_name}}', index),
-      ['customer_name'],
-    );
-  });
+  // ── the mapping ──────────────────────────────────────────────────────────────
+  //
+  // WaTokenMap used to live here — it scanned the body for each row's insert_as
+  // and rebuilt the key list in Dart. That is exactly the decision the backend
+  // now owns: wa_body_insert_token and wa_body_renumber return the map, and the
+  // editor passes it straight to wa_template_save. The numbered-insert contract
+  // is covered end to end in test/wa_token_insert_test.dart.
 
   // ── D: the editor ──────────────────────────────────────────────────────────
 
@@ -428,6 +409,35 @@ void main() {
       'wa_tokens_screen': (_) => tokensPayload(),
       'wa_template_validate': (_) => {'ok': true, 'errors': [], 'warnings': []},
       'wa_template_preview': (_) => {'body': 'preview', 'buttons': []},
+      // Numbering is the backend's. This mirrors wa_body_insert_token: {{n}} at
+      // the caret, reusing a value's number and appending a new one otherwise.
+      'wa_body_insert_token': (p) {
+        final body = (p['p_body'] ?? '').toString();
+        final cursor = (p['p_cursor'] as num?)?.toInt() ?? body.length;
+        final map = [
+          for (final k in (p['p_token_map'] as List?) ?? const []) k.toString()
+        ];
+        final key = (p['p_key'] ?? '').toString();
+        final existing = map.indexOf(key);
+        final n = existing >= 0 ? existing + 1 : (map..add(key)).length;
+        final ins = '{{$n}}';
+        final at = cursor.clamp(0, body.length);
+        return {
+          'body': body.substring(0, at) + ins + body.substring(at),
+          'cursor': at + ins.length,
+          'inserted': ins,
+          'token_map': map,
+          'label': key,
+          'preview_value': '',
+        };
+      },
+      // A body the editor holds is already gap-free, so renumber changes nothing
+      // — and a hand-typed {{2}} therefore never enters the stored map.
+      'wa_body_renumber': (p) => {
+            'body': p['p_body'],
+            'token_map': p['p_token_map'],
+            'changed': false,
+          },
       'wa_template_save': (_) => {
             'ok': true,
             'template': {'id': 't1'},
@@ -452,7 +462,7 @@ void main() {
               (w) => w is TextField && w.maxLines == 6))
           .controller!;
 
-  testWidgets('tapping a chip inserts insert_as AT THE CURSOR, not appended',
+  testWidgets('tapping a chip inserts a NUMBERED variable AT THE CURSOR',
       (tester) async {
     await pumpEditor(tester);
 
@@ -464,12 +474,14 @@ void main() {
     await tester.tap(find.text('Customer name'));
     await tester.pumpAndSettle();
 
-    // Inserted at offset 3 — NOT appended to the end.
-    expect(body.text, 'Hi {{customer_name}}, your order is ready');
-    expect(body.text.endsWith('{{customer_name}}'), isFalse);
+    // {{1}} inserted at offset 3 — NOT appended, and NOT the named placeholder
+    // Meta would send as literal text.
+    expect(body.text, 'Hi {{1}}, your order is ready');
+    expect(body.text.endsWith('{{1}}'), isFalse);
+    expect(find.textContaining('{{customer_name}}'), findsNothing);
 
     // And the caret sits after what was inserted.
-    expect(body.selection.baseOffset, 3 + '{{customer_name}}'.length);
+    expect(body.selection.baseOffset, 3 + '{{1}}'.length);
   });
 
   testWidgets('saving passes p_token_map with exactly the inserted keys',

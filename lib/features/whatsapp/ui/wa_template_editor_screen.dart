@@ -67,6 +67,12 @@ class WaTemplateEditorScreen extends StatefulWidget {
   @visibleForTesting
   static Duration similarDebounce = const Duration(milliseconds: 600);
 
+  /// Debounce before wa_body_renumber. Deleting a variable out of the middle
+  /// leaves a hole Meta rejects, so the body is re-checked as the admin types
+  /// rather than only at save time.
+  @visibleForTesting
+  static Duration renumberDebounce = const Duration(milliseconds: 400);
+
   /// How often, and for how long, the media-header and policy-review jobs are
   /// polled. Both stop at the deadline rather than hanging on a job that never
   /// finishes.
@@ -96,28 +102,20 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
   String _language = '';
   String _category = '';
 
-  /// Which value feeds each placeholder, in the order they appear in the body.
+  /// Which value feeds each numbered variable: the key at index 0 is what
+  /// {{1}} in the body means.
   ///
-  /// This is DERIVED from the body text before every backend call, never
-  /// hand-maintained — inserting at the cursor reorders the placeholders, and a
-  /// list kept by hand would drift the moment it did.
+  /// This is the single source of truth for the mapping, and it is never
+  /// derived from the body text. wa_body_insert_token and wa_body_renumber
+  /// both return a map alongside the body they produced; whatever they hand
+  /// back is stored here verbatim and passed to wa_template_save unchanged.
+  /// Rebuilding it in Dart is what let the app and the backend disagree about
+  /// which value fed {{2}}.
   List<String> _tokenKeys = const [];
 
   /// The example value shown to Meta, held per VALUE rather than per {{n}}.
-  /// Reordering the body then cannot separate a value from its example.
+  /// Renumbering then cannot separate a value from its example.
   final Map<String, TextEditingController> _exampleByKey = {};
-
-  /// insert_as -> key, as the picker reported it. The only source of truth for
-  /// which placeholders in the body came from a real value.
-  Map<String, String> _insertAsToKey = const {};
-
-  /// A template saved before values had names carries a numbered body
-  /// ({{1}}) plus its token_map. Both are kept until the picker's rows arrive,
-  /// then converted once to named placeholders so editing an old template does
-  /// not silently drop its mapping on save.
-  List<dynamic> _legacyTokenMap = const [];
-  List<String> _legacyExamples = const [];
-  bool _migrated = false;
 
   final List<Map<String, dynamic>> _buttons = [];
   final List<TextEditingController> _buttonText = [];
@@ -155,6 +153,13 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
 
   Timer? _similarDebounce;
   Map<String, dynamic>? _similar;
+
+  Timer? _renumberDebounce;
+
+  /// True while a backend-supplied body is being written into the field.
+  /// Writing to the controller re-fires its own listeners, and without this the
+  /// renumber that produced the text would immediately schedule another one.
+  bool _applyingBody = false;
 
   Map<String, dynamic>? _policy;
   bool _policyBusy = false;
@@ -231,6 +236,9 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
     // The duplicate check depends only on the body, so it runs on its own,
     // slower debounce rather than riding the lint round-trip.
     _body.addListener(_scheduleSimilar);
+    // Editing the body by hand can delete a variable and leave a hole in the
+    // numbering, so every edit is put back to wa_body_renumber.
+    _body.addListener(_scheduleRenumber);
     if (seed.isNotEmpty) _schedule();
 
     _id = (t?['id'] ?? '').toString();
@@ -245,6 +253,7 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
   void dispose() {
     _debounce?.cancel();
     _similarDebounce?.cancel();
+    _renumberDebounce?.cancel();
     _headerPoll?.cancel();
     _policyPoll?.cancel();
     for (final c in [_name, _header, _body, _footer]) {
@@ -280,10 +289,12 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
     _buttons.clear();
     _buttonText.clear();
     _buttonValue.clear();
-    _tokenKeys = const [];
-    _legacyTokenMap = tokenMap;
-    _legacyExamples = const [];
-    _migrated = false;
+    // The saved row's own map, adopted as-is. A stored body is ALREADY numbered
+    // — that is the only form Meta accepts — so there is nothing to convert and
+    // nothing to re-derive: token_map[i] is what {{i+1}} means, and it stays
+    // that way until an RPC returns a different one.
+    _tokenKeys = [for (final k in tokenMap) k.toString()];
+    List<String> examples = const [];
 
     for (final raw in components) {
       if (raw is! Map) continue;
@@ -301,7 +312,7 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
           final ex = (c['example'] as Map?)?['body_text'];
           final row = (ex is List && ex.isNotEmpty) ? ex.first : null;
           if (row is List) {
-            _legacyExamples = row.map((v) => v.toString()).toList();
+            examples = row.map((v) => v.toString()).toList();
           }
           break;
         case 'FOOTER':
@@ -320,41 +331,45 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
           break;
       }
     }
-    _migrateAndRecount();
-  }
 
-  /// Converts a legacy numbered body ({{1}}) into named placeholders, once the
-  /// picker has told us what each key inserts as, then re-derives the mapping
-  /// from the body text.
-  void _migrateAndRecount() {
-    if (!_migrated && _insertAsToKey.isNotEmpty && _legacyTokenMap.isNotEmpty) {
-      final keyToInsertAs = {
-        for (final e in _insertAsToKey.entries) e.value: e.key,
-      };
-      var text = _body.text;
-      for (var i = 0; i < _legacyTokenMap.length; i++) {
-        final key = _legacyTokenMap[i].toString();
-        final insertAs = keyToInsertAs[key];
-        if (insertAs == null) continue;
-        text = text.replaceAll('{{${i + 1}}}', insertAs);
-        if (i < _legacyExamples.length) {
-          _exampleByKey.putIfAbsent(
-              key, () => TextEditingController(text: _legacyExamples[i]));
-        }
-      }
-      if (text != _body.text) _body.text = text;
-      _migrated = true;
+    // examples[i] belongs to {{i+1}}, which token_map[i] names — the same
+    // index in both, which is why the example follows the VALUE and survives a
+    // later renumber.
+    for (var i = 0; i < _tokenKeys.length; i++) {
+      _exampleByKey.putIfAbsent(
+        _tokenKeys[i],
+        () => TextEditingController(
+            text: i < examples.length ? examples[i] : ''),
+      );
     }
-    _recountTokens();
+    _ensureExamples();
   }
 
-  /// The mapping, re-derived from the body text. Called before every backend
-  /// call so the lint, the preview and the save always describe the same
-  /// placeholders the admin can actually see.
-  void _recountTokens() {
-    _tokenKeys = WaTokenMap.fromBody(_body.text, _insertAsToKey);
+  /// Gives every key in the map an example field to type into. It creates
+  /// controllers and nothing else — the map itself is never touched here.
+  void _ensureExamples() {
     for (final k in _tokenKeys) {
       _exampleByKey.putIfAbsent(k, () => TextEditingController());
+    }
+  }
+
+  /// Writes a body the BACKEND produced into the field, with its map and its
+  /// caret. The three always move together: a body without its map is exactly
+  /// the disagreement this screen exists to prevent.
+  void _applyBody(Map<String, dynamic> res, {int? caret}) {
+    final body = (res['body'] ?? '').toString();
+    final map = (res['token_map'] as List?) ?? const [];
+    _applyingBody = true;
+    try {
+      _body.text = body;
+      // Clamped only to stay inside the string — an offset past the end is a
+      // Flutter assertion, not a decision about where the caret belongs.
+      final at = (caret ?? body.length).clamp(0, body.length);
+      _body.selection = TextSelection.collapsed(offset: at);
+      _tokenKeys = [for (final k in map) k.toString()];
+      _ensureExamples();
+    } finally {
+      _applyingBody = false;
     }
   }
 
@@ -428,9 +443,7 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
   }
 
   Future<void> _refresh() async {
-    // The admin may have deleted or retyped a placeholder by hand since the
-    // last keystroke, so the mapping is re-derived from the text first.
-    _recountTokens();
+    _ensureExamples();
     final components = _componentsNow();
     if (mounted) setState(() => _checking = true);
     try {
@@ -711,48 +724,111 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
     _schedule();
   }
 
-  /// Drops the value's own `insert_as` in at the cursor.
+  /// Asks the backend to put value [key] into the body at the caret.
   ///
-  /// The inserted text is the backend's string, printed verbatim — this method
-  /// never builds "{{" + key + "}}" and never picks a number. Numbering is the
-  /// backend's job at save time, from p_token_map, which is why inserting in
-  /// the middle of a sentence cannot put the placeholders out of order.
-  void _insertToken(Map<String, dynamic> token) {
-    final key = (token['key'] ?? '').toString();
-    final inserted = (token['insert_as'] ?? '').toString();
-    if (inserted.isEmpty) return;
+  /// Every part of this is wa_body_insert_token's answer: which number the
+  /// value gets, whether it REUSES the number the value already has further up
+  /// the message, the resulting body, and where the caret lands after it. This
+  /// method computes none of it — no arithmetic, no scan of the text for {{n}},
+  /// no map building.
+  ///
+  /// It also does not build the placeholder. Inserting a value's own
+  /// `insert_as` was the bug: that string was named ({{customer_name}}), Meta
+  /// accepts numbered variables only, and a named one is literal text — the
+  /// pharmacy received the characters "{{customer_name}}".
+  Future<void> _insertToken(String key) async {
+    if (key.isEmpty) return;
+
+    final text = _body.text;
+    final sel = _body.selection;
+    final cursor = (sel.isValid && sel.start >= 0 && sel.start <= text.length)
+        ? sel.start
+        : text.length;
+
+    Map<String, dynamic> res;
+    try {
+      res = await WaTemplateApi.bodyInsertToken(
+        body: text,
+        cursor: cursor,
+        key: key,
+        tokenMap: _tokenKeys,
+      );
+    } catch (_) {
+      return;
+    }
+    if (!mounted) return;
+
+    // A refusal inserts NOTHING and says why in the backend's own sentence.
+    // Half an insert — text placed but the map not updated — would be the
+    // disagreement itself.
+    if (WaTemplateApi.isError(res, 'body')) {
+      final msg = WaTemplateApi.errorMessage(res);
+      if (msg.isNotEmpty) showToast(context, msg, isError: true);
+      return;
+    }
 
     setState(() {
-      final sel = _body.selection;
-      final text = _body.text;
-      final at = (sel.isValid && sel.start >= 0 && sel.start <= text.length)
-          ? sel.start
-          : text.length;
-      _body.text = text.substring(0, at) + inserted + text.substring(at);
-      _body.selection = TextSelection.collapsed(offset: at + inserted.length);
+      _applyBody(res, caret: (res['cursor'] as num?)?.toInt());
 
-      // Seed the example from the row that was just inserted, keeping whatever
-      // the admin already typed for this value.
-      final example = (token['example'] ?? '').toString();
+      // The example Meta is shown, seeded from the backend's own sample of what
+      // this variable will really contain. Anything the admin already typed for
+      // this value wins.
+      final preview = (res['preview_value'] ?? '').toString();
       final existing = _exampleByKey[key];
       if (existing == null) {
-        _exampleByKey[key] = TextEditingController(text: example);
-      } else if (existing.text.isEmpty && example.isNotEmpty) {
-        existing.text = example;
+        _exampleByKey[key] = TextEditingController(text: preview);
+      } else if (existing.text.isEmpty && preview.isNotEmpty) {
+        existing.text = preview;
       }
-      _recountTokens();
     });
+
+    // A brief hint of what the variable just inserted will actually say, in the
+    // backend's words — printed verbatim, never composed here.
+    final preview = (res['preview_value'] ?? '').toString();
+    if (preview.isNotEmpty) showToast(context, preview);
+
     _schedule();
   }
 
-  /// The picker reporting the live value set. Anything the body already
-  /// contains is mapped now — including a legacy numbered template.
-  void _onPickerRows(List<dynamic> rows) {
-    if (!mounted) return;
-    setState(() {
-      _insertAsToKey = WaTokenMap.indexOf(rows);
-      _migrateAndRecount();
-    });
+  // ── renumbering ────────────────────────────────────────────────────────────
+  //
+  // Deleting {{1}} out of the middle of a sentence leaves {{2}},{{3}} behind,
+  // and Meta rejects a template whose numbering has a hole. Closing that gap
+  // means renaming the remaining variables AND rebuilding the map that says
+  // what they mean — one operation, done in one place, by wa_body_renumber.
+
+  void _scheduleRenumber() {
+    // The body that a renumber or an insert just wrote is already correct;
+    // re-checking it would only bounce between the two.
+    if (_applyingBody) return;
+    _renumberDebounce?.cancel();
+    _renumberDebounce =
+        Timer(WaTemplateEditorScreen.renumberDebounce, _renumber);
+  }
+
+  /// Puts the current body and map through wa_body_renumber and adopts the
+  /// result when it says the numbering actually moved.
+  Future<void> _renumber() async {
+    _renumberDebounce?.cancel();
+    final before = _body.text;
+    Map<String, dynamic> res;
+    try {
+      res = await WaTemplateApi.bodyRenumber(before, _tokenKeys);
+    } catch (_) {
+      return;
+    }
+    if (!mounted || WaTemplateApi.isError(res, 'body')) return;
+    if (res['changed'] != true) return;
+    // The admin may have typed on since the round-trip started. Rewriting the
+    // field would throw that away, so a stale answer is dropped and the next
+    // keystroke's renumber will carry the correction instead.
+    if (_body.text != before) return;
+
+    // The caret is held where it was rather than jumping to the end — the
+    // admin is mid-sentence. clamp() in _applyBody keeps it inside the string.
+    final caret = _body.selection.isValid ? _body.selection.start : null;
+    setState(() => _applyBody(res, caret: caret));
+    _schedule();
   }
 
   // ── save / submit ──────────────────────────────────────────────────────────
@@ -760,10 +836,12 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
   Future<void> _save({bool thenSubmit = false}) async {
     setState(() => _busy = true);
     try {
-      // Recomputed from the body text, immediately before the save — so a
-      // placeholder the admin deleted is not still claimed in the map, and a
-      // key the picker never provided can never appear in it.
-      _recountTokens();
+      // Immediately before the save, whatever the debounce has or has not had
+      // time to do: a template whose numbering has a hole is rejected by Meta,
+      // and saving one is how it would reach them.
+      await _renumber();
+      if (!mounted) return;
+      _ensureExamples();
       // _id, not widget.template — after the first save of a NEW template the
       // widget's map still has no id, so reading it there would send null a
       // second time and create a duplicate. Save-and-continue makes that
@@ -980,10 +1058,7 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
         const SizedBox(height: 12),
         _SectionTitle(copy['tokens_title']),
         const SizedBox(height: 8),
-        WaTokenPicker(
-          onInsert: _insertToken,
-          onRows: _onPickerRows,
-        ),
+        WaTokenPicker(onInsert: _insertToken),
 
         if (_tokenKeys.isNotEmpty) ...[
           const SizedBox(height: 16),

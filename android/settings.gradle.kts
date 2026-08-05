@@ -19,7 +19,12 @@ pluginManagement {
 
 plugins {
     id("dev.flutter.flutter-plugin-loader") version "1.0.0"
-    id("com.android.application") version "9.0.1" apply false
+    // AGP 9 only reads the new DSL, which the current plugin set (file_picker
+    // 11.0.2 et al., still on the old Gradle-plugin DSL) does not use — their
+    // Android modules fail to compile under AGP 9. Pinned to the stable 8.9.1
+    // line (Gradle 8.11.1, Kotlin 2.1.0), which supports compileSdk 36 and the
+    // whole plugin set.
+    id("com.android.application") version "8.9.1" apply false
     id("org.jetbrains.kotlin.android") version "2.3.20" apply false
 }
 

@@ -70,6 +70,15 @@ CHANGE_LABEL="$N"
 # bundle (different byte count, fails to boot) even with identical source code.
 flutter clean
 flutter build web --release
+# Bundle the downloadable Android APK (built separately by the android-build
+# lane and left at ~/mediBO/app.apk) so Cloudflare serves it at /app.apk.
+# gitignored — wrangler uploads the whole build/web dir regardless of git.
+if [ -f app.apk ]; then
+  cp app.apk build/web/app.apk
+  echo "[deploy] app.apk bundled ($(du -h app.apk | cut -f1)) -> build/web/app.apk"
+else
+  echo "[deploy] note: app.apk not present — /app.apk will 404 until an APK is built"
+fi
 cp web/_redirects build/web/_redirects
 cp web/_headers  build/web/_headers
 cp web/_routes.json build/web/_routes.json

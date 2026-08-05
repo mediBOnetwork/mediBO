@@ -44,6 +44,13 @@ app.*.map.json
 .env
 scripts/*.json
 
+# Downloadable Android APK — 85MB binary, uploaded to Cloudflare by deploy.sh
+# but never committed to git. Rebuilt by the android-build lane.
+/app.apk
+build/web/app.apk
+android/key.properties
+medibo-release.jks
+
 # Claude Code worktrees (per-change isolated checkouts) — never track these
 .claude/worktrees/
 build/native_assets/

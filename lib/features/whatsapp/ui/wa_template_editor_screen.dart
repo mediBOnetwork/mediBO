@@ -9,6 +9,7 @@ import 'package:pharma_b2b/utils/toast.dart';
 import '../data/wa_template_api.dart';
 import 'wa_template_actions.dart';
 import 'wa_template_bits.dart';
+import 'wa_token_picker.dart';
 
 /// A file the admin chose, reduced to the three things the upload needs.
 ///
@@ -92,11 +93,28 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
   String _language = '';
   String _category = '';
 
-  /// Which backend token feeds each {{n}}, in order. token_map[0] -> {{1}}.
-  final List<String> _tokenMap = [];
+  /// Which value feeds each placeholder, in the order they appear in the body.
+  ///
+  /// This is DERIVED from the body text before every backend call, never
+  /// hand-maintained — inserting at the cursor reorders the placeholders, and a
+  /// list kept by hand would drift the moment it did.
+  List<String> _tokenKeys = const [];
 
-  /// The example value shown to Meta for each {{n}}, in the same order.
-  final List<TextEditingController> _examples = [];
+  /// The example value shown to Meta, held per VALUE rather than per {{n}}.
+  /// Reordering the body then cannot separate a value from its example.
+  final Map<String, TextEditingController> _exampleByKey = {};
+
+  /// insert_as -> key, as the picker reported it. The only source of truth for
+  /// which placeholders in the body came from a real value.
+  Map<String, String> _insertAsToKey = const {};
+
+  /// A template saved before values had names carries a numbered body
+  /// ({{1}}) plus its token_map. Both are kept until the picker's rows arrive,
+  /// then converted once to named placeholders so editing an old template does
+  /// not silently drop its mapping on save.
+  List<dynamic> _legacyTokenMap = const [];
+  List<String> _legacyExamples = const [];
+  bool _migrated = false;
 
   final List<Map<String, dynamic>> _buttons = [];
   final List<TextEditingController> _buttonText = [];
@@ -145,7 +163,8 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
       WaCopy((widget.screen['copy'] as Map?)?.cast<String, dynamic>() ?? const {});
   List<dynamic> get _starters =>
       (widget.screen['starters'] as List?) ?? const [];
-  List<dynamic> get _tokens => (widget.screen['tokens'] as List?) ?? const [];
+  // screen['tokens'] is deliberately NOT read. It was wa_template_tokens()'s
+  // fixed list of nine; WaTokenPicker loads the live set instead.
   List<dynamic> get _categories =>
       (widget.screen['categories'] as List?) ?? const [];
   List<dynamic> get _languages =>
@@ -228,7 +247,11 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
     for (final c in [_name, _header, _body, _footer]) {
       c.dispose();
     }
-    for (final c in [..._examples, ..._buttonText, ..._buttonValue]) {
+    for (final c in [
+      ..._exampleByKey.values,
+      ..._buttonText,
+      ..._buttonValue
+    ]) {
       c.dispose();
     }
     super.dispose();
@@ -243,16 +266,21 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
     _headerFormat = 'TEXT';
     _body.text = '';
     _footer.text = '';
-    for (final c in [..._examples, ..._buttonText, ..._buttonValue]) {
+    for (final c in [
+      ..._exampleByKey.values,
+      ..._buttonText,
+      ..._buttonValue
+    ]) {
       c.dispose();
     }
-    _examples.clear();
+    _exampleByKey.clear();
     _buttons.clear();
     _buttonText.clear();
     _buttonValue.clear();
-    _tokenMap
-      ..clear()
-      ..addAll(tokenMap.map((e) => e.toString()));
+    _tokenKeys = const [];
+    _legacyTokenMap = tokenMap;
+    _legacyExamples = const [];
+    _migrated = false;
 
     for (final raw in components) {
       if (raw is! Map) continue;
@@ -270,9 +298,7 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
           final ex = (c['example'] as Map?)?['body_text'];
           final row = (ex is List && ex.isNotEmpty) ? ex.first : null;
           if (row is List) {
-            for (final v in row) {
-              _examples.add(TextEditingController(text: v.toString()));
-            }
+            _legacyExamples = row.map((v) => v.toString()).toList();
           }
           break;
         case 'FOOTER':
@@ -291,21 +317,42 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
           break;
       }
     }
-    // A starter may declare more bindings than it has example values, or the
-    // other way round. Keep the two lists the same length so {{n}} and its
-    // example never drift apart.
-    while (_examples.length < _tokenMap.length) {
-      _examples.add(TextEditingController(text: _exampleFor(_tokenMap[_examples.length])));
-    }
+    _migrateAndRecount();
   }
 
-  String _exampleFor(String tokenKey) {
-    for (final t in _tokens) {
-      if (t is Map && (t['key'] ?? '').toString() == tokenKey) {
-        return (t['example'] ?? '').toString();
+  /// Converts a legacy numbered body ({{1}}) into named placeholders, once the
+  /// picker has told us what each key inserts as, then re-derives the mapping
+  /// from the body text.
+  void _migrateAndRecount() {
+    if (!_migrated && _insertAsToKey.isNotEmpty && _legacyTokenMap.isNotEmpty) {
+      final keyToInsertAs = {
+        for (final e in _insertAsToKey.entries) e.value: e.key,
+      };
+      var text = _body.text;
+      for (var i = 0; i < _legacyTokenMap.length; i++) {
+        final key = _legacyTokenMap[i].toString();
+        final insertAs = keyToInsertAs[key];
+        if (insertAs == null) continue;
+        text = text.replaceAll('{{${i + 1}}}', insertAs);
+        if (i < _legacyExamples.length) {
+          _exampleByKey.putIfAbsent(
+              key, () => TextEditingController(text: _legacyExamples[i]));
+        }
       }
+      if (text != _body.text) _body.text = text;
+      _migrated = true;
     }
-    return '';
+    _recountTokens();
+  }
+
+  /// The mapping, re-derived from the body text. Called before every backend
+  /// call so the lint, the preview and the save always describe the same
+  /// placeholders the admin can actually see.
+  void _recountTokens() {
+    _tokenKeys = WaTokenMap.fromBody(_body.text, _insertAsToKey);
+    for (final k in _tokenKeys) {
+      _exampleByKey.putIfAbsent(k, () => TextEditingController());
+    }
   }
 
   /// The components array as it currently stands in the form. This is what is
@@ -322,9 +369,11 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
       list.add({'type': 'HEADER', 'format': 'TEXT', 'text': _header.text});
     }
     final body = <String, dynamic>{'type': 'BODY', 'text': _body.text};
-    if (_examples.isNotEmpty) {
+    if (_tokenKeys.isNotEmpty) {
       body['example'] = {
-        'body_text': [_examples.map((c) => c.text).toList()],
+        'body_text': [
+          _tokenKeys.map((k) => _exampleByKey[k]?.text ?? '').toList(),
+        ],
       };
     }
     list.add(body);
@@ -376,6 +425,9 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
   }
 
   Future<void> _refresh() async {
+    // The admin may have deleted or retyped a placeholder by hand since the
+    // last keystroke, so the mapping is re-derived from the text first.
+    _recountTokens();
     final components = _componentsNow();
     if (mounted) setState(() => _checking = true);
     try {
@@ -624,29 +676,48 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
     _schedule();
   }
 
-  /// Appends the next {{n}} and records which backend value feeds it.
+  /// Drops the value's own `insert_as` in at the cursor.
   ///
-  /// The index comes from how many bindings are already recorded — the body
-  /// text is never parsed to work it out. If the admin deletes a {{n}} by hand
-  /// the backend lint says so ("Placeholders must run in order"); that verdict
-  /// is not second-guessed here.
+  /// The inserted text is the backend's string, printed verbatim — this method
+  /// never builds "{{" + key + "}}" and never picks a number. Numbering is the
+  /// backend's job at save time, from p_token_map, which is why inserting in
+  /// the middle of a sentence cannot put the placeholders out of order.
   void _insertToken(Map<String, dynamic> token) {
     final key = (token['key'] ?? '').toString();
-    final n = _tokenMap.length + 1;
+    final inserted = (token['insert_as'] ?? '').toString();
+    if (inserted.isEmpty) return;
+
     setState(() {
-      _tokenMap.add(key);
-      _examples.add(TextEditingController(text: (token['example'] ?? '').toString()));
       final sel = _body.selection;
       final text = _body.text;
       final at = (sel.isValid && sel.start >= 0 && sel.start <= text.length)
           ? sel.start
           : text.length;
-      final inserted = '{{$n}}';
       _body.text = text.substring(0, at) + inserted + text.substring(at);
-      _body.selection =
-          TextSelection.collapsed(offset: at + inserted.length);
+      _body.selection = TextSelection.collapsed(offset: at + inserted.length);
+
+      // Seed the example from the row that was just inserted, keeping whatever
+      // the admin already typed for this value.
+      final example = (token['example'] ?? '').toString();
+      final existing = _exampleByKey[key];
+      if (existing == null) {
+        _exampleByKey[key] = TextEditingController(text: example);
+      } else if (existing.text.isEmpty && example.isNotEmpty) {
+        existing.text = example;
+      }
+      _recountTokens();
     });
     _schedule();
+  }
+
+  /// The picker reporting the live value set. Anything the body already
+  /// contains is mapped now — including a legacy numbered template.
+  void _onPickerRows(List<dynamic> rows) {
+    if (!mounted) return;
+    setState(() {
+      _insertAsToKey = WaTokenMap.indexOf(rows);
+      _migrateAndRecount();
+    });
   }
 
   // ── save / submit ──────────────────────────────────────────────────────────
@@ -654,12 +725,17 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
   Future<void> _save({bool thenSubmit = false}) async {
     setState(() => _busy = true);
     try {
+      // Recomputed from the body text, immediately before the save — so a
+      // placeholder the admin deleted is not still claimed in the map, and a
+      // key the picker never provided can never appear in it.
+      _recountTokens();
       final res = await WaTemplateApi.save(
         id: widget.template?['id']?.toString(),
         name: _name.text,
         language: _language,
         category: _category,
         components: _componentsNow(),
+        tokenMap: _tokenKeys,
       );
       if (!mounted) return;
 
@@ -859,31 +935,21 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
         const SizedBox(height: 12),
         _SectionTitle(copy['tokens_title']),
         const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            for (final t in _tokens)
-              if (t is Map)
-                _TokenChip(
-                  label: (t['label'] ?? '').toString(),
-                  example: (t['example'] ?? '').toString(),
-                  onTap: () => _insertToken(t.cast<String, dynamic>()),
-                ),
-          ],
+        WaTokenPicker(
+          onInsert: _insertToken,
+          onRows: _onPickerRows,
         ),
 
-        if (_examples.isNotEmpty) ...[
+        if (_tokenKeys.isNotEmpty) ...[
           const SizedBox(height: 16),
           _SectionTitle(copy['examples_title']),
           const SizedBox(height: 8),
-          for (var i = 0; i < _examples.length; i++)
+          for (var i = 0; i < _tokenKeys.length; i++)
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: _Field(
-                label: '{{${i + 1}}}'
-                    '${i < _tokenMap.length ? '  ·  ${_tokenMap[i]}' : ''}',
-                controller: _examples[i],
+                label: '{{${i + 1}}}  ·  ${_tokenKeys[i]}',
+                controller: _exampleByKey[_tokenKeys[i]]!,
                 onChanged: (_) => _schedule(),
               ),
             ),
@@ -1505,45 +1571,6 @@ class _StarterChip extends StatelessWidget {
                 Text(note,
                     style: const TextStyle(
                         fontSize: 12, color: Color(0xFF6B7280))),
-            ],
-          ),
-        ),
-      );
-}
-
-class _TokenChip extends StatelessWidget {
-  final String label;
-  final String example;
-  final VoidCallback onTap;
-  const _TokenChip(
-      {required this.label, required this.example, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) => InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(20),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            color: const Color(0xFFEFF6FF),
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.add, size: 13, color: Color(0xFF1E40AF)),
-              const SizedBox(width: 5),
-              Text(label,
-                  style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                      color: Color(0xFF1E40AF))),
-              if (example.isNotEmpty) ...[
-                const SizedBox(width: 6),
-                Text(example,
-                    style: const TextStyle(
-                        fontSize: 12, color: Color(0xFF6B7280))),
-              ],
             ],
           ),
         ),

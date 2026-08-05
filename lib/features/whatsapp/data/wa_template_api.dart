@@ -185,12 +185,18 @@ class WaTemplateApi {
 
   /// {ok, template} | {error:'invalid', issues[]} |
   /// {error:'bad_name'|'pending_review'|'not_found'|'not_authorized', message}
+  ///
+  /// `tokenMap` is the list of value KEYS this template uses, in the order the
+  /// placeholders appear in the body. The backend turns the named placeholders
+  /// ({{customer_name}}) into the numbered ones Meta wants ({{1}}) using it, so
+  /// the mapping is decided in exactly one place — not here.
   static Future<Map<String, dynamic>> save({
     String? id,
     required String name,
     required String language,
     required String category,
     required List<dynamic> components,
+    List<dynamic>? tokenMap,
   }) =>
       _rpc('wa_template_save', {
         'p_id': id,
@@ -198,6 +204,7 @@ class WaTemplateApi {
         'p_language': language,
         'p_category': category,
         'p_components': components,
+        'p_token_map': tokenMap ?? const <dynamic>[],
       });
 
   /// {ok, template, note} | {error:'exists', message}
@@ -207,6 +214,65 @@ class WaTemplateApi {
   /// {ok} | {error:'delete_at_meta', message}
   static Future<Map<String, dynamic>> deleteLocal(String id) =>
       _rpc('wa_template_delete_local', {'p_id': id});
+
+  // ── values (the {{...}} picker) ────────────────────────────────────────────
+  //
+  // wa_template_tokens() is deliberately NOT called from this file. It returned
+  // a fixed list of nine values, so a value that was not on it (a delivery
+  // person's name) could not be inserted at all — and inserting a bare {{2}}
+  // instead sent a customer a message reading "{{2}}". These RPCs return the
+  // live, editable, searchable set instead.
+
+  /// The whole picker in one payload: rows[], search, sample_from, empty_copy,
+  /// source_kinds[], formats[]. A null `search` loads everything.
+  ///
+  /// Every row arrives render-ready — label, example, insert_as, source_label,
+  /// coverage_label and coverage_tone are all decided by the backend.
+  static Future<Map<String, dynamic>> tokensScreen([String? search]) =>
+      _rpc('wa_tokens_screen', {'p_search': search});
+
+  /// {ok, key, insert_as, sample, resolves, warning} | {error, message}
+  ///
+  /// The RPC is what checks that `sourceRef` actually exists — this app never
+  /// validates a field name itself, it renders whatever verdict comes back.
+  static Future<Map<String, dynamic>> tokenSave({
+    required String key,
+    required String label,
+    required String sourceKind,
+    String? sourceRef,
+    String? group,
+    String? format,
+    String? fallback,
+    String? example,
+    int? sort,
+  }) =>
+      _rpc('wa_token_save', {
+        'p_key': key,
+        'p_label': label,
+        'p_source_kind': sourceKind,
+        'p_source_ref': sourceRef,
+        'p_group': group,
+        'p_format': format,
+        'p_fallback': fallback,
+        'p_example': example,
+        'p_sort': sort,
+      });
+
+  /// {ok} | {error, message, templates[]} — templates[] lists what still uses it.
+  static Future<Map<String, dynamic>> tokenDelete(String key) =>
+      _rpc('wa_token_delete', {'p_key': key});
+
+  /// {ok, enabled}
+  static Future<Map<String, dynamic>> tokenToggle(String key, bool enabled) =>
+      _rpc('wa_token_toggle', {'p_key': key, 'p_enabled': enabled});
+
+  /// Starts the AI lookup for a value the admin could not find. {ok, job_id, status}
+  static Future<Map<String, dynamic>> tokenAiSearch(String query) =>
+      _rpc('wa_token_ai_search', {'p_query': query});
+
+  /// {status, query, status_label, error, result:{matches[], proposal, note}}
+  static Future<Map<String, dynamic>> tokenSearchResult(String jobId) =>
+      _rpc('wa_token_search_result', {'p_job_id': jobId});
 
   // ── edge functions ─────────────────────────────────────────────────────────
 

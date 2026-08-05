@@ -430,6 +430,17 @@ class WaTemplateApi {
   static Future<Map<String, dynamic>> tokenSearchResult(String jobId) =>
       _rpc('wa_token_search_result', {'p_job_id': jobId});
 
+  /// Accepts the AI's proposal by JOB id — the proposal fields are NOT sent
+  /// back, the backend re-reads the job itself. It validates the lookup the AI
+  /// wrote, test-runs it against a real order, and saves the lookup AND the
+  /// value together, refusing if the query does not run. The old create path
+  /// (wa_token_save with the proposal fields) could not carry a new lookup;
+  /// this replaces it.
+  ///
+  /// {ok, key, insert_as, sample, created_lookup, message} | {error, message}
+  static Future<Map<String, dynamic>> tokenApplyProposal(String jobId) =>
+      _rpc('wa_token_apply_proposal', {'p_job_id': jobId});
+
   // ── edge functions ─────────────────────────────────────────────────────────
 
   /// {status:'ok', meta_id, template_status} |

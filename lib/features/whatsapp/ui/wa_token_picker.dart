@@ -64,6 +64,11 @@ class _WaTokenPickerState extends State<WaTokenPicker> {
   Map<String, dynamic>? _aiResult;
   String _aiStatus = '';
 
+  /// The job the AI search is running. Held so accepting the proposal sends the
+  /// JOB id — wa_token_apply_proposal re-reads the proposal from it and writes
+  /// the lookup the AI proposed, which the old create-and-insert path could not.
+  String _aiJobId = '';
+
   @override
   void initState() {
     super.initState();
@@ -138,6 +143,7 @@ class _WaTokenPickerState extends State<WaTokenPicker> {
       setState(() {
         _aiResult = null;
         _aiStatus = '';
+        _aiJobId = '';
       });
       _load(q.isEmpty ? null : q);
     });
@@ -152,6 +158,7 @@ class _WaTokenPickerState extends State<WaTokenPicker> {
       _aiBusy = true;
       _aiResult = null;
       _aiStatus = '';
+      _aiJobId = '';
       _notice = null;
     });
     try {
@@ -165,6 +172,8 @@ class _WaTokenPickerState extends State<WaTokenPicker> {
         return;
       }
       final jobId = (start['job_id'] ?? '').toString();
+      // Held for wa_token_apply_proposal, which re-reads the proposal from it.
+      setState(() => _aiJobId = jobId);
 
       final deadline = DateTime.now().add(WaTokenPicker.pollTimeout);
       while (DateTime.now().isBefore(deadline)) {
@@ -211,21 +220,18 @@ class _WaTokenPickerState extends State<WaTokenPicker> {
     widget.onInsert(key);
   }
 
-  Future<void> _createFromProposal(Map<String, dynamic> p) async {
-    final res = await WaTemplateApi.tokenSave(
-      key: (p['key'] ?? '').toString(),
-      label: (p['label'] ?? '').toString(),
-      sourceKind: (p['source_kind'] ?? '').toString(),
-      sourceRef: p['source_ref']?.toString(),
-      group: p['group_label']?.toString(),
-      format: p['format']?.toString(),
-      fallback: p['fallback']?.toString(),
-      example: p['example']?.toString(),
-    );
+  /// Accepts the AI's proposal. The proposal fields are NOT sent — the JOB id
+  /// is, and wa_token_apply_proposal re-reads the proposal, validates and
+  /// test-runs the lookup the AI wrote, then saves the lookup AND the value
+  /// together. The old wa_token_save path could not carry a new lookup, so the
+  /// AI's work was thrown away; this replaces it.
+  Future<void> _applyProposal() async {
+    if (_aiJobId.isEmpty) return;
+    final res = await WaTemplateApi.tokenApplyProposal(_aiJobId);
     if (!mounted) return;
 
-    if (res['ok'] != true) {
-      // Nothing is inserted on a refusal — the value does not exist.
+    // A refusal creates nothing and inserts nothing — the backend's sentence.
+    if ((res['error'] ?? '').toString().isNotEmpty) {
       setState(() => _notice = {
             'tone': 'bad',
             'lines': [(res['message'] ?? res['error'] ?? '').toString()],
@@ -233,15 +239,22 @@ class _WaTokenPickerState extends State<WaTokenPicker> {
       return;
     }
 
-    widget.onInsert((res['key'] ?? p['key'] ?? '').toString());
+    // Inserted exactly like a normal chip: onInsert hands the KEY to the editor,
+    // which puts it in the body through wa_body_insert_token (that RPC owns the
+    // body text and the cursor). Nothing is assembled here.
+    widget.onInsert((res['key'] ?? '').toString());
 
-    final warning = (res['warning'] ?? '').toString();
-    if (warning.isNotEmpty) {
-      setState(() => _notice = {
-            'tone': 'warn',
-            'lines': [warning],
-          });
+    // The backend's own message, plus — when it wrote a fresh lookup — the value
+    // that lookup returned on Om's latest order, so he can see it really ran.
+    final lines = <String>[
+      (res['message'] ?? '').toString(),
+      if (res['created_lookup'] == true) (res['sample'] ?? '').toString(),
+    ].where((s) => s.isNotEmpty).toList();
+    if (lines.isNotEmpty) {
+      setState(() => _notice = {'tone': 'good', 'lines': lines});
     }
+
+    // The value now exists — re-read the list so its chip appears there too.
     await _reloadAll();
   }
 
@@ -583,7 +596,7 @@ class _WaTokenPickerState extends State<WaTokenPicker> {
           Align(
             alignment: Alignment.centerLeft,
             child: ElevatedButton(
-              onPressed: () => _createFromProposal(p),
+              onPressed: _applyProposal,
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF1B7A43),
                 foregroundColor: Colors.white,

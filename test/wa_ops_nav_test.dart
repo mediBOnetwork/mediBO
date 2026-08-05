@@ -64,6 +64,8 @@ Map<String, dynamic> _route({
       'stage': 'waiting_meta',
       'stage_label': stageLabel,
       'stage_tone': stageTone,
+      'bypass_send_window': true,
+      'dedupe_minutes': 45,
     };
 
 Map<String, dynamic> _routesPayload({List<Map<String, dynamic>>? rows}) => {
@@ -290,16 +292,18 @@ void main() {
       expect(find.byKey(const Key('wa_ops_template_picker')), findsOneWidget);
     });
 
-    testWidgets('the send-any-time control starts UNKNOWN, never inferred '
-        'from window_label', (tester) async {
+    testWidgets('the send-any-time control reads bypass_send_window, never '
+        'window_label', (tester) async {
       await _pumpOps(tester,
           routes: _routesPayload(rows: [_route(autoManage: false)]));
 
-      final box = tester.widget<Checkbox>(
-          find.byKey(const Key('wa_ops_bypass_checkbox')));
-      // window_label says "Sends any time" — reading that back into `true`
-      // would be the app holding a second answer to a backend question.
-      expect(box.value, isNull);
+      // #648 shipped this tristate-and-unknown because the payload carried no
+      // boolean. It does now, so the control is plainly two-state and starts
+      // from that value — while window_label remains something this screen
+      // only ever prints. Full coverage lives in wa_ops_window_switch_test.
+      final sw = tester
+          .widget<Switch>(find.byKey(const Key('wa_ops_bypass_switch')));
+      expect(sw.value, isTrue);
       expect(find.text('Sends any time — transactional'), findsOneWidget);
     });
 

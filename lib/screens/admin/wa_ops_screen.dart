@@ -26,17 +26,29 @@
 //      A control that moved first would be the app asserting a value the
 //      backend had not agreed to.
 //
-//   2. THE "SEND ANY TIME" CONTROL IS TRISTATE AND STARTS UNKNOWN.
-//      wa_event_routes_screen() returns `window_label` (a sentence) but no
-//      bypass_send_window boolean. Reading the sentence back into a bool —
-//      "if it says 'any time' the switch is on" — is exactly the two-answers-
-//      to-one-question bug this repo keeps paying for: reword the sentence in
-//      Postgres and the switch silently flips. So the control renders as null
-//      (unknown) until an admin sets it, the backend's own window_label sits
-//      beside it as the statement of what is actually happening, and
-//      p_bypass_window is sent ONLY when the admin has actually chosen. Same
-//      rule as p_variable_map: untouched means null means "leave it alone",
-//      which is what wa_event_route_save's coalesce() already does.
+//   2. THE "SEND ANY TIME" CONTROL READS `bypass_send_window`, NEVER
+//      `window_label`. #648 shipped this control tristate-and-unknown because
+//      the payload carried only window_label — a sentence — and parsing that
+//      sentence back into a bool ("if it says 'any time' the switch is on")
+//      would have been the two-answers-to-one-question bug this repo keeps
+//      paying for: reword the sentence in Postgres and the switch silently
+//      flips. The backend now returns the boolean itself, so the control is a
+//      plain two-state switch initialised from it. window_label stays exactly
+//      what it was — the descriptive line beneath the switch, rendered
+//      verbatim — and is still never read back into a value.
+//
+//      p_bypass_window is STILL sent only when an admin actually toggles the
+//      switch — onBypass fires on interaction and nowhere else. Same rule as
+//      p_variable_map: untouched means null means "leave it alone", which is
+//      what wa_event_route_save's coalesce() already does. Initialising the
+//      control from the payload is not the same as asserting it back; a screen
+//      that re-sent every value it merely displayed would overwrite a
+//      concurrent change made anywhere else.
+//
+//      The switch holds NO local copy of its value, exactly like the enabled
+//      switch above it. It paints row['bypass_send_window'] and nothing else,
+//      so rule 1 holds here too: a save that fails leaves the control showing
+//      what the backend still says, with nothing to roll back.
 //
 // TONE VOCABULARY. These RPCs speak good/warn/bad/muted; WaToneChip's palette
 // speaks green/yellow/red/blue and greys anything it does not know. That is a
@@ -249,12 +261,6 @@ class _EventRoutesSectionState extends State<_EventRoutesSection> {
   /// Purely a disclosure state — it decides nothing about the data.
   final _overridden = <String>{};
 
-  /// The "send any time" choice, per event key, ONLY once an admin has made
-  /// one. Absent = unknown = do not send p_bypass_window at all. See the file
-  /// header: the payload carries no bypass boolean and window_label must not be
-  /// read back into one.
-  final _bypassChoice = <String, bool>{};
-
   /// Event keys with a save in flight — their controls are disabled so a second
   /// tap cannot race the first.
   final _saving = <String>{};
@@ -363,19 +369,15 @@ class _EventRoutesSectionState extends State<_EventRoutesSection> {
               approved: _approved,
               overridden: _overridden.contains((r['event_key'] ?? '').toString()),
               busy: _saving.contains((r['event_key'] ?? '').toString()),
-              bypassChoice: _bypassChoice[(r['event_key'] ?? '').toString()],
+              bypass: r['bypass_send_window'] == true,
               onOverride: () => setState(() =>
                   _overridden.add((r['event_key'] ?? '').toString())),
               onPickTemplate: (id) => _save(
                   (r['event_key'] ?? '').toString(), {'p_template_id': id}),
               onEnabled: (v) => _save(
                   (r['event_key'] ?? '').toString(), {'p_enabled': v}),
-              onBypass: (v) {
-                setState(() =>
-                    _bypassChoice[(r['event_key'] ?? '').toString()] = v);
-                _save((r['event_key'] ?? '').toString(),
-                    {'p_bypass_window': v});
-              },
+              onBypass: (v) => _save(
+                  (r['event_key'] ?? '').toString(), {'p_bypass_window': v}),
             ),
           ),
       ],
@@ -388,7 +390,7 @@ class _EventRouteCard extends StatelessWidget {
   final List<Map<String, dynamic>> approved;
   final bool overridden;
   final bool busy;
-  final bool? bypassChoice;
+  final bool bypass;
   final VoidCallback onOverride;
   final ValueChanged<String> onPickTemplate;
   final ValueChanged<bool> onEnabled;
@@ -399,7 +401,7 @@ class _EventRouteCard extends StatelessWidget {
     required this.approved,
     required this.overridden,
     required this.busy,
-    required this.bypassChoice,
+    required this.bypass,
     required this.onOverride,
     required this.onPickTemplate,
     required this.onEnabled,
@@ -525,7 +527,7 @@ class _EventRouteCard extends StatelessWidget {
               row: row,
               approved: approved,
               busy: busy,
-              bypassChoice: bypassChoice,
+              bypass: bypass,
               onPickTemplate: onPickTemplate,
               onEnabled: onEnabled,
               onBypass: onBypass,
@@ -543,7 +545,7 @@ class _RouteControls extends StatelessWidget {
   final Map<String, dynamic> row;
   final List<Map<String, dynamic>> approved;
   final bool busy;
-  final bool? bypassChoice;
+  final bool bypass;
   final ValueChanged<String> onPickTemplate;
   final ValueChanged<bool> onEnabled;
   final ValueChanged<bool> onBypass;
@@ -552,7 +554,7 @@ class _RouteControls extends StatelessWidget {
     required this.row,
     required this.approved,
     required this.busy,
-    required this.bypassChoice,
+    required this.bypass,
     required this.onPickTemplate,
     required this.onEnabled,
     required this.onBypass,
@@ -617,22 +619,32 @@ class _RouteControls extends StatelessWidget {
                 style: const TextStyle(fontSize: 13, color: _kText)),
           ),
         ]),
-        // Tristate on purpose — see the file header. Null means "the payload
-        // never told us", so nothing is sent until an admin chooses. The
-        // backend's window_label beside it is the statement of record.
+        // Two-state, initialised from the payload's bypass_send_window — see
+        // the file header. window_label is still only ever rendered, never
+        // read back into this value.
         Row(children: [
-          Checkbox(
-            key: const Key('wa_ops_bypass_checkbox'),
-            tristate: true,
-            value: bypassChoice,
-            activeColor: _kGreen,
-            onChanged: busy ? null : (v) => onBypass(v ?? false),
+          Switch(
+            key: const Key('wa_ops_bypass_switch'),
+            value: bypass,
+            onChanged: busy ? null : onBypass,
+            activeThumbColor: _kGreen,
           ),
           Expanded(
             child: Text((row['window_label'] ?? '').toString(),
                 style: const TextStyle(fontSize: 13, color: _kText)),
           ),
         ]),
+        // How long the route stands down after the legacy sender already
+        // delivered. Read-only: there is no control for it, and the label is
+        // the field's own name so no wording is invented here.
+        Padding(
+          padding: const EdgeInsets.only(top: 2, left: 4),
+          child: Text(
+            'Dedupe minutes: ${row['dedupe_minutes'] ?? ''}',
+            key: const Key('wa_ops_dedupe_minutes'),
+            style: const TextStyle(fontSize: 12, color: _kMuted),
+          ),
+        ),
       ],
     );
   }

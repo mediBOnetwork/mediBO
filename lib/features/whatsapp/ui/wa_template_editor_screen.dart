@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/utils/toast.dart';
@@ -123,6 +124,15 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
 
   Timer? _debounce;
   Map<String, dynamic>? _preview;
+
+  /// wa_template_preview(p_template_id) — the SAVED row's preview, carrying the
+  /// media header (the sample file, keyed to the row) plus body_rendered,
+  /// rendered_note and char_count. Refreshed on open and after every save, not
+  /// on every keystroke: the sample lives on the row, so it cannot change while
+  /// the admin edits unsaved text. Null until there is a saved row to ask
+  /// about; the live components preview drives the bubble until then.
+  Map<String, dynamic>? _tplPreview;
+
   List<dynamic> _errors = const [];
   List<dynamic> _warnings = const [];
   bool _checking = false;
@@ -245,6 +255,7 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
     _loadMediaSpec();
     _refreshGate();
     _refreshHeaderStatus();
+    _refreshTemplatePreview();
     _refreshPolicy();
     if (_body.text.trim().isNotEmpty) _scheduleSimilar();
   }
@@ -468,6 +479,19 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
     }
   }
 
+  /// The saved row's preview, fetched by id. Carries the media header (the
+  /// uploaded sample) and body_rendered — everything the bubble needs to read
+  /// like a real message. Refuses to change anything on an error envelope, so a
+  /// transient failure never blanks a bubble that was showing a good answer.
+  Future<void> _refreshTemplatePreview() async {
+    if (_id.isEmpty) return;
+    try {
+      final res = await WaTemplateApi.templatePreview(_id);
+      if (!mounted || WaTemplateApi.isError(res, 'body_rendered')) return;
+      setState(() => _tplPreview = res);
+    } catch (_) {}
+  }
+
   // ── submit gate ────────────────────────────────────────────────────────────
   //
   // Each of these refuses to change anything when the RPC sends an error
@@ -535,6 +559,7 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
       if (status != 'pending' || waited >= WaTemplateEditorScreen.pollTimeout) {
         t.cancel();
         await _refreshGate();
+        await _refreshTemplatePreview();
       }
     });
   }
@@ -606,6 +631,7 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
       });
       if (res['ok'] == true) {
         await _refreshHeaderStatus();
+        await _refreshTemplatePreview();
         _startHeaderPoll();
       }
     } catch (_) {
@@ -878,6 +904,10 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
       // moment the gate has a row to read.
       if (saved != null) _id = (saved['id'] ?? '').toString();
       await _refreshGate();
+      if (!mounted) return;
+      // The bubble now has a row to render — re-ask so the sample and the
+      // rendered body reflect what was just saved.
+      await _refreshTemplatePreview();
       if (!mounted) return;
       // The spec's can_upload/blocked_reason are answers about THIS id, so a
       // save that mints one makes the previous answer stale.
@@ -1189,6 +1219,9 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        // The uploaded sample itself, so the admin can SEE what will sit on top
+        // of the message — the labels below still come from the status banner.
+        ..._buildSampleView(),
         WaBanner(
           title: (h?['status_label'] ?? '').toString(),
           tone: bad ? 'bad' : h?['tone'],
@@ -1262,6 +1295,26 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
         ],
       ],
     );
+  }
+
+  /// The uploaded sample, viewable, from wa_template_preview()'s header. Shown
+  /// only once a file exists — an image as a tappable thumbnail, a PDF or video
+  /// as a tappable file tile. When there is no sample the status banner already
+  /// says so, so nothing extra is drawn.
+  List<Widget> _buildSampleView() {
+    final h = _tplPreview?['header'];
+    if (h is! Map) return const [];
+    final header = h.cast<String, dynamic>();
+    final hasSample = (header['media_url'] ?? '').toString().isNotEmpty ||
+        (header['storage_path'] ?? '').toString().isNotEmpty;
+    if (!hasSample) return const [];
+    return [
+      _SampleView(
+        key: ValueKey('sample-${header['storage_path'] ?? header['media_url']}'),
+        header: header,
+      ),
+      const SizedBox(height: 12),
+    ];
   }
 
   /// Save, then re-ask the spec with the id the save just produced, so the
@@ -1385,19 +1438,7 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
           ],
         ),
         const SizedBox(height: 12),
-        if (_preview == null)
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: const [
-              WaSkeleton(height: 16, width: 200),
-              SizedBox(height: 8),
-              WaSkeleton(height: 16),
-              SizedBox(height: 8),
-              WaSkeleton(height: 16, width: 160),
-            ],
-          )
-        else
-          WaPreviewBubble(preview: _preview!),
+        ..._buildBubble(),
 
         // ── lint, verbatim ─────────────────────────────────────────────
         if (_errors.isNotEmpty) ...[
@@ -1425,6 +1466,45 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
         _buildPolicy(),
       ],
     );
+  }
+
+  /// The message bubble. The saved-row preview (with its media header and
+  /// body_rendered) wins when it is loaded; until there is a saved row, the
+  /// live components preview keeps the bubble updating as the admin types.
+  /// rendered_note and char_count sit under the bubble — both the backend's.
+  List<Widget> _buildBubble() {
+    final source = _tplPreview ?? _preview;
+    if (source == null) {
+      return const [
+        WaSkeleton(height: 16, width: 200),
+        SizedBox(height: 8),
+        WaSkeleton(height: 16),
+        SizedBox(height: 8),
+        WaSkeleton(height: 16, width: 160),
+      ];
+    }
+    final note = (_tplPreview?['rendered_note'] ?? '').toString();
+    final charCount = (_tplPreview?['char_count'] ?? '').toString();
+    return [
+      _MediaBubble(preview: source),
+      if (note.isNotEmpty) ...[
+        const SizedBox(height: 8),
+        Text(
+          note,
+          style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+        ),
+      ],
+      if (charCount.isNotEmpty && charCount != '0') ...[
+        const SizedBox(height: 4),
+        Align(
+          alignment: Alignment.centerRight,
+          child: Text(
+            charCount,
+            style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
+          ),
+        ),
+      ],
+    ];
   }
 
   /// wa_template_similar's own summary, in its own tone, over its own rows.
@@ -1977,4 +2057,451 @@ class _ActionBar extends StatelessWidget {
           ),
         ),
       );
+}
+
+// ── message preview: media header + bubble ───────────────────────────────────
+//
+// The sample file lives in a PRIVATE bucket, so a public URL 403s. The URL is
+// signed here from the bucket and path the backend named — never guessed — and
+// re-signed on every open (the widgets are rebuilt with a fresh key when the
+// payload changes), never cached, because signed URLs expire. When media_url is
+// set the file is public (Meta approved it) and used directly.
+
+/// The viewable link for the sample: the public CDN link when Meta has issued
+/// one, otherwise a fresh signed link for the private file. Null when signing
+/// fails or there is nothing to sign — the caller then shows the file label
+/// instead of a broken image.
+Future<String?> _resolveSampleUrl(Map<String, dynamic> header) async {
+  final mediaUrl = (header['media_url'] ?? '').toString();
+  if (mediaUrl.isNotEmpty) return mediaUrl;
+  final bucket = (header['storage_bucket'] ?? '').toString();
+  final path = (header['storage_path'] ?? '').toString();
+  if (bucket.isNotEmpty && path.isNotEmpty) {
+    return WaTemplateApi.signedUrl(bucket, path);
+  }
+  return null;
+}
+
+/// The icon for the sample's kind. The backend's is_pdf / is_video booleans
+/// decide it — nothing here parses a file name or a mime type.
+IconData _sampleIcon(Map<String, dynamic> header) {
+  if (header['is_pdf'] == true) return Icons.picture_as_pdf_outlined;
+  if (header['is_video'] == true) return Icons.videocam_outlined;
+  return Icons.image_outlined;
+}
+
+/// Opens the sample image full size — the same URL the thumbnail resolved.
+void _openFullSizeImage(BuildContext context, String url) {
+  showDialog<void>(
+    context: context,
+    builder: (_) => Dialog(
+      key: const Key('wa_sample_fullscreen'),
+      backgroundColor: Colors.black,
+      insetPadding: const EdgeInsets.all(16),
+      child: InteractiveViewer(
+        child: Image.network(
+          url,
+          fit: BoxFit.contain,
+          errorBuilder: (_, _, _) => const SizedBox(
+            height: 200,
+            child: Icon(Icons.broken_image_outlined,
+                size: 40, color: Color(0xFF9CA3AF)),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+/// The WhatsApp message bubble: header, then body_rendered, then footer, then
+/// the buttons, top to bottom. body_rendered already has the example values
+/// substituted (body is the same rendered field from the live components
+/// preview); body_raw ({{1}}) is deliberately never read here.
+class _MediaBubble extends StatelessWidget {
+  final Map<String, dynamic> preview;
+  const _MediaBubble({required this.preview});
+
+  @override
+  Widget build(BuildContext context) {
+    final rawHeader = preview['header'];
+    final header = rawHeader is Map ? rawHeader.cast<String, dynamic>() : null;
+    final format = (header?['format'] ?? '').toString().toUpperCase();
+    final textHeader =
+        format == 'TEXT' ? (header?['text'] ?? '').toString() : '';
+    final body = (preview['body_rendered'] ?? preview['body'] ?? '').toString();
+    final footer = (preview['footer'] ?? '').toString();
+    final buttons = (preview['buttons'] as List?) ?? const [];
+    final showMedia = header != null && format.isNotEmpty && format != 'TEXT';
+
+    return Container(
+      key: const Key('wa_preview_bubble'),
+      decoration: BoxDecoration(
+        color: const Color(0xFFE7F8D8),
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.06),
+              blurRadius: 8,
+              offset: const Offset(0, 2)),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (showMedia) _BubbleHeaderMedia(header: header),
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (textHeader.isNotEmpty) ...[
+                  Text(
+                    textHeader,
+                    style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF111827)),
+                  ),
+                  const SizedBox(height: 6),
+                ],
+                Text(
+                  body,
+                  style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w400,
+                      height: 1.35,
+                      color: Color(0xFF111827)),
+                ),
+                if (footer.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    footer,
+                    style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w400,
+                        color: Color(0xFF6B7280)),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          for (final b in buttons)
+            if (b is Map) _bubbleButton(b.cast<String, dynamic>()),
+        ],
+      ),
+    );
+  }
+
+  /// A full-width WhatsApp-style button tile: its text, with kind_label as a
+  /// small caption. Both are the backend's.
+  Widget _bubbleButton(Map<String, dynamic> b) {
+    final text = (b['text'] ?? '').toString();
+    final kindLabel = (b['kind_label'] ?? '').toString();
+    final kind = (b['kind'] ?? b['type'] ?? '').toString();
+    return Container(
+      decoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: Color(0x22000000), width: 0.5)),
+      ),
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(_buttonIcon(kind),
+                  size: 14, color: const Color(0xFF1E40AF)),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  text,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      color: Color(0xFF1E40AF)),
+                ),
+              ),
+            ],
+          ),
+          if (kindLabel.isNotEmpty) ...[
+            const SizedBox(height: 2),
+            Text(
+              kindLabel,
+              style:
+                  const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  static IconData _buttonIcon(String kind) {
+    switch (kind.toUpperCase()) {
+      case 'URL':
+        return Icons.open_in_new;
+      case 'PHONE_NUMBER':
+        return Icons.call_outlined;
+      case 'QUICK_REPLY':
+        return Icons.reply_outlined;
+      default:
+        return Icons.smart_button_outlined;
+    }
+  }
+}
+
+/// The media header INSIDE the bubble. Fills the bubble width with rounded top
+/// corners for an image; a file tile for a PDF or video; a neutral placeholder
+/// box with the warn line when no sample has been uploaded yet.
+class _BubbleHeaderMedia extends StatefulWidget {
+  final Map<String, dynamic> header;
+  const _BubbleHeaderMedia({required this.header});
+
+  @override
+  State<_BubbleHeaderMedia> createState() => _BubbleHeaderMediaState();
+}
+
+class _BubbleHeaderMediaState extends State<_BubbleHeaderMedia> {
+  late final Future<String?> _url;
+
+  @override
+  void initState() {
+    super.initState();
+    _url = _resolveSampleUrl(widget.header);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final h = widget.header;
+    final missing = (h['missing_label'] ?? '').toString();
+    if (missing.isNotEmpty) {
+      final placeholder = (h['placeholder_label'] ?? '').toString();
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            height: 120,
+            alignment: Alignment.center,
+            decoration: const BoxDecoration(
+              color: Color(0xFFF3F4F6),
+              borderRadius: BorderRadius.only(
+                  topLeft: Radius.circular(12), topRight: Radius.circular(12)),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(_sampleIcon(h), size: 28, color: const Color(0xFF9CA3AF)),
+                if (placeholder.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Text(
+                      placeholder,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                          fontSize: 12, color: Color(0xFF6B7280)),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+            child: Text(
+              missing,
+              style: TextStyle(fontSize: 12, color: WaTone.of('warn').fg),
+            ),
+          ),
+        ],
+      );
+    }
+
+    if (h['is_image'] == true) {
+      return FutureBuilder<String?>(
+        future: _url,
+        builder: (context, snap) {
+          final url = (snap.data ?? '').toString();
+          if (url.isEmpty) {
+            return _SampleFileTile(header: h, roundedTop: true);
+          }
+          return GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => _openFullSizeImage(context, url),
+            child: ClipRRect(
+              borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(12), topRight: Radius.circular(12)),
+              child: Image.network(
+                url,
+                width: double.infinity,
+                height: 180,
+                fit: BoxFit.cover,
+                errorBuilder: (_, _, _) =>
+                    _SampleFileTile(header: h, roundedTop: true),
+              ),
+            ),
+          );
+        },
+      );
+    }
+
+    // PDF / video — a file tile carrying the backend's file_label.
+    return _SampleFileTile(header: h, roundedTop: true);
+  }
+}
+
+/// A file tile — icon, file_label and size_label — for a PDF or video sample,
+/// or an image whose link could not be signed. Tappable when a URL is given.
+class _SampleFileTile extends StatelessWidget {
+  final Map<String, dynamic> header;
+  final VoidCallback? onTap;
+  final bool roundedTop;
+  const _SampleFileTile({
+    required this.header,
+    this.onTap,
+    this.roundedTop = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final label = (header['file_label'] ?? '').toString();
+    final size = (header['size_label'] ?? '').toString();
+    final radius = roundedTop
+        ? const BorderRadius.only(
+            topLeft: Radius.circular(12), topRight: Radius.circular(12))
+        : BorderRadius.circular(10);
+    final tile = Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: radius,
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: Row(
+        children: [
+          Icon(_sampleIcon(header), size: 22, color: const Color(0xFF1B7A43)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (label.isNotEmpty)
+                  Text(
+                    label,
+                    style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF111827)),
+                  ),
+                if (size.isNotEmpty)
+                  Text(
+                    size,
+                    style: const TextStyle(
+                        fontSize: 12, color: Color(0xFF6B7280)),
+                  ),
+              ],
+            ),
+          ),
+          if (onTap != null)
+            const Icon(Icons.open_in_new, size: 16, color: Color(0xFF6B7280)),
+        ],
+      ),
+    );
+    if (onTap == null) return tile;
+    return GestureDetector(
+        behavior: HitTestBehavior.opaque, onTap: onTap, child: tile);
+  }
+}
+
+/// The uploaded sample in the media-header SECTION: a tappable thumbnail for an
+/// image, a tappable file tile for a PDF or video. Expired samples add the
+/// backend's expires_label in the bad tone.
+class _SampleView extends StatefulWidget {
+  final Map<String, dynamic> header;
+  const _SampleView({super.key, required this.header});
+
+  @override
+  State<_SampleView> createState() => _SampleViewState();
+}
+
+class _SampleViewState extends State<_SampleView> {
+  late final Future<String?> _url;
+
+  @override
+  void initState() {
+    super.initState();
+    _url = _resolveSampleUrl(widget.header);
+  }
+
+  Future<void> _open(String url) async {
+    try {
+      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+    } catch (_) {}
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final h = widget.header;
+    final expired = h['expired'] == true;
+    final expiresLabel = (h['expires_label'] ?? '').toString();
+
+    Widget viewer;
+    if (h['is_image'] == true) {
+      viewer = FutureBuilder<String?>(
+        future: _url,
+        builder: (context, snap) {
+          final url = (snap.data ?? '').toString();
+          if (url.isEmpty) return _SampleFileTile(header: h);
+          return GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => _openFullSizeImage(context, url),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: Image.network(
+                url,
+                width: 140,
+                height: 140,
+                fit: BoxFit.cover,
+                errorBuilder: (_, _, _) => _SampleFileTile(header: h),
+              ),
+            ),
+          );
+        },
+      );
+    } else {
+      viewer = FutureBuilder<String?>(
+        future: _url,
+        builder: (context, snap) {
+          final url = (snap.data ?? '').toString();
+          return _SampleFileTile(
+            header: h,
+            onTap: url.isEmpty ? null : () => _open(url),
+          );
+        },
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Align(alignment: Alignment.centerLeft, child: viewer),
+        if (expired && expiresLabel.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Text(
+            expiresLabel,
+            style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: WaTone.of('bad').fg),
+          ),
+        ],
+      ],
+    );
+  }
 }

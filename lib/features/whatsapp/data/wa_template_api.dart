@@ -32,6 +32,12 @@ class WaTemplateApi {
   static Future<void> Function(
       String bucket, String path, Uint8List bytes, String mime)? uploadTransport;
 
+  /// Test seam for the storage signer behind the sample viewer. A widget test
+  /// can hand back a URL — or a failure — without a Supabase client or network.
+  @visibleForTesting
+  static Future<String?> Function(String bucket, String path, int expiresIn)?
+      signerTransport;
+
   /// The bucket the sample file is uploaded to. The RPC defaults to the same
   /// name server-side; it is named once here so the two cannot drift.
   static const String mediaBucket = 'whatsapp-media';
@@ -100,7 +106,8 @@ class WaTemplateApi {
       });
 
   /// Returns {header, body, body_raw, footer, buttons[], used_values[]}.
-  /// The bubble is rendered from this — never assembled in Dart.
+  /// The bubble is rendered from this — never assembled in Dart. This is the
+  /// LIVE preview: it re-renders the unsaved components as the admin types.
   static Future<Map<String, dynamic>> preview(
     List<dynamic> components, [
     List<dynamic>? vars,
@@ -109,6 +116,20 @@ class WaTemplateApi {
         'p_components': components,
         'p_vars': vars,
       });
+
+  /// The SAVED row's whole preview in one call, already render-ready:
+  ///   {header, body_raw, body_rendered, footer, buttons:[{text,kind,kind_label}],
+  ///    rendered_note, char_count}
+  /// where header is null | {format:'TEXT',text} |
+  ///   {format:'IMAGE'|'DOCUMENT'|'VIDEO', is_image, is_pdf, is_video,
+  ///    media_url, storage_bucket, storage_path, file_label, size_label,
+  ///    expires_label, expired, placeholder_label, missing_label}.
+  ///
+  /// Reads the row, so it only answers once the template has an id — the sample
+  /// file (and the handle Meta issues for it) live on the row, not in the
+  /// components the editor is holding.
+  static Future<Map<String, dynamic>> templatePreview(String id) =>
+      _rpc('wa_template_preview', {'p_template_id': id});
 
   // ── submit gate ────────────────────────────────────────────────────────────
 
@@ -165,6 +186,27 @@ class WaTemplateApi {
           bytes,
           fileOptions: FileOptions(contentType: mime, upsert: true),
         );
+  }
+
+  /// A viewable link to a sample file in a PRIVATE bucket. The bucket and path
+  /// are the backend's own — this only asks storage to sign what the preview
+  /// payload named. Returns null when signing fails, so the caller falls back
+  /// to the file label rather than showing a broken image. Re-signed on every
+  /// screen open (the URL expires), never cached.
+  static Future<String?> signedUrl(
+    String bucket,
+    String path, {
+    int expiresIn = 3600,
+  }) async {
+    final t = signerTransport;
+    if (t != null) return t(bucket, path, expiresIn);
+    try {
+      return await Supabase.instance.client.storage
+          .from(bucket)
+          .createSignedUrl(path, expiresIn);
+    } catch (_) {
+      return null;
+    }
   }
 
   // ── duplicate check ────────────────────────────────────────────────────────

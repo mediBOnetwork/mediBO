@@ -26,6 +26,14 @@ import 'google_flow.dart';
 
 export 'google_flow.dart' show GoogleOutcome;
 
+/// What a Google tap did, plus an optional message to show beneath the actions.
+///
+/// [message] is ALWAYS null on the web path — that path is unchanged and shows
+/// nothing on suppression (see #568). The Android native path uses it to carry a
+/// backend string: the config's `google_unavailable_note` when no id token comes
+/// back, or a Supabase auth error's own message. It is never wording coined here.
+typedef GoogleResult = ({GoogleOutcome outcome, String? message});
+
 /// The backend contract this screen renders. One method per RPC.
 abstract class LoginApi {
   /// rpc login_screen_config()
@@ -49,15 +57,19 @@ abstract class LoginApi {
   /// rpc my_session()
   Future<Map<String, dynamic>> session();
 
-  /// Google One Tap. The labels are passed through so no Google copy is ever
-  /// invented client-side.
+  /// Google sign-in. The labels are passed through so no Google copy is ever
+  /// invented client-side; [unavailableNote] is the backend string shown when
+  /// the native Android flow returns without a usable token.
   ///
-  /// CHANGE #564: returns what actually happened. NOTHING here may navigate —
-  /// there is no browser path at all any more.
-  Future<GoogleOutcome> googleSignIn({
+  /// CHANGE #564: returns what actually happened. On the web path NOTHING here
+  /// may navigate — there is no browser path at all any more, and [message] is
+  /// always null. The Android native path (added later) may carry a backend
+  /// [message]; see [GoogleResult].
+  Future<GoogleResult> googleSignIn({
     required String sheetTitle,
     required String sheetSubtitle,
     required String otherAccount,
+    required String unavailableNote,
   });
 
 }
@@ -189,22 +201,28 @@ class _LoginViewState extends State<LoginView> {
     try {
       // No await before this call — the One Tap sheet only displays while the
       // tap's user activation is still live.
-      final outcome = await widget.api.googleSignIn(
+      final res = await widget.api.googleSignIn(
         sheetTitle: _s('google_sheet_title'),
         sheetSubtitle: _s('google_sheet_subtitle'),
         otherAccount: _s('google_other_account'),
+        unavailableNote: _s('google_unavailable_note'),
       );
       if (!mounted) return;
-      switch (outcome) {
+      // On web, res.message is always null so this is a no-op and the message
+      // area is untouched — behaviour there is byte-for-byte what it was. The
+      // Android native path uses it to surface a backend string.
+      if (res.message != null) setState(() => _setMessage(res.message));
+      switch (res.outcome) {
         case GoogleOutcome.signedIn:
           await _goHome();
         case GoogleOutcome.closed:
           // CHANGE #563: the user said no. Stay put, button re-enables below.
           break;
         case GoogleOutcome.suppressed:
-          // CHANGE #568: the note is gone. With the popup restored the only way
-          // to land here is both the sheet AND the popup failing, which leaves
-          // nothing useful to say — and never a navigation.
+          // CHANGE #568: the web note is gone. With the popup restored the only
+          // way web lands here is both the sheet AND the popup failing, which
+          // leaves nothing useful to say — and never a navigation. On Android
+          // the backend message set above is what tells the user.
           break;
       }
     } catch (_) {

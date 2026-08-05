@@ -9,7 +9,9 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -20,6 +22,64 @@ import 'google_flow.dart';
 import '../../user_state.dart';
 import '../../utils/render_log.dart';
 import 'login_view.dart';
+
+/// The Google Cloud WEB OAuth client id.
+///
+/// This is deliberately the WEB id, not the Android one: the native
+/// google_sign_in flow needs the web client id as its serverClientId so the
+/// id token it returns is audienced for the backend. The Android client id is
+/// registered in Google Cloud against this app's signing certificate and the
+/// plugin picks it up from there — it is NEVER passed from Dart, and must not be
+/// hardcoded here.
+const String kGoogleWebClientId =
+    '565577322247-9ls2ocm01sjilq2sb17r5afm6se9jfr4.apps.googleusercontent.com';
+
+/// Tokens from a native Google sign-in. [idToken] can be null if Google returns
+/// an account without one (then we must not call Supabase); [accessToken] is
+/// best-effort and optional for signInWithIdToken.
+typedef NativeGoogleTokens = ({String? idToken, String? accessToken});
+
+/// Runs the native Google sign-in for [serverClientId] and returns the tokens,
+/// or null when the user cancels the sheet. Injected on [SupabaseLoginApi] so
+/// the Android branch is testable without the plugin.
+typedef NativeGoogleSignIn = Future<NativeGoogleTokens?> Function(
+    String serverClientId);
+
+/// The real native sign-in, using google_sign_in 7.x. Runs ONLY on Android (the
+/// caller gates on the platform); on web this function is never invoked.
+///
+/// Cancellation is a null return, not an error — the login screen stays put and
+/// shows nothing. Any other GoogleSignInException propagates so the caller can
+/// surface its message.
+Future<NativeGoogleTokens?> _defaultNativeGoogleSignIn(
+    String serverClientId) async {
+  final gsi = GoogleSignIn.instance;
+  await gsi.initialize(serverClientId: serverClientId);
+
+  final GoogleSignInAccount account;
+  try {
+    account = await gsi.authenticate(scopeHint: const ['email', 'profile']);
+  } on GoogleSignInException catch (e) {
+    // The user closed the sheet — an answer, not a failure.
+    if (e.code == GoogleSignInExceptionCode.canceled) return null;
+    rethrow;
+  }
+
+  final idToken = account.authentication.idToken;
+
+  // Access token is optional for signInWithIdToken; fetch it without forcing a
+  // second consent prompt, and never let its absence block sign-in.
+  String? accessToken;
+  try {
+    final authz = await account.authorizationClient
+        .authorizationForScopes(const ['email', 'profile']);
+    accessToken = authz?.accessToken;
+  } catch (_) {
+    accessToken = null;
+  }
+
+  return (idToken: idToken, accessToken: accessToken);
+}
 
 /// Supabase-backed implementation of the CHANGE #554/#555 login contract.
 class SupabaseLoginApi implements LoginApi {
@@ -33,8 +93,18 @@ class SupabaseLoginApi implements LoginApi {
       required String subtitle,
       required String cancelLabel,
     })? popup,
+    // Android native seam — all three injectable so the branch is unit-testable
+    // with no plugin and no Supabase. In production they default to the real
+    // platform detection, the real google_sign_in flow, and the real
+    // signInWithIdToken.
+    bool? isAndroid,
+    NativeGoogleSignIn? nativeSignIn,
+    Future<void> Function(String idToken, String? accessToken)? finishNative,
   })  : _oneTap = oneTap ?? gisPromptOneTap,
-        _popup = popup ?? gisPopupSignIn;
+        _popup = popup ?? gisPopupSignIn,
+        _isAndroid = isAndroid ?? (!kIsWeb && defaultTargetPlatform == TargetPlatform.android),
+        _nativeSignIn = nativeSignIn ?? _defaultNativeGoogleSignIn,
+        _finishNativeInjected = finishNative;
 
   final Future<GoogleCredential> Function() _oneTap;
   final Future<GoogleCredential> Function({
@@ -42,6 +112,13 @@ class SupabaseLoginApi implements LoginApi {
     required String subtitle,
     required String cancelLabel,
   }) _popup;
+
+  /// Whether this build should take the native token flow instead of the web
+  /// redirect/One Tap flow. Only true on a real Android app.
+  final bool _isAndroid;
+  final NativeGoogleSignIn _nativeSignIn;
+  final Future<void> Function(String idToken, String? accessToken)?
+      _finishNativeInjected;
 
   SupabaseClient get _c => Supabase.instance.client;
 
@@ -110,6 +187,61 @@ class SupabaseLoginApi implements LoginApi {
         nonce: rawNonce,
       );
 
+  /// The native counterpart: no raw nonce (google_sign_in owns that), and the
+  /// access token is passed through. Injectable so a test can assert the token
+  /// without a live Supabase.
+  Future<void> _finishNative(String idToken, String? accessToken) =>
+      _finishNativeInjected != null
+          ? _finishNativeInjected(idToken, accessToken)
+          : _c.auth.signInWithIdToken(
+              provider: OAuthProvider.google,
+              idToken: idToken,
+              accessToken: accessToken,
+            );
+
+  /// The Android native token flow. Kept entirely separate from the web path so
+  /// nothing here can alter web behaviour.
+  ///
+  ///  * cancel  -> closed, no message (the user said no)
+  ///  * no token -> suppressed, backend's [unavailableNote] (never invented)
+  ///  * signed in -> signedIn
+  ///  * auth error -> suppressed, the error's own message
+  Future<GoogleResult> _googleSignInAndroid(String unavailableNote) async {
+    _logNow('c668_native', 'android');
+    final NativeGoogleTokens? tokens;
+    try {
+      tokens = await _nativeSignIn(kGoogleWebClientId);
+    } catch (e) {
+      _logNow('c668_native', 'signin_error');
+      return (
+        outcome: GoogleOutcome.suppressed,
+        message: e is AuthException ? e.message : e.toString(),
+      );
+    }
+    // Cancelled sheet — stay put, show nothing.
+    if (tokens == null) {
+      _logNow('c668_native', 'cancelled');
+      return (outcome: GoogleOutcome.closed, message: null);
+    }
+    final idToken = tokens.idToken;
+    if (idToken == null || idToken.isEmpty) {
+      // No id token: do NOT call Supabase. Show the backend's own note.
+      _logNow('c668_native', 'no_id_token');
+      return (outcome: GoogleOutcome.suppressed, message: unavailableNote);
+    }
+    try {
+      await _finishNative(idToken, tokens.accessToken);
+      _logNow('c668_native', 'signed_in');
+      return (outcome: GoogleOutcome.signedIn, message: null);
+    } on AuthException catch (e) {
+      _logNow('c668_native', 'auth_error');
+      return (outcome: GoogleOutcome.suppressed, message: e.message);
+    } catch (e) {
+      _logNow('c668_native', 'error');
+      return (outcome: GoogleOutcome.suppressed, message: e.toString());
+    }
+  }
+
   /// CHANGE #568: the One Tap sheet, with the GIS button popup when Google
   /// suppresses it. No browser path, no FedCM, no dead end.
   ///
@@ -118,14 +250,22 @@ class SupabaseLoginApi implements LoginApi {
   /// navigate the document away. g_state is cleared before every prompt() so a
   /// cancel never suppresses the next attempt.
   @override
-  Future<GoogleOutcome> googleSignIn({
+  Future<GoogleResult> googleSignIn({
     required String sheetTitle,
     required String sheetSubtitle,
     required String otherAccount,
+    required String unavailableNote,
   }) async {
+    // Android takes the native token flow — the web redirect/One Tap sheet
+    // cannot complete inside the APK. Everything below the gate is the existing
+    // web path, untouched.
+    if (_isAndroid) {
+      return _googleSignInAndroid(unavailableNote);
+    }
+
     _logNow('c559_entry', 'login_screen');
     _logNow('c568_origin', currentOrigin());
-    return runGoogleSignIn(
+    final outcome = await runGoogleSignIn(
       oneTap: _oneTap,
       popup: () => _popup(
         title: sheetTitle,
@@ -135,6 +275,8 @@ class SupabaseLoginApi implements LoginApi {
       finish: _finishIdToken,
       log: _logNow,
     );
+    // Web never carries a message — same behaviour as before the record type.
+    return (outcome: outcome, message: null);
   }
 }
 

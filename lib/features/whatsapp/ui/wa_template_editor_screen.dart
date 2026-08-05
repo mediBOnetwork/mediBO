@@ -267,7 +267,7 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
     _loadMediaSpec();
     _refreshGate();
     _refreshHeaderStatus();
-    _refreshTemplatePreview();
+    _refreshBubblePreview();
     _refreshPolicy();
     if (_body.text.trim().isNotEmpty) _scheduleSimilar();
   }
@@ -490,17 +490,30 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
     } catch (_) {
       if (mounted) setState(() => _checking = false);
     }
+    // Before there is a row, the draft preview is the only one that reflects
+    // the edit just made — refresh it on this same debounce. A saved template
+    // keeps its open/save/upload cadence, since its bubble mirrors the row.
+    if (_id.isEmpty) await _refreshBubblePreview();
   }
 
-  /// The saved row's preview, fetched by id. Carries the media header (the
-  /// uploaded sample) and body_rendered — everything the bubble needs to read
-  /// like a real message. Refuses to change anything on an error envelope, so a
-  /// transient failure never blanks a bubble that was showing a good answer.
-  Future<void> _refreshTemplatePreview() async {
-    if (_id.isEmpty) return;
+  /// The bubble's preview payload — the media header (the uploaded sample) and
+  /// body_rendered, everything it needs to read like a delivered message. One
+  /// shape, two sources: a SAVED row is fetched by id (wa_template_preview); an
+  /// UNSAVED one is built from the components in the editor, the token map, and
+  /// the detached upload job (wa_preview_draft), so the picture shows before
+  /// there is a row. Adopts only a real payload — body_rendered is never null on
+  /// success, so its absence marks an error envelope and a good bubble is never
+  /// blanked.
+  Future<void> _refreshBubblePreview() async {
     try {
-      final res = await WaTemplateApi.templatePreview(_id);
-      if (!mounted || WaTemplateApi.isError(res, 'body_rendered')) return;
+      final res = _id.isEmpty
+          ? await WaTemplateApi.previewDraft(
+              _componentsNow(),
+              _tokenKeys,
+              _mediaJobId.isEmpty ? null : _mediaJobId,
+            )
+          : await WaTemplateApi.templatePreview(_id);
+      if (!mounted || res['body_rendered'] == null) return;
       setState(() => _tplPreview = res);
     } catch (_) {}
   }
@@ -572,7 +585,7 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
       if (status != 'pending' || waited >= WaTemplateEditorScreen.pollTimeout) {
         t.cancel();
         await _refreshGate();
-        await _refreshTemplatePreview();
+        await _refreshBubblePreview();
       }
     });
   }
@@ -660,10 +673,13 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
           // the same status block the attached case shows.
           setState(() => _mediaJobId = (res['job_id'] ?? '').toString());
           await _refreshMediaJobStatus();
+          // The draft preview now has a media job — refresh so the bubble shows
+          // the picture as soon as the handle resolves.
+          await _refreshBubblePreview();
           _startMediaJobPoll();
         } else {
           await _refreshHeaderStatus();
-          await _refreshTemplatePreview();
+          await _refreshBubblePreview();
           _startHeaderPoll();
         }
       }
@@ -698,6 +714,8 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
           status != 'pending' ||
           waited >= WaTemplateEditorScreen.pollTimeout) {
         t.cancel();
+        // The handle has resolved — re-render the draft bubble with the picture.
+        if (ready) await _refreshBubblePreview();
       }
     });
   }
@@ -825,7 +843,7 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
       if (msg.isNotEmpty) showToast(context, msg);
       setState(() => _policyApplying = false);
       // The saved-row preview changed too, so the bubble is refreshed from it.
-      await _refreshTemplatePreview();
+      await _refreshBubblePreview();
     } catch (_) {
       if (mounted) setState(() => _policyApplying = false);
     }
@@ -1014,7 +1032,7 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
       if (!mounted) return;
       // The bubble now has a row to render — re-ask so the sample and the
       // rendered body reflect what was just saved.
-      await _refreshTemplatePreview();
+      await _refreshBubblePreview();
       if (!mounted) return;
       // The spec's can_upload/blocked_reason are answers about THIS id, so a
       // save that mints one makes the previous answer stale.
@@ -1396,17 +1414,20 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
     );
   }
 
-  /// The uploaded sample, viewable, from wa_template_preview()'s header. Shown
-  /// only once a file exists — an image as a tappable thumbnail, a PDF or video
-  /// as a tappable file tile. When there is no sample the status banner already
-  /// says so, so nothing extra is drawn.
+  /// The uploaded sample, viewable, inside the header block. The file location
+  /// comes from the STATUS the block already reads — wa_media_job_status for a
+  /// detached upload, wa_template_header_status for a saved row — both of which
+  /// now carry is_image / storage_bucket / storage_path / file_label. Shown only
+  /// once the sample is ready and there is a file: an image as a tappable
+  /// thumbnail, a PDF or video as a tappable file tile.
   List<Widget> _buildSampleView() {
-    final h = _tplPreview?['header'];
-    if (h is! Map) return const [];
-    final header = h.cast<String, dynamic>();
-    final hasSample = (header['media_url'] ?? '').toString().isNotEmpty ||
+    final raw = _id.isEmpty ? _mediaJobStatus : _headerStatus;
+    if (raw == null) return const [];
+    final header = raw.cast<String, dynamic>();
+    final ready = header['ready'] == true || header['has_sample'] == true;
+    final hasFile = (header['media_url'] ?? '').toString().isNotEmpty ||
         (header['storage_path'] ?? '').toString().isNotEmpty;
-    if (!hasSample) return const [];
+    if (!ready || !hasFile) return const [];
     return [
       _SampleView(
         key: ValueKey('sample-${header['storage_path'] ?? header['media_url']}'),

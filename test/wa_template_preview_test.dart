@@ -115,9 +115,21 @@ _SignerLog _install(Map<String, dynamic> preview) {
         };
       case 'wa_tokens_screen':
         return {'rows': const [], 'search': null, 'empty_copy': 'No values'};
+      // The header block now reads the sample's location from the STATUS, so a
+      // saved row's header status mirrors the media header under test (with the
+      // has_sample flag the block gates on).
+      case 'wa_template_header_status':
+        final hdr = preview['header'];
+        if (hdr is Map) {
+          return {
+            ...hdr.cast<String, dynamic>(),
+            'has_sample': true,
+            'header_format': hdr['format'],
+          };
+        }
+        return const <String, dynamic>{};
       // The remaining reads the editor fires for a saved row. Empty maps are
       // healthy here (each is guarded by its own required-field check).
-      case 'wa_template_header_status':
       case 'wa_template_media_spec':
       case 'wa_template_submit_blockers':
       case 'wa_policy_review_latest':
@@ -348,7 +360,11 @@ void main() {
       )),
     );
 
-    final label = tester.widget<Text>(find.text('Sample expired — re-upload'));
-    expect(label.style?.color, WaTone.of('bad').fg);
+    // It shows in the status line and beside the thumbnail — both in the bad
+    // tone. (The header block now sources the sample from the status RPC.)
+    final labels =
+        tester.widgetList<Text>(find.text('Sample expired — re-upload'));
+    expect(labels, isNotEmpty);
+    expect(labels.every((t) => t.style?.color == WaTone.of('bad').fg), isTrue);
   });
 }

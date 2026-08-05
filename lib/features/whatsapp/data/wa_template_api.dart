@@ -131,6 +131,21 @@ class WaTemplateApi {
   static Future<Map<String, dynamic>> templatePreview(String id) =>
       _rpc('wa_template_preview', {'p_template_id': id});
 
+  /// The SAME preview, for a template that has NOT been saved yet. Identical
+  /// shape to [templatePreview], built from the components the editor is
+  /// holding, its token map, and the detached upload job — so the header can
+  /// carry the sample that has no row to live on. Display only; saves nothing.
+  static Future<Map<String, dynamic>> previewDraft(
+    List<dynamic> components,
+    List<dynamic> tokenMap,
+    String? mediaJob,
+  ) =>
+      _rpc('wa_preview_draft', {
+        'p_components': components,
+        'p_token_map': tokenMap,
+        'p_media_job': mediaJob,
+      });
+
   // ── submit gate ────────────────────────────────────────────────────────────
 
   /// {can_submit, count, why_label, blockers:[{issue,fix}], warnings:[]}

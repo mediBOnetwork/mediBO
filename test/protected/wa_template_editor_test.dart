@@ -18,13 +18,26 @@
 //   3. Choosing a starter fills name, category and components together. Half a
 //      starter is worse than none: the name would no longer describe the body.
 //
-//   4. Inserting a token appends the NEXT {{n}} and records the binding. The
-//      index comes from how many bindings exist, so it never depends on parsing
-//      the body text.
+//   4. Inserting a value drops that value's OWN `insert_as` string at the
+//      cursor — never a number the editor picked, and never appended to the
+//      end. Numbering is the backend's job at save time, from p_token_map.
+//
+//      CHANGED by the value-picker CHANGE, deliberately. This test used to
+//      assert the editor appended the next {{n}} from a fixed nine-value list
+//      (wa_template_tokens). That list could not grow, so a value it did not
+//      carry — a delivery person's name — could not be inserted at all, and
+//      typing a bare {{2}} instead sent the customer a message that literally
+//      read "{{2}}". The editor now renders WaTokenPicker, which loads the
+//      live, editable set from wa_tokens_screen().
+//
+//   5. A legacy numbered body ({{1}}, from a starter or an already-saved
+//      template) is migrated to named placeholders using its OWN token_map,
+//      once the picker's rows arrive. The mapping is read, never guessed, so
+//      the sentence itself is untouched.
 //
 // Fixture mirrors the real wa_templates_screen() sub-payloads (starters,
-// tokens, categories, languages, button_spec) taken off the live database on
-// 2026-08-04. No network, no Supabase, no goldens.
+// categories, languages, button_spec) and wa_tokens_screen(), taken off the
+// live database on 2026-08-04. No network, no Supabase, no goldens.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -38,6 +51,15 @@ import 'package:pharma_b2b/utils/render_log.dart';
 /// The real "Payment pending" starter, verbatim from wa_template_starters().
 const _paymentPendingBody =
     'Hi {{1}}, payment for order {{2}} is still pending. Amount due {{3}}. Please complete it to avoid a delay in dispatch.';
+
+/// The same starter once the editor has swapped the legacy {{n}} for the NAMED
+/// placeholders the picker deals in. token_map decides which number was which,
+/// so the migration reads the starter's own mapping rather than guessing. This
+/// is what lets an admin see "customer name" instead of "{{1}}" — and it is why
+/// a stray hand-typed {{2}} no longer resolves to anything.
+const _paymentPendingNamed =
+    'Hi {{customer_name}}, payment for order {{order_code}} is still pending. '
+    'Amount due {{amount}}. Please complete it to avoid a delay in dispatch.';
 
 const _starters = [
   {
@@ -61,11 +83,73 @@ const _starters = [
   },
 ];
 
+/// wa_templates_screen() still carries a `tokens` list, and the editor still
+/// deliberately ignores it — the picker is the only source of values now. Kept
+/// in the fixture so that stays true: nothing below is asserted to be on screen.
 const _tokens = [
   {'key': 'customer_name', 'label': 'Customer name', 'example': 'Chandra Medicom'},
   {'key': 'order_code', 'label': 'Order code', 'example': 'CPO020826CHAO1'},
   {'key': 'amount', 'label': 'Amount', 'example': '₹12,447.71'},
 ];
+
+/// One row of wa_tokens_screen(), verbatim in shape: the label, the example,
+/// the grouping and the insert text are all the backend's. `insert_as` is a
+/// NAMED placeholder — the editor never builds "{{" + key + "}}" itself.
+Map<String, dynamic> _tokenRow(
+  String key,
+  String label,
+  String group,
+  int sort,
+  String example, {
+  String? coverageLabel,
+  String coverageTone = 'good',
+  int usedIn = 0,
+  bool canDelete = false,
+}) =>
+    {
+      'key': key,
+      'label': label,
+      'group_label': group,
+      'sort_order': sort,
+      'source_kind': 'customer',
+      'source_ref': key,
+      'format': 'plain',
+      'fallback': '',
+      'enabled': true,
+      'is_system': !canDelete,
+      'insert_as': '{{$key}}',
+      'example': example,
+      'live': true,
+      'source_label': 'From the customer record',
+      'coverage_pct': 100,
+      'coverage_label': coverageLabel,
+      'coverage_tone': coverageTone,
+      'used_in': usedIn,
+      'can_delete': canDelete,
+    };
+
+/// The live value set. "Delivery person" is the one that matters: it was NOT on
+/// the fixed nine-value list, which is the whole reason the picker exists.
+Map<String, dynamic> _tokensScreen() => {
+      'rows': [
+        _tokenRow('customer_name', 'Customer name', 'Customer', 1,
+            'Chandra Medicom'),
+        _tokenRow('order_code', 'Order code', 'Order', 1, 'CPO020826CHAO1'),
+        _tokenRow('amount', 'Amount', 'Order', 2, '₹4,500.00'),
+        _tokenRow('rider_name', 'Delivery person', 'Delivery', 1, 'Suresh K.',
+            coverageLabel: '82% of customers have this — the rest send blank',
+            coverageTone: 'warn',
+            canDelete: true),
+      ],
+      'search': null,
+      'sample_from': 'Examples are from your latest real order',
+      'empty_copy': 'No values yet',
+      'source_kinds': const [
+        {'value': 'customer', 'label': 'Customer record', 'table': 'pharmacy_profiles'},
+        {'value': 'delivery', 'label': 'Delivery', 'options': ['rider_name']},
+      ],
+      'formats': const ['plain', 'money', 'date'],
+    };
 
 Map<String, dynamic> _screen() => {
       'copy': const {
@@ -157,6 +241,10 @@ void _stub({
           'buttons': const [],
           'used_values': const [],
         };
+      // The picker's own payload. wa_template_tokens() is NOT stubbed here —
+      // the editor must not call it any more.
+      case 'wa_tokens_screen':
+        return _tokensScreen();
       default:
         return const <String, dynamic>{};
     }
@@ -190,6 +278,14 @@ Future<void> _settleDebounce(WidgetTester tester) async {
 
 T _button<T extends Widget>(WidgetTester tester, String label) =>
     tester.widget<T>(find.widgetWithText(T, label));
+
+/// The message body — the editor's only six-line field. Reached through its
+/// controller so a test can place the caret, which is the whole point of the
+/// insert-at-cursor contract.
+TextEditingController _bodyController(WidgetTester tester) => tester
+    .widget<TextField>(
+        find.byWidgetPredicate((w) => w is TextField && w.maxLines == 6))
+    .controller!;
 
 void main() {
   setUpAll(() {
@@ -271,8 +367,10 @@ void main() {
 
     // name — from the starter, not typed.
     expect(find.text('payment_pending'), findsWidgets);
-    // components — the starter's body, verbatim.
-    expect(find.text(_paymentPendingBody), findsOneWidget);
+    // components — the starter's body, with its legacy {{n}} migrated to the
+    // named placeholders via the starter's own token_map. Nothing else in the
+    // sentence moved.
+    expect(find.text(_paymentPendingNamed), findsOneWidget);
     // category — the starter said MARKETING, so the dropdown moved off UTILITY
     // and the MARKETING cost note is now on screen.
     expect(find.text('Marketing'), findsWidgets);
@@ -283,26 +381,47 @@ void main() {
     expect(find.text('₹4,500.00'), findsWidgets);
   });
 
-  testWidgets('inserting a token appends the next {{n}}', (tester) async {
+  testWidgets('inserting a value drops its insert_as at the cursor',
+      (tester) async {
     _stub();
     await _pump(tester);
 
-    // Each token chip shows its own example beside the label.
+    // The chips come from wa_tokens_screen(). "Delivery person" exists only in
+    // that payload — it was never on the fixed nine-value list, and being
+    // unable to insert it is the bug that created the picker.
     expect(find.text('Customer name'), findsOneWidget);
-    expect(find.text('CPO020826CHAO1'), findsWidgets);
+    expect(find.text('Delivery person'), findsOneWidget);
+    expect(find.text('Suresh K.'), findsWidgets);
+
+    // The coverage warning is on screen BEFORE anything is inserted. Learning
+    // afterwards that a value is blank for some customers is too late.
+    expect(find.text('82% of customers have this — the rest send blank'),
+        findsOneWidget);
+
+    final body = _bodyController(tester);
+    body.text = 'Hi , your order is on its way.';
+    body.selection = const TextSelection.collapsed(offset: 3); // after "Hi "
+    await tester.pumpAndSettle();
 
     await tester.tap(find.text('Customer name'));
     await tester.pumpAndSettle();
-    expect(find.text('{{1}}'), findsWidgets);
 
-    await tester.tap(find.text('Order code'));
-    await tester.pumpAndSettle();
-    // The second insert becomes {{2}} — the body now holds both, in order.
-    expect(find.text('{{1}}{{2}}'), findsOneWidget);
+    // The backend's own insert_as, dropped where the caret was — not appended
+    // to the end, and not a number the editor picked.
+    expect(body.text, 'Hi {{customer_name}}, your order is on its way.');
+    expect(body.selection.baseOffset, 3 + '{{customer_name}}'.length);
 
-    await tester.tap(find.text('Amount'));
+    // A second value goes in at the new caret, still not at the end.
+    await tester.tap(find.text('Delivery person'));
     await tester.pumpAndSettle();
-    expect(find.text('{{1}}{{2}}{{3}}'), findsOneWidget);
+    expect(body.text,
+        'Hi {{customer_name}}{{rider_name}}, your order is on its way.');
+    expect(body.text.endsWith('{{rider_name}}'), isFalse);
+
+    // Nothing here invented a number. {{n}} is assigned by the backend at save
+    // time from p_token_map, which is what stops "{{2}}" reaching a customer.
+    expect(body.text.contains('{{1}}'), isFalse);
+    expect(body.text.contains('{{2}}'), isFalse);
   });
 
   testWidgets('the name field locks once Meta has the template',

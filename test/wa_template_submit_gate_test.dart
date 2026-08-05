@@ -280,7 +280,22 @@ void main() {
     _stub(gate: _gate(canSubmit: false));
     await _pump(tester);
 
-    await tester.tap(find.widgetWithText(ElevatedButton, 'Submit'));
+    // The blockers live ONLY in the sheet. Proving they are absent first is
+    // what makes the assertions below evidence that the tap opened it, rather
+    // than evidence that the strings happened to be on the page all along.
+    expect(find.text('The picture or file header has no sample yet'),
+        findsNothing);
+
+    // The editor is taller than the 800x600 test viewport, so the button sits
+    // off-screen and a bare tap() would miss it and silently pass.
+    final submit = find.widgetWithText(ElevatedButton, 'Submit');
+    await tester.ensureVisible(submit);
+    await tester.pumpAndSettle();
+    // warnIfMissed: the disabled button sits under an IgnorePointer so the tap
+    // is caught by the GestureDetector wrapping it — the hit test resolving to
+    // the ancestor instead of the button is the design, not a missed tap. The
+    // findsNothing above and findsOneWidget below are what prove it landed.
+    await tester.tap(submit, warnIfMissed: false);
     await tester.pumpAndSettle();
 
     expect(find.text('The picture or file header has no sample yet'),

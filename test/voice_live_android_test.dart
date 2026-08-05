@@ -1,0 +1,400 @@
+// Realtime (Android) voice-counting controller — fully mocked, no network, no
+// home_shell import. Drives VoiceLiveController with a fake Speech stream, a fake
+// mic and fake token/preview/commit callers, and asserts the spec contract:
+//  - Start calls voice-token and opens a stream with the returned recognizer,
+//    model and phrases.
+//  - Final words accumulate with 1-based indexes and increasing seconds; interim
+//    words are never sent.
+//  - Preview is debounced to one call per burst.
+//  - Shop AND Warehouse call voice_live_preview with p_supplier; Pack calls
+//    voice_live_preview_pack with p_order_id.
+//  - Totals render from the response.
+//  - Reaching reconnect_after_sec opens a new stream and keeps the word list.
+//  - Stop commits once via the correct RPC and shows message; a second Stop does
+//    not commit again.
+//  - An INVALID_ARGUMENT stream error retries once on fallback.
+//  - A token error shows message and opens no stream.
+//  - On web the old clip path is used and voice-token is never called.
+import 'dart:async';
+import 'dart:typed_data';
+
+import 'package:flutter/foundation.dart' show TargetPlatform;
+import 'package:flutter_test/flutter_test.dart';
+import 'package:pharma_b2b/services/voice_live_service.dart';
+
+// ── fakes ────────────────────────────────────────────────────────────────────
+class _FakeStream implements SpeechStream {
+  final _c = StreamController<SpeechEvent>.broadcast();
+  final List<List<int>> audio = [];
+  bool closed = false;
+
+  @override
+  Stream<SpeechEvent> get events => _c.stream;
+  @override
+  void addAudio(List<int> f) => audio.add(f);
+  @override
+  Future<void> close() async {
+    closed = true;
+  }
+
+  void emitFinal(List<SpeechWord> w, {String transcript = ''}) =>
+      _c.add(SpeechEvent(isFinal: true, transcript: transcript, words: w));
+  void emitInterim(String t) =>
+      _c.add(SpeechEvent(isFinal: false, transcript: t));
+  void fail(Object e) => _c.addError(e);
+}
+
+class _FakeMic implements MicSource {
+  final _c = StreamController<Uint8List>.broadcast();
+  bool started = false;
+  bool stopped = false;
+  @override
+  Future<bool> hasPermission() async => true;
+  @override
+  Future<Stream<Uint8List>> start({required int sampleRate}) async {
+    started = true;
+    return _c.stream;
+  }
+
+  @override
+  Future<void> stop() async {
+    stopped = true;
+  }
+}
+
+class _Opener {
+  final List<VoiceToken> tokens = [];
+  final List<bool> fallbacks = [];
+  final List<_FakeStream> streams;
+  int _i = 0;
+  _Opener(this.streams);
+  Future<SpeechStream> call(VoiceToken t, {bool fallback = false}) async {
+    tokens.add(t);
+    fallbacks.add(fallback);
+    final s = streams[_i < streams.length ? _i : streams.length - 1];
+    _i++;
+    return s;
+  }
+}
+
+class _Rpc {
+  final List<MapEntry<String, Map<String, dynamic>>> calls = [];
+  final Map<String, dynamic> Function(String fn, Map<String, dynamic> p)
+      responder;
+  _Rpc(this.responder);
+  Future<dynamic> call(String fn, Map<String, dynamic> p) {
+    calls.add(MapEntry(fn, Map<String, dynamic>.from(p)));
+    return Future.value(responder(fn, p));
+  }
+
+  List<MapEntry<String, Map<String, dynamic>>> named(String fn) =>
+      calls.where((e) => e.key == fn).toList();
+}
+
+class _Fn {
+  final List<MapEntry<String, Map<String, dynamic>>> calls = [];
+  final Map<String, dynamic> Function(String fn, Map<String, dynamic> b)
+      responder;
+  _Fn(this.responder);
+  Future<Map<String, dynamic>> call(String fn, Map<String, dynamic> b) {
+    calls.add(MapEntry(fn, Map<String, dynamic>.from(b)));
+    return Future.value(responder(fn, b));
+  }
+}
+
+Map<String, dynamic> _tokenOk({int reconnect = 270}) => {
+      'ok': true,
+      'access_token': 'tok',
+      'endpoint': 'speech.googleapis.com',
+      'recognizer': 'projects/p/locations/global/recognizers/_',
+      'location': 'global',
+      'language_code': 'en-IN',
+      'model': 'long',
+      'encoding': 'WEBM_OPUS',
+      'sample_rate': 48000,
+      'phrases': [
+        {'value': 'Winbp', 'boost': 18}
+      ],
+      'reconnect_after_sec': reconnect,
+      'ready_label': 'Listening',
+      'fallback': {
+        'location': 'us-central1',
+        'endpoint': 'us-central1-speech.googleapis.com',
+        'model': 'chirp_2',
+        'recognizer': 'projects/p/locations/us-central1/recognizers/_',
+      },
+    };
+
+Map<String, dynamic> _previewResp(String fn, Map<String, dynamic> p) => {
+      'ok': true,
+      'totals': [
+        {'product_id': 1, 'name': 'Winbp', 'qty': 20}
+      ],
+      'hint': '',
+      'found': 1,
+      'words': (p['p_words'] as List?)?.length ?? 0,
+    };
+
+void main() {
+  const dbg = Duration(milliseconds: 20);
+  Future<void> settle([int ms = 60]) =>
+      Future<void>.delayed(Duration(milliseconds: ms));
+
+  test('Start calls voice-token and opens a stream with recognizer/model/phrases',
+      () async {
+    final fn = _Fn((f, b) => _tokenOk());
+    final rpc = _Rpc(_previewResp);
+    final opener = _Opener([_FakeStream()]);
+    final c = VoiceLiveController(
+      backend:
+          SupplierVoiceBackend(supplier: 'Acme', stage: 'shop', rpc: rpc.call, fn: fn.call),
+      sessionKey: 'k',
+      openStream: opener.call,
+      mic: _FakeMic(),
+      debounce: dbg,
+    );
+
+    final ok = await c.start();
+    expect(ok, true);
+    expect(fn.calls.single.key, 'voice-token');
+    expect(fn.calls.single.value['supplier_name'], 'Acme');
+    expect(fn.calls.single.value['stage'], 'shop');
+    expect(opener.tokens.length, 1);
+    expect(opener.tokens.single.recognizer,
+        'projects/p/locations/global/recognizers/_');
+    expect(opener.tokens.single.model, 'long');
+    expect(opener.tokens.single.phrases.single['value'], 'Winbp');
+    await c.cancel();
+  });
+
+  test('final words accumulate 1-based with increasing seconds; interim not sent; preview debounced once',
+      () async {
+    final fn = _Fn((f, b) => _tokenOk());
+    final rpc = _Rpc(_previewResp);
+    final s = _FakeStream();
+    final c = VoiceLiveController(
+      backend:
+          SupplierVoiceBackend(supplier: 'Acme', stage: 'shop', rpc: rpc.call, fn: fn.call),
+      sessionKey: 'k',
+      openStream: _Opener([s]).call,
+      mic: _FakeMic(),
+      debounce: dbg,
+    );
+    await c.start();
+
+    s.emitInterim('winbp twenty'); // caption only — must never reach an RPC
+    s.emitFinal([
+      const SpeechWord('Winbp', 0.0, 0.4),
+      const SpeechWord('Twenty', 0.5, 0.9),
+    ]);
+    s.emitFinal([const SpeechWord('Paracip', 1.0, 1.4)]); // same burst
+    await settle();
+
+    final previews = rpc.named('voice_live_preview');
+    expect(previews.length, 1, reason: 'debounced to one call per burst');
+    final words = (previews.single.value['p_words'] as List)
+        .cast<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+    expect(words.map((w) => w['i']).toList(), [1, 2, 3]);
+    expect(words.map((w) => w['w']).toList(), ['winbp', 'twenty', 'paracip']);
+    for (var i = 1; i < words.length; i++) {
+      expect((words[i]['s'] as num) >= (words[i - 1]['s'] as num), true);
+    }
+    expect(previews.single.value['p_supplier'], 'Acme');
+    await c.cancel();
+  });
+
+  test('totals render from the response', () async {
+    final fn = _Fn((f, b) => _tokenOk());
+    final rpc = _Rpc(_previewResp);
+    final s = _FakeStream();
+    List<Map<String, dynamic>>? seen;
+    final c = VoiceLiveController(
+      backend:
+          SupplierVoiceBackend(supplier: 'Acme', stage: 'shop', rpc: rpc.call, fn: fn.call),
+      sessionKey: 'k',
+      openStream: _Opener([s]).call,
+      mic: _FakeMic(),
+      debounce: dbg,
+      onTotals: (t, h) => seen = t,
+    );
+    await c.start();
+    s.emitFinal([const SpeechWord('Winbp', 0.0, 0.4)]);
+    await settle();
+    expect(seen, isNotNull);
+    expect(seen!.single['name'], 'Winbp');
+    expect(seen!.single['qty'], 20);
+    await c.cancel();
+  });
+
+  test('Warehouse also calls voice_live_preview with p_supplier', () async {
+    final fn = _Fn((f, b) => _tokenOk());
+    final rpc = _Rpc(_previewResp);
+    final s = _FakeStream();
+    final c = VoiceLiveController(
+      backend: SupplierVoiceBackend(
+          supplier: 'Acme', stage: 'warehouse', rpc: rpc.call, fn: fn.call),
+      sessionKey: 'k',
+      openStream: _Opener([s]).call,
+      mic: _FakeMic(),
+      debounce: dbg,
+    );
+    await c.start();
+    expect(fn.calls.single.value['stage'], 'warehouse');
+    s.emitFinal([const SpeechWord('Winbp', 0.0, 0.4)]);
+    await settle();
+    final previews = rpc.named('voice_live_preview');
+    expect(previews.single.value['p_supplier'], 'Acme');
+    await c.cancel();
+  });
+
+  test('Pack calls voice_live_preview_pack with p_order_id', () async {
+    final fn = _Fn((f, b) => _tokenOk());
+    final rpc = _Rpc((f, p) =>
+        f.contains('commit') ? {'ok': true, 'saved': 1} : _previewResp(f, p));
+    final s = _FakeStream();
+    final c = VoiceLiveController(
+      backend: PackVoiceBackend(
+          orderId: 'ord-1', tokenSupplier: 'Acme', rpc: rpc.call, fn: fn.call),
+      sessionKey: 'sk',
+      openStream: _Opener([s]).call,
+      mic: _FakeMic(),
+      debounce: dbg,
+    );
+    await c.start();
+    expect(fn.calls.single.value['stage'], 'pack');
+    s.emitFinal([const SpeechWord('Winbp', 0.0, 0.4)]);
+    await settle();
+    final previews = rpc.named('voice_live_preview_pack');
+    expect(previews.length, 1);
+    expect(previews.single.value['p_order_id'], 'ord-1');
+    expect(rpc.named('voice_live_preview'), isEmpty);
+    await c.cancel();
+  });
+
+  test('reaching reconnect_after_sec opens a new stream and keeps the word list',
+      () async {
+    final fn = _Fn((f, b) => _tokenOk());
+    final rpc = _Rpc(_previewResp);
+    final s1 = _FakeStream();
+    final s2 = _FakeStream();
+    final opener = _Opener([s1, s2]);
+    final c = VoiceLiveController(
+      backend:
+          SupplierVoiceBackend(supplier: 'Acme', stage: 'shop', rpc: rpc.call, fn: fn.call),
+      sessionKey: 'k',
+      openStream: opener.call,
+      mic: _FakeMic(),
+      debounce: dbg,
+      reconnectAfter: const Duration(milliseconds: 40),
+    );
+    await c.start();
+    s1.emitFinal([const SpeechWord('Winbp', 0.0, 0.4)]);
+    await settle(90); // reconnect fires at 40ms
+    expect(opener.tokens.length, greaterThanOrEqualTo(2));
+    expect(opener.fallbacks[1], false);
+    expect(s1.closed, true);
+
+    // The word list survives the reconnect: a new word continues the indexes.
+    s2.emitFinal([const SpeechWord('Paracip', 0.0, 0.4)]);
+    await settle();
+    final lastPreview = rpc.named('voice_live_preview').last;
+    final words = (lastPreview.value['p_words'] as List).cast<Map>();
+    expect(words.map((w) => w['w']).toList(), ['winbp', 'paracip']);
+    expect(words.map((w) => w['i']).toList(), [1, 2]);
+    await c.cancel();
+  });
+
+  test('Stop commits once via commit RPC and shows message; second Stop is a no-op',
+      () async {
+    final fn = _Fn((f, b) => _tokenOk());
+    final rpc = _Rpc((f, p) => f.contains('commit')
+        ? {'ok': true, 'saved': 1, 'message': 'Counted 1 product.'}
+        : _previewResp(f, p));
+    final s = _FakeStream();
+    String? msg;
+    final c = VoiceLiveController(
+      backend:
+          SupplierVoiceBackend(supplier: 'Acme', stage: 'shop', rpc: rpc.call, fn: fn.call),
+      sessionKey: 'sk',
+      openStream: _Opener([s]).call,
+      mic: _FakeMic(),
+      debounce: dbg,
+      onMessage: (m) => msg = m,
+    );
+    await c.start();
+    s.emitFinal([const SpeechWord('Winbp', 0.0, 0.4)]);
+    await settle();
+
+    final r = await c.stop();
+    expect(r, isNotNull);
+    final commits = rpc.named('voice_live_commit');
+    expect(commits.length, 1);
+    expect(commits.single.value['p_supplier'], 'Acme');
+    expect(commits.single.value['p_stage'], 'shop');
+    expect(commits.single.value['p_session_key'], 'sk');
+    expect((commits.single.value['p_words'] as List).single['w'], 'winbp');
+    expect(msg, 'Counted 1 product.');
+
+    final r2 = await c.stop();
+    expect(r2, isNull);
+    expect(rpc.named('voice_live_commit').length, 1, reason: 'no second commit');
+  });
+
+  test('INVALID_ARGUMENT stream error retries once on fallback', () async {
+    final fn = _Fn((f, b) => _tokenOk());
+    final rpc = _Rpc(_previewResp);
+    final s1 = _FakeStream();
+    final s2 = _FakeStream();
+    final opener = _Opener([s1, s2]);
+    final c = VoiceLiveController(
+      backend:
+          SupplierVoiceBackend(supplier: 'Acme', stage: 'shop', rpc: rpc.call, fn: fn.call),
+      sessionKey: 'k',
+      openStream: opener.call,
+      mic: _FakeMic(),
+      debounce: dbg,
+      reconnectAfter: const Duration(seconds: 60),
+    );
+    await c.start();
+    s1.fail(SpeechStreamException('bad config', invalidArgument: true));
+    await settle();
+    expect(opener.tokens.length, 2);
+    expect(opener.fallbacks[1], true, reason: 'retry uses the fallback config');
+    await c.cancel();
+  });
+
+  test('token error shows message and opens no stream', () async {
+    final fn =
+        _Fn((f, b) => {'error': 'nothing_open', 'message': 'no open items'});
+    final rpc = _Rpc(_previewResp);
+    final opener = _Opener([_FakeStream()]);
+    String? err;
+    final c = VoiceLiveController(
+      backend:
+          SupplierVoiceBackend(supplier: 'X', stage: 'shop', rpc: rpc.call, fn: fn.call),
+      sessionKey: 'k',
+      openStream: opener.call,
+      mic: _FakeMic(),
+      onError: (m) => err = m,
+    );
+    final ok = await c.start();
+    expect(ok, false);
+    expect(err, 'no open items');
+    expect(opener.tokens, isEmpty, reason: 'no stream opened on token error');
+    await c.cancel();
+  });
+
+  test('web uses the clip path — the live gate is false on web (no voice-token)',
+      () {
+    // The Android live path is the ONLY caller of voice-token. On web the gate is
+    // false, so the caller keeps the existing clip flow and never mints a token.
+    expect(
+        isLiveVoicePlatform(isWeb: true, platform: TargetPlatform.android), false);
+    expect(
+        isLiveVoicePlatform(isWeb: false, platform: TargetPlatform.android), true);
+    expect(
+        isLiveVoicePlatform(isWeb: false, platform: TargetPlatform.iOS), false);
+  });
+}

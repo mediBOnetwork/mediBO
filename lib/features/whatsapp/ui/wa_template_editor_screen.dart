@@ -173,6 +173,7 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
 
   Map<String, dynamic>? _policy;
   bool _policyBusy = false;
+  bool _policyApplying = false;
   Timer? _policyPoll;
 
   // ── payload accessors ──────────────────────────────────────────────────────
@@ -734,6 +735,38 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
         if (mounted) setState(() => _policyBusy = false);
       }
     });
+  }
+
+  /// One tap applies the review's suggested rewrite. wa_policy_apply changes the
+  /// SAVED row and re-lints it server-side, then returns the new body — this
+  /// method only writes that body into the field and re-runs the existing lint,
+  /// preview and duplicate checks. It composes no wording of its own, and on any
+  /// refusal it changes nothing and shows the backend's sentence.
+  Future<void> _applyPolicy() async {
+    if (_id.isEmpty) return;
+    setState(() => _policyApplying = true);
+    try {
+      final res = await WaTemplateApi.policyApply(_id);
+      if (!mounted) return;
+      if (res['ok'] != true) {
+        final msg = WaTemplateApi.errorMessage(res);
+        if (msg.isNotEmpty) showToast(context, msg, isError: true);
+        setState(() => _policyApplying = false);
+        return;
+      }
+      // The rewrite is already applied and linted on the row; the field takes
+      // the body it returned, verbatim. Setting the text fires the body's own
+      // listeners, so the lint, preview and duplicate checks re-run on their
+      // usual debounce.
+      _body.text = (res['body'] ?? _body.text).toString();
+      final msg = (res['message'] ?? '').toString();
+      if (msg.isNotEmpty) showToast(context, msg);
+      setState(() => _policyApplying = false);
+      // The saved-row preview changed too, so the bubble is refreshed from it.
+      await _refreshTemplatePreview();
+    } catch (_) {
+      if (mounted) setState(() => _policyApplying = false);
+    }
   }
 
   // ── starters / tokens ──────────────────────────────────────────────────────
@@ -1485,8 +1518,47 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
     }
     final note = (_tplPreview?['rendered_note'] ?? '').toString();
     final charCount = (_tplPreview?['char_count'] ?? '').toString();
+    final buttons = [
+      for (final b in (source['buttons'] as List?) ?? const [])
+        if (b is Map) b.cast<String, dynamic>(),
+    ];
     return [
-      _MediaBubble(preview: source),
+      // A plain chat-style backdrop, so the message reads like a phone screen
+      // rather than a form field.
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(14),
+        decoration: const BoxDecoration(
+          color: Color(0xFFECE5DD),
+          borderRadius: BorderRadius.all(Radius.circular(12)),
+        ),
+        child: LayoutBuilder(
+          builder: (context, box) {
+            // WhatsApp holds an incoming bubble to ~85% of the width, left
+            // aligned; the button tiles below it share that width.
+            final maxW = box.maxWidth * 0.85;
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: maxW),
+                  child: _MediaBubble(preview: source),
+                ),
+                // Quick-reply and link buttons are NOT part of the bubble — in
+                // WhatsApp they arrive as their own full-width tiles beneath it.
+                if (buttons.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: maxW),
+                    child: _BubbleButtons(buttons: buttons),
+                  ),
+                ],
+              ],
+            );
+          },
+        ),
+      ),
       if (note.isNotEmpty) ...[
         const SizedBox(height: 8),
         Text(
@@ -1588,23 +1660,28 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
           const SizedBox(height: 12),
           WaIssueList(issues: issues),
         ],
+        // One-tap apply. The caption is the review's own apply_all_label when it
+        // sent one; the single Dart literal "Use this wording" is the fallback.
+        // Applying goes through wa_policy_apply — it changes the saved row and
+        // re-lints server-side — never a local edit that could disagree with it.
         if (suggested.isNotEmpty) ...[
           const SizedBox(height: 8),
           Align(
             alignment: Alignment.centerLeft,
             child: OutlinedButton(
-              onPressed: () {
-                _body.text = suggested;
-                _schedule();
-                _scheduleSimilar();
-              },
+              onPressed:
+                  (_id.isEmpty || _policyApplying) ? null : _applyPolicy,
               style: OutlinedButton.styleFrom(
                 foregroundColor: const Color(0xFF1B7A43),
                 side: const BorderSide(color: Color(0xFF1B7A43)),
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(8)),
               ),
-              child: const Text('Use this wording'),
+              child: Text(
+                (verdict?['apply_all_label'] ?? '').toString().isNotEmpty
+                    ? (verdict!['apply_all_label']).toString()
+                    : 'Use this wording',
+              ),
             ),
           ),
         ],
@@ -2113,10 +2190,12 @@ void _openFullSizeImage(BuildContext context, String url) {
   );
 }
 
-/// The WhatsApp message bubble: header, then body_rendered, then footer, then
-/// the buttons, top to bottom. body_rendered already has the example values
-/// substituted (body is the same rendered field from the live components
-/// preview); body_raw ({{1}}) is deliberately never read here.
+/// The WhatsApp message bubble: the media header flush to the top edges, then
+/// body_rendered, then the footer in smaller grey text, then the delivery time
+/// in the bottom-right, with the small tail on the top-left. body_rendered
+/// already has the example values substituted; body_raw ({{1}}) is deliberately
+/// never read here. Buttons are NOT drawn inside — WhatsApp renders those as
+/// their own tiles below the bubble (see _BubbleButtons).
 class _MediaBubble extends StatelessWidget {
   final Map<String, dynamic> preview;
   const _MediaBubble({required this.preview});
@@ -2130,19 +2209,23 @@ class _MediaBubble extends StatelessWidget {
         format == 'TEXT' ? (header?['text'] ?? '').toString() : '';
     final body = (preview['body_rendered'] ?? preview['body'] ?? '').toString();
     final footer = (preview['footer'] ?? '').toString();
-    final buttons = (preview['buttons'] as List?) ?? const [];
     final showMedia = header != null && format.isNotEmpty && format != 'TEXT';
+    // The device clock, stamped the way WhatsApp stamps a message. Display only
+    // — chrome that mimics the app, never part of the template, which is why it
+    // is the one value here not read from the backend.
+    final time = TimeOfDay.now().format(context);
 
-    return Container(
+    const bubbleColor = Color(0xFFE7F8D8);
+    final bubble = Container(
       key: const Key('wa_preview_bubble'),
       decoration: BoxDecoration(
-        color: const Color(0xFFE7F8D8),
+        color: bubbleColor,
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
               color: Colors.black.withValues(alpha: 0.06),
-              blurRadius: 8,
-              offset: const Offset(0, 2)),
+              blurRadius: 4,
+              offset: const Offset(0, 1)),
         ],
       ),
       child: Column(
@@ -2151,7 +2234,7 @@ class _MediaBubble extends StatelessWidget {
         children: [
           if (showMedia) _BubbleHeaderMedia(header: header),
           Padding(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.fromLTRB(10, 8, 10, 6),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
@@ -2174,8 +2257,9 @@ class _MediaBubble extends StatelessWidget {
                       height: 1.35,
                       color: Color(0xFF111827)),
                 ),
+                // The footer sits directly under the body, smaller and grey.
                 if (footer.isNotEmpty) ...[
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 6),
                   Text(
                     footer,
                     style: const TextStyle(
@@ -2184,73 +2268,123 @@ class _MediaBubble extends StatelessWidget {
                         color: Color(0xFF6B7280)),
                   ),
                 ],
+                const SizedBox(height: 4),
+                // The timestamp, bottom-right, the way a delivered message reads.
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Text(
+                    time,
+                    style: const TextStyle(
+                        fontSize: 11, color: Color(0xFF9CA3AF)),
+                  ),
+                ),
               ],
             ),
           ),
-          for (final b in buttons)
-            if (b is Map) _bubbleButton(b.cast<String, dynamic>()),
         ],
       ),
     );
-  }
 
-  /// A full-width WhatsApp-style button tile: its text, with kind_label as a
-  /// small caption. Both are the backend's.
-  Widget _bubbleButton(Map<String, dynamic> b) {
-    final text = (b['text'] ?? '').toString();
-    final kindLabel = (b['kind_label'] ?? '').toString();
-    final kind = (b['kind'] ?? b['type'] ?? '').toString();
+    // The little tail on the top-left corner an incoming WhatsApp bubble has.
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        CustomPaint(
+          size: const Size(7, 14),
+          painter: _BubbleTailPainter(bubbleColor),
+        ),
+        Flexible(child: bubble),
+      ],
+    );
+  }
+}
+
+/// The button tiles WhatsApp shows BELOW the bubble: one full-width tile per
+/// row, never side by side, each its text centred with the backend's kind_label
+/// beneath, and a hairline divider between them. Every string is the backend's.
+class _BubbleButtons extends StatelessWidget {
+  final List<Map<String, dynamic>> buttons;
+  const _BubbleButtons({required this.buttons});
+
+  @override
+  Widget build(BuildContext context) {
     return Container(
-      decoration: const BoxDecoration(
-        border: Border(top: BorderSide(color: Color(0x22000000), width: 0.5)),
+      key: const Key('wa_preview_buttons'),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.06),
+              blurRadius: 4,
+              offset: const Offset(0, 1)),
+        ],
       ),
-      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(_buttonIcon(kind),
-                  size: 14, color: const Color(0xFF1E40AF)),
-              const SizedBox(width: 6),
-              Flexible(
-                child: Text(
-                  text,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                      color: Color(0xFF1E40AF)),
-                ),
-              ),
-            ],
-          ),
-          if (kindLabel.isNotEmpty) ...[
-            const SizedBox(height: 2),
-            Text(
-              kindLabel,
-              style:
-                  const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
-            ),
+          for (var i = 0; i < buttons.length; i++) ...[
+            if (i > 0)
+              const Divider(
+                  height: 1, thickness: 0.5, color: Color(0xFFE5E7EB)),
+            _tile(buttons[i]),
           ],
         ],
       ),
     );
   }
 
-  static IconData _buttonIcon(String kind) {
-    switch (kind.toUpperCase()) {
-      case 'URL':
-        return Icons.open_in_new;
-      case 'PHONE_NUMBER':
-        return Icons.call_outlined;
-      case 'QUICK_REPLY':
-        return Icons.reply_outlined;
-      default:
-        return Icons.smart_button_outlined;
-    }
+  Widget _tile(Map<String, dynamic> b) {
+    final text = (b['text'] ?? '').toString();
+    final kindLabel = (b['kind_label'] ?? '').toString();
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 12),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            text,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+                color: Color(0xFF1E40AF)),
+          ),
+          if (kindLabel.isNotEmpty) ...[
+            const SizedBox(height: 2),
+            Text(
+              kindLabel,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
+            ),
+          ],
+        ],
+      ),
+    );
   }
+}
+
+/// The small triangular tail at the bubble's top-left, in the bubble's colour.
+class _BubbleTailPainter extends CustomPainter {
+  final Color color;
+  const _BubbleTailPainter(this.color);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()..color = color;
+    final path = Path()
+      ..moveTo(size.width, 0)
+      ..lineTo(size.width, size.height)
+      ..lineTo(0, 0)
+      ..close();
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(_BubbleTailPainter oldDelegate) =>
+      oldDelegate.color != color;
 }
 
 /// The media header INSIDE the bubble. Fills the bubble width with rounded top

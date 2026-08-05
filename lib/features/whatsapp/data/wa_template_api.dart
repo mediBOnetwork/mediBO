@@ -229,6 +229,16 @@ class WaTemplateApi {
   static Future<Map<String, dynamic>> policyReviewLatest(String id) =>
       _rpc('wa_policy_review_latest', {'p_template_id': id});
 
+  /// Applies the review's suggested rewrite to the SAVED row and re-lints it,
+  /// all server-side. {ok, body, message, warnings} | {error, message}
+  ///
+  /// The rewrite is the backend's, checked by the backend: it refuses one that
+  /// would disturb a variable or fail the lint, with its own sentence. The
+  /// editor only takes the `body` it returns and re-runs its own preview — it
+  /// never edits the wording itself.
+  static Future<Map<String, dynamic>> policyApply(String id) =>
+      _rpc('wa_policy_apply', {'p_template_id': id});
+
   // ── writes ─────────────────────────────────────────────────────────────────
 
   /// {ok, template} | {error:'invalid', issues[]} |

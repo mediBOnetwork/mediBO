@@ -233,6 +233,18 @@ void _stub({
         return similar ?? const <String, dynamic>{};
       case 'wa_policy_review_latest':
         return policy ?? const <String, dynamic>{};
+      case 'wa_policy_apply':
+        // The one-tap apply persists and re-lints the review's rewrite
+        // server-side, then hands the new body back. Mirror that: echo the
+        // verdict's suggested_body as the applied wording.
+        final sb =
+            ((policy?['verdict'] as Map?)?['suggested_body'] ?? '').toString();
+        return {
+          'ok': true,
+          'body': sb,
+          'message': 'Suggested wording applied',
+          'warnings': const [],
+        };
       default:
         return const <String, dynamic>{};
     }
@@ -389,6 +401,9 @@ void main() {
     expect(find.text('Use this wording'), findsOneWidget);
     await tester.tap(find.text('Use this wording'));
     await tester.pumpAndSettle();
+    // wa_policy_apply's success toast schedules a 4s auto-dismiss; let it expire
+    // so no real Timer outlives the test.
+    await tester.pump(const Duration(seconds: 5));
 
     expect(
       tester

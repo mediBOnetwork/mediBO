@@ -844,7 +844,7 @@ class _PreviewSheet extends StatelessWidget {
                 ),
                 const SizedBox(height: 6),
               ],
-              _ChatBackdrop(child: _DeliveredBubble(preview: current)),
+              WaChatBackdrop(child: WaDeliveredBubble(preview: current)),
               if (hasPrevious) ...[
                 const SizedBox(height: 18),
                 if (previousLabel.isNotEmpty)
@@ -866,8 +866,8 @@ class _PreviewSheet extends StatelessWidget {
                     ),
                   ),
                 const SizedBox(height: 6),
-                _ChatBackdrop(
-                  child: _DeliveredBubble(
+                WaChatBackdrop(
+                  child: WaDeliveredBubble(
                     // Shaped like a preview payload so one bubble paints both:
                     // previous_segments are the styled runs, previous_plain the
                     // marker-stripped fallback, previous_body the last resort.
@@ -888,9 +888,9 @@ class _PreviewSheet extends StatelessWidget {
 }
 
 /// Plain chat-style backdrop so the bubble reads as a phone screen.
-class _ChatBackdrop extends StatelessWidget {
+class WaChatBackdrop extends StatelessWidget {
   final Widget child;
-  const _ChatBackdrop({required this.child});
+  const WaChatBackdrop({super.key, required this.child});
 
   @override
   Widget build(BuildContext context) {
@@ -916,9 +916,15 @@ class _ChatBackdrop extends StatelessWidget {
 /// body (with example values already substituted), then the footer, with the
 /// buttons rendered as full-width tiles BELOW the bubble — the same reading a
 /// pharmacy gets. Reads a wa_template_preview-shaped payload.
-class _DeliveredBubble extends StatelessWidget {
+///
+/// Public because the WhatsApp Templates list reuses this exact bubble for its
+/// own row-level preview: one delivered-message widget, two callers, so the two
+/// previews cannot drift. It paints whatever payload it is handed and never
+/// looks at a template's status — DRAFT, PENDING, REJECTED and APPROVED all
+/// render the same bubble; status only ever decides the LABEL above it.
+class WaDeliveredBubble extends StatelessWidget {
   final Map<String, dynamic> preview;
-  const _DeliveredBubble({required this.preview});
+  const WaDeliveredBubble({super.key, required this.preview});
 
   @override
   Widget build(BuildContext context) {

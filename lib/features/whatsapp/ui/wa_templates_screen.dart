@@ -2,6 +2,10 @@ import 'package:flutter/material.dart';
 
 import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/utils/toast.dart';
+// The delivered-message bubble lives here and is reused verbatim, so the list's
+// row preview and the dashboard notifications preview paint the identical widget.
+import 'package:pharma_b2b/widgets/notifications_card.dart'
+    show WaChatBackdrop, WaDeliveredBubble;
 import '../data/wa_template_api.dart';
 import 'wa_template_actions.dart';
 import 'wa_template_bits.dart';
@@ -358,6 +362,8 @@ class WaTemplateCard extends StatelessWidget {
     final lastUsed = (template['last_used_label'] ?? '').toString();
     final edits = (template['edits_label'] ?? '').toString();
     final lastError = (template['last_error'] ?? '').toString();
+    final editBlockedReason =
+        (template['edit_blocked_reason'] ?? '').toString();
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -475,12 +481,23 @@ class WaTemplateCard extends StatelessWidget {
             ],
           ),
 
-          // ── actions: each shown ONLY when its own backend flag is true ──
+          // ── actions ─────────────────────────────────────────────────────
+          // Preview is shown on EVERY row and is never gated — a PENDING
+          // template cannot be edited while Meta reviews it, but it can always
+          // be looked at. can_preview is a backend boolean (true whenever a
+          // template exists) and preview_label is its caption; both come from
+          // the payload. Every OTHER action is still shown ONLY when its own
+          // backend flag is true.
           const SizedBox(height: 12),
           Wrap(
             spacing: 8,
             runSpacing: 8,
             children: [
+              _CardAction(
+                label: (template['preview_label'] ?? '').toString(),
+                icon: Icons.visibility_outlined,
+                onTap: () => waTemplatePreviewSheet(context, template),
+              ),
               if (_flag('can_edit'))
                 _CardAction(
                   label: copy['edit'],
@@ -530,7 +547,95 @@ class WaTemplateCard extends StatelessWidget {
                 ),
             ],
           ),
+
+          // When Edit is blocked (a template under Meta review), the button is
+          // gone but the REASON is not — the backend's own sentence stays on the
+          // row so the admin sees why, rather than an action that silently
+          // vanished. Shown only when can_edit is false and a reason was sent.
+          if (!_flag('can_edit') && editBlockedReason.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(
+              editBlockedReason,
+              style: TextStyle(fontSize: 13, color: WaTone.of('warn').fg),
+            ),
+          ],
         ],
+      ),
+    );
+  }
+}
+
+// ── preview: the delivered message, for ANY status ───────────────────────────
+
+/// PREVIEW — the template as the pharmacy would receive it, in a bottom sheet.
+///
+/// One RPC (wa_template_preview) returns the whole bubble render-ready — header,
+/// body_segments, footer_segments, buttons — and works identically for DRAFT,
+/// PENDING, REJECTED and APPROVED: status has never been a factor in what the
+/// message looks like, so it is not a factor here. This is display only: it
+/// fetches and renders, and can never save, submit or alter the template. The
+/// bubble itself is [WaDeliveredBubble] — the same widget the dashboard
+/// notifications preview paints, so the two can never drift.
+Future<void> waTemplatePreviewSheet(
+  BuildContext context,
+  Map<String, dynamic> template,
+) async {
+  final id = (template['id'] ?? '').toString();
+  Map<String, dynamic> preview = const {};
+  try {
+    preview = await WaTemplateApi.templatePreview(id);
+  } catch (_) {
+    // A failed fetch shows the empty bubble rather than a broken screen; the
+    // sheet never invents wording of its own.
+  }
+  if (!context.mounted) return;
+  try {
+    RenderLog.write('wa_tpl_preview_open', id);
+  } catch (_) {}
+  await showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.white,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+    ),
+    builder: (_) => _TemplatePreviewSheet(preview: preview),
+  );
+}
+
+class _TemplatePreviewSheet extends StatelessWidget {
+  final Map<String, dynamic> preview;
+  const _TemplatePreviewSheet({required this.preview});
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      top: false,
+      child: Container(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.85,
+        ),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFE5E7EB),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              WaChatBackdrop(child: WaDeliveredBubble(preview: preview)),
+            ],
+          ),
+        ),
       ),
     );
   }

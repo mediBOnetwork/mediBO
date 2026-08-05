@@ -263,27 +263,25 @@ void main() {
     expect(find.text('Choose the picture Meta will review'), findsOneWidget);
   });
 
-  testWidgets('template_saved:false offers Save and continue', (tester) async {
+  testWidgets('an unsaved template offers the picker enabled, no save-first gate',
+      (tester) async {
+    // The backend dropped the save-first restriction: can_upload is true and
+    // there is no blocked_reason before the template is saved.
     _stub(
       spec: _spec(
-        canUpload: false,
+        canUpload: true,
         templateSaved: false,
-        uploadLabel: 'Save this template once before adding a picture or file',
-        blockedReason: 'A sample file is attached to a saved template. Give '
-            'this template a name, a category and a message body, tap Save, '
-            'then choose the picture or file.',
+        uploadLabel: 'Choose the picture Meta will review',
       ),
     );
     await _pump(tester, withId: false);
 
-    expect(find.text('Save and continue'), findsOneWidget);
-    expect(find.text('Save this template once before adding a picture or file'),
-        findsOneWidget);
+    // The picker is on screen and enabled before any save.
     expect(
-        find.text('A sample file is attached to a saved template. Give this '
-            'template a name, a category and a message body, tap Save, then '
-            'choose the picture or file.'),
-        findsOneWidget);
+        _uploadButton(tester, 'Choose the picture Meta will review').onPressed,
+        isNotNull);
+    // The old save-first control is gone entirely.
+    expect(find.text('Save and continue'), findsNothing);
   });
 
   testWidgets('a file over max_mb never reaches storage, and the refusal is '

@@ -161,6 +161,17 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
   String _uploadMessage = '';
   Timer? _headerPoll;
 
+  /// The detached upload's job id, held from an unsaved-template upload until
+  /// the next save claims it (passed as p_media_job). Empty once claimed, and
+  /// unused once the template exists — that path uses set_header_media instead.
+  String _mediaJobId = '';
+
+  /// wa_media_job_status for the detached upload. Same fields the banner already
+  /// reads from wa_template_header_status, so the unsaved and saved cases share
+  /// one block.
+  Map<String, dynamic>? _mediaJobStatus;
+  Timer? _mediaJobPoll;
+
   Timer? _similarDebounce;
   Map<String, dynamic>? _similar;
 
@@ -267,6 +278,7 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
     _similarDebounce?.cancel();
     _renumberDebounce?.cancel();
     _headerPoll?.cancel();
+    _mediaJobPoll?.cancel();
     _policyPoll?.cancel();
     for (final c in [_name, _header, _body, _footer]) {
       c.dispose();
@@ -568,16 +580,19 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
   /// The extensions and the mime filter both come from the format's own spec,
   /// so the dialog offers exactly what Meta accepts.
   ///
+  /// Works whether or not the template has been saved. An UNSAVED template
+  /// uploads to a detached job (wa_media_upload_detached) whose handle the next
+  /// save claims; a SAVED template attaches the sample directly, exactly as
+  /// before. The two only differ in the storage path and the RPC — everything
+  /// the user sees is the backend's.
+  ///
   /// Size is the one thing checked before the bytes move: a 100 MB video has
   /// to travel to storage before the RPC can refuse it, and paying for that
   /// upload only to be told no is the wrong order. The refusal is still the
-  /// BACKEND's sentence, not one written here — wa_template_set_header_media
-  /// returns its `too_big` message before it touches a single row (it returns
-  /// above the UPDATE and above the job insert), so asking it is free and
-  /// changes nothing. Nothing else is judged here: a wrong-typed file goes up
-  /// and the RPC refuses it in its own words, exactly as before.
+  /// BACKEND's sentence — both RPCs return their `too_big` message from p_bytes
+  /// before they read the file, so asking first is free. Nothing else is judged
+  /// here: a wrong-typed file goes up and the RPC refuses it in its own words.
   Future<void> _pickAndUpload(Map<String, dynamic> format) async {
-    if (_id.isEmpty) return;
     final exts = [
       for (final e in (format['accepts'] ?? '').toString().split(','))
         if (e.trim().isNotEmpty) e.trim().toLowerCase(),
@@ -595,19 +610,25 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
           ? picked.name.split('.').last.toLowerCase()
           : '';
       final mime = _mimeFor(ext);
-      final path =
-          'whatsapp/tpl_${_id}_${DateTime.now().millisecondsSinceEpoch}.$ext';
+      final millis = DateTime.now().millisecondsSinceEpoch;
+      final detached = _id.isEmpty;
+      final path = detached
+          ? 'whatsapp/tpl_new_$millis.$ext'
+          : 'whatsapp/tpl_${_id}_$millis.$ext';
 
       final maxMb = num.tryParse((format['max_mb'] ?? '').toString());
       final tooBig =
           maxMb != null && picked.bytes.length > maxMb * 1024 * 1024;
       if (tooBig) {
-        final refusal = await WaTemplateApi.setHeaderMedia(
-          id: _id,
-          storagePath: path,
-          mime: mime,
-          bytes: picked.bytes.length,
-        );
+        final refusal = detached
+            ? await WaTemplateApi.mediaUploadDetached(
+                storagePath: path, mime: mime, bytes: picked.bytes.length)
+            : await WaTemplateApi.setHeaderMedia(
+                id: _id,
+                storagePath: path,
+                mime: mime,
+                bytes: picked.bytes.length,
+              );
         if (!mounted) return;
         setState(() {
           _uploading = false;
@@ -618,12 +639,15 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
 
       await WaTemplateApi.uploadMedia(
           path: path, bytes: picked.bytes, mime: mime);
-      final res = await WaTemplateApi.setHeaderMedia(
-        id: _id,
-        storagePath: path,
-        mime: mime,
-        bytes: picked.bytes.length,
-      );
+      final res = detached
+          ? await WaTemplateApi.mediaUploadDetached(
+              storagePath: path, mime: mime, bytes: picked.bytes.length)
+          : await WaTemplateApi.setHeaderMedia(
+              id: _id,
+              storagePath: path,
+              mime: mime,
+              bytes: picked.bytes.length,
+            );
       if (!mounted) return;
       setState(() {
         _uploading = false;
@@ -631,13 +655,51 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
         _uploadMessage = WaTemplateApi.errorMessage(res);
       });
       if (res['ok'] == true) {
-        await _refreshHeaderStatus();
-        await _refreshTemplatePreview();
-        _startHeaderPoll();
+        if (detached) {
+          // Hold the job id for the next save to claim, and poll the job for
+          // the same status block the attached case shows.
+          setState(() => _mediaJobId = (res['job_id'] ?? '').toString());
+          await _refreshMediaJobStatus();
+          _startMediaJobPoll();
+        } else {
+          await _refreshHeaderStatus();
+          await _refreshTemplatePreview();
+          _startHeaderPoll();
+        }
       }
     } catch (_) {
       if (mounted) setState(() => _uploading = false);
     }
+  }
+
+  /// The detached job's state, fetched by job id. Refuses to change anything on
+  /// an error envelope, exactly like the attached header status.
+  Future<void> _refreshMediaJobStatus() async {
+    if (_mediaJobId.isEmpty) return;
+    try {
+      final res = await WaTemplateApi.mediaJobStatus(_mediaJobId);
+      if (!mounted || WaTemplateApi.isError(res, 'status')) return;
+      setState(() => _mediaJobStatus = res);
+    } catch (_) {}
+  }
+
+  /// Meta issues the sample handle asynchronously, so the job is polled until
+  /// it is ready (or no longer pending) or the deadline passes — never forever.
+  void _startMediaJobPoll() {
+    _mediaJobPoll?.cancel();
+    var waited = Duration.zero;
+    _mediaJobPoll =
+        Timer.periodic(WaTemplateEditorScreen.pollInterval, (t) async {
+      waited += WaTemplateEditorScreen.pollInterval;
+      await _refreshMediaJobStatus();
+      final ready = _mediaJobStatus?['ready'] == true;
+      final status = (_mediaJobStatus?['status'] ?? '').toString();
+      if (ready ||
+          status != 'pending' ||
+          waited >= WaTemplateEditorScreen.pollTimeout) {
+        t.cancel();
+      }
+    });
   }
 
   /// A file name is not a MIME type, and the browser hands over only the name.
@@ -914,6 +976,9 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
         category: _category,
         components: _componentsNow(),
         tokenMap: _tokenKeys,
+        // Claim the detached upload, when there is one. The backend writes the
+        // HEADER from the job's handle and format.
+        mediaJob: _mediaJobId.isEmpty ? null : _mediaJobId,
       );
       if (!mounted) return;
 
@@ -924,6 +989,8 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
           // uses.
           setState(() => _errors = (res['issues'] as List?) ?? const []);
         } else {
+          // media_not_ready included: show the backend's sentence and leave the
+          // job id in place so the user can simply save again once it settles.
           final msg = (res['message'] ?? '').toString();
           showToast(context, msg.isEmpty ? _copy['generic_error'] : msg,
               isError: true);
@@ -936,6 +1003,13 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
       // A new template only has an id from here on, which is also the first
       // moment the gate has a row to read.
       if (saved != null) _id = (saved['id'] ?? '').toString();
+      // The save has claimed the detached job — drop it so a second save does
+      // not try to claim it again, and let the attached header path take over.
+      if (_mediaJobId.isNotEmpty) {
+        _mediaJobPoll?.cancel();
+        _mediaJobId = '';
+        _mediaJobStatus = null;
+      }
       await _refreshGate();
       if (!mounted) return;
       // The bubble now has a row to render — re-ask so the sample and the
@@ -945,6 +1019,10 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
       // The spec's can_upload/blocked_reason are answers about THIS id, so a
       // save that mints one makes the previous answer stale.
       await _loadMediaSpec();
+      if (!mounted) return;
+      // A save that claimed a detached upload now carries a handle on the row —
+      // read it so a still-open editor shows the attached header and Re-upload.
+      await _refreshHeaderStatus();
       if (!mounted) return;
 
       if (thenSubmit && saved != null) {
@@ -1220,9 +1298,14 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
   /// is the one place this widget insists, because a stale sample looks fine
   /// until Meta rejects the submission.
   Widget _buildMediaHeader() {
-    final h = _headerStatus;
-    final expired = h?['expired'] == true;
-    final blocker = (h?['blocker'] ?? '').toString();
+    // Before the template exists the banner reads the DETACHED upload job; once
+    // saved it reads the row's header status. Both speak the same vocabulary
+    // (status_label, tone, file_label, size_label, expires_label), so one block
+    // serves both.
+    final h = _id.isEmpty ? _mediaJobStatus : _headerStatus;
+    // expired / blocker / has_sample are attached-only answers about a saved row.
+    final expired = _headerStatus?['expired'] == true;
+    final blocker = (_headerStatus?['blocker'] ?? '').toString();
     final bad = expired || blocker.isNotEmpty;
     final format = _formatSpec(_headerFormat);
 
@@ -1237,16 +1320,14 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
         if (s.isNotEmpty) s,
     ];
 
-    // Every one of these is the backend's answer about THIS template. The old
-    // version asked `_id.isEmpty` itself and then said nothing about it, which
-    // is how the picker came to be greyed out with no reason on screen.
+    // can_upload is now true on an unsaved template too — the backend dropped
+    // the save-first restriction, so the picker is offered saved or not.
     final canUpload = _mediaSpec?['can_upload'] == true;
-    final templateSaved = _mediaSpec?['template_saved'] == true;
     final uploadLabel = (_mediaSpec?['upload_label'] ?? '').toString();
     final blockedReason = (_mediaSpec?['blocked_reason'] ?? '').toString();
     // Re-upload is a SECOND way to do what the primary button already does, so
     // it appears only once there is something to replace.
-    final hasSample = h?['has_sample'] == true;
+    final hasSample = _headerStatus?['has_sample'] == true;
     final showReupload = hasSample || expired;
 
     return Column(
@@ -1284,25 +1365,10 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
                         child: Text(uploadLabel),
                       ),
                     // The reason sits directly beneath the control it explains.
+                    // The backend no longer sends one for an unsaved template.
                     if (!canUpload && blockedReason.isNotEmpty) ...[
                       const SizedBox(height: 8),
                       WaBanner(body: blockedReason, tone: 'warn'),
-                    ],
-                    // Saving is the one thing that unblocks an unsaved
-                    // template, so it is offered here rather than making the
-                    // admin find Save and come back.
-                    if (!templateSaved) ...[
-                      const SizedBox(height: 8),
-                      OutlinedButton(
-                        onPressed: _busy ? null : _saveAndContinue,
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: const Color(0xFF1B7A43),
-                          side: const BorderSide(color: Color(0xFF1B7A43)),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8)),
-                        ),
-                        child: const Text('Save and continue'),
-                      ),
                     ],
                     if (showReupload) ...[
                       const SizedBox(height: 8),
@@ -1348,21 +1414,6 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
       ),
       const SizedBox(height: 12),
     ];
-  }
-
-  /// Save, then re-ask the spec with the id the save just produced, so the
-  /// picker becomes available without leaving the screen. A save that fails
-  /// lint surfaces the blocker sheet — the error is never swallowed.
-  Future<void> _saveAndContinue() async {
-    await _save();
-    if (!mounted) return;
-    if (_id.isEmpty || _errors.isNotEmpty) {
-      await waSubmitBlockersSheet(context, _gate, _similar);
-      return;
-    }
-    await _loadMediaSpec();
-    if (!mounted) return;
-    await _refreshHeaderStatus();
   }
 
   List<Widget> _categoryNote() {

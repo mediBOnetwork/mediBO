@@ -172,6 +172,31 @@ class WaTemplateApi {
         'p_bytes': bytes,
       });
 
+  /// Upload with NO template yet. Meta holds the sample handle on the returned
+  /// job; the first [save] claims it via p_media_job. Same shape and same size
+  /// refusal as [setHeaderMedia] — the too-big message comes back from p_bytes
+  /// before the file is read, so it may be asked before the bytes are uploaded.
+  ///
+  /// {ok, job_id, format, message} | {error, message}
+  static Future<Map<String, dynamic>> mediaUploadDetached({
+    required String storagePath,
+    required String mime,
+    required int bytes,
+  }) =>
+      _rpc('wa_media_upload_detached', {
+        'p_storage_path': storagePath,
+        'p_mime': mime,
+        'p_bytes': bytes,
+      });
+
+  /// The detached upload job's state, in the same vocabulary the attached
+  /// header status uses so the two share one banner.
+  ///
+  /// {status, ready, format, file_label, size_label, expires_label,
+  ///  status_label, tone, error}
+  static Future<Map<String, dynamic>> mediaJobStatus(String jobId) =>
+      _rpc('wa_media_job_status', {'p_job_id': jobId});
+
   /// Puts the sample file in storage. Nothing here checks the size or the type
   /// — wa_template_set_header_media refuses with its own message if it must.
   static Future<void> uploadMedia({
@@ -248,6 +273,13 @@ class WaTemplateApi {
   /// key at index 0 is what {{1}} in the body means. It is NOT derived from the
   /// body text here — it is the map wa_body_insert_token / wa_body_renumber
   /// handed back, passed straight through. See [bodyInsertToken].
+  ///
+  /// `mediaJob` is the job_id from a detached upload ([mediaUploadDetached]).
+  /// When present the backend writes the HEADER component itself from the job's
+  /// handle and format, replacing any HEADER already present, and may answer
+  /// {error:'media_not_ready', message} if the handle is not issued yet. Sent
+  /// only until the job is claimed; afterwards replacements go through
+  /// [setHeaderMedia] / [headerStatus].
   static Future<Map<String, dynamic>> save({
     String? id,
     required String name,
@@ -255,6 +287,7 @@ class WaTemplateApi {
     required String category,
     required List<dynamic> components,
     List<dynamic>? tokenMap,
+    String? mediaJob,
   }) =>
       _rpc('wa_template_save', {
         'p_id': id,
@@ -263,6 +296,7 @@ class WaTemplateApi {
         'p_category': category,
         'p_components': components,
         'p_token_map': tokenMap ?? const <dynamic>[],
+        'p_media_job': mediaJob,
       });
 
   /// {ok, template, note} | {error:'exists', message}

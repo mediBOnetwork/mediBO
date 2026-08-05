@@ -225,7 +225,8 @@ class PharmaB2BApp extends StatefulWidget {
   State<PharmaB2BApp> createState() => _PharmaB2BAppState();
 }
 
-class _PharmaB2BAppState extends State<PharmaB2BApp> {
+class _PharmaB2BAppState extends State<PharmaB2BApp>
+    with WidgetsBindingObserver {
   final CartModel _cart = CartModel();
   final AuthNotifier _auth = AuthNotifier();
   final ViewAsNotifier _viewAs = ViewAsNotifier();
@@ -236,13 +237,39 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _viewAs.addListener(_onViewAsChanged);
     _auth.addListener(_onAuthChanged);
+  }
+
+  // Foreground resume is one of the three moments a WhatsApp logout must take
+  // effect: a device left open for an hour still holds a valid token the DB
+  // already revoked. The guard debounces, so this is one cheap call at most
+  // once per 20 s — never a timer/poll.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _auth.checkForcedLogout();
+    }
+  }
+
+  // Surface the backend's logout reason verbatim (no Dart wording). Runs on
+  // every auth notify; only fires when a reason is set AND the messenger is
+  // mounted, so a message is never dropped before it can be shown.
+  void _maybeShowForcedLogout() {
+    final msg = _auth.forcedLogoutMessage;
+    if (msg.isEmpty) return;
+    final messenger = VersionWatcher.instance.messengerKey.currentState;
+    if (messenger == null) return; // not mounted yet — keep it for next notify
+    _auth.clearForcedLogoutMessage();
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(SnackBar(content: Text(msg)));
   }
 
   // ─── ViewAs persistence (shared_preferences only — never dart:html) ─────────
 
   void _onAuthChanged() {
+    _maybeShowForcedLogout();
     // Run once when auth fully resolves (loading=false means role is set too).
     if (_viewAsRestored) return;
     if (_auth.loading) return;
@@ -338,6 +365,7 @@ class _PharmaB2BAppState extends State<PharmaB2BApp> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _viewAs.removeListener(_onViewAsChanged);
     _auth.removeListener(_onAuthChanged);
     _cart.dispose();
@@ -665,6 +693,12 @@ class _AppRootState extends State<_AppRoot> {
               VersionWatcher.instance.start();
             } catch (_) {}
           });
+        }
+        // Entering the authenticated shell is the third moment a WhatsApp
+        // logout must take effect. Only ask when a credential is present; the
+        // guard debounces so this collapses with the app-start restore check.
+        if (widget.auth.isAuthenticated) {
+          widget.auth.checkForcedLogout();
         }
         return HomeShell();
       },

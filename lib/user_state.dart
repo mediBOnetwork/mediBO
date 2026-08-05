@@ -7,6 +7,7 @@ import 'models/app_session.dart';
 import 'screens/auth/google_flow.dart';
 import 'services/gis_auth.dart';
 import 'services/delivery_role_state.dart'; // C629: is this login a delivery account?
+import 'services/force_logout_guard.dart'; // WhatsApp "Log Out" -> instant local sign-out
 import 'services/fulfill_realtime.dart'; // C355: app-level realtime auth + subscription
 import 'services/map_config.dart'; // C634: one backend-owned map config, session-cached
 import 'utils/render_log.dart';
@@ -106,6 +107,52 @@ class AuthNotifier extends ChangeNotifier {
   AuthNotifier() {
     _sub = Supabase.instance.client.auth.onAuthStateChange.listen(_onAuthChange);
     _init();
+  }
+
+  /// The single asker/actor for the WhatsApp force-logout. The RPC and the
+  /// logout action are wired to real methods here; the guard owns only the
+  /// debounce and the "true -> act, anything else -> nothing" decision.
+  late final ForceLogoutGuard _forceLogout = ForceLogoutGuard(
+    rpc: _mustLogOutRpc,
+    onForceLogout: _applyForcedLogout,
+  );
+
+  /// The backend's reason for the last forced logout, verbatim. Empty when
+  /// there is nothing to show. main.dart reads and clears this to surface the
+  /// message; no Dart wording is ever invented here.
+  String _forcedLogoutMessage = '';
+  String get forcedLogoutMessage => _forcedLogoutMessage;
+
+  /// Called by main.dart once the reason has been shown, so a later login does
+  /// not resurface a stale message.
+  void clearForcedLogoutMessage() {
+    _forcedLogoutMessage = '';
+  }
+
+  /// Ask the backend whether a WhatsApp logout was requested for this device.
+  /// Safe to call from every trigger (app-start restore, foreground resume,
+  /// entering the authenticated shell) — the guard debounces to one cheap call
+  /// per 20 s and never signs anyone out on an error or a "no".
+  Future<void> checkForcedLogout() => _forceLogout.check();
+
+  /// The RPC read, normalised to a plain map (or null when there is no usable
+  /// answer). Reads only the caller's own row, backend-side.
+  Future<Map<String, dynamic>?> _mustLogOutRpc() async {
+    final raw = await Supabase.instance.client.rpc('must_log_out');
+    final map = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
+    return map is Map ? map.cast<String, dynamic>() : null;
+  }
+
+  /// Run the forced logout: keep the backend's reason, then sign out on the
+  /// SAME local path a manual logout uses. That signedOut event is what clears
+  /// the cart (CartModel), the delivery role (DeliveryRoleState), the map
+  /// config and this notifier's own account state — one path, no divergent
+  /// second answer — and drops the app to the signed-out (login) surface.
+  Future<void> _applyForcedLogout(String message) async {
+    _forcedLogoutMessage = message;
+    RenderLog.write('force_logout', 'applied');
+    await signOut();
+    notifyListeners();
   }
 
   // Fire-and-forget tracer — writes one row per event to auth_debug_log via RPC.
@@ -366,6 +413,12 @@ class AuthNotifier extends ChangeNotifier {
       // never sit in front of first paint, and DeliveryRoleState answers
       // "unresolved", never "no", when it fails.
       unawaited(DeliveryRoleState.instance.probe());
+
+      // A session was just restored/resolved for a signed-in account — one of
+      // the three moments a WhatsApp logout must take effect. Not awaited: it
+      // must never sit in front of first paint, and the guard debounces so the
+      // app-start check and the shell-entry check collapse to one RPC.
+      if (next.signedIn) unawaited(checkForcedLogout());
     } catch (_) {
       // A fetch error is NOT a clean "no account" answer. Keep whatever we
       // already had and flag the error so the UI can offer a retry.

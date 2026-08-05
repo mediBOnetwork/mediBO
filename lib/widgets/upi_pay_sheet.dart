@@ -3,12 +3,12 @@
 // Replaces direct launchUrl('upi://...') which PhonePe/GPay block for P2P VPAs.
 // ignore_for_file: use_build_context_synchronously
 import 'dart:convert';
-import 'dart:html' as html;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import 'qr_saver.dart';
 import '../utils/render_log.dart';
 
 /// Canonical UPI URI builder — single source of truth.
@@ -126,9 +126,7 @@ class _UpiPaySheetState extends State<_UpiPaySheet> {
       if (byteData == null) return;
       final bytes = byteData.buffer.asUint8List();
       final b64 = base64Encode(bytes);
-      html.AnchorElement(href: 'data:image/png;base64,$b64')
-          ..setAttribute('download', _filename)
-          ..click();
+      saveQrPng(b64, _filename);
       RenderLog.write('c336_saveqr', 'file=$_filename;bytes=${bytes.length}');
     } catch (e) {
       if (mounted) {
@@ -238,26 +236,28 @@ class _UpiPaySheetState extends State<_UpiPaySheet> {
                 _copyRow('Amount', _amtDisplay, 'c336_copy_amt'),
                 if (widget.note.isNotEmpty)
                   _copyRow('Note', widget.note, 'c336_copy_note'),
-                const SizedBox(height: 8),
-                FilledButton.icon(
-                  onPressed: _savingQr ? null : _saveQr,
-                  icon: _savingQr
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.white))
-                      : const Icon(Icons.download_outlined, size: 18),
-                  label: Text(_savingQr ? 'Saving…' : 'Save QR',
-                      style: const TextStyle(
-                          fontSize: 14, fontWeight: FontWeight.w600)),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: const Color(0xFF1B7A43),
-                    minimumSize: const Size(double.infinity, 46),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10)),
+                if (kQrSaveSupported) ...[
+                  const SizedBox(height: 8),
+                  FilledButton.icon(
+                    onPressed: _savingQr ? null : _saveQr,
+                    icon: _savingQr
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.white))
+                        : const Icon(Icons.download_outlined, size: 18),
+                    label: Text(_savingQr ? 'Saving…' : 'Save QR',
+                        style: const TextStyle(
+                            fontSize: 14, fontWeight: FontWeight.w600)),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF1B7A43),
+                      minimumSize: const Size(double.infinity, 46),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                    ),
                   ),
-                ),
+                ],
                 const SizedBox(height: 12),
                 Container(
                   padding: const EdgeInsets.all(12),

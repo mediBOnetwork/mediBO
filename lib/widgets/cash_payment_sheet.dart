@@ -1,13 +1,12 @@
-// ignore_for_file: avoid_web_libraries_in_flutter, deprecated_member_use
-import 'dart:async';
 import 'dart:convert';
-import 'dart:html' as html;
 import 'dart:typed_data';
-import 'dart:ui_web' as ui_web;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'fullscreen_image.dart';
+import 'geo_position.dart';
+import 'image_pick.dart';
+import 'selfie_preview.dart';
 import '../utils/render_log.dart';
 
 class CashPaymentSheet extends StatefulWidget {
@@ -36,7 +35,6 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
   Uint8List? _fileBytes;
   String? _fileDataUrl;
   String? _fileMime;
-  String? _viewType;
   double? _lat;
   double? _lng;
   bool _locating = false;
@@ -80,71 +78,34 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
     super.dispose();
   }
 
-  void _pickFile() {
-    final input = html.FileUploadInputElement();
-    input.accept = 'image/*';
-    input.multiple = false;
-    input.click();
+  void _pickFile() async {
+    final picked = await pickImageBytes();
+    if (picked == null) return;
+    final bytes = picked.bytes;
+    final name = picked.name.toLowerCase();
 
-    input.onChange.listen((_) async {
-      final files = input.files;
-      if (files == null || files.isEmpty) return;
-      final file = files.first;
+    // Non-image guard (name-based; the picker is already image-only).
+    final mime = name.endsWith('.png')
+        ? 'image/png'
+        : name.endsWith('.webp')
+            ? 'image/webp'
+            : 'image/jpeg';
 
-      // Non-image guard
-      final mime = file.type.isNotEmpty ? file.type : 'image/jpeg';
-      if (!mime.startsWith('image/')) {
-        if (mounted) {
-          setState(() {
-            _selfieError = 'Please upload a selfie photo (image).';
-            _selfieVerified = false;
-            _fileBytes = null;
-            _fileDataUrl = null;
-            _fileMime = null;
-            _viewType = null;
-          });
-        }
-        return;
-      }
+    final b64 = base64Encode(bytes);
+    final dataUrl = 'data:$mime;base64,$b64';
 
-      // Read file
-      final reader = html.FileReader();
-      reader.readAsDataUrl(file);
-      await reader.onLoad.first;
-      final dataUrl = reader.result as String;
-      final comma = dataUrl.indexOf(',');
-      final b64 = dataUrl.substring(comma + 1);
-      final bytes = base64Decode(b64);
-
-      // Register preview
-      final vt = 'cash-preview-${DateTime.now().millisecondsSinceEpoch}';
-      final capturedContext = context;
-      ui_web.platformViewRegistry.registerViewFactory(vt, (int viewId) {
-        final img = html.ImageElement()
-          ..src = dataUrl
-          ..style.width = '100%'
-          ..style.height = '100%'
-          ..style.objectFit = 'cover'
-          ..style.borderRadius = '10px'
-          ..style.cursor = 'pointer';
-        img.onClick.listen((_) => openFullscreenImage(capturedContext, dataUrl));
-        return img;
-      });
-
-      if (!mounted) return;
-      setState(() {
-        _fileBytes = bytes;
-        _fileDataUrl = dataUrl;
-        _fileMime = mime;
-        _viewType = vt;
-        _selfieVerifying = true;
-        _selfieVerified = false;
-        _selfieError = null;
-      });
-
-      // Verify on pick — sends to Gemini via verify-selfie edge function
-      await _verifySelfie(bytes, mime, b64);
+    if (!mounted) return;
+    setState(() {
+      _fileBytes = bytes;
+      _fileDataUrl = dataUrl;
+      _fileMime = mime;
+      _selfieVerifying = true;
+      _selfieVerified = false;
+      _selfieError = null;
     });
+
+    // Verify on pick — sends to Gemini via verify-selfie edge function
+    await _verifySelfie(bytes, mime, b64);
   }
 
   Future<void> _verifySelfie(Uint8List bytes, String mime, String b64) async {
@@ -177,7 +138,6 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
           _fileBytes = null;
           _fileDataUrl = null;
           _fileMime = null;
-          _viewType = null;
           try {
             RenderLog.write('c243_selfie_fail',
                 'reason=${map['reason'] ?? 'none'}');
@@ -194,7 +154,6 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
         _fileBytes = null;
         _fileDataUrl = null;
         _fileMime = null;
-        _viewType = null;
       });
       try { RenderLog.write('c243_selfie_fail', 'reason=error:$e'); } catch (_) {}
     }
@@ -203,19 +162,9 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
   Future<void> _requestLocation() async {
     setState(() { _locating = true; _locError = null; });
     try {
-      final completer = Completer<html.Geoposition>();
-      html.window.navigator.geolocation
-          .getCurrentPosition(enableHighAccuracy: false, timeout: const Duration(seconds: 20))
-          .then((pos) { if (!completer.isCompleted) completer.complete(pos); })
-          .catchError((e) { if (!completer.isCompleted) completer.completeError(e); });
-
-      final pos = await completer.future.timeout(
-        const Duration(seconds: 25),
-        onTimeout: () => throw TimeoutException('Location timed out'),
-      );
-
-      final lat = pos.coords?.latitude?.toDouble();
-      final lng = pos.coords?.longitude?.toDouble();
+      final pos = await getCurrentPosition(enableHighAccuracy: false);
+      final lat = pos?.lat;
+      final lng = pos?.lng;
       if (lat == null || lng == null) throw Exception('No coordinates returned');
 
       if (mounted) {
@@ -427,8 +376,13 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
                   child: Stack(
                     fit: StackFit.expand,
                     children: [
-                      _viewType != null
-                          ? HtmlElementView(viewType: _viewType!)
+                      (_fileBytes != null && _fileDataUrl != null)
+                          ? selfiePreview(
+                              bytes: _fileBytes!,
+                              dataUrl: _fileDataUrl!,
+                              onTap: () =>
+                                  openFullscreenImage(context, _fileDataUrl!),
+                            )
                           : Container(color: Colors.grey.shade200),
                       // Green verified badge
                       Positioned(

@@ -17,16 +17,14 @@
 //   • all messages    -> shown verbatim; this file composes no error copy.
 //   • normalisation   -> phone / pincode / GSTIN are NOT formatted or validated
 //                        here. The backend normalises and validates them.
-// ignore_for_file: avoid_web_libraries_in_flutter
-import 'dart:async';
 import 'dart:convert';
-import 'dart:html' as html;
 
 import 'package:file_picker/file_picker.dart';
 
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'geo_position.dart';
 import '../utils/render_log.dart';
 
 /// Fields whose per_field_confidence is below this are flagged for review.
@@ -223,18 +221,9 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
       _notice = null;
     });
     try {
-      final completer = Completer<html.Geoposition>();
-      html.window.navigator.geolocation
-          .getCurrentPosition(
-              enableHighAccuracy: true, timeout: const Duration(seconds: 20))
-          .then((p) {
-        if (!completer.isCompleted) completer.complete(p);
-      }).catchError((e) {
-        if (!completer.isCompleted) completer.completeError(e);
-      });
-      final pos = await completer.future.timeout(const Duration(seconds: 25));
-      final lat = pos.coords?.latitude?.toDouble();
-      final lng = pos.coords?.longitude?.toDouble();
+      final pos = await getCurrentPosition(enableHighAccuracy: true);
+      final lat = pos?.lat;
+      final lng = pos?.lng;
       if (lat == null || lng == null) {
         throw Exception('no_coordinates');
       }

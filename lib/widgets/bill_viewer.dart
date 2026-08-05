@@ -12,31 +12,9 @@
 // the full-screen viewer (so the browser's own PDF viewer can scroll/zoom).
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:web/web.dart' as web;
 
+import 'pdf_frame.dart';
 import '../utils/bill_mime.dart';
-
-class PdfFrame extends StatelessWidget {
-  final String url;
-  final bool interactive;
-  const PdfFrame({super.key, required this.url, this.interactive = true});
-
-  @override
-  Widget build(BuildContext context) {
-    return HtmlElementView.fromTagName(
-      tagName: 'iframe',
-      onElementCreated: (element) {
-        final iframe = element as web.HTMLIFrameElement;
-        iframe.src = url;
-        iframe.style
-          ..border = 'none'
-          ..width = '100%'
-          ..height = '100%'
-          ..pointerEvents = interactive ? 'auto' : 'none';
-      },
-    );
-  }
-}
 
 Future<void> showBillViewer(BuildContext context, {required String url, required bool isImage}) {
   return Navigator.of(context, rootNavigator: true).push(PageRouteBuilder(

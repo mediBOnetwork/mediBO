@@ -1,7 +1,5 @@
-// ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:async';
 import 'dart:convert';
-import 'dart:js_interop';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -9,58 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:pharma_b2b/services/date_labels.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 
-// ── External JS function declarations (web only) ─────────────────────────────
-
-@JS('adminAlertStart')
-external void _jsStart();
-
-@JS('adminAlertStop')
-external void _jsStop();
-
-@JS('adminAlertMute')
-external void _jsMute(bool muted);
-
-@JS('adminAlertRegisterMessageHandler')
-external void _jsRegisterHandler(JSFunction callback);
-
-@JS('adminOrderAlertStart')
-external void _jsOrderStart();
-
-@JS('adminOrderAlertStop')
-external void _jsOrderStop();
-
-@JS('adminOrderAlertMute')
-external void _jsOrderMuteJs(bool muted);
-
-void _jsAudioStart() {
-  if (!kIsWeb) return;
-  try { _jsStart(); } catch (_) {}
-}
-
-void _jsAudioStop() {
-  if (!kIsWeb) return;
-  try { _jsStop(); } catch (_) {}
-}
-
-void _jsAudioMute(bool muted) {
-  if (!kIsWeb) return;
-  try { _jsMute(muted); } catch (_) {}
-}
-
-void _jsOrderAudioStart() {
-  if (!kIsWeb) return;
-  try { _jsOrderStart(); } catch (_) {}
-}
-
-void _jsOrderAudioStop() {
-  if (!kIsWeb) return;
-  try { _jsOrderStop(); } catch (_) {}
-}
-
-void _jsOrderAudioMute(bool muted) {
-  if (!kIsWeb) return;
-  try { _jsOrderMuteJs(muted); } catch (_) {}
-}
+import 'alert_audio.dart';
 
 // ── Column skip / label helpers (matches admin_customer_screen) ──────────────
 
@@ -170,23 +117,15 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
 
     // Listen for messages from the FCM service worker (dedup: SW posts when
     // app is focused so we don't also get the OS notification)
-    if (kIsWeb) {
-      try {
-        _jsRegisterHandler(((JSAny? rawMsg) {
-          if (rawMsg == null) return;
-          try {
-            final dartObj = rawMsg.dartify();
-            if (dartObj is Map) {
-              final type = dartObj['type']?.toString();
-              final id   = dartObj['regId']?.toString();
-              if (type == 'new_registration' && id != null) {
-                _maybeFetchAndEnqueue(id);
-              }
-            }
-          } catch (_) {}
-        }).toJS);
-      } catch (_) {}
-    }
+    registerAlertHandler((dartObj) {
+      if (dartObj is Map) {
+        final type = dartObj['type']?.toString();
+        final id   = dartObj['regId']?.toString();
+        if (type == 'new_registration' && id != null) {
+          _maybeFetchAndEnqueue(id);
+        }
+      }
+    });
   }
 
   void _subscribeRealtime() {
@@ -366,9 +305,9 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
   void _onFirstAlert() {
     final type = _queue.first['_alertType'] as String? ?? 'registration';
     if (type == 'order') {
-      _jsOrderAudioStart();
+      orderAudioStart();
     } else {
-      _jsAudioStart(); // registration and supplier_registration share the same alert sound
+      audioStart(); // registration and supplier_registration share the same alert sound
     }
     _slideCtrl.forward(from: 0);
   }
@@ -378,9 +317,9 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
         ? (_queue.first['_alertType'] as String? ?? 'registration')
         : 'registration';
     if (currentType == 'order') {
-      _jsOrderAudioStop();
+      orderAudioStop();
     } else {
-      _jsAudioStop();
+      audioStop();
     }
     setState(() {
       _queue.removeAt(0);
@@ -390,9 +329,9 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
     if (_queue.isNotEmpty) {
       final nextType = _queue.first['_alertType'] as String? ?? 'registration';
       if (nextType == 'order') {
-        _jsOrderAudioStart();
+        orderAudioStart();
       } else {
-        _jsAudioStart();
+        audioStart();
       }
       _slideCtrl.forward(from: 0);
     }
@@ -476,8 +415,8 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
 
   void _toggleMute() {
     setState(() => _muted = !_muted);
-    _jsAudioMute(_muted);
-    _jsOrderAudioMute(_muted);
+    audioMute(_muted);
+    orderAudioMute(_muted);
   }
 
   @override
@@ -488,8 +427,8 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
     _mrChannel?.unsubscribe();
     _companyChannel?.unsubscribe();
     _dpChannel?.unsubscribe();
-    _jsAudioStop();
-    _jsOrderAudioStop();
+    audioStop();
+    orderAudioStop();
     _flashCtrl.dispose();
     _slideCtrl.dispose();
     super.dispose();

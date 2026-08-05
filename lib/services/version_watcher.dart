@@ -1,11 +1,10 @@
-// ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:async';
 import 'dart:convert';
-import 'dart:html' as html;
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
+import 'page_reload.dart';
 import '../utils/render_log.dart';
 
 /// Polls /version.json every 45 s and, when a newer build is detected,
@@ -189,7 +188,7 @@ class VersionWatcher {
     try {
       RenderLog.write('c241_vw_reload', 'reloading to new build');
     } catch (_) {}
-    html.window.location.reload();
+    reloadPage();
   }
 
   void _showBanner() {

@@ -1,8 +1,4 @@
 import 'dart:async';
-// ignore: avoid_web_libraries_in_flutter, deprecated_member_use
-import 'dart:js' as js;
-// ignore: avoid_web_libraries_in_flutter, deprecated_member_use
-import 'dart:html' as html;
 
 import 'package:flutter/services.dart'
     show KeyDownEvent, KeyRepeatEvent, LogicalKeyboardKey;
@@ -10,6 +6,7 @@ import 'package:flutter/services.dart'
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
+import 'storefront_scrollbar.dart';
 import '../app_state.dart'; // CHANGE #454
 import '../data/medicine_repository.dart';
 import '../models/product.dart';
@@ -178,14 +175,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
     if (!kIsWeb || _scrollbarCssInjected) return;
     _scrollbarCssInjected = true;
     try {
-      final style = html.StyleElement()
-        ..text = '''
-          ::-webkit-scrollbar { width: 5px; height: 5px; }
-          ::-webkit-scrollbar-track { background: transparent; }
-          ::-webkit-scrollbar-thumb { background: rgba(27,122,67,0.45); border-radius: 8px; }
-          ::-webkit-scrollbar-thumb:hover { background: #1B7A43; }
-        ''';
-      html.document.head!.append(style);
+      injectScrollbarCss();
     } catch (_) {}
   }
 

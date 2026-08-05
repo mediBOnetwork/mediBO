@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
-// ignore: avoid_web_libraries_in_flutter
-import 'dart:html' as html;
 
+import 'boot_env.dart' as boot;
+import 'services/android_update_check.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:flutter/material.dart';
@@ -12,7 +12,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'app_state.dart';
 import 'order_hours_state.dart';
 import 'inquiry_lock_state.dart';
-import 'url_sync_web.dart' show captureInitialPath;
+import 'url_sync.dart' show captureInitialPath;
 import 'services/version_watcher.dart';
 import 'utils/render_log.dart';
 import 'view_as_state.dart';
@@ -79,14 +79,14 @@ void main() {
     // Prevents browser session-restore from re-presenting the OAuth callback URL on reopen,
     // which would trigger a second PKCE exchange (400 bad_code_verifier) → spurious signedOut.
     try {
-      final href = html.window.location.href;
+      final href = boot.locationHref();
       final uri = Uri.parse(href);
       final hasCode = uri.queryParameters.containsKey('code');
       final hasFragment = uri.fragment.contains('access_token=') ||
           uri.fragment.contains('refresh_token=') ||
           uri.fragment.contains('error=');
       if (hasCode || hasFragment) {
-        html.window.history.replaceState(null, '', '/');
+        boot.historyReplaceRoot();
         RenderLog.write('auth56_url_stripped', 'main_init; hadCode=$hasCode; hadFragment=$hasFragment');
         // CHANGE #308: note that SDK handled the exchange via detectSessionInUri
         if (hasCode) RenderLog.write('c308_code_exchange', 'ran:ok');
@@ -95,11 +95,11 @@ void main() {
 
     // Remove stale sv-typo key (sb-svojhmarmaijkshsbeih-auth-token) if left over from old builds.
     try {
-      html.window.localStorage.remove('sb-svojhmarmaijkshsbeih-auth-token');
+      boot.localStorageRemove('sb-svojhmarmaijkshsbeih-auth-token');
     } catch (_) {}
 
     try {
-      final raw = await html.HttpRequest.getString('/version.json');
+      final raw = await boot.fetchText('/version.json');
       final info = jsonDecode(raw) as Map<String, dynamic>;
       RenderLog.setBuildHash(info['commit'] as String? ?? 'unknown');
       final changeNum = info['change'] as String?;
@@ -185,7 +185,7 @@ void main() {
     // signedIn handler in user_state.dart where persistSession is guaranteed done.
     // Secret: ms62x9k7q.
     try {
-      final uri = Uri.parse(html.window.location.href);
+      final uri = Uri.parse(boot.locationHref());
       if (uri.queryParameters['selftest'] == 'ms62x9k7q' &&
           uri.queryParameters['phase'] == 'login') {
         final em = uri.queryParameters['em'] ?? '';
@@ -692,6 +692,10 @@ class _AppRootState extends State<_AppRoot> {
               await VersionWatcher.instance.init();
               VersionWatcher.instance.start();
             } catch (_) {}
+            // Android APK update check (no-op on web/iOS; own try/catch inside).
+            if (context.mounted) {
+              try { checkAndroidUpdate(context); } catch (_) {}
+            }
           });
         }
         // Entering the authenticated shell is the third moment a WhatsApp

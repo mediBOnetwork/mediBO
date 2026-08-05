@@ -30,6 +30,7 @@ import 'admin/admin_shell.dart';
 import '../features/whatsapp/ui/wa_home_screen.dart';
 import '../features/whatsapp/ui/wa_templates_screen.dart';
 import 'admin/wa_campaigns_screen.dart';
+import 'admin/wa_ops_screen.dart';
 import '../features/bags/bags_screen.dart';
 import 'admin/admin_supplier_screen.dart';
 import 'admin/admin_fulfillment_screen.dart';
@@ -405,6 +406,14 @@ class _HomeShellState extends State<HomeShell> {
       case 'wa_campaigns':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const WaCampaignsScreen()));
+        break;
+      // Event routes, WABA health and the contact ledger. Same gating story as
+      // the two above: wa_event_routes_screen / wa_waba_status /
+      // wa_contact_ledger all check get_my_role() and the screen renders their
+      // not_authorized answer, so there is no _amISuper test here.
+      case 'wa_ops':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const WaOpsScreen()));
         break;
       case 'manage_admins':
         if (_amISuper) {

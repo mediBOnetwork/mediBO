@@ -127,9 +127,15 @@ class WaTemplateApi {
   static Future<Map<String, dynamic>> headerStatus(String id) =>
       _rpc('wa_template_header_status', {'p_template_id': id});
 
-  /// {formats:[{value,label,accepts,max_mb,needs_sample}], rules:[], blocked_reason}
-  static Future<Map<String, dynamic>> mediaSpec() =>
-      _rpc('wa_template_media_spec');
+  /// {formats:[{value,label,accepts,mime,max_mb,needs_sample}], rules:[],
+  ///  template_saved, can_upload, upload_label, blocked_reason}
+  ///
+  /// The id is what makes can_upload/blocked_reason answerable: a sample file
+  /// attaches to a SAVED template, so an unsaved editor passes null and gets
+  /// back the reason it cannot upload yet, in the backend's own words.
+  static Future<Map<String, dynamic>> mediaSpec([String? id]) =>
+      _rpc('wa_template_media_spec',
+          {'p_template_id': (id == null || id.isEmpty) ? null : id});
 
   /// {ok, job_id, format, message} | {error, message}
   static Future<Map<String, dynamic>> setHeaderMedia({

@@ -26,10 +26,10 @@ class WaPickedFile {
 /// Create / edit a WhatsApp template.
 ///
 /// The two things that decide whether this template is any good — the preview
-/// text and the lint — are BOTH backend calls, refreshed on one debounce:
+/// text and the lint — are BOTH backend calls, refreshed as the admin edits:
 ///
-///   wa_template_preview(components)          -> the bubble, already rendered
-///   wa_template_validate(components, cat)    -> errors[] and warnings[]
+///   wa_preview_draft(components, token_map)   -> the bubble, already rendered
+///   wa_template_validate(components, cat)     -> errors[] and warnings[]
 ///
 /// Nothing here validates with a regex, assembles preview text, or decides what
 /// counts as an error. Save and Submit are disabled precisely when the backend
@@ -58,10 +58,15 @@ class WaTemplateEditorScreen extends StatefulWidget {
     this.initialComponents,
   });
 
-  /// Debounce before the preview/lint round-trip. Exposed so a widget test can
-  /// drive it without waiting real time.
+  /// Debounce before the lint round-trip. Exposed so a widget test can drive it
+  /// without waiting real time.
   @visibleForTesting
   static Duration debounce = const Duration(milliseconds: 400);
+
+  /// Debounce before the live preview round-trip. Shorter than the lint's so
+  /// the bubble keeps pace with the keystrokes.
+  @visibleForTesting
+  static Duration previewDebounce = const Duration(milliseconds: 350);
 
   /// Debounce before the duplicate check. Longer than the lint debounce because
   /// wa_template_similar scans every other template.
@@ -123,15 +128,26 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
   final List<TextEditingController> _buttonValue = [];
 
   Timer? _debounce;
-  Map<String, dynamic>? _preview;
 
-  /// wa_template_preview(p_template_id) — the SAVED row's preview, carrying the
-  /// media header (the sample file, keyed to the row) plus body_rendered,
-  /// rendered_note and char_count. Refreshed on open and after every save, not
-  /// on every keystroke: the sample lives on the row, so it cannot change while
-  /// the admin edits unsaved text. Null until there is a saved row to ask
-  /// about; the live components preview drives the bubble until then.
+  /// wa_preview_draft — the bubble's ONLY source, saved row or not. Built from
+  /// the LIVE editor state (components, token map, detached upload job) and
+  /// refreshed on a short debounce after every edit, so the picture follows what
+  /// the admin is typing rather than the last saved row. Identical shape to
+  /// wa_template_preview, so the bubble widget renders it unchanged. Null only
+  /// until the first draft preview lands; after that the last good render is
+  /// kept through every in-flight refresh.
   Map<String, dynamic>? _tplPreview;
+
+  /// The debounce and the in-flight guard for the draft preview. Every refresh
+  /// takes a fresh ticket; a response whose ticket is no longer the latest is
+  /// dropped, so a slow earlier round-trip can never paint over a newer edit.
+  Timer? _previewDebounce;
+  int _previewTicket = 0;
+
+  /// The backend's own sentence from a preview that came back an error
+  /// envelope, printed under the (unchanged) bubble. Empty when the last
+  /// preview succeeded.
+  String _previewMessage = '';
 
   List<dynamic> _errors = const [];
   List<dynamic> _warnings = const [];
@@ -275,6 +291,7 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
   @override
   void dispose() {
     _debounce?.cancel();
+    _previewDebounce?.cancel();
     _similarDebounce?.cancel();
     _renumberDebounce?.cancel();
     _headerPoll?.cancel();
@@ -464,6 +481,18 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
   void _schedule() {
     _debounce?.cancel();
     _debounce = Timer(WaTemplateEditorScreen.debounce, _refresh);
+    _schedulePreview();
+  }
+
+  /// The bubble's own debounce. Shorter than the lint's so the picture keeps up
+  /// with the typing. Every edit that changes what the message looks like —
+  /// body, header format, header text, footer, buttons, category and the token
+  /// map — routes through _schedule, so scheduling here covers them all; the
+  /// preview is also refreshed once on open and after an upload finishes.
+  void _schedulePreview() {
+    _previewDebounce?.cancel();
+    _previewDebounce =
+        Timer(WaTemplateEditorScreen.previewDebounce, _refreshBubblePreview);
   }
 
   Future<void> _refresh() async {
@@ -471,50 +500,59 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
     final components = _componentsNow();
     if (mounted) setState(() => _checking = true);
     try {
-      // Both answers come from the backend, for the same components.
-      final results = await Future.wait([
-        WaTemplateApi.validate(components, _category),
-        WaTemplateApi.preview(components),
-      ]);
+      // The lint's verdict is the backend's, for these exact components. The
+      // bubble is a separate round-trip (wa_preview_draft) on its own debounce.
+      final res = await WaTemplateApi.validate(components, _category);
       if (!mounted) return;
       setState(() {
-        _errors = (results[0]['errors'] as List?) ?? const [];
-        _warnings = (results[0]['warnings'] as List?) ?? const [];
-        _preview = results[1];
+        _errors = (res['errors'] as List?) ?? const [];
+        _warnings = (res['warnings'] as List?) ?? const [];
         _checking = false;
       });
       try {
         RenderLog.write('wa_tpl_lint', 'e:${_errors.length} w:${_warnings.length}');
-        RenderLog.write('wa_tpl_preview_ok', 1);
       } catch (_) {}
     } catch (_) {
       if (mounted) setState(() => _checking = false);
     }
-    // Before there is a row, the draft preview is the only one that reflects
-    // the edit just made — refresh it on this same debounce. A saved template
-    // keeps its open/save/upload cadence, since its bubble mirrors the row.
-    if (_id.isEmpty) await _refreshBubblePreview();
   }
 
-  /// The bubble's preview payload — the media header (the uploaded sample) and
-  /// body_rendered, everything it needs to read like a delivered message. One
-  /// shape, two sources: a SAVED row is fetched by id (wa_template_preview); an
-  /// UNSAVED one is built from the components in the editor, the token map, and
-  /// the detached upload job (wa_preview_draft), so the picture shows before
-  /// there is a row. Adopts only a real payload — body_rendered is never null on
-  /// success, so its absence marks an error envelope and a good bubble is never
-  /// blanked.
+  /// The bubble's preview payload, rebuilt from the LIVE editor state on every
+  /// edit: the components as they stand, the token map, and the detached upload
+  /// job (or null). wa_preview_draft renders them the way a delivered message
+  /// reads — the same shape wa_template_preview returned, so the bubble is
+  /// unchanged. This is the bubble's ONLY source now, saved row or not: the
+  /// saved-row RPC read stale text, so switching a footer or adding a button
+  /// changed nothing until a save-and-reopen. Display only — it never saves and
+  /// never alters what a save would send.
+  ///
+  /// A newer edit must win. Each call takes a ticket; a response whose ticket is
+  /// no longer the latest is dropped, so a slow earlier response cannot paint
+  /// over a newer render. body_rendered is never null on success, so its absence
+  /// marks an error envelope: the last good bubble is kept and the backend's own
+  /// sentence is shown beneath it — the picture is never blanked, never covered
+  /// by a spinner.
   Future<void> _refreshBubblePreview() async {
+    final ticket = ++_previewTicket;
     try {
-      final res = _id.isEmpty
-          ? await WaTemplateApi.previewDraft(
-              _componentsNow(),
-              _tokenKeys,
-              _mediaJobId.isEmpty ? null : _mediaJobId,
-            )
-          : await WaTemplateApi.templatePreview(_id);
-      if (!mounted || res['body_rendered'] == null) return;
-      setState(() => _tplPreview = res);
+      final res = await WaTemplateApi.previewDraft(
+        _componentsNow(),
+        _tokenKeys,
+        _mediaJobId.isEmpty ? null : _mediaJobId,
+      );
+      if (!mounted || ticket != _previewTicket) return;
+      if (res['body_rendered'] == null) {
+        final msg = WaTemplateApi.errorMessage(res);
+        if (msg.isNotEmpty) setState(() => _previewMessage = msg);
+        return;
+      }
+      setState(() {
+        _tplPreview = res;
+        _previewMessage = '';
+      });
+      try {
+        RenderLog.write('wa_tpl_preview_ok', 1);
+      } catch (_) {}
     } catch (_) {}
   }
 
@@ -1573,19 +1611,31 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
     );
   }
 
-  /// The message bubble. The saved-row preview (with its media header and
-  /// body_rendered) wins when it is loaded; until there is a saved row, the
-  /// live components preview keeps the bubble updating as the admin types.
-  /// rendered_note and char_count sit under the bubble — both the backend's.
+  /// The message bubble, driven entirely by the live draft preview
+  /// (wa_preview_draft) so it follows every edit. rendered_note and char_count
+  /// sit under the bubble — both the backend's. When a preview came back an
+  /// error, the last good bubble stays put and the backend's own sentence is
+  /// shown beneath it; the picture is never blanked.
   List<Widget> _buildBubble() {
-    final source = _tplPreview ?? _preview;
+    final source = _tplPreview;
+    // The backend's refusal sentence, kept below whatever the bubble is showing.
+    final message = _previewMessage.isEmpty
+        ? const <Widget>[]
+        : <Widget>[
+            const SizedBox(height: 8),
+            Text(
+              _previewMessage,
+              style: const TextStyle(fontSize: 12, color: Color(0xFF991B1B)),
+            ),
+          ];
     if (source == null) {
-      return const [
-        WaSkeleton(height: 16, width: 200),
-        SizedBox(height: 8),
-        WaSkeleton(height: 16),
-        SizedBox(height: 8),
-        WaSkeleton(height: 16, width: 160),
+      return [
+        const WaSkeleton(height: 16, width: 200),
+        const SizedBox(height: 8),
+        const WaSkeleton(height: 16),
+        const SizedBox(height: 8),
+        const WaSkeleton(height: 16, width: 160),
+        ...message,
       ];
     }
     final note = (_tplPreview?['rendered_note'] ?? '').toString();
@@ -1648,6 +1698,7 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
           ),
         ),
       ],
+      ...message,
     ];
   }
 

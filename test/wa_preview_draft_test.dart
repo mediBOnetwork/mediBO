@@ -6,9 +6,9 @@
 //   1. A ready detached-upload job with is_image signs storage_bucket +
 //      storage_path and renders a thumbnail inside the header block.
 //   2. A PDF job renders a file tile, not an image.
-//   3. With NO template id the editor previews through wa_preview_draft — the
-//      saved-row preview (wa_template_preview by p_template_id) is never asked.
-//      With a template id it is the reverse.
+//   3. The editor previews through wa_preview_draft whether or not the template
+//      is saved — the saved-row preview (wa_template_preview by p_template_id)
+//      is never asked, so an edit shows at once instead of only after a save.
 //   4. The delivered bubble renders the signed draft image above body_rendered.
 //   5. A draft header with missing_label and no file renders the placeholder box.
 //
@@ -280,13 +280,15 @@ void main() {
     expect(calls.calledWithParam('wa_template_preview', 'p_template_id'), isFalse);
   });
 
-  testWidgets('a template id previews through wa_template_preview, not draft',
-      (tester) async {
+  testWidgets('a saved template previews through wa_preview_draft too, never '
+      'the saved-row RPC', (tester) async {
     final calls = _install();
     await _pump(tester, withId: true);
 
-    expect(calls.calledWithParam('wa_template_preview', 'p_template_id'), isTrue);
-    expect(calls.called('wa_preview_draft'), isFalse);
+    // The bubble follows the live editor state even for a saved row, so the
+    // saved-row preview (by p_template_id) is never asked.
+    expect(calls.called('wa_preview_draft'), isTrue);
+    expect(calls.calledWithParam('wa_template_preview', 'p_template_id'), isFalse);
   });
 
   testWidgets('the delivered bubble renders the draft image above body_rendered',

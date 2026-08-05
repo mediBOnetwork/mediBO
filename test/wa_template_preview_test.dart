@@ -2,10 +2,10 @@
 //
 // What this holds down (all DISPLAY, nothing here changes what is saved):
 //
-//   1. wa_template_preview(p_template_id) feeds the whole bubble. When its
-//      header is an approved image (media_url set) the picture renders INSIDE
-//      the bubble, ABOVE the rendered body — the message reads the way the
-//      customer will see it.
+//   1. wa_preview_draft feeds the whole bubble, off the live editor state. When
+//      its header is an approved image (media_url set) the picture renders
+//      INSIDE the bubble, ABOVE the rendered body — the message reads the way
+//      the customer will see it.
 //
 //   2. A sample in the PRIVATE bucket is signed from the bucket and path the
 //      backend named — never a guessed public URL. The signer is called with
@@ -92,9 +92,9 @@ class _SignerLog {
   String? url = 'https://signed.example/sample?token=abc';
 }
 
-/// Installs the transports. [preview] is the wa_template_preview(p_template_id)
-/// payload under test; the live components preview is answered blandly so it
-/// never collides with an assertion.
+/// Installs the transports. [preview] is the wa_preview_draft payload under
+/// test — the editor drives the bubble off the live state now, so this is what
+/// feeds it whether or not the row is saved.
 _SignerLog _install(Map<String, dynamic> preview) {
   final signer = _SignerLog();
 
@@ -102,17 +102,10 @@ _SignerLog _install(Map<String, dynamic> preview) {
     switch (fn) {
       case 'wa_template_validate':
         return {'ok': true, 'errors': const [], 'warnings': const []};
-      case 'wa_template_preview':
-        // The saved-row call carries p_template_id; the live components call
-        // carries p_components. Only the first drives the media bubble.
-        if (params.containsKey('p_template_id')) return preview;
-        return {
-          'header': null,
-          'body': 'live-body',
-          'body_raw': 'live-raw',
-          'footer': '',
-          'buttons': const [],
-        };
+      case 'wa_preview_draft':
+        // The bubble is the live draft preview now — built from the components
+        // the editor holds. wa_template_preview is no longer called here.
+        return preview;
       case 'wa_tokens_screen':
         return {'rows': const [], 'search': null, 'empty_copy': 'No values'};
       // The header block now reads the sample's location from the STATUS, so a

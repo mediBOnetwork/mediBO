@@ -136,7 +136,8 @@ class _Signer {
   String? url = 'https://signed.example/sample?token=abc';
 }
 
-/// Installs the transports. [preview] drives the saved-row bubble; [policy] the
+/// Installs the transports. [preview] drives the bubble — the editor previews
+/// the live state through wa_preview_draft now, saved row or not; [policy] the
 /// AI check; [apply] the one-tap wa_policy_apply result.
 _Signer _install({
   required Map<String, dynamic> preview,
@@ -149,11 +150,11 @@ _Signer _install({
     switch (fn) {
       case 'wa_template_validate':
         return {'ok': true, 'errors': const [], 'warnings': const []};
-      case 'wa_template_preview':
-        // The saved-row call carries p_template_id; the live components call
-        // carries p_components. Only the first drives the bubble.
-        if (params.containsKey('p_template_id')) return preview;
-        return {'header': null, 'body': 'live', 'footer': '', 'buttons': const []};
+      case 'wa_preview_draft':
+        // The bubble is the live draft preview now — built from the components
+        // the editor holds, saved row or not. wa_template_preview is no longer
+        // called from the editor.
+        return preview;
       case 'wa_body_renumber':
         return {
           'body': params['p_body'],

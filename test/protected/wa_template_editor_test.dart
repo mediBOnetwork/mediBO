@@ -10,10 +10,17 @@
 //      errors[] is non-empty. Warnings never block — Meta approves those.
 //      No regex, no length rule and no category rule lives in Dart.
 //
-//   2. The PREVIEW is the backend's. The bubble prints wa_template_preview()'s
-//      `body`, not a locally-substituted copy of the body text. The fixture
-//      returns a preview that could NOT have been produced by string-replacing
-//      the components in Dart, so a local implementation fails this test.
+//   2. The PREVIEW is the backend's. The bubble prints wa_preview_draft()'s
+//      `body_rendered`, not a locally-substituted copy of the body text, and it
+//      is refreshed from the LIVE editor state on every edit — never read off
+//      the saved row. The fixture returns a preview that could NOT have been
+//      produced by string-replacing the components in Dart, so a local
+//      implementation fails this test.
+//
+//      CHANGED by the live-preview CHANGE, deliberately. The bubble used to read
+//      wa_template_preview — the saved row — so an edit changed nothing on
+//      screen until Save-and-reopen. It now renders wa_preview_draft off the
+//      components the editor is holding.
 //
 //   3. Choosing a starter fills name, category and components together. Half a
 //      starter is worse than none: the name would no longer describe the body.
@@ -224,14 +231,21 @@ void _stub({
           'errors': errors,
           'warnings': warnings,
         };
-      case 'wa_template_preview':
+      // The bubble is the live draft preview now, so switching a footer or
+      // adding a button shows at once instead of only after a save-and-reopen.
+      // wa_template_preview is no longer called from the editor.
+      case 'wa_preview_draft':
         return {
           'header': null,
-          'body': previewBody,
+          'body_rendered': previewBody,
+          'body_plain': '',
+          'body_segments': const [],
           'body_raw': 'ignored',
-          'footer': null,
+          'footer': '',
+          'footer_segments': const [],
           'buttons': const [],
-          'used_values': const [],
+          'char_count': 0,
+          'rendered_note': '',
         };
       // The picker's own payload. wa_template_tokens() is NOT stubbed here —
       // the editor must not call it any more.

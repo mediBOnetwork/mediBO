@@ -1,7 +1,5 @@
-// ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:async';
 import 'dart:convert';
-import 'dart:html' as html;
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
@@ -12,7 +10,12 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:xml/xml.dart' as xmlp;
+
+import '../utils/file_pick_io.dart';
+import '../utils/web_image_io.dart' as imgio;
+import '../utils/download_bytes.dart' as dl;
 
 import '../app_state.dart';
 import '../config/api_keys.dart';
@@ -587,8 +590,8 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     if (origImageBytes != null && origImageSize != null) {
       final imgEl = await _loadImageForProcessing(origImageBytes, origMimeType);
       if (imgEl != null) {
-        final srcW = imgEl.naturalWidth;
-        final srcH = imgEl.naturalHeight;
+        final srcW = imgio.imgWidth(imgEl);
+        final srcH = imgio.imgHeight(imgEl);
         const targetHeightPx = 46.0;
         final lineHeights = rows
             .where((r) => r.lineBbox != null)
@@ -696,8 +699,8 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     if (bytes == null) return;
     final imgEl = await _loadImageForProcessing(bytes, mime);
     if (imgEl == null || !mounted) return;
-    final srcW = imgEl.naturalWidth;
-    final srcH = imgEl.naturalHeight;
+    final srcW = imgio.imgWidth(imgEl);
+    final srcH = imgio.imgHeight(imgEl);
     // Re-derive globalScale from restored rows if not already in state.
     double? gs = _cropGlobalScale;
     if (gs == null) {
@@ -739,52 +742,41 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
   // ── File picking & orchestration ───────────────────────────────────────────
 
-  // CHANGE #312: camera button — web capture input, no native plugin.
+  // CHANGE #312: camera button — web capture input / native camera plugin.
   Future<void> _onCameraTap() async {
     try { RenderLog.write('c312_camera_tap', '1'); } catch (_) {}
-    final input = html.FileUploadInputElement()
-      ..accept = 'image/*'
-      ..multiple = false;
-    input.setAttribute('capture', 'environment');
-    input.click();
-    await input.onChange.first;
-    final files = input.files;
-    if (files == null || files.isEmpty) return;
+    final picked = await pickCameraPhoto();
+    if (picked == null) return;
     try { RenderLog.write('c312_camera_got', '1'); } catch (_) {}
-    await _processHtmlFile(files.first);
+    await _processPickedFile(picked.name, picked.bytes);
   }
 
   // CHANGE #312: upload button — keeps existing accept list.
   Future<void> _pickAndProcess() async {
     try { RenderLog.write('c312_upload_tap', '1'); } catch (_) {}
-    final input = html.FileUploadInputElement()
-      ..accept = '.csv,.xlsx,.xls,.pdf,.ods,.tsv,.txt,.docx,.doc,.html,.htm,.jpg,.jpeg,.png,.webp,.heic,.heif,.gif'
-      ..multiple = false;
-    input.click();
-    await input.onChange.first;
-    final files = input.files;
-    if (files == null || files.isEmpty) return;
+    final picked = await pickImportFile();
+    if (picked == null) return;
     try { RenderLog.write('c312_upload_got', '1'); } catch (_) {}
-    await _processHtmlFile(files.first);
+    await _processPickedFile(picked.name, picked.bytes);
   }
 
   // CHANGE #312: shared ingest entry — both camera and upload feed here.
-  Future<void> _processHtmlFile(html.File file) async {
-    try { RenderLog.write('c312_ingest_start', file.name); } catch (_) {}
+  Future<void> _processPickedFile(String fileName, Uint8List fileBytes) async {
+    try { RenderLog.write('c312_ingest_start', fileName); } catch (_) {}
     // Always start fresh — clear any stale session (including old bbox coordinates)
     // so the previous result never bleeds into the new upload's crop display.
     await _clearSession();
 
     setState(() {
       _step = _LoadStep.readingFile;
-      _fileName = file.name;
+      _fileName = fileName;
       _matchProgress = 0;
       _matchTotal = 0;
     });
 
     try {
       // Step 1: extract raw text / bytes from file
-      final rawContent = await _getRawFileContent(file);
+      final rawContent = await _getRawFileContent(fileName, fileBytes);
 
       // Step 2: Try AI; silently fall back to header-column matching on failure
       setState(() => _step = _LoadStep.aiAnalyzing);
@@ -805,7 +797,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
           rawContent.startsWith('IMAGE_BYTES:');
       // Structured spreadsheets have unambiguous column layout; parse locally
       // to avoid Gemini misidentifying the qty column as rate/amount/mrp.
-      final fileExt = file.name.toLowerCase().split('.').last;
+      final fileExt = fileName.toLowerCase().split('.').last;
       final isStructuredSheet =
           const {'xlsx', 'xls', 'ods', 'csv', 'tsv'}.contains(fileExt);
       List<Map<String, dynamic>> extracted;
@@ -813,7 +805,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         extracted = _extractWithFallback(rawContent);
       } else {
         try {
-          extracted = await _extractWithGeminiAI(rawContent, file.name);
+          extracted = await _extractWithGeminiAI(rawContent, fileName);
         } catch (e) {
           debugPrint('[BulkUpload] Extraction error (isBinary=$isBinary): $e');
           if (isBinary) rethrow;
@@ -852,8 +844,8 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         _matchTotal = extracted.length;
         _matchProgress = 0;
       });
-      await _runMatchPipeline(extracted, origImageBytes, origImageSize, origMimeType, file.name);
-      try { RenderLog.write('c312_ingest_done', file.name); } catch (_) {}
+      await _runMatchPipeline(extracted, origImageBytes, origImageSize, origMimeType, fileName);
+      try { RenderLog.write('c312_ingest_done', fileName); } catch (_) {}
     } catch (e) {
       try { RenderLog.write('c312_ingest_err', e.toString().length > 80 ? e.toString().substring(0, 80) : e.toString()); } catch (_) {}
       if (!mounted) return;
@@ -872,17 +864,16 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
   /// Converts any supported file to either a plain-text string (spreadsheets,
   /// CSV, TSV, TXT, DOCX) or a base64-prefixed string for images sent to Gemini.
-  Future<String> _getRawFileContent(html.File file) async {
-    final ext = file.name.toLowerCase().split('.').last;
+  Future<String> _getRawFileContent(String name, Uint8List bytes) async {
+    final ext = name.toLowerCase().split('.').last;
     switch (ext) {
       case 'csv':
       case 'tsv':
       case 'txt':
       case 'html':
       case 'htm':
-        return _readAsText(file);
+        return _readAsText(bytes);
       case 'pdf':
-        final bytes = await _readBinaryBytes(file);
         // Try local text extraction first (works for typed PDFs)
         final localText = await _extractPdfText(bytes);
         if (localText.trim().length > 20) return localText;
@@ -890,29 +881,29 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
         return 'PDF_BYTES:${base64Encode(bytes)}';
       case 'xlsx':
       case 'xls':
-        return _xlsxToRawText(file);
+        return _xlsxToRawText(bytes);
       case 'ods':
-        return _odsToRawText(file);
+        return _odsToRawText(bytes);
       case 'docx':
-        return _docxToRawText(file);
+        return _docxToRawText(bytes);
       case 'doc':
-        return _docToRawText(file);
+        return _docToRawText(bytes);
       case 'jpg':
       case 'jpeg':
-        return 'IMAGE_BYTES:image/jpeg:${base64Encode(await _readBinaryBytes(file))}';
+        return 'IMAGE_BYTES:image/jpeg:${base64Encode(bytes)}';
       case 'png':
-        return 'IMAGE_BYTES:image/png:${base64Encode(await _readBinaryBytes(file))}';
+        return 'IMAGE_BYTES:image/png:${base64Encode(bytes)}';
       case 'webp':
-        return 'IMAGE_BYTES:image/webp:${base64Encode(await _readBinaryBytes(file))}';
+        return 'IMAGE_BYTES:image/webp:${base64Encode(bytes)}';
       case 'heic':
       case 'heif':
-        return 'IMAGE_BYTES:image/heic:${base64Encode(await _readBinaryBytes(file))}';
+        return 'IMAGE_BYTES:image/heic:${base64Encode(bytes)}';
       case 'gif':
-        return 'IMAGE_BYTES:image/gif:${base64Encode(await _readBinaryBytes(file))}';
+        return 'IMAGE_BYTES:image/gif:${base64Encode(bytes)}';
       default:
         // Try unknown format as plain text before giving up
         try {
-          return await _readAsText(file);
+          return _readAsText(bytes);
         } catch (_) {
           throw Exception(
               'Format .$ext is not supported. Please use CSV, Excel, PDF, TXT, or DOCX.');
@@ -920,21 +911,11 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     }
   }
 
-  Future<String> _readAsText(html.File file) async {
-    final reader = html.FileReader();
-    reader.readAsText(file);
-    await reader.onLoad.first;
-    return (reader.result as String)
+  String _readAsText(Uint8List bytes) {
+    return utf8
+        .decode(bytes, allowMalformed: true)
         .replaceAll('\r\n', '\n')
         .replaceAll('\r', '\n');
-  }
-
-  Future<Uint8List> _readBinaryBytes(html.File file) async {
-    final reader = html.FileReader();
-    reader.readAsDataUrl(file);
-    await reader.onLoad.first;
-    final dataUrl = reader.result as String;
-    return base64Decode(dataUrl.split(',').last);
   }
 
   /// Extracts plain text from a typed PDF using syncfusion. Returns empty string
@@ -952,9 +933,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   }
 
   /// Parses DOCX ZIP+XML structure and returns paragraph text as plain lines.
-  Future<String> _docxToRawText(html.File file) async {
-    final bytes = await _readBinaryBytes(file);
-
+  Future<String> _docxToRawText(Uint8List bytes) async {
     Archive archive;
     try {
       archive = ZipDecoder().decodeBytes(bytes);
@@ -990,9 +969,9 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
   /// Extracts readable text from legacy binary .doc files.
   /// Tries plain-text read first (works for RTF-based .doc), then ASCII runs.
-  Future<String> _docToRawText(html.File file) async {
+  Future<String> _docToRawText(Uint8List bytes) async {
     try {
-      final text = await _readAsText(file);
+      final text = _readAsText(bytes);
       if (text.isNotEmpty) {
         final printable = text.codeUnits
             .where((c) => c >= 32 && c < 127 || c == 9 || c == 10 || c == 13)
@@ -1013,7 +992,6 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     } catch (_) {}
 
     // Binary DOC: extract printable ASCII runs of ≥6 chars
-    final bytes = await _readBinaryBytes(file);
     final sb = StringBuffer();
     int runStart = -1;
     for (int i = 0; i < bytes.length; i++) {
@@ -1039,9 +1017,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   }
 
   /// Parses XLSX ZIP+XML structure and returns all sheet data as tab-separated rows.
-  Future<String> _xlsxToRawText(html.File file) async {
-    final bytes = await _readBinaryBytes(file);
-
+  Future<String> _xlsxToRawText(Uint8List bytes) async {
     Archive archive;
     try {
       archive = ZipDecoder().decodeBytes(bytes);
@@ -1114,9 +1090,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   }
 
   /// Parses ODS content.xml and returns all table data as tab-separated rows.
-  Future<String> _odsToRawText(html.File file) async {
-    final bytes = await _readBinaryBytes(file);
-
+  Future<String> _odsToRawText(Uint8List bytes) async {
     Archive archive;
     try {
       archive = ZipDecoder().decodeBytes(bytes);
@@ -1179,28 +1153,10 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
     final base64Data = withoutPrefix.substring(colonIdx + 1);
     try {
       final bytes = base64Decode(base64Data);
-      final blob = html.Blob([bytes], mimeType);
-      final url = html.Url.createObjectUrlFromBlob(blob);
-      final img = html.ImageElement()..src = url;
-      await img.onLoad.first.timeout(const Duration(seconds: 10));
-      html.Url.revokeObjectUrl(url);
-      final srcW = img.naturalWidth;
-      final srcH = img.naturalHeight;
-      if (srcW == 0 || srcH == 0) throw Exception('image dimensions 0');
-      const maxDim = 1600;
-      int dstW = srcW, dstH = srcH;
-      if (srcW > maxDim || srcH > maxDim) {
-        final scale = maxDim / (srcW > srcH ? srcW : srcH);
-        dstW = (srcW * scale).round();
-        dstH = (srcH * scale).round();
-      }
-      final canvas = html.CanvasElement(width: dstW, height: dstH);
-      final ctx = canvas.context2D;
-      ctx.filter = 'grayscale(100%) contrast(160%) brightness(108%)';
-      ctx.drawImageScaled(img, 0, 0, dstW.toDouble(), dstH.toDouble());
-      final dataUrl = canvas.toDataUrl('image/jpeg', 0.92);
-      final enhanced = 'IMAGE_BYTES:image/jpeg:${dataUrl.split(',').last}';
-      debugPrint('[ImageEnhance] ${srcW}x$srcH → ${dstW}x$dstH, out=${enhanced.length} chars');
+      final enhancedBytes = await imgio.enhanceForOcrJpeg(bytes, mimeType);
+      if (enhancedBytes == null) return rawContent;
+      final enhanced = 'IMAGE_BYTES:image/jpeg:${base64Encode(enhancedBytes)}';
+      debugPrint('[ImageEnhance] in=${bytes.length}B → out=${enhanced.length} chars');
       return enhanced;
     } catch (e) {
       debugPrint('[ImageEnhance] Failed ($e) — using original');
@@ -1210,29 +1166,18 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
   Future<Size?> _getImageSize(Uint8List bytes, String mimeType) async {
     try {
-      final blob = html.Blob([bytes], mimeType);
-      final url = html.Url.createObjectUrlFromBlob(blob);
-      final img = html.ImageElement()..src = url;
-      await img.onLoad.first.timeout(const Duration(seconds: 10));
-      html.Url.revokeObjectUrl(url);
-      final w = img.naturalWidth;
-      final h = img.naturalHeight;
-      if (w > 0 && h > 0) return Size(w.toDouble(), h.toDouble());
+      final d = await imgio.imageDims(bytes, mimeType);
+      if (d != null) return Size(d.w.toDouble(), d.h.toDouble());
     } catch (e) {
       debugPrint('[ImageSize] Failed: $e');
     }
     return null;
   }
 
-  // Loads original image bytes into an ImageElement for canvas processing.
-  Future<html.ImageElement?> _loadImageForProcessing(Uint8List bytes, String mimeType) async {
+  // Decodes original image bytes into a reusable handle for crop processing.
+  Future<Object?> _loadImageForProcessing(Uint8List bytes, String mimeType) async {
     try {
-      final blob = html.Blob([bytes], mimeType);
-      final url = html.Url.createObjectUrlFromBlob(blob);
-      final img = html.ImageElement()..src = url;
-      await img.onLoad.first.timeout(const Duration(seconds: 15));
-      html.Url.revokeObjectUrl(url);
-      return img.naturalWidth > 0 ? img : null;
+      return await imgio.decodeImageHandle(bytes, mimeType);
     } catch (e) {
       debugPrint('[CropLoad] Failed: $e');
       return null;
@@ -1271,7 +1216,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
   ///
   /// Output: original-colour PNG, no filter/threshold.
   Uint8List? _processOneCrop(
-    html.ImageElement img, int srcW, int srcH,
+    Object img, int srcW, int srcH,
     Rect nameBbox, Rect lineBbox, double globalScale, {
     Rect? prevLineBbox,
     Rect? nextLineBbox,
@@ -1323,19 +1268,11 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
       // ── Draw ORIGINAL-COLOUR crop directly at output size (no binarization,
       // no ink-mask classification, no filter). ─────────────────────────────
-      final canvas = html.CanvasElement(width: outW, height: outH);
-      final ctx = canvas.context2D;
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, outW.toDouble(), outH.toDouble());
-      ctx.imageSmoothingEnabled = true;
-      ctx.drawImageScaledFromSource(
+      return imgio.drawCrop(
         img,
-        srcXStart, srcTop, cropSrcW, actualSrcH,
-        0, 0, outW.toDouble(), outH.toDouble(),
+        sx: srcXStart, sy: srcTop, sw: cropSrcW, sh: actualSrcH,
+        outW: outW, outH: outH,
       );
-
-      final dataUrl = canvas.toDataUrl('image/png');
-      return base64Decode(dataUrl.split(',').last);
     } catch (e) {
       debugPrint('[CropProcess] Failed: $e');
       return null;
@@ -2414,8 +2351,8 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
       final imgEl = await _loadImageForProcessing(
           bytes, _uploadedMimeType ?? 'image/jpeg');
       if (imgEl == null) return null;
-      final srcW = imgEl.naturalWidth.toDouble();
-      final srcH = imgEl.naturalHeight.toDouble();
+      final srcW = imgio.imgWidth(imgEl).toDouble();
+      final srcH = imgio.imgHeight(imgEl).toDouble();
 
       // Expand bbox slightly for OCR context.
       final left   = ((bbox.left   - bbox.width  * 0.05) * srcW).clamp(0.0, srcW);
@@ -2425,13 +2362,11 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
       final outW = width.round().clamp(10, 800);
       final outH = height.round().clamp(4, 200);
-      final canvas = html.CanvasElement(width: outW, height: outH);
-      final ctx = canvas.context2D;
-      ctx.fillStyle = '#FFFFFF';
-      ctx.fillRect(0, 0, outW.toDouble(), outH.toDouble());
-      ctx.drawImageScaledFromSource(
-          imgEl, left, top, width, height, 0, 0, outW.toDouble(), outH.toDouble());
-      final base64Data = canvas.toDataUrl('image/jpeg', 0.9).split(',').last;
+      final cropBytes = imgio.drawCrop(imgEl,
+          sx: left, sy: top, sw: width, sh: height,
+          outW: outW, outH: outH, jpeg: true, quality: 0.9);
+      if (cropBytes == null) return null;
+      final base64Data = base64Encode(cropBytes);
 
       final response = await http.post(
         Uri.parse(_ocrEdgeFn),
@@ -2736,9 +2671,9 @@ class _WhatsAppCard extends StatelessWidget {
     // CHANGE #400: mediBO's business number, short fixed message — no customer details.
     final msg = Uri.encodeComponent("Hello mediBO, I'm placing a new order. ✨");
     try { RenderLog.write('c400_wa_order_fixed', 'true'); } catch (_) {} // CHANGE #400
-    html.window.open(
-      'https://wa.me/919329252090?text=$msg',
-      '_blank',
+    launchUrl(
+      Uri.parse('https://wa.me/919329252090?text=$msg'),
+      mode: LaunchMode.externalApplication,
     );
   }
 
@@ -3189,25 +3124,16 @@ class _HowItWorksCard extends StatelessWidget {
 class _DemoDownloadRow extends StatelessWidget {
   const _DemoDownloadRow();
 
-  // CHANGE #312: same-origin static files — instant download on all platforms.
+  // CHANGE #312: same-origin static files — web downloads instantly; Android
+  // opens the host URL in the browser to fetch it.
   void _downloadDemoImage() {
     try { RenderLog.write('c312_demo_img_tap', '1'); } catch (_) {}
-    final a = html.AnchorElement(href: '/demo/demo-order.jpg')
-      ..download = 'demo-order.jpg'
-      ..target = '_self';
-    html.document.body!.append(a);
-    a.click();
-    a.remove();
+    dl.downloadSameOriginAsset('/demo/demo-order.jpg', 'demo-order.jpg');
   }
 
   void _downloadDemoExcel() {
     try { RenderLog.write('c312_demo_xls_tap', '1'); } catch (_) {}
-    final a = html.AnchorElement(href: '/demo/demo-order.xlsx')
-      ..download = 'demo-order.xlsx'
-      ..target = '_self';
-    html.document.body!.append(a);
-    a.click();
-    a.remove();
+    dl.downloadSameOriginAsset('/demo/demo-order.xlsx', 'demo-order.xlsx');
   }
 
   @override
@@ -3343,11 +3269,11 @@ class _TemplateSection extends StatelessWidget {
         'Dolo 650,20\n'
         'Metformin 500 SR,8\n'
         'Atorva 10,6\n';
-    final encoded = Uri.encodeComponent(csvContent);
-    final anchor = html.AnchorElement()
-      ..href = 'data:text/csv;charset=utf-8,$encoded'
-      ..setAttribute('download', 'medibo_order_template.csv')
-      ..click();
+    dl.downloadBytes(
+      utf8.encode(csvContent),
+      'medibo_order_template.csv',
+      'text/csv',
+    );
   }
 
   @override

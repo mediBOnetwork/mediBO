@@ -66,6 +66,53 @@ class MicDeniedException implements Exception {
   String toString() => 'Microphone permission denied';
 }
 
+/// One render-ready view of the count, straight from a voice_live_* payload.
+///
+/// [authoritative] is true when it came from voice_live_commit(_pack) — the
+/// numbers are then what the backend has actually PERSISTED, and that is the
+/// number the screen must show. Preview snapshots carry the same shape but are
+/// only a fast repaint while the operator is still speaking.
+class VoiceLiveSnapshot {
+  final List<Map<String, dynamic>> totals; // [{product_id,name,qty,bag_no}]
+  final List<Map<String, dynamic>> overCounted; // backend-clamped rows
+  final List<Map<String, dynamic>> needsBagReview; // never silently dropped
+  final String hint;
+
+  /// Render-ready bag label from the backend, e.g. "Bag 3". Empty where the
+  /// stage has no bag condition (shop, pack), so no chip is drawn there. The app
+  /// never composes this text or decides which stages have bags.
+  final String activeBagLabel;
+
+  final bool authoritative;
+
+  const VoiceLiveSnapshot({
+    this.totals = const [],
+    this.overCounted = const [],
+    this.needsBagReview = const [],
+    this.hint = '',
+    this.activeBagLabel = '',
+    this.authoritative = false,
+  });
+
+  /// Reads the shape both the preview and the commit RPCs return. Absent keys
+  /// become empty — never a Dart-invented value.
+  factory VoiceLiveSnapshot.fromMap(Map<String, dynamic> m,
+      {required bool authoritative}) {
+    List<Map<String, dynamic>> rows(String k) => ((m[k] as List?) ?? const [])
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+    return VoiceLiveSnapshot(
+      totals: rows('totals'),
+      overCounted: rows('over_counted'),
+      needsBagReview: rows('needs_bag_review'),
+      hint: (m['hint'] ?? '').toString(),
+      activeBagLabel: (m['active_bag_label'] ?? '').toString(),
+      authoritative: authoritative,
+    );
+  }
+}
+
 /// Continuous raw-PCM microphone source (record's stream API on Android).
 abstract class MicSource {
   Future<bool> hasPermission();
@@ -81,7 +128,9 @@ class VoiceToken {
   final String location;
   final String languageCode;
   final String model;
-  final String encoding; // e.g. WEBM_OPUS / LINEAR16
+  /// Wire format the backend tells us to send, e.g. LINEAR16. Decided by
+  /// voice_stream_open — never chosen here.
+  final String encoding;
   final int sampleRate;
   final List<Map<String, dynamic>> phrases; // [{value, boost}]
   final int reconnectAfterSec;
@@ -114,8 +163,12 @@ class VoiceToken {
       location: (m['location'] ?? '').toString(),
       languageCode: (m['language_code'] ?? 'en-IN').toString(),
       model: (m['model'] ?? 'long').toString(),
-      encoding: (m['encoding'] ?? 'LINEAR16').toString(),
-      sampleRate: (m['sample_rate'] as num?)?.toInt() ?? 48000,
+      // No Dart fallback for these two: the backend owns the wire format, and a
+      // guessed value would mean sending bytes that do not match what we declare
+      // to Speech. Absent → empty/0, and the stream opener refuses to start with
+      // the backend's own message rather than counting garbage.
+      encoding: (m['encoding'] ?? '').toString(),
+      sampleRate: (m['sample_rate'] as num?)?.toInt() ?? 0,
       phrases: ((m['phrases'] as List?) ?? const [])
           .whereType<Map>()
           .map((e) => Map<String, dynamic>.from(e))

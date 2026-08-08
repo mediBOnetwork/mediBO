@@ -1,10 +1,10 @@
 // ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:async';
-import 'dart:html' as html;
 import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
@@ -19,6 +19,8 @@ import '../../fulfill/fulfill_lookups.dart'; // C531: backend-owned strings/colo
 // dispute_card.dart removed in #170 — Disputes tab rebuilt with accordion layout
 import '../../utils/responsive.dart';
 import '../../utils/tts.dart';
+import '../../utils/audio_clip_io.dart';
+import '../../utils/agent_selftest_hooks.dart' as selftest;
 import '../../user_state.dart';
 import '../../services/voice_receive_service.dart';
 import '../../services/fulfill_realtime.dart'; // C353: single realtime channel
@@ -1134,7 +1136,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   bool _agentRecStarted = false; // tracks whether _voiceService is owned by agent
 
   // #122: cloud TTS audio element (web) — one instance, cancelled on next reply
-  html.AudioElement? _ttsAudio;
+  ClipPlayer? _ttsAudio;
 
   // ── #88: agent reply popup overlay ──────────────────────────────────────────
   final LayerLink _askPillLayerLink = LayerLink();
@@ -1362,7 +1364,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     _agentBubbleEntry = null;
     _spokenPopupEntry?.remove();
     _spokenPopupEntry = null;
-    _ttsAudio?.pause();
+    _ttsAudio?.stop();
     _ttsAudio = null;
     _voiceService.dispose();
     _idleTimer?.cancel();
@@ -1467,42 +1469,24 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   /// Hooks: window.dispatchEvent(new CustomEvent('medibo_injectAgentResponse', {detail:'...'}))
   void _initAgentTestHooks() {
     try {
-      final search = html.window.location.search ?? '';
-      final href   = html.window.location.href ?? '';
-      final ls     = html.window.localStorage['medibo_agentselftest'] ?? '';
-      final isTest = search.contains('agentselftest=1') ||
-                     href.contains('agentselftest=1') ||
-                     ls == '1';
+      final search = selftest.agentSelfTestSearch();
       RenderLog.write('change_85_agent_test_search', search.isEmpty ? 'empty' : search);
-      if (!isTest) return;
-      html.window.addEventListener('medibo_injectAgentResponse', _onTestInjectResponse);
-      html.window.addEventListener('medibo_injectAgentConfirm',  _onTestInjectConfirm);
-      html.window.addEventListener('medibo_injectAgentSupplier', _onTestInjectSupplier);
+      if (!selftest.agentSelfTestActive()) return;
+      selftest.registerAgentTestHooks(
+        onResponse: (detail) {
+          try {
+            _processAgentResponse(jsonDecode(detail) as Map<String, dynamic>);
+          } catch (_) {}
+        },
+        onConfirm: () => _commitPending(),
+        onSupplier: (name) {
+          if (mounted && name.isNotEmpty) setState(() => _selectedSupplier = name);
+        },
+      );
       RenderLog.write('change_85_agent_hooks_registered', '1');
     } catch (e) {
       RenderLog.write('change_85_agent_hooks_error', e.toString().substring(0, 40));
     }
-  }
-
-  void _onTestInjectResponse(html.Event event) {
-    try {
-      final detail = (event as html.CustomEvent).detail;
-      final jsonStr = detail is String ? detail : detail?.toString() ?? '';
-      final data = jsonDecode(jsonStr) as Map<String, dynamic>;
-      _processAgentResponse(data);
-    } catch (_) {}
-  }
-
-  void _onTestInjectConfirm(html.Event event) {
-    _commitPending();
-  }
-
-  void _onTestInjectSupplier(html.Event event) {
-    try {
-      final detail = (event as html.CustomEvent).detail;
-      final name = detail is String ? detail : detail?.toString() ?? '';
-      if (mounted && name.isNotEmpty) setState(() => _selectedSupplier = name);
-    } catch (_) {}
   }
 
 
@@ -3609,7 +3593,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     if (_agentBusy || _voiceListening || _agentPhase != AgentPhase.idle) return;
     _agentBusy = true;
     // #123 P1: clear stale reply + stop previous audio the instant Ask mediBO starts
-    _ttsAudio?.pause();
+    _ttsAudio?.stop();
     _ttsAudio = null;
     final hadPrev = _agentReply.isNotEmpty;
     if (mounted) setState(() { _agentReply = ''; _agentPhase = AgentPhase.idle; });
@@ -3820,7 +3804,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // Cancels any currently-playing reply before starting a new one.
   Future<void> _speakReply(String text) async {
     // Stop any prior TTS audio immediately
-    _ttsAudio?.pause();
+    _ttsAudio?.stop();
     _ttsAudio = null;
 
     if (text.isEmpty) return;
@@ -3838,13 +3822,13 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
 
       final dataUrl = 'data:audio/mpeg;base64,$audioB64';
       final c = Completer<void>();
-      final el = html.AudioElement(dataUrl);
+      final el = ClipPlayer();
       _ttsAudio = el;
       RenderLog.write('c122_tts_play', 'platform=web');
       RenderLog.write('c122_tts_call', 'ok=y;bytes=${audioB64.length};fell_back=n');
-      el.onEnded.listen((_) { if (!c.isCompleted) c.complete(); });
-      el.onError.listen((_) { if (!c.isCompleted) c.complete(); });
-      el.play();
+      el.onEnded(() { if (!c.isCompleted) c.complete(); });
+      el.onError(() { if (!c.isCompleted) c.complete(); });
+      await el.play(dataUrl);
       await c.future;
       if (_ttsAudio == el) _ttsAudio = null;
     } catch (_) {
@@ -6121,7 +6105,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   // Supabase signed URLs get tainted on range responses → element "plays" but
   // emits no sound. A bare AudioElement is never routed through Web Audio, so
   // cross-origin remote clips play correctly.
-  html.AudioElement? _clipAudio;
+  ClipPlayer? _clipAudio;
   final Map<String, String> _signedUrlCache = {}; // clip_path -> signed URL (cached per tap)
   String? _playingClip;   // clip_path of currently-playing recording
   int? _playingSeq;       // #119: recording_seq of playing clip (drives green state)
@@ -6186,8 +6170,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   @override
   void dispose() {
     FulfillRealtime.instance.removeListener(_onRealtimeChange);
-    _clipAudio?.pause();
-    _clipAudio?.src = '';
+    _clipAudio?.stop();
     _clipAudio = null;
     _chipScrollCtrl.removeListener(_onChipScroll);
     _chipScrollCtrl.dispose();
@@ -6292,8 +6275,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
       return;
     }
     // #266 (v2): stop any current playback (pause does not fire onEnded → no reset)
-    _clipAudio?.pause();
-    _clipAudio?.src = '';
+    _clipAudio?.stop();
     _clipAudio = null;
     if (mounted) setState(() { _playingClip = null; _playingSeq = null; });
 
@@ -6317,11 +6299,11 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
       // #266 (v2): bare html.AudioElement (no crossOrigin / no Web Audio routing).
       // Same proven path as TTS playback in this file → cross-origin signed URLs
       // actually emit sound (audioplayers_web silently muted them).
-      final el = html.AudioElement(url);
+      final el = ClipPlayer();
       _clipAudio = el;
       // Natural end → notify the caller (queue advance or reset-to-All).
-      // pause()/src='' interruptions do NOT fire onEnded, so they are excluded.
-      el.onEnded.listen((_) {
+      // stop() interruptions do NOT fire onEnded, so they are excluded.
+      el.onEnded(() {
         if (!mounted || !identical(_clipAudio, el)) return;
         final playedSeq = _playingSeq;
         setState(() { _playingClip = null; _playingSeq = null; });
@@ -6329,13 +6311,13 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
         _newClipSeq = null;
         onWindowEnded(playedSeq);
       });
-      el.onError.listen((_) {
+      el.onError(() {
         if (!mounted || !identical(_clipAudio, el)) return;
         setState(() { _playingClip = null; _playingSeq = null; });
         _showSnackMsg("Couldn't play this clip");
         RenderLog.write('c266_clip_play', 'seq=$recordingSeq;status=fail_media');
       });
-      await el.play();
+      await el.play(url);
       if (!mounted) return;
       setState(() { _playingClip = clipPath; _playingSeq = recordingSeq; });
 
@@ -6384,8 +6366,7 @@ class _CountedMentionsPopupState extends State<_CountedMentionsPopup> {
   }
 
   void _stopAudio() {
-    _clipAudio?.pause();
-    _clipAudio?.src = '';
+    _clipAudio?.stop();
     _clipAudio = null;
     _playQueue = [];
     if (mounted) setState(() { _playingClip = null; _playingSeq = null; });
@@ -11111,7 +11092,7 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
     }
   }
 
-  html.AudioElement? _clipAudio;
+  ClipPlayer? _clipAudio;
   final Map<String, String> _signedUrlCache = {};
   String? _playingClip;
   int? _playingSeq;
@@ -11127,8 +11108,7 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
 
   @override
   void dispose() {
-    _clipAudio?.pause();
-    _clipAudio?.src = '';
+    _clipAudio?.stop();
     _chipScrollCtrl.dispose();
     super.dispose();
   }
@@ -11196,20 +11176,20 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
         if (!mounted) return;
         _signedUrlCache[clipPath] = url;
       }
-      final el = html.AudioElement(url);
+      final el = ClipPlayer();
       _clipAudio = el;
-      el.onEnded.listen((_) {
+      el.onEnded(() {
         if (!mounted || !identical(_clipAudio, el)) return;
         setState(() { _playingClip = null; _playingSeq = null; });
         onWindowEnded();
       });
-      el.onError.listen((_) {
+      el.onError(() {
         if (!mounted || !identical(_clipAudio, el)) return;
         setState(() { _playingClip = null; _playingSeq = null; });
         ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text(FulfillLookups.instance.message('clip_play_failed') ?? '')));
       });
-      await el.play();
+      await el.play(url);
       if (mounted) setState(() { _playingClip = clipPath; _playingSeq = seq; });
     } catch (e) {
       if (mounted) setState(() { _playingClip = null; _playingSeq = null; });
@@ -11238,8 +11218,7 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
   }
 
   void _stopAudio() {
-    _clipAudio?.pause();
-    _clipAudio?.src = '';
+    _clipAudio?.stop();
     _clipAudio = null;
     _playQueue = [];
     if (mounted) setState(() { _playingClip = null; _playingSeq = null; });
@@ -14548,7 +14527,7 @@ class _DisputeContactPopoverBodyState extends State<_DisputeContactPopoverBody>
       },
     );
     RenderLog.write('c180_sendlink_action', 'supplier=${widget.supplierName}');
-    html.window.open('https://wa.me/$intl?text=$msg', '_blank');
+    launchUrl(Uri.parse('https://wa.me/$intl?text=$msg'), mode: LaunchMode.externalApplication);
     widget.onClose();
   }
 

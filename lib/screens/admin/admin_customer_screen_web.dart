@@ -1,11 +1,7 @@
-// ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:async';
 import 'dart:convert';
-import 'dart:html' as html;
-import 'dart:js_interop';
 import 'dart:math';
 import 'dart:typed_data';
-import 'dart:ui_web' as ui_web;
 
 import 'package:file_picker/file_picker.dart'; // CHANGE #464
 import 'package:flutter/material.dart';
@@ -14,6 +10,9 @@ import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:pharma_b2b/utils/toast.dart';
+
+import '../../widgets/geo_position.dart' as geo;
+import '../../utils/file_pick_io.dart' as filepick;
 
 import '../../utils/download_bytes.dart'; // CHANGE #463
 import '../../utils/render_log.dart';
@@ -37,44 +36,9 @@ import '../../widgets/cash_payment_sheet.dart';
 import '../../widgets/fullscreen_image.dart';
 import '../../utils/bill_mime.dart'; // CHANGE #465
 
-// ── CHANGE #242: Web Share API interop (dart:js_interop top-level declarations)
-// Extension types for Blob, File, ShareData. Used only in sharePaymentImage().
-
-extension type _BlobPropBag._(JSObject _) implements JSObject {
-  external factory _BlobPropBag({String type});
-}
-
-@JS('Blob')
-extension type _JsBlob._(JSObject _) implements JSObject {
-  external factory _JsBlob(JSArray<JSAny?> parts, [_BlobPropBag? options]);
-}
-
-@JS('File')
-extension type _JsFile._(JSObject _) implements JSObject {
-  external factory _JsFile(JSArray<JSAny?> bits, String name,
-      [_BlobPropBag? options]);
-}
-
-extension type _ShareOptions._(JSObject _) implements JSObject {
-  external factory _ShareOptions({
-    String? title,
-    String? text,
-    String? url,
-    JSArray<JSAny?>? files,
-  });
-}
-
-@JS('navigator.share')
-external JSFunction? get _jsNavShareFn; // null if browser lacks Web Share API
-
-@JS('navigator.canShare')
-external JSFunction? get _jsCanShareFn;
-
-@JS('navigator.canShare')
-external bool _jsCanShare(_ShareOptions data);
-
-@JS('navigator.share')
-external JSPromise<JSAny?> _jsNavShare(_ShareOptions data);
+// CHANGE #242: payment-image sharing now goes through the platform-conditional
+// download_bytes wrapper (Web Share API on web / share_plus on Android), so no
+// dart:js_interop declarations live here anymore.
 
 // ── Item model ────────────────────────────────────────────────────────────────
 
@@ -4450,16 +4414,18 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   }
 
   Future<void> _pickAndImportCsv() async {
-    final input = html.FileUploadInputElement()..accept = '.csv,text/csv';
-    input.click();
-    await input.onChange.first;
-    final file = input.files?.first;
-    if (file == null || !mounted) return;
+    final res = await FilePicker.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: const ['csv'],
+      withData: true,
+    );
+    final bytes = res?.files.isNotEmpty == true ? res!.files.first.bytes : null;
+    if (bytes == null || !mounted) return;
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (_) => _CsvImportDialog(
-        file: file,
+        fileBytes: bytes,
         onImported: () { if (mounted) _loadLeads(); },
       ),
     );
@@ -5508,9 +5474,9 @@ class _CsvColMap {
 enum _CsvStep { reading, mapping, importing }
 
 class _CsvImportDialog extends StatefulWidget {
-  final html.File file;
+  final Uint8List fileBytes;
   final VoidCallback onImported;
-  const _CsvImportDialog({required this.file, required this.onImported});
+  const _CsvImportDialog({required this.fileBytes, required this.onImported});
 
   @override
   State<_CsvImportDialog> createState() => _CsvImportDialogState();
@@ -5533,10 +5499,7 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
 
   Future<void> _readAndMap() async {
     try {
-      final reader = html.FileReader();
-      reader.readAsText(widget.file);
-      await reader.onLoad.first;
-      final csvText = reader.result as String;
+      final csvText = utf8.decode(widget.fileBytes, allowMalformed: true);
 
       final lines = csvText.split(RegExp(r'\r?\n'));
       if (lines.isEmpty || lines.first.trim().isEmpty) {
@@ -6492,11 +6455,10 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
     }
   }
 
-  // CHANGE #474 — sign + register one claim's proof image. Bounded: sign
-  // failure/timeout OR a browser-level <img> load error both land in
+  // CHANGE #474 — sign one claim's proof image. Bounded: sign failure/timeout
+  // OR a load error (surfaced by NativeSignedImage.onError) both land in
   // _signedUrlErrors (never leaves the caller on an unbounded spinner).
-  // A fresh viewType per attempt lets a retry re-register the platform view
-  // (Flutter web throws if the same viewType is registered twice).
+  // A fresh cacheKey per attempt forces a real reload on retry.
   Future<void> _signOneClaimProof(String claimId, String filePath, String? storageBucket) async {
     RenderLog.write('c474_pay_img_widget', 1);
     try {
@@ -6509,32 +6471,11 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
       if (!mounted) return;
       final attempt = (_imgAttempt[claimId] ?? 0) + 1;
       _imgAttempt[claimId] = attempt;
-      final vt = 'claim-img-$claimId-$attempt';
-      final capturedContext = context;
-      ui_web.platformViewRegistry.registerViewFactory(vt, (int viewId) {
-        final img = html.ImageElement()
-          ..src = url
-          ..style.width = '100%'
-          ..style.height = '100%'
-          ..style.objectFit = 'contain'
-          ..style.background = '#F3F4F6'
-          ..style.cursor = 'pointer';
-        // Platform views absorb Flutter pointer events — use native onClick instead.
-        img.onClick.listen((_) => openFullscreenImage(capturedContext, url));
-        img.onError.listen((_) {
-          if (!mounted) return;
-          setState(() {
-            _signedUrls.remove(claimId);
-            _imgViewTypes.remove(claimId);
-            _signedUrlErrors.add(claimId);
-          });
-        });
-        return img;
-      });
       setState(() {
         _signedUrlErrors.remove(claimId);
         _signedUrls[claimId] = url;
-        _imgViewTypes[claimId] = vt;
+        // Now holds the per-attempt cacheKey for NativeSignedImage (not a viewType).
+        _imgViewTypes[claimId] = 'claim-img-$claimId-$attempt';
       });
     } catch (_) {
       if (mounted) setState(() => _signedUrlErrors.add(claimId));
@@ -7201,7 +7142,7 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
                                 : (await MapConfigService.load()).pointUrl(
                                     claim.locationLat!, claim.locationLng!);
                             if (url.isEmpty) return;
-                            try { html.window.open(url, '_blank'); } catch (_) {}
+                            try { launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication); } catch (_) {}
                           },
                           borderRadius: BorderRadius.circular(8),
                           child: Padding(
@@ -7328,7 +7269,19 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
                       borderRadius: BorderRadius.circular(8),
                       child: SizedBox(
                         width: w, height: h,
-                        child: HtmlElementView(viewType: vt),
+                        child: NativeSignedImage(
+                          url: url ?? '',
+                          cacheKey: vt,
+                          onTap: () => openFullscreenImage(ctx, url ?? ''),
+                          onError: () {
+                            if (!mounted) return;
+                            setState(() {
+                              _signedUrls.remove(claim.claimId);
+                              _imgViewTypes.remove(claim.claimId);
+                              _signedUrlErrors.add(claim.claimId);
+                            });
+                          },
+                        ),
                       ),
                     ),
                     Positioned(
@@ -7398,47 +7351,31 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
 
-  // CHANGE #242: Native share with Web Share API Level 2 (file), then url-share, then open-tab.
-  // dart:js_interop extension types (_JsBlob, _JsFile, _ShareOptions) are declared top-level.
+  // CHANGE #242: native share through the platform-conditional download_bytes
+  // wrapper — Web Share API (file) on web, share_plus on Android. Falls back to
+  // opening/downloading the URL when a native share sheet isn't available.
   Future<void> sharePaymentImage(String signedUrl, BuildContext ctx) async {
     if (signedUrl.isEmpty) return;
 
-    // ── PRIMARY: Web Share API with file (opens native OS share sheet on Android Chrome) ──
-    if (_jsNavShareFn != null && _jsCanShareFn != null) {
-      try {
-        final resp = await http.get(Uri.parse(signedUrl));
+    // PRIMARY: fetch the bytes and hand them to the native share sheet.
+    try {
+      final resp = await http.get(Uri.parse(signedUrl));
+      if (resp.statusCode == 200) {
         final ct = resp.headers['content-type'] ?? 'image/jpeg';
-        final jsBytes = resp.bodyBytes.toJS; // Uint8List → JSUint8Array
-        final blob = _JsBlob([jsBytes].toJS, _BlobPropBag(type: ct));
-        final file = _JsFile([blob].toJS, 'payment.png', _BlobPropBag(type: ct));
-        final shareData = _ShareOptions(
-          files: [file].toJS,
-          title: 'Payment',
-          text: 'Payment proof',
-        );
-        bool canShare = false;
-        try { canShare = _jsCanShare(shareData); } catch (_) {}
-        if (canShare) {
-          await _jsNavShare(shareData).toDart;
+        final shared =
+            await shareBytes(resp.bodyBytes, 'payment.png', ct, text: 'Payment proof');
+        // true = shared, false = user cancelled — either way the sheet handled it.
+        if (shared != null) {
           try { RenderLog.write('c242_share_invoked', 'path=file'); } catch (_) {}
           return;
         }
-      } catch (_) {}
-    }
+        // null = no native share on this platform → fall through to URL open.
+      }
+    } catch (_) {}
 
-    // ── FALLBACK 1: URL share via navigator.share (supported on more browsers) ──
-    if (_jsNavShareFn != null) {
-      try {
-        final data = _ShareOptions(title: 'Payment', text: 'Payment proof', url: signedUrl);
-        await _jsNavShare(data).toDart;
-        try { RenderLog.write('c242_share_invoked', 'path=url'); } catch (_) {}
-        return;
-      } catch (_) {}
-    }
-
-    // ── FALLBACK 2: Open in new tab (desktop / unsupported browsers) ──
+    // FALLBACK: open/download the image URL externally.
     try {
-      html.window.open(signedUrl, '_blank');
+      downloadUrl(signedUrl, 'payment.png');
       try { RenderLog.write('c242_share_invoked', 'path=opentab'); } catch (_) {}
       if (ctx.mounted) {
         ScaffoldMessenger.of(ctx).showSnackBar(
@@ -7847,24 +7784,10 @@ class _WaOrderPanelState extends State<_WaOrderPanel> {
             .from('whatsapp-media')
             .createSignedUrl(filePath, 3600);
         if (mounted) {
-          final vt = 'wa-img-$imageId';
-          if (!_imgViewTypes.containsKey(imageId)) {
-            final capturedCtx = context;
-            ui_web.platformViewRegistry.registerViewFactory(vt, (int viewId) {
-              final img = html.ImageElement()
-                ..src = url
-                ..style.width = '100%'
-                ..style.height = '100%'
-                ..style.objectFit = 'contain'
-                ..style.background = '#F3F4F6'
-                ..style.cursor = 'pointer';
-              img.onClick.listen((_) => openFullscreenImage(capturedCtx, url));
-              return img;
-            });
-          }
           setState(() {
             _signedUrls[imageId] = url;
-            _imgViewTypes[imageId] = vt;
+            // Cache key for NativeSignedImage (was an HtmlElementView viewType).
+            _imgViewTypes[imageId] = 'wa-img-$imageId';
           });
         }
       } catch (_) {}
@@ -8075,7 +7998,12 @@ class _WaOrderPanelState extends State<_WaOrderPanel> {
           ),
           clipBehavior: Clip.hardEdge,
           child: vt != null
-              ? HtmlElementView(viewType: vt)
+              ? NativeSignedImage(
+                  url: _signedUrls[imageId] ?? '',
+                  cacheKey: vt,
+                  onTap: () =>
+                      openFullscreenImage(context, _signedUrls[imageId] ?? ''),
+                )
               : const Center(child: SizedBox(
                   width: 24, height: 24,
                   child: CircularProgressIndicator(strokeWidth: 2))),
@@ -8269,7 +8197,7 @@ class _LeadImageTile extends StatefulWidget {
 }
 
 class _LeadImageTileState extends State<_LeadImageTile> {
-  String? _viewType;
+  String? _imgUrl;
   String? _error;
   bool _converting = false;
   bool _deleting = false;
@@ -8286,23 +8214,7 @@ class _LeadImageTileState extends State<_LeadImageTile> {
           .from('whatsapp-media')
           .createSignedUrl(widget.image.filePath, 3600);
       if (!mounted) return;
-      final vt = 'lead-img-${widget.image.id}';
-      final capturedCtx = context;
-      ui_web.platformViewRegistry.registerViewFactory(vt, (int viewId) {
-        final img = html.ImageElement()
-          ..src = url
-          ..style.width = '100%'
-          ..style.height = '100%'
-          ..style.objectFit = 'contain'
-          ..style.background = '#F3F4F6'
-          ..style.cursor = 'pointer';
-        img.onClick.listen((_) {
-          RenderLog.write('co_img_zoom_369', 'lead_image:${widget.image.id}');
-          openFullscreenImage(capturedCtx, url);
-        });
-        return img;
-      });
-      if (mounted) setState(() => _viewType = vt);
+      setState(() => _imgUrl = url);
     } catch (e) {
       if (mounted) setState(() => _error = e.toString());
     }
@@ -8352,8 +8264,18 @@ class _LeadImageTileState extends State<_LeadImageTile> {
               ? const Center(
                   child: Text('Couldn’t load photo',
                       style: TextStyle(fontSize: 12, color: Color(0xFF991B1B))))
-              : (_viewType != null
-                  ? HtmlElementView(viewType: _viewType!)
+              : (_imgUrl != null
+                  ? NativeSignedImage(
+                      url: _imgUrl!,
+                      cacheKey: 'lead-img-${widget.image.id}',
+                      onTap: () {
+                        RenderLog.write('co_img_zoom_369', 'lead_image:${widget.image.id}');
+                        openFullscreenImage(context, _imgUrl!);
+                      },
+                      onError: () {
+                        if (mounted) setState(() => _error = 'load');
+                      },
+                    )
                   : const Center(
                       child: SizedBox(
                           width: 24,
@@ -8975,17 +8897,9 @@ class _SLeadsTabState extends State<_SLeadsTab> {
       _hubGpsAddress = null;
     });
     try {
-      final completer = Completer<html.Geoposition>();
-      html.window.navigator.geolocation
-          .getCurrentPosition(enableHighAccuracy: false, timeout: const Duration(seconds: 20))
-          .then((pos) { if (!completer.isCompleted) completer.complete(pos); })
-          .catchError((e) { if (!completer.isCompleted) completer.completeError(e); });
-      final pos = await completer.future.timeout(
-        const Duration(seconds: 25),
-        onTimeout: () => throw TimeoutException('Location timed out'),
-      );
-      final lat = pos.coords?.latitude?.toDouble();
-      final lng = pos.coords?.longitude?.toDouble();
+      final pos = await geo.getCurrentPosition(enableHighAccuracy: false);
+      final lat = pos?.lat;
+      final lng = pos?.lng;
       if (lat == null || lng == null) throw Exception('No coordinates returned');
       if (!mounted) return;
       setState(() { _hubGpsLat = lat; _hubGpsLng = lng; _hubLocating = false; });
@@ -11874,17 +11788,9 @@ class _RoutesTabState extends State<_RoutesTab> {
       // the warehouse GPS capture / the rep check-in card (C445).
       double gpsLat, gpsLng;
       try {
-        final completer = Completer<html.Geoposition>();
-        html.window.navigator.geolocation
-            .getCurrentPosition(enableHighAccuracy: true, timeout: const Duration(seconds: 20))
-            .then((pos) { if (!completer.isCompleted) completer.complete(pos); })
-            .catchError((e) { if (!completer.isCompleted) completer.completeError(e); });
-        final pos = await completer.future.timeout(
-          const Duration(seconds: 25),
-          onTimeout: () => throw TimeoutException('Location timed out'),
-        );
-        final lat = pos.coords?.latitude?.toDouble();
-        final lng = pos.coords?.longitude?.toDouble();
+        final pos = await geo.getCurrentPosition(enableHighAccuracy: true);
+        final lat = pos?.lat;
+        final lng = pos?.lng;
         if (lat == null || lng == null) throw Exception('No coordinates returned');
         gpsLat = lat;
         gpsLng = lng;
@@ -14111,17 +14017,9 @@ class _CheckInSheetState extends State<_CheckInSheet> {
   Future<void> _captureGps() async {
     setState(() { _locating = true; _locError = null; });
     try {
-      final completer = Completer<html.Geoposition>();
-      html.window.navigator.geolocation
-          .getCurrentPosition(enableHighAccuracy: false, timeout: const Duration(seconds: 20))
-          .then((pos) { if (!completer.isCompleted) completer.complete(pos); })
-          .catchError((e) { if (!completer.isCompleted) completer.completeError(e); });
-      final pos = await completer.future.timeout(
-        const Duration(seconds: 25),
-        onTimeout: () => throw TimeoutException('Location timed out'),
-      );
-      final lat = pos.coords?.latitude?.toDouble();
-      final lng = pos.coords?.longitude?.toDouble();
+      final pos = await geo.getCurrentPosition(enableHighAccuracy: false);
+      final lat = pos?.lat;
+      final lng = pos?.lng;
       if (lat == null || lng == null) throw Exception('No coordinates returned');
       if (!mounted) return;
       setState(() { _lat = lat; _lng = lng; _locating = false; });
@@ -14139,29 +14037,16 @@ class _CheckInSheetState extends State<_CheckInSheet> {
     }
   }
 
-  // Same html.FileUploadInputElement + FileReader.readAsDataUrl capture
-  // pattern as CashPaymentSheet._pickFile — A3. 'capture=environment' opens
-  // the rear camera directly on mobile instead of the gallery picker.
-  void _takePhoto() {
-    final input = html.FileUploadInputElement();
-    input.accept = 'image/*';
-    input.setAttribute('capture', 'environment');
-    input.click();
-    input.onChange.listen((_) async {
-      final files = input.files;
-      if (files == null || files.isEmpty) return;
-      final file = files.first;
-      final mime = file.type.isNotEmpty ? file.type : 'image/jpeg';
-      if (!mime.startsWith('image/')) return;
-      final reader = html.FileReader();
-      reader.readAsDataUrl(file);
-      await reader.onLoad.first;
-      final dataUrl = reader.result as String;
-      final comma = dataUrl.indexOf(',');
-      final bytes = base64Decode(dataUrl.substring(comma + 1));
-      if (!mounted) return;
-      setState(() { _photoBytes = bytes; _photoMime = mime; });
-    });
+  // Rear-camera capture: web uses an <input capture=environment>, Android the
+  // native camera — both via the file_pick_io wrapper. Returns bytes + name.
+  Future<void> _takePhoto() async {
+    final picked = await filepick.pickCameraPhoto();
+    if (picked == null || !mounted) return;
+    final ext = picked.name.toLowerCase().split('.').last;
+    final mime = ext == 'png'
+        ? 'image/png'
+        : (ext == 'webp' ? 'image/webp' : 'image/jpeg');
+    setState(() { _photoBytes = picked.bytes; _photoMime = mime; });
   }
 
   bool get _canSubmit =>

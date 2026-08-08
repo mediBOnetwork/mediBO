@@ -167,7 +167,7 @@ void main() {
     await c.cancel();
   });
 
-  test('final words accumulate 1-based with increasing seconds; interim not sent; preview debounced once',
+  test('final words accumulate 1-based with increasing seconds; interim not sent; every final previews the WHOLE list',
       () async {
     final fn = _Fn((f, b) => _tokenOk());
     final rpc = _Rpc(_previewResp);
@@ -190,9 +190,14 @@ void main() {
     s.emitFinal([const SpeechWord('Paracip', 1.0, 1.4)]); // same burst
     await settle();
 
+    // Preview is the "instant" half of the count, so it fires on EVERY final
+    // result rather than waiting out a debounce — one per final, not one
+    // per burst.
     final previews = rpc.named('voice_live_preview');
-    expect(previews.length, 1, reason: 'debounced to one call per burst');
-    final words = (previews.single.value['p_words'] as List)
+    expect(previews.length, 2, reason: 'one preview per final result');
+
+    // Every call carries the ENTIRE word list, never just the new words.
+    final words = (previews.last.value['p_words'] as List)
         .cast<Map>()
         .map((e) => Map<String, dynamic>.from(e))
         .toList();
@@ -201,8 +206,129 @@ void main() {
     for (var i = 1; i < words.length; i++) {
       expect((words[i]['s'] as num) >= (words[i - 1]['s'] as num), true);
     }
-    expect(previews.single.value['p_supplier'], 'Acme');
+    expect(previews.last.value['p_supplier'], 'Acme');
     await c.cancel();
+  });
+
+  test('a commit fires mid-session without stopping, and totals come from it',
+      () async {
+    final fn = _Fn((f, b) => _tokenOk());
+    final rpc = _Rpc(_previewResp);
+    final s = _FakeStream();
+    final snaps = <VoiceLiveSnapshot>[];
+    final c = VoiceLiveController(
+      backend: SupplierVoiceBackend(
+          supplier: 'Acme', stage: 'shop', rpc: rpc.call, fn: fn.call),
+      sessionKey: 'k',
+      openStream: _Opener([s]).call,
+      mic: _FakeMic(),
+      debounce: dbg,
+      onSnapshot: snaps.add,
+    );
+    await c.start();
+    s.emitFinal([const SpeechWord('Winbp', 0.0, 0.4)]);
+    await settle();
+
+    // The operator never pressed Stop, yet the count is already persisted.
+    final commits = rpc.named('voice_live_commit');
+    expect(commits.length, 1, reason: 'debounced commit fires while listening');
+    expect(commits.single.value['p_session_key'], 'k');
+    expect(snaps.any((s) => s.authoritative), true,
+        reason: 'the on-screen count comes from the commit, not a local tally');
+    await c.cancel();
+  });
+
+  test('re-committing the same words does not double — the whole list is resent under one key',
+      () async {
+    final fn = _Fn((f, b) => _tokenOk());
+    final rpc = _Rpc(_previewResp);
+    final s = _FakeStream();
+    final c = VoiceLiveController(
+      backend: SupplierVoiceBackend(
+          supplier: 'Acme', stage: 'shop', rpc: rpc.call, fn: fn.call),
+      sessionKey: 'k',
+      openStream: _Opener([s]).call,
+      mic: _FakeMic(),
+      debounce: dbg,
+    );
+    await c.start();
+    s.emitFinal([const SpeechWord('Winbp', 0.0, 0.4)]);
+    await settle();
+    s.emitFinal([const SpeechWord('Winbp', 1.0, 1.4)]); // same item said again
+    await settle();
+    await c.stop();
+
+    final commits = rpc.named('voice_live_commit');
+    // Every commit sends the FULL list under the SAME session key, so the
+    // backend replaces rather than accumulates — saying an item twice counts
+    // twice, but committing twice does not.
+    expect(commits.length >= 2, true);
+    for (final call in commits) {
+      expect(call.value['p_session_key'], 'k');
+    }
+    final last = (commits.last.value['p_words'] as List)
+        .cast<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+    expect(last.map((w) => w['w']).toList(), ['winbp', 'winbp'],
+        reason: 'both utterances survive in the one growing list');
+  });
+
+  test('warehouse maps a bag boundary before the next commit; shop never does',
+      () async {
+    for (final stage in ['warehouse', 'shop']) {
+      final fn = _Fn((f, b) => _tokenOk());
+      final rpc = _Rpc(_previewResp);
+      final s = _FakeStream();
+      final c = VoiceLiveController(
+        backend: SupplierVoiceBackend(
+            supplier: 'Acme', stage: stage, rpc: rpc.call, fn: fn.call),
+        sessionKey: 'k',
+        openStream: _Opener([s]).call,
+        mic: _FakeMic(),
+        debounce: dbg,
+      );
+      await c.start();
+      s.emitFinal([const SpeechWord('Winbp', 0.0, 0.4)]);
+      await settle();
+      await c.mapBagBoundary(2);
+      await settle();
+
+      final bags = rpc.named('voice_map_bag_boundary');
+      if (stage == 'warehouse') {
+        expect(bags.length, 1, reason: 'warehouse has a bag condition');
+        expect(bags.single.value['p_bag_no'], 2);
+        expect(bags.single.value['p_session_key'], 'k');
+        expect((bags.single.value['p_mapped_at_sec'] as num) >= 0, true);
+        // The boundary must already be stored when the words either side of it
+        // are re-parsed, so a commit follows it.
+        expect(rpc.named('voice_live_commit').isNotEmpty, true);
+      } else {
+        expect(bags, isEmpty, reason: 'shop has no bag condition');
+      }
+      await c.cancel();
+    }
+  });
+
+  test('a stream that fails to open hands the session to the clip path, once',
+      () async {
+    final fn = _Fn((f, b) => _tokenOk());
+    final rpc = _Rpc(_previewResp);
+    final fallbacks = <String>[];
+    final c = VoiceLiveController(
+      backend: SupplierVoiceBackend(
+          supplier: 'Acme', stage: 'shop', rpc: rpc.call, fn: fn.call),
+      sessionKey: 'k',
+      openStream: (t, {bool fallback = false}) async =>
+          throw SpeechStreamException('no grpc'),
+      mic: _FakeMic(),
+      debounce: dbg,
+      onFallback: fallbacks.add,
+    );
+
+    final ok = await c.start();
+    expect(ok, false);
+    expect(fallbacks, ['no grpc'], reason: 'told exactly once');
   });
 
   test('totals render from the response', () async {
@@ -306,7 +432,7 @@ void main() {
     await c.cancel();
   });
 
-  test('Stop commits once via commit RPC and shows message; second Stop is a no-op',
+  test('Stop commits the whole list via commit RPC and shows message; second Stop is a no-op',
       () async {
     final fn = _Fn((f, b) => _tokenOk());
     final rpc = _Rpc((f, p) => f.contains('commit')
@@ -327,19 +453,31 @@ void main() {
     s.emitFinal([const SpeechWord('Winbp', 0.0, 0.4)]);
     await settle();
 
+    // The debounce has already committed once mid-session — that is the point of
+    // this change. Stop commits again rather than assuming the pending words are
+    // already saved; the RPC replaces the session's rows, so a repeat cannot
+    // double the ledger.
+    final before = rpc.named('voice_live_commit').length;
+    expect(before, 1, reason: 'debounced commit landed while still speaking');
+
     final r = await c.stop();
     expect(r, isNotNull);
     final commits = rpc.named('voice_live_commit');
-    expect(commits.length, 1);
-    expect(commits.single.value['p_supplier'], 'Acme');
-    expect(commits.single.value['p_stage'], 'shop');
-    expect(commits.single.value['p_session_key'], 'sk');
-    expect((commits.single.value['p_words'] as List).single['w'], 'winbp');
+    expect(commits.length, before + 1, reason: 'Stop always commits');
+    // EVERY commit carries the same session key and the WHOLE word list, so the
+    // backend can replace rather than append.
+    for (final call in commits) {
+      expect(call.value['p_supplier'], 'Acme');
+      expect(call.value['p_stage'], 'shop');
+      expect(call.value['p_session_key'], 'sk');
+      expect((call.value['p_words'] as List).single['w'], 'winbp');
+    }
     expect(msg, 'Counted 1 product.');
 
     final r2 = await c.stop();
     expect(r2, isNull);
-    expect(rpc.named('voice_live_commit').length, 1, reason: 'no second commit');
+    expect(rpc.named('voice_live_commit').length, before + 1,
+        reason: 'a second Stop commits nothing');
   });
 
   test('INVALID_ARGUMENT stream error retries once on fallback', () async {

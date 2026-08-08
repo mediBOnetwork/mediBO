@@ -1,7 +1,5 @@
-// ignore_for_file: avoid_web_libraries_in_flutter
 import 'dart:async';
 import 'dart:convert';
-import 'dart:html' as html;
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
@@ -16,6 +14,7 @@ import 'package:xml/xml.dart' as xmlp;
 
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../utils/file_pick_io.dart' as filepick;
 import '../../models/order_hours_model.dart';
 import '../../order_hours_state.dart';
 import '../../services/match_status_service.dart';
@@ -37,6 +36,10 @@ import 'unmapped_companies_screen.dart';
 
 const _ocrEdgeFn =
     'https://swojhmarmaijkshsbeih.supabase.co/functions/v1/gemini-ocr';
+
+// A picked file's name + bytes — replaces the web-only html.File across the
+// import dialogs so they compile on Android (file_pick_io returns this shape).
+typedef _PickedFile = ({String name, Uint8List bytes});
 
 // ── Supplier row models ───────────────────────────────────────────────────────
 
@@ -3377,7 +3380,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         ),
         const SizedBox(width: 6),
         GestureDetector(
-          onTap: () => html.window.open(link, '_blank'),
+          onTap: () => launchUrl(Uri.parse(link), mode: LaunchMode.externalApplication),
           child: const Icon(Icons.open_in_new_outlined, size: 14, color: Color(0xFF1B7A43)),
         ),
       ]),
@@ -3969,7 +3972,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     final intl = '91$normalized';
     final msg = Uri.encodeComponent(
         'Hello $supName,\nWe want to buy some items from you. Please confirm the stock availability:\n$link');
-    html.window.open('https://wa.me/$intl?text=$msg', '_blank');
+    launchUrl(Uri.parse('https://wa.me/$intl?text=$msg'), mode: LaunchMode.externalApplication);
     RenderLog.write('inquiry_whatsapp_sent', '$supName:$intl');
   }
 
@@ -3977,7 +3980,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     final subject = Uri.encodeComponent('mediBO — Stock Availability Inquiry');
     final body = Uri.encodeComponent(
         'Hello $supName,\nWe want to buy some items from you. Please confirm the stock availability:\n$link');
-    html.window.open('mailto:$email?subject=$subject&body=$body', '_blank');
+    launchUrl(Uri.parse('mailto:$email?subject=$subject&body=$body'), mode: LaunchMode.externalApplication);
     RenderLog.write('inquiry_email_sent', '$supName:$email');
   }
 
@@ -5580,17 +5583,13 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   }
 
   Future<void> _pickAndImportFile() async {
-    final input = html.FileUploadInputElement()
-      ..accept = '.csv,.tsv,.txt,.xlsx,.xls,.ods,.docx,.pdf,.jpg,.jpeg,.png,.webp,.heic,.heif,.gif'
-      ..multiple = true;
-    input.click();
-    await input.onChange.first;
-    final files = input.files;
-    if (files == null || files.isEmpty || !mounted) return;
+    final picked = await filepick.pickImportFiles();
+    if (picked.isEmpty || !mounted) return;
 
     const imageExts = {'jpg', 'jpeg', 'png', 'webp', 'heic', 'heif', 'gif'};
-    final images = files.where((f) => imageExts.contains(f.name.toLowerCase().split('.').last)).toList();
-    final nonImages = files.where((f) => !imageExts.contains(f.name.toLowerCase().split('.').last)).toList();
+    bool isImg(String n) => imageExts.contains(n.toLowerCase().split('.').last);
+    final images = picked.where((f) => isImg(f.name)).toList();
+    final nonImages = picked.where((f) => !isImg(f.name)).toList();
 
     if (nonImages.isNotEmpty) {
       showDialog(
@@ -5617,15 +5616,12 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   }
 
   Future<void> _pickAndImportCsv() async {
-    final input = html.FileUploadInputElement()..accept = '.csv,text/csv';
-    input.click();
-    await input.onChange.first;
-    final file = input.files?.first;
-    if (file == null || !mounted) return;
+    final picked = await filepick.pickImportFile();
+    if (picked == null || !mounted) return;
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (_) => _SupCsvImportDialog(file: file, onImported: () { if (mounted) _load(showSpinner: false); }),
+      builder: (_) => _SupCsvImportDialog(file: picked, onImported: () { if (mounted) _load(showSpinner: false); }),
     );
   }
 
@@ -6285,7 +6281,7 @@ class _SupCsvColMap {
 enum _SupCsvStep { reading, mapping, importing }
 
 class _SupCsvImportDialog extends StatefulWidget {
-  final html.File file;
+  final _PickedFile file;
   final VoidCallback onImported;
   const _SupCsvImportDialog({required this.file, required this.onImported});
 
@@ -6310,10 +6306,7 @@ class _SupCsvImportDialogState extends State<_SupCsvImportDialog> {
 
   Future<void> _readAndMap() async {
     try {
-      final reader = html.FileReader();
-      reader.readAsText(widget.file);
-      await reader.onLoad.first;
-      final csvText = reader.result as String;
+      final csvText = utf8.decode(widget.file.bytes, allowMalformed: true);
       final lines = csvText.split(RegExp(r'\r?\n'));
       if (lines.isEmpty || lines.first.trim().isEmpty) {
         setState(() { _error = 'The CSV file is empty.'; });
@@ -6527,7 +6520,7 @@ class _SupProfColMap {
 enum _SupProfStep { reading, mapping, importing }
 
 class _SupProfileImportDialog extends StatefulWidget {
-  final html.File file;
+  final _PickedFile file;
   final VoidCallback onImported;
   const _SupProfileImportDialog({required this.file, required this.onImported});
   @override
@@ -6594,15 +6587,14 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
 
   // ── File parsing (reused from Add-Medicine pipeline) ─────────────────────────
 
-  Future<String> _readAsText(html.File f) async {
-    final r = html.FileReader(); r.readAsText(f); await r.onLoad.first;
-    return (r.result as String).replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+  Future<String> _readAsText(_PickedFile f) async {
+    return utf8
+        .decode(f.bytes, allowMalformed: true)
+        .replaceAll('\r\n', '\n')
+        .replaceAll('\r', '\n');
   }
 
-  Future<Uint8List> _readBytes(html.File f) async {
-    final r = html.FileReader(); r.readAsDataUrl(f); await r.onLoad.first;
-    return base64Decode((r.result as String).split(',').last);
-  }
+  Future<Uint8List> _readBytes(_PickedFile f) async => f.bytes;
 
   Future<String> _pdfText(Uint8List bytes) async {
     try {
@@ -6749,7 +6741,7 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
     return (headers: headers, rows: rows);
   }
 
-  Future<({List<String> headers, List<List<String>> rows})> _parseFile(html.File f) async {
+  Future<({List<String> headers, List<List<String>> rows})> _parseFile(_PickedFile f) async {
     final ext = f.name.toLowerCase().split('.').last;
     switch (ext) {
       case 'csv': case 'tsv': case 'txt':
@@ -9352,7 +9344,7 @@ class _ResolvedCompany {
 enum _SupCardStep { reading, review, importing }
 
 class _SupCardImportDialog extends StatefulWidget {
-  final html.File file;
+  final _PickedFile file;
   final VoidCallback onImported;
   const _SupCardImportDialog({required this.file, required this.onImported});
   @override
@@ -9493,10 +9485,7 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
     super.dispose();
   }
 
-  Future<Uint8List> _readBytes(html.File f) async {
-    final r = html.FileReader(); r.readAsDataUrl(f); await r.onLoad.first;
-    return base64Decode((r.result as String).split(',').last);
-  }
+  Future<Uint8List> _readBytes(_PickedFile f) async => f.bytes;
 
   String _mimeFor(String ext) => switch (ext) {
     'jpg' || 'jpeg' => 'image/jpeg',
@@ -9966,7 +9955,7 @@ class _MultiExtractedSup {
 enum _MultiStep { processing, review, importing }
 
 class _SupCardMultiImportDialog extends StatefulWidget {
-  final List<html.File> files;
+  final List<_PickedFile> files;
   final VoidCallback onImported;
   const _SupCardMultiImportDialog({required this.files, required this.onImported});
   @override
@@ -10042,10 +10031,7 @@ class _SupCardMultiImportDialogState extends State<_SupCardMultiImportDialog> {
     _               => 'image/jpeg',
   };
 
-  Future<Uint8List> _readBytes(html.File f) async {
-    final r = html.FileReader(); r.readAsDataUrl(f); await r.onLoad.first;
-    return base64Decode((r.result as String).split(',').last);
-  }
+  Future<Uint8List> _readBytes(_PickedFile f) async => f.bytes;
 
   Future<void> _processAll() async {
     final total = widget.files.length;
@@ -12045,7 +12031,7 @@ class ContactPickerPopoverState extends State<ContactPickerPopover>
   Future<void> _onEmailTap(String value) async {
     if (_dismissing) return;
     _dismissing = true;
-    html.window.open('mailto:$value', '_blank');
+    launchUrl(Uri.parse('mailto:$value'), mode: LaunchMode.externalApplication);
     await _ctrl.animateTo(0, duration: const Duration(milliseconds: 180), curve: Curves.easeIn);
     widget.onDismiss();
   }

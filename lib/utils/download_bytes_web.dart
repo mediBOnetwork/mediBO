@@ -31,6 +31,15 @@ void downloadUrl(String url, String filename) {
     ..click();
 }
 
+/// Download a same-origin static asset by its site-relative [path]
+/// (e.g. '/demo/demo-order.jpg'). Web = instant anchor download.
+void downloadSameOriginAsset(String path, String filename) {
+  html.AnchorElement(href: path)
+    ..setAttribute('download', filename)
+    ..setAttribute('target', '_self')
+    ..click();
+}
+
 /// CHANGE #462: native OS share sheet via the Web Share API (Level 2 — file
 /// sharing), the web equivalent of a mobile share sheet since this app has no
 /// native share_plus-style package. Returns:

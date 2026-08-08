@@ -25,8 +25,38 @@ const int _kMaxAudioChunk = 8000; // bytes, even (16-bit aligned)
 
 MicSource createNativeMic() => _RecordMic();
 
+/// Translates the backend's encoding NAME into the enum Speech expects.
+///
+/// This is a lookup, not a decision. It is deliberately limited to the formats
+/// this device can actually PUT ON THE WIRE: `record`'s streaming API emits raw
+/// PCM16 only — its OpusFormat.getContainer() throws "Stream is not supported"
+/// when there is no output path — so a container format like WEBM_OPUS could
+/// only ever be a lie about the bytes we are sending. Rather than silently
+/// mismatch (which yields a confidently wrong count), refuse to open.
+v2.ExplicitDecodingConfig_AudioEncoding _decodingFor(String encoding) {
+  switch (encoding.toUpperCase()) {
+    case 'LINEAR16':
+      return v2.ExplicitDecodingConfig_AudioEncoding.LINEAR16;
+    case 'MULAW':
+      return v2.ExplicitDecodingConfig_AudioEncoding.MULAW;
+    case 'ALAW':
+      return v2.ExplicitDecodingConfig_AudioEncoding.ALAW;
+  }
+  throw SpeechStreamException(
+    encoding.isEmpty
+        ? 'The server did not say which audio format to send'
+        : 'This phone cannot stream $encoding audio',
+    invalidArgument: true,
+  );
+}
+
 Future<SpeechStream> openNativeSpeechStream(VoiceToken token,
     {bool fallback = false}) async {
+  if (token.sampleRate <= 0) {
+    throw SpeechStreamException(
+        'The server did not say which sample rate to send',
+        invalidArgument: true);
+  }
   final endpoint = fallback ? token.fallback.endpoint : token.endpoint;
   final recognizer = fallback ? token.fallback.recognizer : token.recognizer;
   final model = fallback ? token.fallback.model : token.model;
@@ -46,16 +76,15 @@ Future<SpeechStream> openNativeSpeechStream(VoiceToken token,
       .where((p) => p.value.isNotEmpty)
       .toList();
 
-  // The mic emits raw PCM16, so we declare LINEAR16 at the token's sample_rate to
-  // match the actual bytes on the wire. (The token's `encoding` — WEBM_OPUS —
-  // describes the web MediaRecorder clip path, which does not apply to Android's
-  // raw-PCM stream.)
+  // The backend owns the wire format: voice_stream_open returns `encoding` and
+  // `sample_rate`, and both the recogniser config below and the mic are driven
+  // from them. Nothing here picks a format.
   final config = v2.RecognitionConfig(
     model: model,
     languageCodes: [token.languageCode],
     features: v2.RecognitionFeatures(enableWordTimeOffsets: true),
     explicitDecodingConfig: v2.ExplicitDecodingConfig(
-      encoding: v2.ExplicitDecodingConfig_AudioEncoding.LINEAR16,
+      encoding: _decodingFor(token.encoding),
       sampleRateHertz: token.sampleRate,
       audioChannelCount: 1,
     ),

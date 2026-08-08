@@ -2,11 +2,11 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:http/http.dart' as http;
 import 'package:record/record.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../utils/render_log.dart';
 import 'recorder_window_policy.dart';
+import 'voice_file_io.dart';
 
 export 'recorder_window_policy.dart' show RecorderWindowPolicy, WindowOutcome;
 
@@ -41,16 +41,19 @@ class VoiceReceiveService {
 
   Future<void> start() async {
     if (!await _rec.hasPermission()) throw MicPermissionException();
+    // Web ignores the path (blob URL); Android MUST get a real writable file
+    // path or the native recorder crashes. newRecordingPath handles both.
+    final outPath = await newRecordingPath(_ext);
     if (kIsWeb) {
       await _rec.start(
         const RecordConfig(encoder: AudioEncoder.opus),
-        path: '',
+        path: outPath,
       );
       _mime = 'audio/webm;codecs=opus';
     } else {
       await _rec.start(
         const RecordConfig(encoder: AudioEncoder.aacLc),
-        path: '',
+        path: outPath,
       );
       _mime = 'audio/mp4';
     }
@@ -62,14 +65,13 @@ class VoiceReceiveService {
     final path = await _rec.stop();
     if (path == null || path.isEmpty) return null;
     try {
-      final response = await http.get(Uri.parse(path));
-      if (response.statusCode != 200) {
-        throw VoiceReceiveException('Failed to read recorded audio (${response.statusCode})');
-      }
-      return (bytes: response.bodyBytes, mime: _mime, ext: _ext);
+      // Web: fetch bytes from the blob URL. Native: read them off disk. Then
+      // drop the temp file (native) so long sessions don't accumulate clips.
+      final bytes = await readRecording(path);
+      await disposeRecording(path);
+      return (bytes: bytes, mime: _mime, ext: _ext);
     } catch (e) {
-      if (e is VoiceReceiveException) rethrow;
-      throw VoiceReceiveException('Failed to read audio blob: $e');
+      throw VoiceReceiveException('Failed to read recorded audio: $e');
     }
   }
 

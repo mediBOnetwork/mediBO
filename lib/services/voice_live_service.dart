@@ -65,10 +65,18 @@ abstract class VoiceLiveBackend {
   String get tokenSupplier;
   String get stage;
 
+  /// True only where the stage actually has a bag condition (warehouse). Shop and
+  /// pack never map bag boundaries and never show a bag chip.
+  bool get supportsBags;
+
   Future<Map<String, dynamic>> fetchToken();
   Future<Map<String, dynamic>> preview(List<Map<String, dynamic>> words);
   Future<Map<String, dynamic>> commit(
       List<Map<String, dynamic>> words, String sessionKey);
+
+  /// Records that everything spoken from [atSec] onwards belongs to [bagNo].
+  /// No-op where [supportsBags] is false.
+  Future<void> mapBagBoundary(String sessionKey, int bagNo, double atSec);
 }
 
 /// Shop / Warehouse: count against a SUPPLIER's open items.
@@ -91,9 +99,25 @@ class SupplierVoiceBackend implements VoiceLiveBackend {
         rpc = rpc ?? _defaultRpc,
         fn = fn ?? _defaultFn;
 
+  /// Only the warehouse packs into bags; the shop counts loose stock.
+  @override
+  bool get supportsBags => stage == 'warehouse';
+
   @override
   Future<Map<String, dynamic>> fetchToken() =>
       fn('voice-token', {'supplier_name': tokenSupplier, 'stage': stage});
+
+  @override
+  Future<void> mapBagBoundary(
+      String sessionKey, int bagNo, double atSec) async {
+    if (!supportsBags) return;
+    await rpc('voice_map_bag_boundary', {
+      'p_session_key': sessionKey,
+      'p_supplier_name': tokenSupplier,
+      'p_bag_no': bagNo,
+      'p_mapped_at_sec': atSec,
+    });
+  }
 
   @override
   Future<Map<String, dynamic>> preview(List<Map<String, dynamic>> words) async =>
@@ -131,6 +155,13 @@ class PackVoiceBackend implements VoiceLiveBackend {
   @override
   String get stage => 'pack';
 
+  /// Packing a customer order has no bag condition.
+  @override
+  bool get supportsBags => false;
+
+  @override
+  Future<void> mapBagBoundary(String sessionKey, int bagNo, double atSec) async {}
+
   @override
   Future<Map<String, dynamic>> fetchToken() =>
       fn('voice-token', {'supplier_name': tokenSupplier, 'stage': 'pack'});
@@ -152,15 +183,33 @@ class PackVoiceBackend implements VoiceLiveBackend {
 
 /// Drives one continuous live-counting session on Android.
 ///
-/// Lifecycle: start() → (stream words → debounced preview) → reconnect at
-/// reconnect_after_sec → stop() commits ONCE. Every user-facing string comes
-/// from the backend (ready label, hint, commit message).
+/// Lifecycle: start() → words accumulate → every FINAL result repaints from
+/// voice_live_preview and schedules a COMMIT → reconnect at reconnect_after_sec
+/// → stop() commits one last time. Every user-facing string comes from the
+/// backend (ready label, hint, commit message).
+///
+/// Two rules make the count trustworthy:
+///  - The word list is ONE growing list per session. It is never cleared and
+///    every call sends the WHOLE list with the SAME session key, so a lost or
+///    reordered request can never lose a count.
+///  - The number on screen comes from the COMMIT response, which is what the
+///    backend persisted. There is no locally incremented tally to drift.
+///
+/// Committing mid-session is safe because voice_live_commit is idempotent: it
+/// deletes the session's live rows and re-inserts from the full word list, so
+/// N commits of the same words produce the same ledger as one.
 class VoiceLiveController {
   final VoiceLiveBackend backend;
   final String sessionKey;
   final SpeechStreamOpener openStream;
   final MicSource mic;
+
+  /// Quiet-time before a commit fires (restarted by every final result).
   final Duration debounce;
+
+  /// Hard ceiling: a continuous talker never resets the debounce, so this
+  /// guarantees the on-screen count still moves at least this often.
+  final Duration commitCeiling;
 
   /// Test-only override for the reconnect interval. In production the token's
   /// reconnect_after_sec is used (Google closes a stream at 5 minutes).
@@ -172,8 +221,14 @@ class VoiceLiveController {
   /// Interim caption — the words currently being spoken (never committed).
   final void Function(String caption)? onCaption;
 
-  /// Running totals + hint from voice_live_preview(_pack).
+  /// Running totals + hint. Fires for BOTH the fast preview repaint and the
+  /// authoritative commit — see [onSnapshot] to tell them apart.
   final void Function(List<Map<String, dynamic>> totals, String hint)? onTotals;
+
+  /// Every render-ready payload, preview or commit. Snapshots with
+  /// [VoiceLiveSnapshot.authoritative] true are the persisted count and must win
+  /// on screen.
+  final void Function(VoiceLiveSnapshot snap)? onSnapshot;
 
   /// The commit message from voice_live_commit(_pack) on Stop.
   final void Function(String message)? onMessage;
@@ -181,18 +236,25 @@ class VoiceLiveController {
   /// A backend-owned error string (token error, stream 403, window failure).
   final void Function(String message)? onError;
 
+  /// Fired at most ONCE, when the live stream cannot be used at all (failed to
+  /// open, or dropped twice) and the caller should switch to the clip recorder.
+  final void Function(String message)? onFallback;
+
   VoiceLiveController({
     required this.backend,
     required this.sessionKey,
     SpeechStreamOpener? openStream,
     MicSource? mic,
     this.debounce = const Duration(milliseconds: 700),
+    this.commitCeiling = const Duration(seconds: 5),
     this.reconnectAfter,
     this.onReady,
     this.onCaption,
     this.onTotals,
+    this.onSnapshot,
     this.onMessage,
     this.onError,
+    this.onFallback,
   })  : openStream = openStream ?? native.openNativeSpeechStream,
         mic = mic ?? native.createNativeMic();
 
@@ -205,15 +267,43 @@ class VoiceLiveController {
   SpeechStream? _stream;
   StreamSubscription<SpeechEvent>? _eventSub;
   StreamSubscription<Uint8List>? _micSub;
-  Timer? _debounceTimer;
+  Timer? _commitTimer;
+  Timer? _ceilingTimer;
   Timer? _reconnectTimer;
 
   bool _started = false;
   bool _stopped = false;
-  bool _committed = false;
   bool _retriedFallback = false;
 
+  // Commit bookkeeping. Commits never overlap: a request arriving while one is
+  // in flight sets _commitAgain instead, so the ledger is only ever rewritten by
+  // one call at a time.
+  bool _commitInFlight = false;
+  bool _commitAgain = false;
+  bool _dirty = false;
+  Map<String, dynamic>? _lastCommit;
+
+  // Preview responses can land out of order; only the newest may repaint.
+  int _previewSeq = 0;
+
+  // Clip-fallback bookkeeping.
+  int _drops = 0;
+  bool _fellBack = false;
+
+  /// Wall-clock seconds since the first stream opened — the same clock Speech
+  /// stamps its word offsets on, and therefore the clock a bag boundary must be
+  /// recorded against.
+  final Stopwatch _sessionClock = Stopwatch();
+
   bool get isStreaming => _started && !_stopped;
+
+  double get elapsedSec {
+    final byClock = _sessionClock.elapsedMilliseconds / 1000.0;
+    return byClock > _maxEndSec ? byClock : _maxEndSec;
+  }
+
+  /// The most recent commit payload (null until the first commit lands).
+  Map<String, dynamic>? get lastCommit => _lastCommit;
 
   /// Fetches the token, then opens the mic + Speech stream. Returns true if the
   /// session actually started; false (with onError already fired) on a token
@@ -237,22 +327,39 @@ class VoiceLiveController {
     if (token.readyLabel.isNotEmpty) onReady?.call(token.readyLabel);
 
     try {
-      // Mic first — a denied permission must not leave a dangling stream.
+      // Mic first — a denied permission must not leave a dangling stream. A mic
+      // failure is NOT a streaming problem: the clip recorder needs the very same
+      // permission, so it is surfaced to the caller rather than falled back on.
       final micStream = await mic.start(sampleRate: token.sampleRate);
       _micSub = micStream.listen(
         (frame) => _stream?.addAudio(frame),
         onError: (_) {},
         cancelOnError: false,
       );
-      await _openStream(fallback: false);
     } catch (e) {
-      // Mic permission / first-connect failure: tear everything down and let the
-      // caller surface it. Nothing was committed and no stream leaks.
       _started = false;
       await cancel();
       rethrow;
     }
+
+    try {
+      await _openStream(fallback: false);
+    } catch (e) {
+      // gRPC never came up. The clip path does not need gRPC, so hand this
+      // session over to it instead of leaving the operator with a dead mic.
+      _started = false;
+      await cancel();
+      _announceFallback(e is SpeechStreamException ? e.message : e.toString());
+      return false;
+    }
     return true;
+  }
+
+  /// Tells the caller ONCE that live streaming is unavailable for this session.
+  void _announceFallback(String why) {
+    if (_fellBack) return;
+    _fellBack = true;
+    onFallback?.call(why);
   }
 
   Future<void> _openStream({required bool fallback}) async {
@@ -260,6 +367,7 @@ class VoiceLiveController {
     if (token == null || _stopped) return;
     final s = await openStream(token, fallback: fallback);
     _stream = s;
+    if (!_sessionClock.isRunning) _sessionClock.start();
     _streamBase = _maxEndSec; // keep session-clock seconds monotonic
     _eventSub = s.events.listen(
       _onEvent,
@@ -302,31 +410,111 @@ class VoiceLiveController {
         appended = true;
       }
     }
-    if (appended) _schedulePreview();
+    if (appended) {
+      // Repaint immediately from the preview so the number moves while the
+      // operator is still talking, and schedule the commit that will replace it
+      // with the persisted truth.
+      _runPreview();
+      _scheduleCommit();
+    }
   }
 
-  void _schedulePreview() {
-    _debounceTimer?.cancel();
-    _debounceTimer = Timer(debounce, () async {
-      if (_stopped) return;
-      final snapshot = List<Map<String, dynamic>>.from(_words);
-      try {
-        final r = await backend.preview(snapshot);
-        if (_stopped) return;
-        if (r['error'] != null) {
-          onError?.call((r['message'] ?? r['error']).toString());
-          return;
-        }
-        final totals = ((r['totals'] as List?) ?? const [])
-            .whereType<Map>()
-            .map((e) => Map<String, dynamic>.from(e))
-            .toList();
-        onTotals?.call(totals, (r['hint'] ?? '').toString());
-      } catch (_) {
-        // Live preview is best-effort — a failed refresh never breaks counting;
-        // Stop still commits the full word list.
+  /// Fires on EVERY final result — not debounced, because this is the "instant"
+  /// half of the count. Read-only and best-effort: a failed preview never breaks
+  /// counting, since the commit re-sends the whole word list anyway.
+  void _runPreview() async {
+    final seq = ++_previewSeq;
+    final snapshot = List<Map<String, dynamic>>.from(_words);
+    try {
+      final r = await backend.preview(snapshot);
+      // A slower earlier request must never overwrite a newer repaint, and a
+      // preview must never overwrite the persisted count after Stop.
+      if (_stopped || seq != _previewSeq) return;
+      if (r['error'] != null) {
+        onError?.call((r['message'] ?? r['error']).toString());
+        return;
       }
-    });
+      final snap = VoiceLiveSnapshot.fromMap(r, authoritative: false);
+      onTotals?.call(snap.totals, snap.hint);
+      onSnapshot?.call(snap);
+    } catch (_) {
+      // Best-effort: Stop still commits the full word list.
+    }
+  }
+
+  void _scheduleCommit() {
+    _dirty = true;
+    _commitTimer?.cancel();
+    _commitTimer = Timer(debounce, _flushCommit);
+    // The ceiling is deliberately NOT reset by later words — otherwise someone
+    // reading out a long list would never see the count persist until they
+    // paused. `??=` keeps the first pending word's deadline.
+    _ceilingTimer ??= Timer(commitCeiling, _flushCommit);
+  }
+
+  /// Sends the ENTIRE word list under the SAME session key and renders what came
+  /// back. Safe to call repeatedly: voice_live_commit replaces the session's live
+  /// rows rather than adding to them.
+  Future<void> _flushCommit({bool isStop = false}) async {
+    _commitTimer?.cancel();
+    _commitTimer = null;
+    _ceilingTimer?.cancel();
+    _ceilingTimer = null;
+    if (!_started) return;
+    if (_stopped && !isStop) return;
+    if (!_dirty && !isStop) return;
+    if (_commitInFlight) {
+      // Never let two commits rewrite the same session concurrently.
+      _commitAgain = true;
+      return;
+    }
+    _commitInFlight = true;
+    _dirty = false;
+    final snapshot = List<Map<String, dynamic>>.from(_words);
+    try {
+      final r = await backend.commit(snapshot, sessionKey);
+      _lastCommit = r;
+      if (r['error'] != null) {
+        onError?.call((r['message'] ?? r['error']).toString());
+      } else {
+        final snap = VoiceLiveSnapshot.fromMap(r, authoritative: true);
+        onTotals?.call(snap.totals, snap.hint);
+        onSnapshot?.call(snap);
+        // The "N count(s) saved" line is for Stop only — showing it every few
+        // seconds mid-count would be noise.
+        final msg = (r['message'] ?? '').toString();
+        if (isStop && msg.isNotEmpty) onMessage?.call(msg);
+      }
+    } catch (e) {
+      // A dropped mid-session commit loses nothing: every word is still held and
+      // the next commit sends the whole list again.
+      _dirty = true;
+      if (isStop) rethrow;
+    } finally {
+      _commitInFlight = false;
+      if (_commitAgain) {
+        _commitAgain = false;
+        if (!_stopped) _scheduleCommit();
+      }
+    }
+  }
+
+  /// Warehouse only. Marks the moment [bagNo] became the current bag, so the
+  /// backend can attribute words either side of it to the right bag. Recorded
+  /// BEFORE the next commit fires, then commits immediately so the operator sees
+  /// the new bag take effect.
+  Future<void> mapBagBoundary(int bagNo) async {
+    if (!backend.supportsBags || !_started || _stopped) return;
+    _commitTimer?.cancel();
+    _commitTimer = null;
+    try {
+      await backend.mapBagBoundary(sessionKey, bagNo, elapsedSec);
+    } catch (e) {
+      onError?.call(e.toString());
+      return;
+    }
+    _dirty = true;
+    await _flushCommit();
   }
 
   void _onStreamError(Object err, StackTrace st) async {
@@ -353,6 +541,10 @@ class VoiceLiveController {
     await _eventSub?.cancel();
     _eventSub = null;
     _stream = null;
+    // One drop can be a flaky moment on warehouse wifi; two means the live path
+    // is not going to hold for this session, so move to the clip recorder.
+    _drops++;
+    if (_drops >= 2) _announceFallback(msg);
   }
 
   void _onStreamDone() {
@@ -379,7 +571,8 @@ class VoiceLiveController {
   Future<Map<String, dynamic>?> stop() async {
     if (_stopped) return null;
     _stopped = true;
-    _debounceTimer?.cancel();
+    _commitTimer?.cancel();
+    _ceilingTimer?.cancel();
     _reconnectTimer?.cancel();
     await _micSub?.cancel();
     _micSub = null;
@@ -393,24 +586,20 @@ class VoiceLiveController {
     } catch (_) {}
     _stream = null;
 
-    if (!_started || _committed) return null;
-    _committed = true;
-    final snapshot = List<Map<String, dynamic>>.from(_words);
-    final r = await backend.commit(snapshot, sessionKey);
-    final msg = (r['message'] ?? '').toString();
-    if (r['error'] != null) {
-      onError?.call(msg.isNotEmpty ? msg : r['error'].toString());
-    } else if (msg.isNotEmpty) {
-      onMessage?.call(msg);
-    }
-    return r;
+    if (!_started) return null;
+    // Always commit on Stop, even if a debounced commit already sent the same
+    // words: the RPC replaces the session's rows, so a repeat cannot double the
+    // ledger, and this closes the window where the last words were still pending.
+    await _flushCommit(isStop: true);
+    return _lastCommit;
   }
 
   /// Aborts without committing (operator backs out). Safe to call anytime.
   Future<void> cancel() async {
     if (_stopped) return;
     _stopped = true;
-    _debounceTimer?.cancel();
+    _commitTimer?.cancel();
+    _ceilingTimer?.cancel();
     _reconnectTimer?.cancel();
     await _micSub?.cancel();
     _micSub = null;

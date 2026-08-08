@@ -763,65 +763,45 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
 
   Future<void> _doWrite() async {
     setState(() { _step = _ImpStep.writing; _statusMsg = 'Saving to database…'; });
-    int updated = 0, inserted = 0, skipped = 0;
+    int skipped = 0;
     final client = Supabase.instance.client;
-    // INSERT is blocked by MEDICINE RLS for all JWT-authenticated users.
-    // We use the service role key via HTTP for inserts only.
-    final svcKey = supabaseServiceKey;
-    final restBase = '${SupabaseConfig.url}/rest/v1';
 
+    // The privileged insert/update runs server-side in admin_write_medicines
+    // (SECURITY DEFINER, admin-gated) — no service-role key ships in the app.
+    // Build one payload of rows: {id?, data:{col:val}}. An id means UPDATE,
+    // its absence means INSERT (the RPC applies the fixed defaults).
+    final rows = <Map<String, dynamic>>[];
     for (final row in _rows) {
       if (row.isHidden || !row.isApproved) { skipped++; continue; }
       final product = row.selectedProduct;
+      final isUpdate = product != null && row.status != _MsStatus.unrecognized;
+      final data = <String, dynamic>{};
+      for (final col in _cols) {
+        if (col.mappedTo == 'ignore') continue;
+        // Never overwrite marketer on an UPDATE (matches prior behaviour).
+        if (isUpdate && col.mappedTo == 'marketer') continue;
+        final v = col.mappedTo == 'product_name' ? row.lineItem : row.extraData[col.mappedTo];
+        if (v != null && v.isNotEmpty) data[col.mappedTo] = v;
+      }
+      if (isUpdate) {
+        if (data.isEmpty) { skipped++; continue; }
+        rows.add({'id': int.parse(product.id), 'data': data});
+      } else {
+        rows.add({'data': data});
+      }
+    }
+
+    int updated = 0, inserted = 0;
+    if (rows.isNotEmpty) {
       try {
-        if (product != null && row.status != _MsStatus.unrecognized) {
-          // UPDATE existing — never overwrite marketer. RLS allows UPDATE via admin JWT.
-          final upd = <String, dynamic>{};
-          for (final col in _cols) {
-            if (col.mappedTo == 'ignore' || col.mappedTo == 'marketer') continue;
-            final v = col.mappedTo == 'product_name' ? row.lineItem : row.extraData[col.mappedTo];
-            if (v != null && v.isNotEmpty) upd[col.mappedTo] = v;
-          }
-          if (upd.isNotEmpty) {
-            final resp = await http.patch(
-              Uri.parse('$restBase/MEDICINE?id=eq.${int.parse(product.id)}'),
-              headers: {
-                'apikey': svcKey,
-                'Authorization': 'Bearer $svcKey',
-                'Content-Type': 'application/json',
-                'Prefer': 'return=minimal',
-              },
-              body: jsonEncode(upd),
-            ).timeout(const Duration(seconds: 30));
-            if (resp.statusCode >= 400) throw Exception('Update failed (${resp.statusCode}): ${resp.body}');
-          }
-          updated++;
-        } else {
-          // INSERT new medicine — uses service role to bypass INSERT RLS block.
-          final ins = <String, dynamic>{
-            'status': 'Available', 'sales_count': 0, 'has_scheme': false, 'has_image': false,
-          };
-          for (final col in _cols) {
-            if (col.mappedTo == 'ignore') continue;
-            final v = col.mappedTo == 'product_name' ? row.lineItem : row.extraData[col.mappedTo];
-            if (v != null && v.isNotEmpty) ins[col.mappedTo] = v;
-          }
-          final resp = await http.post(
-            Uri.parse('$restBase/MEDICINE'),
-            headers: {
-              'apikey': svcKey,
-              'Authorization': 'Bearer $svcKey',
-              'Content-Type': 'application/json',
-              'Prefer': 'return=minimal',
-            },
-            body: jsonEncode(ins),
-          ).timeout(const Duration(seconds: 30));
-          if (resp.statusCode >= 400) throw Exception('Insert failed (${resp.statusCode}): ${resp.body}');
-          inserted++;
-        }
+        final res = await client.rpc('admin_write_medicines', params: {'p_rows': rows});
+        final m = (res is List ? res.first : res) as Map;
+        updated  = (m['updated']  as num?)?.toInt() ?? 0;
+        inserted = (m['inserted'] as num?)?.toInt() ?? 0;
+        skipped += (m['skipped']  as num?)?.toInt() ?? 0;
       } catch (e) {
-        debugPrint('[AdminImport] Write error "${row.lineItem}": $e');
-        skipped++;
+        debugPrint('[AdminImport] admin_write_medicines error: $e');
+        skipped += rows.length;
       }
     }
     if (!mounted) return;

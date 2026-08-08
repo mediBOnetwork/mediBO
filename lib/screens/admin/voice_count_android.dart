@@ -15,6 +15,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../fulfill/fulfill_lookups.dart';
 import '../../services/admin_date_scope.dart';
 import '../../services/voice_live_service.dart';
+import '../../services/voice_receive_service.dart';
 import '../../utils/render_log.dart';
 
 const Color _kGreen = Color(0xFF1B7A43);
@@ -405,6 +406,26 @@ class _LiveCountScreenState extends State<LiveCountScreen> {
   String _message = '';
   List<Map<String, dynamic>> _totals = const [];
 
+  /// Rows the backend clamped because they exceeded what was ordered. Shown as a
+  /// warning; the ledger itself is already clamped server-side.
+  List<Map<String, dynamic>> _overCounted = const [];
+
+  /// Render-ready bag label straight from the commit payload — '' where the
+  /// stage has no bag condition (shop, pack), so no chip is drawn there.
+  String _activeBag = '';
+
+  /// Mentions the backend could not attribute to a bag. Surfaced so they can be
+  /// reviewed, never silently dropped.
+  List<Map<String, dynamic>> _needsBagReview = const [];
+
+  /// True once a commit has landed. From then on the screen shows only what the
+  /// backend persisted, never an in-flight preview.
+  bool _persisted = false;
+
+  /// The clip-path session running instead of the live stream, if any. Non-null
+  /// means live streaming could not be held and the fallback took over.
+  ContinuousVoiceSession? _clipSession;
+
   String get _title => widget.pack
       ? _label('va_pack')
       : (widget.stage == 'warehouse'
@@ -438,13 +459,19 @@ class _LiveCountScreenState extends State<LiveCountScreen> {
       onCaption: (t) {
         if (mounted) setState(() => _caption = t);
       },
-      onTotals: (totals, hint) {
-        if (mounted) {
-          setState(() {
-            _totals = totals;
-            _hint = hint;
-          });
-        }
+      onSnapshot: (s) {
+        if (!mounted) return;
+        // A preview must never overwrite a persisted count: once the backend has
+        // told us what it SAVED, only another commit may change the number.
+        if (_persisted && !s.authoritative) return;
+        setState(() {
+          _totals = s.totals;
+          _hint = s.hint;
+          _overCounted = s.overCounted;
+          _needsBagReview = s.needsBagReview;
+          _activeBag = s.activeBagLabel;
+          if (s.authoritative) _persisted = true;
+        });
       },
       onMessage: (m) {
         if (mounted) setState(() => _message = m);
@@ -452,12 +479,22 @@ class _LiveCountScreenState extends State<LiveCountScreen> {
       onError: (m) {
         if (mounted) setState(() => _error = m);
       },
+      onFallback: (why) {
+        if (!mounted) return;
+        setState(() {
+          _error = FulfillLookups.instance.message('voice_live_fallback') ?? why;
+        });
+        _startClipFallback();
+      },
     );
     setState(() {
       _listening = true;
       _error = '';
       _message = '';
       _caption = '';
+      _persisted = false;
+      _overCounted = const [];
+      _activeBag = '';
     });
     try {
       final ok = await c.start();
@@ -477,7 +514,101 @@ class _LiveCountScreenState extends State<LiveCountScreen> {
     }
   }
 
+  /// Live streaming could not be held for this session. Shop and Warehouse can
+  /// carry on through the clip recorder: it needs no gRPC, and every spoken name
+  /// is resolved server-side by voice_match_product, so an empty local item list
+  /// costs nothing.
+  ///
+  /// Pack is deliberately NOT auto-switched — PackVoiceSession resolves product
+  /// names against the order's own item list, which this lean Android screen
+  /// never loads. Starting it here would record audio and silently match nothing,
+  /// which is worse than telling the operator the live path is down.
+  Future<void> _startClipFallback() async {
+    if (widget.pack || _clipSession != null) return;
+    try {
+      final s = ContinuousVoiceSession(
+        supplierName: widget.supplier!,
+        stage: widget.stage!,
+        dateYmd: AdminDateScope.instance.dateYmd ?? '',
+        orderItemsProvider: () => const [],
+        onWindowError: (e, st) {
+          if (!mounted) return;
+          setState(() => _error =
+              FulfillLookups.instance.message('window_save_failed') ?? '');
+        },
+      );
+      await s.start();
+      if (!mounted) {
+        await s.stopAndFinalize();
+        return;
+      }
+      setState(() {
+        _clipSession = s;
+        _listening = true;
+      });
+      RenderLog.write('c_voice_live_fallback',
+          'supplier=${widget.supplier};stage=${widget.stage}');
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _listening = false;
+          _error = FulfillLookups.instance.message('voice_error') ?? e.toString();
+        });
+      }
+    }
+  }
+
+  /// Totals after a clip-path session: re-read what the backend persisted rather
+  /// than trusting anything held on screen.
+  Future<void> _refreshPersistedTotals() async {
+    try {
+      final res = await Supabase.instance.client
+          .rpc('voice_mention_product_totals', params: {
+        'p_supplier_name': widget.supplier,
+        'p_stage': widget.stage,
+        'p_date': AdminDateScope.instance.dateYmd,
+      });
+      if (!mounted || res is! List) return;
+      setState(() {
+        _totals = res
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
+        _persisted = true;
+      });
+    } catch (_) {
+      // Best-effort refresh — the counts are already saved either way.
+    }
+  }
+
   Future<void> _stop() async {
+    final clip = _clipSession;
+    if (clip != null) {
+      setState(() {
+        _listening = false;
+        _processing = true;
+        _caption = '';
+      });
+      try {
+        final r = await clip.stopAndFinalize();
+        if (mounted) {
+          final m = (r['message'] ?? '').toString();
+          if (m.isNotEmpty) setState(() => _message = m);
+        }
+        await _refreshPersistedTotals();
+      } catch (e) {
+        if (mounted) {
+          setState(() => _error =
+              FulfillLookups.instance.message('voice_session_error') ??
+                  e.toString());
+        }
+      } finally {
+        _clipSession = null;
+        if (mounted) setState(() => _processing = false);
+      }
+      return;
+    }
+
     final c = _controller;
     if (c == null) return;
     setState(() {
@@ -559,6 +690,56 @@ class _LiveCountScreenState extends State<LiveCountScreen> {
               ),
             ),
             const SizedBox(height: 8),
+            // Bag the backend is currently attributing words to. Only the
+            // warehouse has a bag condition, and active_bag comes back empty
+            // everywhere else, so no chip is drawn on Shop or Pack.
+            if (_activeBag.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEFF6FF),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: const Color(0xFFBFDBFE)),
+                    ),
+                    child: Text(
+                      _activeBag,
+                      style: const TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF1D4ED8),
+                          fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ),
+              ),
+            // Over-count is a WARNING, not a block: the backend has already
+            // clamped the ledger, so the count on screen stays correct. The
+            // wording is the backend's.
+            if (_overCounted.isNotEmpty || _needsBagReview.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (final o in _overCounted)
+                      Text(
+                        (o['message'] ?? '').toString(),
+                        style: const TextStyle(
+                            fontSize: 12, color: Color(0xFF92400E)),
+                      ),
+                    for (final r in _needsBagReview)
+                      Text(
+                        '${r['name'] ?? ''} ${r['qty'] ?? ''} — ${_label('va_needs_bag')}',
+                        style: const TextStyle(
+                            fontSize: 12, color: Color(0xFF92400E)),
+                      ),
+                  ],
+                ),
+              ),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Text(_label('va_totals'),

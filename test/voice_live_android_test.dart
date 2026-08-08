@@ -16,6 +16,7 @@
 //  - A token error shows message and opens no stream.
 //  - On web the old clip path is used and voice-token is never called.
 import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show TargetPlatform;
@@ -534,5 +535,30 @@ void main() {
         isLiveVoicePlatform(isWeb: false, platform: TargetPlatform.android), true);
     expect(
         isLiveVoicePlatform(isWeb: false, platform: TargetPlatform.iOS), false);
+  });
+
+  // CHANGE #670 REGRESSION GUARD. The previous attempt shipped a complete,
+  // fully-tested VoiceLiveController into a screen file that NOTHING imported,
+  // so on the device the Shop/Warehouse/Pack mics still ran the old clip path
+  // and nothing about the count changed. Unit-testing the controller could not
+  // catch that — only its reachability can. This asserts the real counting
+  // screen actually constructs it, for all three stages.
+  test('the real fulfillment screen wires the live controller (not dead code)',
+      () {
+    final src =
+        File('lib/screens/admin/admin_fulfillment_screen_web.dart').readAsStringSync();
+    expect(src.contains("services/voice_live_service.dart"), true,
+        reason: 'the counting screen must import the live service');
+    expect(src.contains('isLiveVoicePlatform('), true,
+        reason: 'the live path must be gated on the platform, not assumed');
+    expect(src.contains('SupplierVoiceBackend('), true,
+        reason: 'Shop + Warehouse must count through the supplier backend');
+    expect(src.contains('PackVoiceBackend('), true,
+        reason: 'Pack must count through the order backend');
+    expect('VoiceLiveController('.allMatches(src).length >= 2, true,
+        reason: 'one controller for Shop/Warehouse and one for Pack');
+    // Bags exist only in the warehouse; Pack must never send a boundary.
+    expect(src.contains('mapBagBoundary('), true,
+        reason: 'warehouse bag mapping must survive the live path');
   });
 }

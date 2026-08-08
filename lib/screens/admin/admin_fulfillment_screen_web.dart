@@ -3,7 +3,7 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -23,6 +23,10 @@ import '../../utils/audio_clip_io.dart';
 import '../../utils/agent_selftest_hooks.dart' as selftest;
 import '../../user_state.dart';
 import '../../services/voice_receive_service.dart';
+// CHANGE #670: live streaming count (Android) — the clip recorder stays as the
+// automatic fallback, so both are imported side by side on purpose.
+import '../../services/voice_live_service.dart';
+import '../../services/voice_live_types.dart' show VoiceLiveSnapshot;
 import '../../services/fulfill_realtime.dart'; // C353: single realtime channel
 import '../../services/admin_date_scope.dart'; // C545: the ONE admin date scope
 import '../../widgets/box_date_row.dart'; // C545: BoxDateOlderRow (the shared date chip is gone)
@@ -1100,6 +1104,28 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   // ignore: unused_field
   String? _activeVoiceSessionKey;
 
+  // ── CHANGE #670: live streaming count (Android only) ──────────────────────
+  // When the live stream opens, THIS drives the count and _voiceSession stays
+  // null; the clip recorder is started only if the stream never opens or drops
+  // twice. Exactly one of the two is ever running.
+  VoiceLiveController? _liveVoice;
+  // Unique per mic-on. voice_live_commit DELETEs the session's live rows before
+  // re-inserting, so this must NOT be the reused low-cardinality _sessionKey
+  // from fw_count_session — that would wipe the previous recording's counts.
+  String _liveSessionKey = '';
+  // Backend-owned render strings for the live pill. Never composed in Dart.
+  String _liveHint = '';
+  String _liveBagLabel = '';
+  String _liveCaption = '';
+  // Over-count messages already shown this session. voice_live_commit re-reports
+  // the same clamped row on every commit, so without this the operator would get
+  // the same warning again every few seconds.
+  final Set<String> _liveOverShown = <String>{};
+  // The bag already mapped on the live session's clock — so a reload that
+  // reports the same bag does not re-send a boundary.
+  int? _liveMappedBagNo;
+  bool _liveReloading = false;
+
   // ── Voice state ──
   bool _voiceSupported = true;
   bool _voiceListening = false;
@@ -1372,6 +1398,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     // navigates away / this screen is torn down mid-count — cancel, never finalize,
     // since an unfinished count must not be persisted.
     _voiceSession?.cancel().ignore();
+    // CHANGE #670: same rule for the live stream — release the mic and the gRPC
+    // stream without committing. Words already committed mid-session stay: they
+    // were persisted by the backend as they were spoken, which is the point.
+    _liveVoice?.cancel().ignore();
+    _liveVoice = null;
     super.dispose();
   }
 
@@ -2351,6 +2382,168 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     // the backend's own stage determination (fw_count_session, authoritative —
     // matches _supplier_shop_stage()); widget.arrivals is only the UI-tab fallback.
     final stage = _sessionStage ?? (widget.arrivals ? 'warehouse' : 'shop');
+    // CHANGE #670: on Android the count comes from the LIVE speech stream — the
+    // number on screen is what voice_live_commit persisted, ~1s after the word,
+    // with no Stop required. The clip recorder below is now only the fallback,
+    // used when the stream cannot open or drops twice.
+    if (isLiveVoicePlatform(isWeb: kIsWeb, platform: defaultTargetPlatform)) {
+      if (await _startLiveVoice(supplier332, stage)) return;
+    }
+    await _startClipRecording(supplier332, stage);
+  }
+
+  /// CHANGE #670: opens the live stream. Returns false — with the operator
+  /// already told why, in the backend's words — when the caller should fall
+  /// through to the clip recorder instead.
+  Future<bool> _startLiveVoice(String supplier, String stage) async {
+    final key = newVoiceSessionKey(supplier, stage);
+    final ctrl = VoiceLiveController(
+      backend: SupplierVoiceBackend(
+        supplier: supplier,
+        stage: stage,
+        date: AdminDateScope.instance.dateYmd ?? '',
+      ),
+      sessionKey: key,
+      onReady: (label) {
+        if (mounted) setState(() => _voiceInterim = label);
+      },
+      onCaption: (caption) {
+        if (mounted) setState(() => _liveCaption = caption);
+      },
+      onSnapshot: (snap) => _onLiveSnapshot(snap),
+      onError: (msg) {
+        if (!mounted) return;
+        setState(() => _voiceError = msg);
+        Future.delayed(const Duration(seconds: 3), () {
+          if (mounted) setState(() => _voiceError = '');
+        });
+      },
+      onFallback: (msg) => _liveFellBackToClip(supplier, stage, msg),
+    );
+    // start() RETHROWS a mic failure on purpose — the clip recorder needs the
+    // very same permission, so this is not a streaming problem. Fall through to
+    // it and let its own handler show the backend's mic-permission message,
+    // exactly as before this change.
+    bool ok;
+    try {
+      ok = await ctrl.start();
+    } catch (e) {
+      RenderLog.write('c670_live_start',
+          'stage=$stage;ok=false;mic=${e.runtimeType}');
+      try { await ctrl.cancel(); } catch (_) {}
+      return false;
+    }
+    if (!ok) {
+      RenderLog.write('c670_live_start', 'stage=$stage;ok=false');
+      return false;
+    }
+    if (!mounted) {
+      await ctrl.cancel();
+      return true;
+    }
+    _liveVoice = ctrl;
+    _liveSessionKey = key;
+    _liveMappedBagNo = null;
+    _liveOverShown.clear();
+    _activeVoiceSessionKey = key; // badge/popup scope, same as the clip path
+    _recStarted = true;
+    try { RenderLog.write('c303_mic_result', 'granted'); } catch (_) {}
+    RenderLog.write('c670_live_start', 'stage=$stage;ok=true;session=$key');
+    // Same rule as CHANGE #455: the bag already scanned before the mic was
+    // tapped owns everything spoken from second 0. Warehouse only — Shop has no
+    // bag condition, and SupplierVoiceBackend.mapBagBoundary is a no-op there.
+    final initialBagNo = (_activeBag?['bag_no'] as num?)?.toInt();
+    if (initialBagNo != null) {
+      _liveMappedBagNo = initialBagNo;
+      try {
+        await ctrl.mapBagBoundary(initialBagNo);
+        RenderLog.write('c670_live_boundary', 'session=$key;bag=$initialBagNo;t=0');
+      } catch (e) {
+        RenderLog.write('c670_live_boundary_err',
+            e.toString().substring(0, e.toString().length.clamp(0, 80)));
+      }
+    }
+    return true;
+  }
+
+  /// CHANGE #670: one place that stamps "this bag became the owning bag NOW",
+  /// for whichever counting engine is running. Live sends the boundary and then
+  /// flushes, so the boundary is always on record BEFORE the next commit places
+  /// the words that follow it. Warehouse only: on Shop both engines no-op,
+  /// because Shop has no bag condition.
+  Future<void> _markBagBoundary(int? newBagNo) async {
+    if (newBagNo == null) return;
+    final live = _liveVoice;
+    if (live != null) {
+      if (_liveMappedBagNo == newBagNo) return;
+      _liveMappedBagNo = newBagNo;
+      try {
+        await live.mapBagBoundary(newBagNo);
+        RenderLog.write('c670_live_boundary',
+            'session=$_liveSessionKey;bag=$newBagNo;t=${live.elapsedSec.toStringAsFixed(1)}');
+      } catch (e) {
+        RenderLog.write('c670_live_boundary_err',
+            e.toString().substring(0, e.toString().length.clamp(0, 80)));
+      }
+      return;
+    }
+    final session = _voiceSession;
+    if (session != null) await session.recordBagMap(newBagNo);
+  }
+
+  /// CHANGE #670: the live stream gave up mid-count (opened, then dropped
+  /// twice). Everything spoken so far is already committed, so switch the mic
+  /// over to the clip recorder and tell the operator once, in the backend's
+  /// words. Never surfaces twice — VoiceLiveController fires onFallback once.
+  Future<void> _liveFellBackToClip(String supplier, String stage, String msg) async {
+    final ctrl = _liveVoice;
+    if (ctrl == null) return;
+    _liveVoice = null;
+    RenderLog.write('c670_live_fallback', 'stage=$stage');
+    try { await ctrl.stop(); } catch (_) {}
+    if (!mounted || !_voiceListening) return;
+    if (msg.isNotEmpty) _showSnack(msg);
+    await _startClipRecording(supplier, stage);
+  }
+
+  /// CHANGE #670: renders a live payload. An authoritative snapshot is what the
+  /// backend PERSISTED, so it — and only it — refreshes the item rows; a preview
+  /// only repaints the pill, and never writes a locally-derived number anywhere.
+  void _onLiveSnapshot(VoiceLiveSnapshot snap) {
+    if (!mounted) return;
+    setState(() {
+      _liveHint = snap.hint;
+      _liveBagLabel = snap.activeBagLabel;
+    });
+    if (!snap.authoritative) return;
+    RenderLog.write('c670_live_commit',
+        'totals=${snap.totals.length};over=${snap.overCounted.length};'
+        'review=${snap.needsBagReview.length};bag=${snap.activeBagLabel}');
+    // The backend clamps the ledger at what was ordered and says so in its own
+    // words. Surface that the moment it happens, not only at Stop — and once per
+    // product, because the same clamped row is re-reported by every commit.
+    for (final row in snap.overCounted) {
+      final msg = (row['message'] ?? '').toString();
+      if (msg.isEmpty || !_liveOverShown.add(msg)) continue;
+      _showSnack(msg);
+    }
+    _reloadAfterLiveCommit();
+  }
+
+  /// Pulls the persisted count back onto the rows. Guarded so a burst of commits
+  /// cannot stack reloads on top of each other.
+  Future<void> _reloadAfterLiveCommit() async {
+    if (_liveReloading) return;
+    _liveReloading = true;
+    try {
+      await _reloadItemsFromDB();
+    } catch (_) {
+    } finally {
+      _liveReloading = false;
+    }
+  }
+
+  Future<void> _startClipRecording(String supplier332, String stage) async {
     final session = ContinuousVoiceSession(
       supplierName: supplier332,
       stage: stage,
@@ -2438,9 +2631,52 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
   Future<void> _stopAndTranscribe() async {
     if (!_voiceListening) return;
     _capsTimer?.cancel(); // #331: stop continuous timer
-    setState(() { _voiceListening = false; _voiceInterim = ''; });
+    setState(() {
+      _voiceListening = false;
+      _voiceInterim = '';
+      _liveCaption = '';
+    });
     if (!_recStarted) return;
     _recStarted = false;
+    // CHANGE #670: live path — the words are already committed, so Stop only
+    // closes the stream, commits whatever was still pending, then runs the SAME
+    // voice_finalize_session the clip path runs. The review dialog, the bag
+    // breakdown and the Finalize button are untouched.
+    final live = _liveVoice;
+    if (live != null) {
+      _liveVoice = null;
+      final liveKey = _liveSessionKey;
+      setState(() => _voiceProcessing = true);
+      try {
+        await live.stop();
+        final result = await finalizeVoiceSession(liveKey,
+            dateYmd: AdminDateScope.instance.dateYmd ?? '');
+        if (!mounted) return;
+        await _reloadItemsFromDB();
+        if (!mounted) return;
+        _showFinalizeSummary(result, liveKey);
+        _advanceIfReceived();
+        _refreshVoiceMentions();
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _popupKey.currentState?._fetchMentions();
+        });
+      } catch (e) {
+        if (!mounted) return;
+        setState(() => _voiceError = e.toString());
+        Future.delayed(const Duration(seconds: 4), () {
+          if (mounted) setState(() => _voiceError = '');
+        });
+      } finally {
+        if (mounted) {
+          setState(() {
+            _voiceProcessing = false;
+            _liveHint = '';
+            _liveBagLabel = '';
+          });
+        }
+      }
+      return;
+    }
     final session = _voiceSession;
     if (session == null) return;
     setState(() => _voiceProcessing = true);
@@ -2684,6 +2920,11 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         // C364: warehouse rows re-rendered from fresh payload on the realtime/refetch path —
         // a resolved dispute's raised received (e.g. 3/4 -> 4/4) reflects here (spec 4).
         RenderLog.write('c364_recv_reflect', 'tab=warehouse;items=${stateItems.length}');
+        // CHANGE #670: safety net — a bag can also become current through a path
+        // that never runs the attach handlers above (realtime, another device,
+        // the change-bag flow reset). _markBagBoundary is guarded on the bag it
+        // already stamped, so this can never double-stamp the same bag.
+        await _markBagBoundary((reloadActiveBag?['bag_no'] as num?)?.toInt());
       } catch (e) {
         final errMsg = e.toString();
         if (mounted) setState(() => _error = errMsg);
@@ -2879,9 +3120,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         _changeBagPendingOldBag.remove(supplier);
       });
       // #8: mark the session-clock moment this bag became current — never on detach.
-      final session = _voiceSession;
-      final newBagNo = (result['bag_no'] as num?)?.toInt();
-      if (session != null && newBagNo != null) await session.recordBagMap(newBagNo);
+      await _markBagBoundary((result['bag_no'] as num?)?.toInt());
     }
     // null: X before scanning old bag — reload restores "Bag in Use" from backend.
     await _reloadItemsFromDB();
@@ -2930,9 +3169,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       }
       RenderLog.write('c253_bag_attached', 'bag=${_activeBag?['bag_no']};supplier=$supplier');
       // #8: mark the session-clock moment this bag became current — never on detach.
-      final session = _voiceSession;
-      final newBagNo = (_activeBag?['bag_no'] as num?)?.toInt();
-      if (session != null && newBagNo != null) await session.recordBagMap(newBagNo);
+      await _markBagBoundary((_activeBag?['bag_no'] as num?)?.toInt());
       await _reloadItemsFromDB();
     } catch (e) {
       if (mounted) _showSnack(FulfillLookups.instance.message('bag_attach_failed') ?? '');
@@ -5093,6 +5330,46 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
               Text(_VoiceCaps.remainingLabel(),
                   style: TextStyle(fontSize: 10, color: _kSub)),
             ],
+          ),
+        ],
+
+        // CHANGE #670: live-count status. Every string is backend-owned —
+        // active_bag_label, hint and the caption all arrive rendered. The bag
+        // chip appears only where the backend sent one, which is why Shop (and
+        // Pack) show none: they have no bag condition.
+        if (_liveVoice != null && _voiceListening) ...[
+          const SizedBox(width: 8),
+          Flexible(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (_liveBagLabel.isNotEmpty)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: _kGreen.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(_liveBagLabel,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            fontSize: 11, fontWeight: FontWeight.w700, color: _kGreen)),
+                  ),
+                if (_liveHint.isNotEmpty)
+                  Text(_liveHint,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 11, fontWeight: FontWeight.w600, color: _kText)),
+                if (_liveCaption.isNotEmpty)
+                  Text(_liveCaption,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 10, color: _kSub)),
+              ],
+            ),
           ),
         ],
 
@@ -9265,6 +9542,18 @@ class _PackTabState extends State<_PackTab>
   // ignore: unused_field
   String? _activePackSessionKey;
 
+  // ── CHANGE #670: live streaming count on Pack (Android only) ──────────────
+  // Packing counts a CUSTOMER ORDER, so this runs voice_live_preview_pack /
+  // voice_live_commit_pack. Pack has no bag condition, so no boundary is ever
+  // sent and no bag chip is ever drawn. The clip recorder stays as the fallback.
+  VoiceLiveController? _packLiveVoice;
+  String _packLiveSessionKey = '';
+  String _packLiveHint = '';
+  String _packLiveCaption = '';
+  bool _packLiveReloading = false;
+  // See _liveOverShown: the same clamped row comes back on every commit.
+  final Set<String> _packLiveOverShown = <String>{};
+
   // CHANGE #627 (B1): the Pack "N item" chip, printed verbatim from
   // get_pack_clip_mentions.items_label. Never composed in Dart. With no rows
   // there is no row to read it from, so the copy catalog's own zero form is
@@ -9328,6 +9617,9 @@ class _PackTabState extends State<_PackTab>
     AdminDateScope.instance.removeListener(_onDateScopeChanged);
     // CHANGE #454: don't leave a session dangling if the tab is torn down mid-count.
     _packVoiceSession?.cancel().ignore();
+    // CHANGE #670: same for the live stream — release the mic without committing.
+    _packLiveVoice?.cancel().ignore();
+    _packLiveVoice = null;
     _scroll.dispose();
     super.dispose();
   }
@@ -9642,6 +9934,104 @@ class _PackTabState extends State<_PackTab>
         _stopCountVoice(_activeVoiceOrderId);
       }
     });
+    // CHANGE #670: live stream first on Android — packed qty moves as the item
+    // is spoken. Falls through to the clip recorder below if it cannot open.
+    if (isLiveVoicePlatform(isWeb: kIsWeb, platform: defaultTargetPlatform)) {
+      if (await _startPackLiveVoice(orderId)) return;
+    }
+    await _startPackClipVoice(orderId);
+  }
+
+  /// CHANGE #670: opens the live stream for one order. False → use the clip
+  /// recorder instead; the operator has already been told why, in the backend's
+  /// own words.
+  Future<bool> _startPackLiveVoice(String orderId) async {
+    final key = newVoiceSessionKey(orderId, 'pack');
+    final ctrl = VoiceLiveController(
+      backend: PackVoiceBackend(orderId: orderId, tokenSupplier: orderId),
+      sessionKey: key,
+      onCaption: (caption) {
+        if (mounted) setState(() => _packLiveCaption = caption);
+      },
+      onSnapshot: (snap) {
+        if (!mounted) return;
+        setState(() => _packLiveHint = snap.hint);
+        if (!snap.authoritative) return;
+        RenderLog.write('c670_pack_live_commit',
+            'totals=${snap.totals.length};over=${snap.overCounted.length}');
+        // pack_set_counted clamps at received_qty; the difference must be said
+        // out loud, once per product, not swallowed by a smaller number.
+        for (final row in snap.overCounted) {
+          final msg = (row['message'] ?? '').toString();
+          if (msg.isEmpty || !_packLiveOverShown.add(msg)) continue;
+          _showPackSnack(msg);
+        }
+        _packReloadAfterLiveCommit(orderId);
+      },
+      onError: (msg) {
+        if (mounted && msg.isNotEmpty) _showPackSnack(msg);
+      },
+      onFallback: (msg) => _packLiveFellBackToClip(orderId, msg),
+    );
+    // Same as Shop/Warehouse: a mic failure rethrows and belongs to the clip
+    // recorder's own handler, not to the live path.
+    bool ok;
+    try {
+      ok = await ctrl.start();
+    } catch (e) {
+      RenderLog.write('c670_pack_live_start', 'ok=false;mic=${e.runtimeType}');
+      try { await ctrl.cancel(); } catch (_) {}
+      return false;
+    }
+    if (!ok) {
+      RenderLog.write('c670_pack_live_start', 'ok=false');
+      return false;
+    }
+    if (!mounted) {
+      await ctrl.cancel();
+      return true;
+    }
+    _packLiveVoice = ctrl;
+    _packLiveSessionKey = key;
+    _packLiveOverShown.clear();
+    _activePackSessionKey = key;
+    _recStarted = true;
+    try { RenderLog.write('c303_mic_result', 'granted'); } catch (_) {}
+    RenderLog.write('c670_pack_live_start', 'ok=true;session=$key');
+    setState(() => _voiceListening = true);
+    return true;
+  }
+
+  /// The number on the rows must be what the backend persisted, so an
+  /// authoritative commit — not a local tally — is what refreshes them.
+  Future<void> _packReloadAfterLiveCommit(String orderId) async {
+    if (_packLiveReloading) return;
+    _packLiveReloading = true;
+    try {
+      await _loadFromPackQueue(orderId);
+      // counted_qty feeds can_mark_ready, so the row's backend-owned
+      // eligibility has to be refreshed with it.
+      if (mounted) _load(silent: true);
+    } catch (_) {
+    } finally {
+      _packLiveReloading = false;
+    }
+  }
+
+  /// CHANGE #670: the live stream dropped twice mid-count. Everything spoken so
+  /// far is already committed; hand the mic to the clip recorder and say so once.
+  Future<void> _packLiveFellBackToClip(String orderId, String msg) async {
+    final ctrl = _packLiveVoice;
+    if (ctrl == null) return;
+    _packLiveVoice = null;
+    RenderLog.write('c670_pack_live_fallback', 'order=$orderId');
+    try { await ctrl.stop(); } catch (_) {}
+    if (!mounted || !_voiceListening) return;
+    if (msg.isNotEmpty) _showPackSnack(msg);
+    await _startPackClipVoice(orderId);
+  }
+
+  Future<void> _startPackClipVoice(String orderId) async {
     final session = PackVoiceSession(
       orderId: orderId,
       orderItemsProvider: () => _packItemsFor(orderId),
@@ -9701,6 +10091,41 @@ class _PackTabState extends State<_PackTab>
       return;
     }
     _recStarted = false;
+    // CHANGE #670: live path — the counts are already persisted. Stop closes the
+    // stream, commits anything still pending, then runs the SAME
+    // pack_finalize_session and the SAME summary dialog as the clip path.
+    final live = _packLiveVoice;
+    if (live != null) {
+      _packLiveVoice = null;
+      final liveKey = _packLiveSessionKey;
+      try {
+        await live.stop();
+        final result = await finalizePackSession(liveKey);
+        if (!mounted) return;
+        await _loadFromPackQueue(orderId);
+        _load(silent: true);
+        if (!mounted) return;
+        _refreshPackMentions(orderId);
+        _showPackFinalizeSummary(result, orderId);
+        RenderLog.write('c301_lock', 'processed');
+      } catch (e) {
+        if (!mounted) return;
+        _showPackSnack(FulfillLookups.instance.message('voice_error') ?? '');
+        RenderLog.write('c670_pack_live_finalize_err',
+            e.toString().substring(0, e.toString().length.clamp(0, 60)));
+      } finally {
+        _packCounting = false;
+        if (mounted) {
+          setState(() {
+            _voiceProcessing = false;
+            _packLiveHint = '';
+            _packLiveCaption = '';
+          });
+        }
+        RenderLog.write('c301_lock', 'released');
+      }
+      return;
+    }
     final session = _packVoiceSession;
     if (session == null) {
       _packCounting = false;
@@ -10284,17 +10709,54 @@ class _PackTabState extends State<_PackTab>
   // CHANGE #299: active voice bar — Count items + (CHANGE #624) Barcode count.
   // Ask mediBO removed; the two counting methods now sit side by side here too.
   Widget _buildPackVoiceBar(String orderId, int spokenCount) {
+    // CHANGE #670: live-count strip under the pills. Both strings come from the
+    // backend (hint from voice_live_preview_pack / voice_live_commit_pack, the
+    // caption straight from Speech). Pack has no bag condition, so no bag chip
+    // is drawn here at all.
+    final showLive = _packLiveVoice != null &&
+        _voiceListening &&
+        _activeVoiceOrderId == orderId &&
+        (_packLiveHint.isNotEmpty || _packLiveCaption.isNotEmpty);
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-      child: Row(children: [
-        Expanded(
-            child: SizedBox(
-                height: 44,
-                child: _buildCountPill(orderId, spokenCount))),
-        const SizedBox(width: 12),
-        Expanded(
-            child: SizedBox(
-                height: 44, child: _buildBarcodePill(orderId))),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Row(children: [
+          Expanded(
+              child: SizedBox(
+                  height: 44,
+                  child: _buildCountPill(orderId, spokenCount))),
+          const SizedBox(width: 12),
+          Expanded(
+              child: SizedBox(
+                  height: 44, child: _buildBarcodePill(orderId))),
+        ]),
+        if (showLive)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Row(children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (_packLiveHint.isNotEmpty)
+                      Text(_packLiveHint,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: _kText)),
+                    if (_packLiveCaption.isNotEmpty)
+                      Text(_packLiveCaption,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontSize: 11, color: _kSub)),
+                  ],
+                ),
+              ),
+            ]),
+          ),
       ]),
     );
   }

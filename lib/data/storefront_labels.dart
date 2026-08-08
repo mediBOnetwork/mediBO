@@ -39,4 +39,10 @@ class StorefrontLabels {
   static const kNotify = 'card_notify_label';
   static const kNotifySubscribed = 'notify_subscribed_label';
   static const kOutOfStock = 'stock_out_label';
+
+  /// CHANGE #673 — the search field's placeholder. It used to be the Dart
+  /// literal 'Search for medicines', which meant the app was telling the user
+  /// what the catalogue contains. It contains companies and brands too, and
+  /// changing that sentence should never have needed a build.
+  static const kSearchHint = 'search_hint';
 }

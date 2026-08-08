@@ -42,6 +42,7 @@ import 'package:pharma_b2b/app_state.dart';
 import 'package:pharma_b2b/models/cart_model.dart';
 import 'package:pharma_b2b/models/home_sections.dart';
 import 'package:pharma_b2b/models/storefront_p3.dart';
+import 'package:pharma_b2b/widgets/compact_product_card.dart';
 import 'package:pharma_b2b/widgets/home_sections_view.dart';
 
 /// One rail card — the exact shape storefront_home_v2() sends.
@@ -92,6 +93,9 @@ Map<String, dynamic> _payload() => {
           'accent_word': 'Best',
           'subtitle': 'MOST ORDERED ON MEDIBO',
           'see_all': {'type': 'category', 'key': 'All'},
+          // CHANGE #673 — the pill's WORD is the backend's too. It used to be
+          // the Dart literal 'See all'.
+          'see_all_label': 'See all',
           'items': [
             _card(id: 252328, name: 'SyNtraN 200 Capsule'),
             _card(
@@ -341,10 +345,14 @@ void main() {
       expect(find.text('Gone Forever Tablet'), findsOneWidget);
       expect(find.text('Unavailable'), findsOneWidget,
           reason: 'the sold-out chip is the backend label');
-      // Exactly one ADD pill in the rail — for the one available card. The
-      // sold-out card offers no control at all. (The See-all pill is not an
-      // OutlinedButton, so it does not count here.)
-      expect(find.byType(OutlinedButton), findsOneWidget,
+      // Exactly one cart control in the rail — for the one available card. The
+      // sold-out card offers no path into the cart at all.
+      //
+      // #673 re-pointed this from OutlinedButton (the ADD pill stopped being
+      // one) to CompactCartControl, which is the only widget in a card that can
+      // write to the cart. Asserting on the button TYPE would now pass without
+      // proving anything.
+      expect(find.byType(CompactCartControl), findsOneWidget,
           reason: 'the sold-out card has no ADD control');
     });
 
@@ -426,6 +434,17 @@ void main() {
       await _pump(tester, _payload());
       // Exactly one See-all in the whole feed: only best_sellers carries one.
       expect(find.text('See all'), findsOneWidget);
+    });
+
+    testWidgets('the See-all pill prints see_all_label, not a Dart word',
+        (tester) async {
+      final p = _payload();
+      (p['sections'] as List).first['see_all_label'] = 'Browse all 77,547';
+      await _pump(tester, p);
+
+      expect(find.text('Browse all 77,547'), findsOneWidget);
+      expect(find.text('See all'), findsNothing,
+          reason: 'rewording the pill is an UPDATE, never a deploy');
     });
   });
 

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../data/medicine_repository.dart';
 import '../models/home_sections.dart';
 import '../models/storefront_p3.dart';
+import '../theme.dart';
 import 'animations.dart';
 import 'compact_product_card.dart';
 
@@ -146,9 +147,17 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
     // block is the only thing that changes. Never a blank page, never a throw.
     if (!d.ok) return _Retry(onRetry: () => _load());
 
+    // CHANGE #673 — the hero is the first row of the feed rather than a
+    // separate widget above it, so it scrolls with the content and costs no
+    // second scrollable. `show` is the backend's decision, not "is the title
+    // non-empty".
+    final hero = d.hero.show ? 1 : 0;
+
     // The strip sits ABOVE Best Sellers, and only when the backend sent
     // products for it.
     final strip = _backInStock.show ? 1 : 0;
+
+    final lead = hero + strip;
 
     return RefreshIndicator(
       onRefresh: () => _load(),
@@ -157,13 +166,19 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
         // AlwaysScrollable so the pull gesture works even on a short feed.
         physics: const AlwaysScrollableScrollPhysics(
             parent: BouncingScrollPhysics()),
-        padding: const EdgeInsets.only(top: 8, bottom: 96),
-        itemCount: strip + d.sections.length + (widget.footer == null ? 0 : 1),
+        padding: const EdgeInsets.only(bottom: 96),
+        itemCount: lead + d.sections.length + (widget.footer == null ? 0 : 1),
         itemBuilder: (_, i) {
-          if (strip == 1 && i == 0) {
+          if (hero == 1 && i == 0) {
+            return HomeHeroBanner(
+              hero: d.hero,
+              onCta: () => widget.onCategoryTap('All'),
+            );
+          }
+          if (strip == 1 && i == hero) {
             return _StripBlock(strip: _backInStock);
           }
-          final si = i - strip;
+          final si = i - lead;
           if (si >= d.sections.length) return widget.footer!;
           return _SectionBlock(
             section: d.sections[si],
@@ -173,6 +188,129 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
       ),
     );
   }
+}
+
+/// CHANGE #673 — the hero banner.
+///
+/// Every word and every colour is [HomeHero], straight from
+/// `storefront_home_v2()`. Rewording the promise or restyling the banner is an
+/// UPDATE to `storefront_ui_label` / `storefront_theme`.
+///
+/// The prop icons are the one thing chosen here, and only as a glyph for a
+/// backend NAME — an unrecognised name renders the label with no icon rather
+/// than a guessed one, so a new prop can ship to an old build.
+class HomeHeroBanner extends StatelessWidget {
+  final HomeHero hero;
+  final VoidCallback onCta;
+  const HomeHeroBanner({super.key, required this.hero, required this.onCta});
+
+  static const Map<String, IconData> _glyphs = {
+    'inventory': Icons.inventory_2_rounded,
+    'truck': Icons.local_shipping_rounded,
+    'verified': Icons.verified_user_rounded,
+    'savings': Icons.savings_rounded,
+    'support': Icons.support_agent_rounded,
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = Brand.hex(hero.accent, Brand.accent);
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 10, 12, 22),
+      padding: const EdgeInsets.fromLTRB(20, 22, 20, 20),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(Rad.band),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Brand.hex(hero.bgTop, Brand.deep),
+            Brand.hex(hero.bgBottom, Brand.deepAlt),
+          ],
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (hero.eyebrow.isNotEmpty) ...[
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: accent,
+                borderRadius: BorderRadius.circular(Rad.pill),
+              ),
+              child: Text(hero.eyebrow,
+                  style: AppType.eyebrow
+                      .copyWith(color: Colors.white, letterSpacing: 1.1)),
+            ),
+            const SizedBox(height: 14),
+          ],
+          if (hero.title.isNotEmpty)
+            Text(hero.title,
+                style: AppType.h3.copyWith(color: Colors.white, height: 1.2)),
+          if (hero.cta.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            _HeroCta(label: hero.cta, accent: accent, onTap: onCta),
+          ],
+          if (hero.props.isNotEmpty) ...[
+            const SizedBox(height: 18),
+            Wrap(
+              spacing: 14,
+              runSpacing: 8,
+              children: [
+                for (final p in hero.props)
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (_glyphs[p.icon] != null) ...[
+                        Icon(_glyphs[p.icon],
+                            size: 13, color: Colors.white70),
+                        const SizedBox(width: 5),
+                      ],
+                      Text(p.label,
+                          style: AppType.t1.copyWith(color: Colors.white70)),
+                    ],
+                  ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _HeroCta extends StatelessWidget {
+  final String label;
+  final Color accent;
+  final VoidCallback onTap;
+  const _HeroCta(
+      {required this.label, required this.accent, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) => Material(
+        color: accent,
+        borderRadius: BorderRadius.circular(Rad.pill),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(Rad.pill),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(label,
+                    style: AppType.l4.copyWith(
+                        color: Colors.white, fontWeight: FontWeight.w700)),
+                const SizedBox(width: 4),
+                const Icon(Icons.arrow_forward_rounded,
+                    size: 16, color: Colors.white),
+              ],
+            ),
+          ),
+        ),
+      );
 }
 
 // ── One section ──────────────────────────────────────────────────────────────
@@ -188,16 +326,28 @@ class _SectionBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 24),
+    // CHANGE #673 — the band. A section with no band colour sits on the page
+    // background, which is what makes the banded ones read as separate blocks
+    // rather than a continuous wash. Which section gets which colour is a
+    // Postgres row, so re-colouring the feed is an UPDATE.
+    final band = Brand.hex(section.band, Colors.transparent);
+    final accent = Brand.hex(section.accent, Brand.green);
+
+    return Container(
+      // Full-bleed: the band runs edge to edge, the content inside keeps the
+      // 16pt gutter. A band inset from the edges reads as a card, not a band.
+      width: double.infinity,
+      color: band,
+      padding: const EdgeInsets.symmetric(vertical: 22),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SectionHeader(section: section),
-          const SizedBox(height: 12),
+          const SizedBox(height: 16),
           switch (section.layout) {
             HomeSectionLayout.rail => _Rail(
                 section: section,
+                accent: accent,
                 onCategoryTap: onCategoryTap,
               ),
             // A category tile hands back `key` — the RAW category name the
@@ -205,8 +355,8 @@ class _SectionBlock extends StatelessWidget {
             HomeSectionLayout.iconGrid => _TileGrid(
                 tiles: section.tiles,
                 crossAxisCount: 4,
-                labelSize: 13,
-                centered: false,
+                centered: true,
+                tinted: true,
                 valueOf: (t) => t.key,
                 onTap: onCategoryTap,
               ),
@@ -218,8 +368,8 @@ class _SectionBlock extends StatelessWidget {
             HomeSectionLayout.brandGrid => _TileGrid(
                 tiles: section.tiles,
                 crossAxisCount: 3,
-                labelSize: 12,
                 centered: true,
+                tinted: false,
                 valueOf: (t) => t.key,
                 onTap: (key) => Navigator.of(context)
                     .pushNamed('/company/${Uri.encodeComponent(key)}'),
@@ -245,24 +395,22 @@ class _StripBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 24),
+    return Container(
+      width: double.infinity,
+      color: Brand.accentSoft,
+      padding: const EdgeInsets.symmetric(vertical: 22),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Text(
               strip.title,
-              style: const TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.w600,
-                height: 1.25,
-                color: Color(0xFF111827),
-              ),
+              textAlign: TextAlign.center,
+              style: AppType.h3,
             ),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 16),
           SizedBox(
             height: CompactProductCard.extent,
             child: ListView.builder(
@@ -290,52 +438,96 @@ class _StripBlock extends StatelessWidget {
   }
 }
 
-/// title with [HomeSection.accentWord] in brand green + subtitle, both verbatim.
+/// CHANGE #673 — the section header, centred and typeset.
+///
+/// Three things changed and each does work the others cannot:
+///
+///  * The subtitle became an **eyebrow above the title**, in caps with 1.6px
+///    tracking and a rule line either side. Tracking is the whole effect — at
+///    letter-spacing 0 it is just small grey text, which is what it was.
+///  * The title is [AppType.h3] — 24px w800 at -0.5 tracking. The old 20px
+///    w600 at 0 was the single biggest reason the page read as a document
+///    rather than a storefront.
+///  * The accent word takes the SECTION's own colour, not one green for the
+///    whole feed, so each band is a distinct place.
+///
+/// Every string is still printed verbatim and the accent split is still
+/// [HomeSection.accentWord] — never guessed from word position.
 class SectionHeader extends StatelessWidget {
   final HomeSection section;
   const SectionHeader({super.key, required this.section});
 
   @override
   Widget build(BuildContext context) {
-    final (before, accent, after) = section.titleParts;
+    final (before, accentWord, after) = section.titleParts;
+    final accent = Brand.hex(section.accent, Brand.green);
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
+          if (section.subtitle.isNotEmpty) ...[
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                _Rule(color: accent),
+                const SizedBox(width: 10),
+                Flexible(
+                  child: Text(
+                    section.subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: AppType.eyebrow.copyWith(color: accent),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                _Rule(color: accent, flip: true),
+              ],
+            ),
+            const SizedBox(height: 8),
+          ],
           Text.rich(
             TextSpan(
-              style: const TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF111827),
-                height: 1.25,
-              ),
+              style: AppType.h3,
               children: [
                 TextSpan(text: before),
-                if (accent.isNotEmpty)
-                  TextSpan(
-                    text: accent,
-                    style: const TextStyle(color: Color(0xFF1B7A43)),
-                  ),
+                if (accentWord.isNotEmpty)
+                  TextSpan(text: accentWord, style: TextStyle(color: accent)),
                 TextSpan(text: after),
               ],
             ),
+            textAlign: TextAlign.center,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
           ),
-          if (section.subtitle.isNotEmpty) ...[
-            const SizedBox(height: 3),
-            Text(
-              section.subtitle,
-              style: const TextStyle(
-                fontSize: 11,
-                letterSpacing: 1.5,
-                fontWeight: FontWeight.w500,
-                color: Color(0xFF9CA3AF),
-              ),
-            ),
-          ],
         ],
+      ),
+    );
+  }
+}
+
+/// The short line flanking an eyebrow. Fades out at its far end so it reads as
+/// a typographic rule rather than a divider.
+class _Rule extends StatelessWidget {
+  final Color color;
+
+  /// The right-hand rule fades the other way, so the pair is symmetric about
+  /// the eyebrow instead of both leaning left.
+  final bool flip;
+  const _Rule({required this.color, this.flip = false});
+
+  @override
+  Widget build(BuildContext context) {
+    final stops = [color.withValues(alpha: 0), color.withValues(alpha: 0.55)];
+    return Container(
+      width: 26,
+      height: 1.5,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: flip ? stops.reversed.toList() : stops,
+        ),
       ),
     );
   }
@@ -345,9 +537,14 @@ class SectionHeader extends StatelessWidget {
 
 class _Rail extends StatelessWidget {
   final HomeSection section;
+  final Color accent;
   final ValueChanged<String> onCategoryTap;
 
-  const _Rail({required this.section, required this.onCategoryTap});
+  const _Rail({
+    required this.section,
+    required this.onCategoryTap,
+    this.accent = Brand.green,
+  });
 
   static const double cardW = 156;
   static const double _gap = 12;
@@ -371,6 +568,11 @@ class _Rail extends StatelessWidget {
           if (i >= section.cards.length) {
             return _SeeAllPill(
               width: cardW,
+              // The wording is the backend's. Empty means the payload sent
+              // none, and the tile renders the arrow alone rather than a word
+              // chosen here — the old hardcoded 'See all' is gone.
+              label: section.seeAllLabel,
+              accent: accent,
               onTap: () => _navigate(context, seeAll!),
             );
           }
@@ -401,42 +603,64 @@ class _Rail extends StatelessWidget {
   }
 }
 
+/// The last item of a rail: a full-height card-shaped target, not a small pill
+/// floating in a gap. At the rail's own card size it reads as "one more card",
+/// which is what makes it get tapped.
 class _SeeAllPill extends StatelessWidget {
   final double width;
+  final String label;
+  final Color accent;
   final VoidCallback onTap;
-  const _SeeAllPill({required this.width, required this.onTap});
+  const _SeeAllPill({
+    required this.width,
+    required this.label,
+    required this.accent,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) => Padding(
         padding: const EdgeInsets.only(right: 12),
         child: SizedBox(
           width: width,
-          child: Center(
+          height: CompactProductCard.tileH,
+          child: Material(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(Rad.tile),
             child: InkWell(
-              borderRadius: BorderRadius.circular(24),
+              borderRadius: BorderRadius.circular(Rad.tile),
               onTap: onTap,
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+              child: Ink(
                 decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(color: const Color(0xFF1B7A43)),
+                  borderRadius: BorderRadius.circular(Rad.tile),
+                  border: Border.all(color: accent.withValues(alpha: 0.35)),
                 ),
-                child: const Row(
-                  mainAxisSize: MainAxisSize.min,
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Text(
-                      'See all',
-                      style: TextStyle(
-                        fontSize: 12.5,
-                        fontWeight: FontWeight.w700,
-                        color: Color(0xFF1B7A43),
+                    Container(
+                      width: 42,
+                      height: 42,
+                      decoration: BoxDecoration(
+                        color: accent,
+                        shape: BoxShape.circle,
                       ),
+                      child: const Icon(Icons.arrow_forward_rounded,
+                          size: 20, color: Colors.white),
                     ),
-                    SizedBox(width: 2),
-                    Icon(Icons.chevron_right,
-                        size: 16, color: Color(0xFF1B7A43)),
+                    if (label.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        child: Text(
+                          label,
+                          textAlign: TextAlign.center,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppType.l5.copyWith(color: accent),
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -451,8 +675,12 @@ class _SeeAllPill extends StatelessWidget {
 class _TileGrid extends StatelessWidget {
   final List<HomeTile> tiles;
   final int crossAxisCount;
-  final double labelSize;
   final bool centered;
+
+  /// Category tiles get a tinted disc + icon from [categoryStyle]; company
+  /// tiles get a neutral initial disc. Passed explicitly rather than inferred
+  /// from [crossAxisCount], which is a layout number and not a meaning.
+  final bool tinted;
 
   /// What this grid hands back on tap — `key` for categories, `label` for
   /// companies. Kept explicit so it is never inferred from a styling flag.
@@ -462,11 +690,17 @@ class _TileGrid extends StatelessWidget {
   const _TileGrid({
     required this.tiles,
     required this.crossAxisCount,
-    required this.labelSize,
     required this.centered,
+    required this.tinted,
     required this.valueOf,
     required this.onTap,
   });
+
+  /// Tall enough for the disc, TWO label lines and the count. The old 92 fit
+  /// barely one and a half, which is why long categories rendered as
+  /// "Anti Infectiv…" and "Gynaecol ogical" — the tiles were not broken data,
+  /// they were a box 30px too short.
+  static const double _extent = 116;
 
   @override
   Widget build(BuildContext context) {
@@ -478,15 +712,15 @@ class _TileGrid extends StatelessWidget {
         padding: EdgeInsets.zero,
         gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
           crossAxisCount: crossAxisCount,
-          mainAxisExtent: 92,
+          mainAxisExtent: _extent,
           crossAxisSpacing: 10,
           mainAxisSpacing: 10,
         ),
         itemCount: tiles.length,
         itemBuilder: (_, i) => _Tile(
           tile: tiles[i],
-          labelSize: labelSize,
           centered: centered,
+          tinted: tinted,
           tapValue: valueOf(tiles[i]),
           onTap: onTap,
         ),
@@ -497,63 +731,76 @@ class _TileGrid extends StatelessWidget {
 
 class _Tile extends StatelessWidget {
   final HomeTile tile;
-  final double labelSize;
   final bool centered;
+  final bool tinted;
   final String tapValue;
   final ValueChanged<String> onTap;
 
   const _Tile({
     required this.tile,
-    required this.labelSize,
     required this.centered,
+    required this.tinted,
     required this.tapValue,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    final align =
-        centered ? CrossAxisAlignment.center : CrossAxisAlignment.start;
+    // The tint is keyed off the category name the backend already sent — the
+    // app is not deciding what a category IS, only how to draw the one it was
+    // handed. A name with no entry falls back to the neutral style.
+    final style = categoryStyle(tile.key.isEmpty ? tile.label : tile.key);
 
     final body = Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFEDEFF2)),
+        borderRadius: BorderRadius.circular(Rad.tile),
+        border: Border.all(color: Brand.border),
       ),
       child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        crossAxisAlignment: align,
+        mainAxisAlignment: MainAxisAlignment.start,
+        crossAxisAlignment:
+            centered ? CrossAxisAlignment.center : CrossAxisAlignment.start,
         children: [
-          // Optional icon slot — deliberately empty. The backend sends no icon
-          // key yet, and picking one per category in Dart would be the app
-          // deciding what a category looks like.
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: tinted ? style.bg : Brand.field,
+              shape: BoxShape.circle,
+            ),
+            alignment: Alignment.center,
+            child: tinted
+                ? Icon(style.icon, size: 20, color: style.fg)
+                : Text(
+                    // First letter of the company's own name. Not a decision
+                    // about the company — a rendering of the string sent.
+                    tile.label.isEmpty ? '' : tile.label.characters.first,
+                    style: AppType.l2.copyWith(color: Brand.inkMuted),
+                  ),
+          ),
+          const SizedBox(height: 8),
           Flexible(
             child: Text(
               tile.label,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               textAlign: centered ? TextAlign.center : TextAlign.start,
-              style: TextStyle(
-                fontSize: labelSize,
-                height: 1.25,
-                fontWeight: FontWeight.w600,
-                color: const Color(0xFF1F2937),
-              ),
+              style: AppType.t2.copyWith(
+                  color: Brand.ink,
+                  fontWeight: FontWeight.w700,
+                  height: 13 / 10),
             ),
           ),
           if (tile.countLabel.isNotEmpty) ...[
-            const SizedBox(height: 3),
+            const SizedBox(height: 2),
             Text(
               tile.countLabel,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               textAlign: centered ? TextAlign.center : TextAlign.start,
-              style: const TextStyle(
-                fontSize: 10,
-                color: Color(0xFF9CA3AF),
-              ),
+              style: AppType.t2.copyWith(fontSize: 9, color: Brand.inkFaint),
             ),
           ],
         ],
@@ -565,7 +812,7 @@ class _Tile extends StatelessWidget {
     if (!tile.tappable) return body;
 
     return InkWell(
-      borderRadius: BorderRadius.circular(16),
+      borderRadius: BorderRadius.circular(Rad.tile),
       onTap: () => onTap(tapValue),
       child: body,
     );
@@ -583,17 +830,15 @@ class _Retry extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 48),
         child: Column(
           children: [
-            const Icon(Icons.cloud_off_outlined,
-                size: 34, color: Color(0xFFC7CBD1)),
+            const Icon(Icons.cloud_off_rounded,
+                size: 34, color: Brand.inkFaint),
             const SizedBox(height: 14),
             OutlinedButton(
               onPressed: onRetry,
               style: OutlinedButton.styleFrom(
-                foregroundColor: const Color(0xFF1B7A43),
-                side: const BorderSide(color: Color(0xFF1B7A43)),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
+                foregroundColor: Brand.green,
+                side: const BorderSide(color: Brand.green),
+                shape: const StadiumBorder(),
               ),
               child: const Text('Retry'),
             ),

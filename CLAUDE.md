@@ -70,82 +70,63 @@ Report the commit hash and the matching test credential. Never install Puppeteer
 - Wait for user instruction
 - Do NOT auto-suggest next steps
 
-## DESIGN SYSTEM (apply to all UI work) — rewritten by CHANGE #673
+## DESIGN SYSTEM (apply to all UI work)
 
-**Read this first.** The version of this section that stood until #673 listed hex
-codes inline and mandated "one dominant green, no rainbow palette", "state colors
-— muted, not vivid", "no gradients on primary surfaces" and "prefer clarity and
-breathing room over information density". Followed literally — which is what
-happened — it produced a storefront Om described as "a 90's website". Everything
-sat in one tonal band, every surface was white-on-grey with a hairline, and the
-only accent in the app was a single green. The rules were not wrong about
-discipline; they were wrong about *flatness*, and they were wrong to keep colour
-values in a markdown file at all.
+Apply these rules automatically to every frontend/UI change in this Flutter web app — no reminder needed. Target visual language: 1mg / PharmEasy / Apollo Pharmacy — professional, clean, trusted Indian pharma.
 
-The replacement has two halves: where values live, and what still holds.
+### COLORS
+- Primary brand green: `#1B7A43` — one dominant green, no rainbow palette
+- Backgrounds: `#F5F6F8` page, `#FFFFFF` cards/surfaces
+- Primary text: `#111827` — Secondary text / labels: `#6B7280`
+- Borders / dividers: `#E5E7EB` (1 px, used sparingly)
+- State colors — muted, not vivid:
+  - Success / active: `#D1FAE5` bg · `#065F46` text
+  - Pending / warning: `#FEF3C7` bg · `#92400E` text
+  - Error / cancelled: `#FEE2E2` bg · `#991B1B` text
+  - Info / neutral: `#EFF6FF` bg · `#1E40AF` text
+- Never use purple gradients, neon accents, or decorative multi-color fills
 
-### THE SOURCE OF TRUTH IS NOT THIS FILE
+### SPACING
+- Scale: 4 · 8 · 12 · 16 · 24 · 32 px — no arbitrary values
+- Generous whitespace inside cards and between sections; never cram content
+- Group related items tightly (8–12 px gap); separate unrelated blocks (24–32 px)
+- Card internal padding: 16–20 px; page horizontal padding: 16 px mobile, 24–32 px desktop
 
-- Every colour, radius and text style is in `lib/theme.dart` — `Brand`, `Rad`,
-  `AppType`, `CategoryStyle`. Never type a hex code, a font size or a radius
-  literal in a widget. If you need a value that is not in `theme.dart`, add it
-  there.
-- Anything the STOREFRONT shows is further owned by Postgres, not by
-  `theme.dart`: section band colours, per-section accents, the hero, and every
-  user-facing word come from `storefront_theme()` / `storefront_home_v2()` /
-  `storefront_ui_label`. Recolouring a section or rewording a button is an
-  `UPDATE`. If a storefront colour change needs a deploy, that is the bug.
-- Do not copy a palette back into this file. A hex code in markdown is a fourth
-  copy of a value that already has an owner.
+### TYPOGRAPHY
+- Hierarchy (max 3 sizes per screen):
+  - Screen / section titles: `FontWeight.w700`, ~20–22 px, `#111827`
+  - Body / primary data: `FontWeight.w500`, ~15–16 px, `#111827`
+  - Captions / labels / hints: `FontWeight.w400`, ~13 px, `#6B7280`
+- Left-align all prose and labels; right-align all numbers, prices, quantities
+- Never bold entire paragraphs; use weight contrast for emphasis only
 
-### WHAT ACTUALLY MAKES IT LOOK DESIGNED
+### COMPONENTS
+- **Cards**: `BorderRadius.circular(12–16)`, background `#FFFFFF`, border `1px #E5E7EB` only when needed, shadow `BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 8, offset: Offset(0,2))`
+- **Primary button**: filled `#1B7A43`, white label, radius 8–10 px, height 44–48 px
+- **Secondary button**: outlined `#1B7A43` border + text, same size, no fill
+- **Inputs / dropdowns**: light fill `#F5F6F8`, border `#E5E7EB`, focus border `#1B7A43`, radius 8 px, height 44–48 px, clear placeholder in `#9CA3AF`
+- **Chips / badges**: small radius (20 px), muted state colors above, `FontWeight.w500` ~12 px
+- **Dividers**: `#E5E7EB`, hairline (0.5–1 px); prefer whitespace over heavy lines
 
-These are the devices #673 added. Keep them; they are the difference.
+### TABLES & LISTS
+- Columns on a strict grid — never ragged
+- Consistent row height (48–56 px for data rows, 40 px for compact)
+- Alternate rows with `#F9FAFB` zebra OR use 1 px `#E5E7EB` dividers — pick one, not both
+- Numbers / prices: right-aligned, `₹` prefix, 2 decimal places max, `FontWeight.w600`
+- Column headers: `#6B7280`, `FontWeight.w600`, ~13 px, uppercase or title-case — consistent
 
-- **Colour is allowed, and is the point.** Category tiles, section bands and
-  accents are a real palette (`Brand.bands`, `CategoryStyle`), not tints of one
-  green. `Brand.accent` (#FF5A1F) is the call-to-action colour; `Brand.green` is
-  the brand. A screen with exactly one hue on it is a defect, not restraint.
-- **Alternating full-bleed section bands.** A feed that is one continuous grey
-  reads as a table. Bands are what make it read as blocks.
-- **One element crossing one boundary.** The product card's ADD pill overlaps
-  the image plate and hangs below it. This single overlap does more than any
-  other change in #673. Do not "clean it up" back inside the box.
-- **Dark chrome.** The header block is a `Brand.deep` → `Brand.deepAlt`
-  gradient with a white search pill on it. Gradients on chrome are correct here;
-  the old "no gradients" rule is withdrawn.
-- **Typeset text.** `AppType` is DM Sans with negative letter-spacing scaled to
-  size. Never fall back to stock Roboto at tracking 0 — that alone reads as
-  unstyled.
-- **Density is fine when it is aligned.** B2B users are scanning a catalogue.
-  The old "breathing room over density" line is withdrawn: two columns of tight,
-  gridded cards beat one column of airy ones.
+### RESPONSIVE
+- Use `LayoutBuilder` / `MediaQuery` — proportional/flexible widths, never hard-coded pixel widths
+- Test breakpoints: 360 px · 390 px · 414 px (mobile), 768 px (tablet), 1280 px+ (desktop)
+- Text must never squish, truncate, or overflow while space remains — use `Flexible`/`Expanded`/`FittedBox` as needed
+- Touch targets minimum 44×44 px on mobile
 
-### WHAT STILL HOLDS (unchanged, and non-negotiable)
-
-- **Spacing scale: 4 · 8 · 12 · 16 · 24 · 32.** No arbitrary values.
-- **Alignment.** Every element sits on the grid; columns are never ragged.
-- **Touch targets ≥ 44×44 px on mobile.**
-- **Text never truncates while space remains** — `Flexible`/`Expanded`, and
-  `maxLines` + `ellipsis` on anything backend-sent. A widget that only fits
-  today's copy will break on tomorrow's `UPDATE`; see the `_PriceLine` overflow
-  #673 caught in test.
-- **Numbers right-aligned in tables**, `₹` prefix, 2 decimals.
-- **No "AI slop":** no oversized emoji, no confetti illustrations, no decorative
-  icons as space-fillers. Colour must carry meaning (category, state, accent) —
-  decoration for its own sake is still banned.
-- **Fixed-extent grids stay fixed.** `CompactProductCard.extent` is summed from
-  the card's own constants and must never become a function of viewport width,
-  or the grid's reserved height and the card's real height diverge per device.
-- Breakpoints to check: 360 · 390 · 414 (mobile), 768 (tablet), 1280+ (desktop).
-
-### B2B, NOT B2C — never blur this
-
-mediBO does not take prescriptions and does not sell at MRP. It sells at **PTR**.
-So: no Rx badges, no "% off MRP" consumer framing. The card's ribbon is a
-**MARGIN** ribbon and the caption above the price is
-`pricing.price_caption` from the backend. Copying a B2C storefront's *layout* is
-correct; copying its *pricing story* is not.
+### RULES — ALWAYS
+- No purple, no gradients on primary surfaces, no decorative icons as space-fillers
+- No "AI slop" look: no oversized emoji in UI, no confetti illustrations, no generic card-with-icon grids
+- Every screen must have clear visual hierarchy: one focal element, supporting data, then metadata
+- Alignment is non-negotiable — every element must sit on the grid
+- Prefer clarity and breathing room over information density
 
 ## VERIFICATION RULE (mandatory — never skip)
 NEVER use CDP/Puppeteer/incognito automation — Flutter canvas is unreadable by browser tools.

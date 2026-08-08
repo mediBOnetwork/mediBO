@@ -3,41 +3,23 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../data/medicine_repository.dart';
 import '../models/product.dart';
-import '../theme.dart';
 import 'animations.dart';
 import 'notify_control.dart';
 import 'product_image.dart';
 
-/// CHANGE #673 — the storefront product card, rebuilt.
+/// CHANGE #636 — the Plazza-style compact product card.
 ///
-/// What made the old card read as a 90s table cell was not one mistake, it was
-/// the absence of every device that makes a card look designed: a hairline box
-/// on white, a tiny outlined "Add to cart" sitting inline in a text row, a flat
-/// rounded ribbon, and no colour anywhere. Everything sat in one tonal band.
+/// Replaces the old heavy card. Two deliberate removals:
 ///
-/// Four changes, in order of how much they do:
+///  * The manufacturer line is gone — it lives on the product page now.
+///  * The old `_SchemePill` invented a "5+1" badge for ~30% of products from a
+///    hash of the product id. That was the app answering "what scheme does
+///    this product have?", a question only the backend can answer. The only
+///    ribbon here is [Pricing.discountLabel], a string the backend rendered.
 ///
-///  1. **The ADD pill overlaps the image plate's bottom-right corner** and
-///     hangs below it. One element crossing one boundary is what separates a
-///     card that was laid out from a card that was designed. Everything else
-///     here is ordinary; this is not.
-///  2. **A notched ribbon**, V-cut at the bottom like a real bookmark, in the
-///     dark brand green — not a rounded rectangle.
-///  3. **A caption above the price.** B2B does not sell at MRP, so the number
-///     is a PTR and says so. The caption word is [Pricing.priceCaption], from
-///     the backend, because "PTR" is a business decision.
-///  4. **Type with tracking.** [AppType] at w800/-0.3 instead of stock Roboto
-///     at 0.
-///
-/// Two rules the card keeps from #636:
-///
-///  * It invents nothing. The ribbon is [Pricing.ribbonTop]/[Pricing.ribbonBottom],
-///    the offer chip is [Product.offerChip] gated on [Product.hasOffer], the
-///    button word is [Availability.ctaLabel]. There is no string, no percentage
-///    and no verdict computed here. The card renders; it never decides.
-///  * Every size is fixed. [extent] is the exact main-axis height the grid
-///    delegate must reserve and is summed from the same constants the widget
-///    lays out with, so the card cannot grow without the grid growing with it.
+/// Every size is fixed so the grid never reflows: [extent] is the exact
+/// main-axis height the grid delegate must reserve, and it is derived from the
+/// same constants the widget lays out with.
 class CompactProductCard extends StatelessWidget {
   final Product product;
 
@@ -52,40 +34,23 @@ class CompactProductCard extends StatelessWidget {
   });
 
   // ── Fixed geometry ────────────────────────────────────────────────────────
-  // The image plate. Near-square at both widths this card is ever laid out at
-  // (156 in a rail, ~173 in a 2-column grid on a 390pt phone). It is a fixed
-  // height rather than an AspectRatio on purpose: [extent] must be a constant,
-  // and a width-derived height would make the grid's reserved height a
-  // function of the viewport.
-  static const double tileH = 160;
+  static const double _imageH = 120;
+  static const double _actionRowH = 34;
+  static const double _cardPad = 8;
 
-  /// How far the ADD pill hangs below the plate. This overhang is the card's
-  /// signature move — if it is ever set to 0 the card goes back to looking
-  /// like a form.
-  static const double _overhang = 12;
-  static const double pillH = 36;
+  /// The card's 1px border sits INSIDE its height, so it must be in this sum.
+  /// Leaving it out cost exactly 2px and overflowed the inner Column.
+  static const double _borderW = 1;
+  static const double cardHeight =
+      _imageH + _actionRowH + _cardPad * 2 + _borderW * 2; // 172
+  static const double _chipH = 17;
+  static const double _nameH = 34; // exactly two 17px lines
+  static const double _priceH = 20;
 
-  static const double _chipH = 18; // form chip ("Strip", "Vial")
-  static const double _nameH = 40; // exactly two 20px lines
-  static const double _priceH = 24; // caption + PTR + struck MRP, one row
-  static const double _offerH = 18; // "Scheme available"
-
-  /// Kept for callers that still reserve the plate alone (the skeleton, and
-  /// anything measuring the tappable image area).
-  static const double cardHeight = tileH;
-
-  /// The grid's mainAxisExtent. Summed from the parts above so a change to the
-  /// card can never silently overflow the grid the way a hardcoded 365 did.
-  static const double extent = tileH +
-      _overhang + // the pill hangs into this
-      6 +
-      _chipH +
-      6 +
-      _nameH +
-      4 +
-      _priceH +
-      4 +
-      _offerH; // 292
+  /// The grid's mainAxisExtent. Kept next to the parts it sums so a change to
+  /// the card can never silently overflow the grid the way a hardcoded 365 did.
+  static const double extent =
+      cardHeight + 8 + _chipH + 4 + _nameH + 2 + _priceH;
 
   /// Hero tag shared with the product page's first carousel image.
   static String heroTag(String id) => 'pd-img-$id';
@@ -99,77 +64,66 @@ class CompactProductCard extends StatelessWidget {
     // out-of-stock signal; the app never compares supplier counts.
     final soldOut = av != null && !av.canAdd;
 
+    final card = _Card(
+      product: product,
+      soldOut: soldOut,
+      ribbon: (pricing != null && pricing.hasDiscount)
+          ? pricing.discountLabel
+          : '',
+      soldOutLabel: soldOut ? av.ctaLabel : '',
+    );
+
     return RepaintBoundary(
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(Rad.tile),
+        borderRadius: BorderRadius.circular(14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            SizedBox(
-              height: tileH + _overhang,
-              child: Stack(
-                children: [
-                  // Dimming the sold-out plate is a visual treatment of the
-                  // backend's own verdict, not a second opinion about it.
+            // Dimming the sold-out state is a visual treatment of the
+            // backend's own verdict, not a second opinion about it.
+            //
+            // CHANGE #638 — the Notify control sits ABOVE the dim layer. It is
+            // the one thing a sold-out card is still for, so it must not be
+            // greyed out along with the content it belongs to.
+            Stack(
+              children: [
+                Opacity(opacity: soldOut ? 0.45 : 1.0, child: card),
+                if (soldOut)
                   Positioned(
-                    left: 0,
-                    right: 0,
-                    top: 0,
-                    child: Opacity(
-                      opacity: soldOut ? 0.45 : 1.0,
-                      child: _Plate(
-                        product: product,
-                        pricing: pricing,
-                        soldOut: soldOut,
-                        soldOutLabel: soldOut ? av.ctaLabel : '',
-                      ),
-                    ),
+                    right: CompactProductCard._cardPad,
+                    bottom: CompactProductCard._cardPad,
+                    child: NotifyControl(productId: product.id),
                   ),
-                  // The overlap. Sits above the dim layer because it is the one
-                  // thing a sold-out card is still for.
-                  Positioned(
-                    right: 8,
-                    bottom: 0,
-                    child: soldOut
-                        ? SizedBox(
-                            height: pillH,
-                            child: Center(
-                                child: NotifyControl(productId: product.id)))
-                        : CompactCartControl(product: product),
-                  ),
-                ],
-              ),
+              ],
             ),
-            const SizedBox(height: 6),
+            const SizedBox(height: 8),
             SizedBox(
               height: _chipH,
               child: product.formChip.isEmpty
                   ? const SizedBox.shrink()
                   : _FormChip(text: product.formChip),
             ),
-            const SizedBox(height: 6),
+            const SizedBox(height: 4),
             SizedBox(
               height: _nameH,
               child: Text(
                 product.name,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
-                style: AppType.l5.copyWith(height: 20 / 12),
+                style: const TextStyle(
+                  fontSize: 12.5,
+                  height: 1.36,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF1F2937),
+                ),
               ),
             ),
-            const SizedBox(height: 4),
-            SizedBox(height: _priceH, child: _PriceLine(pricing: pricing)),
-            const SizedBox(height: 4),
+            const SizedBox(height: 2),
             SizedBox(
-              height: _offerH,
-              // Gated on the backend's boolean, never on "the string is not
-              // empty" — an offer is a fact about the product, not about the
-              // payload.
-              child: (product.hasOffer && product.offerChip.isNotEmpty)
-                  ? _OfferChip(text: product.offerChip)
-                  : const SizedBox.shrink(),
+              height: _priceH,
+              child: _PriceLine(pricing: pricing),
             ),
           ],
         ),
@@ -178,79 +132,79 @@ class CompactProductCard extends StatelessWidget {
   }
 }
 
-/// The image plate: white, hairline-bordered, with the ribbon top-left and the
-/// pack size (or the sold-out chip) bottom-left.
-///
-/// The pack size lives INSIDE the plate deliberately. Putting it below would
-/// make the text block's height depend on whether a product has a pack label,
-/// and a fixed-extent grid cannot survive that.
-class _Plate extends StatelessWidget {
+class _Card extends StatelessWidget {
   final Product product;
-  final Pricing? pricing;
   final bool soldOut;
+  final String ribbon;
   final String soldOutLabel;
 
-  const _Plate({
+  const _Card({
     required this.product,
-    required this.pricing,
     required this.soldOut,
+    required this.ribbon,
     required this.soldOutLabel,
   });
 
   @override
   Widget build(BuildContext context) {
-    final ribbon = (pricing != null && pricing!.hasRibbon);
-
     return Container(
-      height: CompactProductCard.tileH,
-      clipBehavior: Clip.antiAlias,
+      height: CompactProductCard.cardHeight,
+      padding: const EdgeInsets.all(CompactProductCard._cardPad),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(Rad.tile),
-        border: Border.all(color: Brand.border),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+            color: const Color(0xFFEDEFF2),
+            width: CompactProductCard._borderW),
       ),
-      child: Stack(
+      child: Column(
         children: [
-          Positioned.fill(
-            child: Padding(
-              padding: const EdgeInsets.all(10),
-              child: Center(
-                child: Hero(
-                  tag: CompactProductCard.heroTag(product.id),
-                  child: ProductImage(
-                    url: product.imageUrl,
-                    width: CompactProductCard.tileH - 20,
-                    height: CompactProductCard.tileH - 20,
-                    radius: BorderRadius.circular(8),
+          SizedBox(
+            height: CompactProductCard._imageH,
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: Center(
+                    child: Hero(
+                      tag: CompactProductCard.heroTag(product.id),
+                      child: ProductImage(
+                        url: product.imageUrl,
+                        width: CompactProductCard._imageH,
+                        height: CompactProductCard._imageH,
+                        radius: BorderRadius.circular(10),
+                      ),
+                    ),
                   ),
                 ),
-              ),
+                if (ribbon.isNotEmpty)
+                  Positioned(left: 0, top: 0, child: _Ribbon(text: ribbon)),
+                if (soldOut && soldOutLabel.isNotEmpty)
+                  Positioned(
+                      left: 0, bottom: 0, child: _SoldOutChip(text: soldOutLabel)),
+              ],
             ),
           ),
-          if (ribbon)
-            Positioned(
-              left: 8,
-              top: 0,
-              child: _Ribbon(
-                top: pricing!.ribbonTop,
-                bottom: pricing!.ribbonBottom,
-              ),
-            ),
-          Positioned(
-            left: 8,
-            right: 56, // clear of the overlapping pill
-            bottom: 7,
-            child: (soldOut && soldOutLabel.isNotEmpty)
-                ? Align(
-                    alignment: Alignment.centerLeft,
-                    child: _SoldOutChip(text: soldOutLabel),
-                  )
-                : Text(
+          SizedBox(
+            height: CompactProductCard._actionRowH,
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
                     product.packSize,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: AppType.t1,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFF6B7280),
+                    ),
                   ),
+                ),
+                const SizedBox(width: 6),
+                // Sold out: the row leaves the space empty and the Notify
+                // control is overlaid above the dim layer by the parent.
+                if (!soldOut) CompactCartControl(product: product),
+              ],
+            ),
           ),
         ],
       ),
@@ -258,71 +212,15 @@ class _Plate extends StatelessWidget {
   }
 }
 
-/// The notched corner ribbon. Two backend-sent lines, never one string split
-/// here. The V-cut at the bottom is what stops it reading as a badge.
-class _Ribbon extends StatelessWidget {
-  final String top;
-  final String bottom;
-  const _Ribbon({required this.top, required this.bottom});
-
-  static const double w = 40;
-  static const double h = 40;
-
-  @override
-  Widget build(BuildContext context) => ClipPath(
-        clipper: const _RibbonClipper(),
-        child: Container(
-          width: w,
-          height: h,
-          color: Brand.deep,
-          padding: const EdgeInsets.only(top: 5),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(top,
-                  maxLines: 1,
-                  style: AppType.t3.copyWith(
-                      fontSize: 12, height: 14 / 12, letterSpacing: -0.3)),
-              Text(bottom,
-                  maxLines: 1,
-                  overflow: TextOverflow.clip,
-                  style: AppType.t3.copyWith(fontSize: 7, height: 9 / 7)),
-            ],
-          ),
-        ),
-      );
-}
-
-class _RibbonClipper extends CustomClipper<Path> {
-  const _RibbonClipper();
-
-  /// How deep the V bites into the bottom edge.
-  static const double notch = 8;
-
-  @override
-  Path getClip(Size size) => Path()
-    ..moveTo(0, 0)
-    ..lineTo(size.width, 0)
-    ..lineTo(size.width, size.height)
-    ..lineTo(size.width / 2, size.height - notch)
-    ..lineTo(0, size.height)
-    ..close();
-
-  @override
-  bool shouldReclip(covariant CustomClipper<Path> oldClipper) => false;
-}
-
 /// ADD ⇄ stepper, isolated in its own subtree.
 ///
 /// This is the ONLY widget in the card that reads [AppState]. The card itself
-/// never does, so a cart write repaints one 36px control instead of every tile
+/// never does, so a cart write repaints one 34px control instead of every tile
 /// in the grid.
 class CompactCartControl extends StatelessWidget {
   final Product product;
   CompactCartControl({required this.product})
       : super(key: ValueKey('ccc-${product.id}'));
-
-  static const double w = 76;
 
   @override
   Widget build(BuildContext context) {
@@ -330,12 +228,12 @@ class CompactCartControl extends StatelessWidget {
     final qty = cart.quantityOf(product.id);
 
     return SizedBox(
-      height: CompactProductCard.pillH,
-      width: w,
+      height: 28,
+      width: 74,
       child: AnimatedSwitcher(
         duration: const Duration(milliseconds: 180),
-        transitionBuilder: (child, anim) => FadeTransition(
-            opacity: anim, child: ScaleTransition(scale: anim, child: child)),
+        transitionBuilder: (child, anim) =>
+            FadeTransition(opacity: anim, child: ScaleTransition(scale: anim, child: child)),
         child: qty > 0
             ? _Stepper(
                 key: const ValueKey('stepper'),
@@ -362,8 +260,6 @@ class CompactCartControl extends StatelessWidget {
   }
 }
 
-/// White fill, accent outline, accent text — it reads as a button sitting on
-/// top of the card rather than a line of text inside it.
 class _AddPill extends StatelessWidget {
   final String label;
   final VoidCallback onTap;
@@ -371,29 +267,23 @@ class _AddPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(Rad.tile),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(Rad.tile),
-        child: Ink(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(Rad.tile),
-            border: Border.all(color: Brand.accent, width: 1.5),
-          ),
-          child: Center(
-            // The button text is the backend's cta_label, printed verbatim. An
-            // empty label means the row carried no verdict — show nothing
-            // rather than a word chosen here.
-            child: Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: AppType.l3.copyWith(color: Brand.accent),
-            ),
-          ),
-        ),
+    return OutlinedButton(
+      onPressed: onTap,
+      style: OutlinedButton.styleFrom(
+        padding: EdgeInsets.zero,
+        foregroundColor: const Color(0xFF1B7A43),
+        side: const BorderSide(color: Color(0xFF1B7A43), width: 1.2),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ),
+      // The button text is the backend's cta_label, printed verbatim. An empty
+      // label means the row carried no verdict — show nothing rather than a
+      // word chosen here.
+      child: Text(
+        label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700),
       ),
     );
   }
@@ -412,17 +302,24 @@ class _Stepper extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Brand.accent,
-      borderRadius: BorderRadius.circular(Rad.tile),
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: const Color(0xFF1B7A43),
+        borderRadius: BorderRadius.circular(8),
+      ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          _StepIcon(icon: Icons.remove_rounded, onTap: onMinus),
-          Text('$qty',
-              style: AppType.l4.copyWith(
-                  color: Colors.white, fontWeight: FontWeight.w800)),
-          _StepIcon(icon: Icons.add_rounded, onTap: onPlus),
+          _StepIcon(icon: Icons.remove, onTap: onMinus),
+          Text(
+            '$qty',
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 12.5,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          _StepIcon(icon: Icons.add, onTap: onPlus),
         ],
       ),
     );
@@ -439,8 +336,8 @@ class _StepIcon extends StatelessWidget {
         onTap: onTap,
         child: SizedBox(
           width: 24,
-          height: CompactProductCard.pillH,
-          child: Icon(icon, size: 16, color: Colors.white),
+          height: 28,
+          child: Icon(icon, size: 14, color: Colors.white),
         ),
       );
 }
@@ -453,45 +350,48 @@ class _FormChip extends StatelessWidget {
   Widget build(BuildContext context) => Align(
         alignment: Alignment.centerLeft,
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 7),
+          padding: const EdgeInsets.symmetric(horizontal: 6),
           decoration: BoxDecoration(
-            color: Brand.field,
-            borderRadius: BorderRadius.circular(Rad.chip),
+            color: const Color(0xFFF1F5F9),
+            borderRadius: BorderRadius.circular(4),
           ),
           alignment: Alignment.center,
           child: Text(
             text,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: AppType.t2,
+            style: const TextStyle(
+              fontSize: 10,
+              height: 1.4,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF64748B),
+            ),
           ),
         ),
       );
 }
 
-/// The backend's own offer wording, on the positive tint. Not a "5+1" invented
-/// from a hash of the product id — that was the old `_SchemePill`, and it was
-/// the app answering a question only the catalogue can answer.
-class _OfferChip extends StatelessWidget {
+class _Ribbon extends StatelessWidget {
   final String text;
-  const _OfferChip({required this.text});
+  const _Ribbon({required this.text});
 
   @override
-  Widget build(BuildContext context) => Align(
-        alignment: Alignment.centerLeft,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 7),
-          decoration: BoxDecoration(
-            color: Brand.positiveBg,
-            borderRadius: BorderRadius.circular(Rad.chip),
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+        decoration: const BoxDecoration(
+          color: Color(0xFF1B7A43),
+          borderRadius: BorderRadius.only(
+            topLeft: Radius.circular(8),
+            bottomRight: Radius.circular(8),
           ),
-          alignment: Alignment.center,
-          child: Text(
-            text,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: AppType.t2.copyWith(
-                color: Brand.positiveFg, fontWeight: FontWeight.w700),
+        ),
+        child: Text(
+          text,
+          style: const TextStyle(
+            fontSize: 9.5,
+            height: 1.1,
+            fontWeight: FontWeight.w800,
+            color: Colors.white,
           ),
         ),
       );
@@ -503,27 +403,23 @@ class _SoldOutChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
         decoration: BoxDecoration(
-          color: Brand.negativeBg,
-          borderRadius: BorderRadius.circular(Rad.chip),
+          color: const Color(0xFFFEE2E2),
+          borderRadius: BorderRadius.circular(5),
         ),
         child: Text(
           text,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: AppType.t2.copyWith(
-              color: Brand.negativeFg, fontWeight: FontWeight.w700),
+          style: const TextStyle(
+            fontSize: 9.5,
+            height: 1.1,
+            fontWeight: FontWeight.w700,
+            color: Color(0xFFB91C1C),
+          ),
         ),
       );
 }
 
-/// Caption + PTR + struck MRP, on one 24px row.
-///
-/// The caption ("PTR") is [Pricing.priceCaption] — a backend string, because
-/// what the number *is* is a business decision. B2B buys at PTR and resells at
-/// MRP, so the struck number here is what the pharmacy earns against, not a
-/// consumer discount.
 class _PriceLine extends StatelessWidget {
   final Pricing? pricing;
   const _PriceLine({required this.pricing});
@@ -532,44 +428,31 @@ class _PriceLine extends StatelessWidget {
   Widget build(BuildContext context) {
     // No pricing block, or an explicit "this product has no MRP" — render
     // nothing rather than a fabricated ₹0.00.
-    final p = pricing;
-    if (p == null || !p.hasPrice) return const SizedBox.shrink();
-
+    if (pricing == null || !pricing!.hasPrice) return const SizedBox.shrink();
     return Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.baseline,
+      textBaseline: TextBaseline.alphabetic,
       children: [
-        if (p.priceCaption.isNotEmpty) ...[
-          // Flexible because the caption is a backend word. "PTR" fits, but
-          // rewording it to "NET RATE" in Postgres must not overflow the row —
-          // a copy edit is a data change and may never need a deploy.
-          Flexible(
-            child: Text(p.priceCaption,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: AppType.t2.copyWith(
-                    fontSize: 9,
-                    color: Brand.inkFaint,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.4)),
-          ),
-          const SizedBox(width: 4),
-        ],
         Text(
-          p.priceDisplay,
-          style: AppType.l3.copyWith(
-              fontWeight: FontWeight.w800, color: Brand.price),
+          pricing!.priceDisplay,
+          style: const TextStyle(
+            fontSize: 13.5,
+            fontWeight: FontWeight.w800,
+            color: Color(0xFF111827),
+          ),
         ),
-        if (p.hasDiscount) ...[
+        if (pricing!.hasDiscount) ...[
           const SizedBox(width: 5),
           Flexible(
             child: Text(
-              p.mrpDisplay,
+              pricing!.mrpDisplay,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: AppType.t1.copyWith(
-                color: Brand.inkFaint,
+              style: const TextStyle(
+                fontSize: 10.5,
+                color: Color(0xFF9CA3AF),
                 decoration: TextDecoration.lineThrough,
-                decorationColor: Brand.inkFaint,
+                decorationColor: Color(0xFF9CA3AF),
               ),
             ),
           ),
@@ -593,18 +476,16 @@ class CompactCardSkeleton extends StatelessWidget {
         children: [
           SkeletonBox(
             width: double.infinity,
-            height: CompactProductCard.tileH,
-            radius: Rad.tile,
+            height: CompactProductCard.cardHeight,
+            radius: 14,
           ),
-          // Stands in for the pill overhang, so nothing shifts on load.
-          SizedBox(height: CompactProductCard._overhang + 6),
-          SkeletonBox(width: 44, height: CompactProductCard._chipH),
-          SizedBox(height: 6),
-          SkeletonBox(width: double.infinity, height: CompactProductCard._nameH),
+          SizedBox(height: 8),
+          SkeletonBox(width: 42, height: CompactProductCard._chipH),
           SizedBox(height: 4),
-          SkeletonBox(width: 82, height: CompactProductCard._priceH),
-          SizedBox(height: 4),
-          SkeletonBox(width: 96, height: CompactProductCard._offerH),
+          SkeletonBox(
+              width: double.infinity, height: CompactProductCard._nameH),
+          SizedBox(height: 2),
+          SkeletonBox(width: 70, height: CompactProductCard._priceH),
         ],
       );
 }

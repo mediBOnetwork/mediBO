@@ -76,6 +76,11 @@ class VoiceLiveSnapshot {
   final List<Map<String, dynamic>> totals; // [{product_id,name,qty,bag_no}]
   final List<Map<String, dynamic>> overCounted; // backend-clamped rows
   final List<Map<String, dynamic>> needsBagReview; // never silently dropped
+
+  /// Items the backend heard by name but with no number spoken after them.
+  /// Surfaced so a dropped count is visible — it used to vanish in silence.
+  final List<Map<String, dynamic>> unmatched;
+
   final String hint;
 
   /// Render-ready bag label from the backend, e.g. "Bag 3". Empty where the
@@ -89,6 +94,7 @@ class VoiceLiveSnapshot {
     this.totals = const [],
     this.overCounted = const [],
     this.needsBagReview = const [],
+    this.unmatched = const [],
     this.hint = '',
     this.activeBagLabel = '',
     this.authoritative = false,
@@ -106,6 +112,7 @@ class VoiceLiveSnapshot {
       totals: rows('totals'),
       overCounted: rows('over_counted'),
       needsBagReview: rows('needs_bag_review'),
+      unmatched: rows('unmatched'),
       hint: (m['hint'] ?? '').toString(),
       activeBagLabel: (m['active_bag_label'] ?? '').toString(),
       authoritative: authoritative,

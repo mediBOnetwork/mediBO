@@ -2515,10 +2515,19 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       _liveHint = snap.hint;
       _liveBagLabel = snap.activeBagLabel;
     });
+    // An item heard by name with no number after it used to be dropped in
+    // silence. Told on the PREVIEW too, so the operator can say the number again
+    // while still holding the box.
+    for (final row in snap.unmatched) {
+      final msg = (row['message'] ?? '').toString();
+      if (msg.isEmpty || !_liveOverShown.add(msg)) continue;
+      _showSnack(msg);
+    }
     if (!snap.authoritative) return;
     RenderLog.write('c670_live_commit',
         'totals=${snap.totals.length};over=${snap.overCounted.length};'
-        'review=${snap.needsBagReview.length};bag=${snap.activeBagLabel}');
+        'review=${snap.needsBagReview.length};miss=${snap.unmatched.length};'
+        'bag=${snap.activeBagLabel}');
     // The backend clamps the ledger at what was ordered and says so in its own
     // words. Surface that the moment it happens, not only at Stop — and once per
     // product, because the same clamped row is re-reported by every commit.
@@ -9956,9 +9965,16 @@ class _PackTabState extends State<_PackTab>
       onSnapshot: (snap) {
         if (!mounted) return;
         setState(() => _packLiveHint = snap.hint);
+        // Heard the name, never heard a number — say so instead of dropping it.
+        for (final row in snap.unmatched) {
+          final msg = (row['message'] ?? '').toString();
+          if (msg.isEmpty || !_packLiveOverShown.add(msg)) continue;
+          _showPackSnack(msg);
+        }
         if (!snap.authoritative) return;
         RenderLog.write('c670_pack_live_commit',
-            'totals=${snap.totals.length};over=${snap.overCounted.length}');
+            'totals=${snap.totals.length};over=${snap.overCounted.length};'
+            'miss=${snap.unmatched.length}');
         // pack_set_counted clamps at received_qty; the difference must be said
         // out loud, once per product, not swallowed by a smaller number.
         for (final row in snap.overCounted) {

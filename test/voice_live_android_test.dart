@@ -22,6 +22,7 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show TargetPlatform;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pharma_b2b/services/voice_live_service.dart';
+import 'package:pharma_b2b/services/voice_live_types.dart';
 
 // ── fakes ────────────────────────────────────────────────────────────────────
 class _FakeStream implements SpeechStream {
@@ -560,5 +561,41 @@ void main() {
     // Bags exist only in the warehouse; Pack must never send a boundary.
     expect(src.contains('mapBagBoundary('), true,
         reason: 'warehouse bag mapping must survive the live path');
+  });
+
+  test('an item heard without a number is surfaced, never dropped', () {
+    // The backend returns `unmatched` for "heard the name but no number".
+    // The snapshot must carry it verbatim so the screen can say it out loud —
+    // silently dropping the row is what made a miscount invisible.
+    final snap = VoiceLiveSnapshot.fromMap(const {
+      'totals': [
+        {'product_id': 1, 'name': 'Monticope Tablet', 'qty': 2}
+      ],
+      'unmatched': [
+        {
+          'product_id': 2,
+          'matched_name': 'Monticope Suspension',
+          'heard': 'monticope suspension',
+          'message': 'Monticope Suspension: heard the name but no number'
+        }
+      ],
+      'hint': 'Monticope Suspension: heard the name but no number',
+    }, authoritative: true);
+
+    expect(snap.unmatched.length, 1);
+    expect(snap.unmatched.first['message'],
+        'Monticope Suspension: heard the name but no number');
+    expect(snap.hint, 'Monticope Suspension: heard the name but no number',
+        reason: 'the wording is the backend\'s, never composed in Dart');
+    // Absent key stays empty rather than becoming a Dart-invented fallback.
+    expect(VoiceLiveSnapshot.fromMap(const {}, authoritative: false).unmatched,
+        isEmpty);
+  });
+
+  test('both live surfaces show the unmatched rows', () {
+    final src =
+        File('lib/screens/admin/admin_fulfillment_screen_web.dart').readAsStringSync();
+    expect('snap.unmatched'.allMatches(src).length >= 2, true,
+        reason: 'Shop/Warehouse AND Pack must both surface unmatched items');
   });
 }

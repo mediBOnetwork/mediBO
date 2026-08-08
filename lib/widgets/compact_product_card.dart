@@ -23,9 +23,9 @@ import 'product_image.dart';
 ///     here is ordinary; this is not.
 ///  2. **A notched ribbon**, V-cut at the bottom like a real bookmark, in the
 ///     dark brand green — not a rounded rectangle.
-///  3. **A caption above the price.** B2B does not sell at MRP, so the number
-///     is a PTR and says so. The caption word is [Pricing.priceCaption], from
-///     the backend, because "PTR" is a business decision.
+///  3. **A caption above the price.** The caption word is
+///     [Pricing.priceCaption], from the backend, because what the number *is*
+///     ("MRP" today) is a business decision, not a layout one.
 ///  4. **Type with tracking.** [AppType] at w800/-0.3 instead of stock Roboto
 ///     at 0.
 ///
@@ -518,12 +518,14 @@ class _SoldOutChip extends StatelessWidget {
       );
 }
 
-/// Caption + PTR + struck MRP, on one 24px row.
+/// Caption + price + optional struck second price, on one 24px row.
 ///
-/// The caption ("PTR") is [Pricing.priceCaption] — a backend string, because
-/// what the number *is* is a business decision. B2B buys at PTR and resells at
-/// MRP, so the struck number here is what the pharmacy earns against, not a
-/// consumer discount.
+/// The caption ("MRP") is [Pricing.priceCaption] — a backend string, because
+/// what the number *is* is a business decision, not a layout one. CHANGE #676
+/// withdrew the PTR framing entirely: the backend now sends an empty
+/// [Pricing.mrpDisplay] and `hasDiscount: false`, so the struck number and the
+/// margin ribbon simply stop rendering. No branch here had to change — that is
+/// the point of gating on backend strings.
 class _PriceLine extends StatelessWidget {
   final Pricing? pricing;
   const _PriceLine({required this.pricing});
@@ -539,7 +541,7 @@ class _PriceLine extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         if (p.priceCaption.isNotEmpty) ...[
-          // Flexible because the caption is a backend word. "PTR" fits, but
+          // Flexible because the caption is a backend word. "MRP" fits, but
           // rewording it to "NET RATE" in Postgres must not overflow the row —
           // a copy edit is a data change and may never need a deploy.
           Flexible(

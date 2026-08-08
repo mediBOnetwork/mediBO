@@ -1221,7 +1221,10 @@ class _ComputedInvoiceTab extends StatelessWidget {
     final inWords = totals['in_words']?.toString();
 
     return Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-      row('PTR Total', totals['ptr_total_label']),
+      // CHANGE #676 — the caption is the backend's word now. mediBO quotes MRP,
+      // not PTR, and what this row is called is a business decision, so it may
+      // never be a Dart literal again.
+      row(totals['ptr_total_caption']?.toString() ?? '', totals['ptr_total_label']),
       row(totals['discount_label']?.toString() ?? 'Discount', totals['discount_amount_label']),
       row('Net Taxable', totals['taxable_label'], bold: true),
       row('CGST', totals['cgst_label']),

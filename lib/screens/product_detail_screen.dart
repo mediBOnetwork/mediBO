@@ -338,12 +338,12 @@ class _PriceRow extends StatelessWidget {
     // than a fabricated ₹0.00.
     if (pr == null || !pr.hasPrice) return const SizedBox.shrink();
 
-    // CHANGE #673 — the B2B price block.
+    // CHANGE #673, revised by #676 — the price block.
     //
-    // We do not sell at MRP, we sell at PTR, and the page now says so. The
-    // caption, the MRP caption and the margin line are all backend strings —
-    // what the number IS is a business decision, and "PTR" is not a word this
-    // app gets to choose.
+    // #673 framed this as a PTR with a margin line. #676 withdrew that: the
+    // page quotes MRP and nothing else. Nothing here needed an edit, because
+    // the caption, the struck second price and the margin box are all gated on
+    // backend strings — the backend simply stopped sending them.
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [

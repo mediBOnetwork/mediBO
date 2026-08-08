@@ -30,6 +30,11 @@ class _FakeStream implements SpeechStream {
   final List<List<int>> audio = [];
   bool closed = false;
 
+  /// Words Speech is still holding when the stream half-closes — the real
+  /// stream flushes these as a last final result during close(), and the
+  /// controller must catch them (that IS the drain contract under test).
+  List<SpeechWord> pendingOnClose = [];
+
   @override
   Stream<SpeechEvent> get events => _c.stream;
   @override
@@ -37,6 +42,14 @@ class _FakeStream implements SpeechStream {
   @override
   Future<void> close() async {
     closed = true;
+    if (pendingOnClose.isNotEmpty) {
+      _c.add(SpeechEvent(
+          isFinal: true, transcript: '', words: pendingOnClose));
+      pendingOnClose = [];
+    }
+    // Like the real close(): return only after the flushed finals have been
+    // delivered to the listener.
+    await Future(() {});
   }
 
   void emitFinal(List<SpeechWord> w, {String transcript = ''}) =>
@@ -480,6 +493,73 @@ void main() {
     expect(r2, isNull);
     expect(rpc.named('voice_live_commit').length, before + 1,
         reason: 'a second Stop commits nothing');
+  });
+
+  test('words Speech flushes during Stop are committed — the last utterance is never lost',
+      () async {
+    final fn = _Fn((f, b) => _tokenOk());
+    final rpc = _Rpc((f, p) => f.contains('commit')
+        ? {'ok': true, 'saved': 2, 'message': 'ok'}
+        : _previewResp(f, p));
+    final s = _FakeStream();
+    final c = VoiceLiveController(
+      backend:
+          SupplierVoiceBackend(supplier: 'Acme', stage: 'shop', rpc: rpc.call, fn: fn.call),
+      sessionKey: 'sk',
+      openStream: _Opener([s]).call,
+      mic: _FakeMic(),
+      debounce: dbg,
+    );
+    await c.start();
+    s.emitFinal([const SpeechWord('Winbp', 0.0, 0.4)]);
+    await settle();
+
+    // The operator's last sentence is still buffered in Speech when Stop is
+    // tapped — it only finalises when the stream half-closes. It must still
+    // land in the final commit.
+    s.pendingOnClose = [
+      const SpeechWord('Paracip', 1.0, 1.4),
+      const SpeechWord('4', 1.5, 1.7),
+    ];
+    await c.stop();
+    final words =
+        (rpc.named('voice_live_commit').last.value['p_words'] as List)
+            .cast<Map>();
+    expect(words.map((w) => w['w']).toList(), ['winbp', 'paracip', '4'],
+        reason: 'the drained words are part of the persisted count');
+    expect(words.map((w) => w['i']).toList(), [1, 2, 3]);
+  });
+
+  test('a reconnect drains the old stream — finals in flight at the swap still count',
+      () async {
+    final fn = _Fn((f, b) => _tokenOk());
+    final rpc = _Rpc(_previewResp);
+    final s1 = _FakeStream();
+    final s2 = _FakeStream();
+    final opener = _Opener([s1, s2]);
+    final c = VoiceLiveController(
+      backend:
+          SupplierVoiceBackend(supplier: 'Acme', stage: 'shop', rpc: rpc.call, fn: fn.call),
+      sessionKey: 'k',
+      openStream: opener.call,
+      mic: _FakeMic(),
+      debounce: dbg,
+      reconnectAfter: const Duration(milliseconds: 40),
+    );
+    await c.start();
+    s1.emitFinal([const SpeechWord('Winbp', 0.0, 0.4)]);
+    s1.pendingOnClose = [const SpeechWord('Twenty', 0.5, 0.9)];
+    await settle(60); // reconnect fires at 40ms and drains s1
+    expect(s1.closed, true);
+
+    s2.emitFinal([const SpeechWord('Paracip', 0.0, 0.4)]);
+    await settle();
+    final lastPreview = rpc.named('voice_live_preview').last;
+    final words = (lastPreview.value['p_words'] as List).cast<Map>();
+    expect(words.map((w) => w['w']).toList(), ['winbp', 'twenty', 'paracip'],
+        reason: 'nothing spoken across the stream swap is lost');
+    expect(words.map((w) => w['i']).toList(), [1, 2, 3]);
+    await c.cancel();
   });
 
   test('INVALID_ARGUMENT stream error retries once on fallback', () async {

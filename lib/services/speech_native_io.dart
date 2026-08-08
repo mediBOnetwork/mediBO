@@ -209,6 +209,14 @@ class _GrpcSpeechStream implements SpeechStream {
     try {
       if (!_requests.isClosed) await _requests.close();
     } catch (_) {}
+    // Half-closing makes Speech finalise ALL the audio it is still holding and
+    // send those last results before ending the response stream. Wait for that
+    // flush (bounded — a dead network must not hang Stop) instead of cancelling
+    // it away: without this, the words spoken just before Stop/reconnect were
+    // transcribed by Google and then thrown away on the phone.
+    try {
+      await _events.done.timeout(const Duration(seconds: 3));
+    } catch (_) {}
     try {
       await _respSub?.cancel();
     } catch (_) {}

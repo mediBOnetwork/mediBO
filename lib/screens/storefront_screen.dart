@@ -96,7 +96,6 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   int _loadToken = 0; // invalidates in-flight requests on filter change
   bool _loadingFirst = true;
   bool _loadingMore = false;
-  bool _reachedEnd = false;
   Object? _pageError;
   bool _pageNetworkError = false;
   List<String> _suggestions = [];
@@ -113,14 +112,29 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   String? _showingLabel;
   String? _emptyLabel;
 
+  // #677 — the Load-more button word and the end-of-feed line, both backend
+  // strings. Empty means the payload sent none, and then nothing is printed
+  // rather than a phrase chosen here.
+  String _moreLabel = '';
+  String _endLabel = '';
+
   // CHANGE #441: every category's buyable count, fetched once at storefront
   // load via get_all_storefront_counts and read on every category switch —
   // keys are uppercased category names plus 'ALL'.
   Map<String, int> _categoryCounts = {};
   final Set<String> _countFallbackInFlight = {};
 
-  // Browse feed cap: true once loadedCount>=200 or a page returned <20 rows.
-  bool _feedEnded = false;
+  // CHANGE #677 — the backend's paging plan, held verbatim.
+  //
+  // This used to be three client decisions: a page size of 20, a hard stop at
+  // 200 items, and "the page came back short, so the feed has ended". The 200
+  // was why CARDIAC — 3,068 buyable products — dead-ended after 200. All three
+  // are gone. `_hasMore` is the backend's own has_more, `_nextOffset` its own
+  // next_offset, `_moreLimit` the size it wants the next request to be.
+  // Nothing here counts rows to decide anything.
+  bool _hasMore = false;
+  int _nextOffset = 0;
+  int? _moreLimit;
 
   @override
   void initState() {
@@ -316,14 +330,17 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       _items.clear();
       _loadingFirst = true;
       _loadingMore = false;
-      _reachedEnd = false;
-      _feedEnded = false;
+      _hasMore = false;
+      _nextOffset = 0;
+      _moreLimit = null;
       _pageError = null;
       _pageNetworkError = false;
       _suggestions = [];
       _buyableCategoryTotal = null;
       _showingLabel = null;
       _emptyLabel = null;
+      _moreLabel = '';
+      _endLabel = '';
     });
     try {
       final pageResult = await widget.repo.fetchPage(
@@ -421,7 +438,6 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         RenderLog.write(kC408SearchSentinel,
             'term=$term;rows=${page.length};includes_non_buyable=$anyNonBuyable');
       }
-      final ended = page.length < MedicineRepository.pageSize || page.length >= 200;
       if (_onlyBuyable) {
         RenderLog.write('c112_browse_page_loaded',
             'category=${widget.category};page_offset=0;rows_returned=${page.length};loadedCount=${page.length}');
@@ -439,9 +455,15 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
           ..addAll(page);
         _showingLabel = pageResult.showingLabel;
         _emptyLabel = pageResult.emptyLabel;
+        _moreLabel = pageResult.moreLabel ?? '';
+        _endLabel = pageResult.endLabel ?? '';
         _loadingFirst = false;
-        _reachedEnd = page.length < MedicineRepository.pageSize;
-        _feedEnded = ended;
+        // #677 — end-of-feed is the backend's word, not a short page. A
+        // fallback response carries no plan, and then hasMore is false only
+        // because the envelope said nothing, which is the honest answer.
+        _hasMore = pageResult.hasMore;
+        _nextOffset = pageResult.nextOffset ?? page.length;
+        _moreLimit = pageResult.moreLimit;
       });
       // After results arrive for a real search query, scroll to the grid.
       if (widget.query.trim().length >= 2) {
@@ -469,15 +491,11 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   }
 
   Future<void> _loadMore() async {
-    if (_loadingFirst || _loadingMore || _reachedEnd || _feedEnded) return;
-    // Hard cap: never request past 200 items.
-    if (_items.length >= 200) {
-      RenderLog.write('c112_browse_cap_200', 'category=${widget.category}');
-      setState(() => _feedEnded = true);
-      return;
-    }
+    // #677 — the ONLY stop condition is the backend's has_more. There is no
+    // client ceiling any more.
+    if (_loadingFirst || _loadingMore || !_hasMore) return;
     final token = _loadToken;
-    final offset = _items.length;
+    final offset = _nextOffset;
     final afterId = _items.isEmpty ? null : _items.last.id;
     RenderLog.write('c195_load_more_batch', 'category=${widget.category};offset=$offset');
     setState(() => _loadingMore = true);
@@ -487,6 +505,9 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         query: widget.query,
         offset: offset,
         afterId: afterId,
+        // The size the BACKEND asked for on the previous page. Null only
+        // before any envelope has arrived, and then it picks its own again.
+        limit: _moreLimit,
         onlyBuyable: _onlyBuyable,
       );
       if (token != _loadToken || !mounted) return;
@@ -495,7 +516,6 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         setState(() => _buyableCategoryTotal = pageResult.exactCount);
       }
       final newCount = _items.length + page.length;
-      final ended = page.length < MedicineRepository.pageSize || newCount >= 200;
       if (_onlyBuyable) {
         RenderLog.write('c112_browse_page_loaded',
             'category=${widget.category};page_offset=$offset;rows_returned=${page.length};loadedCount=$newCount');
@@ -504,9 +524,6 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
           RenderLog.write('c112_no_captcha_on_browse',
               'category=${widget.category};loadedCount=$newCount');
         }
-        if (newCount >= 200) {
-          RenderLog.write('c112_browse_cap_200', 'category=${widget.category}');
-        }
       }
       setState(() {
         _items.addAll(page);
@@ -514,9 +531,12 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         // one the backend actually sent rather than blanking the counter.
         if (pageResult.showingLabel != null) _showingLabel = pageResult.showingLabel;
         if (pageResult.emptyLabel != null) _emptyLabel = pageResult.emptyLabel;
+        if (pageResult.moreLabel != null) _moreLabel = pageResult.moreLabel!;
+        if (pageResult.endLabel != null) _endLabel = pageResult.endLabel!;
         _loadingMore = false;
-        _reachedEnd = page.length < MedicineRepository.pageSize;
-        _feedEnded = ended;
+        _hasMore = pageResult.hasMore;
+        _nextOffset = pageResult.nextOffset ?? (offset + page.length);
+        if (pageResult.moreLimit != null) _moreLimit = pageResult.moreLimit;
       });
     } catch (e) {
       if (token != _loadToken || !mounted) return;
@@ -646,8 +666,9 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
                 category: widget.category,
                 loadingFirst: _loadingFirst,
                 loadingMore: _loadingMore,
-                reachedEnd: _reachedEnd,
-                feedEnded: _feedEnded,
+                hasMore: _hasMore,
+                moreLabel: _moreLabel,
+                endLabel: _endLabel,
                 totalN: _countFor(widget.category),
                 error: _pageError,
                 isNetworkError: _pageNetworkError,
@@ -1243,8 +1264,15 @@ class _ProductsSection extends StatelessWidget {
   final String category;
   final bool loadingFirst;
   final bool loadingMore;
-  final bool reachedEnd;
-  final bool feedEnded;
+
+  /// CHANGE #677 — the BACKEND's has_more. The section no longer works out
+  /// whether a feed has ended by comparing the page it got against a page size
+  /// it holds, and there is no 200 ceiling any more.
+  final bool hasMore;
+
+  /// The button's word and the end-of-feed line, from the same payload.
+  final String moreLabel;
+  final String endLabel;
   final int totalN;
   final Object? error;
   final bool isNetworkError;
@@ -1262,8 +1290,9 @@ class _ProductsSection extends StatelessWidget {
     required this.category,
     required this.loadingFirst,
     required this.loadingMore,
-    required this.reachedEnd,
-    required this.feedEnded,
+    required this.hasMore,
+    required this.moreLabel,
+    required this.endLabel,
     required this.totalN,
     required this.error,
     this.isNetworkError = false,
@@ -1378,53 +1407,23 @@ class _ProductsSection extends StatelessWidget {
       );
     }
 
-    // Browse feed ended (hit 200 cap or small category exhausted).
-    if (!isSearch && feedEnded) {
-      final showHint = totalN > 0 && items.length < totalN;
-      if (showHint) {
-        RenderLog.write('c112_feed_end_hint',
-            'category=$category;loadedCount=${items.length};totalN=$totalN');
-        return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
-          child: Center(
-            child: Text.rich(
-              TextSpan(
-                style: const TextStyle(
-                    fontSize: 13,
-                    color: Brand.inkMuted,
-                    fontStyle: FontStyle.italic),
-                children: [
-                  TextSpan(
-                    text: 'Use search feature',
-                    style: TextStyle(
-                        color: Brand.green,
-                        fontWeight: FontWeight.w600,
-                        fontStyle: FontStyle.normal),
-                  ),
-                  const TextSpan(
-                      text: ' to find products under a seconds'),
-                ],
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ),
-        );
-      } else {
-        RenderLog.write('c112_feed_end_full',
-            'category=$category;loadedCount=${items.length};totalN=$totalN');
-        return const SizedBox(height: 12);
-      }
-    }
-
-    // Search end states.
-    if (isSearch && (reachedEnd || items.length >= 200)) {
-      final msg = items.length >= 200
-          ? '🔍 Try a more specific search for more results'
-          : 'All results shown for "${query.trim()}"';
+    // CHANGE #677 — ONE end state, and it is the backend's.
+    //
+    // What was here: two Dart-authored blocks. Browse printed "Use search
+    // feature to find products under a seconds" — a hint that only existed
+    // because the client stopped the feed at 200 while the category held
+    // thousands. Search printed "🔍 Try a more specific search for more
+    // results" past its own 200. Both caps are gone, so both hints are wrong,
+    // and both strings were business wording written in Dart.
+    if (!hasMore) {
+      RenderLog.write('c677_feed_end',
+          'category=$category;loaded=${items.length};totalN=$totalN');
+      if (endLabel.isEmpty) return const SizedBox(height: 12);
       return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 12),
+        padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
         child: Center(
-          child: Text(msg,
+          child: Text(endLabel,
+              textAlign: TextAlign.center,
               style: const TextStyle(
                   color: Brand.inkMuted,
                   fontSize: 12,
@@ -1433,8 +1432,11 @@ class _ProductsSection extends StatelessWidget {
       );
     }
 
-    // More products available — show Load More button.
-    final label = isSearch ? 'Load More Results' : 'Load More Products';
+    // More to come. The word on the button is the payload's; no label means
+    // no button, because the app has none of its own to fall back on.
+    if (moreLabel.isEmpty) return const SizedBox(height: 12);
+    RenderLog.write('c677_load_more_shown',
+        'category=$category;loaded=${items.length};search=${isSearch ? 1 : 0}');
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 20),
       child: Center(
@@ -1449,7 +1451,7 @@ class _ProductsSection extends StatelessWidget {
             shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(10)),
           ),
-          child: Text(label),
+          child: Text(moreLabel),
         ),
       ),
     );

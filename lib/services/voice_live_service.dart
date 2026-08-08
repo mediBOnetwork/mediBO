@@ -331,7 +331,6 @@ class VoiceLiveController {
 
   final List<Map<String, dynamic>> _words = <Map<String, dynamic>>[];
   int _counter = 0;
-  double _streamBase = 0.0; // sec offset added to a fresh stream's word clock
   double _maxEndSec = 0.0;
 
   VoiceToken? _token;
@@ -349,6 +348,12 @@ class VoiceLiveController {
   bool _started = false;
   bool _stopped = false;
   bool _retriedFallback = false;
+
+  // True only while Stop is draining the stream: Speech is finalising the audio
+  // it still holds, and those last finals must land in _words before the final
+  // commit — they are the words the operator spoke "without the count
+  // reflecting" yet.
+  bool _draining = false;
 
   // Commit bookkeeping. Commits never overlap: a request arriving while one is
   // in flight sets _commitAgain instead, so the ledger is only ever rewritten by
@@ -463,11 +468,20 @@ class VoiceLiveController {
     final s = await openStream(token, fallback: fallback);
     _stream = s;
     if (!_sessionClock.isRunning) _sessionClock.start();
-    _streamBase = _maxEndSec; // keep session-clock seconds monotonic
+    // Each stream carries ITS OWN clock offset, captured here: during a
+    // reconnect the old stream keeps delivering drained finals stamped on the
+    // old base while the new stream is already live on the new one.
+    final base = _maxEndSec; // keep session-clock seconds monotonic
     _eventSub = s.events.listen(
-      _onEvent,
-      onError: _onStreamError,
-      onDone: _onStreamDone,
+      (e) => _onEvent(e, base),
+      // Done/error from a stream that is no longer current (it is being
+      // drained by a reconnect) must not tear down or reconnect the live one.
+      onError: (Object err, StackTrace st) {
+        if (identical(s, _stream)) _onStreamError(err, st);
+      },
+      onDone: () {
+        if (identical(s, _stream)) _onStreamDone();
+      },
       cancelOnError: false,
     );
     _reconnectTimer?.cancel();
@@ -476,17 +490,19 @@ class VoiceLiveController {
         _doReconnect);
   }
 
-  void _onEvent(SpeechEvent e) {
-    if (_stopped) return;
+  void _onEvent(SpeechEvent e, double base) {
+    // While Stop drains the stream, the finals Speech flushes for its buffered
+    // audio still count — dropping them here loses the last thing spoken.
+    if (_stopped && !_draining) return;
     if (!e.isFinal) {
-      onCaption?.call(e.transcript);
+      if (!_stopped) onCaption?.call(e.transcript);
       return;
     }
     var appended = false;
     if (e.words.isNotEmpty) {
       for (final w in e.words) {
-        final s = _streamBase + w.startSec;
-        final en = _streamBase + w.endSec;
+        final s = base + w.startSec;
+        final en = base + w.endSec;
         if (en > _maxEndSec) _maxEndSec = en;
         _words.add({
           'i': ++_counter,
@@ -505,10 +521,11 @@ class VoiceLiveController {
         appended = true;
       }
     }
-    if (appended) {
+    if (appended && !_stopped) {
       // Repaint immediately from the preview so the number moves while the
       // operator is still talking, and schedule the commit that will replace it
-      // with the persisted truth.
+      // with the persisted truth. (Drained words during Stop skip this — the
+      // final commit right after the drain sends the whole list anyway.)
       _runPreview();
       _scheduleCommit();
     }
@@ -652,12 +669,27 @@ class VoiceLiveController {
   Future<void> _doReconnect() async {
     if (_stopped) return;
     final old = _stream;
-    await _eventSub?.cancel();
-    _eventSub = null;
-    await _openStream(fallback: _retriedFallback);
+    final oldSub = _eventSub;
+    try {
+      await _openStream(fallback: _retriedFallback);
+    } catch (e) {
+      // The replacement stream would not open. Keep the OLD one running — it
+      // still counts until Google closes it, and _onStreamDone retries then.
+      _drops++;
+      if (_drops >= 2) {
+        _announceFallback(
+            e is SpeechStreamException ? e.message : e.toString());
+      }
+      return;
+    }
+    // Drain, don't discard: close() half-closes the request stream, which makes
+    // Speech finalise every buffered utterance. oldSub is still listening, so
+    // those finals land in _words — before this change they were silently lost
+    // on every reconnect.
     try {
       await old?.close();
     } catch (_) {}
+    await oldSub?.cancel();
   }
 
   /// Stops the stream + mic and commits the session ONCE via the tab's commit
@@ -674,11 +706,17 @@ class VoiceLiveController {
     try {
       await mic.stop();
     } catch (_) {}
-    await _eventSub?.cancel();
-    _eventSub = null;
+    // Drain BEFORE dropping the listener: the operator's last words are often
+    // still buffered in Speech (fast talkers outrun endpointing). close()
+    // half-closes, Speech flushes the remaining finals, and _onEvent — kept
+    // alive by _draining — appends them so the final commit counts them.
+    _draining = true;
     try {
       await _stream?.close();
     } catch (_) {}
+    _draining = false;
+    await _eventSub?.cancel();
+    _eventSub = null;
     _stream = null;
 
     // Flush the last review window BEFORE the final commit: commit runs

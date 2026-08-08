@@ -68,9 +68,26 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
   BackInStock _backInStock = BackInStock.empty;
   bool _seenSent = false;
 
+  /// CHANGE #677 — the infinite tail.
+  ///
+  /// The last section is the one the backend marked `infinite`, and it is the
+  /// reason the storefront never dead-ends: as the page nears its bottom the
+  /// app asks for the next page and appends it. It asks the BACKEND whether
+  /// there is more (`canPageMore`) — it never concludes a feed has ended by
+  /// counting what it holds.
+  final ScrollController _scroll = ScrollController();
+  bool _paging = false;
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
   @override
   void initState() {
     super.initState();
+    _scroll.addListener(_onScroll);
     final memo = HomeSectionsView._memo;
     if (memo != null) {
       _data = memo;
@@ -120,6 +137,51 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
     _reportSeen();
   }
 
+  /// Fires the next page when the bottom is within one screen. The threshold
+  /// is geometry, not policy: it only decides WHEN to ask, never whether more
+  /// exists.
+  void _onScroll() {
+    if (!_scroll.hasClients) return;
+    final pos = _scroll.position;
+    if (pos.pixels < pos.maxScrollExtent - 900) return;
+    unawaited(_pageTail());
+  }
+
+  /// Appends one page to the section the backend marked infinite.
+  Future<void> _pageTail() async {
+    if (_paging) return;
+    final d = _data;
+    if (d == null || !d.ok) return;
+
+    final i = d.sections.lastIndexWhere((s) => s.canPageMore);
+    if (i < 0) return;
+
+    _paging = true;
+    final section = d.sections[i];
+    try {
+      final more = await MedicineRepository().fetchHomeMore(
+        section.feedKey,
+        offset: section.nextOffset,
+        limit: section.pageSize,
+      );
+      if (!mounted || more.items.isEmpty) return;
+      final next = List<HomeSection>.of(d.sections);
+      next[i] = section.appending(more.items, more.nextOffset);
+      final grown = HomeSections(
+        ok: true,
+        sections: next,
+        header: d.header,
+        hero: d.hero,
+      );
+      // The memo grows with it, so coming back from a product page lands on the
+      // same feed the user had scrolled, not a reset one.
+      HomeSectionsView._memo = grown;
+      setState(() => _data = grown);
+    } finally {
+      _paging = false;
+    }
+  }
+
   /// The strip has been built, so it has been seen. Fire-and-forget: the ids
   /// go back exactly as the backend sent them, and a failure is silent because
   /// the user has already been shown the products.
@@ -163,6 +225,7 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
       onRefresh: () => _load(),
       child: ListView.builder(
         key: const PageStorageKey('home-sections'),
+        controller: _scroll,
         // AlwaysScrollable so the pull gesture works even on a short feed.
         physics: const AlwaysScrollableScrollPhysics(
             parent: BouncingScrollPhysics()),
@@ -345,6 +408,15 @@ class _SectionBlock extends StatelessWidget {
           SectionHeader(section: section),
           const SizedBox(height: 16),
           switch (section.layout) {
+            // CHANGE #677 — a vertical grid. The feed was every-section-a-rail,
+            // which meant everything sideways and nothing you could sit and
+            // browse. Rail vs grid is now a column in `storefront_home_section`,
+            // so re-shaping the page is an UPDATE.
+            HomeSectionLayout.grid => _ProductGrid(
+                section: section,
+                accent: accent,
+                onCategoryTap: onCategoryTap,
+              ),
             HomeSectionLayout.rail => _Rail(
                 section: section,
                 accent: accent,
@@ -601,6 +673,135 @@ class _Rail extends StatelessWidget {
         onCategoryTap(s.key);
     }
   }
+}
+
+// ── grid ─────────────────────────────────────────────────────────────────────
+
+/// CHANGE #677 — a section rendered as a vertical grid instead of a rail.
+///
+/// It scrolls with the page, so it is where the 100-per-category sections and
+/// the never-ending All Products tail live. It measures nothing and decides
+/// nothing: the item count is whatever the payload holds, and the column count
+/// is the only thing chosen here — from the available width, because that is
+/// geometry, not business.
+class _ProductGrid extends StatelessWidget {
+  final HomeSection section;
+  final Color accent;
+  final ValueChanged<String> onCategoryTap;
+
+  const _ProductGrid({
+    required this.section,
+    required this.accent,
+    required this.onCategoryTap,
+  });
+
+  /// The card is 156 wide in the rail; the grid gives it the same room. Two up
+  /// on a phone, more as the window grows — never a hardcoded pixel width.
+  static int columnsFor(double width) {
+    final n = ((width - 32 + 12) / (168.0)).floor();
+    return n.clamp(2, 6);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final seeAll = section.seeAll;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: LayoutBuilder(
+            builder: (context, c) => GridView.builder(
+              shrinkWrap: true,
+              // The page is the scrollable. A grid with its own scroll inside a
+              // list is the thing that makes a feed feel broken on mobile.
+              physics: const NeverScrollableScrollPhysics(),
+              padding: EdgeInsets.zero,
+              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: columnsFor(c.maxWidth),
+                mainAxisExtent: CompactProductCard.extent,
+                crossAxisSpacing: 12,
+                mainAxisSpacing: 12,
+              ),
+              itemCount: section.cards.length,
+              itemBuilder: (context, i) {
+                final p = section.cards[i];
+                return CompactProductCard(
+                  product: p,
+                  onTap: () =>
+                      Navigator.of(context).pushNamed('/product/${p.id}'),
+                );
+              },
+            ),
+          ),
+        ),
+        // A grid's See-all cannot be the last card in a row — it would land in
+        // an arbitrary column. It is a full-width button under the grid.
+        if (seeAll != null && section.seeAllLabel.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: _SeeAllBar(
+              label: section.seeAllLabel,
+              accent: accent,
+              onTap: () {
+                // Same mapping the rail uses: the backend names the
+                // destination type, the app maps it to navigation it has.
+                switch (seeAll.type) {
+                  case 'category':
+                  case 'search':
+                    onCategoryTap(seeAll.key);
+                }
+              },
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// The grid's See-all: a full-width outlined bar. Same backend word as the
+/// rail's pill, different shape because a grid has no "one more card" slot.
+class _SeeAllBar extends StatelessWidget {
+  final String label;
+  final Color accent;
+  final VoidCallback onTap;
+  const _SeeAllBar({
+    required this.label,
+    required this.accent,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) => Material(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(Rad.pill),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(Rad.pill),
+          onTap: onTap,
+          child: Ink(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(Rad.pill),
+              border: Border.all(color: accent.withValues(alpha: 0.45)),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 13),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(label,
+                      style: AppType.l4.copyWith(
+                          color: accent, fontWeight: FontWeight.w700)),
+                  const SizedBox(width: 6),
+                  Icon(Icons.arrow_forward_rounded, size: 16, color: accent),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
 }
 
 /// The last item of a rail: a full-height card-shaped target, not a small pill

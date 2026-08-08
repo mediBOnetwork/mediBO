@@ -33,12 +33,33 @@ class CatalogMeta {
 /// `storefront_page` / `storefront_search_page`. Print them verbatim; never
 /// rebuild a counter from the client's own list length (that was the old
 /// "Showing 0 of 32133" bug). Both are null on the outage fallback paths.
+///
+/// CHANGE #677 — the last four fields are the backend's PAGING PLAN. The app
+/// used to hold three numbers of its own: a page size of 20, a "stop at 200"
+/// ceiling, and "the page came back short so the feed must have ended". All
+/// three were the frontend answering a question the backend owns, and the 200
+/// was why a 3,068-product category dead-ended at 200. Now: [initialLimit] is
+/// how many the first request asks for, [moreLimit] how many each Load more
+/// adds, [nextOffset] where the next request starts, and [hasMore] whether
+/// there is anything left. Changing 250/100 is an `app_settings` UPDATE.
+///
+/// They are null/false only on the outage fallback paths, which carry no
+/// envelope at all.
 typedef FetchPageResult = ({
   List<Product> items,
   int? exactCount,
   String? showingLabel,
   String? emptyLabel,
   bool gated,
+  int? initialLimit,
+  int? moreLimit,
+  int? nextOffset,
+  bool hasMore,
+  // #677 — the Load-more button's word and the end-of-feed line. Both were
+  // Dart literals ('Load More Products', 'Use search feature to find products
+  // under a seconds'); rewording them is now an UPDATE.
+  String? moreLabel,
+  String? endLabel,
 });
 
 /// CHANGE #553 — one product plus the backend's availability verdict, as
@@ -337,6 +358,15 @@ class MedicineRepository {
       showingLabel: env['showing_label']?.toString(),
       emptyLabel: env['empty_label']?.toString(),
       gated: env['gated'] == true,
+      // #677 — absent on `storefront_search_page`, which is unpaged by design
+      // (search shows everything it matched). Null means "the backend sent no
+      // plan", never "use 20".
+      initialLimit: (env['initial_limit'] as num?)?.toInt(),
+      moreLimit: (env['more_limit'] as num?)?.toInt(),
+      nextOffset: (env['next_offset'] as num?)?.toInt(),
+      hasMore: env['has_more'] == true,
+      moreLabel: env['more_label']?.toString(),
+      endLabel: env['end_label']?.toString(),
     );
   }
 
@@ -455,13 +485,61 @@ class MedicineRepository {
   ///
   /// A throw or a non-Map response becomes [HomeSections.failed] so the screen
   /// can show its quiet retry block instead of a blank page.
-  Future<HomeSections> fetchHomeSections({int items = 12}) async {
+  ///
+  /// CHANGE #677 — [items] is null by default and null means "backend, use the
+  /// count each section carries in `storefront_home_section`". The old
+  /// `items = 12` was a client-side ceiling that silently capped every section
+  /// at 12 cards no matter what the config said. It stays as a parameter only
+  /// so a future slow-connection path can ask for LESS; it can never ask for
+  /// more than the config allows.
+  Future<HomeSections> fetchHomeSections({int? items}) async {
     try {
       final res = await _rpc('storefront_home_v2', params: {'p_items': items});
       if (res is! Map) return HomeSections.failed;
       return HomeSections.fromMap(Map<String, dynamic>.from(res));
     } catch (_) {
       return HomeSections.failed;
+    }
+  }
+
+  /// CHANGE #677 — one more page of a home-feed section.
+  ///
+  /// `storefront_home_more()` returns cards in the SAME shape
+  /// `storefront_home_v2()` sends, so an appended page is parsed by the same
+  /// [Product.fromHomeCard] the first page went through. A second shape would
+  /// mean a second parser and two places for one card to disagree with itself.
+  /// [nextOffset] and [hasMore] are the backend's; the app never decides a feed
+  /// has ended.
+  ///
+  /// Returns an empty page with hasMore:false on any failure, so a dead call
+  /// stops the tail quietly instead of throwing under the user's scroll.
+  Future<({List<Product> items, int nextOffset, bool hasMore})> fetchHomeMore(
+    String key, {
+    required int offset,
+    int? limit,
+  }) async {
+    try {
+      final res = await _rpc('storefront_home_more', params: {
+        'p_key': key,
+        'p_offset': offset,
+        'p_limit': limit,
+      });
+      if (res is! Map) {
+        return (items: <Product>[], nextOffset: offset, hasMore: false);
+      }
+      final env = Map<String, dynamic>.from(res);
+      final items = ((env['items'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((r) => Product.fromHomeCard(Map<String, dynamic>.from(r)))
+          .toList(growable: false);
+      return (
+        items: items,
+        nextOffset:
+            (env['next_offset'] as num?)?.toInt() ?? offset + items.length,
+        hasMore: env['has_more'] == true,
+      );
+    } catch (_) {
+      return (items: <Product>[], nextOffset: offset, hasMore: false);
     }
   }
 
@@ -507,12 +585,19 @@ class MedicineRepository {
   /// [afterId] is the `id` of the last row from the previous page (null for
   /// the first page) — only consulted by the keyset fallback above; the
   /// primary RPCs keep paging via [offset].
+  ///
+  /// CHANGE #677 — [limit] is now NULLABLE on the browse path, and null is the
+  /// normal case: it means "backend, use your own plan". `storefront_page`
+  /// resolves it to `app_settings.storefront_initial_limit`. The caller passes
+  /// a number only when echoing back the `more_limit` the backend itself sent
+  /// on the previous page. The old `limit = pageSize` default was the client
+  /// holding a page size, which is a backend decision.
   Future<FetchPageResult> fetchPage({
     String category = 'All',
     String query = '',
     required int offset,
     String? afterId,
-    int limit = pageSize,
+    int? limit,
     bool onlyBuyable = false,
   }) async {
     // Strip characters that break PostgREST's or()/ilike syntax.
@@ -523,9 +608,13 @@ class MedicineRepository {
     // per-viewer (approved customers see real availability, everyone else sees
     // a full shop), so a cached page must never leak across a login/logout.
     final viewer = _client.auth.currentUser?.id ?? 'anon';
+    // #677 — the limit is part of the key. Two requests for the same offset
+    // with different page sizes are different pages, and merging them was how
+    // a 250-row first page could be served a cached 20-row one.
+    final lim = limit?.toString() ?? 'plan';
     final cacheKey = onlyBuyable && term.isEmpty
-        ? '$viewer|${term.toLowerCase()}|$category|$offset|buyable'
-        : '$viewer|${term.toLowerCase()}|$category|$offset';
+        ? '$viewer|${term.toLowerCase()}|$category|$offset|$lim|buyable'
+        : '$viewer|${term.toLowerCase()}|$category|$offset|$lim';
     final cached = _resultCache[cacheKey];
     if (cached != null) {
       lastCallWasCacheHit = true;
@@ -542,6 +631,7 @@ class MedicineRepository {
           'search_term': term,
           'category_filter': category,
           'page_offset': offset,
+          // #677 — null lets storefront_search_page use its own plan too.
           'page_limit': limit,
         });
         result = _parseEnvelope(env);
@@ -551,7 +641,7 @@ class MedicineRepository {
         final items = await _fetchKeysetFallback(
           category: category,
           afterId: afterId,
-          limit: limit,
+          limit: limit ?? pageSize,
           search: term,
         );
         result = (
@@ -560,6 +650,14 @@ class MedicineRepository {
           showingLabel: null,
           emptyLabel: null,
           gated: false,
+          // Outage path: no envelope, so no plan. The caller keeps whatever
+          // plan it already had rather than inventing one here.
+          initialLimit: null,
+          moreLimit: null,
+          nextOffset: null,
+          hasMore: items.isNotEmpty,
+          moreLabel: null,
+          endLabel: null,
         );
       }
       _cacheSet(_resultCache, cacheKey, result);
@@ -575,6 +673,9 @@ class MedicineRepository {
         final env = await _rpc('storefront_page', params: {
           'category_filter': category,
           'page_offset': offset,
+          // #677 — null on purpose. The backend picks the size from
+          // app_settings; this is the one call site that must NOT substitute
+          // a client default.
           'page_limit': limit,
         });
         final result = _parseEnvelope(env);
@@ -587,7 +688,7 @@ class MedicineRepository {
         final items = await _fetchKeysetFallback(
           category: category,
           afterId: afterId,
-          limit: limit,
+          limit: limit ?? pageSize,
           buyable: true,
         );
         final result = (
@@ -596,6 +697,14 @@ class MedicineRepository {
           showingLabel: null,
           emptyLabel: null,
           gated: false,
+          // Outage path: no envelope, so no plan. The caller keeps whatever
+          // plan it already had rather than inventing one here.
+          initialLimit: null,
+          moreLimit: null,
+          nextOffset: null,
+          hasMore: items.isNotEmpty,
+          moreLabel: null,
+          endLabel: null,
         );
         _cacheSet(_resultCache, cacheKey, result);
         return result;
@@ -608,7 +717,7 @@ class MedicineRepository {
       final rows = await _rpc('fetch_medicines_by_category_priority', params: {
         'category_name': category,
         'page_offset': offset,
-        'page_limit': limit,
+        'page_limit': limit ?? pageSize,
       });
       items = (rows as List)
           .map((r) => Product.fromMap(r as Map<String, dynamic>))
@@ -617,7 +726,7 @@ class MedicineRepository {
       items = await _fetchKeysetFallback(
         category: category,
         afterId: afterId,
-        limit: limit,
+        limit: limit ?? pageSize,
         buyable: false,
       );
     }
@@ -627,6 +736,12 @@ class MedicineRepository {
       showingLabel: null,
       emptyLabel: null,
       gated: false,
+      initialLimit: null,
+      moreLimit: null,
+      nextOffset: null,
+      hasMore: items.isNotEmpty,
+      moreLabel: null,
+      endLabel: null,
     );
     _cacheSet(_resultCache, cacheKey, result);
     return result;

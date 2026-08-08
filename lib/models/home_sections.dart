@@ -13,12 +13,17 @@ import 'product.dart';
 /// renderer cannot accidentally half-render it. Same for a section that
 /// arrives with no items. Both are silent — a future backend can ship a new
 /// layout to old clients safely.
-enum HomeSectionLayout { rail, iconGrid, brandGrid, unknown }
+enum HomeSectionLayout { rail, grid, iconGrid, brandGrid, unknown }
 
 HomeSectionLayout _layoutOf(String raw) {
   switch (raw) {
     case 'rail':
       return HomeSectionLayout.rail;
+    // CHANGE #677 — a product section that scrolls with the page instead of
+    // sideways. Which sections are rails and which are grids is a row in
+    // `storefront_home_section`; this build only knows how to paint both.
+    case 'grid':
+      return HomeSectionLayout.grid;
     case 'icon_grid':
       return HomeSectionLayout.iconGrid;
     case 'brand_grid':
@@ -26,6 +31,18 @@ HomeSectionLayout _layoutOf(String raw) {
     default:
       return HomeSectionLayout.unknown;
   }
+}
+
+/// True for the layouts whose items are products rather than tiles.
+bool _isProductLayout(HomeSectionLayout l) =>
+    l == HomeSectionLayout.rail || l == HomeSectionLayout.grid;
+
+/// PostgREST sends jsonb numbers as int or double depending on the value, and
+/// a `total` that arrives as "3068" must not become 0.
+int _asInt(Object? raw) {
+  if (raw is int) return raw;
+  if (raw is num) return raw.toInt();
+  return int.tryParse(raw?.toString() ?? '') ?? 0;
 }
 
 /// Where a section's "See all" goes. Absent when the backend sent none — the
@@ -190,11 +207,23 @@ class HomeSection {
   /// render no label; the app no longer holds a hardcoded 'See all'.
   final String seeAllLabel;
 
-  /// Populated for [HomeSectionLayout.rail]; empty otherwise.
+  /// Populated for the product layouts (rail, grid); empty otherwise.
   final List<Product> cards;
 
-  /// Populated for the grid layouts; empty otherwise.
+  /// Populated for the tile layouts (icon_grid, brand_grid); empty otherwise.
   final List<HomeTile> tiles;
+
+  /// CHANGE #677 — the backend's paging plan for this section.
+  ///
+  /// [infinite] is the backend saying "keep going" — the app must never decide
+  /// a feed has ended by counting rows, which is exactly the bug that capped
+  /// browsing at 200. [nextOffset] is where the next request starts and
+  /// [pageSize] how many to ask for. [total] is how many exist, so the app can
+  /// stop when it has them all without inventing a ceiling.
+  final bool infinite;
+  final int nextOffset;
+  final int pageSize;
+  final int total;
 
   const HomeSection({
     required this.id,
@@ -208,7 +237,40 @@ class HomeSection {
     this.band = '',
     this.accent = '',
     this.seeAllLabel = '',
+    this.infinite = false,
+    this.nextOffset = 0,
+    this.pageSize = 0,
+    this.total = 0,
   });
+
+  /// The category this section pages from, per the backend's own See-all
+  /// destination. Empty when the backend gave none — and then it cannot page.
+  String get feedKey => seeAll?.key ?? '';
+
+  /// Whether the app may ask for more. Backend-decided on both counts.
+  bool get canPageMore =>
+      infinite && feedKey.isNotEmpty && pageSize > 0 && cards.length < total;
+
+  /// Appends a page the backend just returned. [next] is the backend's own
+  /// next_offset — never `cards.length`, which would drift if the feed changed
+  /// between requests.
+  HomeSection appending(List<Product> more, int next) => HomeSection(
+        id: id,
+        layout: layout,
+        title: title,
+        accentWord: accentWord,
+        subtitle: subtitle,
+        seeAll: seeAll,
+        cards: [...cards, ...more],
+        tiles: tiles,
+        band: band,
+        accent: accent,
+        seeAllLabel: seeAllLabel,
+        infinite: infinite,
+        nextOffset: next,
+        pageSize: pageSize,
+        total: total,
+      );
 
   bool get isEmpty => cards.isEmpty && tiles.isEmpty;
 
@@ -242,10 +304,11 @@ class HomeSection {
         .toList(growable: false);
     if (maps.isEmpty) return null;
 
-    final cards = layout == HomeSectionLayout.rail
+    final isProduct = _isProductLayout(layout);
+    final cards = isProduct
         ? maps.map(Product.fromHomeCard).toList(growable: false)
         : const <Product>[];
-    final tiles = layout == HomeSectionLayout.rail
+    final tiles = isProduct
         ? const <HomeTile>[]
         : maps.map(HomeTile.fromMap).toList(growable: false);
 
@@ -261,6 +324,10 @@ class HomeSection {
       band: m['band']?.toString() ?? '',
       accent: m['accent']?.toString() ?? '',
       seeAllLabel: m['see_all_label']?.toString() ?? '',
+      infinite: m['infinite'] == true,
+      nextOffset: _asInt(m['next_offset']),
+      pageSize: _asInt(m['page_size']),
+      total: _asInt(m['total']),
     );
     return section.isEmpty ? null : section;
   }

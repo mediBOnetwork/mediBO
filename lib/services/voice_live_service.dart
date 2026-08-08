@@ -18,6 +18,7 @@ import 'package:flutter/foundation.dart' show TargetPlatform;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'voice_live_types.dart';
+import 'voice_review_recorder.dart';
 import 'speech_native.dart' as native;
 
 export 'voice_live_types.dart';
@@ -37,8 +38,23 @@ typedef RpcCaller = Future<dynamic> Function(
 typedef FnCaller = Future<Map<String, dynamic>> Function(
     String fn, Map<String, dynamic> body);
 
+/// Puts one review-audio window in storage. Injectable so tests never upload.
+typedef StorageUploader = Future<void> Function(
+    String bucket, String path, Uint8List bytes, String contentType);
+
 Future<dynamic> _defaultRpc(String fn, Map<String, dynamic> params) =>
     Supabase.instance.client.rpc(fn, params: params);
+
+Future<void> _defaultUpload(
+    String bucket, String path, Uint8List bytes, String contentType) async {
+  // upsert: a reconnect or a retry rewrites the same window key rather than
+  // failing — the backend owns the key, so a repeat is the SAME window.
+  await Supabase.instance.client.storage.from(bucket).uploadBinary(
+        path,
+        bytes,
+        fileOptions: FileOptions(contentType: contentType, upsert: true),
+      );
+}
 
 Future<Map<String, dynamic>> _defaultFn(
     String fn, Map<String, dynamic> body) async {
@@ -77,17 +93,65 @@ abstract class VoiceLiveBackend {
   /// Records that everything spoken from [atSec] onwards belongs to [bagNo].
   /// No-op where [supportsBags] is false.
   Future<void> mapBagBoundary(String sessionKey, int bagNo, double atSec);
+
+  /// Where one review-audio window's bytes belong. The backend owns the bucket
+  /// AND the object key — the app never composes a storage path.
+  /// Returns `{ok, bucket, path, content_type, message}`.
+  Future<Map<String, dynamic>> clipTarget(String sessionKey, int seq);
+
+  /// Uploads that window.
+  Future<void> uploadClip(
+      String bucket, String path, Uint8List bytes, String contentType);
+
+  /// Tells the backend the window landed, so it binds the clip to every mention
+  /// whose word offset falls inside [tStart, tEnd).
+  Future<void> attachClip(
+      String sessionKey, int seq, String path, double tStart, double tEnd);
+}
+
+/// The review-audio half of the contract — identical for supplier and pack, so it
+/// lives once. Only [stage] differs, and the backend reads that.
+mixin VoiceClipStorage {
+  RpcCaller get rpc;
+  StorageUploader get storage;
+  String get stage;
+
+  Future<Map<String, dynamic>> clipTarget(String sessionKey, int seq) async =>
+      _asMap(await rpc('voice_live_clip_target', {
+        'p_session_key': sessionKey,
+        'p_seq': seq,
+        'p_stage': stage,
+      }));
+
+  Future<void> uploadClip(String bucket, String path, Uint8List bytes,
+          String contentType) =>
+      storage(bucket, path, bytes, contentType);
+
+  Future<void> attachClip(String sessionKey, int seq, String path,
+      double tStart, double tEnd) async {
+    await rpc('voice_live_attach_clip', {
+      'p_session_key': sessionKey,
+      'p_seq': seq,
+      'p_clip_path': path,
+      'p_t_start': tStart,
+      'p_t_end': tEnd,
+      'p_stage': stage,
+    });
+  }
 }
 
 /// Shop / Warehouse: count against a SUPPLIER's open items.
-class SupplierVoiceBackend implements VoiceLiveBackend {
+class SupplierVoiceBackend with VoiceClipStorage implements VoiceLiveBackend {
   @override
   final String tokenSupplier;
   @override
   final String stage; // 'shop' | 'warehouse'
   final String? date; // 'YYYY-MM-DD' — the admin's active date
+  @override
   final RpcCaller rpc;
   final FnCaller fn;
+  @override
+  final StorageUploader storage;
 
   SupplierVoiceBackend({
     required String supplier,
@@ -95,9 +159,11 @@ class SupplierVoiceBackend implements VoiceLiveBackend {
     this.date,
     RpcCaller? rpc,
     FnCaller? fn,
+    StorageUploader? storage,
   })  : tokenSupplier = supplier,
         rpc = rpc ?? _defaultRpc,
-        fn = fn ?? _defaultFn;
+        fn = fn ?? _defaultFn,
+        storage = storage ?? _defaultUpload;
 
   /// Only the warehouse packs into bags; the shop counts loose stock.
   @override
@@ -137,20 +203,25 @@ class SupplierVoiceBackend implements VoiceLiveBackend {
 }
 
 /// Pack: count against ONE CUSTOMER ORDER. Writes through pack_set_counted.
-class PackVoiceBackend implements VoiceLiveBackend {
+class PackVoiceBackend with VoiceClipStorage implements VoiceLiveBackend {
   final String orderId;
   @override
   final String tokenSupplier;
+  @override
   final RpcCaller rpc;
   final FnCaller fn;
+  @override
+  final StorageUploader storage;
 
   PackVoiceBackend({
     required this.orderId,
     required this.tokenSupplier,
     RpcCaller? rpc,
     FnCaller? fn,
+    StorageUploader? storage,
   })  : rpc = rpc ?? _defaultRpc,
-        fn = fn ?? _defaultFn;
+        fn = fn ?? _defaultFn,
+        storage = storage ?? _defaultUpload;
 
   @override
   String get stage => 'pack';
@@ -265,6 +336,10 @@ class VoiceLiveController {
 
   VoiceToken? _token;
   SpeechStream? _stream;
+
+  /// Keeps a playable copy of the session for the review screen. Built from the
+  /// token's review_audio block, so the backend decides whether it runs at all.
+  VoiceReviewRecorder? _review;
   StreamSubscription<SpeechEvent>? _eventSub;
   StreamSubscription<Uint8List>? _micSub;
   Timer? _commitTimer;
@@ -326,13 +401,33 @@ class VoiceLiveController {
     _started = true;
     if (token.readyLabel.isNotEmpty) onReady?.call(token.readyLabel);
 
+    // The live path streams PCM straight to Speech, so the mic frames are the
+    // ONLY copy of the audio. Tee them into the review recorder or there is
+    // nothing to play back afterwards.
+    if (token.reviewAudio.usable) {
+      _review = VoiceReviewRecorder(
+        cfg: token.reviewAudio,
+        sourceSampleRate: token.sampleRate,
+        nowSec: () => elapsedSec,
+        resolveTarget: (seq) => backend.clipTarget(sessionKey, seq),
+        upload: backend.uploadClip,
+        attach: (seq, path, from, to) =>
+            backend.attachClip(sessionKey, seq, path, from, to),
+        onProblem: (m) => onError?.call(m),
+      );
+    }
+
     try {
       // Mic first — a denied permission must not leave a dangling stream. A mic
       // failure is NOT a streaming problem: the clip recorder needs the very same
       // permission, so it is surfaced to the caller rather than falled back on.
       final micStream = await mic.start(sampleRate: token.sampleRate);
       _micSub = micStream.listen(
-        (frame) => _stream?.addAudio(frame),
+        (frame) {
+          _stream?.addAudio(frame);
+          // Counting comes first; a review-audio fault never costs a count.
+          _review?.addFrame(frame);
+        },
         onError: (_) {},
         cancelOnError: false,
       );
@@ -586,6 +681,14 @@ class VoiceLiveController {
     } catch (_) {}
     _stream = null;
 
+    // Flush the last review window BEFORE the final commit: commit runs
+    // voice_live_bind_clips, so a clip attached first is bound to the mentions
+    // the very same call creates.
+    try {
+      await _review?.stop();
+    } catch (_) {}
+    _review = null;
+
     if (!_started) return null;
     // Always commit on Stop, even if a debounced commit already sent the same
     // words: the RPC replaces the session's rows, so a repeat cannot double the
@@ -598,6 +701,9 @@ class VoiceLiveController {
   Future<void> cancel() async {
     if (_stopped) return;
     _stopped = true;
+    // Nothing is committed, so nothing needs the audio — drop it without
+    // uploading rather than paying for bytes no mention will ever point at.
+    _review = null;
     _commitTimer?.cancel();
     _ceilingTimer?.cancel();
     _reconnectTimer?.cancel();

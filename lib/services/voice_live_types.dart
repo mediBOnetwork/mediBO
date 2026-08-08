@@ -127,6 +127,41 @@ abstract class MicSource {
   Future<void> stop();
 }
 
+/// How the backend wants the review copy of the audio recorded. The live path
+/// streams PCM straight to Speech, so that stream is the ONLY copy of what was
+/// said — without this there is nothing to play back on the review screen.
+///
+/// Every value is the backend's: the app never picks a rate, a window length or a
+/// bucket, so tuning them is an UPDATE rather than a deploy.
+class VoiceReviewAudio {
+  final bool enabled;
+  final String bucket;
+  final int sampleRate;
+  final int windowSec;
+  final String failedLabel;
+
+  const VoiceReviewAudio({
+    this.enabled = false,
+    this.bucket = '',
+    this.sampleRate = 0,
+    this.windowSec = 0,
+    this.failedLabel = '',
+  });
+
+  factory VoiceReviewAudio.fromMap(Map<String, dynamic> m) => VoiceReviewAudio(
+        enabled: m['enabled'] == true,
+        bucket: (m['bucket'] ?? '').toString(),
+        sampleRate: (m['sample_rate'] as num?)?.toInt() ?? 0,
+        windowSec: (m['window_sec'] as num?)?.toInt() ?? 0,
+        failedLabel: (m['failed_label'] ?? '').toString(),
+      );
+
+  /// Recording is only attempted when the backend gave a usable configuration.
+  /// A missing rate or bucket means "do not record" — never a guessed default.
+  bool get usable =>
+      enabled && bucket.isNotEmpty && sampleRate > 0 && windowSec > 0;
+}
+
 /// The voice-token edge-function payload. Memory-only — never persisted or logged.
 class VoiceToken {
   final String accessToken;
@@ -142,6 +177,7 @@ class VoiceToken {
   final List<Map<String, dynamic>> phrases; // [{value, boost}]
   final int reconnectAfterSec;
   final String readyLabel;
+  final VoiceReviewAudio reviewAudio;
   final VoiceTokenFallback fallback;
 
   const VoiceToken({
@@ -157,6 +193,7 @@ class VoiceToken {
     required this.reconnectAfterSec,
     required this.readyLabel,
     required this.fallback,
+    this.reviewAudio = const VoiceReviewAudio(),
   });
 
   factory VoiceToken.fromMap(Map<String, dynamic> m) {
@@ -182,6 +219,10 @@ class VoiceToken {
           .toList(),
       reconnectAfterSec: (m['reconnect_after_sec'] as num?)?.toInt() ?? 270,
       readyLabel: (m['ready_label'] ?? '').toString(),
+      reviewAudio: VoiceReviewAudio.fromMap(
+          m['review_audio'] is Map
+              ? Map<String, dynamic>.from(m['review_audio'] as Map)
+              : const <String, dynamic>{}),
       fallback: VoiceTokenFallback(
         location: (fb['location'] ?? 'us-central1').toString(),
         endpoint:

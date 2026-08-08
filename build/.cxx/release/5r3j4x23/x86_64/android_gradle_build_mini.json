@@ -1,0 +1,20 @@
+{
+  "buildFiles": [
+    "/home/mimbonetwork/flutter/packages/flutter_tools/gradle/src/main/scripts/CMakeLists.txt"
+  ],
+  "cleanCommandsComponents": [
+    [
+      "/home/mimbonetwork/Android/Sdk/cmake/3.22.1/bin/ninja",
+      "-C",
+      "/home/mimbonetwork/mediBO/build/.cxx/release/5r3j4x23/x86_64",
+      "clean"
+    ]
+  ],
+  "buildTargetsCommandComponents": [
+    "/home/mimbonetwork/Android/Sdk/cmake/3.22.1/bin/ninja",
+    "-C",
+    "/home/mimbonetwork/mediBO/build/.cxx/release/5r3j4x23/x86_64",
+    "{LIST_OF_TARGETS_TO_BUILD}"
+  ],
+  "libraries": {}
+}

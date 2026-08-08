@@ -332,32 +332,32 @@ class CompactCartControl extends StatelessWidget {
     return SizedBox(
       height: CompactProductCard.pillH,
       width: w,
-      child: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 180),
-        transitionBuilder: (child, anim) => FadeTransition(
-            opacity: anim, child: ScaleTransition(scale: anim, child: child)),
-        child: qty > 0
-            ? _Stepper(
-                key: const ValueKey('stepper'),
-                qty: qty,
-                onMinus: () => cart.decrementId(product.id),
-                onPlus: () => cart.incrementId(product.id),
-              )
-            : _AddPill(
-                key: const ValueKey('add'),
-                label: product.availability?.ctaLabel ?? '',
-                onTap: () {
-                  if (cart.isPending(product.id)) return;
-                  cart.addId(product.id);
-                  // Fire-and-forget popularity ping. It must never be able to
-                  // break an add-to-cart: the cart write above is the real
-                  // work and has already been sent.
-                  try {
-                    MedicineRepository().incrementSalesCount(product.id);
-                  } catch (_) {}
-                },
-              ),
-      ),
+      // CHANGE #678a — the Add pill becomes the stepper instantly.
+      //
+      // It used to cross-fade and scale over 180ms. On a grid of cards that is
+      // motion the user did not ask for, in the one place they are tapping
+      // fast. The storefront paints; it does not perform.
+      child: qty > 0
+          ? _Stepper(
+              key: const ValueKey('stepper'),
+              qty: qty,
+              onMinus: () => cart.decrementId(product.id),
+              onPlus: () => cart.incrementId(product.id),
+            )
+          : _AddPill(
+              key: const ValueKey('add'),
+              label: product.availability?.ctaLabel ?? '',
+              onTap: () {
+                if (cart.isPending(product.id)) return;
+                cart.addId(product.id);
+                // Fire-and-forget popularity ping. It must never be able to
+                // break an add-to-cart: the cart write above is the real
+                // work and has already been sent.
+                try {
+                  MedicineRepository().incrementSalesCount(product.id);
+                } catch (_) {}
+              },
+            ),
     );
   }
 }

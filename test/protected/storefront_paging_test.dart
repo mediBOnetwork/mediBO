@@ -54,32 +54,32 @@ import 'package:pharma_b2b/widgets/home_sections_view.dart';
 
 /// One card in the exact shape storefront_home_v2 / storefront_home_more send.
 Map<String, dynamic> _card(int id, String name) => {
-      'id': id,
-      'name': name,
-      'company': 'GLENMARK PHARMACEUTICALS LTD',
-      'pack_label': '1 Strip',
-      'form_chip': 'Strip',
-      'image': '',
-      'mrp_label': '₹236.20',
-      'buyable': true,
-      'availability': {
-        'is_available': true,
-        'can_add': true,
-        'gated': false,
-        'cta_label': 'Add to cart',
-        'colors': {'bg': '#1B7A43', 'fg': '#FFFFFF'},
-      },
-      'pricing': {
-        'mrp': 236.2,
-        'sale_price': 236.2,
-        'discount_pct': 0,
-        'mrp_display': '',
-        'price_display': '₹236.20',
-        'discount_label': '',
-        'has_price': true,
-        'has_discount': false,
-      },
-    };
+  'id': id,
+  'name': name,
+  'company': 'GLENMARK PHARMACEUTICALS LTD',
+  'pack_label': '1 Strip',
+  'form_chip': 'Strip',
+  'image': '',
+  'mrp_label': '₹236.20',
+  'buyable': true,
+  'availability': {
+    'is_available': true,
+    'can_add': true,
+    'gated': false,
+    'cta_label': 'Add to cart',
+    'colors': {'bg': '#1B7A43', 'fg': '#FFFFFF'},
+  },
+  'pricing': {
+    'mrp': 236.2,
+    'sale_price': 236.2,
+    'discount_pct': 0,
+    'mrp_display': '',
+    'price_display': '₹236.20',
+    'discount_label': '',
+    'has_price': true,
+    'has_discount': false,
+  },
+};
 
 /// A `grid` section carrying the backend's paging plan — the shape the live
 /// `all_products` section arrives in.
@@ -89,23 +89,20 @@ Map<String, dynamic> _gridSection({
   int pageSize = 100,
   int nextOffset = 100,
   int cards = 3,
-}) =>
-    {
-      'id': 'all_products',
-      'layout': 'grid',
-      'title': 'All Products',
-      'accent_word': 'All',
-      'subtitle': 'THE WHOLE CATALOGUE',
-      'see_all': {'type': 'category', 'key': 'All'},
-      'see_all_label': 'See all products',
-      'infinite': infinite,
-      'next_offset': nextOffset,
-      'page_size': pageSize,
-      'total': total,
-      'items': [
-        for (var i = 0; i < cards; i++) _card(900000 + i, 'Grid Item $i'),
-      ],
-    };
+}) => {
+  'id': 'all_products',
+  'layout': 'grid',
+  'title': 'All Products',
+  'accent_word': 'All',
+  'subtitle': 'THE WHOLE CATALOGUE',
+  'see_all': {'type': 'category', 'key': 'All'},
+  'see_all_label': 'See all products',
+  'infinite': infinite,
+  'next_offset': nextOffset,
+  'page_size': pageSize,
+  'total': total,
+  'items': [for (var i = 0; i < cards; i++) _card(900000 + i, 'Grid Item $i')],
+};
 
 /// CHANGE #678 — a `rail`: the section that carries depth. 24 up front, +24 a
 /// page, stopping at the backend's ceiling of 100.
@@ -113,28 +110,30 @@ Map<String, dynamic> _railSection({
   int total = 100,
   int cards = 4,
   int nextOffset = 24,
-}) =>
-    {
-      ..._gridSection(total: total, cards: cards, nextOffset: nextOffset),
-      'id': 'cat_cardiac',
-      'layout': 'rail',
-      'title': 'Cardiac',
-      'accent_word': 'Cardiac',
-      'subtitle': 'TOP PICKS IN CARDIAC',
-      'see_all': {'type': 'category', 'key': 'CARDIAC'},
-      'see_all_label': 'Show all 3,068 products',
-      'page_size': 24,
-    };
+}) => {
+  ..._gridSection(total: total, cards: cards, nextOffset: nextOffset),
+  'id': 'cat_cardiac',
+  'layout': 'rail',
+  'title': 'Cardiac',
+  'accent_word': 'Cardiac',
+  'subtitle': 'TOP PICKS IN CARDIAC',
+  'see_all': {'type': 'category', 'key': 'CARDIAC'},
+  'see_all_label': 'Show all 3,068 products',
+  'page_size': 24,
+};
 
 Map<String, dynamic> _payload(Map<String, dynamic> section) => {
-      'ok': true,
-      'sections': [section],
-    };
+  'ok': true,
+  'sections': [section],
+};
 
 int _pumpSeq = 0;
 
-Future<void> _pump(WidgetTester tester, Map<String, dynamic> payload,
-    {double width = 1000}) async {
+Future<void> _pump(
+  WidgetTester tester,
+  Map<String, dynamic> payload, {
+  double width = 1000,
+}) async {
   // Width matters: the grid's column count is derived from it, and a widget
   // test's default viewport is 800 — assert the phone case explicitly.
   tester.view.physicalSize = Size(width, 3000);
@@ -175,8 +174,11 @@ HomeSection _parse(Map<String, dynamic> raw) {
 
 void main() {
   setUp(() {
-    CartModel.rpcTransport = (fn, params) async =>
-        {'ok': true, 'message': '', 'cart': <String, dynamic>{}};
+    CartModel.rpcTransport = (fn, params) async => {
+      'ok': true,
+      'message': '',
+      'cart': <String, dynamic>{},
+    };
   });
   tearDown(() => CartModel.rpcTransport = null);
 
@@ -186,14 +188,20 @@ void main() {
       expect(s.infinite, isTrue);
       expect(s.total, 30304);
       expect(s.pageSize, 100);
-      expect(s.canPageMore, isTrue,
-          reason: '3 of 30,304 held — the backend says keep going');
+      expect(
+        s.canPageMore,
+        isTrue,
+        reason: '3 of 30,304 held — the backend says keep going',
+      );
     });
 
     test('a section the backend did not mark infinite never pages', () {
       final s = _parse(_gridSection(infinite: false));
-      expect(s.canPageMore, isFalse,
-          reason: 'no client rule may override infinite:false');
+      expect(
+        s.canPageMore,
+        isFalse,
+        reason: 'no client rule may override infinite:false',
+      );
     });
 
     test('holding everything the backend has ends it — no 200 ceiling', () {
@@ -204,10 +212,15 @@ void main() {
       expect(s.cards.length, 250);
       expect(s.canPageMore, isFalse);
 
-      final deep = _parse(_gridSection(total: 30304, cards: 250, nextOffset: 250));
+      final deep = _parse(
+        _gridSection(total: 30304, cards: 250, nextOffset: 250),
+      );
       expect(deep.cards.length, 250);
-      expect(deep.canPageMore, isTrue,
-          reason: '250 held is well past the old 200 cap and must NOT end');
+      expect(
+        deep.canPageMore,
+        isTrue,
+        reason: '250 held is well past the old 200 cap and must NOT end',
+      );
     });
 
     test('a short page does not end the feed — only has_more does', () {
@@ -223,8 +236,11 @@ void main() {
       raw['see_all'] = null;
       final s = _parse(raw);
       expect(s.feedKey, '');
-      expect(s.canPageMore, isFalse,
-          reason: 'nowhere to page FROM is not a reason to invent one');
+      expect(
+        s.canPageMore,
+        isFalse,
+        reason: 'nowhere to page FROM is not a reason to invent one',
+      );
     });
   });
 
@@ -241,8 +257,11 @@ void main() {
 
       expect(grown.cards.length, 5);
       expect(grown.nextOffset, 250);
-      expect(grown.cards.first.name, 'Grid Item 0',
-          reason: 'appending keeps order — it never re-sorts');
+      expect(
+        grown.cards.first.name,
+        'Grid Item 0',
+        reason: 'appending keeps order — it never re-sorts',
+      );
       expect(grown.cards.last.name, 'Appended B');
       // Everything else survives the copy.
       expect(grown.id, s.id);
@@ -270,8 +289,11 @@ void main() {
       final row2 = tester.getTopLeft(cards.at(2));
 
       expect(row1b.dy, row1.dy, reason: 'cards 1 and 2 share a row');
-      expect(row2.dy, greaterThan(row1.dy),
-          reason: 'card 3 wrapped — a grid, not a sideways rail');
+      expect(
+        row2.dy,
+        greaterThan(row1.dy),
+        reason: 'card 3 wrapped — a grid, not a sideways rail',
+      );
       expect(row1b.dx, greaterThan(row1.dx));
     });
 
@@ -292,20 +314,32 @@ void main() {
   group('depth is sideways, not downwards', () {
     test('a rail below the ceiling pages; at the ceiling it stops', () {
       final mid = _parse(_railSection(total: 100, cards: 24, nextOffset: 24));
-      expect(mid.canPageMore, isTrue,
-          reason: '24 of the backend\'s 100 — scroll right for more');
+      expect(
+        mid.canPageMore,
+        isTrue,
+        reason: '24 of the backend\'s 100 — scroll right for more',
+      );
 
-      final full = _parse(_railSection(total: 100, cards: 100, nextOffset: 100));
-      expect(full.canPageMore, isFalse,
-          reason: 'the ceiling is the backend\'s 100, not a number in Dart');
+      final full = _parse(
+        _railSection(total: 100, cards: 100, nextOffset: 100),
+      );
+      expect(
+        full.canPageMore,
+        isFalse,
+        reason: 'the ceiling is the backend\'s 100, not a number in Dart',
+      );
     });
 
     test('a finite grid never pages, whatever it holds', () {
       // The live grid arrives infinite:false with total == what it was given.
       final s = _parse(
-          _gridSection(infinite: false, total: 9, cards: 9, nextOffset: 9));
-      expect(s.canPageMore, isFalse,
-          reason: 'a vertical block that keeps growing has no bottom');
+        _gridSection(infinite: false, total: 9, cards: 9, nextOffset: 9),
+      );
+      expect(
+        s.canPageMore,
+        isFalse,
+        reason: 'a vertical block that keeps growing has no bottom',
+      );
     });
 
     testWidgets('a rail lays its cards out in ONE row', (tester) async {
@@ -318,12 +352,56 @@ void main() {
       expect(b.dx, greaterThan(a.dx));
     });
 
-    testWidgets('a rail carries the same Show-all bar a grid does',
-        (tester) async {
+    testWidgets('a rail carries the same Show-all bar a grid does', (
+      tester,
+    ) async {
       await _pump(tester, _payload(_railSection()));
       // The count is the backend's word, printed verbatim — the app owns no
       // wording it could compose this from.
       expect(find.text('Show all 3,068 products'), findsOneWidget);
+    });
+  });
+
+  // CHANGE #678a — a rail moves because a finger moved it. Nothing else.
+  group('a rail never scrolls itself', () {
+    testWidgets('it sits at 0 and stays there', (tester) async {
+      await _pump(tester, _payload(_railSection(cards: 6)), width: 390);
+      final pos = tester
+          .state<ScrollableState>(find.byType(Scrollable).last)
+          .position;
+      expect(pos.pixels, 0);
+
+      // Let every post-frame callback, layout pass and animation run out.
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pumpAndSettle();
+      expect(
+        pos.pixels,
+        0,
+        reason: 'no effect, no animation, no restored offset — it is a list',
+      );
+    });
+
+    testWidgets('two rails keep their own positions', (tester) async {
+      final a = _railSection(cards: 8);
+      final b = {..._railSection(cards: 8), 'id': 'cat_derma'};
+      await _pump(tester, {
+        'ok': true,
+        'sections': [a, b],
+      }, width: 390);
+
+      final rails = find.byType(Scrollable);
+      final posA = tester.state<ScrollableState>(rails.at(1)).position;
+      final posB = tester.state<ScrollableState>(rails.at(2)).position;
+
+      await tester.drag(rails.at(1), const Offset(-200, 0));
+      await tester.pumpAndSettle();
+
+      expect(posA.pixels, greaterThan(0));
+      expect(
+        posB.pixels,
+        0,
+        reason: 'one rail\'s offset must never land on another rail',
+      );
     });
   });
 }

@@ -1501,22 +1501,18 @@ class _ProductsSection extends StatelessWidget {
             mainAxisSpacing: 14,
           ),
           itemCount: items.length,
-          itemBuilder: (context, i) {
-            final card = CompactProductCard(
-              product: items[i],
-              onTap: () => Navigator.of(context)
-                  .pushNamed('/product/${items[i].id}'),
-            );
-            // First page: stagger entrance on initial load.
-            if (i < MedicineRepository.pageSize) {
-              return EntranceAnimator(
-                key: ValueKey(items[i].id),
-                delay: Duration(milliseconds: (i * 30).clamp(0, 420)),
-                child: card,
-              );
-            }
-            return KeyedSubtree(key: ValueKey(items[i].id), child: card);
-          },
+          // CHANGE #678a — no entrance animation.
+          //
+          // The first page used to fade-and-slide in on a 30ms-per-card
+          // stagger. Scrolling back up replayed it, so products appeared to
+          // drop in from above every time — the page never looked settled. A
+          // product grid is a list of products; it is painted, not performed.
+          itemBuilder: (context, i) => CompactProductCard(
+            key: ValueKey(items[i].id),
+            product: items[i],
+            onTap: () =>
+                Navigator.of(context).pushNamed('/product/${items[i].id}'),
+          ),
         );
       },
     );

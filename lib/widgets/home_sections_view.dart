@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 
 import '../data/medicine_repository.dart';
 import '../models/home_sections.dart';
@@ -233,6 +234,13 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
           parent: BouncingScrollPhysics(),
         ),
         padding: const EdgeInsets.only(bottom: 96),
+        // CHANGE #678a — build two screens ahead of the viewport.
+        //
+        // The default builds a section only as its top edge arrives, so the
+        // row you were scrolling towards assembled under your thumb. Two
+        // screens of lead time means it is already painted when it appears —
+        // no placeholder, no pop-in, and nothing to animate away.
+        scrollCacheExtent: const ScrollCacheExtent.pixels(2400),
         itemCount: lead + d.sections.length + (widget.footer == null ? 0 : 1),
         itemBuilder: (_, i) {
           if (hero == 1 && i == 0) {
@@ -248,6 +256,12 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
           if (si >= d.sections.length) return widget.footer!;
           final section = d.sections[si];
           return _SectionBlock(
+            // CHANGE #678a — keyed by the backend's section id. Without it
+            // Flutter recycles one rail's State onto the next section as they
+            // scroll past, and the incoming rail inherits the outgoing one's
+            // scroll offset — which is what made rails slide sideways by
+            // themselves and then fetch a page nobody asked for.
+            key: ValueKey(section.id),
             section: section,
             onCategoryTap: widget.onCategoryTap,
             onNeedMore: () => unawaited(_pageSection(section.id)),
@@ -409,6 +423,7 @@ class _SectionBlock extends StatelessWidget {
   final VoidCallback onNeedMore;
 
   const _SectionBlock({
+    super.key,
     required this.section,
     required this.onCategoryTap,
     required this.onNeedMore,
@@ -683,7 +698,15 @@ class _Rail extends StatefulWidget {
 }
 
 class _RailState extends State<_Rail> {
-  final ScrollController _c = ScrollController();
+  /// CHANGE #678a — `keepScrollOffset: false`.
+  ///
+  /// The default is true, and every rail in the feed writes its offset into
+  /// the SAME PageStorage bucket — none of them carries a key of its own. A
+  /// rail scrolling into view then restored an offset a DIFFERENT rail had
+  /// left there, which looked like the row scrolling sideways on its own, and
+  /// landing near the end it immediately fetched a page. Nothing was
+  /// animating: it was one rail wearing another rail's position.
+  final ScrollController _c = ScrollController(keepScrollOffset: false);
 
   @override
   void initState() {
@@ -703,6 +726,10 @@ class _RailState extends State<_Rail> {
     if (!_c.hasClients) return;
     if (!widget.section.canPageMore) return;
     final pos = _c.position;
+    // Only ever after the user has actually dragged this rail. A rail sitting
+    // untouched at 0 must never fetch — on a wide window its whole content
+    // fits, maxScrollExtent is 0, and "near the end" would be true at rest.
+    if (pos.pixels <= 0) return;
     if (pos.pixels < pos.maxScrollExtent - (_Rail.cardW * 3)) return;
     widget.onNeedMore();
   }

@@ -244,6 +244,11 @@ void main() {
       expect(find.byIcon(Icons.remove_rounded), findsNothing);
 
       await tester.tap(find.text('Add to cart'));
+      // CHANGE #678a — the swap is instant now (the 180ms cross-fade is gone),
+      // so pumpAndSettle returns before the cart's own send debounce has run.
+      // Pump past it explicitly rather than relying on an animation to hold
+      // the frame loop open.
+      await tester.pump(const Duration(milliseconds: 400));
       await tester.pumpAndSettle();
 
       expect(cart.quantityOf('176026'), 1);

@@ -19,6 +19,21 @@ if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
   exit 1
 fi
 
+# ── RELEASE-SIGNING TRIPWIRE ────────────────────────────────────────────────
+# android/key.properties is gitignored, so a fresh checkout / worktree can be
+# missing it — and a release APK built without it is SILENTLY debug-signed
+# (users then hit a signature mismatch and cannot install the update; this is
+# exactly what happened to medibo-1.1.0.apk). This VM is the canonical release
+# host, so refuse to run at all when the keystore config is absent rather than
+# risk shipping a debug-signed artifact from here.
+if [ ! -f ~/mediBO/android/key.properties ]; then
+  echo "❌  DEPLOY ABORTED: android/key.properties is MISSING."
+  echo "    A release APK built from here would be silently DEBUG-signed"
+  echo "    (signature mismatch — users cannot install the update)."
+  echo "    Restore android/key.properties (release keystore config) and retry."
+  exit 1
+fi
+
 # ── CHANGE #424: PULL-FIRST GUARD — never build/commit/push on a stale local
 # main. If a PR was merged on GitHub since the last deploy, this incorporates
 # it instead of a later force-push silently erasing it (see #422 incident).
@@ -379,6 +394,28 @@ for i in $(seq 1 $MAX); do
     mkdir -p ~/.medibo
     echo "commit=${SHORT} size=${BUNDLE_SIZE} change=${CHANGE_LABEL} built=${BUILT}" > ~/.medibo/lastgood.txt
     echo "[lastgood] updated: commit=${SHORT} size=${BUNDLE_SIZE}"
+
+    # ── SELF-PRUNE — stop disk creeping between nightly cleanups ────────────
+    # Runs only on a proven-good deploy (we are past the live-assert) and after
+    # the git push, so nothing here can change what shipped.
+    #
+    # build/ is deliberately NOT deleted: build/web is git-tracked, so removing
+    # it leaves main dirty with ~71 deletions and the NEXT deploy's
+    # `git pull --ff-only` refuses to run. `flutter clean` at the top of this
+    # script already discards it every time. .dart_tool IS safe to drop — it is
+    # gitignored and the next build regenerates it.
+    git worktree prune 2>/dev/null || true
+    rm -rf ~/mediBO/.dart_tool 2>/dev/null || true
+    FREE_MB=$(df -Pm / | awk 'NR==2{print $4}')
+    echo "[self-prune] worktrees pruned, .dart_tool dropped — free ${FREE_MB}MB"
+    if [ "$FREE_MB" -lt 2048 ]; then
+      echo "[self-prune] under 2GB — invoking cleanup_vm.sh"
+      # cleanup_vm.sh is lock-aware. If the caller gave us a lock token, hand it
+      # straight through: without it cleanup would either see lane_busy=true and
+      # skip, or try to take a lock we are already holding.
+      DEPLOY_LOCK_TOKEN="${DEPLOY_LOCK_TOKEN:-}" bash scripts/cleanup_vm.sh \
+        || echo "⚠️   cleanup_vm.sh returned non-zero (the deploy itself is fine)"
+    fi
 
     bash scripts/verify_live.sh
     exit 0

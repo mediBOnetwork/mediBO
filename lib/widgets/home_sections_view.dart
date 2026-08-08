@@ -68,15 +68,17 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
   BackInStock _backInStock = BackInStock.empty;
   bool _seenSent = false;
 
-  /// CHANGE #677 — the infinite tail.
+  /// CHANGE #678 — paging happens sideways, not downwards.
   ///
-  /// The last section is the one the backend marked `infinite`, and it is the
-  /// reason the storefront never dead-ends: as the page nears its bottom the
-  /// app asks for the next page and appends it. It asks the BACKEND whether
-  /// there is more (`canPageMore`) — it never concludes a feed has ended by
-  /// counting what it holds.
+  /// A rail grows as you scroll RIGHT, up to the ceiling the backend set. The
+  /// vertical page does not grow at all: a grid holds what it was given and
+  /// ends in a Show-all button. #677 paged the page itself, and the result was
+  /// a storefront you could never scroll to the bottom of.
   final ScrollController _scroll = ScrollController();
-  bool _paging = false;
+
+  /// One in-flight request per section, keyed by section id — two rails may
+  /// page at once without either seeing the other's half-applied result.
+  final Set<String> _paging = <String>{};
 
   @override
   void dispose() {
@@ -87,7 +89,6 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
   @override
   void initState() {
     super.initState();
-    _scroll.addListener(_onScroll);
     final memo = HomeSectionsView._memo;
     if (memo != null) {
       _data = memo;
@@ -100,7 +101,8 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
   Future<void> _load({bool sectionsFromMemo = false}) async {
     final loadSections =
         widget.loader ?? () => MedicineRepository().fetchHomeSections();
-    final loadNotifs = widget.notificationsLoader ??
+    final loadNotifs =
+        widget.notificationsLoader ??
         () => MedicineRepository().myStockNotifications();
 
     // Labels are needed by the Notify control on any out-of-stock card, and
@@ -137,26 +139,19 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
     _reportSeen();
   }
 
-  /// Fires the next page when the bottom is within one screen. The threshold
-  /// is geometry, not policy: it only decides WHEN to ask, never whether more
-  /// exists.
-  void _onScroll() {
-    if (!_scroll.hasClients) return;
-    final pos = _scroll.position;
-    if (pos.pixels < pos.maxScrollExtent - 900) return;
-    unawaited(_pageTail());
-  }
-
-  /// Appends one page to the section the backend marked infinite.
-  Future<void> _pageTail() async {
-    if (_paging) return;
+  /// Appends one page to [id]. Called by a rail that has been scrolled near
+  /// its right-hand end. Whether there is more to fetch is [HomeSection
+  /// .canPageMore] — the backend's `infinite` and `total`, never a count kept
+  /// here.
+  Future<void> _pageSection(String id) async {
+    if (_paging.contains(id)) return;
     final d = _data;
     if (d == null || !d.ok) return;
 
-    final i = d.sections.lastIndexWhere((s) => s.canPageMore);
-    if (i < 0) return;
+    final i = d.sections.indexWhere((s) => s.id == id);
+    if (i < 0 || !d.sections[i].canPageMore) return;
 
-    _paging = true;
+    _paging.add(id);
     final section = d.sections[i];
     try {
       final more = await MedicineRepository().fetchHomeMore(
@@ -165,20 +160,27 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
         limit: section.pageSize,
       );
       if (!mounted || more.items.isEmpty) return;
-      final next = List<HomeSection>.of(d.sections);
-      next[i] = section.appending(more.items, more.nextOffset);
+      // Re-find by id: a refresh may have replaced the list while this was in
+      // flight, and appending to a stale index would graft a page onto the
+      // wrong section.
+      final now = _data;
+      if (now == null || !now.ok) return;
+      final j = now.sections.indexWhere((s) => s.id == id);
+      if (j < 0) return;
+      final next = List<HomeSection>.of(now.sections);
+      next[j] = now.sections[j].appending(more.items, more.nextOffset);
       final grown = HomeSections(
         ok: true,
         sections: next,
-        header: d.header,
-        hero: d.hero,
+        header: now.header,
+        hero: now.hero,
       );
       // The memo grows with it, so coming back from a product page lands on the
       // same feed the user had scrolled, not a reset one.
       HomeSectionsView._memo = grown;
       setState(() => _data = grown);
     } finally {
-      _paging = false;
+      _paging.remove(id);
     }
   }
 
@@ -228,7 +230,8 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
         controller: _scroll,
         // AlwaysScrollable so the pull gesture works even on a short feed.
         physics: const AlwaysScrollableScrollPhysics(
-            parent: BouncingScrollPhysics()),
+          parent: BouncingScrollPhysics(),
+        ),
         padding: const EdgeInsets.only(bottom: 96),
         itemCount: lead + d.sections.length + (widget.footer == null ? 0 : 1),
         itemBuilder: (_, i) {
@@ -243,9 +246,11 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
           }
           final si = i - lead;
           if (si >= d.sections.length) return widget.footer!;
+          final section = d.sections[si];
           return _SectionBlock(
-            section: d.sections[si],
+            section: section,
             onCategoryTap: widget.onCategoryTap,
+            onNeedMore: () => unawaited(_pageSection(section.id)),
           );
         },
       ),
@@ -303,15 +308,21 @@ class HomeHeroBanner extends StatelessWidget {
                 color: accent,
                 borderRadius: BorderRadius.circular(Rad.pill),
               ),
-              child: Text(hero.eyebrow,
-                  style: AppType.eyebrow
-                      .copyWith(color: Colors.white, letterSpacing: 1.1)),
+              child: Text(
+                hero.eyebrow,
+                style: AppType.eyebrow.copyWith(
+                  color: Colors.white,
+                  letterSpacing: 1.1,
+                ),
+              ),
             ),
             const SizedBox(height: 14),
           ],
           if (hero.title.isNotEmpty)
-            Text(hero.title,
-                style: AppType.h3.copyWith(color: Colors.white, height: 1.2)),
+            Text(
+              hero.title,
+              style: AppType.h3.copyWith(color: Colors.white, height: 1.2),
+            ),
           if (hero.cta.isNotEmpty) ...[
             const SizedBox(height: 16),
             _HeroCta(label: hero.cta, accent: accent, onTap: onCta),
@@ -327,12 +338,13 @@ class HomeHeroBanner extends StatelessWidget {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       if (_glyphs[p.icon] != null) ...[
-                        Icon(_glyphs[p.icon],
-                            size: 13, color: Colors.white70),
+                        Icon(_glyphs[p.icon], size: 13, color: Colors.white70),
                         const SizedBox(width: 5),
                       ],
-                      Text(p.label,
-                          style: AppType.t1.copyWith(color: Colors.white70)),
+                      Text(
+                        p.label,
+                        style: AppType.t1.copyWith(color: Colors.white70),
+                      ),
                     ],
                   ),
               ],
@@ -348,32 +360,42 @@ class _HeroCta extends StatelessWidget {
   final String label;
   final Color accent;
   final VoidCallback onTap;
-  const _HeroCta(
-      {required this.label, required this.accent, required this.onTap});
+  const _HeroCta({
+    required this.label,
+    required this.accent,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) => Material(
-        color: accent,
-        borderRadius: BorderRadius.circular(Rad.pill),
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(Rad.pill),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(label,
-                    style: AppType.l4.copyWith(
-                        color: Colors.white, fontWeight: FontWeight.w700)),
-                const SizedBox(width: 4),
-                const Icon(Icons.arrow_forward_rounded,
-                    size: 16, color: Colors.white),
-              ],
+    color: accent,
+    borderRadius: BorderRadius.circular(Rad.pill),
+    child: InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(Rad.pill),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              label,
+              style: AppType.l4.copyWith(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+              ),
             ),
-          ),
+            const SizedBox(width: 4),
+            const Icon(
+              Icons.arrow_forward_rounded,
+              size: 16,
+              color: Colors.white,
+            ),
+          ],
         ),
-      );
+      ),
+    ),
+  );
 }
 
 // ── One section ──────────────────────────────────────────────────────────────
@@ -382,10 +404,25 @@ class _SectionBlock extends StatelessWidget {
   final HomeSection section;
   final ValueChanged<String> onCategoryTap;
 
+  /// CHANGE #678 — the rail has been scrolled near its end and wants the next
+  /// page. Whether one is fetched is decided upstairs, from the payload.
+  final VoidCallback onNeedMore;
+
   const _SectionBlock({
     required this.section,
     required this.onCategoryTap,
+    required this.onNeedMore,
   });
+
+  /// The backend named the destination type; the app maps it to navigation it
+  /// already has. An unrecognised type does nothing rather than guessing.
+  void _navigate(BuildContext context, SeeAll s) {
+    switch (s.type) {
+      case 'category':
+      case 'search':
+        onCategoryTap(s.key);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -395,6 +432,12 @@ class _SectionBlock extends StatelessWidget {
     // Postgres row, so re-colouring the feed is an UPDATE.
     final band = Brand.hex(section.band, Colors.transparent);
     final accent = Brand.hex(section.accent, Brand.green);
+
+    // CHANGE #678 — one Show-all control for both product layouts, a
+    // full-width button under the section. It used to be a card tacked onto
+    // the end of the rail, which nobody scrolled 24 cards to reach.
+    final seeAll = section.seeAll;
+    final showBar = seeAll != null && section.seeAllLabel.isNotEmpty;
 
     return Container(
       // Full-bleed: the band runs edge to edge, the content inside keeps the
@@ -412,44 +455,54 @@ class _SectionBlock extends StatelessWidget {
             // which meant everything sideways and nothing you could sit and
             // browse. Rail vs grid is now a column in `storefront_home_section`,
             // so re-shaping the page is an UPDATE.
-            HomeSectionLayout.grid => _ProductGrid(
-                section: section,
-                accent: accent,
-                onCategoryTap: onCategoryTap,
-              ),
+            HomeSectionLayout.grid => _ProductGrid(section: section),
+            // CHANGE #678 — a rail carries up to the backend's ceiling and
+            // fetches the next page as it is scrolled right, so sideways is
+            // where depth lives and downwards always ends.
             HomeSectionLayout.rail => _Rail(
-                section: section,
-                accent: accent,
-                onCategoryTap: onCategoryTap,
-              ),
+              section: section,
+              onNeedMore: onNeedMore,
+            ),
             // A category tile hands back `key` — the RAW category name the
             // chips already use ("ANTI INFECTIVES"), not the pretty label.
             HomeSectionLayout.iconGrid => _TileGrid(
-                tiles: section.tiles,
-                crossAxisCount: 4,
-                centered: true,
-                tinted: true,
-                valueOf: (t) => t.key,
-                onTap: onCategoryTap,
-              ),
+              tiles: section.tiles,
+              crossAxisCount: 4,
+              centered: true,
+              tinted: true,
+              valueOf: (t) => t.key,
+              onTap: onCategoryTap,
+            ),
             // CHANGE #638 — a company tile now opens the real company page at
             // /company/<key>, so it hands back `key` again. The #637
             // search-prefill fallback is gone: it existed only because no
             // company listing existed yet, and a name search was never the
             // same thing as a company filter.
             HomeSectionLayout.brandGrid => _TileGrid(
-                tiles: section.tiles,
-                crossAxisCount: 3,
-                centered: true,
-                tinted: false,
-                valueOf: (t) => t.key,
-                onTap: (key) => Navigator.of(context)
-                    .pushNamed('/company/${Uri.encodeComponent(key)}'),
-              ),
+              tiles: section.tiles,
+              crossAxisCount: 3,
+              centered: true,
+              tinted: false,
+              valueOf: (t) => t.key,
+              onTap: (key) => Navigator.of(
+                context,
+              ).pushNamed('/company/${Uri.encodeComponent(key)}'),
+            ),
             // Unreachable: unknown layouts are dropped at parse time. Kept so
             // this switch stays exhaustive if the enum grows.
             HomeSectionLayout.unknown => const SizedBox.shrink(),
           },
+          if (showBar) ...[
+            const SizedBox(height: 16),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: _SeeAllBar(
+                label: section.seeAllLabel,
+                accent: accent,
+                onTap: () => _navigate(context, seeAll),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -566,7 +619,10 @@ class SectionHeader extends StatelessWidget {
               children: [
                 TextSpan(text: before),
                 if (accentWord.isNotEmpty)
-                  TextSpan(text: accentWord, style: TextStyle(color: accent)),
+                  TextSpan(
+                    text: accentWord,
+                    style: TextStyle(color: accent),
+                  ),
                 TextSpan(text: after),
               ],
             ),
@@ -607,71 +663,77 @@ class _Rule extends StatelessWidget {
 
 // ── rail ─────────────────────────────────────────────────────────────────────
 
-class _Rail extends StatelessWidget {
+/// CHANGE #678 — the horizontal rail, and the only place the feed grows.
+///
+/// It starts with the payload's cards and asks for the next page when the user
+/// scrolls near its right-hand end, up to the ceiling the backend put in
+/// `total`. Nothing here knows what that ceiling is: it asks
+/// [HomeSection.canPageMore] and stops when the answer is no.
+class _Rail extends StatefulWidget {
   final HomeSection section;
-  final Color accent;
-  final ValueChanged<String> onCategoryTap;
+  final VoidCallback onNeedMore;
 
-  const _Rail({
-    required this.section,
-    required this.onCategoryTap,
-    this.accent = Brand.green,
-  });
+  const _Rail({required this.section, required this.onNeedMore});
 
   static const double cardW = 156;
-  static const double _gap = 12;
+  static const double gap = 12;
+
+  @override
+  State<_Rail> createState() => _RailState();
+}
+
+class _RailState extends State<_Rail> {
+  final ScrollController _c = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    _c.addListener(_onScroll);
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  /// Asks for the next page when the end is within about three cards. The
+  /// threshold is geometry — it decides WHEN to ask, never whether more exists.
+  void _onScroll() {
+    if (!_c.hasClients) return;
+    if (!widget.section.canPageMore) return;
+    final pos = _c.position;
+    if (pos.pixels < pos.maxScrollExtent - (_Rail.cardW * 3)) return;
+    widget.onNeedMore();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final seeAll = section.seeAll;
-    final n = section.cards.length + (seeAll == null ? 0 : 1);
+    final cards = widget.section.cards;
 
     return SizedBox(
       // Fixed height derived from the card's own constant — the rail never
       // measures its children, so scrolling it costs no layout.
       height: CompactProductCard.extent,
       child: ListView.builder(
+        controller: _c,
         scrollDirection: Axis.horizontal,
         physics: const BouncingScrollPhysics(),
         padding: const EdgeInsets.symmetric(horizontal: 16),
-        itemExtent: cardW + _gap,
-        itemCount: n,
+        itemExtent: _Rail.cardW + _Rail.gap,
+        itemCount: cards.length,
         itemBuilder: (context, i) {
-          if (i >= section.cards.length) {
-            return _SeeAllPill(
-              width: cardW,
-              // The wording is the backend's. Empty means the payload sent
-              // none, and the tile renders the arrow alone rather than a word
-              // chosen here — the old hardcoded 'See all' is gone.
-              label: section.seeAllLabel,
-              accent: accent,
-              onTap: () => _navigate(context, seeAll!),
-            );
-          }
-          final p = section.cards[i];
+          final p = cards[i];
           return Padding(
-            padding: const EdgeInsets.only(right: _gap),
+            padding: const EdgeInsets.only(right: _Rail.gap),
             child: CompactProductCard(
               product: p,
-              onTap: () =>
-                  Navigator.of(context).pushNamed('/product/${p.id}'),
+              onTap: () => Navigator.of(context).pushNamed('/product/${p.id}'),
             ),
           );
         },
       ),
     );
-  }
-
-  void _navigate(BuildContext context, SeeAll s) {
-    // The backend names the destination type; the app maps it to the
-    // navigation it already has. An unrecognised type does nothing rather
-    // than guessing a screen.
-    switch (s.type) {
-      case 'category':
-        onCategoryTap(s.key);
-      case 'search':
-        onCategoryTap(s.key);
-    }
   }
 }
 
@@ -679,21 +741,18 @@ class _Rail extends StatelessWidget {
 
 /// CHANGE #677 — a section rendered as a vertical grid instead of a rail.
 ///
-/// It scrolls with the page, so it is where the 100-per-category sections and
-/// the never-ending All Products tail live. It measures nothing and decides
-/// nothing: the item count is whatever the payload holds, and the column count
-/// is the only thing chosen here — from the available width, because that is
-/// geometry, not business.
+/// CHANGE #678 — and a FINITE one. It shows exactly the cards the payload
+/// carried and never grows: depth belongs to the rails, which scroll sideways,
+/// and to the category page behind the Show-all button. A vertical block that
+/// keeps loading under the thumb is why the page felt like it had no bottom.
+///
+/// It measures nothing and decides nothing: the item count is whatever the
+/// payload holds, and the column count is the only thing chosen here — from
+/// the available width, because that is geometry, not business.
 class _ProductGrid extends StatelessWidget {
   final HomeSection section;
-  final Color accent;
-  final ValueChanged<String> onCategoryTap;
 
-  const _ProductGrid({
-    required this.section,
-    required this.accent,
-    required this.onCategoryTap,
-  });
+  const _ProductGrid({required this.section});
 
   /// The card is 156 wide in the rail; the grid gives it the same room. Two up
   /// on a phone, more as the window grows — never a hardcoded pixel width.
@@ -704,66 +763,42 @@ class _ProductGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final seeAll = section.seeAll;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: LayoutBuilder(
-            builder: (context, c) => GridView.builder(
-              shrinkWrap: true,
-              // The page is the scrollable. A grid with its own scroll inside a
-              // list is the thing that makes a feed feel broken on mobile.
-              physics: const NeverScrollableScrollPhysics(),
-              padding: EdgeInsets.zero,
-              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: columnsFor(c.maxWidth),
-                mainAxisExtent: CompactProductCard.extent,
-                crossAxisSpacing: 12,
-                mainAxisSpacing: 12,
-              ),
-              itemCount: section.cards.length,
-              itemBuilder: (context, i) {
-                final p = section.cards[i];
-                return CompactProductCard(
-                  product: p,
-                  onTap: () =>
-                      Navigator.of(context).pushNamed('/product/${p.id}'),
-                );
-              },
-            ),
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: LayoutBuilder(
+        builder: (context, c) => GridView.builder(
+          shrinkWrap: true,
+          // The page is the scrollable. A grid with its own scroll inside a
+          // list is the thing that makes a feed feel broken on mobile.
+          physics: const NeverScrollableScrollPhysics(),
+          padding: EdgeInsets.zero,
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: columnsFor(c.maxWidth),
+            mainAxisExtent: CompactProductCard.extent,
+            crossAxisSpacing: 12,
+            mainAxisSpacing: 12,
           ),
+          itemCount: section.cards.length,
+          itemBuilder: (context, i) {
+            final p = section.cards[i];
+            return CompactProductCard(
+              product: p,
+              onTap: () => Navigator.of(context).pushNamed('/product/${p.id}'),
+            );
+          },
         ),
-        // A grid's See-all cannot be the last card in a row — it would land in
-        // an arbitrary column. It is a full-width button under the grid.
-        if (seeAll != null && section.seeAllLabel.isNotEmpty) ...[
-          const SizedBox(height: 16),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: _SeeAllBar(
-              label: section.seeAllLabel,
-              accent: accent,
-              onTap: () {
-                // Same mapping the rail uses: the backend names the
-                // destination type, the app maps it to navigation it has.
-                switch (seeAll.type) {
-                  case 'category':
-                  case 'search':
-                    onCategoryTap(seeAll.key);
-                }
-              },
-            ),
-          ),
-        ],
-      ],
+      ),
     );
   }
 }
 
-/// The grid's See-all: a full-width outlined bar. Same backend word as the
-/// rail's pill, different shape because a grid has no "one more card" slot.
+/// CHANGE #678 — the Show-all button, under every product section.
+///
+/// Solid in the section's own accent and full width, because it is the one
+/// route out of a section and the previous outline-on-white version read as
+/// decoration. The word is the backend's, counts and all ("Show all 3,068
+/// products") — the app holds no wording to fall back on, so no label means no
+/// button.
 class _SeeAllBar extends StatelessWidget {
   final String label;
   final Color accent;
@@ -776,99 +811,34 @@ class _SeeAllBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Material(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(Rad.pill),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(Rad.pill),
-          onTap: onTap,
-          child: Ink(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(Rad.pill),
-              border: Border.all(color: accent.withValues(alpha: 0.45)),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 13),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(label,
-                      style: AppType.l4.copyWith(
-                          color: accent, fontWeight: FontWeight.w700)),
-                  const SizedBox(width: 6),
-                  Icon(Icons.arrow_forward_rounded, size: 16, color: accent),
-                ],
+    color: accent,
+    borderRadius: BorderRadius.circular(Rad.pill),
+    child: InkWell(
+      borderRadius: BorderRadius.circular(Rad.pill),
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 15),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              label,
+              style: AppType.l4.copyWith(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
               ),
             ),
-          ),
-        ),
-      );
-}
-
-/// The last item of a rail: a full-height card-shaped target, not a small pill
-/// floating in a gap. At the rail's own card size it reads as "one more card",
-/// which is what makes it get tapped.
-class _SeeAllPill extends StatelessWidget {
-  final double width;
-  final String label;
-  final Color accent;
-  final VoidCallback onTap;
-  const _SeeAllPill({
-    required this.width,
-    required this.label,
-    required this.accent,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(right: 12),
-        child: SizedBox(
-          width: width,
-          height: CompactProductCard.tileH,
-          child: Material(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(Rad.tile),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(Rad.tile),
-              onTap: onTap,
-              child: Ink(
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(Rad.tile),
-                  border: Border.all(color: accent.withValues(alpha: 0.35)),
-                ),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Container(
-                      width: 42,
-                      height: 42,
-                      decoration: BoxDecoration(
-                        color: accent,
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(Icons.arrow_forward_rounded,
-                          size: 20, color: Colors.white),
-                    ),
-                    if (label.isNotEmpty) ...[
-                      const SizedBox(height: 12),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        child: Text(
-                          label,
-                          textAlign: TextAlign.center,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: AppType.l5.copyWith(color: accent),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
+            const SizedBox(width: 8),
+            const Icon(
+              Icons.arrow_forward_rounded,
+              size: 16,
+              color: Colors.white,
             ),
-          ),
+          ],
         ),
-      );
+      ),
+    ),
+  );
 }
 
 // ── icon_grid / brand_grid ───────────────────────────────────────────────────
@@ -961,8 +931,9 @@ class _Tile extends StatelessWidget {
       ),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.start,
-        crossAxisAlignment:
-            centered ? CrossAxisAlignment.center : CrossAxisAlignment.start,
+        crossAxisAlignment: centered
+            ? CrossAxisAlignment.center
+            : CrossAxisAlignment.start,
         children: [
           Container(
             width: 40,
@@ -989,9 +960,10 @@ class _Tile extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
               textAlign: centered ? TextAlign.center : TextAlign.start,
               style: AppType.t2.copyWith(
-                  color: Brand.ink,
-                  fontWeight: FontWeight.w700,
-                  height: 13 / 10),
+                color: Brand.ink,
+                fontWeight: FontWeight.w700,
+                height: 13 / 10,
+              ),
             ),
           ),
           if (tile.countLabel.isNotEmpty) ...[
@@ -1028,24 +1000,23 @@ class _Retry extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 48),
-        child: Column(
-          children: [
-            const Icon(Icons.cloud_off_rounded,
-                size: 34, color: Brand.inkFaint),
-            const SizedBox(height: 14),
-            OutlinedButton(
-              onPressed: onRetry,
-              style: OutlinedButton.styleFrom(
-                foregroundColor: Brand.green,
-                side: const BorderSide(color: Brand.green),
-                shape: const StadiumBorder(),
-              ),
-              child: const Text('Retry'),
-            ),
-          ],
+    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 48),
+    child: Column(
+      children: [
+        const Icon(Icons.cloud_off_rounded, size: 34, color: Brand.inkFaint),
+        const SizedBox(height: 14),
+        OutlinedButton(
+          onPressed: onRetry,
+          style: OutlinedButton.styleFrom(
+            foregroundColor: Brand.green,
+            side: const BorderSide(color: Brand.green),
+            shape: const StadiumBorder(),
+          ),
+          child: const Text('Retry'),
         ),
-      );
+      ],
+    ),
+  );
 }
 
 /// Two headers and one rail of card skeletons — the same geometry the loaded
@@ -1055,31 +1026,31 @@ class _FeedSkeleton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Shimmer(
-        child: ListView(
-          physics: const NeverScrollableScrollPhysics(),
-          padding: const EdgeInsets.only(top: 8),
-          children: [
-            const _SkeletonHeader(),
-            const SizedBox(height: 12),
-            SizedBox(
-              height: CompactProductCard.extent,
-              child: ListView.builder(
-                scrollDirection: Axis.horizontal,
-                physics: const NeverScrollableScrollPhysics(),
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                itemExtent: _Rail.cardW + 12,
-                itemCount: 4,
-                itemBuilder: (_, __) => const Padding(
-                  padding: EdgeInsets.only(right: 12),
-                  child: CompactCardSkeleton(),
-                ),
-              ),
+    child: ListView(
+      physics: const NeverScrollableScrollPhysics(),
+      padding: const EdgeInsets.only(top: 8),
+      children: [
+        const _SkeletonHeader(),
+        const SizedBox(height: 12),
+        SizedBox(
+          height: CompactProductCard.extent,
+          child: ListView.builder(
+            scrollDirection: Axis.horizontal,
+            physics: const NeverScrollableScrollPhysics(),
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            itemExtent: _Rail.cardW + 12,
+            itemCount: 4,
+            itemBuilder: (_, __) => const Padding(
+              padding: EdgeInsets.only(right: 12),
+              child: CompactCardSkeleton(),
             ),
-            const SizedBox(height: 24),
-            const _SkeletonHeader(),
-          ],
+          ),
         ),
-      );
+        const SizedBox(height: 24),
+        const _SkeletonHeader(),
+      ],
+    ),
+  );
 }
 
 class _SkeletonHeader extends StatelessWidget {
@@ -1087,14 +1058,14 @@ class _SkeletonHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => const Padding(
-        padding: EdgeInsets.symmetric(horizontal: 16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SkeletonBox(width: 170, height: 22, radius: 6),
-            SizedBox(height: 6),
-            SkeletonBox(width: 120, height: 11, radius: 4),
-          ],
-        ),
-      );
+    padding: EdgeInsets.symmetric(horizontal: 16),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SkeletonBox(width: 170, height: 22, radius: 6),
+        SizedBox(height: 6),
+        SkeletonBox(width: 120, height: 11, radius: 4),
+      ],
+    ),
+  );
 }

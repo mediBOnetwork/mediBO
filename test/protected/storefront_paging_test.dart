@@ -31,6 +31,14 @@
 //   5. `grid` is a real layout: a product section that scrolls with the page.
 //      Which sections are rails and which are grids is a Postgres row.
 //
+// CHANGE #678 added the sixth, and it is a shape rule as much as a paging one:
+//
+//   6. Depth goes SIDEWAYS. A rail pages as it is scrolled right, up to the
+//      ceiling the backend put in `total`. A vertical grid holds exactly what
+//      the payload gave it and never grows — a page that reloads under the
+//      thumb is a page you can never reach the bottom of. Both shapes end in
+//      the same full-width Show-all button, whose words are the backend's.
+//
 // No network, no Supabase, no goldens.
 
 import 'package:flutter/material.dart';
@@ -97,6 +105,25 @@ Map<String, dynamic> _gridSection({
       'items': [
         for (var i = 0; i < cards; i++) _card(900000 + i, 'Grid Item $i'),
       ],
+    };
+
+/// CHANGE #678 — a `rail`: the section that carries depth. 24 up front, +24 a
+/// page, stopping at the backend's ceiling of 100.
+Map<String, dynamic> _railSection({
+  int total = 100,
+  int cards = 4,
+  int nextOffset = 24,
+}) =>
+    {
+      ..._gridSection(total: total, cards: cards, nextOffset: nextOffset),
+      'id': 'cat_cardiac',
+      'layout': 'rail',
+      'title': 'Cardiac',
+      'accent_word': 'Cardiac',
+      'subtitle': 'TOP PICKS IN CARDIAC',
+      'see_all': {'type': 'category', 'key': 'CARDIAC'},
+      'see_all_label': 'Show all 3,068 products',
+      'page_size': 24,
     };
 
 Map<String, dynamic> _payload(Map<String, dynamic> section) => {
@@ -258,6 +285,45 @@ void main() {
       raw['see_all_label'] = '';
       await _pump(tester, _payload(raw));
       expect(find.text('See all products'), findsNothing);
+    });
+  });
+
+  // CHANGE #678 — the shape rule. Sideways is where depth lives.
+  group('depth is sideways, not downwards', () {
+    test('a rail below the ceiling pages; at the ceiling it stops', () {
+      final mid = _parse(_railSection(total: 100, cards: 24, nextOffset: 24));
+      expect(mid.canPageMore, isTrue,
+          reason: '24 of the backend\'s 100 — scroll right for more');
+
+      final full = _parse(_railSection(total: 100, cards: 100, nextOffset: 100));
+      expect(full.canPageMore, isFalse,
+          reason: 'the ceiling is the backend\'s 100, not a number in Dart');
+    });
+
+    test('a finite grid never pages, whatever it holds', () {
+      // The live grid arrives infinite:false with total == what it was given.
+      final s = _parse(
+          _gridSection(infinite: false, total: 9, cards: 9, nextOffset: 9));
+      expect(s.canPageMore, isFalse,
+          reason: 'a vertical block that keeps growing has no bottom');
+    });
+
+    testWidgets('a rail lays its cards out in ONE row', (tester) async {
+      await _pump(tester, _payload(_railSection(cards: 4)), width: 390);
+
+      final cards = find.byType(CompactProductCard);
+      final a = tester.getTopLeft(cards.at(0));
+      final b = tester.getTopLeft(cards.at(1));
+      expect(b.dy, a.dy, reason: 'a rail never wraps — that is a grid');
+      expect(b.dx, greaterThan(a.dx));
+    });
+
+    testWidgets('a rail carries the same Show-all bar a grid does',
+        (tester) async {
+      await _pump(tester, _payload(_railSection()));
+      // The count is the backend's word, printed verbatim — the app owns no
+      // wording it could compose this from.
+      expect(find.text('Show all 3,068 products'), findsOneWidget);
     });
   });
 }

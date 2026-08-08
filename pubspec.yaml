@@ -116,6 +116,25 @@ flutter:
     - assets/sounds/
     - assets/images/
 
+  # DM Sans (SIL Open Font License 1.1) — CHANGE #673. Bundled rather than
+  # pulled from a CDN so the storefront types correctly offline and on a weak
+  # connection, and so the first frame never flashes a fallback face.
+  fonts:
+    - family: DMSans
+      fonts:
+        - asset: assets/fonts/DMSans-400.ttf
+          weight: 400
+        - asset: assets/fonts/DMSans-500.ttf
+          weight: 500
+        - asset: assets/fonts/DMSans-600.ttf
+          weight: 600
+        - asset: assets/fonts/DMSans-700.ttf
+          weight: 700
+        - asset: assets/fonts/DMSans-800.ttf
+          weight: 800
+        - asset: assets/fonts/DMSans-900.ttf
+          weight: 900
+
   # To add assets to your application, add an assets section, like this:
   # assets:
   #   - images/a_dot_burr.jpeg

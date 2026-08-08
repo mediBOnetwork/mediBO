@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../data/medicine_repository.dart';
 import '../models/product_detail.dart';
+import '../theme.dart';
 import '../widgets/animations.dart';
 import '../widgets/compact_product_card.dart';
 import '../widgets/notify_control.dart';
@@ -337,38 +338,91 @@ class _PriceRow extends StatelessWidget {
     // than a fabricated ₹0.00.
     if (pr == null || !pr.hasPrice) return const SizedBox.shrink();
 
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.baseline,
-      textBaseline: TextBaseline.alphabetic,
+    // CHANGE #673 — the B2B price block.
+    //
+    // We do not sell at MRP, we sell at PTR, and the page now says so. The
+    // caption, the MRP caption and the margin line are all backend strings —
+    // what the number IS is a business decision, and "PTR" is not a word this
+    // app gets to choose.
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          pr.priceDisplay,
-          style: const TextStyle(
-            fontSize: 24,
-            fontWeight: FontWeight.w800,
-            color: Color(0xFF111827),
-          ),
-        ),
-        // The struck MRP appears only when the backend says there IS a
-        // discount — otherwise it would strike through the same number.
-        if (pr.hasDiscount) ...[
-          const SizedBox(width: 8),
-          Text(
-            pr.mrpDisplay,
-            style: const TextStyle(
-              fontSize: 13,
-              color: Color(0xFF9CA3AF),
-              decoration: TextDecoration.lineThrough,
-              decorationColor: Color(0xFF9CA3AF),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.baseline,
+          textBaseline: TextBaseline.alphabetic,
+          children: [
+            if (pr.priceCaption.isNotEmpty) ...[
+              Text(pr.priceCaption,
+                  style: AppType.t2.copyWith(
+                      color: Brand.inkMuted,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.6)),
+              const SizedBox(width: 6),
+            ],
+            Text(
+              pr.priceDisplay,
+              style: AppType.h4.copyWith(color: Brand.price),
             ),
-          ),
-        ],
-        if (data.hasGst) ...[
-          const SizedBox(width: 8),
-          _Chip(
-            text: data.gstLabel,
-            bg: const Color(0xFFF1F5F9),
-            fg: const Color(0xFF475569),
+            // The struck MRP appears only when the backend says there IS a
+            // discount — otherwise it would strike through the same number.
+            if (pr.hasDiscount) ...[
+              const SizedBox(width: 10),
+              Text(
+                '${data.label('pdp_mrp_caption')} ${pr.mrpDisplay}'.trim(),
+                style: AppType.b3.copyWith(
+                  color: Brand.inkFaint,
+                  decoration: TextDecoration.lineThrough,
+                  decorationColor: Brand.inkFaint,
+                ),
+              ),
+            ],
+            if (data.hasGst) ...[
+              const SizedBox(width: 8),
+              _Chip(
+                text: data.gstLabel,
+                bg: Brand.field,
+                fg: Brand.inkSub,
+              ),
+            ],
+          ],
+        ),
+        // The margin line: the whole reason a pharmacy is on this screen.
+        // Rendered only when the backend computed one — never derived here
+        // from mrp minus price, which would be the app pricing the product.
+        if (pr.marginLabel.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: Brand.positiveBg,
+              borderRadius: BorderRadius.circular(Rad.chip),
+              border: Border.all(color: Brand.positiveLine),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.trending_up_rounded,
+                    size: 16, color: Brand.positiveFg),
+                const SizedBox(width: 7),
+                Text(
+                  data.label('pdp_margin_title'),
+                  style: AppType.t2.copyWith(color: Brand.positiveFg),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  pr.marginLabel,
+                  style: AppType.l4.copyWith(
+                      color: Brand.positiveFg, fontWeight: FontWeight.w800),
+                ),
+                if (pr.discountLabel.isNotEmpty) ...[
+                  const SizedBox(width: 8),
+                  Text(
+                    pr.discountLabel,
+                    style: AppType.t2.copyWith(color: Brand.positiveFg),
+                  ),
+                ],
+              ],
+            ),
           ),
         ],
       ],

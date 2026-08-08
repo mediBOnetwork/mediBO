@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../app_state.dart';
 import '../data/medicine_repository.dart';
+import '../data/storefront_labels.dart';
 import '../models/app_session.dart';
 import '../models/cart_model.dart';
 import '../theme.dart';
@@ -983,68 +984,77 @@ class _LocationHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cartItems = AppState.of(context).distinctItems;
-    return SafeArea(
-      bottom: false,
-      child: Container(
-        width: double.infinity,
-        constraints: const BoxConstraints(minHeight: 70),
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          border: Border(bottom: BorderSide(color: Brand.border)),
+    // CHANGE #673 — the header is a dark brand block, not a white bar with a
+    // hairline under it. A white header on a white page gives the eye nothing
+    // to anchor on, which is most of why the app read as a document. The
+    // gradient is the same deep→deepAlt pair the hero uses, so the top of the
+    // page is one continuous brand field.
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Brand.deep, Brand.deepAlt],
         ),
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-        child: Row(
-          children: [
-            // LEFT: profile avatar
-            _MobileProfileAvatar(onAdminNav: onAdminNav, isSuperAdmin: isSuperAdmin),
-            // CENTER: logo — context-aware navigation
-            Expanded(
-              child: Center(
-                child: Tooltip(
-                  message: logoTooltip,
-                  child: MouseRegion(
-                    cursor: SystemMouseCursors.click,
-                    child: GestureDetector(
-                      onTap: onLogoTap,
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Image.asset('assets/images/medibo_logo.png', width: 28, height: 28),
-                          const SizedBox(width: 7),
-                          RichText(
-                            text: const TextSpan(
-                              children: [
-                                TextSpan(
-                                  text: 'medi',
-                                  style: TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.w700,
-                                    color: Color(0xFF1B5E20),
-                                    letterSpacing: -0.3,
+      ),
+      child: SafeArea(
+        bottom: false,
+        child: Container(
+          width: double.infinity,
+          constraints: const BoxConstraints(minHeight: 62),
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+          child: Row(
+            children: [
+              // LEFT: profile avatar
+              _MobileProfileAvatar(
+                  onAdminNav: onAdminNav, isSuperAdmin: isSuperAdmin),
+              // CENTER: logo — context-aware navigation
+              Expanded(
+                child: Center(
+                  child: Tooltip(
+                    message: logoTooltip,
+                    child: MouseRegion(
+                      cursor: SystemMouseCursors.click,
+                      child: GestureDetector(
+                        onTap: onLogoTap,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Image.asset('assets/images/medibo_logo.png',
+                                width: 26, height: 26),
+                            const SizedBox(width: 7),
+                            // On the dark block the wordmark inverts: white
+                            // stem, accent "BO". The old dark-green-on-white
+                            // pair would be invisible here.
+                            Text.rich(
+                              TextSpan(
+                                children: [
+                                  TextSpan(
+                                      text: 'medi',
+                                      style: AppType.h1
+                                          .copyWith(color: Colors.white)),
+                                  TextSpan(
+                                    text: 'BO',
+                                    style: AppType.h1.copyWith(
+                                      color: Brand.accent,
+                                      fontWeight: FontWeight.w800,
+                                    ),
                                   ),
-                                ),
-                                TextSpan(
-                                  text: 'BO',
-                                  style: TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.w800,
-                                    color: Color(0xFF4CAF50),
-                                    letterSpacing: -0.3,
-                                  ),
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                   ),
                 ),
               ),
-            ),
-            // RIGHT: cart icon (customers only)
-            if (!isAdmin) _MobileCartIcon(cartItems: cartItems, onCart: onCart),
-          ],
+              // RIGHT: cart icon (customers only)
+              if (!isAdmin)
+                _MobileCartIcon(cartItems: cartItems, onCart: onCart),
+            ],
+          ),
         ),
       ),
     );
@@ -1090,31 +1100,22 @@ class _MobileProfileAvatar extends StatelessWidget {
         child: Container(
           width: 40,
           height: 40,
+          // CHANGE #673 — a translucent white disc reads correctly on the dark
+          // header block. The old green-on-green gradient vanished into it.
           decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [Color(0xFF1D9E75), Color(0xFF0F4C35)],
-            ),
+            color: Colors.white.withValues(alpha: 0.14),
             shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(
-                color: const Color(0xFF1D9E75).withValues(alpha: 0.35),
-                blurRadius: 8,
-                offset: const Offset(0, 3),
-              ),
-            ],
+            border:
+                Border.all(color: Colors.white.withValues(alpha: 0.28)),
           ),
           child: Center(
             child: initial != null
                 ? Text(
                     initial,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800,
-                      color: Colors.white,
-                      height: 1,
-                    ),
+                    style: AppType.l2.copyWith(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w800,
+                        height: 1),
                   )
                 : const Icon(Icons.person_rounded,
                     color: Colors.white, size: 20),
@@ -1248,23 +1249,25 @@ class _MobileCartIconState extends State<_MobileCartIcon>
         child: Stack(
           clipBehavior: Clip.none,
           children: [
+            // CHANGE #673 — on the dark header the mint-on-white treatment
+            // disappeared. Accent fill makes the cart the one warm point in
+            // the block, which is where it should be.
             Container(
               width: 40,
               height: 40,
               decoration: BoxDecoration(
-                color: Brand.mint,
+                color: Brand.accent,
                 shape: BoxShape.circle,
-                border: Border.all(color: const Color(0xFFBBF7D0), width: 1.5),
                 boxShadow: [
                   BoxShadow(
-                    color: Brand.green.withValues(alpha: 0.18),
-                    blurRadius: 6,
-                    offset: const Offset(0, 2),
+                    color: Brand.accent.withValues(alpha: 0.35),
+                    blurRadius: 10,
+                    offset: const Offset(0, 3),
                   ),
                 ],
               ),
-              child: const Icon(Icons.shopping_bag_outlined,
-                  color: Brand.green, size: 20),
+              child: const Icon(Icons.shopping_bag_rounded,
+                  color: Colors.white, size: 19),
             ),
             if (widget.cartItems > 0)
               Positioned(
@@ -1276,9 +1279,11 @@ class _MobileCartIconState extends State<_MobileCartIcon>
                     width: 18,
                     height: 18,
                     decoration: BoxDecoration(
-                      color: const Color(0xFFDC2626),
+                      color: Brand.danger,
                       shape: BoxShape.circle,
-                      border: Border.all(color: Colors.white, width: 2),
+                      // Ringed in the header colour, not white, so the badge
+                      // reads as punched out of the dark block.
+                      border: Border.all(color: Brand.deep, width: 2),
                     ),
                     child: Center(
                       child: Text(
@@ -1368,19 +1373,34 @@ class _MobileSearchBarState extends State<_MobileSearchBar> {
 
   @override
   Widget build(BuildContext context) {
+    // CHANGE #673 — the search pill now sits INSIDE the dark header block and
+    // is white, so it reads as the one thing you are invited to touch. Grey on
+    // white read as a disabled field.
+    //
+    // The placeholder is the backend's `search_hint`. It used to be the Dart
+    // literal 'Search for medicines', which was the app telling the user what
+    // the catalogue holds — it holds companies and brands too, and correcting
+    // that sentence should never have needed a build. A missing label renders
+    // no hint rather than a sentence chosen here.
+    final hint = StorefrontLabels.get(StorefrontLabels.kSearchHint);
+
     return Container(
-      color: Colors.white,
-      padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
+      decoration: const BoxDecoration(
+        color: Brand.deepAlt,
+        borderRadius: BorderRadius.vertical(bottom: Radius.circular(Rad.band)),
+      ),
+      padding: const EdgeInsets.fromLTRB(14, 2, 14, 14),
       child: Container(
         decoration: BoxDecoration(
-          color: const Color(0xFFF3F4F6),
-          borderRadius: BorderRadius.circular(28),
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(Rad.pill),
         ),
         child: Row(
           children: [
             const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 14),
-              child: Icon(Icons.search, color: Color(0xFF9CA3AF), size: 20),
+              padding: EdgeInsets.only(left: 16, right: 10),
+              child:
+                  Icon(Icons.search_rounded, color: Brand.inkMuted, size: 21),
             ),
             Expanded(
               child: TextField(
@@ -1391,40 +1411,40 @@ class _MobileSearchBarState extends State<_MobileSearchBar> {
                 autocorrect: false,
                 enableSuggestions: false,
                 keyboardType: TextInputType.text,
-                style: const TextStyle(fontSize: 14, color: Brand.ink),
-                decoration: const InputDecoration(
+                style: AppType.b2.copyWith(color: Brand.ink),
+                decoration: InputDecoration(
                   border: InputBorder.none,
                   enabledBorder: InputBorder.none,
                   focusedBorder: InputBorder.none,
-                  hintText: 'Search for medicines',
-                  hintStyle: TextStyle(color: Brand.inkMuted, fontSize: 14),
+                  hintText: hint,
+                  hintStyle: AppType.b2.copyWith(color: Brand.inkFaint),
                   isDense: true,
-                  contentPadding: EdgeInsets.symmetric(vertical: 13),
+                  contentPadding: const EdgeInsets.symmetric(vertical: 14),
                   filled: false,
                 ),
               ),
             ),
             if (widget.isLoading)
               const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 14),
+                padding: EdgeInsets.symmetric(horizontal: 16),
                 child: SizedBox(
                   width: 18,
                   height: 18,
                   child: CircularProgressIndicator(
                     strokeWidth: 2,
-                    color: Brand.green,
+                    color: Brand.accent,
                   ),
                 ),
               )
             else if (_hasText)
               IconButton(
                 onPressed: _clearSearch,
-                icon: const Icon(Icons.close,
-                    size: 18, color: Color(0xFF6B7280)),
+                icon: const Icon(Icons.close_rounded,
+                    size: 18, color: Brand.inkMuted),
                 visualDensity: VisualDensity.compact,
                 padding: EdgeInsets.zero,
                 constraints:
-                    const BoxConstraints(minWidth: 40, minHeight: 40),
+                    const BoxConstraints(minWidth: 44, minHeight: 44),
               ),
           ],
         ),
@@ -2759,45 +2779,58 @@ class _MobileBottomBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final cart = AppState.of(context);
     final bottomNavIndex = index == 1 ? 2 : index == 2 ? 3 : 0;
-    return BottomNavigationBar(
-      currentIndex: bottomNavIndex,
-      type: BottomNavigationBarType.fixed,
-      selectedItemColor: Brand.green,
-      unselectedItemColor: Brand.inkMuted,
-      selectedFontSize: 10,
-      unselectedFontSize: 10,
-      elevation: 8,
-      onTap: onNavTap,
-      items: [
-        const BottomNavigationBarItem(
-          icon: Icon(Icons.home_outlined),
-          activeIcon: Icon(Icons.home),
-          label: 'Home',
-        ),
-        const BottomNavigationBarItem(
-          icon: Icon(Icons.grid_view_outlined),
-          activeIcon: Icon(Icons.grid_view),
-          label: 'Catalogue',
-        ),
-        BottomNavigationBarItem(
-          icon: Badge(
-            isLabelVisible: cart.orders.isNotEmpty,
-            label: Text('${cart.orders.length}'),
-            child: const Icon(Icons.receipt_long_outlined),
+    // CHANGE #673 — the selected item takes the ACCENT, not the same green as
+    // every other affordance on the page. A nav bar whose active state is the
+    // brand colour is invisible on a brand-coloured page; the accent is
+    // reserved for "you are here" and "tap this", and nothing else uses it.
+    return Container(
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(top: BorderSide(color: Brand.border)),
+      ),
+      child: BottomNavigationBar(
+        currentIndex: bottomNavIndex,
+        type: BottomNavigationBarType.fixed,
+        backgroundColor: Colors.white,
+        selectedItemColor: Brand.accent,
+        unselectedItemColor: Brand.inkFaint,
+        selectedFontSize: 10,
+        unselectedFontSize: 10,
+        selectedLabelStyle: AppType.t2.copyWith(fontWeight: FontWeight.w700),
+        unselectedLabelStyle: AppType.t2,
+        elevation: 0,
+        onTap: onNavTap,
+        items: [
+          const BottomNavigationBarItem(
+            icon: Icon(Icons.home_outlined),
+            activeIcon: Icon(Icons.home_rounded),
+            label: 'Home',
           ),
-          activeIcon: Badge(
-            isLabelVisible: cart.orders.isNotEmpty,
-            label: Text('${cart.orders.length}'),
-            child: const Icon(Icons.receipt_long),
+          const BottomNavigationBarItem(
+            icon: Icon(Icons.grid_view_outlined),
+            activeIcon: Icon(Icons.grid_view_rounded),
+            label: 'Catalogue',
           ),
-          label: 'Orders',
-        ),
-        const BottomNavigationBarItem(
-          icon: Icon(Icons.upload_file_outlined),
-          activeIcon: Icon(Icons.upload_file),
-          label: 'Bulk',
-        ),
-      ],
+          BottomNavigationBarItem(
+            icon: Badge(
+              isLabelVisible: cart.orders.isNotEmpty,
+              label: Text('${cart.orders.length}'),
+              child: const Icon(Icons.receipt_long_outlined),
+            ),
+            activeIcon: Badge(
+              isLabelVisible: cart.orders.isNotEmpty,
+              label: Text('${cart.orders.length}'),
+              child: const Icon(Icons.receipt_long_rounded),
+            ),
+            label: 'Orders',
+          ),
+          const BottomNavigationBarItem(
+            icon: Icon(Icons.upload_file_outlined),
+            activeIcon: Icon(Icons.upload_file_rounded),
+            label: 'Bulk',
+          ),
+        ],
+      ),
     );
   }
 }

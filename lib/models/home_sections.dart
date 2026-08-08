@@ -70,6 +70,100 @@ class HomeTile {
       );
 }
 
+/// CHANGE #673 — the dark header block at the top of the storefront.
+///
+/// Colours and the search placeholder are backend strings. Recolouring the
+/// header, or rewording what the search box invites you to type, is an UPDATE
+/// to `storefront_theme` / `storefront_ui_label` — not a deploy.
+class HomeHeader {
+  final String bgTop;
+  final String bgBottom;
+  final String fg;
+  final String accent;
+  final String searchHint;
+
+  const HomeHeader({
+    this.bgTop = '',
+    this.bgBottom = '',
+    this.fg = '',
+    this.accent = '',
+    this.searchHint = '',
+  });
+
+  static const HomeHeader none = HomeHeader();
+
+  static HomeHeader fromMap(Object? raw) {
+    if (raw is! Map) return none;
+    return HomeHeader(
+      bgTop: raw['bg_top']?.toString() ?? '',
+      bgBottom: raw['bg_bottom']?.toString() ?? '',
+      fg: raw['fg']?.toString() ?? '',
+      accent: raw['accent']?.toString() ?? '',
+      searchHint: raw['search_hint']?.toString() ?? '',
+    );
+  }
+}
+
+/// One trust prop under the hero, e.g. "75,814+ products".
+///
+/// [icon] is a backend NAME ("truck"), not a codepoint. The renderer maps a
+/// known name to a glyph and falls back to no icon for one it does not know —
+/// so the backend can ship a new prop to an old build without breaking it.
+class HeroProp {
+  final String icon;
+  final String label;
+  const HeroProp({required this.icon, required this.label});
+
+  static HeroProp fromMap(Map<String, dynamic> m) => HeroProp(
+        icon: m['icon']?.toString() ?? '',
+        label: m['label']?.toString() ?? '',
+      );
+}
+
+/// The hero banner. [show] is the backend's decision about whether the viewer
+/// sees one at all — the app never infers it from "is the title empty".
+class HomeHero {
+  final bool show;
+  final String eyebrow;
+  final String title;
+  final String cta;
+  final String bgTop;
+  final String bgBottom;
+  final String accent;
+  final List<HeroProp> props;
+
+  const HomeHero({
+    this.show = false,
+    this.eyebrow = '',
+    this.title = '',
+    this.cta = '',
+    this.bgTop = '',
+    this.bgBottom = '',
+    this.accent = '',
+    this.props = const [],
+  });
+
+  static const HomeHero none = HomeHero();
+
+  static HomeHero fromMap(Object? raw) {
+    if (raw is! Map) return none;
+    return HomeHero(
+      show: raw['show'] == true,
+      eyebrow: raw['eyebrow']?.toString() ?? '',
+      title: raw['title']?.toString() ?? '',
+      cta: raw['cta']?.toString() ?? '',
+      bgTop: raw['bg_top']?.toString() ?? '',
+      bgBottom: raw['bg_bottom']?.toString() ?? '',
+      accent: raw['accent']?.toString() ?? '',
+      props: ((raw['props'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => HeroProp.fromMap(Map<String, dynamic>.from(e)))
+          .where((p) => p.label.isNotEmpty)
+          .toList(growable: false),
+    );
+  }
+}
+
 class HomeSection {
   final String id;
   final HomeSectionLayout layout;
@@ -80,6 +174,21 @@ class HomeSection {
   final String accentWord;
   final String subtitle;
   final SeeAll? seeAll;
+
+  /// CHANGE #673 — the full-bleed background this section paints behind
+  /// itself, as `#RRGGBB`. Empty means "no band, sit on the page background".
+  /// Alternating bands are the single biggest reason the feed stopped reading
+  /// as one undifferentiated white scroll, and which section gets which colour
+  /// is a data decision, not a Dart one.
+  final String band;
+
+  /// The section's own accent, used for the accent word and the rule lines.
+  /// Empty means fall back to the theme's brand colour.
+  final String accent;
+
+  /// CHANGE #673 — the See-all wording, e.g. "See all products". Empty means
+  /// render no label; the app no longer holds a hardcoded 'See all'.
+  final String seeAllLabel;
 
   /// Populated for [HomeSectionLayout.rail]; empty otherwise.
   final List<Product> cards;
@@ -96,6 +205,9 @@ class HomeSection {
     required this.seeAll,
     required this.cards,
     required this.tiles,
+    this.band = '',
+    this.accent = '',
+    this.seeAllLabel = '',
   });
 
   bool get isEmpty => cards.isEmpty && tiles.isEmpty;
@@ -146,6 +258,9 @@ class HomeSection {
       seeAll: SeeAll.fromMap(m['see_all']),
       cards: cards,
       tiles: tiles,
+      band: m['band']?.toString() ?? '',
+      accent: m['accent']?.toString() ?? '',
+      seeAllLabel: m['see_all_label']?.toString() ?? '',
     );
     return section.isEmpty ? null : section;
   }
@@ -155,7 +270,18 @@ class HomeSections {
   final bool ok;
   final List<HomeSection> sections;
 
-  const HomeSections({required this.ok, required this.sections});
+  /// CHANGE #673 — the chrome that wraps the feed. Both default to their
+  /// "nothing to paint" value rather than null, so no caller ever has to
+  /// invent a fallback header or decide whether a hero exists.
+  final HomeHeader header;
+  final HomeHero hero;
+
+  const HomeSections({
+    required this.ok,
+    required this.sections,
+    this.header = HomeHeader.none,
+    this.hero = HomeHero.none,
+  });
 
   static const HomeSections failed =
       HomeSections(ok: false, sections: <HomeSection>[]);
@@ -170,6 +296,11 @@ class HomeSections {
         .map((e) => HomeSection.fromMap(Map<String, dynamic>.from(e)))
         .whereType<HomeSection>()
         .toList(growable: false);
-    return HomeSections(ok: true, sections: parsed);
+    return HomeSections(
+      ok: true,
+      sections: parsed,
+      header: HomeHeader.fromMap(m['header']),
+      hero: HomeHero.fromMap(m['hero']),
+    );
   }
 }

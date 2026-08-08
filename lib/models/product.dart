@@ -124,9 +124,22 @@ class Pricing {
   final String priceDisplay;
   final String mrpDisplay;
 
-  /// e.g. "18% off". Empty when [hasDiscount] is false.
+  /// e.g. "18% margin". Empty when [hasDiscount] is false.
   final String discountLabel;
   final bool hasDiscount;
+
+  /// CHANGE #673 — the caption printed above the price. "PTR" for B2B; the
+  /// word itself is backend-owned so a B2C surface could say something else
+  /// without a deploy. Empty means print no caption.
+  final String priceCaption;
+
+  /// CHANGE #673 — the corner ribbon, sent as TWO explicit lines rather than
+  /// one string the app would have to split. Empty when there is no ribbon.
+  final String ribbonTop;
+  final String ribbonBottom;
+
+  /// CHANGE #673 — "You earn ₹42.10", already formatted. Empty when none.
+  final String marginLabel;
 
   /// Raw numbers, for anything that must sort or compare. Never for display.
   final double salePrice;
@@ -140,7 +153,14 @@ class Pricing {
     required this.hasDiscount,
     required this.salePrice,
     required this.mrp,
+    this.priceCaption = '',
+    this.ribbonTop = '',
+    this.ribbonBottom = '',
+    this.marginLabel = '',
   });
+
+  /// True when both ribbon lines arrived. The card never paints a half ribbon.
+  bool get hasRibbon => ribbonTop.isNotEmpty && ribbonBottom.isNotEmpty;
 
   /// Parses the `pricing` object attached to every storefront row. Returns
   /// null when the row carried none, so callers can tell "backend said no
@@ -158,6 +178,10 @@ class Pricing {
       hasDiscount: m['has_discount'] == true,
       salePrice: (m['sale_price'] as num?)?.toDouble() ?? 0.0,
       mrp: (m['mrp'] as num?)?.toDouble() ?? 0.0,
+      priceCaption: (m['price_caption'] ?? '').toString(),
+      ribbonTop: (m['ribbon_top'] ?? '').toString(),
+      ribbonBottom: (m['ribbon_bottom'] ?? '').toString(),
+      marginLabel: (m['margin_label'] ?? '').toString(),
     );
   }
 
@@ -169,6 +193,10 @@ class Pricing {
         'has_discount': hasDiscount,
         'sale_price': salePrice,
         'mrp': mrp,
+        'price_caption': priceCaption,
+        'ribbon_top': ribbonTop,
+        'ribbon_bottom': ribbonBottom,
+        'margin_label': marginLabel,
       };
 }
 
@@ -250,6 +278,12 @@ class Product {
   /// CHANGE #573 — the backend's rendered price block for this row.
   final Pricing? pricing;
 
+  /// CHANGE #673 — the backend's own offer chip, e.g. "Scheme available".
+  /// [hasOffer] is the backend's boolean; the card NEVER infers an offer from
+  /// the presence of a string, and never invents a "5+1" of its own.
+  final bool hasOffer;
+  final String offerChip;
+
   const Product({
     required this.id,
     required this.name,
@@ -276,6 +310,8 @@ class Product {
     this.availability,
     this.pricing,
     this.mrpText = '',
+    this.hasOffer = false,
+    this.offerChip = '',
   });
 
   /// Returns a copy carrying [availability] — used to graft a cart line's
@@ -304,6 +340,10 @@ class Product {
         supplierLabel: supplierLabel,
         supplierCount: supplierCount,
         availability: a,
+        pricing: pricing,
+        mrpText: mrpText,
+        hasOffer: hasOffer,
+        offerChip: offerChip,
       );
 
   /// CHANGE #637 — one card from `storefront_home_v2()`.
@@ -345,6 +385,8 @@ class Product {
       availability: Availability.fromMap(map['availability']),
       pricing: pricing,
       mrpText: (map['mrp_label'] ?? '').toString(),
+      hasOffer: map['has_offer'] == true,
+      offerChip: (map['offer_chip'] ?? '').toString(),
     );
   }
 
@@ -407,6 +449,8 @@ class Product {
       availability: Availability.fromMap(map['availability']),
       pricing: Pricing.fromMap(map['pricing']),
       mrpText: (map['mrp_display'] ?? '').toString(),
+      hasOffer: map['has_offer'] == true,
+      offerChip: (map['offer_chip'] ?? '').toString(),
     );
   }
 

@@ -95,6 +95,11 @@ class _HomeShellState extends State<HomeShell> {
   String _viewAsKey = 'none'; // tracks active ViewAs identity; reset _index on change
   String _query = '';
   String _category = 'All';
+  // CHANGE #681 — Catalogue mode: show the full product LISTING (category 'All'
+  // as a grid) rather than the sectioned home feed. category=='All' alone can
+  // never do this because it is exactly the home-feed condition. Set by the
+  // Catalogue tab and the "Show all N products" control; cleared by Home.
+  bool _browseAll = false;
   bool _cartOpen = false;
   bool _loginOpen = false;
   int _scrollTrigger = 0;
@@ -244,6 +249,10 @@ class _HomeShellState extends State<HomeShell> {
     }
     if (path.startsWith('/c/')) {
       _category = _slugToCat(path.substring(3));
+      _browseAll = true;
+    } else if (path == '/browse') {
+      _category = 'All';
+      _browseAll = true;
     } else if (path == '/orders') {
       _index = 1;
     } else if (path == '/bulk-upload') {
@@ -283,6 +292,13 @@ class _HomeShellState extends State<HomeShell> {
     setState(() {
       if (path.startsWith('/c/')) {
         _category = _slugToCat(path.substring(3));
+        _browseAll = true;
+        _index = 0;
+        _cartOpen = false;
+        _scrollToTopTrigger++;
+      } else if (path == '/browse') {
+        _category = 'All';
+        _browseAll = true;
         _index = 0;
         _cartOpen = false;
         _scrollToTopTrigger++;
@@ -294,6 +310,7 @@ class _HomeShellState extends State<HomeShell> {
         _cartOpen = false;
       } else {
         _category = 'All';
+        _browseAll = false;
         _index = 0;
         _cartOpen = false;
         _scrollToTopTrigger++;
@@ -321,11 +338,28 @@ class _HomeShellState extends State<HomeShell> {
       _index = 0;
       _category = 'All';
       _query = '';
+      _browseAll = false;
       _cartOpen = false;
       _scrollToTopTrigger++;
     });
     _searchCtrl.clear();
     pushUrl('/');
+  }
+
+  // CHANGE #681 — open the full catalogue: the All-products listing (grid),
+  // not the home feed. Wired to the Catalogue tab and the "Show all N products"
+  // control so both reach the same destination.
+  void _browseAllProducts() {
+    setState(() {
+      _index = 0;
+      _category = 'All';
+      _query = '';
+      _browseAll = true;
+      _cartOpen = false;
+      _scrollToTopTrigger++;
+    });
+    _searchCtrl.clear();
+    pushUrl('/browse');
   }
 
   void _onMetaLoaded(CatalogMeta meta) {
@@ -527,9 +561,14 @@ class _HomeShellState extends State<HomeShell> {
       _query = '';
       _searchCtrl.clear();
       _index = 0;
+      // CHANGE #681 — picking a category (including 'All' via "Show all")
+      // enters the product LISTING, never the home feed. Without this, tapping
+      // "Show all N products" for Best Sellers (key 'All') just re-rendered the
+      // same home feed and read as a dead button.
+      _browseAll = true;
       _cartOpen = false;
     });
-    pushUrl(c == 'All' ? '/' : '/c/${_catToSlug(c)}');
+    pushUrl(c == 'All' ? '/browse' : '/c/${_catToSlug(c)}');
   }
 
   @override
@@ -671,6 +710,7 @@ class _HomeShellState extends State<HomeShell> {
           StorefrontScreen(
             query: _query,
             category: _category,
+            browseAll: _browseAll,
             onCategorySelected: _selectCategory,
             onSuggestionTap: (s) => setState(() {
               _query = s;
@@ -763,13 +803,17 @@ class _HomeShellState extends State<HomeShell> {
               ? null
               : _MobileBottomBar(
                   index: _index,
+                  browseAll: _browseAll,
                   cartOpen: _cartOpen,
                   onCartTap: () => _openCart(),
                   onNavTap: (i) {
                     switch (i) {
                       case 0:
+                        // Home — the sectioned feed.
+                        _goHome();
                       case 1:
-                        _setIndex(0);
+                        // Catalogue — the full All-products listing.
+                        _browseAllProducts();
                       case 2:
                         _setIndex(1);
                       case 3:
@@ -2744,12 +2788,14 @@ class _LoginPanelGoogleIcon extends StatelessWidget {
 
 class _MobileBottomBar extends StatelessWidget {
   final int index;
+  final bool browseAll;
   final bool cartOpen;
   final VoidCallback onCartTap;
   final ValueChanged<int> onNavTap;
 
   const _MobileBottomBar({
     required this.index,
+    required this.browseAll,
     required this.cartOpen,
     required this.onCartTap,
     required this.onNavTap,
@@ -2758,7 +2804,9 @@ class _MobileBottomBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cart = AppState.of(context);
-    final bottomNavIndex = index == 1 ? 2 : index == 2 ? 3 : 0;
+    // Home vs Catalogue share app index 0; browseAll is what tells them apart.
+    final bottomNavIndex =
+        index == 1 ? 2 : index == 2 ? 3 : (browseAll ? 1 : 0);
     return BottomNavigationBar(
       currentIndex: bottomNavIndex,
       type: BottomNavigationBarType.fixed,

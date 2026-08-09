@@ -44,6 +44,11 @@ class StorefrontScreen extends StatefulWidget {
   // When false (desktop), the category tile grid is hidden; the shell sidebar
   // handles category filtering instead.
   final bool showCategoryTiles;
+  // CHANGE #681 — Catalogue mode. When true, the All-products LISTING is shown
+  // even for category 'All', instead of the sectioned home feed. This is how
+  // the "Show all N products" control and the Catalogue tab reach the full
+  // grid, which category=='All' alone could never do (it always meant home).
+  final bool browseAll;
   // Called once after CatalogMeta loads so the shell can populate its sidebar.
   final ValueChanged<CatalogMeta>? onMetaLoaded;
 
@@ -64,6 +69,7 @@ class StorefrontScreen extends StatefulWidget {
     this.scrollToTopTrigger = 0,
     this.onLoadingChanged,
     this.showCategoryTiles = true,
+    this.browseAll = false,
     this.onMetaLoaded,
     this.onFooterSearch,
     this.onFooterBulkUpload,
@@ -196,7 +202,12 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   @override
   void didUpdateWidget(StorefrontScreen old) {
     super.didUpdateWidget(old);
-    if (old.category != widget.category || old.query != widget.query) {
+    if (old.category != widget.category ||
+        old.query != widget.query ||
+        // CHANGE #681 — entering the All-products listing keeps category 'All'
+        // but flips browseAll; without this the grid stays whatever the last
+        // non-home listing loaded (empty on a Home→Catalogue jump).
+        (old.browseAll != widget.browseAll && !_isHome)) {
       _resetAndLoad();
     }
     if (old.category != widget.category) {
@@ -314,7 +325,8 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
 
   /// CHANGE #637 — home is the sectioned feed, which fetches its own payload.
   /// No search, no category filter.
-  bool get _isHome => widget.query.trim().isEmpty && widget.category == 'All';
+  bool get _isHome =>
+      widget.query.trim().isEmpty && widget.category == 'All' && !widget.browseAll;
 
   Future<void> _resetAndLoad() async {
     // Home does not render the paged grid any more, so fetching a page of
@@ -602,6 +614,13 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
           onKeyEvent: _onKeyEvent,
           child: HomeSectionsView(
             onCategoryTap: (c) => widget.onCategorySelected(c),
+            // CHANGE #681 — the feed's trailing clearance exists only for the
+            // sticky cart bar, which shows only when the cart holds orders.
+            // Empty cart → no bar → no clearance, so the page ends at the
+            // footer instead of a blank block below it. AppState.of here makes
+            // the build depend on the order count, so it re-insets on change.
+            bottomInset:
+                AppState.of(context).orders.isNotEmpty ? 96.0 : 0.0,
             // CHANGE #638 — company tiles now push /company/<key> themselves;
             // the search-prefill fallback is gone.
             footer: Column(
@@ -632,11 +651,6 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
           physics: platformScrollPhysics(),
           child: Column(
         children: [
-          _Hero(
-            onShopNow: _scrollToProducts,
-            onUploadOrder: widget.onFooterBulkUpload,
-            medicineCount: _meta?.total,
-          ),
           if (widget.showCategoryTiles)
             _Section(
               child: _CategoryTiles(
@@ -754,281 +768,6 @@ class _SectionHeader extends StatelessWidget {
             ],
           ),
       ],
-    );
-  }
-}
-
-// ─────────────────────────── Hero ───────────────────────────
-
-class _Hero extends StatelessWidget {
-  final VoidCallback onShopNow;
-  final int? medicineCount;
-  final VoidCallback? onUploadOrder;
-  const _Hero({required this.onShopNow, this.medicineCount, this.onUploadOrder});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Brand.greenDark, Brand.greenDarker],
-        ),
-      ),
-      child: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: _kMaxContent),
-          child: LayoutBuilder(
-            builder: (context, c) {
-              final wide = c.maxWidth >= 820;
-              final text = _heroText(context, wide: wide);
-              return Padding(
-                padding: EdgeInsets.symmetric(
-                  horizontal: 20,
-                  vertical: wide ? 44 : 28,
-                ),
-                child: wide
-                    ? Row(
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          Expanded(flex: 6, child: text),
-                          const SizedBox(width: 32),
-                          const Expanded(flex: 5, child: _HeroArt()),
-                        ],
-                      )
-                    : text,
-              );
-            },
-          ),
-        ),
-      ),
-    );
-  }
-
-  String _formatCount(int? n) {
-    if (n == null || n == 0) return '...';
-    final s = n.toString();
-    final buf = StringBuffer();
-    for (var i = 0; i < s.length; i++) {
-      if (i > 0 && (s.length - i) % 3 == 0) buf.write(',');
-      buf.write(s[i]);
-    }
-    return '${buf.toString()}+';
-  }
-
-  Widget _heroText(BuildContext context, {bool wide = true}) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: const Text('● New Arrivals',
-              style: TextStyle(
-                  color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
-        ),
-        const SizedBox(height: 18),
-        Text(
-          'Health, Delivered\nwith Care',
-          style: TextStyle(
-              color: Colors.white,
-              fontSize: wide ? 44 : 30,
-              height: 1.1,
-              fontWeight: FontWeight.w800),
-        ),
-        const SizedBox(height: 14),
-        Text(
-          'Genuine medicines & wellness products delivered to your '
-          'doorstep in hours.',
-          style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.85),
-              fontSize: wide ? 15 : 13,
-              height: 1.4),
-        ),
-        const SizedBox(height: 24),
-        Wrap(
-          spacing: 12,
-          runSpacing: 12,
-          children: [
-            PressEffect(
-              child: FilledButton.icon(
-                style: FilledButton.styleFrom(
-                  backgroundColor: Colors.white,
-                  foregroundColor: Brand.greenDark,
-                ),
-                onPressed: onShopNow,
-                icon: const Icon(Icons.storefront, size: 18),
-                label: const Text('Shop Now'),
-              ),
-            ),
-            PressEffect(
-              child: OutlinedButton.icon(
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: Colors.white,
-                  side: const BorderSide(color: Colors.white70),
-                ),
-                onPressed: onUploadOrder,
-                icon: const Icon(Icons.upload_file, size: 18),
-                label: const Text('Upload Order'),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 26),
-        Wrap(
-          spacing: 28,
-          runSpacing: 12,
-          children: [
-            _HeroStat(value: _formatCount(medicineCount), label: 'Medicines'),
-            const _HeroStat(value: '2 hr', label: 'Fast Delivery'),
-            const _HeroStat(value: '100%', label: 'Genuine'),
-          ],
-        ),
-      ],
-    );
-  }
-}
-
-class _HeroStat extends StatelessWidget {
-  final String value;
-  final String label;
-  const _HeroStat({required this.value, required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(value,
-            style: const TextStyle(
-                color: Colors.white, fontSize: 22, fontWeight: FontWeight.w800)),
-        Text(label,
-            style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.8), fontSize: 12)),
-      ],
-    );
-  }
-}
-
-class _HeroArt extends StatelessWidget {
-  const _HeroArt();
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: 260,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(20),
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            Image.network(
-              'https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?w=400',
-              fit: BoxFit.cover,
-              loadingBuilder: (ctx, child, progress) {
-                if (progress == null) return child;
-                return Container(
-                  color: const Color(0xFF1F6F52),
-                  child: const Center(
-                    child: CircularProgressIndicator(
-                        color: Colors.white38, strokeWidth: 2),
-                  ),
-                );
-              },
-              errorBuilder: (ctx, _, __) => Container(
-                color: const Color(0xFF1F6F52),
-                child: const Center(
-                  child: Icon(Icons.medication_liquid,
-                      size: 110, color: Colors.white24),
-                ),
-              ),
-            ),
-            Positioned(
-              bottom: 0,
-              left: 0,
-              right: 0,
-              child: Container(
-                height: 80,
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.bottomCenter,
-                    end: Alignment.topCenter,
-                    colors: [Colors.black45, Colors.transparent],
-                  ),
-                ),
-              ),
-            ),
-            Positioned(
-              top: 18,
-              right: 18,
-              child: _FloatingBadge(
-                icon: Icons.bolt,
-                title: 'Express Delivery',
-                subtitle: 'In 2 hours',
-              ),
-            ),
-            Positioned(
-              bottom: 18,
-              left: 18,
-              child: _FloatingBadge(
-                icon: Icons.verified_user,
-                title: 'Verified Pharmacy',
-                subtitle: '100% genuine',
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _FloatingBadge extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  const _FloatingBadge(
-      {required this.icon, required this.title, required this.subtitle});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-              color: Colors.black.withValues(alpha: 0.12),
-              blurRadius: 12,
-              offset: const Offset(0, 4)),
-        ],
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 18, color: Brand.green),
-          const SizedBox(width: 8),
-          Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(title,
-                  style: const TextStyle(
-                      fontSize: 12, fontWeight: FontWeight.w700, color: Brand.ink)),
-              Text(subtitle,
-                  style: const TextStyle(fontSize: 10, color: Brand.inkMuted)),
-            ],
-          ),
-        ],
-      ),
     );
   }
 }

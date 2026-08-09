@@ -2457,49 +2457,59 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      controller: _scrollCtrl,
-      child: Container(
-        color: const Color(0xFFF9FAFB),
-        width: double.infinity,
-        child: Center(
+    // CHANGE #681 — the page fills the viewport and starts at the top. The grey
+    // page colour runs to the bottom edge via minHeight, so short content no
+    // longer leaves a blank slab below the last card, and the old fixed 32/48
+    // spacers that read as dead space at the top and bottom are gone.
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return SingleChildScrollView(
+          controller: _scrollCtrl,
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 1200),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 32),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const _PageHeader(),
-                  const SizedBox(height: 28),
-                  _MainLayout(
-                    rows: _rows,
-                    isLoading: _isLoading,
-                    loadingMessage: _loadingMessage,
-                    matchProgress: _matchProgress,
-                    matchTotal: _matchTotal,
-                    isFromFile: _isFromFile,
-                    fileName: _fileName,
-                    addingToCart: _addingToCart,
-                    onPickFile: _pickAndProcess,
-                    onCamera: _onCameraTap,
-                    onAddToCart: _addMatchedToCart,
-                    onHideToggle: _onRowHideToggle,
-                    uploadedImageSize: _uploadedImageSize,
-                    onRetry: _retryMatch,
-                    isRetrying: _isRetrying,
-                    retryProgress: _retryProgress,
-                    onRowRetry: _isFromFile ? _retryOneRow : null,
+            constraints: BoxConstraints(minHeight: constraints.maxHeight),
+            child: Container(
+              color: const Color(0xFFF9FAFB),
+              width: double.infinity,
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 1200),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const _PageHeader(),
+                        const SizedBox(height: 24),
+                        _MainLayout(
+                          rows: _rows,
+                          isLoading: _isLoading,
+                          loadingMessage: _loadingMessage,
+                          matchProgress: _matchProgress,
+                          matchTotal: _matchTotal,
+                          isFromFile: _isFromFile,
+                          fileName: _fileName,
+                          addingToCart: _addingToCart,
+                          onPickFile: _pickAndProcess,
+                          onCamera: _onCameraTap,
+                          onAddToCart: _addMatchedToCart,
+                          onHideToggle: _onRowHideToggle,
+                          uploadedImageSize: _uploadedImageSize,
+                          onRetry: _retryMatch,
+                          isRetrying: _isRetrying,
+                          retryProgress: _retryProgress,
+                          onRowRetry: _isFromFile ? _retryOneRow : null,
+                        ),
+                        // CHANGE #324: c324_wa_box_gone — WA convert box removed;
+                        // cart drawer checkboxes now handle item selection.
+                      ],
+                    ),
                   ),
-                  // CHANGE #324: c324_wa_box_gone — WA convert box removed;
-                  // cart drawer checkboxes now handle item selection + ordering.
-                  const SizedBox(height: 48),
-                ],
+                ),
               ),
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 }

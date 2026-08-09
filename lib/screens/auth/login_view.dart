@@ -105,6 +105,11 @@ class _LoginViewState extends State<LoginView> {
   static const _muted = Color(0xFF6B7280);
   static const _line = Color(0xFFD1D5DB);
   static const _danger = Color(0xFFDC2626);
+  // CHANGE #681 — design-system input tokens (soft fill + hairline border,
+  // brand green focus). Shared by the WhatsApp number field and the OTP boxes.
+  static const _fieldFill = Color(0xFFF5F6F8);
+  static const _fieldBorder = Color(0xFFE5E7EB);
+  static const _brandGreen = Color(0xFF1B7A43);
 
   Map<String, dynamic>? _cfg;
   bool _cfgFailed = false;
@@ -739,10 +744,13 @@ class _LoginViewState extends State<LoginView> {
       );
 
   Widget _numberField() => Container(
+        // CHANGE #681 — design-system input: a soft neutral fill with a subtle
+        // hairline border, not a hard outlined box. Consistent with every other
+        // field in the app (1mg/PharmEasy language).
         decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: _line),
+          color: _fieldFill,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: _fieldBorder),
         ),
         child: Row(
           children: [
@@ -758,7 +766,7 @@ class _LoginViewState extends State<LoginView> {
                 ),
               ),
             ),
-            Container(width: 1, height: 26, color: _line),
+            Container(width: 1, height: 26, color: _fieldBorder),
             Expanded(
               child: TextField(
                 controller: _numCtrl,
@@ -797,41 +805,50 @@ class _LoginViewState extends State<LoginView> {
             padding: EdgeInsets.only(right: i == n - 1 ? 0 : 8),
             child: AspectRatio(
               aspectRatio: 0.82,
-              child: TextField(
-                controller: _codeCtrls[i],
-                focusNode: _codeFocus[i],
-                keyboardType: TextInputType.number,
-                textAlign: TextAlign.center,
-                maxLength: 1,
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                onChanged: (v) => _onCodeChanged(i, v),
-                style: const TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w700,
-                  color: _ink,
-                ),
-                decoration: InputDecoration(
-                  counterText: '',
-                  filled: true,
-                  fillColor: _codeError
-                      ? const Color(0xFFFEF2F2)
-                      : filled
-                          ? const Color(0xFFEFF8F1)
-                          : Colors.white,
-                  contentPadding: EdgeInsets.zero,
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide: BorderSide(
-                        color: _codeError
-                            ? _danger
-                            : filled
-                                ? _green
-                                : _line),
+              // Focus wrapper catches the keys a bare TextField can't express
+              // as text edits: backspace on an ALREADY-empty box (step back and
+              // clear), and the arrow keys (move between boxes).
+              child: Focus(
+                onKeyEvent: (_, event) => _onCodeKey(i, event),
+                child: TextField(
+                  controller: _codeCtrls[i],
+                  focusNode: _codeFocus[i],
+                  keyboardType: TextInputType.number,
+                  textAlign: TextAlign.center,
+                  textInputAction: i == n - 1
+                      ? TextInputAction.done
+                      : TextInputAction.next,
+                  // No maxLength — a pasted or SMS-autofilled code arrives as
+                  // all six digits in one box and must survive to be spread.
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  onChanged: (v) => _onCodeChanged(i, v),
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                    color: _ink,
                   ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide: BorderSide(
-                        color: _codeError ? _danger : _green, width: 1.8),
+                  decoration: InputDecoration(
+                    counterText: '',
+                    filled: true,
+                    fillColor: _codeError
+                        ? const Color(0xFFFEF2F2)
+                        : _fieldFill,
+                    contentPadding: EdgeInsets.zero,
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(
+                          color: _codeError
+                              ? _danger
+                              : filled
+                                  ? _brandGreen
+                                  : _fieldBorder),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(
+                          color: _codeError ? _danger : _brandGreen,
+                          width: 1.8),
+                    ),
                   ),
                 ),
               ),
@@ -842,16 +859,67 @@ class _LoginViewState extends State<LoginView> {
     );
   }
 
+  KeyEventResult _onCodeKey(int i, KeyEvent event) {
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+    final key = event.logicalKey;
+    if (key == LogicalKeyboardKey.backspace) {
+      // Empty box: step to the previous one and clear it. A FILLED box is left
+      // to the TextField, which clears it in place via onChanged and stays put.
+      if (_codeCtrls[i].text.isEmpty && i > 0) {
+        _codeCtrls[i - 1].clear();
+        _codeFocus[i - 1].requestFocus();
+        setState(() => _codeError = false);
+        return KeyEventResult.handled;
+      }
+      return KeyEventResult.ignored;
+    }
+    if (key == LogicalKeyboardKey.arrowLeft && i > 0) {
+      _codeFocus[i - 1].requestFocus();
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.arrowRight && i < _codeFocus.length - 1) {
+      _codeFocus[i + 1].requestFocus();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
   void _onCodeChanged(int i, String v) {
     setState(() => _codeError = false);
-    if (v.isNotEmpty) {
-      if (i + 1 < _codeFocus.length) {
-        _codeFocus[i + 1].requestFocus();
-      } else {
-        _codeFocus[i].unfocus();
-      }
-    } else if (i > 0) {
-      _codeFocus[i - 1].requestFocus();
+    // A paste / autofill lands as multiple digits in one box: spread them from
+    // the first box, then focus the next empty box (or verify if now full).
+    if (v.length > 1) {
+      _fillCode(v);
+      return;
+    }
+    if (v.isEmpty) {
+      // Backspace cleared this box; clear-in-place means stay put.
+      return;
+    }
+    if (i + 1 < _codeFocus.length) {
+      _codeFocus[i + 1].requestFocus();
+    } else {
+      _codeFocus[i].unfocus();
+      if (_code.length == _codeCtrls.length) _verify();
+    }
+  }
+
+  /// Spreads a whole code across the boxes and, once every box is filled,
+  /// verifies without a further tap.
+  void _fillCode(String raw) {
+    final digits = raw.replaceAll(RegExp(r'\D'), '');
+    final n = _codeCtrls.length;
+    for (var k = 0; k < n; k++) {
+      _codeCtrls[k].text = k < digits.length ? digits[k] : '';
+    }
+    setState(() {});
+    if (digits.length >= n) {
+      _codeFocus[n - 1].unfocus();
+      if (_code.length == n) _verify();
+    } else {
+      _codeFocus[digits.length].requestFocus();
     }
   }
 

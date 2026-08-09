@@ -40,6 +40,12 @@ class HomeSectionsView extends StatefulWidget {
   /// lazy ListView, so sections below the fold are never built.
   final Widget? footer;
 
+  /// CHANGE #681 — trailing clearance below the footer, for whatever bottom
+  /// chrome (the sticky cart bar) is currently floating over the feed. The
+  /// shell passes 0 when nothing floats, so the feed ends flush at the footer
+  /// instead of scrolling past it into empty space.
+  final double bottomInset;
+
   const HomeSectionsView({
     super.key,
     this.loader,
@@ -47,6 +53,7 @@ class HomeSectionsView extends StatefulWidget {
     this.notificationsLoader,
     this.onSeen,
     this.footer,
+    this.bottomInset = 0,
   });
 
   /// Last successful payload, kept for the life of the app session.
@@ -233,7 +240,7 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
         physics: const AlwaysScrollableScrollPhysics(
           parent: BouncingScrollPhysics(),
         ),
-        padding: const EdgeInsets.only(bottom: 96),
+        padding: EdgeInsets.only(bottom: widget.bottomInset),
         // CHANGE #678a — build two screens ahead of the viewport.
         //
         // The default builds a section only as its top edge arrives, so the

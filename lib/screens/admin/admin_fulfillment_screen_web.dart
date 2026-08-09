@@ -35,6 +35,7 @@ import '../../supabase_config.dart' show SupabaseConfig;
 import 'voice_receive.dart';
 import 'admin_delivery_tab.dart'; // CHANGE #629: Delivery tab (zone + date scoped)
 import 'barcode_count_screen.dart'; // CHANGE #624: barcode counting screen
+import '../../fulfill/count_voice_hooks.dart'; // COUNT MODE: voice bridge
 import '../../widgets/pinned_footer_list.dart';
 import '../../widgets/fulfill_item_sheet.dart';
 import '../../widgets/report_issue_section.dart';
@@ -4445,10 +4446,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                       ? Icons.hourglass_top_rounded
                       : Icons.mic_none_rounded,
               label: _voiceListening
-                  ? 'Stop'
+                  ? FulfillLookups.instance.ui('voice_pill_stop')
                   : _voiceProcessing
-                      ? 'Processing…'
-                      : 'Count items',
+                      ? FulfillLookups.instance.ui('voice_pill_processing')
+                      : FulfillLookups.instance.ui('voice_pill_count'),
               active: _voiceListening,
               activeColor: _kWrongFg,
               disabled: countingDisabled && !_voiceListening,
@@ -5308,10 +5309,10 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
                       ? Icons.hourglass_top_rounded
                       : Icons.mic_none_rounded,
               label: _voiceListening
-                  ? 'Stop recording'
+                  ? FulfillLookups.instance.ui('voice_pill_stop_recording')
                   : _voiceProcessing
-                      ? 'Processing…'
-                      : 'Count items',
+                      ? FulfillLookups.instance.ui('voice_pill_processing')
+                      : FulfillLookups.instance.ui('voice_pill_count'),
               active: _voiceListening,
               activeColor: _kWrongFg,
               disabled: countingDisabled && !_voiceListening,
@@ -5418,8 +5419,27 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         'open;supplier=$supplier;stage=$stage;surface=${widget.arrivals ? 'warehouse' : 'shop'}');
     final committed = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
-        builder: (_) =>
-            BarcodeCountScreen.supplier(supplierName: supplier, stage: stage),
+        builder: (_) => BarcodeCountScreen.supplier(
+          supplierName: supplier,
+          stage: stage,
+          // COUNT MODE — the tab's own voice engine, exposed to the Count
+          // screen. This State stays alive under the pushed route, so the mic
+          // genuinely runs alongside the camera; the backend merges the two
+          // streams (voice_merged). Every string here is one the tab already
+          // read from the backend or the live interim caption.
+          voice: CountVoiceHooks(
+            toggle: _toggleRecording,
+            status: () => CountVoiceStatus(
+              supported: _voiceSupported,
+              listening: _voiceListening,
+              processing: _voiceProcessing,
+              caption: _liveCaption.isNotEmpty ? _liveCaption : _voiceInterim,
+              hint: _liveHint,
+              error: _voiceError,
+              bagLabel: _liveBagLabel,
+            ),
+          ),
+        ),
       ),
     );
     if (!mounted) return;
@@ -10253,7 +10273,7 @@ class _PackTabState extends State<_PackTab>
 
   Future<void> _stopAskMediaBO(String orderId) async {
     if (!_askListening) return;
-    if (mounted) setState(() { _askInterim = 'Processing…'; });
+    if (mounted) setState(() { _askInterim = FulfillLookups.instance.ui('voice_pill_processing'); });
     _askProcessing = true;
     try {
       final result = await _voiceService.stop();
@@ -10437,7 +10457,24 @@ class _PackTabState extends State<_PackTab>
             await Navigator.push(
               context,
               MaterialPageRoute(
-                  builder: (_) => _PackingScreen(orderId: orderId)),
+                  builder: (_) => _PackingScreen(
+                        orderId: orderId,
+                        // COUNT MODE — same hooks the accordion's Count entry
+                        // uses, so the swipe screen's scanner also runs voice
+                        // in parallel. This tab State stays alive underneath.
+                        voice: CountVoiceHooks(
+                          toggle: () => _toggleCountVoice(orderId),
+                          status: () => CountVoiceStatus(
+                            supported: true,
+                            listening: _voiceListening &&
+                                _activeVoiceOrderId == orderId,
+                            processing: _voiceProcessing || _packCounting,
+                            caption: _packLiveCaption,
+                            hint: _packLiveHint,
+                            bagLabel: '',
+                          ),
+                        ),
+                      )),
             );
             _packStatus.remove(orderId);
             _packQueueData.remove(orderId);
@@ -10812,8 +10849,10 @@ class _PackTabState extends State<_PackTab>
             Flexible(
                 child: Text(
               processing
-                  ? 'Processing…'
-                  : (listening ? 'Stop' : 'Count items'),
+                  ? FulfillLookups.instance.ui('voice_pill_processing')
+                  : (listening
+                      ? FulfillLookups.instance.ui('voice_pill_stop')
+                      : FulfillLookups.instance.ui('voice_pill_count')),
               style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w600,
@@ -10859,7 +10898,10 @@ class _PackTabState extends State<_PackTab>
   // supplier+stage RPCs, so a Pack scan can still never reach the shop
   // receiving ledger.
   Widget _buildBarcodePill(String orderId) {
-    final bool disabled = _voiceListening || _voiceProcessing || _packCounting;
+    // COUNT MODE — voice no longer blocks the scanner: the Count screen runs
+    // camera and mic in parallel (the backend merges the streams). Only an
+    // in-flight transcription/commit still gates the tap.
+    final bool disabled = _voiceProcessing || _packCounting;
     return GestureDetector(
       onTap: disabled ? null : () => _openPackBarcodeCount(orderId),
       child: AnimatedContainer(
@@ -10894,7 +10936,25 @@ class _PackTabState extends State<_PackTab>
     RenderLog.write('c624_barcode_count', 'open;surface=pack;order=$orderId');
     final committed = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
-        builder: (_) => BarcodeCountScreen.pack(orderId: orderId),
+        builder: (_) => BarcodeCountScreen.pack(
+          orderId: orderId,
+          // COUNT MODE — Pack's own per-order voice engine, exposed to the
+          // Count screen. The tab State stays alive under the pushed route so
+          // the mic runs alongside the camera; pack_barcode_submit_scan merges
+          // the streams server-side (voice_merged). Listening reflects THIS
+          // order only — pack voice is order-scoped.
+          voice: CountVoiceHooks(
+            toggle: () => _toggleCountVoice(orderId),
+            status: () => CountVoiceStatus(
+              supported: true,
+              listening: _voiceListening && _activeVoiceOrderId == orderId,
+              processing: _voiceProcessing || _packCounting,
+              caption: _packLiveCaption,
+              hint: _packLiveHint,
+              bagLabel: '',
+            ),
+          ),
+        ),
       ),
     );
     if (!mounted) return;
@@ -12022,7 +12082,12 @@ class _PackMentionsSheetState extends State<_PackMentionsSheet> {
 
 class _PackingScreen extends StatefulWidget {
   final String orderId;
-  const _PackingScreen({required this.orderId});
+
+  /// COUNT MODE — the Pack tab's voice engine, forwarded so the Count entry on
+  /// this screen runs camera + mic in parallel too. Null-safe: no hooks, no bar.
+  final CountVoiceHooks? voice;
+
+  const _PackingScreen({required this.orderId, this.voice});
   @override
   State<_PackingScreen> createState() => _PackingScreenState();
 }
@@ -12119,6 +12184,26 @@ class _PackingScreenState extends State<_PackingScreen>
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(msg), duration: const Duration(seconds: 3)));
+  }
+
+  // COUNT MODE — the swipe screen's entry to the unified counting session.
+  // Same PACK-mode scanner the accordion opens (pack_barcode_* RPCs only),
+  // with the tab's voice hooks forwarded through the constructor. On any
+  // committed count the queue refetches — counts land via pack_set_counted,
+  // so the backend's is_done/nav blocks are re-read, never patched locally.
+  Future<void> _openCountMode() async {
+    RenderLog.write('c627_pack_barcode',
+        'open;mode=pack;order=${widget.orderId};surface=packing_screen');
+    final committed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => BarcodeCountScreen.pack(
+          orderId: widget.orderId,
+          voice: widget.voice,
+        ),
+      ),
+    );
+    if (!mounted) return;
+    if (committed == true) await _loadQueue();
   }
 
   @override
@@ -12699,6 +12784,14 @@ class _PackingScreenState extends State<_PackingScreen>
                 style: TextStyle(fontSize: 12, color: _kSub)),
         ]),
         actions: [
+          // COUNT MODE — the swipe screen's own entry to the unified counting
+          // session (camera + the tab's voice engine via forwarded hooks).
+          if (!_loading && _queue != null)
+            IconButton(
+              icon: Icon(Icons.qr_code_scanner_rounded, size: 20, color: _kGreen),
+              tooltip: FulfillLookups.instance.ui('barcode_count'),
+              onPressed: _openCountMode,
+            ),
           if (!_loading && _queue != null)
             TextButton.icon(
               icon: Icon(Icons.inventory_2_outlined, size: 16, color: _kGreen),

@@ -43,6 +43,17 @@ class BarcodeStaged {
   final String bagLabel;
   final bool bagWarning;
 
+  // COUNT MODE: GS1 extras, read verbatim from barcode_lookup's `gs1` block.
+  // Empty string when the code was a plain EAN — absence is explicit, and the
+  // backend's expiry_warning.show (not these) decides whether a chip renders.
+  final String batch;
+  final String expiryLabel;
+
+  /// barcode_lookup's expiry_warning block, verbatim: {show, level, label,
+  /// colors:{bg,fg,border}}. The app only reads `show` to decide visibility;
+  /// label and every colour are the backend's.
+  final Map<String, dynamic> expiryWarning;
+
   /// Staged, not counted. Starts at 1 on the scan that created it (B2).
   int qty = 1;
 
@@ -56,6 +67,9 @@ class BarcodeStaged {
     required this.progressLabel,
     required this.bagLabel,
     required this.bagWarning,
+    this.batch = '',
+    this.expiryLabel = '',
+    this.expiryWarning = const {},
   });
 }
 
@@ -115,6 +129,30 @@ class BarcodeCountLogic {
   bool busy = false;
   bool anyCommitted = false;
 
+  // COUNT MODE — the last commit's outcome, for the screen to toast/haptic on.
+  // 'committed' | 'skipped' | 'refused' | 'error' | 'zero' | ''.
+  // commitSeq bumps once per outcome so the screen never toasts the same
+  // event twice (handleCode's auto-commit and an explicit swipe share this).
+  String lastCommitEvent = '';
+  int commitSeq = 0;
+
+  /// The backend's skipped code (duplicate_serial | duplicate_scan |
+  /// voice_merged | zero_qty) and its message, VERBATIM. A skipped commit wrote
+  /// nothing — anyCommitted is untouched and progressLabel keeps its last value.
+  String skipped = '';
+  String skippedMessage = '';
+
+  /// The commit response's expiry_warning block, verbatim (chip after commit).
+  Map<String, dynamic> commitExpiry = const {};
+
+  // TEACH — set only by an unknown_barcode lookup whose payload said
+  // can_teach:true. teachBarcode is the backend's own normalised code (GTIN for
+  // GS1); _teachRaw is the raw scan we re-run the lookup with after saving.
+  bool canTeach = false;
+  String teachBarcode = '';
+  String teachHint = '';
+  String _teachRaw = '';
+
   void _changed() => onChanged?.call();
 
   static Map<String, dynamic> _asMap(dynamic raw) =>
@@ -161,9 +199,18 @@ class BarcodeCountLogic {
         staged = null;
         errTitle = res['title']?.toString() ?? '';
         errMessage = res['message']?.toString() ?? '';
+        // TEACH: unknown_barcode + can_teach opens the one-tap teach flow. The
+        // backend decided teachability and supplied the code to save; the app
+        // only remembers the raw scan to re-run the lookup with afterwards.
+        canTeach = res['error']?.toString() == 'unknown_barcode' &&
+            res['can_teach'] == true;
+        teachBarcode = canTeach ? (res['teach_barcode']?.toString() ?? '') : '';
+        teachHint = canTeach ? (res['teach_hint']?.toString() ?? '') : '';
+        _teachRaw = canTeach ? code : '';
         return;
       }
 
+      final gs1 = _asMap(res['gs1']);
       staged = BarcodeStaged(
         barcode: code,
         productId: (res['product_id'] as num?)?.toInt() ?? 0,
@@ -177,9 +224,16 @@ class BarcodeCountLogic {
         // key being absent.
         bagLabel: isPack ? '' : (res['bag_label']?.toString() ?? ''),
         bagWarning: isPack ? false : res['bag_warning'] == true,
+        batch: gs1['batch']?.toString() ?? '',
+        expiryLabel: gs1['expiry_label']?.toString() ?? '',
+        expiryWarning: _asMap(res['expiry_warning']),
       );
       errTitle = '';
       errMessage = '';
+      canTeach = false;
+      teachBarcode = '';
+      teachHint = '';
+      _teachRaw = '';
       countedQty = (res['counted_qty'] as num?)?.toInt() ?? countedQty;
       progressLabel = staged!.progressLabel;
       isOver = false;
@@ -201,22 +255,31 @@ class BarcodeCountLogic {
 
     if (s.qty <= 0) {
       staged = null;
+      lastCommitEvent = 'zero';
+      commitSeq++;
       _changed();
       return;
     }
 
     busy = true;
+    skipped = '';
+    skippedMessage = '';
     _changed();
     try {
       // CHANGE #627: Pack commits through pack_barcode_submit_scan, which writes
       // to pack_clip_mentions and applies via pack_set_counted — the SAME function
       // Pack's voice count uses.
+      //
+      // COUNT MODE: p_raw is the code's raw string EXACTLY as the camera decoded
+      // it. gs1_parse in the backend owns all decoding — GTIN, batch, expiry,
+      // serial — so nothing is parsed or stripped here.
       final raw = isPack
           ? await rpc('pack_barcode_submit_scan', {
               'p_order_id': orderId,
               'p_product_id': s.productId,
               'p_qty': s.qty,
               'p_session_key': sessionKey,
+              'p_raw': s.barcode,
             })
           : await rpc('barcode_submit_scan', {
               'p_supplier': supplierName,
@@ -225,14 +288,36 @@ class BarcodeCountLogic {
               'p_stage': stage,
               'p_date': dateYmd(),
               'p_session_key': sessionKey,
+              'p_raw': s.barcode,
             });
       final res = _asMap(raw);
 
       if (res['ok'] != true) {
-        errTitle = '';
+        // no_active_bag and every other refusal: title + message verbatim, and
+        // the count stays untouched — the backend wrote nothing.
+        errTitle = res['title']?.toString() ?? '';
         errMessage = res['message']?.toString() ??
             messageForCode(res['error']?.toString() ?? '');
         staged = null;
+        lastCommitEvent = 'refused';
+        commitSeq++;
+        return;
+      }
+
+      // SKIPPED (duplicate_serial | duplicate_scan | voice_merged): the backend
+      // wrote nothing and said why. Show its message verbatim; counted_qty is
+      // the payload's (unchanged) total; progressLabel keeps its last value
+      // because a skip carries none.
+      final skip = res['skipped']?.toString() ?? '';
+      if (skip.isNotEmpty) {
+        skipped = skip;
+        skippedMessage = res['message']?.toString() ?? '';
+        countedQty = (res['counted_qty'] as num?)?.toInt() ?? countedQty;
+        staged = null;
+        errTitle = '';
+        errMessage = '';
+        lastCommitEvent = 'skipped';
+        commitSeq++;
         return;
       }
 
@@ -245,14 +330,48 @@ class BarcodeCountLogic {
       progressLabel = res['progress_label']?.toString() ?? '';
       isOver = res['is_over'] == true;
       overQty = (res['over_qty'] as num?)?.toInt() ?? 0;
+      commitExpiry = _asMap(res['expiry_warning']);
+      lastCommitEvent = 'committed';
+      commitSeq++;
     } catch (e) {
       errTitle = '';
       errMessage = errorText(e);
       staged = null;
+      lastCommitEvent = 'error';
+      commitSeq++;
     } finally {
       busy = false;
       _changed();
     }
+  }
+
+  /// TEACH — one tap, saved forever. Attaches the unknown code to [productId]
+  /// via medicine_set_barcode, then re-runs the SAME raw lookup so the staged
+  /// card appears immediately. A refusal (barcode_taken) renders the backend's
+  /// message verbatim and leaves the teach state open for another pick.
+  Future<void> teach(int productId) async {
+    if (!canTeach || teachBarcode.isEmpty || busy) return;
+    busy = true;
+    _changed();
+    final rawCode = _teachRaw;
+    try {
+      final res = _asMap(await rpc('medicine_set_barcode', {
+        'p_product_id': productId,
+        'p_barcode': teachBarcode,
+      }));
+      if (res['ok'] != true) {
+        errMessage = res['message']?.toString() ??
+            messageForCode(res['error']?.toString() ?? '');
+        return;
+      }
+    } catch (e) {
+      errMessage = errorText(e);
+      return;
+    } finally {
+      busy = false;
+      _changed();
+    }
+    await lookup(rawCode);
   }
 
   /// B3/B4: image tap zones. Down to 0 but never below; at 0 the product stays

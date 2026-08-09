@@ -1,2 +1,0 @@
-/home/mimbonetwork/mediBO/build/.cxx/release/5r3j4x23/x86_64/CMakeFiles/edit_cache.dir
-/home/mimbonetwork/mediBO/build/.cxx/release/5r3j4x23/x86_64/CMakeFiles/rebuild_cache.dir

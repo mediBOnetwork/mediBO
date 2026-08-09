@@ -22,6 +22,7 @@ import 'admin/admin_manage_admins_screen.dart';
 import 'admin/admin_customer_screen.dart';
 import 'admin/admin_company_screen.dart';
 import 'admin/admin_dashboard_screen.dart';
+import 'admin/admin_deletion_request_screen.dart';
 import 'admin/admin_delivery_partner_screen.dart';
 import 'admin/admin_mr_screen.dart';
 import 'admin/admin_alert_overlay.dart';
@@ -109,6 +110,10 @@ class _HomeShellState extends State<HomeShell> {
   bool _amISuper = false;
   bool _amISuperChecked = false;
 
+  // Deletion-request queue badge — the count is the server's
+  // (admin_deletion_request_count); the shell only renders it.
+  int _deletionCount = 0;
+
   // Desktop sidebar: populated once storefront loads its CatalogMeta
   CatalogMeta? _desktopMeta;
 
@@ -193,6 +198,16 @@ class _HomeShellState extends State<HomeShell> {
     }
   }
 
+  /// The deletion-request queue badge. Returns 0 for non-admins (the RPC gates
+  /// on role), so calling it unconditionally on an admin session is safe.
+  Future<void> _loadDeletionCount() async {
+    try {
+      final r = await Supabase.instance.client.rpc('admin_deletion_request_count');
+      final n = (r is num) ? r.toInt() : int.tryParse('$r') ?? 0;
+      if (mounted) setState(() => _deletionCount = n);
+    } catch (_) {}
+  }
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -200,6 +215,7 @@ class _HomeShellState extends State<HomeShell> {
     if (authForSuper.isAdmin && !_amISuperChecked) {
       _amISuperChecked = true;
       _checkAmISuper();
+      _loadDeletionCount();
     }
     final viewAs = ViewAsState.of(context);
     final key = viewAs.isActive
@@ -438,6 +454,34 @@ class _HomeShellState extends State<HomeShell> {
           Navigator.push(context,
               MaterialPageRoute(builder: (_) => const AdminUpiScreen()));
         }
+        break;
+      case 'deletion_requests':
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => AdminDeletionRequestScreen(
+              listRpc: (status) async {
+                final raw = await Supabase.instance.client.rpc(
+                    'admin_deletion_request_list',
+                    params: {'p_status': status});
+                return Map<String, dynamic>.from(
+                    (raw is List ? raw.first : raw) as Map);
+              },
+              reviewRpc: (id, decision, note) async {
+                final raw = await Supabase.instance.client.rpc(
+                    'admin_review_deletion_request',
+                    params: {
+                      'p_request_id': id,
+                      'p_decision': decision,
+                      'p_note': note,
+                    });
+                return Map<String, dynamic>.from(
+                    (raw is List ? raw.first : raw) as Map);
+              },
+              onChanged: _loadDeletionCount,
+            ),
+          ),
+        ).then((_) => _loadDeletionCount());
         break;
       case 'logout':
         UserState.read(context).signOut(); break;
@@ -790,6 +834,7 @@ class _HomeShellState extends State<HomeShell> {
                   logoTooltip: '',
                   onAdminNav: isAdmin ? _handleAdminNav : null,
                   isSuperAdmin: isAdmin ? _amISuper : false,
+                  deletionCount: isAdmin ? _deletionCount : 0,
                 ),
                 // CHANGE #455 B1 — the persistent order-hours banner that
                 // used to sit here (and in the desktop header below) is
@@ -882,6 +927,7 @@ class _HomeShellState extends State<HomeShell> {
                   ][i]),
                   onAdminNav: _handleAdminNav,
                   isSuperAdmin: _amISuper,
+                  deletionCount: _deletionCount,
                 )
               else
                 _DesktopHeader(
@@ -970,6 +1016,7 @@ class _LocationHeader extends StatelessWidget {
   final String logoTooltip;
   final ValueChanged<String>? onAdminNav;
   final bool isSuperAdmin;
+  final int deletionCount;
   const _LocationHeader({
     required this.isAdmin,
     required this.onCart,
@@ -978,6 +1025,7 @@ class _LocationHeader extends StatelessWidget {
     required this.logoTooltip,
     this.onAdminNav,
     this.isSuperAdmin = false,
+    this.deletionCount = 0,
   });
 
   @override
@@ -996,7 +1044,7 @@ class _LocationHeader extends StatelessWidget {
         child: Row(
           children: [
             // LEFT: profile avatar
-            _MobileProfileAvatar(onAdminNav: onAdminNav, isSuperAdmin: isSuperAdmin),
+            _MobileProfileAvatar(onAdminNav: onAdminNav, isSuperAdmin: isSuperAdmin, deletionCount: deletionCount),
             // CENTER: logo — context-aware navigation
             Expanded(
               child: Center(
@@ -1056,7 +1104,8 @@ class _LocationHeader extends StatelessWidget {
 class _MobileProfileAvatar extends StatelessWidget {
   final ValueChanged<String>? onAdminNav;
   final bool isSuperAdmin;
-  const _MobileProfileAvatar({this.onAdminNav, this.isSuperAdmin = false});
+  final int deletionCount;
+  const _MobileProfileAvatar({this.onAdminNav, this.isSuperAdmin = false, this.deletionCount = 0});
 
   @override
   Widget build(BuildContext context) {
@@ -1164,7 +1213,7 @@ class _MobileProfileAvatar extends StatelessWidget {
               Navigator.pop(context);
               Navigator.push(context, MaterialPageRoute(builder: (_) => const ProfileScreen()));
             }),
-            AdminProfileMenuTiles(isSuperAdmin: isSuperAdmin, nav: nav),
+            AdminProfileMenuTiles(isSuperAdmin: isSuperAdmin, nav: nav, deletionCount: deletionCount),
             AdminSheetTile(
               icon: Icons.qr_code_2,
               label: 'Bags',
@@ -3961,6 +4010,7 @@ class _AdminDesktopHeader extends StatelessWidget {
   final ValueChanged<int> onSection; // 0=Dashboard,1=AddMedicine,2=Suppliers,3=Customers,4=Bills
   final ValueChanged<String> onAdminNav;
   final bool isSuperAdmin;
+  final int deletionCount;
 
   const _AdminDesktopHeader({
     required this.onHome,
@@ -3968,6 +4018,7 @@ class _AdminDesktopHeader extends StatelessWidget {
     required this.onAdminNav,
     this.isSuperAdmin = false,
     this.scrolled = false,
+    this.deletionCount = 0,
   });
 
   @override
@@ -4025,7 +4076,7 @@ class _AdminDesktopHeader extends StatelessWidget {
           ],
           // Overflow rather than two more links: at the 900 px where this shell
           // begins, the row has no room left.
-          AdminMoreNavMenu(onNav: onAdminNav),
+          AdminMoreNavMenu(onNav: onAdminNav, deletionCount: deletionCount),
           const SizedBox(width: 8),
           _DesktopProfileButton(onLogin: () {}, onAdminNav: onAdminNav, isSuperAdmin: isSuperAdmin),
           const SizedBox(width: 24),

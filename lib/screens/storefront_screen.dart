@@ -1937,6 +1937,8 @@ class _Footer extends StatelessWidget {
             () => Navigator.pushNamed(context, '/terms')),
         _footerLink('Privacy Policy',
             () => Navigator.pushNamed(context, '/privacy')),
+        _footerLink('Delete Account & Data',
+            () => Navigator.pushNamed(context, '/data-deletion')),
         _footerLink('Refund & Return',
             () => Navigator.pushNamed(context, '/refund')),
         _footerLink('Shipping Policy',

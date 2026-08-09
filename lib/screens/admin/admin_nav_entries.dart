@@ -64,6 +64,11 @@ const kAdminOverflowNav = <AdminNavEntry>[
   AdminNavEntry('Sequences', Icons.timeline_outlined, route: 'wa_drips'),
   AdminNavEntry('WhatsApp Ops', Icons.settings_suggest_outlined,
       route: 'wa_ops'),
+  // Sibling of registration approvals: the customer account/data-deletion
+  // queue. Its badge count comes from admin_deletion_request_count(), passed in
+  // as a plain int so this file keeps its Supabase-free, VM-testable isolation.
+  AdminNavEntry('Deletion Requests', Icons.person_remove_outlined,
+      route: 'deletion_requests'),
 ];
 
 /// The wide shell's "More" popup, sitting after Fulfillment in the top row.
@@ -72,7 +77,15 @@ const kAdminOverflowNav = <AdminNavEntry>[
 /// where the wide shell begins, two extra links clip the row.
 class AdminMoreNavMenu extends StatelessWidget {
   final ValueChanged<String> onNav;
-  const AdminMoreNavMenu({super.key, required this.onNav});
+
+  /// Live count for the Deletion Requests entry (admin_deletion_request_count).
+  final int deletionCount;
+
+  const AdminMoreNavMenu({
+    super.key,
+    required this.onNav,
+    this.deletionCount = 0,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -87,7 +100,12 @@ class AdminMoreNavMenu extends StatelessWidget {
             // min + Flexible: the popup constrains its items, and these two
             // labels are long enough to clip against a narrow one.
             child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Icon(e.icon, size: 16, color: const Color(0xFF374151)),
+              (e.route == 'deletion_requests' && deletionCount > 0)
+                  ? Badge(
+                      label: Text('$deletionCount'),
+                      child: Icon(e.icon,
+                          size: 16, color: const Color(0xFF374151)))
+                  : Icon(e.icon, size: 16, color: const Color(0xFF374151)),
               const SizedBox(width: 10),
               Flexible(
                 child: Text(e.label,
@@ -137,10 +155,14 @@ class AdminProfileMenuTiles extends StatelessWidget {
   final bool isSuperAdmin;
   final ValueChanged<String> nav;
 
+  /// Live count for the Deletion Requests tile (admin_deletion_request_count).
+  final int deletionCount;
+
   const AdminProfileMenuTiles({
     super.key,
     required this.isSuperAdmin,
     required this.nav,
+    this.deletionCount = 0,
   });
 
   @override
@@ -211,6 +233,8 @@ class AdminProfileMenuTiles extends StatelessWidget {
           AdminSheetTile(
             icon: e.icon,
             label: e.label,
+            badgeCount:
+                e.route == 'deletion_requests' ? deletionCount : 0,
             onTap: () { Navigator.pop(context); nav(e.route ?? ''); },
           ),
       ],
@@ -225,12 +249,17 @@ class AdminSheetTile extends StatelessWidget {
   final String label;
   final Color color;
   final VoidCallback onTap;
+
+  /// When > 0, a badge on the leading icon (used by the Deletion Requests tile).
+  final int badgeCount;
+
   const AdminSheetTile({
     super.key,
     required this.icon,
     required this.label,
     required this.onTap,
     this.color = const Color(0xFF374151),
+    this.badgeCount = 0,
   });
 
   @override
@@ -241,7 +270,9 @@ class AdminSheetTile extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 12),
         child: Row(children: [
-          Icon(icon, size: 20, color: color),
+          badgeCount > 0
+              ? Badge(label: Text('$badgeCount'), child: Icon(icon, size: 20, color: color))
+              : Icon(icon, size: 20, color: color),
           const SizedBox(width: 12),
           Text(label, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: color)),
         ]),

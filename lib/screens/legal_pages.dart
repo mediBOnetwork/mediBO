@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../theme.dart';
+import '../utils/render_log.dart';
 import '../widgets/policy_page_layout.dart';
 
 // CHANGE #619 — the partner identity constants that used to live here
@@ -169,26 +170,154 @@ class TermsScreen extends StatelessWidget {
   }
 }
 
+// ─── Backend-rendered legal page (legal_get_page) ─────────────────────────────
+
+/// Fetches one legal page and renders it verbatim.
+typedef LegalPageLoader = Future<Map<String, dynamic>> Function(String slug);
+
+/// A policy page whose every word comes from `legal_get_page(slug)` — title,
+/// "Last updated" line and each section's heading + items. Nothing on this page
+/// is written in Dart: the app renders exactly what the backend returns, so a
+/// wording change is an UPDATE to `legal_pages`, never a redeploy. Both the
+/// Privacy Policy and the Delete Account & Data page are just this widget with
+/// a different slug.
+class LegalPageScreen extends StatefulWidget {
+  final String slug;
+
+  /// Test seam: when set, replaces the `legal_get_page` RPC so the renderer can
+  /// be pumped on the VM without a network or a Supabase session.
+  final LegalPageLoader? loader;
+
+  const LegalPageScreen({super.key, required this.slug, this.loader});
+
+  @override
+  State<LegalPageScreen> createState() => _LegalPageScreenState();
+}
+
+class _LegalPageScreenState extends State<LegalPageScreen> {
+  Map<String, dynamic>? _data;
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() => _failed = false);
+    try {
+      final load = widget.loader ??
+          (String slug) async {
+            final raw = await Supabase.instance.client
+                .rpc('legal_get_page', params: {'p_slug': slug});
+            return Map<String, dynamic>.from(
+                (raw is List ? raw.first : raw) as Map);
+          };
+      final d = await load(widget.slug);
+      if (!mounted) return;
+      setState(() => _data = d);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _failed = true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final d = _data;
+
+    // Failure path carries no backend copy, so it stays free of Dart strings:
+    // an icon-only retry, matching PlatformCopy's failure affordance.
+    if (_failed && d == null) {
+      return Scaffold(
+        backgroundColor: Colors.white,
+        body: SafeArea(
+          child: Center(
+            child: IconButton(
+              onPressed: _load,
+              icon: const Icon(Icons.refresh, size: 26, color: Brand.green),
+            ),
+          ),
+        ),
+      );
+    }
+    if (d == null) {
+      return const Scaffold(
+        backgroundColor: Colors.white,
+        body: Center(
+          child: CircularProgressIndicator(color: Brand.green, strokeWidth: 3),
+        ),
+      );
+    }
+
+    final title = (d['title'] as String?) ?? '';
+    RenderLog.write('legal_page', widget.slug);
+
+    // not_found (or any ok:false) — render the backend's own message, nothing
+    // invented here.
+    if (d['ok'] != true) {
+      RenderLog.write('legal_sections', 0);
+      return PolicyPageLayout(
+        title: title,
+        child: _p((d['message'] as String?) ?? ''),
+      );
+    }
+
+    final sections = (d['sections'] as List?) ?? const [];
+    final updated = (d['updated_label'] as String?) ?? '';
+    RenderLog.write('legal_sections', sections.length);
+
+    final blocks = <Widget>[];
+    for (final s in sections) {
+      final m = Map<String, dynamic>.from(s as Map);
+      blocks.add(_h((m['heading'] as String?) ?? ''));
+      final items = ((m['items'] as List?) ?? const [])
+          .map((e) => e?.toString() ?? '')
+          .toList();
+      if ((m['list'] as String?) == 'numbered') {
+        blocks.add(_numbered(items));
+      } else {
+        for (final item in items) {
+          blocks.add(_p(item));
+        }
+      }
+    }
+
+    return PolicyPageLayout(
+      title: title,
+      lastUpdated: updated.isNotEmpty ? updated : null,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: blocks,
+      ),
+    );
+  }
+}
+
 // ─── Privacy Policy ───────────────────────────────────────────────────────────
 
+/// CHANGE — the hardcoded May-2025 six-point privacy text is gone. /privacy now
+/// renders `legal_get_page('privacy')` verbatim, the same renderer the
+/// data-deletion page uses.
 class PrivacyScreen extends StatelessWidget {
   const PrivacyScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    return PolicyPageLayout(
-      title: 'Privacy Policy',
-      lastUpdated: 'Last updated: May 2025',
-      child: PlatformCopy((p) => [
-        'We collect business KYC details (name, address, GSTIN, drug licence), contact information, and order/transaction data necessary to provide our services.',
-        'We use this data to process orders, verify eligibility, comply with legal obligations, and communicate with you.',
-        'We share data with payment partners to process payments, and with authorities where required by law.',
-        'We retain transaction records as required under applicable law and apply reasonable security measures to protect your data.',
-        'We do not store full card credentials. Payments are processed by our PCI-DSS compliant payment partner.',
-        'For privacy queries or data requests, contact ${platformField(p, 'email')}.',
-      ]),
-    );
-  }
+  Widget build(BuildContext context) =>
+      const LegalPageScreen(slug: 'privacy');
+}
+
+// ─── Delete Account & Data ────────────────────────────────────────────────────
+
+/// The URL given to Google Play as the "Delete data" link (medibo.in/data-deletion).
+/// Renders `legal_get_page('data-deletion')` verbatim.
+class DataDeletionScreen extends StatelessWidget {
+  const DataDeletionScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) =>
+      const LegalPageScreen(slug: 'data-deletion');
 }
 
 // ─── Refund & Return Policy ───────────────────────────────────────────────────

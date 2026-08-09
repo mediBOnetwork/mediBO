@@ -7,6 +7,7 @@ import '../models/user_profile.dart';
 import '../user_state.dart';
 import '../utils/render_log.dart';
 import '../view_as_state.dart';
+import '../widgets/delete_account_section.dart';
 import 'auth/business_details_screen.dart';
 import 'admin/view_as_picker_dialog.dart';
 
@@ -597,10 +598,28 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 if (!isViewAs && kEnableViewAs && (session?.isSuperAdmin ?? false))
                   _ViewAsCard(),
 
+                // Delete account / data — a logged-in registered customer only.
+                // request_account_deletion() itself refuses anyone who is not a
+                // customer, so this mirrors the backend gate rather than
+                // inventing one.
+                if (!isViewAs && isRegistered) ...[
+                  const SizedBox(height: 24),
+                  DeleteAccountSection(
+                    rpc: (scope, reason) async {
+                      final raw = await Supabase.instance.client.rpc(
+                        'request_account_deletion',
+                        params: {'p_scope': scope, 'p_reason': reason},
+                      );
+                      return Map<String, dynamic>.from(
+                          (raw is List ? raw.first : raw) as Map);
+                    },
+                  ),
+                ],
+
                 // Logout button — hidden when viewing as another customer
                 if (!isViewAs)
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 24, 16, 40),
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
                   child: OutlinedButton.icon(
                     onPressed: () async {
                       await UserState.read(context).signOut();

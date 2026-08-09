@@ -608,6 +608,8 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
               '/contact':      (_) => const ContactScreen(),
               '/terms':        (_) => const TermsScreen(),
               '/privacy':      (_) => const PrivacyScreen(),
+              // Google Play "Delete data" URL — renders legal_get_page('data-deletion').
+              '/data-deletion': (_) => const DataDeletionScreen(),
               '/refund':       (_) => const RefundScreen(),
               '/shipping':     (_) => const ShippingScreen(),
               '/cancellation': (_) => const CancellationScreen(),

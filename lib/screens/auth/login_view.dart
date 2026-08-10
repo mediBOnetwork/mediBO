@@ -652,35 +652,26 @@ class _LoginViewState extends State<LoginView> {
                 child: Text(
                   _s('code_section_label'),
                   style: const TextStyle(
-                      fontSize: 15, fontWeight: FontWeight.w700, color: _ink),
-                ),
-              ),
-              Flexible(
-                child: Text(
-                  '${_s('sent_to_prefix')} ${_s('number_prefix')} '
-                  '${_format5x5(_sentDigits)}',
-                  textAlign: TextAlign.right,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 12.5, color: _muted),
+                      fontSize: 16, fontWeight: FontWeight.w700, color: _ink),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 6),
+          // The masked number, once — no second copy anywhere on the step.
+          Padding(
+            padding: const EdgeInsets.only(left: 40),
+            child: Text(
+              '${_s('sent_to_prefix')} ${_s('number_prefix')} '
+              '${_format5x5(_sentDigits)}',
+              style: const TextStyle(fontSize: 13, color: _muted),
+            ),
+          ),
+          const SizedBox(height: 22),
           _codeBoxes(),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  _s('code_idle_note'),
-                  style: const TextStyle(fontSize: 12.5, color: _muted),
-                ),
-              ),
-              _resendControl(),
-            ],
-          ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 18),
+          Align(alignment: Alignment.centerRight, child: _resendControl()),
+          const SizedBox(height: 18),
           _primaryButton(
             label: _s('verify_label'),
             onPressed: _verify,
@@ -690,8 +681,6 @@ class _LoginViewState extends State<LoginView> {
             const SizedBox(height: 14),
             _messageText(),
           ],
-          const SizedBox(height: 18),
-          _footer(),
         ],
       );
 
@@ -791,60 +780,60 @@ class _LoginViewState extends State<LoginView> {
 
   Widget _codeBoxes() {
     final n = _codeCtrls.length;
-    return Row(
-      children: List.generate(n, (i) {
-        final filled = _codeCtrls[i].text.isNotEmpty;
-        return Expanded(
-          child: Padding(
-            padding: EdgeInsets.only(right: i == n - 1 ? 0 : 8),
-            child: AspectRatio(
-              aspectRatio: 0.82,
-              child: Focus(
-                onKeyEvent: (_, event) => _onCodeKey(i, event),
-                child: TextField(
-                controller: _codeCtrls[i],
-                focusNode: _codeFocus[i],
-                keyboardType: TextInputType.number,
-                textAlign: TextAlign.center,
-                // No maxLength: a 6-digit paste must arrive whole so it can be
-                // spread across the boxes; _onCodeChanged trims each to one.
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                onChanged: (v) => _onCodeChanged(i, v),
-                style: const TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w700,
-                  color: _ink,
-                ),
-                decoration: InputDecoration(
-                  counterText: '',
-                  filled: true,
-                  fillColor: _codeError
-                      ? const Color(0xFFFEF2F2)
-                      : filled
-                          ? const Color(0xFFEFF8F1)
-                          : Colors.white,
-                  contentPadding: EdgeInsets.zero,
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide: BorderSide(
-                        color: _codeError
-                            ? _danger
-                            : filled
-                                ? _green
-                                : _line),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide: BorderSide(
-                        color: _codeError ? _danger : _green, width: 1.8),
-                  ),
-                ),
-              ),
-              ),
+    // Equal-width boxes with the gaps as their own widgets — putting the gap
+    // inside each Expanded (as before) stole width from every box but the last,
+    // which is what made them look uneven.
+    final row = <Widget>[];
+    for (var i = 0; i < n; i++) {
+      if (i > 0) row.add(const SizedBox(width: 10));
+      row.add(Expanded(child: _codeBox(i)));
+    }
+    return Row(children: row);
+  }
+
+  Widget _codeBox(int i) {
+    final filled = _codeCtrls[i].text.isNotEmpty;
+    // Neutral outline — no green. Empty is a hairline, a filled box firms up a
+    // shade, focus is a clean dark ring, and only an error turns red.
+    final border = _codeError
+        ? _danger
+        : filled
+            ? const Color(0xFF9CA3AF)
+            : const Color(0xFFE5E7EB);
+    return AspectRatio(
+      aspectRatio: 0.84,
+      child: Focus(
+        onKeyEvent: (_, event) => _onCodeKey(i, event),
+        child: TextField(
+          controller: _codeCtrls[i],
+          focusNode: _codeFocus[i],
+          keyboardType: TextInputType.number,
+          textAlign: TextAlign.center,
+          // No maxLength: a 6-digit paste must arrive whole so it can be spread
+          // across the boxes; _onCodeChanged trims each to one.
+          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+          onChanged: (v) => _onCodeChanged(i, v),
+          style: const TextStyle(
+              fontSize: 22, fontWeight: FontWeight.w700, color: _ink),
+          decoration: InputDecoration(
+            counterText: '',
+            filled: true,
+            fillColor:
+                _codeError ? const Color(0xFFFEF2F2) : const Color(0xFFF9FAFB),
+            contentPadding: EdgeInsets.zero,
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: border),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(
+                  color: _codeError ? _danger : const Color(0xFF111827),
+                  width: 1.6),
             ),
           ),
-        );
-      }),
+        ),
+      ),
     );
   }
 

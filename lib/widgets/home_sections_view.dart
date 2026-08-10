@@ -246,9 +246,11 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
       child: ListView.builder(
         key: const PageStorageKey('home-sections'),
         controller: _scroll,
-        // AlwaysScrollable so the pull gesture works even on a short feed.
+        // AlwaysScrollable so the pull gesture works even on a short feed;
+        // Clamping so a hard flick past the end never opens a blank strip that
+        // snaps back on release (the feed stops firmly top and bottom).
         physics: const AlwaysScrollableScrollPhysics(
-          parent: BouncingScrollPhysics(),
+          parent: ClampingScrollPhysics(),
         ),
         // CHANGE — the feed ends at the footer. The old bottom:96 spacer left a
         // blank band scrolling past the real end of the page.
@@ -592,7 +594,7 @@ class _StripBlock extends StatelessWidget {
             height: CompactProductCard.extent,
             child: ListView.builder(
               scrollDirection: Axis.horizontal,
-              physics: const BouncingScrollPhysics(),
+              physics: const ClampingScrollPhysics(),
               padding: const EdgeInsets.symmetric(horizontal: 16),
               itemExtent: _Rail.cardW + 12,
               itemCount: strip.items.length,
@@ -782,7 +784,7 @@ class _RailState extends State<_Rail> {
       child: ListView.builder(
         controller: _c,
         scrollDirection: Axis.horizontal,
-        physics: const BouncingScrollPhysics(),
+        physics: const ClampingScrollPhysics(),
         padding: const EdgeInsets.symmetric(horizontal: 16),
         itemExtent: _Rail.cardW + _Rail.gap,
         itemCount: cards.length,

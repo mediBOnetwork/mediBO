@@ -297,9 +297,14 @@ void main() {
       expect(row1b.dx, greaterThan(row1.dx));
     });
 
-    testWidgets('the See-all word is the backend string', (tester) async {
+    testWidgets('the whole-catalogue grid (key All) shows no See-all bar',
+        (tester) async {
+      // Best Sellers / All-products (see_all key 'All') carry no "Show all
+      // products" bar — the hero's Browse-catalogue CTA is that entry instead.
+      // A category- or company-wise bar still renders verbatim (the rail test
+      // below covers that).
       await _pump(tester, _payload(_gridSection()));
-      expect(find.text('See all products'), findsOneWidget);
+      expect(find.text('See all products'), findsNothing);
     });
 
     testWidgets('no See-all label means no See-all control', (tester) async {

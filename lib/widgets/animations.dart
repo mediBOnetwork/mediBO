@@ -99,16 +99,12 @@ class AdminScrollBehavior extends MaterialScrollBehavior {
   }
 }
 
-/// Web: ClampingScrollPhysics so the scroll position tracks the wheel delta
-/// exactly and stops the instant the wheel stops.
-/// Mobile: Flutter's native iOS-style BouncingScrollPhysics — a physically
-/// accurate, butter-smooth fling that carries exactly as far as the flick
-/// warrants. (The old MomentumScrollPhysics doubled the fling velocity and
-/// cut friction — a WEB-only compensation that made Android over-scroll: a
-/// small flick flew across the whole list.)
-ScrollPhysics platformScrollPhysics() => kIsWeb
-    ? const ClampingScrollPhysics(parent: AlwaysScrollableScrollPhysics())
-    : const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics());
+/// ClampingScrollPhysics on every platform: the list stops firmly at the top
+/// and bottom, so a hard flick past the end never opens a strip of blank
+/// background that snaps back on release. AlwaysScrollableScrollPhysics keeps
+/// pull-to-refresh working on short feeds.
+ScrollPhysics platformScrollPhysics() =>
+    const ClampingScrollPhysics(parent: AlwaysScrollableScrollPhysics());
 
 /// ScrollController that adds momentum to discrete wheel events on web.
 ///

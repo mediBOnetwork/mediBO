@@ -21,6 +21,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'google_flow.dart';
 
@@ -134,9 +135,31 @@ class _LoginViewState extends State<LoginView> {
   Timer? _resendTimer;
 
   @override
+  static const _kLastNumberKey = 'medibo_last_login_number';
+
   void initState() {
     super.initState();
     _loadConfig();
+    _loadLastNumber();
+  }
+
+  // Prefill the number used in the last WhatsApp login (blank on the first
+  // ever login). Never overwrites something the user is already typing.
+  Future<void> _loadLastNumber() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final n = prefs.getString(_kLastNumberKey);
+      if (n != null && n.isNotEmpty && mounted && _numCtrl.text.isEmpty) {
+        setState(() => _numCtrl.text = n);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _saveLastNumber(String digits) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kLastNumberKey, digits);
+    } catch (_) {}
   }
 
   @override
@@ -235,15 +258,12 @@ class _LoginViewState extends State<LoginView> {
   // ── Step transitions ───────────────────────────────────────────────────────
 
   void _openNumber() {
+    // No auto-focus: the number is prefilled from the last login and the
+    // keyboard opens only when the user taps the field to edit it. If nothing
+    // was prefilled the field is simply blank and one tap starts entry.
     setState(() {
       _step = LoginStep.number;
       _message = null;
-    });
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      _numFocus.requestFocus();
-      // Caret at the end — a prefilled number must not come up selected, or a
-      // stray keypress would wipe the whole thing.
       _numCtrl.selection =
           TextSelection.collapsed(offset: _numCtrl.text.length);
     });
@@ -323,6 +343,7 @@ class _LoginViewState extends State<LoginView> {
     if (!ok) return;
 
     _sentDigits = digits;
+    unawaited(_saveLastNumber(digits)); // remember for next time's prefill
     _startPolling(digits);
   }
 

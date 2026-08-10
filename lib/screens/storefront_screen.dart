@@ -1592,24 +1592,6 @@ class _Footer extends StatelessWidget {
             textAlign: TextAlign.center,
             style: const TextStyle(color: _kLink, fontSize: 12, height: 1.6),
           ),
-          const SizedBox(height: 16),
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: const [
-              Icon(Icons.call, size: 13, color: _kAccent),
-              SizedBox(width: 6),
-              Text('9329252090', style: _kLinkStyle),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.mail, size: 13, color: _kAccent),
-              const SizedBox(width: 6),
-              Text(c('storefront_screen.contact_email'), style: _kLinkStyle),
-            ],
-          ),
         ],
       ),
     );

@@ -476,23 +476,24 @@ class _LoginViewState extends State<LoginView> {
 
     return LayoutBuilder(
       builder: (context, cons) {
-        final bandH = (cons.maxHeight * 0.34).clamp(150.0, 320.0);
+        // A compact brand band, then the step content flows directly beneath
+        // it (top-anchored) rather than floating in the lower half — no dead
+        // gap between the logo and the form.
+        final bandH = (cons.maxHeight * 0.24).clamp(140.0, 230.0);
         return Column(
           children: [
             _topBand(bandH),
             Expanded(
-              // reverse keeps the actions in thumb reach and still scrolls
-              // once the revealed steps or the keyboard need the room.
               child: SingleChildScrollView(
-                reverse: true,
-                padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
-                child: Center(
+                padding: const EdgeInsets.fromLTRB(24, 24, 24, 28),
+                child: Align(
+                  alignment: Alignment.topCenter,
                   child: ConstrainedBox(
                     constraints: const BoxConstraints(maxWidth: 420),
                     child: AnimatedSize(
                       duration: _reveal(context),
                       curve: Curves.easeOutCubic,
-                      alignment: Alignment.bottomCenter,
+                      alignment: Alignment.topCenter,
                       child: _stepBlock(),
                     ),
                   ),
@@ -645,37 +646,26 @@ class _LoginViewState extends State<LoginView> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Align(alignment: Alignment.centerLeft, child: _backButton()),
-          const SizedBox(height: 2),
-          // A soft icon badge, centered heading and masked number — the
-          // focused, single-purpose look of a proper OTP screen.
-          Center(
-            child: Container(
-              width: 56,
-              height: 56,
-              decoration: const BoxDecoration(
-                  color: _wash, shape: BoxShape.circle),
-              child: const Icon(Icons.chat_bubble_outline_rounded,
-                  color: _green, size: 26),
-            ),
-          ),
-          const SizedBox(height: 16),
+          // Clean, centered OTP: a bold heading, the masked number, the boxes,
+          // Resend, then Validate. No empty icon badge, no second back arrow
+          // (the app bar already has one).
+          const SizedBox(height: 4),
           Text(
             _s('code_section_label'),
             textAlign: TextAlign.center,
             style: const TextStyle(
-                fontSize: 19, fontWeight: FontWeight.w700, color: _ink),
+                fontSize: 22, fontWeight: FontWeight.w800, color: _ink),
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 8),
           Text(
             '${_s('sent_to_prefix')} ${_s('number_prefix')} '
             '${_format5x5(_sentDigits)}',
             textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 13.5, color: _muted, height: 1.4),
+            style: const TextStyle(fontSize: 14, color: _muted, height: 1.4),
           ),
-          const SizedBox(height: 26),
+          const SizedBox(height: 28),
           _codeBoxes(),
-          const SizedBox(height: 22),
+          const SizedBox(height: 24),
           Center(child: _resendControl()),
           const SizedBox(height: 22),
           _primaryButton(

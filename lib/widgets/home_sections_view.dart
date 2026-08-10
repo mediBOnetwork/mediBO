@@ -483,7 +483,13 @@ class _SectionBlock extends StatelessWidget {
     // full-width button under the section. It used to be a card tacked onto
     // the end of the rail, which nobody scrolled 24 cards to reach.
     final seeAll = section.seeAll;
-    final showBar = seeAll != null && section.seeAllLabel.isNotEmpty;
+    // No "Show all products" bar for a whole-catalogue see-all (key 'All' —
+    // Best Sellers and the All-products rail): the hero's "Browse catalogue"
+    // CTA already opens the full grid. Category- and company-wise see-alls keep
+    // their bar.
+    final showBar = seeAll != null &&
+        section.seeAllLabel.isNotEmpty &&
+        seeAll.key != 'All';
 
     return Container(
       // Full-bleed: the band runs edge to edge, the content inside keeps the

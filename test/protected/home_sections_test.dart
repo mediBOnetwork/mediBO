@@ -446,7 +446,14 @@ void main() {
 
     testWidgets('a section with no see_all shows no See-all pill',
         (tester) async {
-      await _pump(tester, _payload());
+      // Point best_sellers at a real category so its pill renders (the
+      // whole-catalogue 'All' pill is deliberately suppressed).
+      final p = _payload();
+      (p['sections'] as List).first['see_all'] = {
+        'type': 'category',
+        'key': 'CARDIAC',
+      };
+      await _pump(tester, p);
       // Exactly one See-all in the whole feed: only best_sellers carries one.
       expect(find.text('See all'), findsOneWidget);
     });
@@ -454,6 +461,10 @@ void main() {
     testWidgets('the See-all pill prints see_all_label, not a Dart word',
         (tester) async {
       final p = _payload();
+      (p['sections'] as List).first['see_all'] = {
+        'type': 'category',
+        'key': 'CARDIAC',
+      };
       (p['sections'] as List).first['see_all_label'] = 'Browse all 77,547';
       await _pump(tester, p);
 
@@ -488,20 +499,31 @@ void main() {
     });
   });
 
-  // The "Show all products" bar under Best Sellers (see_all key 'All') opens the
-  // full product grid via onBrowseAll — not a category jump back onto the home
-  // feed we are already on (which is what made the button dead).
-  testWidgets('Show-all with key All navigates to browse-all, not a category',
+  // A whole-catalogue see-all (key 'All' — Best Sellers and the All-products
+  // rail) renders NO "Show all products" bar. Category- and company-wise
+  // see-alls keep theirs; the full grid is reached from the hero CTA.
+  testWidgets('the whole-catalogue see-all (key All) renders no button',
       (tester) async {
-    final taps = await _pump(tester, _payload());
-    expect(find.text('See all'), findsOneWidget);
+    await _pump(tester, _payload());
+    expect(find.text('See all'), findsNothing);
+  });
 
-    await tester.tap(find.text('See all'));
+  // The hero's "Browse catalogue" CTA is the entry to the full product grid.
+  testWidgets('the hero Browse-catalogue CTA opens browse-all', (tester) async {
+    final payload = _payload();
+    payload['hero'] = {
+      'show': true,
+      'cta': 'Browse catalogue',
+      'props': [
+        {'icon': 'inventory', 'label': '30,304+ products'}
+      ],
+    };
+    final taps = await _pump(tester, payload);
+
+    await tester.tap(find.text('Browse catalogue'));
     await tester.pumpAndSettle();
 
-    expect(taps.browseAll, 1, reason: 'the see-all opened the full catalogue');
-    expect(taps.categories, isNot(contains('All')),
-        reason: 'browse-all must NOT be a plain category jump to All');
+    expect(taps.browseAll, 1);
   });
 
   // The hero stat is the backend string verbatim (banner_count_label lands here

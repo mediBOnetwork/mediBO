@@ -225885,7 +225885,7 @@ q.push(A.c(l.kF(j),k,k,k,k,k,B.akg,B.a9,k,k))
 return A.B(q,B.ad,B.cxS,B.h,B.I,0,B.u)
 case 2:s=t.p
 r=A.b([l.aIL(l.kF("code_section_label")),B.am,l.bim()],s)
-if(l.f!=null)B.e.q(r,A.b([B.aE,l.agG()],s))
+if(l.ax&&l.f!=null)B.e.q(r,A.b([B.aE,l.agG()],s))
 r.push(B.vx)
 q=l.kF("verify_label")
 r.push(l.agv(l.at,q,l.gbUT()))

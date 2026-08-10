@@ -768,7 +768,16 @@ class _LoginViewState extends State<LoginView> {
                   hintText: _s('number_hint'),
                   hintStyle: const TextStyle(
                       color: Color(0xFFC7CDD4), fontFamily: 'monospace'),
+                  // The container owns the border. Override the app theme's
+                  // green focusedBorder in every state so typing shows no green
+                  // ring inside the field.
+                  filled: false,
+                  isCollapsed: true,
                   border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: InputBorder.none,
+                  errorBorder: InputBorder.none,
+                  focusedErrorBorder: InputBorder.none,
                   contentPadding:
                       const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
                 ),

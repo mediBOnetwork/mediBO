@@ -962,7 +962,11 @@ class _HomeShellState extends State<HomeShell> {
                   onBulk: () => _setIndex(2),
                   onOrders: () => _setIndex(1),
                   onCart: () => _openCart(),
-                  onLogin: () => setState(() => _loginOpen = true),
+                  // Web/desktop now uses the SAME login as mobile: the full
+                  // WhatsApp/Google LoginScreen (backend-driven login_screen_config),
+                  // not the legacy email/password LoginPanel. Mobile path unchanged.
+                  onLogin: () => Navigator.push(context,
+                      MaterialPageRoute(builder: (_) => const LoginScreen())),
                   index: _index,
                   cartOpen: _cartOpen,
                 ),

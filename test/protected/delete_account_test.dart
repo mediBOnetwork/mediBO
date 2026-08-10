@@ -54,6 +54,13 @@ void main() {
     // Confirm dialog is up; the RPC has NOT been called yet.
     expect(seenScope, isNull);
 
+    // Continue is dead until the confirm word is typed.
+    await tester.tap(find.text('Continue'));
+    await tester.pumpAndSettle();
+    expect(seenScope, isNull, reason: 'a tap alone must not delete');
+
+    await tester.enterText(find.byType(TextField).first, 'DELETE');
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Continue'));
     await tester.pumpAndSettle();
 
@@ -73,6 +80,8 @@ void main() {
 
     await _expand(tester);
     await tester.tap(find.text('Delete my data only'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, 'DELETE');
     await tester.pumpAndSettle();
     await tester.tap(find.text('Continue'));
     await tester.pumpAndSettle();

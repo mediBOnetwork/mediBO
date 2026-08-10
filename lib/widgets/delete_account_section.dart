@@ -24,54 +24,85 @@ class DeleteAccountSection extends StatelessWidget {
 
   Future<void> _request(BuildContext context, String scope) async {
     final reasonCtrl = TextEditingController();
+    final confirmCtrl = TextEditingController();
+    final confirmWord = c('delete_account_section.confirm_word');
+    OutlineInputBorder fieldBorder([Color c = const Color(0xFFE5E7EB)]) =>
+        OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: BorderSide(color: c),
+        );
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text(
-          scope == 'data' ? 'Delete my data only?' : 'Delete my account?',
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              c('delete_account_section.confirm_body'),
-              style: const TextStyle(fontSize: 14, color: Color(0xFF374151)),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) {
+          // Continue is dead until the user types the confirm word exactly —
+          // a tap alone can never delete anything.
+          final canProceed = confirmWord.isNotEmpty &&
+              confirmCtrl.text.trim().toUpperCase() ==
+                  confirmWord.toUpperCase();
+          return AlertDialog(
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: Text(
+              scope == 'data' ? 'Delete my data only?' : 'Delete my account?',
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
             ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: reasonCtrl,
-              minLines: 1,
-              maxLines: 3,
-              decoration: InputDecoration(
-                hintText: c('delete_account_section.reason_hint'),
-                filled: true,
-                fillColor: const Color(0xFFF5F6F8),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  c('delete_account_section.confirm_body'),
+                  style:
+                      const TextStyle(fontSize: 14, color: Color(0xFF374151)),
                 ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: confirmCtrl,
+                  autofocus: true,
+                  textCapitalization: TextCapitalization.characters,
+                  onChanged: (_) => setLocal(() {}),
+                  decoration: InputDecoration(
+                    hintText: c('delete_account_section.type_to_confirm'),
+                    filled: true,
+                    fillColor: const Color(0xFFF5F6F8),
+                    border: fieldBorder(),
+                    enabledBorder: fieldBorder(),
+                    focusedBorder: fieldBorder(_danger),
+                  ),
                 ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: reasonCtrl,
+                  minLines: 1,
+                  maxLines: 3,
+                  decoration: InputDecoration(
+                    hintText: c('delete_account_section.reason_hint'),
+                    filled: true,
+                    fillColor: const Color(0xFFF5F6F8),
+                    border: fieldBorder(),
+                    enabledBorder: fieldBorder(),
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: Text(c('delete_account_section.cancel')),
               ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text(c('delete_account_section.cancel')),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: FilledButton.styleFrom(backgroundColor: _danger),
-            child: Text(c('delete_account_section.continue')),
-          ),
-        ],
+              FilledButton(
+                onPressed:
+                    canProceed ? () => Navigator.pop(ctx, true) : null,
+                style: FilledButton.styleFrom(
+                  backgroundColor: _danger,
+                  disabledBackgroundColor: _danger.withValues(alpha: 0.35),
+                ),
+                child: Text(c('delete_account_section.continue')),
+              ),
+            ],
+          );
+        },
       ),
     );
     if (confirmed != true || !context.mounted) return;

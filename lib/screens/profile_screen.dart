@@ -603,8 +603,42 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 // request_account_deletion() itself refuses anyone who is not a
                 // customer, so this mirrors the backend gate rather than
                 // inventing one.
+                // Logout — a normal action, ABOVE the delete zone and styled
+                // neutral (not red) so it never reads as destructive. This is
+                // the tap target a leaving customer reaches for.
+                if (!isViewAs)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                    child: OutlinedButton.icon(
+                      onPressed: () async {
+                        await UserState.read(context).signOut();
+                        if (context.mounted) {
+                          Navigator.of(context).popUntil((r) => r.isFirst);
+                        }
+                      },
+                      icon: const Icon(Icons.logout,
+                          size: 18, color: Color(0xFF374151)),
+                      label: Text(c('profile.btn_logout')),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFF374151),
+                        side: const BorderSide(
+                            color: Color(0xFFD1D5DB), width: 1.5),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10)),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        textStyle: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+
+                // Delete account / data — the destructive danger zone, kept at
+                // the very bottom, below Logout and collapsed, so a tap meant
+                // for Logout can never land on it.
                 if (!isViewAs && isRegistered) ...[
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 8),
                   DeleteAccountSection(
                     rpc: (scope, reason) async {
                       final raw = await Supabase.instance.client.rpc(
@@ -615,36 +649,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           (raw is List ? raw.first : raw) as Map);
                     },
                   ),
+                  const SizedBox(height: 40),
                 ],
-
-                // Logout button — hidden when viewing as another customer
-                if (!isViewAs)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
-                  child: OutlinedButton.icon(
-                    onPressed: () async {
-                      await UserState.read(context).signOut();
-                      if (context.mounted) {
-                        Navigator.of(context).popUntil((r) => r.isFirst);
-                      }
-                    },
-                    icon: const Icon(Icons.logout,
-                        size: 18, color: Color(0xFFDC2626)),
-                    label: Text(c('profile.btn_logout')),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: const Color(0xFFDC2626),
-                      side: const BorderSide(
-                          color: Color(0xFFDC2626), width: 1.5),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10)),
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      textStyle: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ),
               ],
             ),
           ),

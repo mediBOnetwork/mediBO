@@ -645,33 +645,39 @@ class _LoginViewState extends State<LoginView> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            children: [
-              _backButton(),
-              Expanded(
-                child: Text(
-                  _s('code_section_label'),
-                  style: const TextStyle(
-                      fontSize: 16, fontWeight: FontWeight.w700, color: _ink),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          // The masked number, once — no second copy anywhere on the step.
-          Padding(
-            padding: const EdgeInsets.only(left: 40),
-            child: Text(
-              '${_s('sent_to_prefix')} ${_s('number_prefix')} '
-              '${_format5x5(_sentDigits)}',
-              style: const TextStyle(fontSize: 13, color: _muted),
+          Align(alignment: Alignment.centerLeft, child: _backButton()),
+          const SizedBox(height: 2),
+          // A soft icon badge, centered heading and masked number — the
+          // focused, single-purpose look of a proper OTP screen.
+          Center(
+            child: Container(
+              width: 56,
+              height: 56,
+              decoration: const BoxDecoration(
+                  color: _wash, shape: BoxShape.circle),
+              child: const Icon(Icons.chat_bubble_outline_rounded,
+                  color: _green, size: 26),
             ),
           ),
-          const SizedBox(height: 22),
+          const SizedBox(height: 16),
+          Text(
+            _s('code_section_label'),
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+                fontSize: 19, fontWeight: FontWeight.w700, color: _ink),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '${_s('sent_to_prefix')} ${_s('number_prefix')} '
+            '${_format5x5(_sentDigits)}',
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 13.5, color: _muted, height: 1.4),
+          ),
+          const SizedBox(height: 26),
           _codeBoxes(),
-          const SizedBox(height: 18),
-          Align(alignment: Alignment.centerRight, child: _resendControl()),
-          const SizedBox(height: 18),
+          const SizedBox(height: 22),
+          Center(child: _resendControl()),
+          const SizedBox(height: 22),
           _primaryButton(
             label: _s('verify_label'),
             onPressed: _verify,

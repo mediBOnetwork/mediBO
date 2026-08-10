@@ -649,9 +649,11 @@ class _LoginViewState extends State<LoginView> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Clean: just the boxes, Validate, then a single
-          // "Code from WhatsApp • Resend" line. No heading, no masked number.
-          const SizedBox(height: 8),
+          // A header that matches the number step ("Enter login code"), then
+          // the boxes, Validate, and a single "Code sent on WhatsApp • Resend"
+          // line — so the step never reads as blank.
+          _sectionHeader(_s('code_section_label')),
+          const SizedBox(height: 16),
           _codeBoxes(),
           if (_message != null) ...[
             const SizedBox(height: 14),
@@ -669,7 +671,7 @@ class _LoginViewState extends State<LoginView> {
             children: [
               Flexible(
                 child: Text(
-                  _s('code_section_label'),
+                  _s('code_sent_note'),
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontSize: 13, color: _muted),
                 ),

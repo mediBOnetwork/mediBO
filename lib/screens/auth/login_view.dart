@@ -649,37 +649,36 @@ class _LoginViewState extends State<LoginView> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Clean, centered OTP: a bold heading, the masked number, the boxes,
-          // Resend, then Validate. No empty icon badge, no second back arrow
-          // (the app bar already has one).
-          const SizedBox(height: 4),
-          Text(
-            _s('code_section_label'),
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-                fontSize: 22, fontWeight: FontWeight.w800, color: _ink),
-          ),
+          // Clean: just the boxes, Validate, then a single
+          // "Code from WhatsApp • Resend" line. No heading, no masked number.
           const SizedBox(height: 8),
-          Text(
-            '${_s('sent_to_prefix')} ${_s('number_prefix')} '
-            '${_format5x5(_sentDigits)}',
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 14, color: _muted, height: 1.4),
-          ),
-          const SizedBox(height: 28),
           _codeBoxes(),
-          const SizedBox(height: 24),
-          Center(child: _resendControl()),
+          if (_message != null) ...[
+            const SizedBox(height: 14),
+            _messageText(),
+          ],
           const SizedBox(height: 22),
           _primaryButton(
             label: _s('verify_label'),
             onPressed: _verify,
             busy: _verifying,
           ),
-          if (_message != null) ...[
-            const SizedBox(height: 14),
-            _messageText(),
-          ],
+          const SizedBox(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Flexible(
+                child: Text(
+                  _s('code_section_label'),
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 13, color: _muted),
+                ),
+              ),
+              const Text('  •  ',
+                  style: TextStyle(fontSize: 13, color: _muted)),
+              _resendControl(),
+            ],
+          ),
         ],
       );
 

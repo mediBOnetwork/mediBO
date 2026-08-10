@@ -479,7 +479,7 @@ class _LoginViewState extends State<LoginView> {
         // A compact brand band, then the step content flows directly beneath
         // it (top-anchored) rather than floating in the lower half — no dead
         // gap between the logo and the form.
-        final bandH = (cons.maxHeight * 0.24).clamp(140.0, 230.0);
+        final bandH = (cons.maxHeight * 0.30).clamp(180.0, 300.0);
         return Column(
           children: [
             _topBand(bandH),
@@ -539,11 +539,15 @@ class _LoginViewState extends State<LoginView> {
               ),
               const SizedBox(height: 16),
               _wordmark(_s('brand')),
-              const SizedBox(height: 6),
-              Text(
-                _s('tagline'),
-                textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 14.5, color: _muted),
+              const SizedBox(height: 8),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 22),
+                child: Text(
+                  _s('tagline'),
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                      fontSize: 12.5, color: _muted, height: 1.45),
+                ),
               ),
             ],
           ),

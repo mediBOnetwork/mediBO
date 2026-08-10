@@ -476,24 +476,23 @@ class _LoginViewState extends State<LoginView> {
 
     return LayoutBuilder(
       builder: (context, cons) {
-        // A compact brand band, then the step content flows directly beneath
-        // it (top-anchored) rather than floating in the lower half — no dead
-        // gap between the logo and the form.
-        final bandH = (cons.maxHeight * 0.30).clamp(180.0, 300.0);
+        final bandH = (cons.maxHeight * 0.34).clamp(150.0, 320.0);
         return Column(
           children: [
             _topBand(bandH),
             Expanded(
+              // reverse keeps the actions in thumb reach and still scrolls
+              // once the revealed steps or the keyboard need the room.
               child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(24, 24, 24, 28),
-                child: Align(
-                  alignment: Alignment.topCenter,
+                reverse: true,
+                padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+                child: Center(
                   child: ConstrainedBox(
                     constraints: const BoxConstraints(maxWidth: 420),
                     child: AnimatedSize(
                       duration: _reveal(context),
                       curve: Curves.easeOutCubic,
-                      alignment: Alignment.topCenter,
+                      alignment: Alignment.bottomCenter,
                       child: _stepBlock(),
                     ),
                   ),

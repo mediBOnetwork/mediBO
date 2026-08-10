@@ -655,7 +655,10 @@ class _LoginViewState extends State<LoginView> {
           _sectionHeader(_s('code_section_label')),
           const SizedBox(height: 16),
           _codeBoxes(),
-          if (_message != null) ...[
+          // Only an ERROR shows here. The plain "code sent" confirmation is
+          // dropped — the Resend line below already says it, so it never
+          // duplicates above Validate.
+          if (_codeError && _message != null) ...[
             const SizedBox(height: 14),
             _messageText(),
           ],

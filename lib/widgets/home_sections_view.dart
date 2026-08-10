@@ -30,6 +30,11 @@ class HomeSectionsView extends StatefulWidget {
   /// its existing category selection and the matching URL push.
   final ValueChanged<String> onCategoryTap;
 
+  /// A "Show all products" / "Browse catalogue" target (category 'All') was
+  /// tapped. HomeShell opens the full product grid rather than re-showing the
+  /// home feed. Null → the see-all falls back to onCategoryTap.
+  final VoidCallback? onBrowseAll;
+
   /// Test seam: the back-in-stock strip payload.
   final Future<BackInStock> Function()? notificationsLoader;
 
@@ -45,6 +50,7 @@ class HomeSectionsView extends StatefulWidget {
     super.key,
     this.loader,
     required this.onCategoryTap,
+    this.onBrowseAll,
     this.notificationsLoader,
     this.onSeen,
     this.footer,
@@ -201,6 +207,16 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
     });
   }
 
+  /// "Show all products" / "Browse catalogue" — open the full grid. Falls back
+  /// to a plain category jump if the shell did not wire the browse-all target.
+  void _openBrowseAll() {
+    if (widget.onBrowseAll != null) {
+      widget.onBrowseAll!();
+    } else {
+      widget.onCategoryTap('All');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final d = _data;
@@ -234,7 +250,9 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
         physics: const AlwaysScrollableScrollPhysics(
           parent: BouncingScrollPhysics(),
         ),
-        padding: const EdgeInsets.only(bottom: 96),
+        // CHANGE — the feed ends at the footer. The old bottom:96 spacer left a
+        // blank band scrolling past the real end of the page.
+        padding: EdgeInsets.zero,
         // CHANGE #678a — build two screens ahead of the viewport.
         //
         // The default builds a section only as its top edge arrives, so the
@@ -247,7 +265,7 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
           if (hero == 1 && i == 0) {
             return HomeHeroBanner(
               hero: d.hero,
-              onCta: () => widget.onCategoryTap('All'),
+              onCta: _openBrowseAll,
             );
           }
           if (strip == 1 && i == hero) {
@@ -265,6 +283,7 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
             key: ValueKey(section.id),
             section: section,
             onCategoryTap: widget.onCategoryTap,
+            onBrowseAll: _openBrowseAll,
             onNeedMore: () => unawaited(_pageSection(section.id)),
           );
         },
@@ -419,6 +438,9 @@ class _SectionBlock extends StatelessWidget {
   final HomeSection section;
   final ValueChanged<String> onCategoryTap;
 
+  /// Opens the full product grid (a see-all that targets category 'All').
+  final VoidCallback onBrowseAll;
+
   /// CHANGE #678 — the rail has been scrolled near its end and wants the next
   /// page. Whether one is fetched is decided upstairs, from the payload.
   final VoidCallback onNeedMore;
@@ -427,6 +449,7 @@ class _SectionBlock extends StatelessWidget {
     super.key,
     required this.section,
     required this.onCategoryTap,
+    required this.onBrowseAll,
     required this.onNeedMore,
   });
 
@@ -435,6 +458,13 @@ class _SectionBlock extends StatelessWidget {
   void _navigate(BuildContext context, SeeAll s) {
     switch (s.type) {
       case 'category':
+        // 'All' is the whole catalogue — open the full product grid, not the
+        // home feed we are already looking at (which made the button dead).
+        if (s.key == 'All') {
+          onBrowseAll();
+        } else {
+          onCategoryTap(s.key);
+        }
       case 'search':
         onCategoryTap(s.key);
     }

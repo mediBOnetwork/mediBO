@@ -738,11 +738,13 @@ class _LoginViewState extends State<LoginView> {
         ),
       );
 
+  // A subtle filled surface with a hairline neutral border — the design
+  // system's input style. No hard accent outline around the field/button.
   Widget _numberField() => Container(
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: const Color(0xFFF5F6F8),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: _line),
+          border: Border.all(color: const Color(0xFFE5E7EB)),
         ),
         child: Row(
           children: [
@@ -758,7 +760,7 @@ class _LoginViewState extends State<LoginView> {
                 ),
               ),
             ),
-            Container(width: 1, height: 26, color: _line),
+            Container(width: 1, height: 26, color: const Color(0xFFE5E7EB)),
             Expanded(
               child: TextField(
                 controller: _numCtrl,
@@ -797,12 +799,15 @@ class _LoginViewState extends State<LoginView> {
             padding: EdgeInsets.only(right: i == n - 1 ? 0 : 8),
             child: AspectRatio(
               aspectRatio: 0.82,
-              child: TextField(
+              child: Focus(
+                onKeyEvent: (_, event) => _onCodeKey(i, event),
+                child: TextField(
                 controller: _codeCtrls[i],
                 focusNode: _codeFocus[i],
                 keyboardType: TextInputType.number,
                 textAlign: TextAlign.center,
-                maxLength: 1,
+                // No maxLength: a 6-digit paste must arrive whole so it can be
+                // spread across the boxes; _onCodeChanged trims each to one.
                 inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                 onChanged: (v) => _onCodeChanged(i, v),
                 style: const TextStyle(
@@ -835,6 +840,7 @@ class _LoginViewState extends State<LoginView> {
                   ),
                 ),
               ),
+              ),
             ),
           ),
         );
@@ -842,16 +848,68 @@ class _LoginViewState extends State<LoginView> {
     );
   }
 
+  // Keys we drive ourselves: backspace on an already-empty box jumps back and
+  // clears the previous one; arrows move the caret between boxes.
+  KeyEventResult _onCodeKey(int i, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    final key = event.logicalKey;
+    if (key == LogicalKeyboardKey.backspace && _codeCtrls[i].text.isEmpty) {
+      if (i > 0) {
+        _codeCtrls[i - 1].text = '';
+        _codeFocus[i - 1].requestFocus();
+        setState(() => _codeError = false);
+      }
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.arrowLeft && i > 0) {
+      _codeFocus[i - 1].requestFocus();
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.arrowRight && i < _codeCtrls.length - 1) {
+      _codeFocus[i + 1].requestFocus();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
   void _onCodeChanged(int i, String v) {
-    setState(() => _codeError = false);
-    if (v.isNotEmpty) {
+    final digits = v.replaceAll(RegExp(r'\D'), '');
+
+    // Paste / SMS autofill: several digits land in one box. Spread them across
+    // the boxes from here, trim each to one, then submit if that fills them.
+    if (digits.length > 1) {
+      for (var k = 0; i + k < _codeCtrls.length && k < digits.length; k++) {
+        _codeCtrls[i + k].text = digits[k];
+      }
+      final landed = (i + digits.length).clamp(1, _codeCtrls.length);
+      final focusIdx =
+          landed >= _codeCtrls.length ? _codeCtrls.length - 1 : landed;
+      _codeFocus[focusIdx].requestFocus();
+      setState(() => _codeError = false);
+      _maybeAutoSubmit();
+      return;
+    }
+
+    // Single character: keep exactly one digit and auto-advance.
+    if (digits.isEmpty) {
+      _codeCtrls[i].text = '';
+    } else {
+      _codeCtrls[i].text = digits;
+      _codeCtrls[i].selection = const TextSelection.collapsed(offset: 1);
       if (i + 1 < _codeFocus.length) {
         _codeFocus[i + 1].requestFocus();
       } else {
         _codeFocus[i].unfocus();
       }
-    } else if (i > 0) {
-      _codeFocus[i - 1].requestFocus();
+    }
+    setState(() => _codeError = false);
+    _maybeAutoSubmit();
+  }
+
+  // All six boxes filled → validate without waiting for the button.
+  void _maybeAutoSubmit() {
+    if (!_verifying && _code.length == _codeCtrls.length) {
+      _verify();
     }
   }
 

@@ -97,6 +97,9 @@ class _HomeShellState extends State<HomeShell> {
   String _viewAsKey = 'none'; // tracks active ViewAs identity; reset _index on change
   String _query = '';
   String _category = 'All';
+  // When true, the storefront shows the full product grid for 'All' (the
+  // "Show all products" / "Browse catalogue" target) instead of the home feed.
+  bool _browseAll = false;
   bool _cartOpen = false;
   bool _loginOpen = false;
   int _scrollTrigger = 0;
@@ -311,6 +314,7 @@ class _HomeShellState extends State<HomeShell> {
         _cartOpen = false;
       } else {
         _category = 'All';
+        _browseAll = false;
         _index = 0;
         _cartOpen = false;
         _scrollToTopTrigger++;
@@ -338,6 +342,7 @@ class _HomeShellState extends State<HomeShell> {
       _index = 0;
       _category = 'All';
       _query = '';
+      _browseAll = false;
       _cartOpen = false;
       _scrollToTopTrigger++;
     });
@@ -556,6 +561,7 @@ class _HomeShellState extends State<HomeShell> {
     setState(() {
       final q = v.trim().replaceAll(RegExp(r'[^a-zA-Z0-9]'), '');
       _category = 'All';
+      _browseAll = false;
       _index = 0;
       if (q.length >= 3) {
         _query = v;
@@ -570,11 +576,26 @@ class _HomeShellState extends State<HomeShell> {
     setState(() {
       _category = c;
       _query = '';
+      _browseAll = false;
       _searchCtrl.clear();
       _index = 0;
       _cartOpen = false;
     });
     pushUrl(c == 'All' ? '/' : '/c/${_catToSlug(c)}');
+  }
+
+  // "Show all products" / "Browse catalogue": open the full product grid for
+  // every product (category 'All') rather than the sectioned home feed.
+  void _browseAllProducts() {
+    setState(() {
+      _category = 'All';
+      _query = '';
+      _browseAll = true;
+      _searchCtrl.clear();
+      _index = 0;
+      _cartOpen = false;
+      _scrollToTopTrigger++;
+    });
   }
 
   @override
@@ -721,9 +742,12 @@ class _HomeShellState extends State<HomeShell> {
               _query = s;
               _searchCtrl.text = s;
               _category = 'All';
+              _browseAll = false;
               _index = 0;
             }),
             repo: _repo,
+            browseAll: _browseAll,
+            onBrowseAll: _browseAllProducts,
             scrollTrigger: _scrollTrigger,
             scrollToTopTrigger: _scrollToTopTrigger,
             onLoadingChanged: (loading) {

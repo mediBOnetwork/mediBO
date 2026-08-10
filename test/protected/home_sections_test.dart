@@ -168,6 +168,7 @@ class _Taps {
   final categories = <String>[];
   final companies = <String>[];
   final routes = <String>[];
+  int browseAll = 0;
 }
 
 Future<_Taps> _pump(WidgetTester tester, Map<String, dynamic> payload) async {
@@ -201,6 +202,7 @@ Future<_Taps> _pump(WidgetTester tester, Map<String, dynamic> payload) async {
             key: ValueKey('feed-${_pumpSeq++}'),
             loader: () async => HomeSections.fromMap(payload),
             onCategoryTap: taps.categories.add,
+            onBrowseAll: () => taps.browseAll++,
             // #638 — this file covers the sections themselves; the strip has
             // its own tests in company_notify_test.dart.
             notificationsLoader: () async => BackInStock.empty,
@@ -412,13 +414,23 @@ void main() {
           reason: 'the #637 search-prefill fallback is gone');
     });
 
-    testWidgets('See-all uses the section is own destination', (tester) async {
-      final taps = await _pump(tester, _payload());
+    testWidgets('See-all hands back the section key verbatim (a real category)',
+        (tester) async {
+      // A category see-all (not the whole-catalogue 'All') routes to the
+      // backend's own key, unchanged. 'All' is covered separately — it opens
+      // the full grid via browse-all, not a category jump.
+      final payload = _payload();
+      (payload['sections'] as List)[0]['see_all'] = {
+        'type': 'category',
+        'key': 'CARDIAC',
+      };
+      final taps = await _pump(tester, payload);
 
       await tester.tap(find.text('See all'));
       await tester.pumpAndSettle();
 
-      expect(taps.categories, ['All'], reason: 'see_all.key, verbatim');
+      expect(taps.categories, ['CARDIAC'], reason: 'see_all.key, verbatim');
+      expect(taps.browseAll, 0);
     });
 
     testWidgets('a tile with no key is not tappable', (tester) async {
@@ -474,5 +486,42 @@ void main() {
       expect(SeeAll.fromMap(null), isNull);
       expect(SeeAll.fromMap({'type': 'category', 'key': 'All'})?.key, 'All');
     });
+  });
+
+  // The "Show all products" bar under Best Sellers (see_all key 'All') opens the
+  // full product grid via onBrowseAll — not a category jump back onto the home
+  // feed we are already on (which is what made the button dead).
+  testWidgets('Show-all with key All navigates to browse-all, not a category',
+      (tester) async {
+    final taps = await _pump(tester, _payload());
+    expect(find.text('See all'), findsOneWidget);
+
+    await tester.tap(find.text('See all'));
+    await tester.pumpAndSettle();
+
+    expect(taps.browseAll, 1, reason: 'the see-all opened the full catalogue');
+    expect(taps.categories, isNot(contains('All')),
+        reason: 'browse-all must NOT be a plain category jump to All');
+  });
+
+  // The hero stat is the backend string verbatim (banner_count_label lands here
+  // as a prop label). No product count is composed in Dart.
+  testWidgets('hero renders banner_count_label prop verbatim, not a literal',
+      (tester) async {
+    final payload = _payload();
+    payload['hero'] = {
+      'show': true,
+      'eyebrow': 'EVERY BRAND, ONE ORDER',
+      'title': "Your whole month's stock in one place",
+      'cta': 'Browse catalogue',
+      'props': [
+        {'icon': 'inventory', 'label': '30,304+ products'},
+        {'icon': 'truck', 'label': 'Next-day delivery'},
+      ],
+    };
+    await _pump(tester, payload);
+
+    expect(find.text('30,304+ products'), findsOneWidget);
+    expect(find.text("Your whole month's stock in one place"), findsOneWidget);
   });
 }

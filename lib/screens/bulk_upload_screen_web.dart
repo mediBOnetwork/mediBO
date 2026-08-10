@@ -2458,44 +2458,50 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      controller: _scrollCtrl,
-      child: Container(
-        color: const Color(0xFFF9FAFB),
-        width: double.infinity,
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 1200),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 32),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const _PageHeader(),
-                  const SizedBox(height: 28),
-                  _MainLayout(
-                    rows: _rows,
-                    isLoading: _isLoading,
-                    loadingMessage: _loadingMessage,
-                    matchProgress: _matchProgress,
-                    matchTotal: _matchTotal,
-                    isFromFile: _isFromFile,
-                    fileName: _fileName,
-                    addingToCart: _addingToCart,
-                    onPickFile: _pickAndProcess,
-                    onCamera: _onCameraTap,
-                    onAddToCart: _addMatchedToCart,
-                    onHideToggle: _onRowHideToggle,
-                    uploadedImageSize: _uploadedImageSize,
-                    onRetry: _retryMatch,
-                    isRetrying: _isRetrying,
-                    retryProgress: _retryProgress,
-                    onRowRetry: _isFromFile ? _retryOneRow : null,
+    // Fill the viewport so short content leaves no dead gap below the last
+    // card, and top-anchor it so there is none above the first — taller
+    // content scrolls normally.
+    return LayoutBuilder(
+      builder: (context, viewport) => SingleChildScrollView(
+        controller: _scrollCtrl,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: viewport.maxHeight),
+          child: Container(
+            color: const Color(0xFFF9FAFB),
+            width: double.infinity,
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 1200),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const _PageHeader(),
+                      const SizedBox(height: 20),
+                      _MainLayout(
+                        rows: _rows,
+                        isLoading: _isLoading,
+                        loadingMessage: _loadingMessage,
+                        matchProgress: _matchProgress,
+                        matchTotal: _matchTotal,
+                        isFromFile: _isFromFile,
+                        fileName: _fileName,
+                        addingToCart: _addingToCart,
+                        onPickFile: _pickAndProcess,
+                        onCamera: _onCameraTap,
+                        onAddToCart: _addMatchedToCart,
+                        onHideToggle: _onRowHideToggle,
+                        uploadedImageSize: _uploadedImageSize,
+                        onRetry: _retryMatch,
+                        isRetrying: _isRetrying,
+                        retryProgress: _retryProgress,
+                        onRowRetry: _isFromFile ? _retryOneRow : null,
+                      ),
+                    ],
                   ),
-                  // CHANGE #324: c324_wa_box_gone — WA convert box removed;
-                  // cart drawer checkboxes now handle item selection + ordering.
-                  const SizedBox(height: 48),
-                ],
+                ),
               ),
             ),
           ),

@@ -18,8 +18,27 @@ Future<void> _pump(
   await tester.pumpAndSettle();
 }
 
+// The destructive buttons live in a collapsed "danger zone" so a tap meant for
+// Logout can't hit Delete. Every action test opens it first.
+Future<void> _expand(WidgetTester tester) async {
+  await tester.tap(find.text('Delete account or data'));
+  await tester.pumpAndSettle();
+}
+
 void main() {
   setUp(seedUiCopy);
+
+  testWidgets('the delete buttons are hidden until the danger zone is opened',
+      (tester) async {
+    await _pump(tester, (scope, reason) async => {'ok': true, 'message': 'x'});
+    // Collapsed: neither destructive action is reachable.
+    expect(find.text('Delete my account'), findsNothing);
+    expect(find.text('Delete my data only'), findsNothing);
+
+    await _expand(tester);
+    expect(find.text('Delete my account'), findsOneWidget);
+    expect(find.text('Delete my data only'), findsOneWidget);
+  });
 
   testWidgets('Delete my account → confirm → request_account_deletion("account")',
       (tester) async {
@@ -29,6 +48,7 @@ void main() {
       return {'ok': true, 'title': 'RESULT_TITLE', 'message': 'RESULT_MESSAGE'};
     });
 
+    await _expand(tester);
     await tester.tap(find.text('Delete my account'));
     await tester.pumpAndSettle();
     // Confirm dialog is up; the RPC has NOT been called yet.
@@ -51,6 +71,7 @@ void main() {
       return {'ok': true, 'message': 'DATA_RESULT'};
     });
 
+    await _expand(tester);
     await tester.tap(find.text('Delete my data only'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Continue'));
@@ -67,6 +88,7 @@ void main() {
       return {'ok': true, 'message': 'x'};
     });
 
+    await _expand(tester);
     await tester.tap(find.text('Delete my account'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Cancel'));

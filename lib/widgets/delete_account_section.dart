@@ -134,33 +134,70 @@ class DeleteAccountSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // The destructive actions are collapsed behind a muted "danger zone" row —
+    // no red button sitting next to Logout — so a tap meant for logout cannot
+    // land on Delete. Opening it is a deliberate extra step, and each option
+    // still passes through the confirm dialog below.
+    // Border + rounded corners come from the tile's own shape (not a colored
+    // Container wrapping the ListTile, which trips a Material ink-visibility
+    // assertion).
+    final shape = RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(12),
+      side: const BorderSide(color: Color(0xFFE5E7EB)),
+    );
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          OutlinedButton.icon(
-            onPressed: () => _request(context, 'account'),
-            icon: const Icon(Icons.delete_outline, size: 18, color: _danger),
-            label: Text(c('delete_account_section.delete_my_account')),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: _danger,
-              side: const BorderSide(color: _danger, width: 1.5),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10)),
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              textStyle:
-                  const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+            backgroundColor: Colors.white,
+            collapsedBackgroundColor: Colors.white,
+            shape: shape,
+            collapsedShape: shape,
+            tilePadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
+            leading: const Icon(Icons.warning_amber_rounded,
+                size: 20, color: Color(0xFF9CA3AF)),
+            title: Text(
+              c('delete_account_section.section_header'),
+              style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF6B7280)),
             ),
+            childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+            expandedCrossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                c('delete_account_section.section_note'),
+                style: const TextStyle(
+                    fontSize: 12.5, color: Color(0xFF6B7280), height: 1.4),
+              ),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: () => _request(context, 'account'),
+                icon:
+                    const Icon(Icons.delete_outline, size: 18, color: _danger),
+                label: Text(c('delete_account_section.delete_my_account')),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: _danger,
+                  side: const BorderSide(color: _danger, width: 1.5),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  textStyle: const TextStyle(
+                      fontSize: 15, fontWeight: FontWeight.w600),
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextButton(
+                onPressed: () => _request(context, 'data'),
+                style: TextButton.styleFrom(
+                    foregroundColor: const Color(0xFF6B7280)),
+                child: Text(c('delete_account_section.delete_my_data_only')),
+              ),
+            ],
           ),
-          const SizedBox(height: 8),
-          TextButton(
-            onPressed: () => _request(context, 'data'),
-            style: TextButton.styleFrom(foregroundColor: const Color(0xFF6B7280)),
-            child: Text(c('delete_account_section.delete_my_data_only')),
-          ),
-        ],
-      ),
+        ),
     );
   }
 }

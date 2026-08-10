@@ -240,7 +240,12 @@ class _LoginViewState extends State<LoginView> {
       _message = null;
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _numFocus.requestFocus();
+      if (!mounted) return;
+      _numFocus.requestFocus();
+      // Caret at the end — a prefilled number must not come up selected, or a
+      // stray keypress would wipe the whole thing.
+      _numCtrl.selection =
+          TextSelection.collapsed(offset: _numCtrl.text.length);
     });
   }
 
@@ -613,11 +618,8 @@ class _LoginViewState extends State<LoginView> {
             busy: _googleBusy,
           ),
           const SizedBox(height: 18),
-          _footer(),
-          if (_message != null) ...[
-            const SizedBox(height: 12),
-            _messageText(),
-          ],
+          // One line only: a status message replaces the note, never adds to it.
+          _message != null ? _messageText() : _footer(),
         ],
       );
 
@@ -635,12 +637,10 @@ class _LoginViewState extends State<LoginView> {
             onPressed: _send,
             busy: _sending,
           ),
-          if (_message != null) ...[
-            const SizedBox(height: 14),
-            _messageText(),
-          ],
-          const SizedBox(height: 18),
-          _footer(),
+          const SizedBox(height: 16),
+          // Exactly one line under Send: the status while sending, otherwise
+          // the "no password" note — never both, never a new line.
+          _message != null ? _messageText() : _footer(),
         ],
       );
 

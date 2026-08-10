@@ -847,27 +847,36 @@ class _ProductGrid extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: LayoutBuilder(
-        builder: (context, c) => GridView.builder(
-          shrinkWrap: true,
-          // The page is the scrollable. A grid with its own scroll inside a
-          // list is the thing that makes a feed feel broken on mobile.
-          physics: const NeverScrollableScrollPhysics(),
-          padding: EdgeInsets.zero,
-          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: columnsFor(c.maxWidth),
-            mainAxisExtent: CompactProductCard.extent,
-            crossAxisSpacing: 12,
-            mainAxisSpacing: 12,
-          ),
-          itemCount: section.cards.length,
-          itemBuilder: (context, i) {
-            final p = section.cards[i];
-            return CompactProductCard(
-              product: p,
-              onTap: () => Navigator.of(context).pushNamed('/product/${p.id}'),
-            );
-          },
-        ),
+        builder: (context, c) {
+          // A vertical grid stays compact — 6 cards on a phone, 10 on web —
+          // while the horizontal rails carry up to 100. The backend sends up
+          // to 10; a phone shows the first 6.
+          final cap = c.maxWidth >= 600 ? 10 : 6;
+          final count =
+              section.cards.length < cap ? section.cards.length : cap;
+          return GridView.builder(
+            shrinkWrap: true,
+            // The page is the scrollable. A grid with its own scroll inside a
+            // list is the thing that makes a feed feel broken on mobile.
+            physics: const NeverScrollableScrollPhysics(),
+            padding: EdgeInsets.zero,
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: columnsFor(c.maxWidth),
+              mainAxisExtent: CompactProductCard.extent,
+              crossAxisSpacing: 12,
+              mainAxisSpacing: 12,
+            ),
+            itemCount: count,
+            itemBuilder: (context, i) {
+              final p = section.cards[i];
+              return CompactProductCard(
+                product: p,
+                onTap: () =>
+                    Navigator.of(context).pushNamed('/product/${p.id}'),
+              );
+            },
+          );
+        },
       ),
     );
   }

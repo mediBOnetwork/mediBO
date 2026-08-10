@@ -121,25 +121,43 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
       unawaited(MedicineRepository().loadStorefrontLabels());
     }
 
-    HomeSections sections;
-    BackInStock strip;
+    HomeSections? sections;
+    BackInStock strip = BackInStock.empty;
     try {
       final results = await Future.wait([loadSections(), loadNotifs()]);
       sections = results[0] as HomeSections;
       strip = results[1] as BackInStock;
     } catch (_) {
-      // Offline / failure — keep whatever is already painted (the memo) rather
-      // than wiping the feed; only show the failed state on a truly cold start.
-      sections = HomeSectionsView._memo ?? HomeSections.failed;
-      strip = BackInStock.empty;
+      sections = null; // network/parse failure — treat as no fresh payload
     }
 
     if (!mounted) return;
-    if (sections.ok) HomeSectionsView._memo = sections;
-    setState(() {
-      _data = sections;
-      _backInStock = strip;
-    });
+
+    // Rule 8: the cache is a render fallback, never overwritten by a worse
+    // answer. A refetch only REPLACES the feed when it comes back ok; a failed
+    // or ok:false refetch leaves the last good memo on screen (so a flaky
+    // network never flips a populated home into a bare Retry). The bare Retry
+    // shows only on a genuine cold start with nothing cached.
+    final fresh = sections;
+    if (fresh != null && fresh.ok) {
+      HomeSectionsView._memo = fresh;
+      setState(() {
+        _data = fresh;
+        _backInStock = strip;
+      });
+    } else if (HomeSectionsView._memo != null) {
+      // Keep the cached feed; just carry any fresh strip verdict through.
+      setState(() {
+        _data = HomeSectionsView._memo;
+        _backInStock = strip;
+      });
+    } else {
+      // Cold start, nothing cached, fetch did not succeed → the retry state.
+      setState(() {
+        _data = fresh ?? HomeSections.failed;
+        _backInStock = strip;
+      });
+    }
 
     _reportSeen();
   }

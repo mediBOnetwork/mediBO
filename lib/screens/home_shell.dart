@@ -962,11 +962,10 @@ class _HomeShellState extends State<HomeShell> {
                   onBulk: () => _setIndex(2),
                   onOrders: () => _setIndex(1),
                   onCart: () => _openCart(),
-                  // Web/desktop now uses the SAME login as mobile: the full
-                  // WhatsApp/Google LoginScreen (backend-driven login_screen_config),
-                  // not the legacy email/password LoginPanel. Mobile path unchanged.
-                  onLogin: () => Navigator.push(context,
-                      MaterialPageRoute(builder: (_) => const LoginScreen())),
+                  // Web/desktop keeps the right-side slide-in panel, but its body
+                  // is now the SAME mobile WhatsApp/Google LoginView (via
+                  // LoginPanel → LoginPanelView), not the legacy email/password.
+                  onLogin: () => setState(() => _loginOpen = true),
                   index: _index,
                   cartOpen: _cartOpen,
                 ),
@@ -2232,7 +2231,25 @@ class _LoginPanelState extends State<LoginPanel>
                 child: Material(
                   elevation: 16,
                   color: Colors.white,
-                  child: _LoginPanelContent(onClose: widget.onClose),
+                  // New mobile-style WhatsApp/Google login, hosted in the
+                  // right-side panel. The ✕ overlays the top-right; the scrim
+                  // behind the panel also closes on tap.
+                  child: Stack(
+                    children: [
+                      Positioned.fill(
+                        child: LoginPanelView(onClose: widget.onClose),
+                      ),
+                      Positioned(
+                        top: 6,
+                        right: 6,
+                        child: IconButton(
+                          icon: const Icon(Icons.close, size: 22),
+                          color: const Color(0xFF6B7280),
+                          onPressed: widget.onClose,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),

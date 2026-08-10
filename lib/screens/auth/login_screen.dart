@@ -436,3 +436,121 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 }
+
+/// The passwordless [LoginView] hosted inside the desktop right-side slide-in
+/// panel (see `LoginPanel` in home_shell) instead of a full-screen route.
+///
+/// It carries its own [SupabaseLoginApi] + auth harness so the WhatsApp/Google
+/// flows behave EXACTLY as in [LoginScreen]; on a successful sign-in it closes
+/// the hosting panel and lands the user on their backend `home_route`. This is
+/// what keeps the web login layout identical to mobile while preserving the
+/// half-screen panel presentation (no full-screen redirect).
+class LoginPanelView extends StatefulWidget {
+  const LoginPanelView({super.key, required this.onClose});
+
+  /// Closes the hosting panel (backdrop tap, the ✕, and after a sign-in).
+  final VoidCallback onClose;
+
+  @override
+  State<LoginPanelView> createState() => _LoginPanelViewState();
+}
+
+class _LoginPanelViewState extends State<LoginPanelView> {
+  late final SupabaseLoginApi _api;
+  StreamSubscription<AuthState>? _authSub;
+  CartModel? _cart;
+  bool _landed = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    try {
+      _cart = AppState.of(context);
+    } catch (_) {}
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _api = SupabaseLoginApi();
+
+    // Warm GIS so the Google tap can prompt() synchronously (same as LoginScreen).
+    unawaited(gisPrewarm().then((ok) {
+      try {
+        RenderLog.write('c562_prewarm', ok ? 'ready' : 'failed');
+      } catch (_) {}
+    }));
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      try {
+        RenderLog.write('loginpanel_rendered', true);
+      } catch (_) {}
+      // Already signed in (panel opened with a live session): land immediately.
+      try {
+        if (mounted && Supabase.instance.client.auth.currentUser != null) {
+          _resolveHome();
+        }
+      } catch (_) {}
+    });
+
+    // OAuth PKCE / One Tap setSession / WhatsApp OTP all surface as signedIn.
+    try {
+      _authSub = Supabase.instance.client.auth.onAuthStateChange.listen((s) {
+        if (s.event == AuthChangeEvent.signedIn && mounted) _resolveHome();
+      });
+    } catch (_) {}
+  }
+
+  @override
+  void dispose() {
+    _authSub?.cancel();
+    super.dispose();
+  }
+
+  /// Asks the backend where this user belongs, then lands there.
+  Future<void> _resolveHome() async {
+    if (_landed) return;
+    try {
+      final s = await _api.session();
+      if (!mounted) return;
+      if (s['signed_in'] != true) return;
+      final route = (s['home_route'] as String?) ?? '';
+      if (route.isEmpty) return;
+      await _land(route);
+    } catch (_) {
+      // No local error copy — the view keeps showing the last backend message.
+    }
+  }
+
+  /// Loads the signed-in cart (bounded), closes the panel, and navigates to the
+  /// backend home_route — mirrors _LoginScreenState._landOn so WhatsApp/Google
+  /// behave the same whether login is a full screen or this panel.
+  Future<void> _land(String route) async {
+    if (_landed) return;
+    _landed = true;
+    final cart = _cart;
+    if (cart != null) {
+      try {
+        await cart
+            .syncSignedInCart()
+            .timeout(const Duration(milliseconds: 2500));
+        RenderLog.write('c566_cart_before_home', cart.badge ?? '');
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    widget.onClose();
+    try {
+      Navigator.of(context).pushNamedAndRemoveUntil(route, (r) => false);
+    } catch (_) {}
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // LoginView owns its own full-height layout (wash band + thumb-reach
+    // actions). The panel gives it a bounded (panelW × viewport-height) box, so
+    // it renders exactly like mobile, just within the 420px panel.
+    return LoginView(api: _api, onHome: (route) {
+      _land(route);
+    });
+  }
+}

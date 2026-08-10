@@ -11,6 +11,7 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/date_labels.dart';
+import '../services/ui_copy.dart';
 import 'date_label_text.dart';
 import '../utils/render_log.dart';
 import '../utils/safe_parse.dart';
@@ -130,7 +131,7 @@ class _SupPayPanelState extends State<SupPayPanel> {
     final ext   = (pf.extension ?? 'jpg').toLowerCase();
 
     if (bytes.length > 10 * 1024 * 1024) {
-      if (mounted) showToast(context, 'Image too large (max 10 MB)', isError: true);
+      if (mounted) showToast(context, c('sup_pay.toast_image_too_large'), isError: true);
       return;
     }
 
@@ -151,7 +152,7 @@ class _SupPayPanelState extends State<SupPayPanel> {
             .uploadBinary(path, bytes,
                 fileOptions: FileOptions(contentType: contentType));
       } catch (_) {
-        if (mounted) showToast(context, 'Upload failed — try again', isError: true);
+        if (mounted) showToast(context, c('sup_pay.toast_upload_failed'), isError: true);
         return;
       }
 
@@ -209,11 +210,14 @@ class _SupPayPanelState extends State<SupPayPanel> {
       if (!mounted) return;
       if (result == 'ok') {
         showToast(context,
-            '${kind == 'advance' ? 'Advance' : 'Balance'} payment recorded ✓');
+            cf('sup_pay.toast_payment_recorded',
+                {'kind': kind == 'advance'
+                    ? c('sup_pay.kind_advance')
+                    : c('sup_pay.kind_balance')}));
         RenderLog.write('c330_record', 'kind=$kind;ok=true');
         widget.onReload();
       } else if (result == 'duplicate') {
-        showToast(context, 'Already recorded — duplicate payment reference');
+        showToast(context, c('sup_pay.toast_duplicate'));
       }
     } finally {
       if (mounted) setState(() => _uploading = false);
@@ -235,19 +239,19 @@ class _SupPayPanelState extends State<SupPayPanel> {
         scrollDirection: Axis.horizontal,
         child: Row(children: [
           _PayChip(
-            label: 'Payment Info',
+            label: c('sup_pay.tab_payment_info'),
             selected: _tab == 0,
             onTap: () => setState(() => _tab = 0),
           ),
           const SizedBox(width: 6),
           _PayChip(
-            label: 'Advance Payment',
+            label: c('sup_pay.tab_advance_payment'),
             selected: _tab == 1,
             onTap: () => setState(() => _tab = 1),
           ),
           const SizedBox(width: 6),
           _PayChip(
-            label: 'Remaining',
+            label: c('sup_pay.tab_remaining'),
             selected: _tab == 2,
             onTap: () => setState(() => _tab = 2),
           ),
@@ -270,20 +274,22 @@ class _SupPayPanelState extends State<SupPayPanel> {
     final remDue  = _remainingDue;
     final remDenom = anyImp ? _billsTotal : mrp;
     final remSub   = anyImp
-        ? 'of ${_r(_billsTotal)} bill total'
-        : 'of ${_r(mrp)} total';
+        ? cf('sup_pay.rem_sub_bill_total', {'amount': _r(_billsTotal)})
+        : cf('sup_pay.rem_sub_order_total', {'amount': _r(mrp)});
     final pct = mrp > 0 ? ((paid / mrp) * 100).round() : 0;
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _StatCard(
-        label: 'Total ordered vs paid',
+        label: c('sup_pay.card_total_ordered_vs_paid'),
         headline: '${_r(paid)} / ${_r(mrp)}',
-        sub: mrp > 0 ? '$pct% paid' : '—',
+        sub: mrp > 0
+            ? cf('sup_pay.card_pct_paid', {'pct': '$pct'})
+            : c('sup_pay.value_dash'),
         fill: mrp > 0 ? (paid / mrp).clamp(0.0, 1.0) : 0.0,
         barColor: const Color(0xFF1B7A43),
       ),
       _StatCard(
-        label: 'Advance (30% of MRP)',
+        label: c('sup_pay.card_advance'),
         headline: '${_r(advPaid)} / ${_r(advReq)}',
         sub: '',
         fill: advReq > 0 ? (advPaid / advReq).clamp(0.0, 1.0) : 0.0,
@@ -292,7 +298,7 @@ class _SupPayPanelState extends State<SupPayPanel> {
             : const Color(0xFFD97706),
       ),
       _StatCard(
-        label: 'Remaining balance',
+        label: c('sup_pay.card_remaining_balance'),
         headline: '${_r(remDue)} left',
         sub: remSub,
         fill: remDenom > 0
@@ -305,8 +311,8 @@ class _SupPayPanelState extends State<SupPayPanel> {
         OutlinedButton.icon(
           onPressed: _showManualDialog,
           icon: const Icon(Icons.add, size: 16),
-          label: const Text('Add manual payment',
-              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+          label: Text(c('sup_pay.btn_add_manual_payment'),
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
           style: OutlinedButton.styleFrom(
             side: const BorderSide(color: Color(0xFF1B7A43)),
             foregroundColor: const Color(0xFF1B7A43),
@@ -316,13 +322,13 @@ class _SupPayPanelState extends State<SupPayPanel> {
         ),
       ],
       const SizedBox(height: 12),
-      const Text('All payments',
-          style: TextStyle(
+      Text(c('sup_pay.section_all_payments'),
+          style: const TextStyle(
               fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6B7280))),
       const SizedBox(height: 6),
       if (_payments.isEmpty)
-        const Text('No payments recorded yet.',
-            style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)))
+        Text(c('sup_pay.empty_no_payments'),
+            style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)))
       else
         ..._payments.map(_buildCompactRow),
       // Adjustments block (c349 — excess-kept and other adjustments from backend)
@@ -332,8 +338,8 @@ class _SupPayPanelState extends State<SupPayPanel> {
           RenderLog.write('c349_bill_adj', 'n=${_adjustments.length}');
           RenderLog.write('c352_bill_adj', 'n=${_adjustments.length}');
           return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const Text('Adjustments',
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+            Text(c('sup_pay.section_adjustments'),
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
                     color: Color(0xFF6B7280))),
             const SizedBox(height: 6),
             ..._adjustments.map((adj) {
@@ -345,7 +351,8 @@ class _SupPayPanelState extends State<SupPayPanel> {
               return Padding(
                 padding: const EdgeInsets.only(bottom: 4),
                 child: Row(children: [
-                  Expanded(child: Text(label.isNotEmpty ? label : 'Adjustment',
+                  Expanded(child: Text(
+                      label.isNotEmpty ? label : c('sup_pay.adjustment_default_label'),
                       style: const TextStyle(fontSize: 13, color: Color(0xFF111827)))),
                   Text(amtStr, style: const TextStyle(fontSize: 13,
                       fontWeight: FontWeight.w600, color: Color(0xFF065F46))),
@@ -354,8 +361,8 @@ class _SupPayPanelState extends State<SupPayPanel> {
             }),
             const Divider(height: 16, color: Color(0xFFE5E7EB)),
             Row(children: [
-              const Expanded(child: Text('Adjustments total',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
+              Expanded(child: Text(c('sup_pay.adjustments_total'),
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
                       color: Color(0xFF111827)))),
               Text(
                 _adjustmentsTotal == _adjustmentsTotal.truncateToDouble()
@@ -383,15 +390,15 @@ class _SupPayPanelState extends State<SupPayPanel> {
     switch (kind) {
       case 'advance':
         pillBg = const Color(0xFFD1FAE5); pillFg = const Color(0xFF065F46);
-        pillLbl = 'Adv';
+        pillLbl = c('sup_pay.pill_adv');
         break;
       case 'balance':
         pillBg = const Color(0xFFEFF6FF); pillFg = const Color(0xFF1E40AF);
-        pillLbl = 'Bal';
+        pillLbl = c('sup_pay.pill_bal');
         break;
       default:
         pillBg = const Color(0xFFF3F4F6); pillFg = const Color(0xFF6B7280);
-        pillLbl = 'Other';
+        pillLbl = c('sup_pay.pill_other');
     }
 
     return Padding(
@@ -437,7 +444,7 @@ class _SupPayPanelState extends State<SupPayPanel> {
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _StatCard(
-        label: 'Advance (30% of MRP)',
+        label: c('sup_pay.card_advance'),
         headline: '${_r(advPaid)} / ${_r(advReq)}',
         sub: '',
         fill: advReq > 0 ? (advPaid / advReq).clamp(0.0, 1.0) : 0.0,
@@ -454,12 +461,12 @@ class _SupPayPanelState extends State<SupPayPanel> {
               shape:
                   RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             ),
-            child: const Text('Pay Advance'),
+            child: Text(c('sup_pay.btn_pay_advance')),
           ),
           const SizedBox(height: 6),
-          const Text(
-            "Add the supplier's UPI ID in their profile to enable direct payment",
-            style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+          Text(
+            c('sup_pay.hint_missing_vpa'),
+            style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
           ),
         ] else if (due <= 0) ...[
           FilledButton(
@@ -470,8 +477,8 @@ class _SupPayPanelState extends State<SupPayPanel> {
               shape:
                   RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             ),
-            child: const Text('Advance fully paid ✓',
-                style: TextStyle(color: Colors.white)),
+            child: Text(c('sup_pay.btn_advance_fully_paid'),
+                style: const TextStyle(color: Colors.white)),
           ),
         ] else ...[
           FilledButton(
@@ -482,7 +489,8 @@ class _SupPayPanelState extends State<SupPayPanel> {
               shape:
                   RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             ),
-            child: Text('Pay Advance ${_r(due)}',
+            child: Text(
+                cf('sup_pay.btn_pay_advance_amount', {'amount': _r(due)}),
                 style: const TextStyle(color: Colors.white)),
           ),
         ],
@@ -496,7 +504,9 @@ class _SupPayPanelState extends State<SupPayPanel> {
                   child: CircularProgressIndicator(strokeWidth: 2))
               : const Icon(Icons.upload_outlined, size: 16),
           label: Text(
-              _uploading ? 'Uploading…' : 'Upload payment screenshot',
+              _uploading
+                  ? c('sup_pay.btn_uploading')
+                  : c('sup_pay.btn_upload_screenshot'),
               style:
                   const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
           style: OutlinedButton.styleFrom(
@@ -509,15 +519,15 @@ class _SupPayPanelState extends State<SupPayPanel> {
         ),
         const SizedBox(height: 12),
       ],
-      const Text('Advance payments',
-          style: TextStyle(
+      Text(c('sup_pay.section_advance_payments'),
+          style: const TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w600,
               color: Color(0xFF6B7280))),
       const SizedBox(height: 6),
       if (advPayments.isEmpty)
-        const Text('No advance payments yet.',
-            style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)))
+        Text(c('sup_pay.empty_no_advance_payments'),
+            style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)))
       else
         ...advPayments.map((p) => C330PayCard(payment: p)),
     ]);
@@ -527,16 +537,16 @@ class _SupPayPanelState extends State<SupPayPanel> {
   Widget _buildRemTab(List<Map<String, dynamic>> balPayments) {
     if (!_anyImported) {
       RenderLog.write('c330_remaining_gate', 'locked');
-      return const Column(
+      return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.lock_outline, size: 32, color: Color(0xFF9CA3AF)),
-          SizedBox(height: 8),
-          Text('Remaining payment unlocks after a bill is imported.',
-              style: TextStyle(fontSize: 14, color: Color(0xFF6B7280))),
-          SizedBox(height: 4),
-          Text("Import the supplier's bill in View Bill to continue.",
-              style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
+          const Icon(Icons.lock_outline, size: 32, color: Color(0xFF9CA3AF)),
+          const SizedBox(height: 8),
+          Text(c('sup_pay.remaining_locked_title'),
+              style: const TextStyle(fontSize: 14, color: Color(0xFF6B7280))),
+          const SizedBox(height: 4),
+          Text(c('sup_pay.remaining_locked_sub'),
+              style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
         ],
       );
     }
@@ -551,9 +561,10 @@ class _SupPayPanelState extends State<SupPayPanel> {
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _StatCard(
-        label: 'Remaining balance',
+        label: c('sup_pay.card_remaining_balance'),
         headline: '${_r(remDue)} left',
-        sub: 'Bill total ${_r(billsTot)} · Paid ${_r(paid)}',
+        sub: cf('sup_pay.rem_sub_bill_paid',
+            {'bill': _r(billsTot), 'paid': _r(paid)}),
         fill: paidFrac,
         barColor: const Color(0xFF1B7A43),
       ),
@@ -566,12 +577,12 @@ class _SupPayPanelState extends State<SupPayPanel> {
               shape:
                   RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             ),
-            child: const Text('Pay Remaining'),
+            child: Text(c('sup_pay.btn_pay_remaining')),
           ),
           const SizedBox(height: 6),
-          const Text(
-            "Add the supplier's UPI ID in their profile to enable direct payment",
-            style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+          Text(
+            c('sup_pay.hint_missing_vpa'),
+            style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
           ),
         ] else if (remDue <= 0) ...[
           FilledButton(
@@ -582,8 +593,8 @@ class _SupPayPanelState extends State<SupPayPanel> {
               shape:
                   RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             ),
-            child: const Text('Fully paid ✓',
-                style: TextStyle(color: Colors.white)),
+            child: Text(c('sup_pay.btn_fully_paid'),
+                style: const TextStyle(color: Colors.white)),
           ),
         ] else ...[
           FilledButton(
@@ -594,7 +605,8 @@ class _SupPayPanelState extends State<SupPayPanel> {
               shape:
                   RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             ),
-            child: Text('Pay Remaining ${_r(remDue)}',
+            child: Text(
+                cf('sup_pay.btn_pay_remaining_amount', {'amount': _r(remDue)}),
                 style: const TextStyle(color: Colors.white)),
           ),
         ],
@@ -608,7 +620,9 @@ class _SupPayPanelState extends State<SupPayPanel> {
                   child: CircularProgressIndicator(strokeWidth: 2))
               : const Icon(Icons.upload_outlined, size: 16),
           label: Text(
-              _uploading ? 'Uploading…' : 'Upload payment screenshot',
+              _uploading
+                  ? c('sup_pay.btn_uploading')
+                  : c('sup_pay.btn_upload_screenshot'),
               style:
                   const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
           style: OutlinedButton.styleFrom(
@@ -621,15 +635,15 @@ class _SupPayPanelState extends State<SupPayPanel> {
         ),
         const SizedBox(height: 12),
       ],
-      const Text('Balance payments',
-          style: TextStyle(
+      Text(c('sup_pay.section_balance_payments'),
+          style: const TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w600,
               color: Color(0xFF6B7280))),
       const SizedBox(height: 6),
       if (balPayments.isEmpty)
-        const Text('No balance payments yet.',
-            style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)))
+        Text(c('sup_pay.empty_no_balance_payments'),
+            style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)))
       else
         ...balPayments.map((p) => C330PayCard(payment: p)),
     ]);
@@ -651,15 +665,15 @@ class _SupPayPanelState extends State<SupPayPanel> {
         builder: (ctx, set) => AlertDialog(
           shape:
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          title: const Text('Add manual payment',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+          title: Text(c('sup_pay.dialog_manual_title'),
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
           content: Column(mainAxisSize: MainAxisSize.min, children: [
             TextField(
               controller: amtCtrl,
               keyboardType:
                   const TextInputType.numberWithOptions(decimal: true),
               decoration: InputDecoration(
-                labelText: 'Amount (₹)',
+                labelText: c('sup_pay.field_amount'),
                 errorText: amtErr,
                 border: const OutlineInputBorder(),
                 contentPadding:
@@ -672,15 +686,17 @@ class _SupPayPanelState extends State<SupPayPanel> {
             const SizedBox(height: 12),
             DropdownButtonFormField<String>(
               initialValue: mode,
-              decoration: const InputDecoration(
-                labelText: 'Mode',
-                border: OutlineInputBorder(),
+              decoration: InputDecoration(
+                labelText: c('sup_pay.field_mode'),
+                border: const OutlineInputBorder(),
                 contentPadding:
-                    EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
               ),
-              items: const [
-                DropdownMenuItem(value: 'cash',   child: Text('Cash')),
-                DropdownMenuItem(value: 'online', child: Text('Online')),
+              items: [
+                DropdownMenuItem(
+                    value: 'cash', child: Text(c('sup_pay.mode_cash'))),
+                DropdownMenuItem(
+                    value: 'online', child: Text(c('sup_pay.mode_online'))),
               ],
               onChanged: (v) {
                 if (v != null) set(() => mode = v);
@@ -689,11 +705,11 @@ class _SupPayPanelState extends State<SupPayPanel> {
             const SizedBox(height: 12),
             TextField(
               controller: noteCtrl,
-              decoration: const InputDecoration(
-                labelText: 'Note (optional)',
-                border: OutlineInputBorder(),
+              decoration: InputDecoration(
+                labelText: c('sup_pay.field_note'),
+                border: const OutlineInputBorder(),
                 contentPadding:
-                    EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
               ),
             ),
             if (saveErr != null) ...[
@@ -706,7 +722,7 @@ class _SupPayPanelState extends State<SupPayPanel> {
           actions: [
             TextButton(
               onPressed: saving ? null : () => Navigator.of(ctx).pop(),
-              child: const Text('Cancel'),
+              child: Text(c('sup_pay.btn_cancel')),
             ),
             FilledButton(
               onPressed: saving
@@ -715,7 +731,7 @@ class _SupPayPanelState extends State<SupPayPanel> {
                       final amount =
                           double.tryParse(amtCtrl.text.trim());
                       if (amount == null || amount <= 0) {
-                        set(() => amtErr = 'Enter a valid amount');
+                        set(() => amtErr = c('sup_pay.err_invalid_amount'));
                         return;
                       }
                       set(() { saving = true; saveErr = null; });
@@ -735,7 +751,7 @@ class _SupPayPanelState extends State<SupPayPanel> {
                         );
                         if (ctx.mounted) Navigator.of(ctx).pop();
                         if (mounted) {
-                          showToast(context, 'Payment recorded ✓');
+                          showToast(context, c('sup_pay.toast_manual_recorded'));
                           widget.onReload();
                         }
                       } catch (e) {
@@ -755,7 +771,7 @@ class _SupPayPanelState extends State<SupPayPanel> {
                       height: 16,
                       child: CircularProgressIndicator(
                           strokeWidth: 2, color: Colors.white))
-                  : const Text('Save'),
+                  : Text(c('sup_pay.btn_save')),
             ),
           ],
         ),
@@ -921,23 +937,23 @@ class _C330PayCardState extends State<C330PayCard> {
     switch (kind) {
       case 'advance':
         kindBg = const Color(0xFFD1FAE5); kindFg = const Color(0xFF065F46);
-        kindLbl = 'Advance';
+        kindLbl = c('sup_pay.kind_advance');
         break;
       case 'balance':
         kindBg = const Color(0xFFEFF6FF); kindFg = const Color(0xFF1E40AF);
-        kindLbl = 'Balance';
+        kindLbl = c('sup_pay.kind_balance');
         break;
       default:
         kindBg = const Color(0xFFF3F4F6); kindFg = const Color(0xFF6B7280);
-        kindLbl = 'Other';
+        kindLbl = c('sup_pay.kind_other');
     }
 
     final modeLabel = switch (mode) {
-      'upi'    => 'UPI',
-      'cash'   => 'Cash',
-      'online' => 'Online',
-      'neft'   => 'NEFT',
-      'rtgs'   => 'RTGS',
+      'upi'    => c('sup_pay.mode_upi'),
+      'cash'   => c('sup_pay.mode_cash'),
+      'online' => c('sup_pay.mode_online'),
+      'neft'   => c('sup_pay.mode_neft'),
+      'rtgs'   => c('sup_pay.mode_rtgs'),
       _        => mode,
     };
 
@@ -989,12 +1005,12 @@ class _C330PayCardState extends State<C330PayCard> {
                   color: Color(0xFF111827))),
         ]),
         const SizedBox(height: 10),
-        C330CopyRow(label: 'Payee',          value: payee),
-        C330CopyRow(label: 'UPI ID',         value: vpa),
-        C330CopyRow(label: 'App',            value: app),
-        C330CopyRow(label: 'UTR / RRN',      value: utr),
-        C330CopyRow(label: 'Transaction ID', value: txn),
-        C330CopyRow(label: 'Paid at',        value: paidAt),
+        C330CopyRow(label: c('sup_pay.row_payee'),          value: payee),
+        C330CopyRow(label: c('sup_pay.row_upi_id'),         value: vpa),
+        C330CopyRow(label: c('sup_pay.row_app'),            value: app),
+        C330CopyRow(label: c('sup_pay.row_utr'),            value: utr),
+        C330CopyRow(label: c('sup_pay.row_txn_id'),         value: txn),
+        C330CopyRow(label: c('sup_pay.row_paid_at'),        value: paidAt),
         if (hasSnap) ...[
           const SizedBox(height: 8),
           if (_loading)
@@ -1014,10 +1030,10 @@ class _C330PayCardState extends State<C330PayCard> {
                   fit: BoxFit.contain,
                   width: double.infinity,
                   height: 160,
-                  errorBuilder: (_, _e, _st) => const Text(
-                    'Screenshot unavailable',
-                    style:
-                        TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+                  errorBuilder: (_, _e, _st) => Text(
+                    c('sup_pay.screenshot_unavailable'),
+                    style: const TextStyle(
+                        fontSize: 12, color: Color(0xFF9CA3AF)),
                   ),
                 ),
               ),
@@ -1028,7 +1044,7 @@ class _C330PayCardState extends State<C330PayCard> {
           DateLabelText(
             ts: at,
             style: DateStyle.dmy2Time12,
-            transform: (d) => 'Recorded $d',
+            transform: (d) => cf('sup_pay.recorded_at', {'date': d}),
             textStyle:
                 const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
           ),
@@ -1090,7 +1106,7 @@ class _C330ConfirmSheetState extends State<C330ConfirmSheet> {
   Future<void> _save() async {
     final amount = double.tryParse(_amtCtrl.text.trim());
     if (amount == null || amount <= 0) {
-      setState(() => _amtErr = 'Enter a valid amount');
+      setState(() => _amtErr = c('sup_pay.err_invalid_amount'));
       return;
     }
     setState(() { _saving = true; _amtErr = null; _saveErr = null; });
@@ -1117,7 +1133,10 @@ class _C330ConfirmSheetState extends State<C330ConfirmSheet> {
         if (err == 'duplicate_utr' || err == 'duplicate_txn') {
           Navigator.of(context).pop('duplicate');
         } else if (err == 'bad_amount') {
-          setState(() { _saving = false; _amtErr = 'Invalid amount'; });
+          setState(() {
+            _saving = false;
+            _amtErr = c('sup_pay.err_bad_amount');
+          });
         } else {
           setState(() { _saving = false; _saveErr = err; });
         }
@@ -1135,7 +1154,9 @@ class _C330ConfirmSheetState extends State<C330ConfirmSheet> {
   @override
   Widget build(BuildContext context) {
     final bottom    = MediaQuery.of(context).viewInsets.bottom;
-    final kindLabel = widget.kind == 'advance' ? 'Advance' : 'Balance';
+    final kindLabel = widget.kind == 'advance'
+        ? c('sup_pay.kind_advance')
+        : c('sup_pay.kind_balance');
     return Container(
       constraints:
           BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.92),
@@ -1151,7 +1172,8 @@ class _C330ConfirmSheetState extends State<C330ConfirmSheet> {
         const SizedBox(height: 12),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20),
-          child: Text('Confirm $kindLabel Payment',
+          child: Text(
+              cf('sup_pay.confirm_sheet_title', {'kind': kindLabel}),
               style: const TextStyle(
                   fontSize: 16, fontWeight: FontWeight.w700)),
         ),
@@ -1172,10 +1194,10 @@ class _C330ConfirmSheetState extends State<C330ConfirmSheet> {
                 ),
               ),
               const SizedBox(height: 12),
-              const Text(
-                'Details read automatically — verify before saving.',
-                style:
-                    TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+              Text(
+                c('sup_pay.confirm_sheet_hint'),
+                style: const TextStyle(
+                    fontSize: 12, color: Color(0xFF9CA3AF)),
               ),
               const SizedBox(height: 12),
               TextField(
@@ -1183,7 +1205,7 @@ class _C330ConfirmSheetState extends State<C330ConfirmSheet> {
                 keyboardType:
                     const TextInputType.numberWithOptions(decimal: true),
                 decoration: InputDecoration(
-                  labelText: 'Amount (₹)*',
+                  labelText: c('sup_pay.field_amount_required'),
                   errorText: _amtErr,
                   border: const OutlineInputBorder(),
                   contentPadding: const EdgeInsets.symmetric(
@@ -1194,12 +1216,16 @@ class _C330ConfirmSheetState extends State<C330ConfirmSheet> {
                 },
               ),
               const SizedBox(height: 12),
-              C330CopyRow(label: 'Payee Name',    value: _s('payee_name')),
-              C330CopyRow(label: 'Payee UPI ID',  value: _s('payee_vpa')),
-              C330CopyRow(label: 'App',            value: _s('app')),
-              C330CopyRow(label: 'UTR / RRN',      value: _s('utr')),
-              C330CopyRow(label: 'Transaction ID', value: _s('txn_id')),
-              C330CopyRow(label: 'Paid At',        value: _s('paid_at')),
+              C330CopyRow(
+                  label: c('sup_pay.row_payee_name'), value: _s('payee_name')),
+              C330CopyRow(
+                  label: c('sup_pay.row_payee_vpa'), value: _s('payee_vpa')),
+              C330CopyRow(label: c('sup_pay.row_app'), value: _s('app')),
+              C330CopyRow(label: c('sup_pay.row_utr'), value: _s('utr')),
+              C330CopyRow(
+                  label: c('sup_pay.row_txn_id'), value: _s('txn_id')),
+              C330CopyRow(
+                  label: c('sup_pay.row_paid_at_caps'), value: _s('paid_at')),
               if (_saveErr != null) ...[
                 const SizedBox(height: 8),
                 Text(_saveErr!,
@@ -1221,8 +1247,8 @@ class _C330ConfirmSheetState extends State<C330ConfirmSheet> {
                         height: 20,
                         child: CircularProgressIndicator(
                             strokeWidth: 2, color: Colors.white))
-                    : const Text('Confirm & Save',
-                        style: TextStyle(
+                    : Text(c('sup_pay.btn_confirm_save'),
+                        style: const TextStyle(
                             fontSize: 15,
                             fontWeight: FontWeight.w600,
                             color: Colors.white)),
@@ -1233,8 +1259,8 @@ class _C330ConfirmSheetState extends State<C330ConfirmSheet> {
                     _saving ? null : () => Navigator.of(context).pop(null),
                 style: TextButton.styleFrom(
                     minimumSize: const Size(double.infinity, 44)),
-                child: const Text('Cancel',
-                    style: TextStyle(color: Color(0xFF6B7280))),
+                child: Text(c('sup_pay.btn_cancel'),
+                    style: const TextStyle(color: Color(0xFF6B7280))),
               ),
             ]),
           ),

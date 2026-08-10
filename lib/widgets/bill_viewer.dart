@@ -14,6 +14,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'pdf_frame.dart';
+import '../services/ui_copy.dart';
 import '../utils/bill_mime.dart';
 
 Future<void> showBillViewer(BuildContext context, {required String url, required bool isImage}) {
@@ -74,9 +75,9 @@ class _BillViewerScreen extends StatelessWidget {
                                     height: 32,
                                     child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                                   ),
-                            errorBuilder: (_, __, ___) => const Text(
-                              "Couldn't load bill",
-                              style: TextStyle(color: Colors.white, fontSize: 14),
+                            errorBuilder: (_, __, ___) => Text(
+                              c('bill_viewer.err_load'),
+                              style: const TextStyle(color: Colors.white, fontSize: 14),
                             ),
                           ),
                         ),
@@ -216,8 +217,8 @@ class _BillFilePreviewState extends State<BillFilePreview> {
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           const Icon(Icons.error_outline, size: 28, color: Color(0xFF9CA3AF)),
           const SizedBox(height: 8),
-          const Text("Couldn't load bill",
-              style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFF6B7280))),
+          Text(c('bill_viewer.err_load'),
+              style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFF6B7280))),
         ]),
       );
     }
@@ -252,9 +253,9 @@ class _BillFilePreviewState extends State<BillFilePreview> {
                     ? child
                     : const Center(
                         child: SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2))),
-                errorBuilder: (_, __, ___) => const Center(
-                    child: Text("Couldn't load bill",
-                        style: TextStyle(fontSize: 12.5, color: Color(0xFF6B7280)))),
+                errorBuilder: (_, __, ___) => Center(
+                    child: Text(c('bill_viewer.err_load'),
+                        style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280)))),
               )
             : PdfFrame(url: url, interactive: false),
       ),

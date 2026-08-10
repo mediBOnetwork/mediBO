@@ -3,6 +3,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../../services/date_labels.dart';
+import '../../../services/ui_copy.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
@@ -286,9 +287,9 @@ class _WaChatScreenState extends State<WaChatScreen>
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Could not send. Please try again.'),
-            backgroundColor: Color(0xFF991B1B),
+          SnackBar(
+            content: Text(c('wa_chat_screen.could_not_send_please_try_again')),
+            backgroundColor: const Color(0xFF991B1B),
             behavior: SnackBarBehavior.floating,
           ),
         );
@@ -320,7 +321,7 @@ class _WaChatScreenState extends State<WaChatScreen>
     if (e is WaSendException) {
       _showError(e.humanMessage);
     } else {
-      _showError('Could not send. Please try again.');
+      _showError(c('wa_chat_screen.could_not_send_please_try_again'));
     }
   }
 
@@ -494,31 +495,31 @@ class _WaChatScreenState extends State<WaChatScreen>
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: Colors.white,
-        title: const Text('Add a caption',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+        title: Text(c('wa_chat_screen.add_a_caption'),
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
         content: TextField(
           controller: controller,
           autofocus: true,
           minLines: 1,
           maxLines: 3,
-          decoration: const InputDecoration(
-            hintText: 'Optional caption…',
+          decoration: InputDecoration(
+            hintText: c('wa_chat_screen.optional_caption'),
             filled: true,
-            fillColor: Color(0xFFF5F6F8),
-            border: OutlineInputBorder(borderSide: BorderSide.none),
+            fillColor: const Color(0xFFF5F6F8),
+            border: const OutlineInputBorder(borderSide: BorderSide.none),
           ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(null),
-            child: const Text('Cancel',
-                style: TextStyle(color: Color(0xFF6B7280))),
+            child: Text(c('wa_chat_screen.cancel'),
+                style: const TextStyle(color: Color(0xFF6B7280))),
           ),
           FilledButton(
             style: FilledButton.styleFrom(
                 backgroundColor: const Color(0xFF1B7A43)),
             onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
-            child: const Text('Send'),
+            child: Text(c('wa_chat_screen.send')),
           ),
         ],
       ),
@@ -534,8 +535,8 @@ class _WaChatScreenState extends State<WaChatScreen>
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: Colors.white,
-        title: const Text('Send location',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+        title: Text(c('wa_chat_screen.send_location'),
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
         content: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -557,14 +558,14 @@ class _WaChatScreenState extends State<WaChatScreen>
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Cancel',
-                style: TextStyle(color: Color(0xFF6B7280))),
+            child: Text(c('wa_chat_screen.cancel'),
+                style: const TextStyle(color: Color(0xFF6B7280))),
           ),
           FilledButton(
             style: FilledButton.styleFrom(
                 backgroundColor: const Color(0xFF1B7A43)),
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Send'),
+            child: Text(c('wa_chat_screen.send')),
           ),
         ],
       ),
@@ -615,8 +616,8 @@ class _WaChatScreenState extends State<WaChatScreen>
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: Colors.white,
-        title: const Text('Send contact',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+        title: Text(c('wa_chat_screen.send_contact'),
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -629,14 +630,14 @@ class _WaChatScreenState extends State<WaChatScreen>
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Cancel',
-                style: TextStyle(color: Color(0xFF6B7280))),
+            child: Text(c('wa_chat_screen.cancel'),
+                style: const TextStyle(color: Color(0xFF6B7280))),
           ),
           FilledButton(
             style: FilledButton.styleFrom(
                 backgroundColor: const Color(0xFF1B7A43)),
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Send'),
+            child: Text(c('wa_chat_screen.send')),
           ),
         ],
       ),
@@ -876,9 +877,9 @@ class _WaChatScreenState extends State<WaChatScreen>
                         const Icon(Icons.error_outline,
                             size: 40, color: Color(0xFF6B7280)),
                         const SizedBox(height: 12),
-                        const Text(
-                          'Could not load messages.',
-                          style: TextStyle(
+                        Text(
+                          c('wa_chat_screen.could_not_load_messages'),
+                          style: const TextStyle(
                               fontSize: 14, color: Color(0xFF6B7280)),
                         ),
                         const SizedBox(height: 16),
@@ -890,7 +891,7 @@ class _WaChatScreenState extends State<WaChatScreen>
                             shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(8)),
                           ),
-                          child: const Text('Retry'),
+                          child: Text(c('wa_chat_screen.retry')),
                         ),
                       ],
                     ),
@@ -898,11 +899,11 @@ class _WaChatScreenState extends State<WaChatScreen>
                 }
                 final msgs = _messages;
                 if (msgs.isEmpty) {
-                  return const Center(
+                  return Center(
                     child: Text(
-                      'No messages yet.',
-                      style:
-                          TextStyle(fontSize: 15, color: Color(0xFF6B7280)),
+                      c('wa_chat_screen.no_messages_yet'),
+                      style: const TextStyle(
+                          fontSize: 15, color: Color(0xFF6B7280)),
                     ),
                   );
                 }
@@ -1025,7 +1026,7 @@ class _ReplyBar extends StatelessWidget {
               IconButton(
                 icon: const Icon(Icons.add_circle_outline,
                     color: Color(0xFF1B7A43)),
-                tooltip: 'Attach',
+                tooltip: c('wa_chat_screen.attach'),
                 onPressed: sending ? null : onAttach,
               ),
               Expanded(
@@ -1034,7 +1035,7 @@ class _ReplyBar extends StatelessWidget {
                   minLines: 1,
                   maxLines: 4,
                   decoration: InputDecoration(
-                    hintText: 'Type a reply…',
+                    hintText: c('wa_chat_screen.type_a_reply'),
                     hintStyle: const TextStyle(
                         color: Color(0xFF9CA3AF), fontSize: 14),
                     filled: true,

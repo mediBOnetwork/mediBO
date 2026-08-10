@@ -59,6 +59,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../features/whatsapp/ui/wa_campaign_chips.dart';
+import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 
 const _kGreen = Color(0xFF1B7A43);
@@ -204,8 +205,8 @@ class _WaOpsScreenState extends State<WaOpsScreen> {
         // Matches the nav entry's label. Nav labels are unavoidably Dart
         // literals (the nav list is const and renders before any RPC); the
         // title reuses that same word rather than inventing a second name.
-        title: const Text('WhatsApp Ops',
-            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+        title: Text(c('wa_ops_screen.whatsapp_ops'),
+            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
       ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 40),
@@ -594,7 +595,7 @@ class _EventRouteCard extends StatelessWidget {
           Row(children: [
             const Icon(Icons.send_outlined, size: 13, color: _kMuted),
             const SizedBox(width: 5),
-            Text('$sent sent in 30 days',
+            Text(cf('wa_ops_screen.sent_in_30_days', {'a': sent}),
                 style: const TextStyle(fontSize: 11.5, color: _kMuted)),
             const SizedBox(width: 12),
             const Icon(Icons.schedule, size: 13, color: _kMuted),
@@ -620,8 +621,8 @@ class _EventRouteCard extends StatelessWidget {
                   ),
                   // pipeline_note already said what the system is doing; this
                   // button explains nothing, it only unlocks.
-                  child: const Text('Override',
-                      style: TextStyle(
+                  child: Text(c('wa_ops_screen.override'),
+                      style: const TextStyle(
                           fontSize: 13, fontWeight: FontWeight.w600)),
                 ),
               ),
@@ -745,7 +746,8 @@ class _RouteControls extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.only(top: 2, left: 4),
           child: Text(
-            'Dedupe minutes: ${row['dedupe_minutes'] ?? ''}',
+            cf('wa_ops_screen.dedupe_minutes',
+                {'a': '${row['dedupe_minutes'] ?? ''}'}),
             key: const Key('wa_ops_dedupe_minutes'),
             style: const TextStyle(fontSize: 12, color: _kMuted),
           ),
@@ -929,8 +931,8 @@ class _AccountHealthSectionState extends State<_AccountHealthSection> {
                         const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
                     minimumSize: const Size(0, 34),
                   ),
-                  child: const Text('Refresh',
-                      style: TextStyle(
+                  child: Text(c('wa_ops_screen.refresh'),
+                      style: const TextStyle(
                           fontSize: 13, fontWeight: FontWeight.w600)),
                 ),
               ]),
@@ -1040,7 +1042,7 @@ class _ContactLedgerSectionState extends State<_ContactLedgerSection> {
             isDense: true,
             filled: true,
             fillColor: _kCard,
-            hintText: 'Search a number',
+            hintText: c('wa_ops_screen.search_a_number'),
             hintStyle: const TextStyle(fontSize: 13, color: _kMuted),
             prefixIcon: const Icon(Icons.search, size: 18, color: _kMuted),
             contentPadding:
@@ -1361,13 +1363,13 @@ class _ZoneContactCardState extends State<_ZoneContactCard> {
             key: Key('wa_ops_zone_phone:${row['zone_id']}'),
             controller: _phone,
             keyboardType: TextInputType.phone,
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               isDense: true,
-              labelText: 'Number',
-              labelStyle: TextStyle(fontSize: 13, color: _kMuted),
+              labelText: c('wa_ops_screen.number'),
+              labelStyle: const TextStyle(fontSize: 13, color: _kMuted),
               contentPadding:
-                  EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-              border: OutlineInputBorder(),
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+              border: const OutlineInputBorder(),
             ),
             style: const TextStyle(fontSize: 13, color: _kText),
           ),
@@ -1375,13 +1377,13 @@ class _ZoneContactCardState extends State<_ZoneContactCard> {
           TextField(
             key: Key('wa_ops_zone_label:${row['zone_id']}'),
             controller: _label,
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               isDense: true,
-              labelText: 'Label',
-              labelStyle: TextStyle(fontSize: 13, color: _kMuted),
+              labelText: c('wa_ops_screen.label'),
+              labelStyle: const TextStyle(fontSize: 13, color: _kMuted),
               contentPadding:
-                  EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-              border: OutlineInputBorder(),
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+              border: const OutlineInputBorder(),
             ),
             style: const TextStyle(fontSize: 13, color: _kText),
           ),

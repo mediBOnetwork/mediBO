@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../services/ui_copy.dart';
 import '../utils/render_log.dart';
 import 'public/public_order_page.dart';
 import 'public/inquiry_form_screen.dart';
@@ -114,18 +115,18 @@ class _CodeResolverPageState extends State<CodeResolverPage> {
         backgroundColor: _kGreen,
         elevation: 0,
         automaticallyImplyLeading: false,
-        title: const Text('mediBO',
-            style: TextStyle(
+        title: Text(c('code_resolver.page_title'),
+            style: const TextStyle(
                 color: Colors.white, fontWeight: FontWeight.w700, fontSize: 18)),
       ),
-      body: const Center(
+      body: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            CircularProgressIndicator(color: _kGreen, strokeWidth: 2.5),
-            SizedBox(height: 16),
-            Text('Opening your link…',
-                style: TextStyle(fontSize: 15, color: _kTextMuted)),
+            const CircularProgressIndicator(color: _kGreen, strokeWidth: 2.5),
+            const SizedBox(height: 16),
+            Text(c('code_resolver.loading'),
+                style: const TextStyle(fontSize: 15, color: _kTextMuted)),
           ],
         ),
       ),
@@ -145,8 +146,8 @@ class _NotFoundScaffold extends StatelessWidget {
         backgroundColor: _kGreen,
         elevation: 0,
         automaticallyImplyLeading: false,
-        title: const Text('mediBO',
-            style: TextStyle(
+        title: Text(c('code_resolver.page_title'),
+            style: const TextStyle(
                 color: Colors.white, fontWeight: FontWeight.w700, fontSize: 18)),
       ),
       body: Center(
@@ -165,18 +166,18 @@ class _NotFoundScaffold extends StatelessWidget {
                     size: 36, color: Color(0xFF9CA3AF)),
               ),
               const SizedBox(height: 20),
-              const Text(
-                'Link not found or expired',
-                style: TextStyle(
+              Text(
+                c('code_resolver.not_found_title'),
+                style: const TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.w700,
                     color: _kTextPrimary),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 8),
-              const Text(
-                'Please contact mediBO for assistance.',
-                style: TextStyle(fontSize: 14, color: _kTextMuted),
+              Text(
+                c('code_resolver.not_found_body'),
+                style: const TextStyle(fontSize: 14, color: _kTextMuted),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 28),
@@ -190,10 +191,10 @@ class _NotFoundScaffold extends StatelessWidget {
                   borderRadius: BorderRadius.circular(10),
                   // Navigate home — this is intentional (going TO home, not a token route).
                   onTap: () => Navigator.of(context).pushReplacementNamed('/'),
-                  child: const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-                    child: Text('Go to mediBO',
-                        style: TextStyle(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                    child: Text(c('code_resolver.btn_go_home'),
+                        style: const TextStyle(
                             fontSize: 14,
                             fontWeight: FontWeight.w600,
                             color: _kGreen)),

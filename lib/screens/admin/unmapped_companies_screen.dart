@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
+import '../../services/ui_copy.dart';
 
 class UnmappedCompaniesScreen extends StatefulWidget {
   const UnmappedCompaniesScreen({super.key});
@@ -93,7 +94,7 @@ class _UnmappedCompaniesScreenState extends State<UnmappedCompaniesScreen> {
         _busyIds.remove(scId);
       });
       RenderLog.write('c430_mapped', 'raw=${row['raw_name']};to=$name');
-      showToast(context, msg ?? 'Mapped ${row['raw_name']} → $name');
+      showToast(context, msg ?? cf('unmapped_companies.toast_mapped', {'raw': '${row['raw_name']}', 'name': name}));
     } catch (e) {
       if (!mounted) return;
       setState(() => _busyIds.remove(scId));
@@ -103,11 +104,11 @@ class _UnmappedCompaniesScreenState extends State<UnmappedCompaniesScreen> {
 
   String _mapError(Object e) {
     final msg = e.toString();
-    if (msg.contains('forbidden')) return 'Only a super admin can access company mapping.';
-    if (msg.contains('no empty company slot')) return 'This row already has 30 linked companies.';
-    if (msg.contains('row not found')) return 'This entry was already mapped or removed.';
-    if (msg.contains('company required')) return 'Enter a company name.';
-    return 'Something went wrong. Please try again.';
+    if (msg.contains('forbidden')) return c('unmapped_companies.err_forbidden');
+    if (msg.contains('no empty company slot')) return c('unmapped_companies.err_no_slot');
+    if (msg.contains('row not found')) return c('unmapped_companies.err_row_not_found');
+    if (msg.contains('company required')) return c('unmapped_companies.err_company_required');
+    return c('unmapped_companies.err_generic');
   }
 
   List<Map<String, dynamic>> get _visibleRows {
@@ -157,7 +158,7 @@ class _UnmappedCompaniesScreenState extends State<UnmappedCompaniesScreen> {
           icon: const Icon(Icons.arrow_back_ios_new, size: 18, color: Color(0xFF1B7A43)),
           onPressed: () => Navigator.of(context).maybePop(),
         ),
-        title: Text('Unmapped: ${_rows.length}',
+        title: Text(cf('unmapped_companies.title', {'n': '${_rows.length}'}),
             style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
@@ -199,7 +200,7 @@ class _UnmappedCompaniesScreenState extends State<UnmappedCompaniesScreen> {
           controller: _searchCtrl,
           onChanged: (v) => setState(() => _query = v.trim().toLowerCase()),
           decoration: InputDecoration(
-            hintText: 'Search by company or supplier name',
+            hintText: c('unmapped_companies.search_hint'),
             prefixIcon: const Icon(Icons.search, size: 18),
             suffixIcon: _query.isEmpty ? null : IconButton(
               icon: const Icon(Icons.clear, size: 18),
@@ -218,7 +219,7 @@ class _UnmappedCompaniesScreenState extends State<UnmappedCompaniesScreen> {
         child: Row(children: [
           Expanded(
             child: Text(
-              'Mapping teaches the system — the same raw name maps automatically next time.',
+              c('unmapped_companies.learn_note'),
               style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
             ),
           ),
@@ -229,7 +230,7 @@ class _UnmappedCompaniesScreenState extends State<UnmappedCompaniesScreen> {
         child: _visibleRows.isEmpty
             ? Center(
                 child: Text(
-                  _rows.isEmpty ? 'Nothing unmapped 🎉' : 'No matches',
+                  _rows.isEmpty ? c('unmapped_companies.empty_none') : c('unmapped_companies.empty_no_matches'),
                   style: const TextStyle(fontSize: 14, color: Color(0xFF9CA3AF)),
                 ),
               )
@@ -250,7 +251,7 @@ class _UnmappedCompaniesScreenState extends State<UnmappedCompaniesScreen> {
   Widget _buildRow(Map<String, dynamic> row) {
     final scId = row['sc_id'] as String;
     final busy = _busyIds.contains(scId);
-    final rawName = row['raw_name'] as String? ?? '—';
+    final rawName = row['raw_name'] as String? ?? c('unmapped_companies.dash');
     final supplierName = row['supplier_name'] as String? ?? '';
     final confident = row['confident_company'] as String?;
 
@@ -265,20 +266,20 @@ class _UnmappedCompaniesScreenState extends State<UnmappedCompaniesScreen> {
         Text(rawName,
             style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
         const SizedBox(height: 2),
-        Text('from $supplierName',
+        Text(cf('unmapped_companies.from_supplier', {'name': supplierName}),
             style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
         const SizedBox(height: 10),
         Wrap(spacing: 8, runSpacing: 8, children: [
           if (confident != null)
             _MapButton(
-              label: 'Map to $confident',
+              label: cf('unmapped_companies.btn_map_to_confident', {'name': confident}),
               icon: Icons.auto_awesome,
               highlighted: true,
               busy: busy,
               onTap: () => _mapRow(row, confident),
             ),
           _MapButton(
-            label: 'Map to…',
+            label: c('unmapped_companies.btn_map_to'),
             icon: Icons.search,
             highlighted: false,
             busy: busy,
@@ -378,7 +379,7 @@ class _CompanyPickerSheetState extends State<_CompanyPickerSheet> {
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('Map "${widget.rawName}" to…',
+              Text(cf('unmapped_companies.sheet_title', {'raw': widget.rawName}),
                   style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
               const SizedBox(height: 10),
               TextField(
@@ -386,7 +387,7 @@ class _CompanyPickerSheetState extends State<_CompanyPickerSheet> {
                 autofocus: true,
                 onChanged: (v) => setState(() => _q = v),
                 decoration: InputDecoration(
-                  hintText: 'Search or type a company name',
+                  hintText: c('unmapped_companies.sheet_search_hint'),
                   prefixIcon: const Icon(Icons.search, size: 18),
                   isDense: true,
                   contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -411,15 +412,15 @@ class _CompanyPickerSheetState extends State<_CompanyPickerSheet> {
                   ListTile(
                     dense: true,
                     leading: const Icon(Icons.add_circle_outline, color: Color(0xFF1B7A43)),
-                    title: Text('Add "${_ctrl.text.trim()}" as new company',
+                    title: Text(cf('unmapped_companies.sheet_add_new', {'name': _ctrl.text.trim()}),
                         style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF1B7A43))),
                     onTap: () => Navigator.of(context).pop(_ctrl.text.trim()),
                   ),
                 if (filteredCandidates.isNotEmpty) ...[
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 6),
-                    child: Text('Suggested',
-                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF9CA3AF))),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    child: Text(c('unmapped_companies.sheet_suggested'),
+                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF9CA3AF))),
                   ),
                   ...filteredCandidates.map((c) => ListTile(
                         dense: true,
@@ -429,16 +430,16 @@ class _CompanyPickerSheetState extends State<_CompanyPickerSheet> {
                       )),
                 ],
                 if (q.isNotEmpty) ...[
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 6),
-                    child: Text('All companies',
-                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF9CA3AF))),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    child: Text(c('unmapped_companies.sheet_all_companies'),
+                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF9CA3AF))),
                   ),
                   if (filteredAll.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 8),
-                      child: Text('No matches — use "Add" above to map anyway.',
-                          style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Text(c('unmapped_companies.sheet_no_matches'),
+                          style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
                     )
                   else
                     ...filteredAll.map((c) => ListTile(
@@ -448,10 +449,10 @@ class _CompanyPickerSheetState extends State<_CompanyPickerSheet> {
                           onTap: () => Navigator.of(context).pop(c),
                         )),
                 ] else
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 12),
-                    child: Text('Type to search all companies.',
-                        style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Text(c('unmapped_companies.sheet_type_to_search'),
+                        style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
                   ),
               ],
             ),

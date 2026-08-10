@@ -5,6 +5,7 @@ import 'package:pharma_b2b/widgets/admin_date_picker.dart';
 import 'package:pharma_b2b/widgets/admin_zone_picker.dart'; // CHANGE #609
 import 'package:pharma_b2b/widgets/order_hours_card.dart';
 import 'package:pharma_b2b/widgets/notifications_card.dart';
+import '../../services/ui_copy.dart';
 
 class AdminDashboardScreen extends StatefulWidget {
   const AdminDashboardScreen({super.key});
@@ -60,28 +61,28 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           runSpacing: 12,
           children: [
             _ActionCard(
-              label: 'Bills to Review',
+              label: c('admin_dashboard.action_bills_to_review'),
               count: _billsNeedingReview,
               icon: Icons.assignment_late_outlined,
               activeColor: const Color(0xFFDC2626),
               route: 'bills',
             ),
             _ActionCard(
-              label: 'Pending Orders',
+              label: c('admin_dashboard.action_pending_orders'),
               count: _pendingOrders,
               icon: Icons.receipt_long_outlined,
               activeColor: const Color(0xFFD97706),
               route: 'orders',
             ),
             _ActionCard(
-              label: 'Inquiries',
+              label: c('admin_dashboard.action_inquiries'),
               count: _inquiries,
               icon: Icons.help_outline,
               activeColor: const Color(0xFF2563EB),
               route: 'inquiry',
             ),
             _ActionCard(
-              label: 'Pending Sign-ups',
+              label: c('admin_dashboard.action_pending_signups'),
               count: _pendingRegistrations,
               icon: Icons.person_add_outlined,
               activeColor: const Color(0xFF1B7A43),
@@ -100,13 +101,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       children: [
         Wrap(spacing: 16, runSpacing: 16, children: [
           _StatCard(
-            label: 'Pending Bills',
+            label: c('admin_dashboard.stat_pending_bills'),
             value: '$_pendingBills',
             icon: Icons.inbox_outlined,
             color: _pendingBills > 0 ? const Color(0xFFDC2626) : const Color(0xFF6B7280),
           ),
           _StatCard(
-            label: 'Medicines',
+            label: c('admin_dashboard.stat_medicines'),
             value: '$_totalMedicines',
             icon: Icons.medication_outlined,
             color: const Color(0xFF1B7A43),
@@ -119,7 +120,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   static Widget _sectionLabel(String text) => Padding(
         padding: const EdgeInsets.only(bottom: 12),
         child: Text(
-          text.toUpperCase(),
+          text,
           style: const TextStyle(
             fontSize: 10,
             fontWeight: FontWeight.w700,
@@ -182,36 +183,36 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   ),
                   const OrderHoursCard(),
                   const NotificationsCard(),
-                  _sectionLabel('Action Required'),
+                  _sectionLabel(c('admin_dashboard.section_action_required')),
                   _buildActionRequired(),
                   const SizedBox(height: 28),
-                  _sectionLabel('Overview'),
+                  _sectionLabel(c('admin_dashboard.section_overview')),
                   _buildOverview(),
                   const SizedBox(height: 28),
-                  _sectionLabel('Quick Navigation'),
-                  Wrap(spacing: 10, runSpacing: 10, children: const [
+                  _sectionLabel(c('admin_dashboard.section_quick_navigation')),
+                  Wrap(spacing: 10, runSpacing: 10, children: [
                     _QuickTile(
-                        label: 'Add Medicine',
+                        label: c('admin_dashboard.quick_add_medicine'),
                         icon: Icons.medication_outlined,
                         route: 'add_medicine'),
                     _QuickTile(
-                        label: 'Orders',
+                        label: c('admin_dashboard.quick_orders'),
                         icon: Icons.receipt_long_outlined,
                         route: 'orders'),
                     _QuickTile(
-                        label: 'Inquiry',
+                        label: c('admin_dashboard.quick_inquiry'),
                         icon: Icons.help_outline,
                         route: 'inquiry'),
                     _QuickTile(
-                        label: 'Suppliers',
+                        label: c('admin_dashboard.quick_suppliers'),
                         icon: Icons.inventory_2_outlined,
                         route: 'suppliers'),
                     _QuickTile(
-                        label: 'Customers',
+                        label: c('admin_dashboard.quick_customers'),
                         icon: Icons.people_outline,
                         route: 'customers'),
                     _QuickTile(
-                        label: 'Bills',
+                        label: c('admin_dashboard.quick_bills'),
                         icon: Icons.inbox_outlined,
                         route: 'bills'),
                   ]),

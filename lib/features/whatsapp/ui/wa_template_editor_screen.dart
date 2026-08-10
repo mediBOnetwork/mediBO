@@ -7,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/utils/toast.dart';
+import '../../../services/ui_copy.dart';
 import '../data/wa_template_api.dart';
 import 'wa_template_actions.dart';
 import 'wa_template_bits.dart';
@@ -1438,7 +1439,7 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(8)),
                         ),
-                        child: const Text('Re-upload'),
+                        child: Text(c('wa_template_editor_screen.re_upload')),
                       ),
                     ],
                   ],
@@ -1765,7 +1766,7 @@ class _WaTemplateEditorScreenState extends State<WaTemplateEditorScreen> {
               shape:
                   RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             ),
-            child: const Text('Check before submitting'),
+            child: Text(c('wa_template_editor_screen.check_before_submitting')),
           ),
         ),
         if (label.isNotEmpty) ...[

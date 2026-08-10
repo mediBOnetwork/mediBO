@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 
 import '../models/order_hours_model.dart';
+import '../services/ui_copy.dart';
 import '../order_hours_state.dart';
 
 /// CHANGE #456 B — admin dashboard card: view + control order hours. Every
@@ -28,7 +29,7 @@ class _OrderHoursCardState extends State<OrderHoursCard> {
     } catch (e) {
       if (mounted) {
         setState(() => model.isOpen = !target); // revert
-        showToast(context, 'Could not update order hours: $e', isError: true);
+        showToast(context, cf('order_hours.toast_update_failed', {'error': '$e'}), isError: true);
       }
     } finally {
       if (mounted) setState(() => _switchBusy = false);
@@ -40,22 +41,22 @@ class _OrderHoursCardState extends State<OrderHoursCard> {
     final result = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Closed message', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+        title: Text(c('order_hours.dialog_closed_message_title'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
         content: TextField(
           controller: ctrl,
           maxLines: 4,
           minLines: 2,
-          decoration: const InputDecoration(
-            hintText: 'Shown to customers while orders are closed',
-            border: OutlineInputBorder(),
+          decoration: InputDecoration(
+            hintText: c('order_hours.field_closed_message_hint'),
+            border: const OutlineInputBorder(),
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(c('order_hours.btn_cancel'))),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
             style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B5E20)),
-            child: const Text('Save'),
+            child: Text(c('order_hours.btn_save')),
           ),
         ],
       ),
@@ -64,7 +65,7 @@ class _OrderHoursCardState extends State<OrderHoursCard> {
     try {
       await model.setOrderHours(closedMessage: result);
     } catch (e) {
-      if (mounted) showToast(context, 'Could not update closed message: $e', isError: true);
+      if (mounted) showToast(context, cf('order_hours.toast_closed_message_failed', {'error': '$e'}), isError: true);
     }
   }
 
@@ -92,16 +93,16 @@ class _OrderHoursCardState extends State<OrderHoursCard> {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSheet) => AlertDialog(
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Text('Order hours schedule',
-              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+          title: Text(c('order_hours.dialog_schedule_title'),
+              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _ScheduleTimeRow(
-                label: 'Opens at',
+                label: c('order_hours.label_opens_at'),
                 time: clearOpen ? null : openTime,
-                placeholder: 'Reopen manually',
+                placeholder: c('order_hours.placeholder_reopen_manually'),
                 onTap: () async {
                   final picked = await showTimePicker(
                     context: ctx,
@@ -116,7 +117,7 @@ class _OrderHoursCardState extends State<OrderHoursCard> {
               ),
               const SizedBox(height: 10),
               _ScheduleTimeRow(
-                label: 'Closes at',
+                label: c('order_hours.label_closes_at'),
                 time: closeTime,
                 onTap: () async {
                   final picked = await showTimePicker(
@@ -133,17 +134,17 @@ class _OrderHoursCardState extends State<OrderHoursCard> {
               const SizedBox(height: 4),
               TextButton(
                 onPressed: () => setSheet(() { clearOpen = true; openTime = null; }),
-                child: const Text('Clear auto-open',
-                    style: TextStyle(fontSize: 12.5, color: Color(0xFFDC2626))),
+                child: Text(c('order_hours.btn_clear_auto_open'),
+                    style: const TextStyle(fontSize: 12.5, color: Color(0xFFDC2626))),
               ),
             ],
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(c('order_hours.btn_cancel'))),
             FilledButton(
               onPressed: () => Navigator.pop(ctx, true),
               style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B5E20)),
-              child: const Text('Save'),
+              child: Text(c('order_hours.btn_save')),
             ),
           ],
         ),
@@ -157,7 +158,7 @@ class _OrderHoursCardState extends State<OrderHoursCard> {
         clearAutoOpen: clearOpen,
       );
     } catch (e) {
-      if (mounted) showToast(context, 'Could not update schedule: $e', isError: true);
+      if (mounted) showToast(context, cf('order_hours.toast_schedule_failed', {'error': '$e'}), isError: true);
     }
   }
 
@@ -191,8 +192,8 @@ class _OrderHoursCardState extends State<OrderHoursCard> {
                   Icon(isOpen ? Icons.storefront_outlined : Icons.storefront,
                       size: 16, color: accent),
                   const SizedBox(width: 7),
-                  const Text('ORDER HOURS',
-                      style: TextStyle(
+                  Text(c('order_hours.card_title'),
+                      style: const TextStyle(
                           fontSize: 11.5,
                           fontWeight: FontWeight.w700,
                           letterSpacing: 0.6,
@@ -204,7 +205,7 @@ class _OrderHoursCardState extends State<OrderHoursCard> {
                       color: accent.withValues(alpha: 0.12),
                       borderRadius: BorderRadius.circular(20),
                     ),
-                    child: Text(model.statusLabel ?? (isOpen ? 'OPEN' : 'CLOSED'),
+                    child: Text(model.statusLabel ?? (isOpen ? c('order_hours.status_open') : c('order_hours.status_closed')),
                         style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: accent)),
                   ),
                   const SizedBox(width: 8),
@@ -241,8 +242,8 @@ class _OrderHoursCardState extends State<OrderHoursCard> {
                               fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
                     ),
                     const SizedBox(width: 8),
-                    const Text('Edit',
-                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF1B7A43))),
+                    Text(c('order_hours.btn_edit'),
+                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF1B7A43))),
                   ],
                 ),
               ),
@@ -263,7 +264,7 @@ class _OrderHoursCardState extends State<OrderHoursCard> {
                     const SizedBox(width: 6),
                     Flexible(
                       child: Text(
-                        'Closed message: ${(model.closedMessage ?? '').isEmpty ? '(default)' : model.closedMessage}',
+                        cf('order_hours.closed_message_summary', {'message': (model.closedMessage ?? '').isEmpty ? c('order_hours.closed_message_default') : (model.closedMessage ?? '')}),
                         style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -283,14 +284,14 @@ class _OrderHoursCardState extends State<OrderHoursCard> {
 class _ScheduleTimeRow extends StatelessWidget {
   final String label;
   final TimeOfDay? time;
-  final String placeholder;
+  final String? placeholder;
   final VoidCallback onTap;
 
   const _ScheduleTimeRow({
     required this.label,
     required this.time,
     required this.onTap,
-    this.placeholder = '--:--',
+    this.placeholder,
   });
 
   @override
@@ -311,7 +312,8 @@ class _ScheduleTimeRow extends StatelessWidget {
               border: Border.all(color: const Color(0xFFE5E7EB)),
             ),
             child: Text(
-              time?.format(context) ?? placeholder,
+              time?.format(context) ??
+                  (placeholder ?? c('order_hours.placeholder_time_empty')),
               style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
             ),
           ),

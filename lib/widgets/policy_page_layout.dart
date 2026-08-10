@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../services/ui_copy.dart';
 import '../theme.dart';
 import '../utils/render_log.dart';
 
@@ -51,15 +52,15 @@ class PolicyPageLayout extends StatelessWidget {
                     InkWell(
                       onTap: () => Navigator.of(context).pop(),
                       borderRadius: BorderRadius.circular(8),
-                      child: const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(Icons.arrow_back_ios_new, size: 13, color: Brand.inkMuted),
-                            SizedBox(width: 4),
-                            Text('Back',
-                                style: TextStyle(fontSize: 14, color: Brand.inkMuted)),
+                            const Icon(Icons.arrow_back_ios_new, size: 13, color: Brand.inkMuted),
+                            const SizedBox(width: 4),
+                            Text(c('common.back'),
+                                style: const TextStyle(fontSize: 14, color: Brand.inkMuted)),
                           ],
                         ),
                       ),
@@ -74,13 +75,13 @@ class PolicyPageLayout extends StatelessWidget {
                         Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(headerName ?? 'mediBO',
+                            Text(headerName ?? c('brand.name'),
                                 style: const TextStyle(
                                     fontSize: 22,
                                     fontWeight: FontWeight.w800,
                                     color: Brand.ink,
                                     letterSpacing: -0.4)),
-                            Text(headerTagline ?? 'B2B Pharmacy Platform',
+                            Text(headerTagline ?? c('brand.tagline'),
                                 style: const TextStyle(
                                     fontSize: 12, color: Brand.inkMuted)),
                           ],

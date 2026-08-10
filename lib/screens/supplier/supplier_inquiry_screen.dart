@@ -506,7 +506,7 @@ class SupplierInquiryScreenState extends State<SupplierInquiryScreen>
       if (mounted) _toast(_label('save_ok'));
       await _fetch(source: 'post_answer', silent: true);
     } catch (e) {
-      if (mounted) showToast(context, 'Failed: $e', isError: true);
+      if (mounted) _toast(_label('submit_failed'), isError: true);
       RenderLog.write('inq.answer.err', e.toString().substring(0, 60));
     } finally {
       if (mounted) setState(() => _answering.remove(inquiryId));

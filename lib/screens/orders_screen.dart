@@ -19,6 +19,7 @@ import '../widgets/bill_actions_row.dart';
 import '../widgets/bill_viewer.dart';
 import '../widgets/cust_pay_panel.dart';
 import '../widgets/customer_order_item_card.dart'; // #641: the Items-tab card
+import '../services/ui_copy.dart';
 
 // ─── Data models ─────────────────────────────────────────────────────────────
 
@@ -494,10 +495,10 @@ class _OrdersScreenState extends State<OrdersScreen> {
             Icon(Icons.cloud_off_outlined,
                 size: 64, color: Theme.of(context).hintColor),
             const SizedBox(height: 12),
-            const Center(child: Text("Couldn't load orders")),
+            Center(child: Text(c('orders.load_failed_title'))),
             const SizedBox(height: 4),
             Center(
-              child: Text('Pull down to try again.',
+              child: Text(c('orders.load_failed_note'),
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Theme.of(context).hintColor)),
             ),
@@ -669,8 +670,8 @@ class _OrderCardState extends State<_OrderCard> {
                       color: const Color(0xFFFEF3C7),
                       borderRadius: BorderRadius.circular(4),
                     ),
-                    child: const Text('Placed by admin',
-                        style: TextStyle(
+                    child: Text(c('orders.placed_by_admin'),
+                        style: const TextStyle(
                             fontSize: 10,
                             color: Color(0xFF92400E),
                             fontWeight: FontWeight.w600)),
@@ -682,15 +683,15 @@ class _OrderCardState extends State<_OrderCard> {
           const SizedBox(height: 14),
           Row(children: [
             Expanded(
-              child: _TabButton(label: 'Items', selected: _tab == 0, onTap: () => _toggleTab(0)),
+              child: _TabButton(label: c('orders.tab_items'), selected: _tab == 0, onTap: () => _toggleTab(0)),
             ),
             const SizedBox(width: 8),
             Expanded(
-              child: _TabButton(label: 'Payment', selected: _tab == 1, onTap: () => _toggleTab(1)),
+              child: _TabButton(label: c('orders.tab_payment'), selected: _tab == 1, onTap: () => _toggleTab(1)),
             ),
             const SizedBox(width: 8),
             Expanded(
-              child: _TabButton(label: 'Bill', selected: _tab == 2, onTap: () => _toggleTab(2)),
+              child: _TabButton(label: c('orders.tab_bill'), selected: _tab == 2, onTap: () => _toggleTab(2)),
             ),
             const SizedBox(width: 8),
             // CHANGE #629 (PART F1): Track. This opens a sheet rather than a
@@ -949,7 +950,7 @@ class _BillTabState extends State<_BillTab> {
       final data = raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
       if (mounted) setState(() { _fileInfo = data; _loading = false; });
     } catch (_) {
-      if (mounted) setState(() { _error = 'Could not load the bill.'; _loading = false; });
+      if (mounted) setState(() { _error = c('orders.bill_load_failed'); _loading = false; });
     }
   }
 
@@ -976,27 +977,37 @@ class _BillTabState extends State<_BillTab> {
       // slot when there's nothing to preview yet) above the disabled actions,
       // matching the has_file layout's preview-then-buttons order.
       return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Padding(
-          padding: EdgeInsets.symmetric(vertical: 24),
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 24),
           child: Column(children: [
-            Icon(Icons.receipt_long_outlined, size: 48, color: Color(0xFFD1D5DB)),
-            SizedBox(height: 12),
-            Text("We're processing your order — the bill will appear shortly.",
-                textAlign: TextAlign.center, style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+            const Icon(Icons.receipt_long_outlined, size: 48, color: Color(0xFFD1D5DB)),
+            const SizedBox(height: 12),
+            Text(c('orders.bill_processing'),
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
           ]),
         ),
         Row(children: [
           Expanded(
               child: BillActionButton(
-                  icon: Icons.download_outlined, label: 'Download', enabled: false, onTap: () {})),
+                  icon: Icons.download_outlined,
+                  label: c('orders.bill_download'),
+                  enabled: false,
+                  onTap: () {})),
           const SizedBox(width: 8),
           Expanded(
               child: BillActionButton(
-                  icon: Icons.chat_bubble_outline, label: 'WhatsApp', enabled: false, onTap: () {})),
+                  icon: Icons.chat_bubble_outline,
+                  label: c('orders.bill_whatsapp'),
+                  enabled: false,
+                  onTap: () {})),
           const SizedBox(width: 8),
           Expanded(
-              child:
-                  BillActionButton(icon: Icons.share_outlined, label: 'Share', enabled: false, onTap: () {})),
+              child: BillActionButton(
+                  icon: Icons.share_outlined,
+                  label: c('orders.bill_share'),
+                  enabled: false,
+                  onTap: () {})),
         ]),
       ]);
     }
@@ -1098,15 +1109,19 @@ class _ComputedInvoiceTab extends StatelessWidget {
         .where((e) => e != null && e.toString().isNotEmpty)
         .toList();
     final sellerMeta = <String>[
-      if (seller['gstin'] != null && seller['gstin'].toString().isNotEmpty) 'GSTIN: ${seller['gstin']}',
-      if (seller['dl'] != null && seller['dl'].toString().isNotEmpty) 'DL: ${seller['dl']}',
+      if (seller['gstin'] != null && seller['gstin'].toString().isNotEmpty)
+        cf('orders.invoice_gstin', {'value': seller['gstin'].toString()}),
+      if (seller['dl'] != null && seller['dl'].toString().isNotEmpty)
+        cf('orders.invoice_dl', {'value': seller['dl'].toString()}),
     ];
     final buyerLine = [buyer['address'], buyer['phone']]
         .where((e) => e != null && e.toString().isNotEmpty)
         .toList();
     final buyerMeta = <String>[
-      if (buyer['gstin'] != null && buyer['gstin'].toString().isNotEmpty) 'GSTIN: ${buyer['gstin']}',
-      if (buyer['dl'] != null && buyer['dl'].toString().isNotEmpty) 'DL: ${buyer['dl']}',
+      if (buyer['gstin'] != null && buyer['gstin'].toString().isNotEmpty)
+        cf('orders.invoice_gstin', {'value': buyer['gstin'].toString()}),
+      if (buyer['dl'] != null && buyer['dl'].toString().isNotEmpty)
+        cf('orders.invoice_dl', {'value': buyer['dl'].toString()}),
     ];
 
     return Container(
@@ -1114,8 +1129,8 @@ class _ComputedInvoiceTab extends StatelessWidget {
       decoration: BoxDecoration(color: const Color(0xFFF9FAFB), borderRadius: BorderRadius.circular(10)),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          const Expanded(
-            child: Text('TAX INVOICE', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+          Expanded(
+            child: Text(c('orders.invoice_title'), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
           ),
           if (invoice['number'] != null)
             Text(invoice['number'].toString(), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
@@ -1127,7 +1142,8 @@ class _ComputedInvoiceTab extends StatelessWidget {
                 style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
           ),
           if (invoice['date'] != null)
-            Text('Date: ${invoice['date']}', style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
+            Text(cf('orders.invoice_date', {'value': invoice['date'].toString()}),
+                style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
         ]),
         if (sellerLine.isNotEmpty || sellerMeta.isNotEmpty)
           Padding(
@@ -1145,7 +1161,8 @@ class _ComputedInvoiceTab extends StatelessWidget {
         ],
         const SizedBox(height: 10),
         if (buyer['name'] != null)
-          Text('Billed to: ${buyer['name']}', style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
+          Text(cf('orders.invoice_billed_to', {'value': buyer['name'].toString()}),
+              style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
         if (buyerLine.isNotEmpty || buyerMeta.isNotEmpty)
           Text([...buyerLine, ...buyerMeta].join(' | '), style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
       ]),
@@ -1225,18 +1242,18 @@ class _ComputedInvoiceTab extends StatelessWidget {
       // not PTR, and what this row is called is a business decision, so it may
       // never be a Dart literal again.
       row(totals['ptr_total_caption']?.toString() ?? '', totals['ptr_total_label']),
-      row(totals['discount_label']?.toString() ?? 'Discount', totals['discount_amount_label']),
-      row('Net Taxable', totals['taxable_label'], bold: true),
-      row('CGST', totals['cgst_label']),
-      row('SGST', totals['sgst_label']),
-      row('Round Off', totals['round_off_label']),
+      row(totals['discount_label']?.toString() ?? c('orders.total_discount'), totals['discount_amount_label']),
+      row(c('orders.total_net_taxable'), totals['taxable_label'], bold: true),
+      row(c('orders.total_cgst'), totals['cgst_label']),
+      row(c('orders.total_sgst'), totals['sgst_label']),
+      row(c('orders.total_round_off'), totals['round_off_label']),
       const Padding(padding: EdgeInsets.symmetric(vertical: 6), child: Divider(height: 1)),
-      row('NET PAYABLE', totals['net_payable_label'], bold: true, size: 15),
-      row('Less: Advance paid', totals['paid_label']),
-      row('BALANCE DUE', totals['remaining_label'], bold: true, size: 15),
+      row(c('orders.total_net_payable'), totals['net_payable_label'], bold: true, size: 15),
+      row(c('orders.total_advance_paid'), totals['paid_label']),
+      row(c('orders.total_balance_due'), totals['remaining_label'], bold: true, size: 15),
       if (inWords != null && inWords.isNotEmpty) ...[
         const SizedBox(height: 8),
-        Text('Amount in words: $inWords',
+        Text(cf('orders.total_amount_in_words', {'value': inWords}),
             textAlign: TextAlign.right,
             style: const TextStyle(fontSize: 11, fontStyle: FontStyle.italic, color: Color(0xFF6B7280))),
       ],
@@ -1259,12 +1276,12 @@ class _ComputedInvoiceTab extends StatelessWidget {
         dataTextStyle: const TextStyle(fontSize: 11.5, color: Color(0xFF374151)),
         columnSpacing: 18,
         horizontalMargin: 10,
-        columns: const [
-          DataColumn(label: Text('Rate')),
-          DataColumn(label: Text('Taxable'), numeric: true),
-          DataColumn(label: Text('CGST'), numeric: true),
-          DataColumn(label: Text('SGST'), numeric: true),
-          DataColumn(label: Text('Total'), numeric: true),
+        columns: [
+          DataColumn(label: Text(c('orders.gst_col_rate'))),
+          DataColumn(label: Text(c('orders.gst_col_taxable')), numeric: true),
+          DataColumn(label: Text(c('orders.gst_col_cgst')), numeric: true),
+          DataColumn(label: Text(c('orders.gst_col_sgst')), numeric: true),
+          DataColumn(label: Text(c('orders.gst_col_total')), numeric: true),
         ],
         rows: gstSummary
             .map((g) => DataRow(cells: [
@@ -1341,7 +1358,7 @@ class _BillActionsRowState extends State<_BillActionsRow> {
         body: jsonEncode({'order_id': widget.orderId}),
       );
       if (resp.statusCode != 200) {
-        String message = 'Could not load the bill.';
+        String message = c('orders.bill_load_failed');
         try {
           final decoded = jsonDecode(resp.body);
           if (decoded is Map) {
@@ -1353,7 +1370,7 @@ class _BillActionsRowState extends State<_BillActionsRow> {
       }
       return (bytes: resp.bodyBytes, filename: _filenameFrom(resp));
     } catch (_) {
-      if (mounted) showToast(context, 'Could not load the bill.', isError: true);
+      if (mounted) showToast(context, c('orders.bill_load_failed'), isError: true);
       return null;
     }
   }
@@ -1439,7 +1456,7 @@ class _BillActionsRowState extends State<_BillActionsRow> {
       Expanded(
         child: _BillActionButton(
           icon: Icons.download_outlined,
-          label: _downloading ? 'Downloading…' : 'Download',
+          label: _downloading ? c('orders.bill_downloading') : c('orders.bill_download'),
           enabled: widget.ready && !_downloading,
           loading: _downloading,
           onTap: _download,
@@ -1449,7 +1466,7 @@ class _BillActionsRowState extends State<_BillActionsRow> {
       Expanded(
         child: Builder(builder: (btnContext) => _BillActionButton(
               icon: Icons.chat_bubble_outline,
-              label: 'WhatsApp',
+              label: c('orders.bill_whatsapp'),
               enabled: widget.ready,
               onTap: () => _showWaPopup(btnContext),
             )),
@@ -1458,7 +1475,7 @@ class _BillActionsRowState extends State<_BillActionsRow> {
       Expanded(
         child: _BillActionButton(
           icon: Icons.share_outlined,
-          label: _sharing ? 'Sharing…' : 'Share',
+          label: _sharing ? c('orders.bill_sharing') : c('orders.bill_share'),
           enabled: widget.ready && !_sharing,
           loading: _sharing,
           onTap: _share,
@@ -1549,7 +1566,7 @@ class _WaNumberPickerState extends State<_WaNumberPicker> {
           .toList();
       if (mounted) setState(() => _numbers = list);
     } catch (_) {
-      if (mounted) setState(() => _error = 'Could not load numbers.');
+      if (mounted) setState(() => _error = c('orders.wa_numbers_load_failed'));
     }
   }
 
@@ -1563,25 +1580,25 @@ class _WaNumberPickerState extends State<_WaNumberPicker> {
           params: {'p_order_id': widget.orderId, 'p_phone': phone});
       final res = raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
       if (res['status'] == 'queued') {
-        message = 'Bill sent to $phone on WhatsApp';
+        message = cf('orders.wa_sent', {'phone': phone});
         isError = false;
       } else if (res['error'] == 'no_bill_uploaded') {
         // #463: send_customer_bill_wa now gates on the uploaded file
         // (orders.cust_bill_path), not the old computed-invoice readiness.
-        message = 'Upload a bill first';
+        message = c('orders.wa_no_bill_uploaded');
         isError = true;
       } else if (res['error'] == 'bill_not_ready') {
-        message = 'Bill not ready yet';
+        message = c('orders.wa_bill_not_ready');
         isError = true;
       } else if (res['error'] == 'bad_phone') {
-        message = 'Invalid number';
+        message = c('orders.wa_bad_phone');
         isError = true;
       } else {
-        message = 'Could not send the bill';
+        message = c('orders.wa_send_failed');
         isError = true;
       }
     } catch (_) {
-      message = 'Could not send the bill';
+      message = c('orders.wa_send_failed');
       isError = true;
     }
     widget.onDismiss();
@@ -1595,10 +1612,10 @@ class _WaNumberPickerState extends State<_WaNumberPicker> {
       child: Padding(
         padding: const EdgeInsets.all(10),
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-            child: Text('Send bill to',
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+            child: Text(c('orders.wa_picker_title'),
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
           ),
           const SizedBox(height: 4),
           if (_error != null)
@@ -1613,10 +1630,10 @@ class _WaNumberPickerState extends State<_WaNumberPicker> {
                   child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))),
             )
           else if (_numbers!.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(8),
-              child: Text('No saved number for this customer',
-                  style: TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
+            Padding(
+              padding: const EdgeInsets.all(8),
+              child: Text(c('orders.wa_no_saved_number'),
+                  style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
             )
           else
             Flexible(
@@ -1642,8 +1659,8 @@ class _WaNumberPickerState extends State<_WaNumberPicker> {
                               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                               decoration: BoxDecoration(
                                   color: const Color(0xFFE8F5E9), borderRadius: BorderRadius.circular(4)),
-                              child: const Text('last used',
-                                  style: TextStyle(
+                              child: Text(c('orders.wa_last_used'),
+                                  style: const TextStyle(
                                       fontSize: 9.5, color: Color(0xFF1B7A43), fontWeight: FontWeight.w600)),
                             ),
                           if (busy) ...[

@@ -16,6 +16,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../services/ui_copy.dart';
 import '../utils/bill_mime.dart';
 import '../utils/download_bytes.dart';
 import '../utils/render_log.dart';
@@ -82,7 +83,10 @@ class _CustPayPanelState extends State<CustPayPanel> {
       });
     } catch (e) {
       if (!mounted) return;
-      setState(() { _error = 'Could not load payment details.'; _loading = false; });
+      setState(() {
+        _error = c('cust_pay.err_load_failed');
+        _loading = false;
+      });
     }
   }
 
@@ -119,7 +123,9 @@ class _CustPayPanelState extends State<CustPayPanel> {
       final v = display[key]?.toString();
       if (v != null && v.isNotEmpty) return v;
       final pending = display['pending_label']?.toString();
-      return (pending != null && pending.isNotEmpty) ? pending : '—';
+      return (pending != null && pending.isNotEmpty)
+          ? pending
+          : c('cust_pay.value_dash');
     }
 
     final totalText = disp('total');
@@ -132,9 +138,9 @@ class _CustPayPanelState extends State<CustPayPanel> {
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(color: const Color(0xFFF9FAFB), borderRadius: BorderRadius.circular(8)),
         child: Row(children: [
-          Expanded(child: _statLine('Total', totalText)),
-          Expanded(child: _statLine('Paid', paidText)),
-          Expanded(child: _statLine('Due', dueText)),
+          Expanded(child: _statLine(c('cust_pay.stat_total'), totalText)),
+          Expanded(child: _statLine(c('cust_pay.stat_paid'), paidText)),
+          Expanded(child: _statLine(c('cust_pay.stat_due'), dueText)),
         ]),
       ),
       const SizedBox(height: 12),
@@ -142,7 +148,10 @@ class _CustPayPanelState extends State<CustPayPanel> {
       SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         child: Row(children: [
-          _CustPayChip(label: 'Payment Info', selected: _chip == 0, onTap: () => setState(() => _chip = 0)),
+          _CustPayChip(
+              label: c('cust_pay.chip_payment_info'),
+              selected: _chip == 0,
+              onTap: () => setState(() => _chip = 0)),
           for (var i = 0; i < payments.length; i++) ...[
             const SizedBox(width: 6),
             _CustPayChip(
@@ -185,16 +194,18 @@ class _CustPayPanelState extends State<CustPayPanel> {
     final advPaid = safeParseDouble(advance['paid']);
     final advRequired = safeParseDouble(advance['required']);
     final advDue = (advRequired - advPaid) < 0 ? 0.0 : (advRequired - advPaid);
-    final advPayLabel = advance['pay_label']?.toString() ?? 'Pay Advance';
+    final advPayLabel =
+        advance['pay_label']?.toString() ?? c('cust_pay.btn_pay_advance');
 
     final ready = remaining['ready'] == true;
-    final remPayLabel = remaining['pay_label']?.toString() ?? 'Pay Remaining';
+    final remPayLabel =
+        remaining['pay_label']?.toString() ?? c('cust_pay.btn_pay_remaining');
 
     // CHANGE #480 — Remaining headline reads backend display.remaining verbatim
     // (carries "Awaiting bill" until the bill is imported). No client literal.
     final remHeadline = display['remaining']?.toString().isNotEmpty == true
         ? display['remaining'].toString()
-        : (display['pending_label']?.toString() ?? '—');
+        : (display['pending_label']?.toString() ?? c('cust_pay.value_dash'));
     final remSub = remaining['sub']?.toString() ?? '';
     double remFill;
     if (ready) {
@@ -212,7 +223,7 @@ class _CustPayPanelState extends State<CustPayPanel> {
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _CustStatCard(
-        label: 'Advance',
+        label: c('cust_pay.card_advance'),
         headline: advance['value']?.toString() ?? '',
         sub: '',
         fill: (safeParseInt(advance['pct'])).clamp(0, 100) / 100,
@@ -226,7 +237,7 @@ class _CustPayPanelState extends State<CustPayPanel> {
       ),
       const SizedBox(height: 16),
       _CustStatCard(
-        label: 'Remaining Balance',
+        label: c('cust_pay.card_remaining_balance'),
         headline: remHeadline,
         sub: remSub,
         fill: remFill,
@@ -283,17 +294,17 @@ class _CustPayPanelState extends State<CustPayPanel> {
         minimumSize: const Size(double.infinity, 40),
       ),
       child: _uploading
-          ? const Row(mainAxisAlignment: MainAxisAlignment.center, mainAxisSize: MainAxisSize.min, children: [
-              SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF1B7A43))),
-              SizedBox(width: 8),
-              Text('Uploading…', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+          ? Row(mainAxisAlignment: MainAxisAlignment.center, mainAxisSize: MainAxisSize.min, children: [
+              const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF1B7A43))),
+              const SizedBox(width: 8),
+              Text(c('cust_pay.btn_uploading'), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
             ])
-          : const Row(mainAxisAlignment: MainAxisAlignment.center, mainAxisSize: MainAxisSize.min, children: [
-              Icon(Icons.upload_outlined, size: 16),
-              SizedBox(width: 6),
+          : Row(mainAxisAlignment: MainAxisAlignment.center, mainAxisSize: MainAxisSize.min, children: [
+              const Icon(Icons.upload_outlined, size: 16),
+              const SizedBox(width: 6),
               Flexible(
-                child: Text('Upload Screenshot',
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis),
+                child: Text(c('cust_pay.btn_upload_screenshot'),
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis),
               ),
             ]),
     );
@@ -308,12 +319,12 @@ class _CustPayPanelState extends State<CustPayPanel> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         minimumSize: const Size(double.infinity, 40),
       ),
-      child: const Row(mainAxisAlignment: MainAxisAlignment.center, mainAxisSize: MainAxisSize.min, children: [
-        Icon(Icons.qr_code_2_outlined, size: 16),
-        SizedBox(width: 6),
+      child: Row(mainAxisAlignment: MainAxisAlignment.center, mainAxisSize: MainAxisSize.min, children: [
+        const Icon(Icons.qr_code_2_outlined, size: 16),
+        const SizedBox(width: 6),
         Flexible(
-          child: Text('Download QR',
-              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis),
+          child: Text(c('cust_pay.btn_download_qr'),
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis),
         ),
       ]),
     );
@@ -367,7 +378,9 @@ class _CustPayPanelState extends State<CustPayPanel> {
       downloadBytes(bytes, 'mediBO_payment_QR.png', 'image/png');
       RenderLog.write('c468_download_qr', 1);
     } catch (_) {
-      if (mounted) showToast(context, 'Could not generate the QR image.', isError: true);
+      if (mounted) {
+        showToast(context, c('cust_pay.toast_qr_generate_failed'), isError: true);
+      }
     }
   }
 
@@ -396,12 +409,17 @@ class _CustPayPanelState extends State<CustPayPanel> {
       final data = res.data;
       final map = data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{};
       final ok = map['ok'] == true;
-      final message = map['message']?.toString() ?? (ok ? 'Payment recorded.' : 'Could not verify the screenshot.');
+      final message = map['message']?.toString() ??
+          (ok
+              ? c('cust_pay.toast_payment_recorded')
+              : c('cust_pay.toast_verify_failed'));
       if (!mounted) return;
       showToast(context, message, isError: !ok);
       if (ok) await _load();
     } catch (_) {
-      if (mounted) showToast(context, 'Upload failed. Try again.', isError: true);
+      if (mounted) {
+        showToast(context, c('cust_pay.toast_upload_failed'), isError: true);
+      }
     } finally {
       if (mounted) setState(() => _uploading = false);
     }
@@ -463,9 +481,11 @@ Future<Uint8List> _buildQrDownloadImage({
     return painter;
   }
 
-  final title = layout('mediBO payment QR', size: 18, weight: FontWeight.w700);
-  final upiLine = layout('UPI ID: $vpa');
-  final nameLine = layout('Banking Name: $bankingName');
+  final title =
+      layout(c('cust_pay.qr_image_title'), size: 18, weight: FontWeight.w700);
+  final upiLine = layout(cf('cust_pay.qr_image_upi_line', {'vpa': vpa}));
+  final nameLine =
+      layout(cf('cust_pay.qr_image_name_line', {'name': bankingName}));
 
   final height = padding + title.height + 16 + qrSize + 20 + upiLine.height + 10 + nameLine.height + padding;
 
@@ -680,7 +700,9 @@ class _CustPaySheetState extends State<CustPaySheet> {
       sink(bytes, filename);
       RenderLog.write('c490_paypopup_qr_capture', 1);
     } catch (_) {
-      if (mounted) showToast(context, 'Could not download the QR image.', isError: true);
+      if (mounted) {
+        showToast(context, c('cust_pay.toast_qr_download_failed'), isError: true);
+      }
     } finally {
       if (mounted) setState(() => _downloadingQr = false);
     }
@@ -834,7 +856,7 @@ class _CustPaySheetState extends State<CustPaySheet> {
                 Expanded(
                   child: _sheetActionButton(
                     icon: Icons.qr_code_2_outlined,
-                    label: 'Download QR',
+                    label: c('cust_pay.btn_download_qr'),
                     loading: _downloadingQr,
                     onTap: _downloadingQr ? null : _downloadSheetQr,
                   ),
@@ -846,7 +868,7 @@ class _CustPaySheetState extends State<CustPaySheet> {
                     child: Builder(
                       builder: (btnContext) => _sheetActionButton(
                         icon: Icons.chat_bubble_outline,
-                        label: 'WhatsApp',
+                        label: c('cust_pay.btn_whatsapp'),
                         onTap: () => _showWaPopup(btnContext),
                       ),
                     ),
@@ -920,7 +942,7 @@ class _PayQrWaPickerState extends State<PayQrWaPicker> {
       final list = _parseNumbers(raw);
       if (mounted) setState(() { _numbers = list; _error = null; });
     } catch (_) {
-      if (mounted) setState(() => _error = 'Could not load numbers.');
+      if (mounted) setState(() => _error = c('cust_pay.wa_err_load'));
     }
   }
 
@@ -969,10 +991,10 @@ class _PayQrWaPickerState extends State<PayQrWaPicker> {
         child: Padding(
           padding: const EdgeInsets.all(10),
           child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-              child: Text('Send QR to',
-                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+              child: Text(c('cust_pay.wa_send_qr_to'),
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
             ),
             const SizedBox(height: 4),
             if (_error != null)
@@ -987,9 +1009,10 @@ class _PayQrWaPickerState extends State<PayQrWaPicker> {
                     child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))),
               )
             else if (_numbers!.isEmpty)
-              const Padding(
-                padding: EdgeInsets.all(8),
-                child: Text('No saved number', style: TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
+              Padding(
+                padding: const EdgeInsets.all(8),
+                child: Text(c('cust_pay.wa_no_saved_number'),
+                    style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
               )
             else
               Flexible(
@@ -1022,16 +1045,16 @@ class _PayQrWaPickerState extends State<PayQrWaPicker> {
                                 Text(display,
                                     style: const TextStyle(fontSize: 13.5, color: Color(0xFF111827))),
                                 if (sent)
-                                  const Padding(
-                                    padding: EdgeInsets.only(top: 2),
-                                    child: Text('Sent to WhatsApp ✓',
-                                        style: TextStyle(fontSize: 11, color: Color(0xFF1B7A43), fontWeight: FontWeight.w600)),
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 2),
+                                    child: Text(c('cust_pay.wa_sent'),
+                                        style: const TextStyle(fontSize: 11, color: Color(0xFF1B7A43), fontWeight: FontWeight.w600)),
                                   )
                                 else if (failed)
-                                  const Padding(
-                                    padding: EdgeInsets.only(top: 2),
-                                    child: Text("Couldn't send — try again",
-                                        style: TextStyle(fontSize: 11, color: Color(0xFFDC2626), fontWeight: FontWeight.w600)),
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 2),
+                                    child: Text(c('cust_pay.wa_send_failed'),
+                                        style: const TextStyle(fontSize: 11, color: Color(0xFFDC2626), fontWeight: FontWeight.w600)),
                                   ),
                               ]),
                             ),
@@ -1040,8 +1063,8 @@ class _PayQrWaPickerState extends State<PayQrWaPicker> {
                                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                                 decoration: BoxDecoration(
                                     color: const Color(0xFFE8F5E9), borderRadius: BorderRadius.circular(4)),
-                                child: const Text('last used',
-                                    style: TextStyle(
+                                child: Text(c('cust_pay.wa_last_used'),
+                                    style: const TextStyle(
                                         fontSize: 9.5, color: Color(0xFF1B7A43), fontWeight: FontWeight.w600)),
                               ),
                             if (busy) ...[
@@ -1078,7 +1101,7 @@ class _CustPaymentDetailCard extends StatelessWidget {
     final isCash = (payment['method']?.toString() ?? 'online') == 'cash';
     final modeLabel = payment['method_label']?.toString().isNotEmpty == true
         ? payment['method_label'].toString()
-        : (isCash ? 'Cash' : 'Online');
+        : (isCash ? c('cust_pay.mode_cash') : c('cust_pay.mode_online'));
 
     final path = payment['screenshot']?.toString() ?? '';
 
@@ -1114,18 +1137,18 @@ class _CustPaymentDetailCard extends StatelessWidget {
         const SizedBox(height: 10),
         // ── Detail rows — same fields & order as admin's _OrderPaymentPanel ──
         if (isCash) ...[
-          C330CopyRow(label: 'Amount', value: payment['amount_label']?.toString()),
-          C330CopyRow(label: 'Received by', value: payment['collected_by']?.toString()),
-          C330CopyRow(label: 'Location', value: payment['location']?.toString()),
+          C330CopyRow(label: c('cust_pay.row_amount'), value: payment['amount_label']?.toString()),
+          C330CopyRow(label: c('cust_pay.row_received_by'), value: payment['collected_by']?.toString()),
+          C330CopyRow(label: c('cust_pay.row_location'), value: payment['location']?.toString()),
           _viewInMapsRow(context, payment['location']?.toString()),
-          C330CopyRow(label: 'Received at', value: payment['paid_label']?.toString()),
+          C330CopyRow(label: c('cust_pay.row_received_at'), value: payment['paid_label']?.toString()),
         ] else ...[
-          C330CopyRow(label: 'Amount', value: payment['amount_label']?.toString()),
-          C330CopyRow(label: 'Payee', value: payment['payee_name']?.toString()),
-          C330CopyRow(label: 'App', value: payment['app']?.toString()),
-          C330CopyRow(label: 'UTR', value: payment['utr']?.toString()),
-          C330CopyRow(label: 'Txn', value: payment['txn_id']?.toString()),
-          C330CopyRow(label: 'Paid', value: payment['paid_label']?.toString()),
+          C330CopyRow(label: c('cust_pay.row_amount'), value: payment['amount_label']?.toString()),
+          C330CopyRow(label: c('cust_pay.row_payee'), value: payment['payee_name']?.toString()),
+          C330CopyRow(label: c('cust_pay.row_app'), value: payment['app']?.toString()),
+          C330CopyRow(label: c('cust_pay.row_utr'), value: payment['utr']?.toString()),
+          C330CopyRow(label: c('cust_pay.row_txn'), value: payment['txn_id']?.toString()),
+          C330CopyRow(label: c('cust_pay.row_paid'), value: payment['paid_label']?.toString()),
         ],
         if (path.isNotEmpty)
           Padding(
@@ -1156,13 +1179,13 @@ class _CustPaymentDetailCard extends StatelessWidget {
           } catch (_) {}
         },
         borderRadius: BorderRadius.circular(8),
-        child: const Padding(
-          padding: EdgeInsets.symmetric(vertical: 6),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(Icons.location_on, size: 18, color: Color(0xFF1A73E8)),
-            SizedBox(width: 6),
-            Text('View in Maps',
-                style: TextStyle(
+            const Icon(Icons.location_on, size: 18, color: Color(0xFF1A73E8)),
+            const SizedBox(width: 6),
+            Text(c('cust_pay.btn_view_in_maps'),
+                style: const TextStyle(
                     color: Color(0xFF1A73E8), fontWeight: FontWeight.w600, fontSize: 14)),
           ]),
         ),

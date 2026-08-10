@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../services/fulfill_realtime.dart' show kC416;
+import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 import '../../widgets/fulfill_item_sheet.dart' show ProofThumbnail;
 import '../admin/dispute/dispute_models.dart';
@@ -150,15 +151,18 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
       builder: (ctx) => AlertDialog(
         title: Text(action.label),
         content: Text(
-          '${item.productName}\nConfirm: ${action.label}?',
+          cf('supplier_disputes.confirm_body',
+              {'product': item.productName, 'action': action.label}),
           style: const TextStyle(fontSize: 14),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(c('supplier_disputes.cancel'))),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: _kGreen),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Confirm'),
+            child: Text(c('supplier_disputes.confirm')),
           ),
         ],
       ),
@@ -189,7 +193,8 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
         RenderLog.write('c362_disp_group', 'supplier_fanout=${others.length}');
       }
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Recorded: $result')));
+        SnackBar(content: Text(
+            cf('supplier_disputes.snack_recorded', {'result': result}))));
       Future.delayed(const Duration(seconds: 1), () {
         if (mounted) _load();
       });
@@ -221,8 +226,8 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
                 size: 48, color: _kSub),
             const SizedBox(height: 12),
             Text(isNoSupplier
-                ? 'No supplier account found.'
-                : 'Unable to load disputes.',
+                ? c('supplier_disputes.no_supplier')
+                : c('supplier_disputes.load_failed'),
                 style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _kSub)),
             if (!isNoSupplier) ...[
               const SizedBox(height: 8),
@@ -236,7 +241,7 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                 ),
                 icon: const Icon(Icons.refresh_rounded, size: 16),
-                label: const Text('Retry'),
+                label: Text(c('supplier_disputes.retry')),
               ),
             ],
           ]),
@@ -248,13 +253,13 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           const Icon(Icons.check_circle_outline_rounded, size: 48, color: _kGreen),
           const SizedBox(height: 12),
-          const Text('No disputes for this supplier.',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _kSub)),
+          Text(c('supplier_disputes.empty'),
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _kSub)),
           const SizedBox(height: 16),
           TextButton.icon(
             onPressed: _load,
             icon: const Icon(Icons.refresh_rounded, size: 16),
-            label: const Text('Refresh'),
+            label: Text(c('supplier_disputes.refresh')),
           ),
         ]),
       );
@@ -293,7 +298,7 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        'Viewing as $_supplierName (admin)',
+                        cf('supplier_disputes.viewing_as', {'name': _supplierName}),
                         style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
                             color: Color(0xFF92400E)),
                       ),
@@ -303,13 +308,14 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
               ],
 
               // Active section
-              _sectionLabel('Active', activeItems.length, active: true),
+              _sectionLabel(c('supplier_disputes.section_active'),
+                  activeItems.length, active: true),
               const SizedBox(height: 8),
               if (activeItems.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 12),
-                  child: Text('No active disputes.',
-                      style: TextStyle(fontSize: 13, color: _kSub)),
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  child: Text(c('supplier_disputes.no_active'),
+                      style: const TextStyle(fontSize: 13, color: _kSub)),
                 )
               else
                 ...activeItems.map((item) => Padding(
@@ -324,9 +330,12 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
                   onTap: () => setState(() => _closedExpanded = !_closedExpanded),
                   child: Row(mainAxisSize: MainAxisSize.min, children: [
                     Text(
-                      _closedExpanded
-                          ? 'Hide closed (${closedItems.length})'
-                          : 'Show closed (${closedItems.length})',
+                      cf(
+                        _closedExpanded
+                            ? 'supplier_disputes.hide_closed'
+                            : 'supplier_disputes.show_closed',
+                        {'count': '${closedItems.length}'},
+                      ),
                       style: const TextStyle(fontSize: 13, color: _kSub,
                           fontWeight: FontWeight.w600),
                     ),
@@ -379,7 +388,7 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
           style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
               color: active ? _kText : _kSub)),
       const SizedBox(width: 4),
-      Text('($count)',
+      Text(cf('supplier_disputes.section_count', {'count': '$count'}),
           style: const TextStyle(fontSize: 12, color: _kSub)),
     ]);
   }
@@ -442,7 +451,8 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
                     // B1b: wrong_product_name
                     if ((item.wrongProductName ?? '').isNotEmpty) ...[
                       const SizedBox(height: 3),
-                      Text('They say we sent: ${item.wrongProductName}',
+                      Text(cf('supplier_disputes.wrong_product',
+                              {'name': '${item.wrongProductName}'}),
                           style: const TextStyle(fontSize: 12, color: _kRed),
                           maxLines: 2, overflow: TextOverflow.ellipsis),
                     ],
@@ -518,8 +528,15 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
         if (agg.disputedQty > 0) ...[
           const SizedBox(height: 6),
           Text(
-              'In dispute: ${agg.disputedQty.toInt()} units'
-              '${agg.lines.length > 1 ? ' (${agg.lines.length} orders)' : ''}',
+              cf(
+                agg.lines.length > 1
+                    ? 'supplier_disputes.in_dispute_multi'
+                    : 'supplier_disputes.in_dispute',
+                {
+                  'units': '${agg.disputedQty.toInt()}',
+                  'orders': '${agg.lines.length}',
+                },
+              ),
               style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
                   color: _kAmberText)),
         ],
@@ -528,8 +545,8 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
         if ((item.proofUrl ?? '').isNotEmpty) ...[
           const SizedBox(height: 10),
           Row(children: [
-            const Text('Proof photo:',
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+            Text(c('supplier_disputes.proof_photo'),
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
                     color: _kSub)),
             const SizedBox(width: 10),
             ProofThumbnail(proofUrl: item.proofUrl!, size: 72),
@@ -604,11 +621,11 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
       child: Column(children: [
         IntrinsicHeight(
           child: Row(children: [
-            _qtyCell('Ordered', isHeader: true, isAmber: false),
+            _qtyCell(c('supplier_disputes.qty_ordered'), isHeader: true, isAmber: false),
             _vertDivider(),
-            _qtyCell('Received', isHeader: true, isAmber: false),
+            _qtyCell(c('supplier_disputes.qty_received'), isHeader: true, isAmber: false),
             _vertDivider(),
-            _qtyCell('Missing', isHeader: true, isAmber: true),
+            _qtyCell(c('supplier_disputes.qty_missing'), isHeader: true, isAmber: true),
           ]),
         ),
         const Divider(height: 1, color: Color(0xFFE5E7EB)),

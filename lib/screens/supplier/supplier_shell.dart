@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../pages/supplier_disputes_page.dart';
+import '../../services/ui_copy.dart';
 import '../../user_state.dart';
 import '../../utils/render_log.dart';
 import '../../utils/toast.dart';
@@ -35,12 +36,12 @@ class _SupplierShellState extends State<SupplierShell> {
   // Keys to allow deep-linking into child screens
   final GlobalKey<SupplierInquiryScreenState> _inquiryKey = GlobalKey();
 
-  final List<_NavItem> _navItems = const [
-    _NavItem(icon: Icons.store_outlined,           label: 'Home'),
-    _NavItem(icon: Icons.add_circle_outline,       label: 'Add Medicine'),
-    _NavItem(icon: Icons.question_answer_outlined, label: 'Inquiry'),
-    _NavItem(icon: Icons.receipt_long_outlined,    label: 'Orders'),
-    _NavItem(icon: Icons.gavel_outlined,           label: 'Disputes'),
+  List<_NavItem> get _navItems => [
+    _NavItem(icon: Icons.store_outlined,           label: c('supplier_shell.tab_home')),
+    _NavItem(icon: Icons.add_circle_outline,       label: c('supplier_shell.tab_add_medicine')),
+    _NavItem(icon: Icons.question_answer_outlined, label: c('supplier_shell.tab_inquiry')),
+    _NavItem(icon: Icons.receipt_long_outlined,    label: c('supplier_shell.tab_orders')),
+    _NavItem(icon: Icons.gavel_outlined,           label: c('supplier_shell.tab_disputes')),
   ];
 
   @override
@@ -88,14 +89,14 @@ class _SupplierShellState extends State<SupplierShell> {
   Widget build(BuildContext context) {
     final supplierName = widget.viewAsSupplierName
         ?? UserState.of(context).supplierName
-        ?? 'Supplier';
+        ?? c('supplier_shell.supplier_fallback_name');
     final viewAsSupplierId = widget.viewAsSupplierId;
     final isDesktop = MediaQuery.of(context).size.width >= 900;
 
     final pages = [
       SupplierHomeScreen(viewAsSupplierId: viewAsSupplierId),
       if (viewAsSupplierId == null) const SupplierAddMedicineScreen()
-      else const _ViewAsReadOnlyPlaceholder(label: 'Add Medicine (read-only in preview)'),
+      else _ViewAsReadOnlyPlaceholder(label: c('supplier_shell.viewas_readonly')),
       SupplierInquiryScreen(
         key: _inquiryKey,
         viewAsSupplierId: viewAsSupplierId,
@@ -180,7 +181,7 @@ class _SupplierHeader extends StatelessWidget {
         boxShadow: [BoxShadow(color: Color(0x20000000), blurRadius: 4, offset: Offset(0, 2))],
       ),
       child: Row(children: [
-        const Text('mediBO', style: TextStyle(
+        Text(c('supplier_shell.brand'), style: const TextStyle(
           color: Colors.white, fontSize: 20, fontWeight: FontWeight.w700,
           letterSpacing: -0.5,
         )),
@@ -191,12 +192,12 @@ class _SupplierHeader extends StatelessWidget {
             color: Colors.white.withOpacity(0.2),
             borderRadius: BorderRadius.circular(12),
           ),
-          child: const Text('Supplier', style: TextStyle(
+          child: Text(c('supplier_shell.role_badge'), style: const TextStyle(
             color: Colors.white, fontSize: 11, fontWeight: FontWeight.w500,
           )),
         ),
         const Spacer(),
-        Text('Hello, $supplierName',
+        Text(cf('supplier_shell.greeting', {'name': supplierName}),
           style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500),
           overflow: TextOverflow.ellipsis,
         ),
@@ -237,7 +238,12 @@ class _InquiryBanner extends StatelessWidget {
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              'You have $count item${count == 1 ? '' : 's'} awaiting your response. Tap to answer.',
+              cf(
+                count == 1
+                    ? 'supplier_shell.banner_pending_one'
+                    : 'supplier_shell.banner_pending_many',
+                {'count': '$count'},
+              ),
               style: const TextStyle(
                 fontSize: 13, color: Color(0xFF92400E), fontWeight: FontWeight.w500,
               ),

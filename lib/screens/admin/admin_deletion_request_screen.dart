@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../services/ui_copy.dart';
 
 /// `admin_deletion_request_list(p_status)` → `{rows, count, has_rows, title}`.
 typedef DeletionListRpc = Future<Map<String, dynamic>> Function(String status);
@@ -83,7 +84,7 @@ class _AdminDeletionRequestScreenState
           minLines: 1,
           maxLines: 3,
           decoration: InputDecoration(
-            hintText: 'Note (optional)',
+            hintText: c('admin_deletion_request.note_hint'),
             filled: true,
             fillColor: const Color(0xFFF5F6F8),
             border: OutlineInputBorder(
@@ -99,7 +100,7 @@ class _AdminDeletionRequestScreenState
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
+            child: Text(c('admin_deletion_request.cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
@@ -108,7 +109,9 @@ class _AdminDeletionRequestScreenState
                   ? const Color(0xFF1B5E20)
                   : const Color(0xFF991B1B),
             ),
-            child: Text(decision == 'approve' ? 'Approve' : 'Reject'),
+            child: Text(decision == 'approve'
+                ? c('admin_deletion_request.approve')
+                : c('admin_deletion_request.reject')),
           ),
         ],
       ),
@@ -154,7 +157,7 @@ class _AdminDeletionRequestScreenState
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh, color: Color(0xFF374151)),
-            tooltip: 'Refresh',
+            tooltip: c('admin_deletion_request.refresh'),
             onPressed: _load,
           ),
         ],
@@ -202,12 +205,12 @@ class _AdminDeletionRequestScreenState
               ? Center(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
-                    children: const [
-                      Icon(Icons.person_remove_outlined,
+                    children: [
+                      const Icon(Icons.person_remove_outlined,
                           size: 48, color: Color(0xFFD1D5DB)),
-                      SizedBox(height: 12),
-                      Text('No requests here',
-                          style: TextStyle(
+                      const SizedBox(height: 12),
+                      Text(c('admin_deletion_request.no_requests_here'),
+                          style: const TextStyle(
                               fontSize: 15, color: Color(0xFF6B7280))),
                     ],
                   ),

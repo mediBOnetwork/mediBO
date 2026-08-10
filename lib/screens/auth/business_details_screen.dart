@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../models/user_profile.dart';
+import '../../services/ui_copy.dart';
 import '../../user_state.dart';
 import '../../utils/render_log.dart';
 import '../../widgets/code_field.dart';
@@ -14,11 +15,11 @@ enum _Role { pharmacy, supplier, mr, company, deliveryPartner }
 extension _RoleX on _Role {
   String get label {
     switch (this) {
-      case _Role.pharmacy: return 'Pharmacy';
-      case _Role.supplier: return 'Supplier';
-      case _Role.mr: return 'MR';
-      case _Role.company: return 'Company';
-      case _Role.deliveryPartner: return 'Delivery';
+      case _Role.pharmacy: return c('business_details.role_pharmacy');
+      case _Role.supplier: return c('business_details.role_supplier');
+      case _Role.mr: return c('business_details.role_mr');
+      case _Role.company: return c('business_details.role_company');
+      case _Role.deliveryPartner: return c('business_details.role_delivery');
     }
   }
 
@@ -127,11 +128,36 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
   String? _saveError;
 
   // ── Static option lists ──────────────────────────────────────────────────
-  static const _storeTypes = ['Retail Pharmacy', 'Hospital Pharmacy', 'Clinic', 'Wholesale Distributor', 'Other'];
-  static const _rangeZones = ['Local (0–25 km)', 'City (25–50 km)', 'District (50–100 km)', 'Regional (100+ km)'];
-  static const _paymentTerms = ['Advance Payment', 'COD'];
-  static const _idProofTypes = ['Aadhaar Card', 'PAN Card', 'Driving Licence', 'Passport', 'Voter ID'];
-  static const _vehicleTypes = ['Two-Wheeler (Bike/Scooter)', 'Three-Wheeler (Auto)', 'Four-Wheeler (Car/Van)', 'Bicycle'];
+  List<String> get _storeTypes => [
+    c('business_details.store_type_retail'),
+    c('business_details.store_type_hospital'),
+    c('business_details.store_type_clinic'),
+    c('business_details.store_type_wholesale'),
+    c('business_details.store_type_other'),
+  ];
+  List<String> get _rangeZones => [
+    c('business_details.range_local'),
+    c('business_details.range_city'),
+    c('business_details.range_district'),
+    c('business_details.range_regional'),
+  ];
+  List<String> get _paymentTerms => [
+    c('business_details.payment_advance'),
+    c('business_details.payment_cod'),
+  ];
+  List<String> get _idProofTypes => [
+    c('business_details.id_proof_aadhaar'),
+    c('business_details.id_proof_pan'),
+    c('business_details.id_proof_dl'),
+    c('business_details.id_proof_passport'),
+    c('business_details.id_proof_voter'),
+  ];
+  List<String> get _vehicleTypes => [
+    c('business_details.vehicle_two_wheeler'),
+    c('business_details.vehicle_three_wheeler'),
+    c('business_details.vehicle_four_wheeler'),
+    c('business_details.vehicle_bicycle'),
+  ];
 
   @override
   void initState() {
@@ -329,7 +355,7 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
         backgroundColor: Colors.white,
         elevation: 0,
         leading: IconButton(icon: const Icon(Icons.close, color: Color(0xFF1B5E20)), onPressed: () => Navigator.of(context).pop()),
-        title: const Text('Complete Registration', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
+        title: Text(c('business_details.app_bar_title'), style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
         centerTitle: false,
         bottom: PreferredSize(preferredSize: const Size.fromHeight(1), child: Container(height: 1, color: const Color(0xFFE5E7EB))),
       ),
@@ -355,7 +381,7 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
                       child: Row(children: [
                         Icon(_role.icon, color: const Color(0xFF1B5E20), size: 22),
                         const SizedBox(width: 10),
-                        Expanded(child: Text('Fill in your ${_role.label} details to register on mediBO.', style: const TextStyle(fontSize: 13, color: Color(0xFF065F46)))),
+                        Expanded(child: Text(cf('business_details.info_banner', {'role': _role.label}), style: const TextStyle(fontSize: 13, color: Color(0xFF065F46)))),
                       ]),
                     ),
                     const SizedBox(height: 24),
@@ -384,11 +410,11 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
                         ),
                         child: _saving
                             ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5))
-                            : const Text('Submit Registration'),
+                            : Text(c('business_details.btn_submit')),
                       ),
                     ),
                     const SizedBox(height: 16),
-                    const Text('Your details are reviewed by our team. You will be approved within 24 hours.', textAlign: TextAlign.center, style: TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
+                    Text(c('business_details.review_note'), textAlign: TextAlign.center, style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
                   ],
                 ),
               ),
@@ -436,54 +462,54 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
 
   // ── Pharmacy form (unchanged) ──────────────────────────────────────────
   List<Widget> _buildPharmacyForm() => [
-    const _SectionHeader(icon: Icons.storefront_outlined, title: 'Business Details'),
+    _SectionHeader(icon: Icons.storefront_outlined, title: c('business_details.sec_business')),
     const SizedBox(height: 14),
-    _Field(label: 'Customer / Contact Name', required: true, controller: _customerNameCtrl, hint: 'Dr. Ramesh Kumar', validator: (v) => (v == null || v.trim().isEmpty) ? 'Name is required' : null),
+    _Field(label: c('business_details.ph_customer_name_label'), required: true, controller: _customerNameCtrl, hint: c('business_details.ph_customer_name_hint'), validator: (v) => (v == null || v.trim().isEmpty) ? c('business_details.err_name_required') : null),
     const SizedBox(height: 14),
-    _Field(label: 'Pharmacy / Clinic Name', required: true, controller: _pharmacyCtrl, hint: 'Apollo Pharmacy', validator: (v) => (v == null || v.trim().isEmpty) ? 'Business name is required' : null),
+    _Field(label: c('business_details.ph_pharmacy_name_label'), required: true, controller: _pharmacyCtrl, hint: c('business_details.ph_pharmacy_name_hint'), validator: (v) => (v == null || v.trim().isEmpty) ? c('business_details.err_business_name_required') : null),
     const SizedBox(height: 14),
-    _Dropdown(label: 'Store Type', required: true, value: _storeType, items: _storeTypes, onChanged: (v) => setState(() => _storeType = v), validator: (v) => v == null ? 'Select store type' : null),
+    _Dropdown(label: c('business_details.dd_store_type'), required: true, value: _storeType, items: _storeTypes, onChanged: (v) => setState(() => _storeType = v), validator: (v) => v == null ? c('business_details.err_select_store_type') : null),
     const SizedBox(height: 14),
-    _Dropdown(label: 'Delivery Range / Zone', required: true, value: _rangeZone, items: _rangeZones, onChanged: (v) => setState(() => _rangeZone = v), validator: (v) => v == null ? 'Select delivery range' : null),
+    _Dropdown(label: c('business_details.dd_range_zone'), required: true, value: _rangeZone, items: _rangeZones, onChanged: (v) => setState(() => _rangeZone = v), validator: (v) => v == null ? c('business_details.err_select_range') : null),
     const SizedBox(height: 28),
-    const _SectionHeader(icon: Icons.location_on_outlined, title: 'Address'),
+    _SectionHeader(icon: Icons.location_on_outlined, title: c('business_details.sec_address')),
     const SizedBox(height: 14),
-    _Field(label: 'Local Address', required: true, controller: _addressCtrl, hint: 'Shop 12, Medical Complex, MG Road', maxLines: 2, validator: (v) => (v == null || v.trim().isEmpty) ? 'Address is required' : null),
+    _Field(label: c('business_details.ph_address_label'), required: true, controller: _addressCtrl, hint: c('business_details.ph_address_hint'), maxLines: 2, validator: (v) => (v == null || v.trim().isEmpty) ? c('business_details.err_address_required') : null),
     const SizedBox(height: 14),
     Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Expanded(child: _Field(label: 'City', required: true, controller: _cityCtrl, hint: 'Mumbai', validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null)),
+      Expanded(child: _Field(label: c('business_details.ph_city_label'), required: true, controller: _cityCtrl, hint: c('business_details.ph_city_hint'), validator: (v) => (v == null || v.trim().isEmpty) ? c('business_details.err_required') : null)),
       const SizedBox(width: 12),
-      Expanded(child: _Field(label: 'State', required: true, controller: _stateCtrl, hint: 'Maharashtra', validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null)),
+      Expanded(child: _Field(label: c('business_details.ph_state_label'), required: true, controller: _stateCtrl, hint: c('business_details.ph_state_hint'), validator: (v) => (v == null || v.trim().isEmpty) ? c('business_details.err_required') : null)),
     ]),
     const SizedBox(height: 14),
-    Row(children: [SizedBox(width: 160, child: _Field(label: 'Pincode', required: true, controller: _pincodeCtrl, hint: '400001', keyboardType: TextInputType.number, maxLength: 6, inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(6)], validator: (v) { if (v == null || v.trim().isEmpty) return 'Required'; if (v.trim().length != 6) return '6 digits'; return null; }))]),
+    Row(children: [SizedBox(width: 160, child: _Field(label: c('business_details.ph_pincode_label'), required: true, controller: _pincodeCtrl, hint: c('business_details.ph_pincode_hint'), keyboardType: TextInputType.number, maxLength: 6, inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(6)], validator: (v) { if (v == null || v.trim().isEmpty) return c('business_details.err_required'); if (v.trim().length != 6) return c('business_details.err_6_digits'); return null; }))]),
     const SizedBox(height: 14),
-    _Field(label: 'Store Location Link', controller: _storeLocationCtrl, hint: 'Google Maps link (optional)', keyboardType: TextInputType.url, capitalization: TextCapitalization.none),
+    _Field(label: c('business_details.ph_store_link_label'), controller: _storeLocationCtrl, hint: c('business_details.ph_store_link_hint'), keyboardType: TextInputType.url, capitalization: TextCapitalization.none),
     const SizedBox(height: 28),
-    const _SectionHeader(icon: Icons.phone_outlined, title: 'Contact'),
+    _SectionHeader(icon: Icons.phone_outlined, title: c('business_details.sec_contact')),
     const SizedBox(height: 14),
-    _Field(label: 'WhatsApp Number', required: true, controller: _whatsappCtrl, hint: '9876543210', keyboardType: TextInputType.phone, maxLength: 10, inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(10)], validator: (v) { if (v == null || v.trim().isEmpty) return 'Required'; if (v.trim().length != 10) return '10-digit number required'; return null; }),
+    _Field(label: c('business_details.ph_whatsapp_label'), required: true, controller: _whatsappCtrl, hint: c('business_details.ph_whatsapp_hint'), keyboardType: TextInputType.phone, maxLength: 10, inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(10)], validator: (v) { if (v == null || v.trim().isEmpty) return c('business_details.err_required'); if (v.trim().length != 10) return c('business_details.err_10_digit_number'); return null; }),
     const SizedBox(height: 14),
-    _Field(label: 'Other Contact Number', controller: _otherContactCtrl, hint: '9876543210 (optional)', keyboardType: TextInputType.phone, maxLength: 10, inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(10)], validator: (v) { if (v == null || v.trim().isEmpty) return null; if (v.trim().length != 10) return '10-digit number required'; return null; }),
+    _Field(label: c('business_details.ph_other_contact_label'), controller: _otherContactCtrl, hint: c('business_details.ph_other_contact_hint'), keyboardType: TextInputType.phone, maxLength: 10, inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(10)], validator: (v) { if (v == null || v.trim().isEmpty) return null; if (v.trim().length != 10) return c('business_details.err_10_digit_number'); return null; }),
     const SizedBox(height: 14),
-    _Field(label: 'Email Address', required: widget.email.isEmpty, controller: _emailCtrl, hint: 'pharmacy@example.com', keyboardType: TextInputType.emailAddress, capitalization: TextCapitalization.none, readOnly: widget.email.isNotEmpty, validator: (v) { if (v == null || v.trim().isEmpty) return 'Required'; if (!v.trim().contains('@')) return 'Invalid email'; return null; }),
+    _Field(label: c('business_details.ph_email_label'), required: widget.email.isEmpty, controller: _emailCtrl, hint: c('business_details.ph_email_hint'), keyboardType: TextInputType.emailAddress, capitalization: TextCapitalization.none, readOnly: widget.email.isNotEmpty, validator: (v) { if (v == null || v.trim().isEmpty) return c('business_details.err_required'); if (!v.trim().contains('@')) return c('business_details.err_invalid_email'); return null; }),
     const SizedBox(height: 28),
-    const _SectionHeader(icon: Icons.verified_outlined, title: 'Drug Licenses'),
+    _SectionHeader(icon: Icons.verified_outlined, title: c('business_details.sec_drug_licenses')),
     const SizedBox(height: 14),
-    _Field(label: 'DL 20B', required: true, controller: _dl20bCtrl, hint: 'MH-MUM-123456', validator: (v) => (v == null || v.trim().isEmpty) ? 'DL 20B is required' : null),
+    _Field(label: c('business_details.ph_dl20b_label'), required: true, controller: _dl20bCtrl, hint: c('business_details.ph_dl20b_hint'), validator: (v) => (v == null || v.trim().isEmpty) ? c('business_details.err_dl20b_required') : null),
     const SizedBox(height: 14),
-    _Field(label: 'DL 21B', controller: _dl21bCtrl, hint: 'MH-MUM-654321 (optional)'),
+    _Field(label: c('business_details.ph_dl21b_label'), controller: _dl21bCtrl, hint: c('business_details.ph_dl21b_hint')),
     const SizedBox(height: 14),
-    _Field(label: 'GST Number', controller: _gstCtrl, hint: '27AAPFU0939F1ZV (optional)', maxLength: 15, capitalization: TextCapitalization.characters, validator: (v) { if (v == null || v.trim().isEmpty) return null; final gst = v.trim().toUpperCase(); if (!RegExp(r'^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$').hasMatch(gst)) return 'Invalid GSTIN format'; return null; }),
+    _Field(label: c('business_details.ph_gst_label'), controller: _gstCtrl, hint: c('business_details.ph_gst_hint'), maxLength: 15, capitalization: TextCapitalization.characters, validator: (v) { if (v == null || v.trim().isEmpty) return null; final gst = v.trim().toUpperCase(); if (!RegExp(r'^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$').hasMatch(gst)) return c('business_details.err_invalid_gstin'); return null; }),
     const SizedBox(height: 28),
-    const _SectionHeader(icon: Icons.manage_accounts_outlined, title: 'Account Setup'),
+    _SectionHeader(icon: Icons.manage_accounts_outlined, title: c('business_details.sec_account_setup')),
     const SizedBox(height: 14),
-    _Dropdown(label: 'Payment Term', required: true, value: _paymentTerm, items: _paymentTerms, onChanged: (v) => setState(() => _paymentTerm = v), validator: (v) => v == null ? 'Select payment term' : null),
+    _Dropdown(label: c('business_details.dd_payment_term'), required: true, value: _paymentTerm, items: _paymentTerms, onChanged: (v) => setState(() => _paymentTerm = v), validator: (v) => v == null ? c('business_details.err_select_payment_term') : null),
     const SizedBox(height: 14),
     CodeField(
       controller: _customerCodeCtrl,
-      label: 'Customer Code',
-      hint: 'ABC123',
+      label: c('business_details.ph_customer_code_label'),
+      hint: c('business_details.ph_customer_code_hint'),
       isTaken: (code) async =>
           await Supabase.instance.client.rpc('is_customer_code_taken', params: {'p_code': code}) as bool,
       onStatusChanged: (s) => setState(() => _customerCodeStatus = s),
@@ -492,40 +518,40 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
 
   // ── Supplier form ──────────────────────────────────────────────────────
   List<Widget> _buildSupplierForm() => [
-    const _SectionHeader(icon: Icons.business_outlined, title: 'Company Details'),
+    _SectionHeader(icon: Icons.business_outlined, title: c('business_details.sec_company')),
     const SizedBox(height: 14),
-    _Field(label: 'Company / Business Name', required: true, controller: _supCompanyCtrl, hint: 'Medico Pharma Ltd.', validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null),
+    _Field(label: c('business_details.sup_company_label'), required: true, controller: _supCompanyCtrl, hint: c('business_details.sup_company_hint'), validator: (v) => (v == null || v.trim().isEmpty) ? c('business_details.err_required') : null),
     const SizedBox(height: 14),
-    _Field(label: 'Contact Name', required: true, controller: _supContactCtrl, hint: 'Rajesh Sharma', validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null),
+    _Field(label: c('business_details.sup_contact_label'), required: true, controller: _supContactCtrl, hint: c('business_details.sup_contact_hint'), validator: (v) => (v == null || v.trim().isEmpty) ? c('business_details.err_required') : null),
     const SizedBox(height: 14),
-    _Field(label: 'Phone / WhatsApp', required: true, controller: _supPhoneCtrl, hint: '9876543210', keyboardType: TextInputType.phone, maxLength: 10, inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(10)], validator: (v) { if (v == null || v.trim().isEmpty) return 'Required'; if (v.trim().length != 10) return '10-digit required'; return null; }),
+    _Field(label: c('business_details.sup_phone_label'), required: true, controller: _supPhoneCtrl, hint: c('business_details.sup_phone_hint'), keyboardType: TextInputType.phone, maxLength: 10, inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(10)], validator: (v) { if (v == null || v.trim().isEmpty) return c('business_details.err_required'); if (v.trim().length != 10) return c('business_details.err_10_digit'); return null; }),
     const SizedBox(height: 14),
-    _Field(label: 'Email Address', required: widget.email.isEmpty, controller: _supEmailCtrl, hint: 'contact@company.com', keyboardType: TextInputType.emailAddress, capitalization: TextCapitalization.none, readOnly: widget.email.isNotEmpty, validator: (v) { if (v == null || v.trim().isEmpty) return 'Required'; if (!v.trim().contains('@')) return 'Invalid email'; return null; }),
+    _Field(label: c('business_details.sup_email_label'), required: widget.email.isEmpty, controller: _supEmailCtrl, hint: c('business_details.sup_email_hint'), keyboardType: TextInputType.emailAddress, capitalization: TextCapitalization.none, readOnly: widget.email.isNotEmpty, validator: (v) { if (v == null || v.trim().isEmpty) return c('business_details.err_required'); if (!v.trim().contains('@')) return c('business_details.err_invalid_email'); return null; }),
     const SizedBox(height: 28),
-    const _SectionHeader(icon: Icons.location_on_outlined, title: 'Address'),
+    _SectionHeader(icon: Icons.location_on_outlined, title: c('business_details.sec_address')),
     const SizedBox(height: 14),
-    _Field(label: 'Address', required: true, controller: _supAddressCtrl, hint: 'Plot 5, Industrial Area, Phase 2', maxLines: 2, validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null),
+    _Field(label: c('business_details.sup_address_label'), required: true, controller: _supAddressCtrl, hint: c('business_details.sup_address_hint'), maxLines: 2, validator: (v) => (v == null || v.trim().isEmpty) ? c('business_details.err_required') : null),
     const SizedBox(height: 14),
     Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Expanded(child: _Field(label: 'City', required: true, controller: _supCityCtrl, hint: 'Ahmedabad', validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null)),
+      Expanded(child: _Field(label: c('business_details.sup_city_label'), required: true, controller: _supCityCtrl, hint: c('business_details.sup_city_hint'), validator: (v) => (v == null || v.trim().isEmpty) ? c('business_details.err_required') : null)),
       const SizedBox(width: 12),
-      Expanded(child: _Field(label: 'State', required: true, controller: _supStateCtrl, hint: 'Gujarat', validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null)),
+      Expanded(child: _Field(label: c('business_details.sup_state_label'), required: true, controller: _supStateCtrl, hint: c('business_details.sup_state_hint'), validator: (v) => (v == null || v.trim().isEmpty) ? c('business_details.err_required') : null)),
     ]),
     const SizedBox(height: 28),
-    const _SectionHeader(icon: Icons.verified_outlined, title: 'Compliance (Optional)'),
+    _SectionHeader(icon: Icons.verified_outlined, title: c('business_details.sec_compliance_optional')),
     const SizedBox(height: 14),
-    _Field(label: 'GST Number', controller: _supGstCtrl, hint: '24AAPFU0939F1ZV (optional)', maxLength: 15, capitalization: TextCapitalization.characters),
+    _Field(label: c('business_details.sup_gst_label'), controller: _supGstCtrl, hint: c('business_details.sup_gst_hint'), maxLength: 15, capitalization: TextCapitalization.characters),
     const SizedBox(height: 14),
-    _Field(label: 'Drug License Number', controller: _supDlCtrl, hint: 'GJ-AHM-123456 (optional)'),
+    _Field(label: c('business_details.sup_dl_label'), controller: _supDlCtrl, hint: c('business_details.sup_dl_hint')),
     const SizedBox(height: 14),
-    _Field(label: 'Product Categories Supplied', controller: _supCategoriesCtrl, hint: 'e.g. Antibiotics, Cardiovascular, OTC…', maxLines: 2),
+    _Field(label: c('business_details.sup_categories_label'), controller: _supCategoriesCtrl, hint: c('business_details.sup_categories_hint'), maxLines: 2),
     const SizedBox(height: 28),
-    const _SectionHeader(icon: Icons.manage_accounts_outlined, title: 'Account Setup'),
+    _SectionHeader(icon: Icons.manage_accounts_outlined, title: c('business_details.sec_account_setup')),
     const SizedBox(height: 14),
     CodeField(
       controller: _supplierCodeCtrl,
-      label: 'Supplier Code',
-      hint: 'ABC123',
+      label: c('business_details.sup_supplier_code_label'),
+      hint: c('business_details.sup_supplier_code_hint'),
       isTaken: (code) async =>
           await Supabase.instance.client.rpc('is_supplier_code_taken', params: {'p_code': code}) as bool,
       onStatusChanged: (s) => setState(() => _supplierCodeStatus = s),
@@ -534,93 +560,93 @@ class _BusinessDetailsScreenState extends State<BusinessDetailsScreen> {
 
   // ── MR form ────────────────────────────────────────────────────────────
   List<Widget> _buildMrForm() => [
-    const _SectionHeader(icon: Icons.person_outlined, title: 'Personal Details'),
+    _SectionHeader(icon: Icons.person_outlined, title: c('business_details.sec_personal')),
     const SizedBox(height: 14),
-    _Field(label: 'Full Name', required: true, controller: _mrNameCtrl, hint: 'Amit Verma', validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null),
+    _Field(label: c('business_details.mr_name_label'), required: true, controller: _mrNameCtrl, hint: c('business_details.mr_name_hint'), validator: (v) => (v == null || v.trim().isEmpty) ? c('business_details.err_required') : null),
     const SizedBox(height: 14),
-    _Field(label: 'Phone', required: true, controller: _mrPhoneCtrl, hint: '9876543210', keyboardType: TextInputType.phone, maxLength: 10, inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(10)], validator: (v) { if (v == null || v.trim().isEmpty) return 'Required'; if (v.trim().length != 10) return '10-digit required'; return null; }),
+    _Field(label: c('business_details.mr_phone_label'), required: true, controller: _mrPhoneCtrl, hint: c('business_details.mr_phone_hint'), keyboardType: TextInputType.phone, maxLength: 10, inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(10)], validator: (v) { if (v == null || v.trim().isEmpty) return c('business_details.err_required'); if (v.trim().length != 10) return c('business_details.err_10_digit'); return null; }),
     const SizedBox(height: 14),
-    _Field(label: 'Email Address', required: widget.email.isEmpty, controller: _mrEmailCtrl, hint: 'mr@company.com', keyboardType: TextInputType.emailAddress, capitalization: TextCapitalization.none, readOnly: widget.email.isNotEmpty, validator: (v) { if (v == null || v.trim().isEmpty) return 'Required'; if (!v.trim().contains('@')) return 'Invalid email'; return null; }),
+    _Field(label: c('business_details.mr_email_label'), required: widget.email.isEmpty, controller: _mrEmailCtrl, hint: c('business_details.mr_email_hint'), keyboardType: TextInputType.emailAddress, capitalization: TextCapitalization.none, readOnly: widget.email.isNotEmpty, validator: (v) { if (v == null || v.trim().isEmpty) return c('business_details.err_required'); if (!v.trim().contains('@')) return c('business_details.err_invalid_email'); return null; }),
     const SizedBox(height: 28),
-    const _SectionHeader(icon: Icons.work_outlined, title: 'Professional Details'),
+    _SectionHeader(icon: Icons.work_outlined, title: c('business_details.sec_professional')),
     const SizedBox(height: 14),
-    _Field(label: 'Company / Pharma Represented', required: true, controller: _mrCompanyCtrl, hint: 'Sun Pharma, Cipla, etc.', validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null),
+    _Field(label: c('business_details.mr_company_label'), required: true, controller: _mrCompanyCtrl, hint: c('business_details.mr_company_hint'), validator: (v) => (v == null || v.trim().isEmpty) ? c('business_details.err_required') : null),
     const SizedBox(height: 14),
-    _Field(label: 'Territory / Zone', required: true, controller: _mrTerritoryCtrl, hint: 'e.g. Mumbai West, Gujarat North', validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null),
+    _Field(label: c('business_details.mr_territory_label'), required: true, controller: _mrTerritoryCtrl, hint: c('business_details.mr_territory_hint'), validator: (v) => (v == null || v.trim().isEmpty) ? c('business_details.err_required') : null),
     const SizedBox(height: 28),
-    const _SectionHeader(icon: Icons.location_on_outlined, title: 'Location'),
+    _SectionHeader(icon: Icons.location_on_outlined, title: c('business_details.sec_location')),
     const SizedBox(height: 14),
-    _Field(label: 'Address', controller: _mrAddressCtrl, hint: 'Residential / Office address (optional)', maxLines: 2),
+    _Field(label: c('business_details.mr_address_label'), controller: _mrAddressCtrl, hint: c('business_details.mr_address_hint'), maxLines: 2),
     const SizedBox(height: 14),
     Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Expanded(child: _Field(label: 'City', required: true, controller: _mrCityCtrl, hint: 'Mumbai', validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null)),
+      Expanded(child: _Field(label: c('business_details.mr_city_label'), required: true, controller: _mrCityCtrl, hint: c('business_details.mr_city_hint'), validator: (v) => (v == null || v.trim().isEmpty) ? c('business_details.err_required') : null)),
       const SizedBox(width: 12),
-      Expanded(child: _Field(label: 'State', required: true, controller: _mrStateCtrl, hint: 'Maharashtra', validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null)),
+      Expanded(child: _Field(label: c('business_details.mr_state_label'), required: true, controller: _mrStateCtrl, hint: c('business_details.mr_state_hint'), validator: (v) => (v == null || v.trim().isEmpty) ? c('business_details.err_required') : null)),
     ]),
     const SizedBox(height: 14),
-    _Dropdown(label: 'ID Proof Type', value: _mrIdProofType, items: _idProofTypes, onChanged: (v) => setState(() => _mrIdProofType = v)),
+    _Dropdown(label: c('business_details.dd_id_proof_type'), value: _mrIdProofType, items: _idProofTypes, onChanged: (v) => setState(() => _mrIdProofType = v)),
   ];
 
   // ── Company form ───────────────────────────────────────────────────────
   List<Widget> _buildCompanyForm() => [
-    const _SectionHeader(icon: Icons.business_outlined, title: 'Company Details'),
+    _SectionHeader(icon: Icons.business_outlined, title: c('business_details.sec_company')),
     const SizedBox(height: 14),
-    _Field(label: 'Company Name', required: true, controller: _coNameCtrl, hint: 'ABC Pharmaceuticals Pvt. Ltd.', validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null),
+    _Field(label: c('business_details.co_name_label'), required: true, controller: _coNameCtrl, hint: c('business_details.co_name_hint'), validator: (v) => (v == null || v.trim().isEmpty) ? c('business_details.err_required') : null),
     const SizedBox(height: 14),
-    _Field(label: 'Contact Person', required: true, controller: _coContactCtrl, hint: 'Priya Gupta', validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null),
+    _Field(label: c('business_details.co_contact_label'), required: true, controller: _coContactCtrl, hint: c('business_details.co_contact_hint'), validator: (v) => (v == null || v.trim().isEmpty) ? c('business_details.err_required') : null),
     const SizedBox(height: 14),
-    _Field(label: 'Phone', required: true, controller: _coPhoneCtrl, hint: '9876543210', keyboardType: TextInputType.phone, maxLength: 10, inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(10)], validator: (v) { if (v == null || v.trim().isEmpty) return 'Required'; if (v.trim().length != 10) return '10-digit required'; return null; }),
+    _Field(label: c('business_details.co_phone_label'), required: true, controller: _coPhoneCtrl, hint: c('business_details.co_phone_hint'), keyboardType: TextInputType.phone, maxLength: 10, inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(10)], validator: (v) { if (v == null || v.trim().isEmpty) return c('business_details.err_required'); if (v.trim().length != 10) return c('business_details.err_10_digit'); return null; }),
     const SizedBox(height: 14),
-    _Field(label: 'Email Address', required: widget.email.isEmpty, controller: _coEmailCtrl, hint: 'info@company.com', keyboardType: TextInputType.emailAddress, capitalization: TextCapitalization.none, readOnly: widget.email.isNotEmpty, validator: (v) { if (v == null || v.trim().isEmpty) return 'Required'; if (!v.trim().contains('@')) return 'Invalid email'; return null; }),
+    _Field(label: c('business_details.co_email_label'), required: widget.email.isEmpty, controller: _coEmailCtrl, hint: c('business_details.co_email_hint'), keyboardType: TextInputType.emailAddress, capitalization: TextCapitalization.none, readOnly: widget.email.isNotEmpty, validator: (v) { if (v == null || v.trim().isEmpty) return c('business_details.err_required'); if (!v.trim().contains('@')) return c('business_details.err_invalid_email'); return null; }),
     const SizedBox(height: 28),
-    const _SectionHeader(icon: Icons.verified_outlined, title: 'Compliance'),
+    _SectionHeader(icon: Icons.verified_outlined, title: c('business_details.sec_compliance')),
     const SizedBox(height: 14),
-    _Field(label: 'GST Number', controller: _coGstCtrl, hint: '27AAPFU0939F1ZV (optional)', maxLength: 15, capitalization: TextCapitalization.characters),
+    _Field(label: c('business_details.co_gst_label'), controller: _coGstCtrl, hint: c('business_details.co_gst_hint'), maxLength: 15, capitalization: TextCapitalization.characters),
     const SizedBox(height: 14),
-    _Field(label: 'Drug License', controller: _coDlCtrl, hint: 'MH-MUM-123456 (optional)'),
+    _Field(label: c('business_details.co_dl_label'), controller: _coDlCtrl, hint: c('business_details.co_dl_hint')),
     const SizedBox(height: 14),
-    _Field(label: 'Product Categories', controller: _coCategoriesCtrl, hint: 'e.g. OTC, Prescription, Surgical, Diagnostic…', maxLines: 2),
+    _Field(label: c('business_details.co_categories_label'), controller: _coCategoriesCtrl, hint: c('business_details.co_categories_hint'), maxLines: 2),
     const SizedBox(height: 28),
-    const _SectionHeader(icon: Icons.location_on_outlined, title: 'Registered Address'),
+    _SectionHeader(icon: Icons.location_on_outlined, title: c('business_details.sec_registered_address')),
     const SizedBox(height: 14),
-    _Field(label: 'Registered Address', required: true, controller: _coAddressCtrl, hint: 'Plot 12, Pharma Zone, MIDC', maxLines: 2, validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null),
+    _Field(label: c('business_details.co_address_label'), required: true, controller: _coAddressCtrl, hint: c('business_details.co_address_hint'), maxLines: 2, validator: (v) => (v == null || v.trim().isEmpty) ? c('business_details.err_required') : null),
     const SizedBox(height: 14),
     Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Expanded(child: _Field(label: 'City', required: true, controller: _coCityCtrl, hint: 'Pune', validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null)),
+      Expanded(child: _Field(label: c('business_details.co_city_label'), required: true, controller: _coCityCtrl, hint: c('business_details.co_city_hint'), validator: (v) => (v == null || v.trim().isEmpty) ? c('business_details.err_required') : null)),
       const SizedBox(width: 12),
-      Expanded(child: _Field(label: 'State', required: true, controller: _coStateCtrl, hint: 'Maharashtra', validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null)),
+      Expanded(child: _Field(label: c('business_details.co_state_label'), required: true, controller: _coStateCtrl, hint: c('business_details.co_state_hint'), validator: (v) => (v == null || v.trim().isEmpty) ? c('business_details.err_required') : null)),
     ]),
     const SizedBox(height: 14),
-    _Field(label: 'Website', controller: _coWebsiteCtrl, hint: 'https://company.com (optional)', keyboardType: TextInputType.url, capitalization: TextCapitalization.none),
+    _Field(label: c('business_details.co_website_label'), controller: _coWebsiteCtrl, hint: c('business_details.co_website_hint'), keyboardType: TextInputType.url, capitalization: TextCapitalization.none),
   ];
 
   // ── Delivery Partner form ──────────────────────────────────────────────
   List<Widget> _buildDeliveryForm() => [
-    const _SectionHeader(icon: Icons.person_outlined, title: 'Personal Details'),
+    _SectionHeader(icon: Icons.person_outlined, title: c('business_details.sec_personal')),
     const SizedBox(height: 14),
-    _Field(label: 'Full Name', required: true, controller: _dpNameCtrl, hint: 'Suresh Kumar', validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null),
+    _Field(label: c('business_details.dp_name_label'), required: true, controller: _dpNameCtrl, hint: c('business_details.dp_name_hint'), validator: (v) => (v == null || v.trim().isEmpty) ? c('business_details.err_required') : null),
     const SizedBox(height: 14),
-    _Field(label: 'Phone', required: true, controller: _dpPhoneCtrl, hint: '9876543210', keyboardType: TextInputType.phone, maxLength: 10, inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(10)], validator: (v) { if (v == null || v.trim().isEmpty) return 'Required'; if (v.trim().length != 10) return '10-digit required'; return null; }),
+    _Field(label: c('business_details.dp_phone_label'), required: true, controller: _dpPhoneCtrl, hint: c('business_details.dp_phone_hint'), keyboardType: TextInputType.phone, maxLength: 10, inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(10)], validator: (v) { if (v == null || v.trim().isEmpty) return c('business_details.err_required'); if (v.trim().length != 10) return c('business_details.err_10_digit'); return null; }),
     const SizedBox(height: 14),
-    _Field(label: 'Email Address', required: widget.email.isEmpty, controller: _dpEmailCtrl, hint: 'partner@email.com', keyboardType: TextInputType.emailAddress, capitalization: TextCapitalization.none, readOnly: widget.email.isNotEmpty, validator: (v) { if (v == null || v.trim().isEmpty) return 'Required'; if (!v.trim().contains('@')) return 'Invalid email'; return null; }),
+    _Field(label: c('business_details.dp_email_label'), required: widget.email.isEmpty, controller: _dpEmailCtrl, hint: c('business_details.dp_email_hint'), keyboardType: TextInputType.emailAddress, capitalization: TextCapitalization.none, readOnly: widget.email.isNotEmpty, validator: (v) { if (v == null || v.trim().isEmpty) return c('business_details.err_required'); if (!v.trim().contains('@')) return c('business_details.err_invalid_email'); return null; }),
     const SizedBox(height: 28),
-    const _SectionHeader(icon: Icons.delivery_dining_outlined, title: 'Delivery Details'),
+    _SectionHeader(icon: Icons.delivery_dining_outlined, title: c('business_details.sec_delivery')),
     const SizedBox(height: 14),
-    _Dropdown(label: 'Vehicle Type', required: true, value: _dpVehicleType, items: _vehicleTypes, onChanged: (v) => setState(() => _dpVehicleType = v), validator: (v) => v == null ? 'Select vehicle type' : null),
+    _Dropdown(label: c('business_details.dd_vehicle_type'), required: true, value: _dpVehicleType, items: _vehicleTypes, onChanged: (v) => setState(() => _dpVehicleType = v), validator: (v) => v == null ? c('business_details.err_select_vehicle_type') : null),
     const SizedBox(height: 14),
-    _Field(label: 'Delivery Zone / Area', required: true, controller: _dpZoneCtrl, hint: 'e.g. South Mumbai, Andheri-Kurla', validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null),
+    _Field(label: c('business_details.dp_zone_label'), required: true, controller: _dpZoneCtrl, hint: c('business_details.dp_zone_hint'), validator: (v) => (v == null || v.trim().isEmpty) ? c('business_details.err_required') : null),
     const SizedBox(height: 28),
-    const _SectionHeader(icon: Icons.location_on_outlined, title: 'Location'),
+    _SectionHeader(icon: Icons.location_on_outlined, title: c('business_details.sec_location')),
     const SizedBox(height: 14),
-    _Field(label: 'Address', controller: _dpAddressCtrl, hint: 'Residential address (optional)', maxLines: 2),
+    _Field(label: c('business_details.dp_address_label'), controller: _dpAddressCtrl, hint: c('business_details.dp_address_hint'), maxLines: 2),
     const SizedBox(height: 14),
     Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Expanded(child: _Field(label: 'City', required: true, controller: _dpCityCtrl, hint: 'Mumbai', validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null)),
+      Expanded(child: _Field(label: c('business_details.dp_city_label'), required: true, controller: _dpCityCtrl, hint: c('business_details.dp_city_hint'), validator: (v) => (v == null || v.trim().isEmpty) ? c('business_details.err_required') : null)),
       const SizedBox(width: 12),
-      Expanded(child: _Field(label: 'State', required: true, controller: _dpStateCtrl, hint: 'Maharashtra', validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null)),
+      Expanded(child: _Field(label: c('business_details.dp_state_label'), required: true, controller: _dpStateCtrl, hint: c('business_details.dp_state_hint'), validator: (v) => (v == null || v.trim().isEmpty) ? c('business_details.err_required') : null)),
     ]),
     const SizedBox(height: 14),
-    _Dropdown(label: 'ID Proof Type', value: _dpIdProofType, items: _idProofTypes, onChanged: (v) => setState(() => _dpIdProofType = v)),
+    _Dropdown(label: c('business_details.dd_id_proof_type'), value: _dpIdProofType, items: _idProofTypes, onChanged: (v) => setState(() => _dpIdProofType = v)),
   ];
 }
 
@@ -754,7 +780,7 @@ class _Dropdown extends StatelessWidget {
           filled: true,
           fillColor: const Color(0xFFFAFAFA),
         ),
-        hint: const Text('Select…', style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 14)),
+        hint: Text(c('business_details.dropdown_hint'), style: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 14)),
         items: items.map((item) => DropdownMenuItem(value: item, child: Text(item, style: const TextStyle(fontSize: 14)))).toList(),
         onChanged: onChanged,
         validator: validator,

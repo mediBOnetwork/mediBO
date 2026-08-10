@@ -3,6 +3,7 @@
 
 import 'package:flutter/material.dart';
 import '../screens/admin/dispute/dispute_models.dart';
+import '../services/ui_copy.dart';
 import '../utils/render_log.dart';
 import '../utils/toast.dart';
 import '../widgets/dispute_card.dart';
@@ -71,7 +72,7 @@ class _DisputeTokenPageState extends State<DisputeTokenPage> {
       if (!mounted) return;
       // c350_responded: emitted from _respond handler on success (token page)
       RenderLog.write('c350_responded', 'code=$code');
-      showToast(context, 'Response recorded');
+      showToast(context, c('dispute_token_page.response_recorded'));
       await Future.delayed(const Duration(milliseconds: 600));
       if (mounted) _load();
     } on DisputeException catch (e) {
@@ -80,7 +81,7 @@ class _DisputeTokenPageState extends State<DisputeTokenPage> {
       if (mounted) _load();
     } catch (e) {
       if (!mounted) return;
-      showToast(context, 'Error — please try again');
+      showToast(context, c('dispute_token_page.error_try_again'));
     } finally {
       if (mounted) setState(() => _responding.remove(disputeId));
     }
@@ -109,7 +110,7 @@ class _DisputeTokenPageState extends State<DisputeTokenPage> {
             const Icon(Icons.link_off_rounded, size: 56, color: Color(0xFFD97706)),
             const SizedBox(height: 16),
             Text(
-              isInvalid ? 'Link invalid' : 'Unable to load disputes.',
+              isInvalid ? 'Link invalid' : c('dispute_token_page.unable_to_load'),
               style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: _kText),
               textAlign: TextAlign.center,
             ),
@@ -130,7 +131,7 @@ class _DisputeTokenPageState extends State<DisputeTokenPage> {
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                 ),
                 icon: const Icon(Icons.refresh_rounded, size: 16),
-                label: const Text('Retry'),
+                label: Text(c('dispute_token_page.retry')),
               ),
             ],
           ]),
@@ -147,8 +148,8 @@ class _DisputeTokenPageState extends State<DisputeTokenPage> {
         color: const Color(0xFF1B7A43),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('mediBO Dispute Form',
-              style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
+          Text(c('dispute_token_page.title'),
+              style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
           if (_supplierName.isNotEmpty) ...[
             const SizedBox(height: 2),
             Text(_supplierName,
@@ -163,11 +164,11 @@ class _DisputeTokenPageState extends State<DisputeTokenPage> {
           onRefresh: _load,
           color: _kGreen,
           child: _items.isEmpty
-              ? const Center(
+              ? Center(
                   child: Padding(
-                    padding: EdgeInsets.all(32),
-                    child: Text('No active disputes.',
-                        style: TextStyle(fontSize: 16, color: _kSub)),
+                    padding: const EdgeInsets.all(32),
+                    child: Text(c('dispute_token_page.no_active_disputes'),
+                        style: const TextStyle(fontSize: 16, color: _kSub)),
                   ),
                 )
               : Center(

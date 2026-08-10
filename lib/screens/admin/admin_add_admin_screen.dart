@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 
+import '../../services/ui_copy.dart';
 import '../../user_state.dart';
 
 class AdminAddAdminScreen extends StatefulWidget {
@@ -49,7 +50,7 @@ class _AdminAddAdminScreenState extends State<AdminAddAdminScreen> {
   Future<void> _addAdmin() async {
     final email = _emailCtrl.text.trim().toLowerCase();
     if (email.isEmpty || !email.contains('@')) {
-      setState(() => _error = 'Enter a valid email address');
+      setState(() => _error = c('admin_add_admin.err_invalid_email'));
       return;
     }
     setState(() {
@@ -66,21 +67,21 @@ class _AdminAddAdminScreenState extends State<AdminAddAdminScreen> {
       await Supabase.instance.client
           .rpc('admin_add_admin', params: {'p_email': email});
       _emailCtrl.clear();
-      if (mounted) setState(() => _success = '$email added as admin');
+      if (mounted) setState(() => _success = cf('admin_add_admin.success_added', {'email': email}));
       await _loadAdmins();
     } on PostgrestException catch (e) {
       if (e.code == '23505') {
         if (mounted) {
-          setState(() => _error = 'This email is already an admin');
+          setState(() => _error = c('admin_add_admin.err_duplicate'));
         }
       } else {
         if (mounted) {
-          setState(() => _error = 'Failed: ${e.message}');
+          setState(() => _error = cf('admin_add_admin.err_failed', {'msg': e.message}));
         }
       }
     } catch (_) {
       if (mounted) {
-        setState(() => _error = 'Failed to add admin. Please try again.');
+        setState(() => _error = c('admin_add_admin.err_generic'));
       }
     } finally {
       if (mounted) setState(() => _adding = false);
@@ -96,7 +97,7 @@ class _AdminAddAdminScreenState extends State<AdminAddAdminScreen> {
       await _loadAdmins();
     } catch (_) {
       if (mounted) {
-        showToast(context, 'Failed to remove admin', isError: true);
+        showToast(context, c('admin_add_admin.toast_remove_failed'), isError: true);
       }
     }
   }
@@ -116,26 +117,26 @@ class _AdminAddAdminScreenState extends State<AdminAddAdminScreen> {
                 size: 20, color: Color(0xFF1B7A43)),
             onPressed: () => Navigator.of(context).pop(),
           ),
-          title: const Text('Add New Admin',
-              style: TextStyle(
+          title: Text(c('admin_add_admin.title'),
+              style: const TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.w800,
                   color: Color(0xFF111827))),
         ),
-        body: const Center(
+        body: Center(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.lock_outline, size: 48, color: Color(0xFF9CA3AF)),
-              SizedBox(height: 16),
-              Text('Access Restricted',
-                  style: TextStyle(
+              const Icon(Icons.lock_outline, size: 48, color: Color(0xFF9CA3AF)),
+              const SizedBox(height: 16),
+              Text(c('admin_add_admin.denied_title'),
+                  style: const TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.w700,
                       color: Color(0xFF374151))),
-              SizedBox(height: 8),
-              Text('Only super-admins can manage admin accounts.',
-                  style:
+              const SizedBox(height: 8),
+              Text(c('admin_add_admin.denied_body'),
+                  style: const
                       TextStyle(fontSize: 14, color: Color(0xFF9CA3AF))),
             ],
           ),
@@ -154,9 +155,9 @@ class _AdminAddAdminScreenState extends State<AdminAddAdminScreen> {
               size: 20, color: Color(0xFF1B7A43)),
           onPressed: () => Navigator.of(context).pop(),
         ),
-        title: const Text(
-          'Add New Admin',
-          style: TextStyle(
+        title: Text(
+          c('admin_add_admin.title'),
+          style: const TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.w800,
               color: Color(0xFF111827)),
@@ -191,18 +192,18 @@ class _AdminAddAdminScreenState extends State<AdminAddAdminScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      const Text(
-                        'Grant admin access',
-                        style: TextStyle(
+                      Text(
+                        c('admin_add_admin.form_title'),
+                        style: const TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w700,
                           color: Color(0xFF111827),
                         ),
                       ),
                       const SizedBox(height: 4),
-                      const Text(
-                        'The user must sign in with this Google account to access the admin panel.',
-                        style: TextStyle(
+                      Text(
+                        c('admin_add_admin.form_hint'),
+                        style: const TextStyle(
                             fontSize: 12, color: Color(0xFF6B7280)),
                       ),
                       const SizedBox(height: 16),
@@ -212,7 +213,7 @@ class _AdminAddAdminScreenState extends State<AdminAddAdminScreen> {
                         textCapitalization: TextCapitalization.none,
                         style: const TextStyle(fontSize: 14),
                         decoration: InputDecoration(
-                          hintText: 'admin@example.com',
+                          hintText: c('admin_add_admin.email_hint'),
                           hintStyle: const TextStyle(
                               color: Color(0xFF9CA3AF), fontSize: 14),
                           isDense: true,
@@ -270,8 +271,8 @@ class _AdminAddAdminScreenState extends State<AdminAddAdminScreen> {
                                   child: CircularProgressIndicator(
                                       color: Colors.white, strokeWidth: 2.5),
                                 )
-                              : const Text('Add Admin',
-                                  style: TextStyle(
+                              : Text(c('admin_add_admin.btn_add'),
+                                  style: const TextStyle(
                                       fontWeight: FontWeight.w700)),
                         ),
                       ),
@@ -284,9 +285,9 @@ class _AdminAddAdminScreenState extends State<AdminAddAdminScreen> {
                 // ── Current admins list ─────────────────────────────────
                 Row(
                   children: [
-                    const Text(
-                      'Current admins',
-                      style: TextStyle(
+                    Text(
+                      c('admin_add_admin.list_title'),
+                      style: const TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w700,
                         color: Color(0xFF374151),
@@ -297,16 +298,16 @@ class _AdminAddAdminScreenState extends State<AdminAddAdminScreen> {
                       onPressed: _loadAdmins,
                       icon: const Icon(Icons.refresh,
                           size: 18, color: Color(0xFF9CA3AF)),
-                      tooltip: 'Refresh',
+                      tooltip: c('admin_add_admin.tooltip_refresh'),
                       padding: EdgeInsets.zero,
                       constraints: const BoxConstraints(),
                     ),
                   ],
                 ),
                 const SizedBox(height: 4),
-                const Text(
-                  'Super-admins are hardcoded and not listed here.',
-                  style: TextStyle(
+                Text(
+                  c('admin_add_admin.list_note'),
+                  style: const TextStyle(
                       fontSize: 11, color: Color(0xFF9CA3AF)),
                 ),
                 const SizedBox(height: 12),
@@ -327,9 +328,9 @@ class _AdminAddAdminScreenState extends State<AdminAddAdminScreen> {
                       borderRadius: BorderRadius.circular(10),
                       border: Border.all(color: const Color(0xFFE5E7EB)),
                     ),
-                    child: const Text(
-                      'No admins added yet.',
-                      style: TextStyle(
+                    child: Text(
+                      c('admin_add_admin.list_empty'),
+                      style: const TextStyle(
                           fontSize: 13, color: Color(0xFF9CA3AF)),
                       textAlign: TextAlign.center,
                     ),
@@ -383,7 +384,7 @@ class _AdminAddAdminScreenState extends State<AdminAddAdminScreen> {
                                             )),
                                         if (addedBy.isNotEmpty)
                                           Text(
-                                            'Added by $addedBy',
+                                            cf('admin_add_admin.added_by', {'who': addedBy}),
                                             style: const TextStyle(
                                               fontSize: 11,
                                               color: Color(0xFF9CA3AF),
@@ -397,7 +398,7 @@ class _AdminAddAdminScreenState extends State<AdminAddAdminScreen> {
                                         Icons.remove_circle_outline,
                                         size: 18,
                                         color: Color(0xFFDC2626)),
-                                    tooltip: 'Remove admin',
+                                    tooltip: c('admin_add_admin.tooltip_remove'),
                                     onPressed: () =>
                                         _confirmRemove(context, email),
                                   ),
@@ -428,16 +429,16 @@ class _AdminAddAdminScreenState extends State<AdminAddAdminScreen> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Remove admin?',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+        title: Text(c('admin_add_admin.confirm_title'),
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
         content: Text(
-          'Remove admin access for $email?\nThey will no longer see the admin panel.',
+          cf('admin_add_admin.confirm_body', {'email': email}),
           style: const TextStyle(fontSize: 14),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Cancel'),
+            child: Text(c('admin_add_admin.btn_cancel')),
           ),
           FilledButton(
             style: FilledButton.styleFrom(
@@ -446,7 +447,7 @@ class _AdminAddAdminScreenState extends State<AdminAddAdminScreen> {
               Navigator.of(ctx).pop();
               _removeAdmin(email);
             },
-            child: const Text('Remove'),
+            child: Text(c('admin_add_admin.btn_remove')),
           ),
         ],
       ),

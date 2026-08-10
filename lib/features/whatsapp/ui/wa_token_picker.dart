@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../../services/ui_copy.dart';
 import '../data/wa_template_api.dart';
 import 'wa_template_bits.dart';
 
@@ -327,7 +328,7 @@ class _WaTokenPickerState extends State<WaTokenPicker> {
             OutlinedButton.icon(
               onPressed: () => _openForm(),
               icon: const Icon(Icons.add, size: 16),
-              label: const Text('Add a value'),
+              label: Text(c('wa_token_picker.add_a_value')),
               style: OutlinedButton.styleFrom(
                 foregroundColor: const Color(0xFF1B7A43),
                 side: const BorderSide(color: Color(0xFF1B7A43)),
@@ -345,7 +346,7 @@ class _WaTokenPickerState extends State<WaTokenPicker> {
             lines: (_notice!['lines'] as List).cast<String>(),
             action: TextButton(
               onPressed: () => setState(() => _notice = null),
-              child: const Text('Dismiss'),
+              child: Text(c('wa_token_picker.dismiss')),
             ),
           ),
         ],
@@ -379,7 +380,7 @@ class _WaTokenPickerState extends State<WaTokenPicker> {
         onChanged: _onSearchChanged,
         style: const TextStyle(fontSize: 15, color: Color(0xFF111827)),
         decoration: InputDecoration(
-          hintText: 'Search values',
+          hintText: c('wa_token_picker.search_values'),
           hintStyle: const TextStyle(color: Color(0xFF9CA3AF)),
           prefixIcon: const Icon(Icons.search, size: 18, color: Color(0xFF9CA3AF)),
           filled: true,
@@ -418,7 +419,7 @@ class _WaTokenPickerState extends State<WaTokenPicker> {
               child: OutlinedButton.icon(
                 onPressed: _askAi,
                 icon: const Icon(Icons.auto_awesome, size: 16),
-                label: const Text('Ask AI to find it'),
+                label: Text(c('wa_token_picker.ask_ai_to_find_it')),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: const Color(0xFF1B7A43),
                   side: const BorderSide(color: Color(0xFF1B7A43)),
@@ -604,7 +605,7 @@ class _WaTokenPickerState extends State<WaTokenPicker> {
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(8)),
               ),
-              child: const Text('Create and insert'),
+              child: Text(c('wa_token_picker.create_and_insert')),
             ),
           ),
         ],
@@ -686,14 +687,14 @@ class _ValueTile extends StatelessWidget {
                     if (v == 'delete') onDelete();
                   },
                   itemBuilder: (_) => [
-                    const PopupMenuItem(value: 'edit', child: Text('Edit')),
+                    PopupMenuItem(value: 'edit', child: Text(c('wa_token_picker.edit'))),
                     PopupMenuItem(
                       value: 'toggle',
                       child: Text(enabled ? 'Disable' : 'Enable'),
                     ),
                     if (canDelete)
-                      const PopupMenuItem(
-                          value: 'delete', child: Text('Delete')),
+                      PopupMenuItem(
+                          value: 'delete', child: Text(c('wa_token_picker.delete'))),
                   ],
                 ),
               ],
@@ -709,7 +710,7 @@ class _ValueTile extends StatelessWidget {
             if (usedIn > 0)
               Padding(
                 padding: const EdgeInsets.only(top: 6),
-                child: Text('used in $usedIn templates',
+                child: Text(cf('wa_token_picker.used_in_templates', {'a': '$usedIn'}),
                     style: const TextStyle(
                         fontSize: 12, color: Color(0xFF6B7280))),
               ),
@@ -827,7 +828,7 @@ class _WaValueFormState extends State<WaValueForm> {
       backgroundColor: Colors.white,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       title: Text(
-        widget.row == null ? 'Add a value' : 'Edit',
+        widget.row == null ? c('wa_token_picker.add_a_value') : c('wa_token_picker.edit'),
         style: const TextStyle(
             fontSize: 18, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
       ),
@@ -893,7 +894,7 @@ class _WaValueFormState extends State<WaValueForm> {
             shape:
                 RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           ),
-          child: const Text('Save'),
+          child: Text(c('wa_token_picker.save')),
         ),
       ],
     );

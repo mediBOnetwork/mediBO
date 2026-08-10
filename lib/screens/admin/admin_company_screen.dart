@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../services/ui_copy.dart';
 import '../../user_state.dart';
 
 class AdminCompanyScreen extends StatefulWidget {
@@ -75,7 +76,7 @@ class _AdminCompanyScreenState extends State<AdminCompanyScreen> with SingleTick
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,
-        title: const Text('Company Registrations', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+        title: Text(c('admin_company.title'), style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
         bottom: TabBar(
           controller: _tab,
           labelStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
@@ -84,13 +85,13 @@ class _AdminCompanyScreenState extends State<AdminCompanyScreen> with SingleTick
           labelColor: const Color(0xFF1B5E20),
           unselectedLabelColor: const Color(0xFF6B7280),
           tabs: [
-            Tab(text: 'Pending (${_pending.length})'),
-            Tab(text: 'Approved (${_approved.length})'),
-            Tab(text: 'Rejected (${_rejected.length})'),
+            Tab(text: cf('admin_company.tab_pending', {'n': '${_pending.length}'})),
+            Tab(text: cf('admin_company.tab_approved', {'n': '${_approved.length}'})),
+            Tab(text: cf('admin_company.tab_rejected', {'n': '${_rejected.length}'})),
           ],
         ),
         actions: [
-          IconButton(icon: const Icon(Icons.refresh, color: Color(0xFF374151)), onPressed: _load, tooltip: 'Refresh'),
+          IconButton(icon: const Icon(Icons.refresh, color: Color(0xFF374151)), onPressed: _load, tooltip: c('admin_company.tooltip_refresh')),
         ],
       ),
       body: _loading
@@ -108,7 +109,7 @@ class _AdminCompanyScreenState extends State<AdminCompanyScreen> with SingleTick
       return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
         const Icon(Icons.business_outlined, size: 48, color: Color(0xFFD1D5DB)),
         const SizedBox(height: 12),
-        Text(showActions ? 'No pending company registrations' : 'No records here', style: const TextStyle(fontSize: 15, color: Color(0xFF6B7280))),
+        Text(showActions ? c('admin_company.empty_pending') : c('admin_company.empty_other'), style: const TextStyle(fontSize: 15, color: Color(0xFF6B7280))),
       ]));
     }
     return ListView.separated(
@@ -134,11 +135,11 @@ class _AdminCompanyScreenState extends State<AdminCompanyScreen> with SingleTick
           _InfoRow(icon: Icons.location_city_outlined, text: '${r['city'] ?? '—'}, ${r['state'] ?? '—'}'),
           _InfoRow(icon: Icons.phone_outlined, text: r['phone'] ?? '—'),
           if ((r['email'] ?? '').isNotEmpty) _InfoRow(icon: Icons.email_outlined, text: r['email']),
-          if ((r['gst_no'] ?? '').isNotEmpty) _InfoRow(icon: Icons.receipt_outlined, text: 'GST: ${r['gst_no']}'),
-          if ((r['drug_license'] ?? '').isNotEmpty) _InfoRow(icon: Icons.verified_outlined, text: 'DL: ${r['drug_license']}'),
+          if ((r['gst_no'] ?? '').isNotEmpty) _InfoRow(icon: Icons.receipt_outlined, text: cf('admin_company.gst_prefix', {'v': '${r['gst_no']}'})),
+          if ((r['drug_license'] ?? '').isNotEmpty) _InfoRow(icon: Icons.verified_outlined, text: cf('admin_company.dl_prefix', {'v': '${r['drug_license']}'})),
           if ((r['product_categories'] ?? '').isNotEmpty) _InfoRow(icon: Icons.category_outlined, text: r['product_categories']),
           if ((r['website'] ?? '').isNotEmpty) _InfoRow(icon: Icons.language_outlined, text: r['website']),
-          if ((r['reviewed_by'] ?? '').isNotEmpty) _InfoRow(icon: Icons.admin_panel_settings_outlined, text: 'Reviewed by: ${r['reviewed_by']}', subtle: true),
+          if ((r['reviewed_by'] ?? '').isNotEmpty) _InfoRow(icon: Icons.admin_panel_settings_outlined, text: cf('admin_company.reviewed_by', {'v': '${r['reviewed_by']}'}), subtle: true),
           if (showActions) ...[
             const SizedBox(height: 14),
             const Divider(height: 1, color: Color(0xFFE5E7EB)),
@@ -147,14 +148,14 @@ class _AdminCompanyScreenState extends State<AdminCompanyScreen> with SingleTick
               Expanded(child: OutlinedButton.icon(
                 onPressed: () => _review(r, 'rejected'),
                 icon: const Icon(Icons.close, size: 16),
-                label: const Text('Reject'),
+                label: Text(c('admin_company.btn_reject')),
                 style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF991B1B), side: const BorderSide(color: Color(0xFF991B1B)), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
               )),
               const SizedBox(width: 12),
               Expanded(child: FilledButton.icon(
                 onPressed: () => _review(r, 'approved'),
                 icon: const Icon(Icons.check, size: 16),
-                label: const Text('Approve'),
+                label: Text(c('admin_company.btn_approve')),
                 style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B5E20), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
               )),
             ]),

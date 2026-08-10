@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 
 /// One item in an admin nav surface.
@@ -19,13 +20,14 @@ class AdminNavEntry {
 /// and the profile chip already needs nearly all of it. Anything added here
 /// clips rather than wraps — which is why the WhatsApp screens live in
 /// [kAdminOverflowNav] behind a "More" popup instead of as two more links.
-const kAdminTopNav = <AdminNavEntry>[
-  AdminNavEntry('Dashboard', Icons.dashboard_outlined),
-  AdminNavEntry('WhatsApp', Icons.forum_outlined),
-  AdminNavEntry('Customers', Icons.people_outline),
-  AdminNavEntry('Suppliers', Icons.inventory_2_outlined),
-  AdminNavEntry('Fulfillment', Icons.local_shipping_outlined),
-];
+List<AdminNavEntry> get kAdminTopNav => <AdminNavEntry>[
+      AdminNavEntry(c('admin_nav.top_dashboard'), Icons.dashboard_outlined),
+      AdminNavEntry(c('admin_nav.top_whatsapp'), Icons.forum_outlined),
+      AdminNavEntry(c('admin_nav.top_customers'), Icons.people_outline),
+      AdminNavEntry(c('admin_nav.top_suppliers'), Icons.inventory_2_outlined),
+      AdminNavEntry(
+          c('admin_nav.top_fulfillment'), Icons.local_shipping_outlined),
+    ];
 
 /// The NARROW shell's bottom bar, in render order. Five tabs is the ceiling —
 /// a sixth makes every label wrap at 360 px. New destinations go in the profile
@@ -34,13 +36,14 @@ const kAdminTopNav = <AdminNavEntry>[
 /// Note the last label is 'Fulfill', not 'Fulfillment': it is the only one that
 /// fits the narrow tab. That is why this list is separate from [kAdminTopNav]
 /// rather than shared.
-const kAdminBottomNav = <AdminNavEntry>[
-  AdminNavEntry('Dashboard', Icons.dashboard_outlined),
-  AdminNavEntry('WhatsApp', Icons.forum_outlined),
-  AdminNavEntry('Customers', Icons.people_outline),
-  AdminNavEntry('Suppliers', Icons.inventory_2_outlined),
-  AdminNavEntry('Fulfill', Icons.local_shipping_outlined),
-];
+List<AdminNavEntry> get kAdminBottomNav => <AdminNavEntry>[
+      AdminNavEntry(c('admin_nav.bottom_dashboard'), Icons.dashboard_outlined),
+      AdminNavEntry(c('admin_nav.bottom_whatsapp'), Icons.forum_outlined),
+      AdminNavEntry(c('admin_nav.bottom_customers'), Icons.people_outline),
+      AdminNavEntry(c('admin_nav.bottom_suppliers'), Icons.inventory_2_outlined),
+      AdminNavEntry(
+          c('admin_nav.bottom_fulfill'), Icons.local_shipping_outlined),
+    ];
 
 /// Destinations that do not fit the top row, shown in its "More" popup AND —
 /// as the same list, not a second copy — in the mobile profile sheet via
@@ -55,21 +58,28 @@ const kAdminBottomNav = <AdminNavEntry>[
 /// Every entry MUST have a `route`, and that key MUST have a case in
 /// `_handleAdminNav` in home_shell.dart. A key with no case renders a perfect
 /// row that does nothing on tap — the #645/#646 bug, three deploys deep.
-const kAdminOverflowNav = <AdminNavEntry>[
-  AdminNavEntry('WhatsApp Templates', Icons.description_outlined,
-      route: 'wa_templates'),
-  AdminNavEntry('WhatsApp Campaigns', Icons.campaign_outlined,
-      route: 'wa_campaigns'),
-  AdminNavEntry('Segments', Icons.filter_alt_outlined, route: 'wa_segments'),
-  AdminNavEntry('Sequences', Icons.timeline_outlined, route: 'wa_drips'),
-  AdminNavEntry('WhatsApp Ops', Icons.settings_suggest_outlined,
-      route: 'wa_ops'),
-  // Sibling of registration approvals: the customer account/data-deletion
-  // queue. Its badge count comes from admin_deletion_request_count(), passed in
-  // as a plain int so this file keeps its Supabase-free, VM-testable isolation.
-  AdminNavEntry('Deletion Requests', Icons.person_remove_outlined,
-      route: 'deletion_requests'),
-];
+List<AdminNavEntry> get kAdminOverflowNav => <AdminNavEntry>[
+      AdminNavEntry(
+          c('admin_nav.overflow_wa_templates'), Icons.description_outlined,
+          route: 'wa_templates'),
+      AdminNavEntry(
+          c('admin_nav.overflow_wa_campaigns'), Icons.campaign_outlined,
+          route: 'wa_campaigns'),
+      AdminNavEntry(c('admin_nav.overflow_segments'), Icons.filter_alt_outlined,
+          route: 'wa_segments'),
+      AdminNavEntry(c('admin_nav.overflow_sequences'), Icons.timeline_outlined,
+          route: 'wa_drips'),
+      AdminNavEntry(
+          c('admin_nav.overflow_wa_ops'), Icons.settings_suggest_outlined,
+          route: 'wa_ops'),
+      // Sibling of registration approvals: the customer account/data-deletion
+      // queue (CHANGE #681). Badge count comes from
+      // admin_deletion_request_count(), passed in as a plain int so this file
+      // keeps its Supabase-free, VM-testable isolation.
+      AdminNavEntry(c('admin_nav.overflow_deletion_requests'),
+          Icons.person_remove_outlined,
+          route: 'deletion_requests'),
+    ];
 
 /// The wide shell's "More" popup, sitting after Fulfillment in the top row.
 ///
@@ -90,7 +100,7 @@ class AdminMoreNavMenu extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return PopupMenuButton<String>(
-      tooltip: 'More',
+      tooltip: c('admin_nav.more_tooltip'),
       offset: const Offset(0, 40),
       onSelected: onNav,
       itemBuilder: (_) => [
@@ -115,15 +125,15 @@ class AdminMoreNavMenu extends StatelessWidget {
             ]),
           ),
       ],
-      child: const Padding(
-        padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.more_horiz, size: 16, color: Color(0xFF374151)),
-            SizedBox(width: 5),
-            Text('More',
-                style: TextStyle(
+            const Icon(Icons.more_horiz, size: 16, color: Color(0xFF374151)),
+            const SizedBox(width: 5),
+            Text(c('admin_nav.more_label'),
+                style: const TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w500,
                     color: Color(0xFF374151))),
@@ -173,7 +183,7 @@ class AdminProfileMenuTiles extends StatelessWidget {
         if (isSuperAdmin)
           AdminSheetTile(
             icon: Icons.admin_panel_settings_outlined,
-            label: 'Manage Admins',
+            label: c('admin_nav.tile_manage_admins'),
             color: const Color(0xFF1B7A43),
             onTap: () { Navigator.pop(context); nav('manage_admins'); },
           ),
@@ -182,40 +192,40 @@ class AdminProfileMenuTiles extends StatelessWidget {
             RenderLog.write('c209_upi_tile_rendered', 1);
             return AdminSheetTile(
               icon: Icons.qr_code_outlined,
-              label: 'Payment and Partner',
+              label: c('admin_nav.tile_payment_partner'),
               color: const Color(0xFF1B7A43),
               onTap: () { Navigator.pop(context); nav('payment_upi'); },
             );
           }),
         AdminSheetTile(
           icon: Icons.add_business_outlined,
-          label: 'Add Supplier',
+          label: c('admin_nav.tile_add_supplier'),
           onTap: () { Navigator.pop(context); nav('add_supplier'); },
         ),
         AdminSheetTile(
           icon: Icons.person_add_outlined,
-          label: 'Add Customer',
+          label: c('admin_nav.tile_add_customer'),
           onTap: () { Navigator.pop(context); nav('add_customer'); },
         ),
         Builder(builder: (_) { RenderLog.write('c206_dropdown_addmed', 1); return const SizedBox.shrink(); }),
         AdminSheetTile(
           icon: Icons.medication_outlined,
-          label: 'Add Medicine',
+          label: c('admin_nav.tile_add_medicine'),
           onTap: () { Navigator.pop(context); nav('add_medicine'); },
         ),
         AdminSheetTile(
           icon: Icons.badge_outlined,
-          label: 'MR Registrations',
+          label: c('admin_nav.tile_mr_registrations'),
           onTap: () { Navigator.pop(context); nav('mr'); },
         ),
         AdminSheetTile(
           icon: Icons.business_outlined,
-          label: 'Company Registrations',
+          label: c('admin_nav.tile_company_registrations'),
           onTap: () { Navigator.pop(context); nav('companies'); },
         ),
         AdminSheetTile(
           icon: Icons.delivery_dining_outlined,
-          label: 'Delivery Partners',
+          label: c('admin_nav.tile_delivery_partners'),
           onTap: () { Navigator.pop(context); nav('delivery_partners'); },
         ),
         // #645/#646 shipped the WhatsApp screens but wired them only into

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 
 class SupplierHomeScreen extends StatefulWidget {
@@ -108,7 +109,7 @@ class _SupplierHomeScreenState extends State<SupplierHomeScreen> {
           controller: _searchCtrl,
           onChanged: _onSearchChanged,
           decoration: InputDecoration(
-            hintText: 'Search medicines from your companies…',
+            hintText: c('supplier_home.search_hint'),
             hintStyle: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 14),
             prefixIcon: const Icon(Icons.search, color: Color(0xFF6B7280), size: 20),
             suffixIcon: _currentSearch.isNotEmpty
@@ -170,17 +171,17 @@ class _SupplierHomeScreenState extends State<SupplierHomeScreen> {
         const SizedBox(height: 12),
         Text(
           _currentSearch.isNotEmpty
-              ? 'No medicines match "$_currentSearch"'
-              : 'No medicines from your stocked companies yet.',
+              ? cf('supplier_home.empty_search', {'query': _currentSearch})
+              : c('supplier_home.empty_no_companies'),
           textAlign: TextAlign.center,
           style: const TextStyle(fontSize: 14, color: Color(0xFF6B7280)),
         ),
         if (_currentSearch.isEmpty) ...[
           const SizedBox(height: 6),
-          const Text(
-            'Ask your admin to link companies to your profile.',
+          Text(
+            c('supplier_home.empty_no_companies_hint'),
             textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)),
+            style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)),
           ),
         ],
       ]),
@@ -249,7 +250,7 @@ class _SupplierMedicineCard extends StatelessWidget {
           const SizedBox(height: 6),
           // MRP
           if (mrp.isNotEmpty)
-            Text('MRP ₹$mrp',
+            Text(cf('supplier_home.mrp', {'mrp': mrp}),
               style: const TextStyle(
                 fontSize: 13, color: Color(0xFF111827), fontWeight: FontWeight.w600,
               ),

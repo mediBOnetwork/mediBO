@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../services/ui_copy.dart';
 import '../utils/payment_proof.dart';
 import '../utils/render_log.dart';
 import 'fullscreen_image.dart';
@@ -140,12 +141,12 @@ class _PaymentProofImageState extends State<PaymentProofImage> {
           width: double.infinity,
           height: widget.fixedHeight ?? 120,
           decoration: box,
-          child: const Center(
+          child: Center(
             child: Column(mainAxisSize: MainAxisSize.min, children: [
-              Icon(Icons.refresh, size: 20, color: Color(0xFF9CA3AF)),
-              SizedBox(height: 4),
-              Text("Couldn't load proof — tap to retry",
-                  style: TextStyle(fontSize: 11.5, color: Color(0xFF6B7280)),
+              const Icon(Icons.refresh, size: 20, color: Color(0xFF9CA3AF)),
+              const SizedBox(height: 4),
+              Text(c('payment_proof.err_load_retry'),
+                  style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280)),
                   textAlign: TextAlign.center),
             ]),
           ),

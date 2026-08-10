@@ -34,6 +34,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'ui_copy_fixture.dart';
+
 import 'package:pharma_b2b/features/whatsapp/ui/wa_campaign_chips.dart';
 import 'package:pharma_b2b/screens/admin/wa_campaigns_screen.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
@@ -148,6 +150,7 @@ Future<void> _pump(
 }
 
 void main() {
+  setUp(seedUiCopy);
   // No network from the protected suite: RenderLog's debounced Supabase flush
   // is a real Timer and would outlive the widget tree.
   setUpAll(() => RenderLog.flushEnabled = false);

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 import 'bag_print.dart';
 
@@ -94,7 +95,7 @@ class _BagsScreenState extends State<BagsScreen> {
         _filtered = _applyFilter(_bags, _query);
       });
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not update bag status')),
+        SnackBar(content: Text(c('bags.snack_status_failed'))),
       );
     }
   }
@@ -102,7 +103,7 @@ class _BagsScreenState extends State<BagsScreen> {
   Future<void> _showPrintDialog() async {
     if (_filtered.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No bags to print')),
+        SnackBar(content: Text(c('bags.snack_nothing_to_print'))),
       );
       return;
     }
@@ -120,8 +121,8 @@ class _BagsScreenState extends State<BagsScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Print bags',
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+                  Text(c('bags.print_dialog_title'),
+                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
                   const SizedBox(height: 16),
                   Wrap(
                     spacing: 10,
@@ -132,7 +133,7 @@ class _BagsScreenState extends State<BagsScreen> {
                           Navigator.pop(ctx);
                           _printBags(n);
                         },
-                        child: Text('${n}B'),
+                        child: Text(cf('bags.print_density_option', {'n': '$n'})),
                       );
                     }).toList(),
                   ),
@@ -147,7 +148,8 @@ class _BagsScreenState extends State<BagsScreen> {
 
   Future<void> _printBags(int perPage) async {
     final items = _filtered
-        .map((b) => BagPrintItem('Bag ${b['bag_no']}', b['bag_code'] as String))
+        .map((b) => BagPrintItem(
+            cf('bags.bag_label', {'no': '${b['bag_no']}'}), b['bag_code'] as String))
         .toList();
     RenderLog.write('c383_bags_print', 'perPage=$perPage;count=${items.length}');
     if (!mounted) return;
@@ -175,12 +177,12 @@ class _BagsScreenState extends State<BagsScreen> {
       appBar: AppBar(
         backgroundColor: const Color(0xFF1B7A43),
         foregroundColor: Colors.white,
-        title: const Text('Bags', style: TextStyle(fontWeight: FontWeight.w700)),
+        title: Text(c('bags.page_title'), style: const TextStyle(fontWeight: FontWeight.w700)),
         elevation: 0,
         actions: [
           IconButton(
             icon: const Icon(Icons.print),
-            tooltip: 'Print bags',
+            tooltip: c('bags.tooltip_print'),
             onPressed: _showPrintDialog,
           ),
         ],
@@ -194,7 +196,7 @@ class _BagsScreenState extends State<BagsScreen> {
                   controller: _searchCtrl,
                   onChanged: _onSearch,
                   decoration: InputDecoration(
-                    hintText: 'Search bag number…',
+                    hintText: c('bags.search_hint'),
                     prefixIcon: const Icon(Icons.search, color: Color(0xFF6B7280)),
                     filled: true,
                     fillColor: Colors.white,
@@ -260,7 +262,7 @@ class _BagCard extends StatelessWidget {
           padding: const EdgeInsets.symmetric(vertical: 8),
           color: kBagHeaderGreen,
           child: Text(
-            'Bag $bagNo',
+            cf('bags.bag_label', {'no': '$bagNo'}),
             textAlign: TextAlign.center,
             style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 16),
           ),
@@ -307,7 +309,7 @@ class _StatusBadge extends StatelessWidget {
           ),
           const SizedBox(width: 5),
           Text(
-            isFull ? 'Full' : 'Empty',
+            isFull ? c('bags.status_full') : c('bags.status_empty'),
             style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w600,

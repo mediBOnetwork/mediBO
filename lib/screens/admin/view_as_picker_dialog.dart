@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 import '../../view_as_state.dart';
 
@@ -64,10 +65,10 @@ class _ViewAsPickerDialogState extends State<_ViewAsPickerDialog> {
 
   String get _roleLabel {
     switch (widget.role) {
-      case ViewAsRole.supplier:        return 'Supplier';
-      case ViewAsRole.customer:        return 'Customer';
-      case ViewAsRole.company:         return 'Company';
-      case ViewAsRole.deliveryPartner: return 'Delivery Partner';
+      case ViewAsRole.supplier:        return c('view_as_picker.role_supplier');
+      case ViewAsRole.customer:        return c('view_as_picker.role_customer');
+      case ViewAsRole.company:         return c('view_as_picker.role_company');
+      case ViewAsRole.deliveryPartner: return c('view_as_picker.role_delivery_partner');
     }
   }
 
@@ -111,7 +112,7 @@ class _ViewAsPickerDialogState extends State<_ViewAsPickerDialog> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'View As $_roleLabel',
+                      cf('view_as_picker.title', {'role': _roleLabel}),
                       style: const TextStyle(
                         fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827),
                       ),
@@ -131,7 +132,7 @@ class _ViewAsPickerDialogState extends State<_ViewAsPickerDialog> {
                 controller: _searchCtrl,
                 autofocus: true,
                 decoration: InputDecoration(
-                  hintText: 'Search by name or email…',
+                  hintText: c('view_as_picker.search_hint'),
                   hintStyle: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 14),
                   prefixIcon: const Icon(Icons.search, size: 18, color: Color(0xFF6B7280)),
                   filled: true,
@@ -149,9 +150,9 @@ class _ViewAsPickerDialogState extends State<_ViewAsPickerDialog> {
               child: _loading
                   ? const Center(child: CircularProgressIndicator(color: Color(0xFFD97706)))
                   : _error != null
-                      ? Center(child: Text('Error: $_error', style: const TextStyle(color: Color(0xFF991B1B), fontSize: 13)))
+                      ? Center(child: Text(cf('view_as_picker.error', {'msg': '$_error'}), style: const TextStyle(color: Color(0xFF991B1B), fontSize: 13)))
                       : _items.isEmpty
-                          ? const Center(child: Text('No accounts found.', style: TextStyle(color: Color(0xFF6B7280), fontSize: 14)))
+                          ? Center(child: Text(c('view_as_picker.empty'), style: const TextStyle(color: Color(0xFF6B7280), fontSize: 14)))
                           : ListView.separated(
                               padding: const EdgeInsets.symmetric(vertical: 4),
                               itemCount: _items.length,
@@ -164,7 +165,7 @@ class _ViewAsPickerDialogState extends State<_ViewAsPickerDialog> {
                                 final id    = item['id']    as String? ?? '';
                                 return ListTile(
                                   dense: true,
-                                  title: Text(name.isNotEmpty ? name : '(no name)',
+                                  title: Text(name.isNotEmpty ? name : c('view_as_picker.no_name'),
                                     style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
                                   subtitle: Text(
                                     [if (email.isNotEmpty) email, if (city.isNotEmpty) city].join(' · '),

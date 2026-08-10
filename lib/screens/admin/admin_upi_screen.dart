@@ -10,6 +10,7 @@ import 'package:pharma_b2b/utils/toast.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/utils/bill_mime.dart';
 import 'package:pharma_b2b/widgets/fullscreen_image.dart';
+import 'package:pharma_b2b/services/ui_copy.dart';
 
 class AdminUpiScreen extends StatefulWidget {
   // Injected RPCs — tests stub these; production leaves them null and hits
@@ -140,7 +141,7 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
       _pnCtrl.clear();
       setState(() { _makeActive = true; _adding = false; });
       await _fetchList();
-      if (mounted) showToast(context, 'UPI added');
+      if (mounted) showToast(context, c('admin_upi_screen.toast_upi_added'));
     } catch (e) {
       if (!mounted) return;
       RenderLog.write('c208_upi_error', 1);
@@ -158,7 +159,7 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
       if (!mounted) return;
       RenderLog.write('c208_upi_set_active', 1);
       await _fetchList();
-      if (mounted) showToast(context, 'Active UPI updated');
+      if (mounted) showToast(context, c('admin_upi_screen.toast_active_upi_updated'));
     } catch (e) {
       if (!mounted) return;
       RenderLog.write('c208_upi_error', 1);
@@ -174,14 +175,14 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
       context: context,
       builder: (_) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: const Text('Remove this UPI?',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-        content: const Text('This cannot be undone.',
-            style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
+        title: Text(c('admin_upi_screen.remove_upi_title'),
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+        content: Text(c('admin_upi_screen.this_cannot_be_undone'),
+            style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+            child: Text(c('admin_upi_screen.btn_cancel')),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
@@ -190,7 +191,7 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
               elevation: 0,
             ),
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Remove'),
+            child: Text(c('admin_upi_screen.btn_remove')),
           ),
         ],
       ),
@@ -206,7 +207,7 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
       if (!mounted) return;
       RenderLog.write('c208_upi_removed', 1);
       await _fetchList();
-      if (mounted) showToast(context, 'UPI removed');
+      if (mounted) showToast(context, c('admin_upi_screen.toast_upi_removed'));
     } catch (e) {
       if (!mounted) return;
       RenderLog.write('c208_upi_error', 1);
@@ -223,7 +224,7 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
     if (msg.contains('invalid_upi')) return 'Enter a valid UPI ID (must contain @).';
     if (msg.contains('invalid_name')) return 'Enter the payee name.';
     if (msg.contains('not_found')) return 'That UPI was already removed.';
-    return 'Something went wrong. Please try again.';
+    return c('admin_upi_screen.generic_error');
   }
 
   // ── Data: Partner ────────────────────────────────────────────────────────
@@ -273,7 +274,7 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _partnersLoading = false);
-      showToast(context, 'Could not load partner details', isError: true);
+      showToast(context, c('admin_upi_screen.could_not_load_partner'), isError: true);
     }
   }
 
@@ -288,7 +289,7 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
       }
       if (data['ok'] == true) await _fetchPartnerData();
     } catch (e) {
-      if (mounted) showToast(context, 'Something went wrong. Please try again.', isError: true);
+      if (mounted) showToast(context, c('admin_upi_screen.generic_error'), isError: true);
     }
     if (mounted) setState(() => _partnerBusy.remove(area));
   }
@@ -298,14 +299,14 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
       context: context,
       builder: (_) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: const Text('Remove this partner?',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-        content: const Text('This cannot be undone.',
-            style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
+        title: Text(c('admin_upi_screen.remove_partner_title'),
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+        content: Text(c('admin_upi_screen.this_cannot_be_undone'),
+            style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+            child: Text(c('admin_upi_screen.btn_cancel')),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
@@ -314,7 +315,7 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
               elevation: 0,
             ),
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Remove'),
+            child: Text(c('admin_upi_screen.btn_remove')),
           ),
         ],
       ),
@@ -333,7 +334,7 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
       }
       if (data['ok'] == true) await _fetchPartnerData();
     } catch (e) {
-      if (mounted) showToast(context, 'Something went wrong. Please try again.', isError: true);
+      if (mounted) showToast(context, c('admin_upi_screen.generic_error'), isError: true);
     }
     if (mounted) setState(() => _partnerBusy.remove(area));
   }
@@ -400,7 +401,7 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
       }
       if (saveData['ok'] == true) await _fetchPartnerData();
     } catch (e) {
-      if (mounted) showToast(context, 'Something went wrong. Please try again.', isError: true);
+      if (mounted) showToast(context, c('admin_upi_screen.generic_error'), isError: true);
     }
     if (mounted) setState(() => _docBusy.remove(busyKey));
   }
@@ -413,14 +414,14 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
       context: context,
       builder: (_) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: const Text('Remove this document?',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-        content: const Text('This cannot be undone.',
-            style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
+        title: Text(c('admin_upi_screen.remove_document_title'),
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+        content: Text(c('admin_upi_screen.this_cannot_be_undone'),
+            style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+            child: Text(c('admin_upi_screen.btn_cancel')),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
@@ -429,7 +430,7 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
               elevation: 0,
             ),
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Remove'),
+            child: Text(c('admin_upi_screen.btn_remove')),
           ),
         ],
       ),
@@ -452,7 +453,7 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
       }
       if (data['ok'] == true) await _fetchPartnerData();
     } catch (e) {
-      if (mounted) showToast(context, 'Something went wrong. Please try again.', isError: true);
+      if (mounted) showToast(context, c('admin_upi_screen.generic_error'), isError: true);
     }
     if (mounted) setState(() => _docBusy.remove(busyKey));
   }
@@ -484,7 +485,7 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
       final url = await Supabase.instance.client.storage.from(bucket).createSignedUrl(path, 3600);
       if (mounted) openFullscreenImage(context, url);
     } catch (e) {
-      if (mounted) showToast(context, 'Something went wrong. Please try again.', isError: true);
+      if (mounted) showToast(context, c('admin_upi_screen.generic_error'), isError: true);
     }
   }
 
@@ -643,8 +644,8 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Payment and Partner',
-                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
+              Text(c('admin_upi_screen.payment_and_partner_title'),
+                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
               const SizedBox(height: 20),
               Text(_config?['payment_heading'] as String? ?? '',
                   style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
@@ -696,8 +697,8 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
           icon: const Icon(Icons.arrow_back_ios_new, size: 18, color: Color(0xFF1B7A43)),
           onPressed: () => Navigator.of(ctx).maybePop(),
         ),
-        title: const Text('Payment and Partner',
-            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
+        title: Text(c('admin_upi_screen.payment_and_partner_title'),
+            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
           child: Container(height: 1, color: const Color(0xFFE5E7EB)),
@@ -778,10 +779,10 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
               child: const Icon(Icons.qr_code_outlined, size: 28, color: Color(0xFFD1D5DB)),
             ),
             const SizedBox(height: 16),
-            const Text(
-              'No UPI added yet. Add one to enable QR payments.',
+            Text(
+              c('admin_upi_screen.empty_no_upi'),
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Color(0xFF9CA3AF)),
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Color(0xFF9CA3AF)),
             ),
           ],
         ),
@@ -839,8 +840,8 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
             TextButton.icon(
               onPressed: () => _openPartnerForm(),
               icon: const Icon(Icons.add, size: 18, color: Color(0xFF1B7A43)),
-              label: const Text('Add Partner',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF1B7A43))),
+              label: Text(c('admin_upi_screen.add_partner'),
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF1B7A43))),
             ),
           ],
         ),
@@ -858,9 +859,9 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
               borderRadius: BorderRadius.circular(14),
               border: Border.all(color: const Color(0xFFE5E7EB)),
             ),
-            child: const Center(
-              child: Text('No partners added yet.',
-                  style: TextStyle(fontSize: 14, color: Color(0xFF9CA3AF))),
+            child: Center(
+              child: Text(c('admin_upi_screen.empty_no_partners'),
+                  style: const TextStyle(fontSize: 14, color: Color(0xFF9CA3AF))),
             ),
           )
         else
@@ -1143,8 +1144,8 @@ class _UpiRow extends StatelessWidget {
                           borderRadius: BorderRadius.circular(20),
                           border: Border.all(color: const Color(0xFF6EE7B7)),
                         ),
-                        child: const Text('Active',
-                            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF065F46))),
+                        child: Text(c('admin_upi_screen.badge_active'),
+                            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF065F46))),
                       ),
                     ],
                   ],
@@ -1161,13 +1162,13 @@ class _UpiRow extends StatelessWidget {
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
                     icon: const Icon(Icons.copy, size: 15, color: Color(0xFF9CA3AF)),
-                    tooltip: 'Copy UPI ID',
+                    tooltip: c('admin_upi_screen.tooltip_copy_upi'),
                     onPressed: () {
                       Clipboard.setData(ClipboardData(text: pa));
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                            content: Text('UPI ID copied'),
-                            duration: Duration(seconds: 1)),
+                        SnackBar(
+                            content: Text(c('admin_upi_screen.toast_upi_id_copied')),
+                            duration: const Duration(seconds: 1)),
                       );
                     },
                   ),
@@ -1186,7 +1187,7 @@ class _UpiRow extends StatelessWidget {
               children: [
                 if (!isActive)
                   Tooltip(
-                    message: 'Set as active UPI',
+                    message: c('admin_upi_screen.tooltip_set_active_upi'),
                     child: TextButton(
                       onPressed: onSetActive,
                       style: TextButton.styleFrom(
@@ -1194,13 +1195,13 @@ class _UpiRow extends StatelessWidget {
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                       ),
-                      child: const Text('Make Active',
-                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                      child: Text(c('admin_upi_screen.make_active'),
+                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
                     ),
                   ),
                 if (onlyOne)
                   Tooltip(
-                    message: 'At least one UPI must remain.',
+                    message: c('admin_upi_screen.tooltip_at_least_one_upi'),
                     child: IconButton(
                       icon: const Icon(Icons.delete_outline, size: 18, color: Color(0xFFD1D5DB)),
                       onPressed: null,
@@ -1211,7 +1212,7 @@ class _UpiRow extends StatelessWidget {
                 else
                   IconButton(
                     icon: const Icon(Icons.delete_outline, size: 18, color: Color(0xFFDC2626)),
-                    tooltip: 'Remove UPI',
+                    tooltip: c('admin_upi_screen.tooltip_remove_upi'),
                     onPressed: onRemove,
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
@@ -1274,19 +1275,19 @@ class _AddUpiCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Add UPI',
-              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+          Text(c('admin_upi_screen.add_upi_title'),
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
           const SizedBox(height: 12),
           TextField(
             controller: paCtrl,
-            decoration: _inputDec('UPI ID (e.g. name@bank)'),
+            decoration: _inputDec(c('admin_upi_screen.hint_upi_id')),
             style: const TextStyle(fontSize: 13),
             keyboardType: TextInputType.emailAddress,
           ),
           const SizedBox(height: 10),
           TextField(
             controller: pnCtrl,
-            decoration: _inputDec('Payee Name'),
+            decoration: _inputDec(c('admin_upi_screen.hint_payee_name')),
             style: const TextStyle(fontSize: 13),
             onSubmitted: (_) => adding ? null : onAdd(),
           ),
@@ -1305,7 +1306,7 @@ class _AddUpiCard extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 8),
-                const Text('Set as active', style: TextStyle(fontSize: 13, color: Color(0xFF374151))),
+                Text(c('admin_upi_screen.set_as_active'), style: const TextStyle(fontSize: 13, color: Color(0xFF374151))),
               ],
             ),
           ),
@@ -1328,7 +1329,7 @@ class _AddUpiCard extends StatelessWidget {
               child: adding
                   ? const SizedBox(width: 16, height: 16,
                       child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                  : const Text('Add UPI', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                  : Text(c('admin_upi_screen.btn_add_upi'), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
             ),
           ),
         ],
@@ -1419,7 +1420,7 @@ class _PartnerCard extends StatelessWidget {
                   children: [
                     IconButton(
                       icon: const Icon(Icons.edit_outlined, size: 18, color: Color(0xFF6B7280)),
-                      tooltip: 'Edit',
+                      tooltip: c('admin_upi_screen.tooltip_edit'),
                       onPressed: onEdit,
                       padding: EdgeInsets.zero,
                       constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
@@ -1432,14 +1433,14 @@ class _PartnerCard extends StatelessWidget {
                           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                         ),
-                        child: const Text('Make Active',
-                            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                        child: Text(c('admin_upi_screen.make_active'),
+                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
                       ),
                     if (canDelete)
                       IconButton(
                         key: const Key('partner_delete_button'),
                         icon: const Icon(Icons.delete_outline, size: 18, color: Color(0xFFDC2626)),
-                        tooltip: 'Remove partner',
+                        tooltip: c('admin_upi_screen.tooltip_remove_partner'),
                         onPressed: onDelete,
                         padding: EdgeInsets.zero,
                         constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
@@ -1466,7 +1467,7 @@ class _PartnerCard extends StatelessWidget {
           const SizedBox(height: 10),
           ...detailLines.map((line) => Padding(
                 padding: const EdgeInsets.only(bottom: 2),
-                child: Text('${line['label']}: ${line['value']}',
+                child: Text(cf('admin_upi_screen.partner_detail_line', {'label': '${line['label']}', 'value': '${line['value']}'}),
                     style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
               )),
           const SizedBox(height: 12),
@@ -1535,7 +1536,7 @@ class _DocRow extends StatelessWidget {
               minimumSize: Size.zero,
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ),
-            child: const Text('Upload', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+            child: Text(c('admin_upi_screen.btn_upload'), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
           ),
           const SizedBox(width: 4),
           TextButton(
@@ -1546,13 +1547,13 @@ class _DocRow extends StatelessWidget {
               minimumSize: Size.zero,
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ),
-            child: const Text('View', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+            child: Text(c('admin_upi_screen.btn_view'), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
           ),
           if (canView)
             IconButton(
               key: Key('doc_delete_button_${doc['kind']}'),
               icon: const Icon(Icons.delete_outline, size: 16, color: Color(0xFFDC2626)),
-              tooltip: 'Remove document',
+              tooltip: c('admin_upi_screen.tooltip_remove_document'),
               onPressed: onDelete,
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
@@ -1655,7 +1656,7 @@ class _PartnerFormDialogState extends State<_PartnerFormDialog> {
       }
       if (message != null) showToast(context, message, isError: true);
     } catch (e) {
-      if (mounted) showToast(context, 'Something went wrong. Please try again.', isError: true);
+      if (mounted) showToast(context, c('admin_upi_screen.generic_error'), isError: true);
     }
     if (mounted) setState(() => _saving = false);
   }
@@ -1717,7 +1718,7 @@ class _PartnerFormDialogState extends State<_PartnerFormDialog> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(isEditing ? 'Edit Partner' : 'Add Partner',
+                Text(isEditing ? c('admin_upi_screen.edit_partner_title') : c('admin_upi_screen.add_partner'),
                     style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
                 const SizedBox(height: 16),
                 for (final f in _fields) ...[
@@ -1748,7 +1749,7 @@ class _PartnerFormDialogState extends State<_PartnerFormDialog> {
                   children: [
                     TextButton(
                       onPressed: _saving ? null : () => Navigator.of(context).pop(),
-                      child: const Text('Cancel'),
+                      child: Text(c('admin_upi_screen.btn_cancel')),
                     ),
                     const SizedBox(width: 8),
                     ElevatedButton(
@@ -1763,7 +1764,7 @@ class _PartnerFormDialogState extends State<_PartnerFormDialog> {
                       child: _saving
                           ? const SizedBox(width: 16, height: 16,
                               child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                          : const Text('Save', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                          : Text(c('admin_upi_screen.btn_save'), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
                     ),
                   ],
                 ),

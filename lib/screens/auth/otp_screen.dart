@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../services/ui_copy.dart';
+
 class OtpScreen extends StatefulWidget {
   final String phone; // E.164 format: +91XXXXXXXXXX
   const OtpScreen({super.key, required this.phone});
@@ -99,7 +101,7 @@ class _OtpScreenState extends State<OtpScreen> {
         _startCountdown();
       }
     } catch (_) {
-      if (mounted) setState(() => _error = 'Could not resend OTP. Try again.');
+      if (mounted) setState(() => _error = c('otp.error_resend_failed'));
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -108,7 +110,7 @@ class _OtpScreenState extends State<OtpScreen> {
   Future<void> _verify() async {
     final otp = _otp;
     if (otp.length < 6) {
-      setState(() => _error = 'Enter all 6 digits');
+      setState(() => _error = c('otp.error_incomplete'));
       return;
     }
     setState(() {
@@ -131,7 +133,7 @@ class _OtpScreenState extends State<OtpScreen> {
       });
     } catch (_) {
       if (mounted) setState(() {
-        _error = 'Verification failed. Check the OTP and try again.';
+        _error = c('otp.error_verify_failed');
         _loading = false;
       });
     }
@@ -155,9 +157,9 @@ class _OtpScreenState extends State<OtpScreen> {
               size: 20, color: Color(0xFF111827)),
           onPressed: () => Navigator.pop(context),
         ),
-        title: const Text(
-          'Verify OTP',
-          style: TextStyle(
+        title: Text(
+          c('otp.title'),
+          style: const TextStyle(
             fontSize: 18,
             fontWeight: FontWeight.w700,
             color: Color(0xFF111827),
@@ -176,7 +178,7 @@ class _OtpScreenState extends State<OtpScreen> {
                 children: [
                   const SizedBox(height: 8),
                   Text(
-                    'OTP sent to $maskedPhone',
+                    cf('otp.sent_to', {'phone': maskedPhone}),
                     textAlign: TextAlign.center,
                     style: const TextStyle(
                       fontSize: 15,
@@ -234,7 +236,7 @@ class _OtpScreenState extends State<OtpScreen> {
                                 strokeWidth: 2.5,
                               ),
                             )
-                          : const Text('Verify OTP'),
+                          : Text(c('otp.btn_verify')),
                     ),
                   ),
                   const SizedBox(height: 24),
@@ -242,7 +244,8 @@ class _OtpScreenState extends State<OtpScreen> {
                   Center(
                     child: _countdown > 0
                         ? Text(
-                            'Resend OTP in ${_countdown}s',
+                            cf('otp.resend_countdown',
+                                {'seconds': '$_countdown'}),
                             style: const TextStyle(
                                 fontSize: 13, color: Color(0xFF9CA3AF)),
                           )
@@ -251,9 +254,9 @@ class _OtpScreenState extends State<OtpScreen> {
                             style: TextButton.styleFrom(
                               foregroundColor: const Color(0xFF1B5E20),
                             ),
-                            child: const Text(
-                              'Resend OTP',
-                              style: TextStyle(fontWeight: FontWeight.w700),
+                            child: Text(
+                              c('otp.btn_resend'),
+                              style: const TextStyle(fontWeight: FontWeight.w700),
                             ),
                           ),
                   ),

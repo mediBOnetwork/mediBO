@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import '../services/ui_copy.dart';
 import '../utils/render_log.dart';
 
 // ── Category → color map ──────────────────────────────────────────────────────
@@ -20,14 +21,12 @@ const _kDefaultClassFg = Color(0xFF2C2C2A);
 // ── Chip specs (fixed order: Don't stock / Out of stock / Available) ──────────
 
 class _ChipSpec {
-  final String label;
   final String answer;
   final IconData icon;
   final Color selBg;
   final Color selBorder;
   final Color selText;
   const _ChipSpec({
-    required this.label,
     required this.answer,
     required this.icon,
     required this.selBg,
@@ -36,9 +35,17 @@ class _ChipSpec {
   });
 }
 
+// Chip labels are user-visible copy from the backend (ui_copy). The `answer`
+// values are the protocol payload sent to onAnswer / matched against, so they
+// stay in Dart. Label keys line up with chip index below.
+const _kChipLabelKeys = [
+  'inquiry_v12.chip_dont_stock',
+  'inquiry_v12.chip_out_of_stock',
+  'inquiry_v12.chip_available',
+];
+
 const _kChips = [
   _ChipSpec(
-    label: "Don't stock",
     answer: "We don't stock this product",
     icon: Icons.do_not_disturb_on_outlined,
     selBg: Color(0xFFF1EFE8),
@@ -46,7 +53,6 @@ const _kChips = [
     selText: Color(0xFF444441),
   ),
   _ChipSpec(
-    label: 'Out of stock',
     answer: 'Out of Stock',
     icon: Icons.close,
     selBg: Color(0xFFFAECE7),
@@ -54,7 +60,6 @@ const _kChips = [
     selText: Color(0xFF993C1D),
   ),
   _ChipSpec(
-    label: 'Available',
     answer: 'Available',
     icon: Icons.check,
     selBg: Color(0xFFE1F5EE),
@@ -190,23 +195,23 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
       if (marked != null && mounted) {
         RenderLog.write('inq_slim_bulk_marked', '$company|$category:$marked');
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text("Marked $marked item${marked == 1 ? '' : 's'} as don't stock"),
+          content: Text(cf('inquiry_v12.snack_bulk_marked', {'n': '$marked'})),
           backgroundColor: const Color(0xFF1B7A43),
           duration: const Duration(seconds: 3),
         ));
       } else if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Could not mark — please try again'),
-          backgroundColor: Color(0xFFDC2626),
-          duration: Duration(seconds: 3),
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(c('inquiry_v12.snack_mark_failed')),
+          backgroundColor: const Color(0xFFDC2626),
+          duration: const Duration(seconds: 3),
         ));
       }
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Error — please try again'),
-          backgroundColor: Color(0xFFDC2626),
-          duration: Duration(seconds: 3),
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(c('inquiry_v12.snack_error')),
+          backgroundColor: const Color(0xFFDC2626),
+          duration: const Duration(seconds: 3),
         ));
       }
     } finally {
@@ -432,7 +437,7 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
                           ? chip.selText
                           : const Color(0xFF6B7280)),
                   const SizedBox(width: 5),
-                  Text(chip.label,
+                  Text(c(_kChipLabelKeys[i]),
                       style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w500,
@@ -606,7 +611,7 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
                             : const Color(0xFF6B7280)),
                     const SizedBox(height: 4),
                     Text(
-                      chip.label,
+                      c(_kChipLabelKeys[i]),
                       style: TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.w500,
@@ -711,8 +716,8 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
         borderRadius: BorderRadius.circular(6),
         border: Border.all(color: const Color(0xFFD1D5DB)),
       ),
-      child: const Text('No supplier available',
-          style: TextStyle(
+      child: Text(c('inquiry_v12.no_supplier_available'),
+          style: const TextStyle(
               fontSize: 11,
               fontWeight: FontWeight.w500,
               color: Color(0xFF6B7280))),
@@ -735,7 +740,7 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
       child: Row(children: [
         Expanded(
           child: Text(
-            "I don't stock $catDisplay from $compDisplay",
+            cf('inquiry_v12.slim_line', {'a': catDisplay, 'b': compDisplay}),
             style: const TextStyle(fontSize: 12, color: Color(0xFF065F46), fontWeight: FontWeight.w500),
             maxLines: 1, overflow: TextOverflow.ellipsis,
           ),
@@ -751,7 +756,7 @@ class _InquiryAnswerListState extends State<InquiryAnswerList> {
             ),
             child: isBulking
                 ? const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.white))
-                : Text("Don't stock $catDisplay",
+                : Text(cf('inquiry_v12.slim_button', {'a': catDisplay}),
                     style: const TextStyle(fontSize: 11, color: Colors.white, fontWeight: FontWeight.w600)),
           ),
         ),

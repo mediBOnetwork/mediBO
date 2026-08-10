@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../services/date_labels.dart';
+import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 import '../../widgets/order_item_card.dart';
 
@@ -37,7 +38,7 @@ class _PublicOrderPageState extends State<PublicOrderPage> {
       final rows = await Supabase.instance.client
           .rpc('get_supplier_order_by_token', params: {'p_token': widget.token}) as List;
       if (rows.isEmpty) {
-        setState(() { _loading = false; _error = 'Order not found.'; });
+        setState(() { _loading = false; _error = c('public_order.error_not_found'); });
         return;
       }
       final data = Map<String, dynamic>.from(rows.first as Map);
@@ -54,7 +55,7 @@ class _PublicOrderPageState extends State<PublicOrderPage> {
       RenderLog.write('c189_order_page_shared_card', 'true');
       RenderLog.write('c189_order_page_items', parsedItems.length);
     } catch (e) {
-      setState(() { _loading = false; _error = 'Failed to load order: $e'; });
+      setState(() { _loading = false; _error = cf('public_order.error_load_failed', {'error': '$e'}); });
     }
   }
 
@@ -66,8 +67,8 @@ class _PublicOrderPageState extends State<PublicOrderPage> {
         backgroundColor: _kGreen,
         elevation: 0,
         automaticallyImplyLeading: false,
-        title: const Text('mediBO Order',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 18)),
+        title: Text(c('public_order.page_title'),
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 18)),
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator(color: _kGreen))
@@ -96,10 +97,10 @@ class _PublicOrderPageState extends State<PublicOrderPage> {
               const SizedBox(height: 8),
               _headerCard(supplierName, orderNo, status, dateStr),
               const SizedBox(height: 16),
-              const Text('Items', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _kTextPrimary)),
+              Text(c('public_order.section_items'), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _kTextPrimary)),
               const SizedBox(height: 8),
               if (_items.isEmpty)
-                const Text('No items.', style: TextStyle(color: _kTextMuted))
+                Text(c('public_order.empty_items'), style: const TextStyle(color: _kTextMuted))
               else
                 ..._items.map((item) => OrderItemCard(item: item)),
               const SizedBox(height: 32),
@@ -125,7 +126,7 @@ class _PublicOrderPageState extends State<PublicOrderPage> {
           _statusChip(status),
         ]),
         const SizedBox(height: 6),
-        Text('Order #$orderNo', style: const TextStyle(fontSize: 13, color: _kTextMuted)),
+        Text(cf('public_order.order_number', {'no': orderNo}), style: const TextStyle(fontSize: 13, color: _kTextMuted)),
         const SizedBox(height: 4),
         Text(date, style: const TextStyle(fontSize: 13, color: _kTextMuted)),
       ]),
@@ -144,7 +145,7 @@ class _PublicOrderPageState extends State<PublicOrderPage> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
-      child: Text(status.isEmpty ? 'pending' : status,
+      child: Text(status.isEmpty ? c('public_order.status_pending') : status,
           style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: fg)),
     );
   }

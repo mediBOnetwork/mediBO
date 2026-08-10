@@ -38,6 +38,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'ui_copy_fixture.dart';
+
 import 'package:pharma_b2b/app_state.dart';
 import 'package:pharma_b2b/models/cart_model.dart';
 import 'package:pharma_b2b/models/home_sections.dart';
@@ -212,6 +214,7 @@ Future<_Taps> _pump(WidgetTester tester, Map<String, dynamic> payload) async {
 }
 
 void main() {
+  setUp(seedUiCopy);
   setUp(() {
     CartModel.rpcTransport = (fn, params) async =>
         {'ok': true, 'message': '', 'cart': <String, dynamic>{}};

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../fulfill/fulfill_lookups.dart';
+import '../services/ui_copy.dart';
 import '../utils/render_log.dart';
 
 /// '#RRGGBB' / '#AARRGGBB' -> Color. Fallback is a COLOUR only — never copy.
@@ -458,7 +459,9 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
         },
         icon: const Icon(Icons.flag_outlined, size: 16),
         label: Text(
-            isEdit ? 'Change issue' : 'Report issue',
+            isEdit
+                ? c('report_issue.btn_change_issue')
+                : c('report_issue.btn_report_issue'),
             style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
         style: OutlinedButton.styleFrom(
           foregroundColor: _kAmber,
@@ -479,7 +482,7 @@ class _ReportIssueSectionState extends State<ReportIssueSection> {
       RenderLog.write('c363_opts5', 'n=${opts.length}');
       RenderLog.write('c531_issue_opts', 'n=${opts.length}');
       final hasExisting = _cleanIssue(widget.existingIssue) != null;
-      const title = 'Report issue';
+      final title = c('report_issue.section_title');
       return Container(
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(

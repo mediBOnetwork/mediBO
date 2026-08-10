@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../services/payment_claims_service.dart';
+import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 
 // Top-level copyable row — works from any widget/class (context passed explicitly).
@@ -29,7 +30,8 @@ Widget _copyRowGlobal(BuildContext context, String label, String? value) {
           Clipboard.setData(ClipboardData(text: v));
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('Copied: $v', maxLines: 1, overflow: TextOverflow.ellipsis),
+              content: Text(cf('payments.snack_copied', {'value': v}),
+                  maxLines: 1, overflow: TextOverflow.ellipsis),
               duration: const Duration(seconds: 1),
             ),
           );
@@ -97,21 +99,21 @@ class _PaymentsTabState extends State<PaymentsTab> {
             FilledButton(
               onPressed: _fetch,
               style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43)),
-              child: const Text('Retry'),
+              child: Text(c('payments.retry')),
             ),
           ]),
         ),
       );
     }
     if (_claims.isEmpty) {
-      return const Padding(
-        padding: EdgeInsets.only(top: 80),
+      return Padding(
+        padding: const EdgeInsets.only(top: 80),
         child: Center(
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Icon(Icons.receipt_long_outlined, size: 48, color: Color(0xFFD1D5DB)),
-            SizedBox(height: 16),
-            Text('No payment claims yet.',
-                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Color(0xFF9CA3AF))),
+            const Icon(Icons.receipt_long_outlined, size: 48, color: Color(0xFFD1D5DB)),
+            const SizedBox(height: 16),
+            Text(c('payments.empty_title'),
+                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Color(0xFF9CA3AF))),
           ]),
         ),
       );
@@ -126,7 +128,7 @@ class _PaymentsTabState extends State<PaymentsTab> {
         children: [
           Padding(
             padding: const EdgeInsets.only(bottom: 12),
-            child: Text('$claimed pending verification',
+            child: Text(cf('payments.pending_header', {'count': '$claimed'}),
                 style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF6B7280))),
           ),
           ..._claims.map((c) => _ClaimCard(
@@ -155,16 +157,18 @@ class _PaymentsTabState extends State<PaymentsTab> {
       context: context,
       builder: (_) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: const Text('Verify payment?',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-        content: Text('Verify payment and accept $po?',
+        title: Text(c('payments.verify_dialog_title'),
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+        content: Text(cf('payments.verify_dialog_body', {'po': po}),
             style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(c('payments.cancel'))),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
             style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43)),
-            child: const Text('Verify & Accept'),
+            child: Text(c('payments.verify_confirm')),
           ),
         ],
       ),
@@ -177,12 +181,16 @@ class _PaymentsTabState extends State<PaymentsTab> {
       if (!mounted) return;
       RenderLog.write('c211_verify_ok', 1);
       ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Verified & accepted $po'), backgroundColor: const Color(0xFF1B7A43)));
+          SnackBar(
+              content: Text(cf('payments.snack_verified', {'po': po})),
+              backgroundColor: const Color(0xFF1B7A43)));
       await _fetch();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed: $e'), backgroundColor: const Color(0xFFDC2626)));
+          SnackBar(
+              content: Text(cf('payments.snack_failed', {'error': '$e'})),
+              backgroundColor: const Color(0xFFDC2626)));
     } finally {
       if (mounted) setState(() => _busy.remove(claimId));
     }
@@ -190,15 +198,17 @@ class _PaymentsTabState extends State<PaymentsTab> {
 
   Future<void> _doReject(String claimId) async {
     if (_busy.contains(claimId)) return;
-    final reasonCtrl = TextEditingController(text: 'Not received');
+    final reasonCtrl =
+        TextEditingController(text: c('payments.reject_reason_default'));
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: const Text('Reject claim?',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+        title: Text(c('payments.reject_dialog_title'),
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
         content: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Text('Reason:', style: TextStyle(fontSize: 13, color: Color(0xFF374151))),
+          Text(c('payments.reject_reason_label'),
+              style: const TextStyle(fontSize: 13, color: Color(0xFF374151))),
           const SizedBox(height: 8),
           TextField(
             controller: reasonCtrl,
@@ -215,17 +225,21 @@ class _PaymentsTabState extends State<PaymentsTab> {
           ),
         ]),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(c('payments.cancel'))),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
             style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
-            child: const Text('Reject'),
+            child: Text(c('payments.reject_confirm')),
           ),
         ],
       ),
     );
     if (ok != true || !mounted) return;
-    final reason = reasonCtrl.text.trim().isEmpty ? 'Not received' : reasonCtrl.text.trim();
+    final reason = reasonCtrl.text.trim().isEmpty
+        ? c('payments.reject_reason_default')
+        : reasonCtrl.text.trim();
     reasonCtrl.dispose();
 
     setState(() => _busy.add(claimId));
@@ -234,12 +248,14 @@ class _PaymentsTabState extends State<PaymentsTab> {
       if (!mounted) return;
       RenderLog.write('c211_reject_ok', 1);
       ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Claim rejected')));
+          SnackBar(content: Text(c('payments.snack_claim_rejected'))));
       await _fetch();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed: $e'), backgroundColor: const Color(0xFFDC2626)));
+          SnackBar(
+              content: Text(cf('payments.snack_failed', {'error': '$e'})),
+              backgroundColor: const Color(0xFFDC2626)));
     } finally {
       if (mounted) setState(() => _busy.remove(claimId));
     }
@@ -275,7 +291,8 @@ class _ClaimCard extends StatelessWidget {
     final status = claim['status'] as String? ?? 'claimed';
     final app = claim['app'] as String? ?? '—';
     final phone = claim['sender_phone'] as String? ?? '';
-    final customerName = claim['customer_name'] as String? ?? 'Unknown customer';
+    final customerName =
+        claim['customer_name'] as String? ?? c('payments.unknown_customer');
     final amount = claim['amount'];
     final utr = claim['utr'] as String? ?? '—';
     final txnId = claim['txn_id'] as String? ?? '—';
@@ -310,7 +327,9 @@ class _ClaimCard extends StatelessWidget {
           const SizedBox(height: 6),
 
           // Customer
-          Text('$customerName • $shortPhone',
+          Text(
+              cf('payments.customer_line',
+                  {'name': customerName, 'phone': shortPhone}),
               style: const TextStyle(fontSize: 13, color: Color(0xFF374151))),
           const SizedBox(height: 10),
 
@@ -329,11 +348,11 @@ class _ClaimCard extends StatelessWidget {
             const Divider(height: 1, color: Color(0xFFE5E7EB)),
             const SizedBox(height: 10),
             if (orders.isEmpty)
-              const Text('No pending order found for this customer.',
-                  style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)))
+              Text(c('payments.no_pending_orders'),
+                  style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)))
             else ...[
-              const Text('Pending orders:',
-                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
+              Text(c('payments.pending_orders_label'),
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
               const SizedBox(height: 8),
               ...orders.map((o) => _OrderRow(
                     order: o,
@@ -350,7 +369,8 @@ class _ClaimCard extends StatelessWidget {
               child: TextButton(
                 onPressed: busy ? null : onReject,
                 style: TextButton.styleFrom(foregroundColor: const Color(0xFFDC2626)),
-                child: const Text('Reject', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                child: Text(c('payments.reject_button'),
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
               ),
             ),
           ],
@@ -360,7 +380,7 @@ class _ClaimCard extends StatelessWidget {
             const Divider(height: 1, color: Color(0xFFE5E7EB)),
             const SizedBox(height: 8),
             if (verifyReason.isNotEmpty)
-              Text('Reason: $verifyReason',
+              Text(cf('payments.reason_line', {'reason': verifyReason}),
                   style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
           ],
         ]),
@@ -419,14 +439,14 @@ class _OcrBlock extends StatelessWidget {
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Padding(
           padding: const EdgeInsets.only(right: 8),
-          child: Text('Paid: $amountStr',
+          child: Text(cf('payments.paid_line', {'amount': amountStr}),
               style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700,
                   color: Color(0xFF111827))),
         ),
-        _copyRowGlobal(context, 'UTR', utr),
-        _copyRowGlobal(context, 'Txn', txnId),
-        _copyRowGlobal(context, 'Time', paidAt),
-        _copyRowGlobal(context, 'Payee', payeeName),
+        _copyRowGlobal(context, c('payments.field_utr'), utr),
+        _copyRowGlobal(context, c('payments.field_txn'), txnId),
+        _copyRowGlobal(context, c('payments.field_time'), paidAt),
+        _copyRowGlobal(context, c('payments.field_payee'), payeeName),
       ]),
     );
   }
@@ -463,7 +483,16 @@ class _OrderRow extends StatelessWidget {
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           Expanded(
-            child: Text('$po • $itemCount item${itemCount == 1 ? '' : 's'} • Expected ₹${advanceNum.toInt()}',
+            child: Text(
+                cf(
+                    itemCount == 1
+                        ? 'payments.order_summary_one'
+                        : 'payments.order_summary_many',
+                    {
+                      'po': po,
+                      'count': '$itemCount',
+                      'expected': '${advanceNum.toInt()}',
+                    }),
                 style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
           ),
         ]),
@@ -474,13 +503,16 @@ class _OrderRow extends StatelessWidget {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
               decoration: BoxDecoration(color: const Color(0xFFD1FAE5), borderRadius: BorderRadius.circular(20)),
-              child: const Text('✓ matches', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF065F46))),
+              child: Text(c('payments.amount_matches'),
+                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF065F46))),
             )
           else if (claimNum != null)
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
               decoration: BoxDecoration(color: const Color(0xFFFEF3C7), borderRadius: BorderRadius.circular(20)),
-              child: Text('≠ ₹${claimNum.toInt()}', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF92400E))),
+              child: Text(
+                  cf('payments.amount_mismatch', {'amount': '${claimNum.toInt()}'}),
+                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF92400E))),
             ),
           const Spacer(),
           // Verify & Accept button
@@ -496,7 +528,8 @@ class _OrderRow extends StatelessWidget {
               child: busy
                   ? const SizedBox(width: 14, height: 14,
                       child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                  : const Text('Verify & Accept', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                  : Text(c('payments.verify_confirm'),
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
             ),
           ),
         ]),
@@ -517,13 +550,13 @@ class _StatusChip extends StatelessWidget {
     String label;
     switch (status) {
       case 'verified':
-        bg = const Color(0xFFD1FAE5); fg = const Color(0xFF065F46); label = 'Verified';
+        bg = const Color(0xFFD1FAE5); fg = const Color(0xFF065F46); label = c('payments.status_verified');
         break;
       case 'rejected':
-        bg = const Color(0xFFFEE2E2); fg = const Color(0xFF991B1B); label = 'Rejected';
+        bg = const Color(0xFFFEE2E2); fg = const Color(0xFF991B1B); label = c('payments.status_rejected');
         break;
       default:
-        bg = const Color(0xFFFEF3C7); fg = const Color(0xFF92400E); label = 'To verify';
+        bg = const Color(0xFFFEF3C7); fg = const Color(0xFF92400E); label = c('payments.status_to_verify');
     }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
@@ -571,10 +604,10 @@ class _ScreenshotThumbnailState extends State<_ScreenshotThumbnail> {
           return Container(
             width: 120, height: 120,
             decoration: BoxDecoration(color: const Color(0xFFF3F4F6), borderRadius: BorderRadius.circular(8)),
-            child: const Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-              Icon(Icons.broken_image_outlined, size: 28, color: Color(0xFF9CA3AF)),
-              SizedBox(height: 4),
-              Text('Image unavailable', textAlign: TextAlign.center, style: TextStyle(fontSize: 10, color: Color(0xFF9CA3AF))),
+            child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+              const Icon(Icons.broken_image_outlined, size: 28, color: Color(0xFF9CA3AF)),
+              const SizedBox(height: 4),
+              Text(c('payments.image_unavailable'), textAlign: TextAlign.center, style: const TextStyle(fontSize: 10, color: Color(0xFF9CA3AF))),
             ]),
           );
         }
@@ -589,10 +622,10 @@ class _ScreenshotThumbnailState extends State<_ScreenshotThumbnail> {
               errorBuilder: (_, e, __) => Container(
                 width: 120, height: 120,
                 decoration: BoxDecoration(color: const Color(0xFFF3F4F6), borderRadius: BorderRadius.circular(8)),
-                child: const Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                  Icon(Icons.broken_image_outlined, size: 28, color: Color(0xFF9CA3AF)),
-                  SizedBox(height: 4),
-                  Text('Image unavailable', textAlign: TextAlign.center, style: TextStyle(fontSize: 10, color: Color(0xFF9CA3AF))),
+                child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                  const Icon(Icons.broken_image_outlined, size: 28, color: Color(0xFF9CA3AF)),
+                  const SizedBox(height: 4),
+                  Text(c('payments.image_unavailable'), textAlign: TextAlign.center, style: const TextStyle(fontSize: 10, color: Color(0xFF9CA3AF))),
                 ]),
               ),
             ),
@@ -611,8 +644,9 @@ class _ScreenshotThumbnailState extends State<_ScreenshotThumbnail> {
         child: Stack(children: [
           InteractiveViewer(
             child: Image.network(url, fit: BoxFit.contain,
-                errorBuilder: (_, e, __) => const Center(
-                    child: Text('Image unavailable', style: TextStyle(color: Colors.white)))),
+                errorBuilder: (_, e, __) => Center(
+                    child: Text(c('payments.image_unavailable'),
+                        style: const TextStyle(color: Colors.white)))),
           ),
           Positioned(
             top: 12, right: 12,

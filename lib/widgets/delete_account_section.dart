@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../services/ui_copy.dart';
 
 /// Calls `request_account_deletion(scope, reason)` and returns the RPC payload
 /// (`{ok, title?, message, already_open?}`) verbatim.
@@ -35,10 +36,9 @@ class DeleteAccountSection extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'This sends your request to our team. We will confirm what '
-              'happens next on the following screen.',
-              style: TextStyle(fontSize: 14, color: Color(0xFF374151)),
+            Text(
+              c('delete_account_section.confirm_body'),
+              style: const TextStyle(fontSize: 14, color: Color(0xFF374151)),
             ),
             const SizedBox(height: 12),
             TextField(
@@ -46,7 +46,7 @@ class DeleteAccountSection extends StatelessWidget {
               minLines: 1,
               maxLines: 3,
               decoration: InputDecoration(
-                hintText: 'Reason (optional)',
+                hintText: c('delete_account_section.reason_hint'),
                 filled: true,
                 fillColor: const Color(0xFFF5F6F8),
                 border: OutlineInputBorder(
@@ -64,12 +64,12 @@ class DeleteAccountSection extends StatelessWidget {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
+            child: Text(c('delete_account_section.cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
             style: FilledButton.styleFrom(backgroundColor: _danger),
-            child: const Text('Continue'),
+            child: Text(c('delete_account_section.continue')),
           ),
         ],
       ),
@@ -99,7 +99,7 @@ class DeleteAccountSection extends StatelessWidget {
       // No payload = we could not reach the backend; retry affordance only, no
       // invented deletion copy.
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please try again.')),
+        SnackBar(content: Text(c('delete_account_section.please_try_again'))),
       );
       return;
     }
@@ -125,7 +125,7 @@ class DeleteAccountSection extends StatelessWidget {
             onPressed: () => Navigator.pop(ctx),
             style: FilledButton.styleFrom(
                 backgroundColor: const Color(0xFF1B7A43)),
-            child: const Text('OK'),
+            child: Text(c('delete_account_section.ok')),
           ),
         ],
       ),
@@ -142,7 +142,7 @@ class DeleteAccountSection extends StatelessWidget {
           OutlinedButton.icon(
             onPressed: () => _request(context, 'account'),
             icon: const Icon(Icons.delete_outline, size: 18, color: _danger),
-            label: const Text('Delete my account'),
+            label: Text(c('delete_account_section.delete_my_account')),
             style: OutlinedButton.styleFrom(
               foregroundColor: _danger,
               side: const BorderSide(color: _danger, width: 1.5),
@@ -157,7 +157,7 @@ class DeleteAccountSection extends StatelessWidget {
           TextButton(
             onPressed: () => _request(context, 'data'),
             style: TextButton.styleFrom(foregroundColor: const Color(0xFF6B7280)),
-            child: const Text('Delete my data only'),
+            child: Text(c('delete_account_section.delete_my_data_only')),
           ),
         ],
       ),

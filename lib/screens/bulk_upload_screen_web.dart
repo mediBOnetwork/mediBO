@@ -20,6 +20,7 @@ import '../utils/download_bytes.dart' as dl;
 import '../app_state.dart';
 import '../config/api_keys.dart';
 import '../models/product.dart';
+import '../services/ui_copy.dart';
 import '../user_state.dart';
 import '../util.dart';
 import '../utils/render_log.dart';
@@ -2164,7 +2165,7 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
             .toList();
         if (!mounted) return;
         cart.addSampleItems(entries);
-        showToast(context, '${entries.length} sample items added · auto-removed in 15s');
+        showToast(context, cf('bulk_upload_screen_web.sample_items_added', {'a': '${entries.length}'}));
       } finally {
         if (mounted) setState(() => _addingToCart = false);
       }
@@ -2522,16 +2523,16 @@ class _PageHeader extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Place Bulk Order',
+              c('bulk_upload_screen_web.place_bulk_order'),
               style: TextStyle(
                   fontSize: titleSize,
                   fontWeight: FontWeight.w800,
                   color: const Color(0xFF111827)),
             ),
             const SizedBox(height: 6),
-            const Text(
-              "Choose how you'd like to send your order — WhatsApp for quick photo orders, or upload a file for smart SKU matching.",
-              style: TextStyle(fontSize: 14, color: Color(0xFF6B7280), height: 1.5),
+            Text(
+              c('bulk_upload_screen_web.choose_how_subtitle'),
+              style: const TextStyle(fontSize: 14, color: Color(0xFF6B7280), height: 1.5),
             ),
           ],
         );
@@ -2754,13 +2755,13 @@ class _WhatsAppCard extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 14),
-                  const Text(
-                    'Send on WhatsApp',
-                    style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700),
+                  Text(
+                    c('bulk_upload_screen_web.send_on_whatsapp'),
+                    style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700),
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    'Take a photo of your order list and send directly',
+                    c('bulk_upload_screen_web.take_a_photo'),
                     style: TextStyle(
                       color: Colors.white.withValues(alpha: 0.85),
                       fontSize: 13,
@@ -2914,13 +2915,13 @@ class _UploadCard extends StatelessWidget {
                     child: const Icon(Icons.cloud_upload_outlined, color: Colors.white, size: 26),
                   ),
                   const SizedBox(height: 14),
-                  const Text(
-                    'Upload Order File',
-                    style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700),
+                  Text(
+                    c('bulk_upload_screen_web.upload_order_file'),
+                    style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700),
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    'Upload any file — AI detects medicines automatically',
+                    c('bulk_upload_screen_web.upload_any_file'),
                     style: TextStyle(
                       color: Colors.white.withValues(alpha: 0.75),
                       fontSize: 13,
@@ -2983,8 +2984,8 @@ class _UploadCard extends StatelessWidget {
                             height: 16,
                             child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                           ),
-                          label: const Text('Processing…',
-                              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12)),
+                          label: Text(c('bulk_upload_screen_web.processing'),
+                              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12)),
                           style: FilledButton.styleFrom(
                             backgroundColor: const Color(0xFF1e2a3a),
                             foregroundColor: Colors.white,
@@ -3006,8 +3007,8 @@ class _UploadCard extends StatelessWidget {
                                   child: FilledButton.icon(
                                     onPressed: onCamera,
                                     icon: const Icon(Icons.camera_alt_outlined, size: 18),
-                                    label: const Text('Camera',
-                                        style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12)),
+                                    label: Text(c('bulk_upload_screen_web.camera'),
+                                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12)),
                                     style: FilledButton.styleFrom(
                                       backgroundColor: const Color(0xFF1e2a3a),
                                       foregroundColor: Colors.white,
@@ -3025,8 +3026,8 @@ class _UploadCard extends StatelessWidget {
                                   child: FilledButton.icon(
                                     onPressed: onPickFile,
                                     icon: const Icon(Icons.upload_file_outlined, size: 18),
-                                    label: const Text('Upload File',
-                                        style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12)),
+                                    label: Text(c('bulk_upload_screen_web.upload_file'),
+                                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12)),
                                     style: FilledButton.styleFrom(
                                       backgroundColor: const Color(0xFF1e2a3a),
                                       foregroundColor: Colors.white,
@@ -3078,9 +3079,9 @@ class _HowItWorksCard extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Text(
-            'HOW IT WORKS',
-            style: TextStyle(
+          Text(
+            c('bulk_upload_screen_web.how_it_works'),
+            style: const TextStyle(
               fontSize: 10,
               fontWeight: FontWeight.w700,
               color: Color(0xFF4ade80),
@@ -3088,9 +3089,9 @@ class _HowItWorksCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 10),
-          const Text(
-            'Three steps to a packed cart.',
-            style: TextStyle(
+          Text(
+            c('bulk_upload_screen_web.three_steps'),
+            style: const TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.w800,
               color: Colors.white,
@@ -3107,7 +3108,7 @@ class _HowItWorksCard extends StatelessWidget {
             color: Colors.white.withValues(alpha: 0.10),
           ),
           Text(
-            'New here? Try a sample:',
+            c('bulk_upload_screen_web.new_here_try_sample'),
             style: TextStyle(
               fontSize: 11,
               color: Colors.white.withValues(alpha: 0.55),
@@ -3142,7 +3143,7 @@ class _DemoDownloadRow extends StatelessWidget {
       children: [
         Expanded(
           child: _DemoBtn(
-            label: 'Demo image',
+            label: c('bulk_upload_screen_web.demo_image'),
             icon: Icons.image_outlined,
             onTap: _downloadDemoImage,
           ),
@@ -3150,7 +3151,7 @@ class _DemoDownloadRow extends StatelessWidget {
         const SizedBox(width: 8),
         Expanded(
           child: _DemoBtn(
-            label: 'Demo file (Excel)',
+            label: c('bulk_upload_screen_web.demo_file_excel'),
             icon: Icons.table_chart_outlined,
             onTap: _downloadDemoExcel,
           ),
@@ -3288,15 +3289,15 @@ class _TemplateSection extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Need a sample?',
-            style: TextStyle(
+          Text(
+            c('bulk_upload_screen_web.need_a_sample'),
+            style: const TextStyle(
                 fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
           ),
           const SizedBox(height: 5),
-          const Text(
-            'Download our sample CSV to see example formatting. Any variation is accepted.',
-            style: TextStyle(fontSize: 12, color: Color(0xFF6B7280), height: 1.5),
+          Text(
+            c('bulk_upload_screen_web.download_sample_csv_desc'),
+            style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280), height: 1.5),
           ),
           const SizedBox(height: 14),
           SizedBox(
@@ -3304,7 +3305,7 @@ class _TemplateSection extends StatelessWidget {
             child: OutlinedButton.icon(
               onPressed: _downloadTemplate,
               icon: const Icon(Icons.download_outlined, size: 15),
-              label: const Text('Download sample .csv'),
+              label: Text(c('bulk_upload_screen_web.download_sample_csv')),
               style: OutlinedButton.styleFrom(
                 foregroundColor: const Color(0xFF374151),
                 side: const BorderSide(color: Color(0xFFD1D5DB)),
@@ -3326,23 +3327,22 @@ class _TemplateSection extends StatelessWidget {
               children: [
                 const Icon(Icons.auto_awesome, color: Color(0xFF16A34A), size: 16),
                 const SizedBox(width: 8),
-                const Expanded(
+                Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'AI-powered parsing',
-                        style: TextStyle(
+                        c('bulk_upload_screen_web.ai_powered_parsing'),
+                        style: const TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w700,
                           color: Color(0xFF15803D),
                         ),
                       ),
-                      SizedBox(height: 3),
+                      const SizedBox(height: 3),
                       Text(
-                        'Works with any column order, any header name, any language. No fixed template required.',
-                        style:
-                            TextStyle(fontSize: 11, color: Color(0xFF166534), height: 1.5),
+                        c('bulk_upload_screen_web.ai_powered_parsing_desc'),
+                        style: const TextStyle(fontSize: 11, color: Color(0xFF166534), height: 1.5),
                       ),
                     ],
                   ),
@@ -3566,9 +3566,9 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
               children: [
                 Row(
                   children: [
-                    const Expanded(
-                      child: Text('Smart match preview',
-                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+                    Expanded(
+                      child: Text(c('bulk_upload_screen_web.smart_match_preview'),
+                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
                     ),
                     if (widget.isFromFile)
                       _RetryIconButton(
@@ -3600,19 +3600,19 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                     runSpacing: 6,
                     children: [
                       _StatusPillBadge(
-                        label: 'Available • $available item${available == 1 ? '' : 's'}',
+                        label: cf('bulk_upload_screen_web.badge_available', {'a': '$available', 'b': available == 1 ? '' : 's'}),
                         bg: const Color(0xFFDCFCE7),
                         fg: const Color(0xFF15803D),
                       ),
                       if (needAttention > 0)
                         _StatusPillBadge(
-                          label: 'Need attention • $needAttention item${needAttention == 1 ? '' : 's'}',
+                          label: cf('bulk_upload_screen_web.badge_need_attention', {'a': '$needAttention', 'b': needAttention == 1 ? '' : 's'}),
                           bg: const Color(0xFFFEF3C7),
                           fg: const Color(0xFF92400E),
                         ),
                       if (unavailable > 0)
                         _StatusPillBadge(
-                          label: 'Unavailable • $unavailable item${unavailable == 1 ? '' : 's'}',
+                          label: cf('bulk_upload_screen_web.badge_unavailable', {'a': '$unavailable', 'b': unavailable == 1 ? '' : 's'}),
                           bg: const Color(0xFFFEE2E2),
                           fg: const Color(0xFFDC2626),
                         ),
@@ -3668,7 +3668,7 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                       ),
                       child: widget.addingToCart
                           ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                          : const Text('Add matched to cart', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+                          : Text(c('bulk_upload_screen_web.add_matched_to_cart'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
                     ),
                   ),
                 ],
@@ -3720,7 +3720,7 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                     elevation: 0,
                   ),
-                  child: Text(narrow ? 'Add to cart' : 'Add matched to cart'),
+                  child: Text(narrow ? 'Add to cart' : c('bulk_upload_screen_web.add_matched_to_cart')),
                 );
                 final spinner = const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2));
                 final statsText = Text(
@@ -3747,17 +3747,17 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                   try { RenderLog.write('c316_badges_built', '1'); } catch (_) {}
                   return Wrap(spacing: 6, runSpacing: 4, children: [
                     _StatusPillBadge(
-                      label: 'Available • $availableCount item${availableCount == 1 ? '' : 's'}',
+                      label: cf('bulk_upload_screen_web.badge_available', {'a': '$availableCount', 'b': availableCount == 1 ? '' : 's'}),
                       bg: const Color(0xFFDCFCE7), fg: const Color(0xFF15803D),
                     ),
                     if (needAttentionCount > 0)
                       _StatusPillBadge(
-                        label: 'Need attention • $needAttentionCount item${needAttentionCount == 1 ? '' : 's'}',
+                        label: cf('bulk_upload_screen_web.badge_need_attention', {'a': '$needAttentionCount', 'b': needAttentionCount == 1 ? '' : 's'}),
                         bg: const Color(0xFFFEF3C7), fg: const Color(0xFF92400E),
                       ),
                     if (unavailableCount > 0)
                       _StatusPillBadge(
-                        label: 'Unavailable • $unavailableCount item${unavailableCount == 1 ? '' : 's'}',
+                        label: cf('bulk_upload_screen_web.badge_unavailable', {'a': '$unavailableCount', 'b': unavailableCount == 1 ? '' : 's'}),
                         bg: const Color(0xFFFEE2E2), fg: const Color(0xFFDC2626),
                       ),
                   ]);
@@ -3767,9 +3767,9 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(children: [
-                        const Flexible(
-                          child: Text('Smart match preview',
-                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
+                        Flexible(
+                          child: Text(c('bulk_upload_screen_web.smart_match_preview'),
+                              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
                               overflow: TextOverflow.ellipsis),
                         ),
                         const SizedBox(width: 8),
@@ -3799,8 +3799,8 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-                      const Text('Smart match preview',
-                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+                      Text(c('bulk_upload_screen_web.smart_match_preview'),
+                          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
                       const SizedBox(width: 8),
                       badgeWidget,
                       const Spacer(),
@@ -3868,24 +3868,24 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                     // LINE ITEM/MATCHED SKU/COMPANY stay left (their values
                     // are left-aligned text/images); PACK/QTY/MRP/STATUS/
                     // APPROVE are centered to sit over their values.
-                    child: const Row(
+                    child: Row(
                       crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
-                        Expanded(flex: 50, child: Text('LINE ITEM', style: _kTh)),
-                        SizedBox(width: 6),
-                        Expanded(flex: 30, child: Text('MATCHED SKU', style: _kTh)),
-                        SizedBox(width: 6),
-                        Expanded(flex: 12, child: Text('PACK', textAlign: TextAlign.center, style: _kTh)),
-                        SizedBox(width: 6),
-                        Expanded(flex: 22, child: Text('COMPANY', style: _kTh)),
-                        SizedBox(width: 6),
-                        Expanded(flex: 8, child: Text('QTY', textAlign: TextAlign.center, style: _kTh)),
-                        SizedBox(width: 6),
-                        Expanded(flex: 13, child: Text('MRP', textAlign: TextAlign.center, style: _kTh)),
-                        SizedBox(width: 6),
-                        Expanded(flex: 20, child: Text('STATUS', textAlign: TextAlign.center, style: _kTh)),
-                        SizedBox(width: 6),
-                        Expanded(flex: 9, child: Text('APPROVE', textAlign: TextAlign.center, style: _kTh)),
+                        Expanded(flex: 50, child: Text(c('bulk_upload_screen_web.col_line_item'), style: _kTh)),
+                        const SizedBox(width: 6),
+                        Expanded(flex: 30, child: Text(c('bulk_upload_screen_web.col_matched_sku'), style: _kTh)),
+                        const SizedBox(width: 6),
+                        Expanded(flex: 12, child: Text(c('bulk_upload_screen_web.col_pack'), textAlign: TextAlign.center, style: _kTh)),
+                        const SizedBox(width: 6),
+                        Expanded(flex: 22, child: Text(c('bulk_upload_screen_web.col_company'), style: _kTh)),
+                        const SizedBox(width: 6),
+                        Expanded(flex: 8, child: Text(c('bulk_upload_screen_web.col_qty'), textAlign: TextAlign.center, style: _kTh)),
+                        const SizedBox(width: 6),
+                        Expanded(flex: 13, child: Text(c('bulk_upload_screen_web.col_mrp'), textAlign: TextAlign.center, style: _kTh)),
+                        const SizedBox(width: 6),
+                        Expanded(flex: 20, child: Text(c('bulk_upload_screen_web.col_status'), textAlign: TextAlign.center, style: _kTh)),
+                        const SizedBox(width: 6),
+                        Expanded(flex: 9, child: Text(c('bulk_upload_screen_web.col_approve'), textAlign: TextAlign.center, style: _kTh)),
                       ],
                     ),
                   ),
@@ -4365,7 +4365,7 @@ class _RetryIconButton extends StatelessWidget {
     return IconButton(
       icon: const Icon(Icons.refresh),
       onPressed: enabled ? onRetry : null,
-      tooltip: 'Re-run matching',
+      tooltip: c('bulk_upload_screen_web.re_run_matching'),
       iconSize: 20,
       visualDensity: VisualDensity.compact,
       color: const Color(0xFF6B7280),
@@ -5278,7 +5278,7 @@ class _MatchPanelState extends State<_MatchPanel> {
                   onSubmitted: (_) => _fireSearch(),
                   onChanged: _hasSearched ? _liveSearch : null,
                   decoration: InputDecoration(
-                    hintText: 'Search / change match…',
+                    hintText: c('bulk_upload_screen_web.search_change_match'),
                     hintStyle: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
                     isDense: true,
                     contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
@@ -5367,7 +5367,7 @@ class _MatchPanelState extends State<_MatchPanel> {
                   onSubmitted: (_) => _fireSearch(),
                   onChanged: _hasSearched ? _liveSearch : null,
                   decoration: InputDecoration(
-                    hintText: 'Search / change match…',
+                    hintText: c('bulk_upload_screen_web.search_change_match'),
                     hintStyle: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
                     isDense: true,
                     contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),

@@ -29,6 +29,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'ui_copy_fixture.dart';
+
 import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/widgets/inquiry_v12.dart';
 
@@ -90,6 +92,7 @@ Future<_Answers> _pump(
 }
 
 void main() {
+  setUp(seedUiCopy);
   setUpAll(() => RenderLog.flushEnabled = false);
 
   testWidgets('1+2. prestate Available arrives selected AND stays editable',

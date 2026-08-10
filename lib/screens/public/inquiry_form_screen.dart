@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 import '../../widgets/inquiry_v12.dart';
 
@@ -277,9 +278,9 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
           'inquiry_form_submit_error', e.toString().substring(0, 40));
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Submission failed. Please try again.'),
-            backgroundColor: Color(0xFFDC2626),
+          SnackBar(
+            content: Text(c('inquiry_form_screen.submission_failed')),
+            backgroundColor: const Color(0xFFDC2626),
           ),
         );
       }
@@ -397,17 +398,17 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
-                      'Response submitted ✓',
-                      style: TextStyle(
+                    Text(
+                      c('inquiry_form_screen.response_submitted'),
+                      style: const TextStyle(
                           fontSize: 15,
                           fontWeight: FontWeight.w700,
                           color: Color(0xFF065F46)),
                     ),
                     const SizedBox(height: 2),
-                    const Text(
-                      "You've already answered. Here's what you submitted.",
-                      style: TextStyle(
+                    Text(
+                      c('inquiry_form_screen.already_answered_receipt'),
+                      style: const TextStyle(
                           fontSize: 12, color: Color(0xFF065F46)),
                     ),
                   ],
@@ -552,9 +553,9 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
-                      'mediBO · Stock Check',
-                      style: TextStyle(
+                    Text(
+                      c('inquiry_form_screen.header_kicker'),
+                      style: const TextStyle(
                           color: Colors.white,
                           fontSize: 11,
                           fontWeight: FontWeight.w500,
@@ -593,14 +594,14 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: const Color(0xFFFCD34D)),
               ),
-              child: const Row(children: [
-                Icon(Icons.info_outline,
+              child: Row(children: [
+                const Icon(Icons.info_outline,
                     size: 16, color: Color(0xFFD97706)),
-                SizedBox(width: 8),
+                const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'New items added — please respond below',
-                    style: TextStyle(
+                    c('inquiry_form_screen.new_items_added'),
+                    style: const TextStyle(
                         fontSize: 13, color: Color(0xFF92400E)),
                   ),
                 ),
@@ -618,14 +619,14 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
                 borderRadius: BorderRadius.circular(10),
                 border: Border.all(color: const Color(0xFF6EE7B7)),
               ),
-              child: const Row(children: [
-                Icon(Icons.check_circle_outline,
+              child: Row(children: [
+                const Icon(Icons.check_circle_outline,
                     color: _kGreen, size: 22),
-                SizedBox(width: 10),
+                const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    'All responses submitted. Thank you!',
-                    style: TextStyle(
+                    c('inquiry_form_screen.all_responses_submitted'),
+                    style: const TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w600,
                         color: _kGreen),
@@ -655,7 +656,7 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'Already Responded (${locked.length})',
+                      cf('inquiry_form_screen.already_responded', {'a': '${locked.length}'}),
                       style: const TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
@@ -687,9 +688,9 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
 
           // ── Pending items — v11 grouped cards ────────────────────────────
           if (unanswered.isNotEmpty) ...[
-            const Text(
-              'PENDING RESPONSE — REQUIRED',
-              style: TextStyle(
+            Text(
+              c('inquiry_form_screen.pending_response_required'),
+              style: const TextStyle(
                 fontSize: 10,
                 fontWeight: FontWeight.w700,
                 color: Color(0xFF374151),
@@ -724,9 +725,9 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
                         height: 20,
                         child: CircularProgressIndicator(
                             color: Colors.white, strokeWidth: 2))
-                    : const Text(
-                        'Submit Responses',
-                        style: TextStyle(
+                    : Text(
+                        c('inquiry_form_screen.submit_responses'),
+                        style: const TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w700,
                             color: Colors.white),
@@ -736,7 +737,7 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
             const SizedBox(height: 10),
             Center(
               child: Text(
-                'All fields are required before submitting',
+                c('inquiry_form_screen.all_fields_required'),
                 style: TextStyle(
                     fontSize: 12,
                     color: _canSubmit
@@ -749,7 +750,7 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
           const SizedBox(height: 32),
           Center(
             child: Text(
-              'mediBO · Powered by mediBO B2B Pharmacy',
+              c('inquiry_form_screen.footer'),
               style: const TextStyle(
                   fontSize: 11, color: Color(0xFF9CA3AF)),
             ),

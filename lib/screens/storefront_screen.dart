@@ -10,6 +10,7 @@ import 'storefront_scrollbar.dart';
 import '../app_state.dart'; // CHANGE #454
 import '../data/medicine_repository.dart';
 import '../models/product.dart';
+import '../services/ui_copy.dart';
 import '../theme.dart';
 import '../util.dart';
 import '../utils/render_log.dart';
@@ -829,13 +830,13 @@ class _Hero extends StatelessWidget {
             color: Colors.white.withValues(alpha: 0.12),
             borderRadius: BorderRadius.circular(20),
           ),
-          child: const Text('● New Arrivals',
-              style: TextStyle(
+          child: Text(c('storefront_screen.new_arrivals'),
+              style: const TextStyle(
                   color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
         ),
         const SizedBox(height: 18),
         Text(
-          'Health, Delivered\nwith Care',
+          c('storefront_screen.hero_title'),
           style: TextStyle(
               color: Colors.white,
               fontSize: wide ? 44 : 30,
@@ -844,8 +845,7 @@ class _Hero extends StatelessWidget {
         ),
         const SizedBox(height: 14),
         Text(
-          'Genuine medicines & wellness products delivered to your '
-          'doorstep in hours.',
+          c('storefront_screen.hero_subtitle'),
           style: TextStyle(
               color: Colors.white.withValues(alpha: 0.85),
               fontSize: wide ? 15 : 13,
@@ -864,7 +864,7 @@ class _Hero extends StatelessWidget {
                 ),
                 onPressed: onShopNow,
                 icon: const Icon(Icons.storefront, size: 18),
-                label: const Text('Shop Now'),
+                label: Text(c('storefront_screen.shop_now')),
               ),
             ),
             PressEffect(
@@ -875,7 +875,7 @@ class _Hero extends StatelessWidget {
                 ),
                 onPressed: onUploadOrder,
                 icon: const Icon(Icons.upload_file, size: 18),
-                label: const Text('Upload Order'),
+                label: Text(c('storefront_screen.upload_order')),
               ),
             ),
           ],
@@ -885,9 +885,9 @@ class _Hero extends StatelessWidget {
           spacing: 28,
           runSpacing: 12,
           children: [
-            _HeroStat(value: _formatCount(medicineCount), label: 'Medicines'),
-            const _HeroStat(value: '2 hr', label: 'Fast Delivery'),
-            const _HeroStat(value: '100%', label: 'Genuine'),
+            _HeroStat(value: _formatCount(medicineCount), label: c('storefront_screen.stat_medicines')),
+            _HeroStat(value: '2 hr', label: c('storefront_screen.stat_fast_delivery')),
+            _HeroStat(value: '100%', label: c('storefront_screen.stat_genuine')),
           ],
         ),
       ],
@@ -1097,19 +1097,19 @@ class _CategoryTiles extends StatelessWidget {
                   children: [
                     const Icon(Icons.wifi_off_rounded, size: 56, color: Colors.grey),
                     const SizedBox(height: 16),
-                    const Text("It seems you're offline",
-                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                    Text(c('storefront_screen.offline_title'),
+                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
                     const SizedBox(height: 8),
-                    const Text(
-                      'Please check your internet connection and try again',
+                    Text(
+                      c('storefront_screen.offline_body'),
                       textAlign: TextAlign.center,
-                      style: TextStyle(color: Brand.inkMuted, fontSize: 13),
+                      style: const TextStyle(color: Brand.inkMuted, fontSize: 13),
                     ),
                     const SizedBox(height: 20),
                     FilledButton(
                       onPressed: onRetry,
                       style: FilledButton.styleFrom(backgroundColor: Brand.green),
-                      child: const Text('Retry'),
+                      child: Text(c('storefront_screen.retry')),
                     ),
                   ],
                 );
@@ -1121,7 +1121,7 @@ class _CategoryTiles extends StatelessWidget {
                     onPressed: onRetry,
                     style: FilledButton.styleFrom(backgroundColor: Brand.green),
                     icon: const Icon(Icons.refresh, size: 16),
-                    label: const Text('Reload categories'),
+                    label: Text(c('storefront_screen.reload_categories')),
                   ),
                 ),
               );
@@ -1561,8 +1561,8 @@ class _EmptyResults extends StatelessWidget {
                   color: Brand.ink)),
           if (overrideLabel == null) ...[
             const SizedBox(height: 6),
-            const Text('Check spelling or try a different name.',
-                style: TextStyle(color: Brand.inkMuted, fontSize: 13)),
+            Text(c('storefront_screen.check_spelling'),
+                style: const TextStyle(color: Brand.inkMuted, fontSize: 13)),
           ],
           if (onRetry != null) ...[
             const SizedBox(height: 16),
@@ -1570,13 +1570,13 @@ class _EmptyResults extends StatelessWidget {
               onPressed: onRetry,
               style: FilledButton.styleFrom(backgroundColor: Brand.green),
               icon: const Icon(Icons.refresh, size: 16),
-              label: const Text('Retry'),
+              label: Text(c('storefront_screen.retry')),
             ),
           ],
           if (suggestions.isNotEmpty) ...[
             const SizedBox(height: 20),
-            const Text('Did you mean:',
-                style: TextStyle(
+            Text(c('storefront_screen.did_you_mean'),
+                style: const TextStyle(
                     color: Brand.inkMuted,
                     fontSize: 13,
                     fontWeight: FontWeight.w600)),
@@ -1619,19 +1619,19 @@ class _InlineError extends StatelessWidget {
         children: [
           const Icon(Icons.wifi_off_rounded, size: 56, color: Colors.grey),
           const SizedBox(height: 16),
-          const Text("It seems you're offline",
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+          Text(c('storefront_screen.offline_title'),
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
           const SizedBox(height: 8),
-          const Text(
-            'Please check your internet connection and try again',
+          Text(
+            c('storefront_screen.offline_body'),
             textAlign: TextAlign.center,
-            style: TextStyle(color: Brand.inkMuted, fontSize: 13),
+            style: const TextStyle(color: Brand.inkMuted, fontSize: 13),
           ),
           const SizedBox(height: 20),
           FilledButton(
             onPressed: onRetry,
             style: FilledButton.styleFrom(backgroundColor: Brand.green),
-            child: const Text('Retry'),
+            child: Text(c('storefront_screen.retry')),
           ),
         ],
       ),
@@ -1800,15 +1800,15 @@ class _Footer extends StatelessWidget {
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 20),
                   child: LayoutBuilder(
-                    builder: (ctx, c) {
-                      final wide = c.maxWidth >= 600;
+                    builder: (ctx, cons) {
+                      final wide = cons.maxWidth >= 600;
                       // CHANGE #619 — the partner's drug licence numbers used
                       // to sit here. Partner details belong on About only.
                       if (wide) {
                         return Row(
                           children: [
                             Text(
-                              '© 2026 mediBO | All rights reserved',
+                              c('storefront_screen.copyright'),
                               style: TextStyle(
                                   color: Colors.white.withValues(alpha: 0.6),
                                   fontSize: 12),
@@ -1819,7 +1819,7 @@ class _Footer extends StatelessWidget {
                       return Column(
                         children: [
                           Text(
-                            '© 2026 mediBO | All rights reserved',
+                            c('storefront_screen.copyright'),
                             textAlign: TextAlign.center,
                             style: TextStyle(
                                 color: Colors.white.withValues(alpha: 0.6),
@@ -1851,18 +1851,18 @@ class _Footer extends StatelessWidget {
               Image.asset('assets/images/medibo_logo.png',
                   height: 24, filterQuality: FilterQuality.medium),
               const SizedBox(width: 8),
-              const Text('mediBO',
-                  style: TextStyle(
+              Text(c('storefront_screen.brand_name'),
+                  style: const TextStyle(
                       color: Colors.white,
                       fontSize: 20,
                       fontWeight: FontWeight.w800)),
             ],
           ),
           const SizedBox(height: 12),
-          const Text(
-            'Your trusted B2B pharmacy distributor. Genuine medicines delivered to pharmacies & clinics.',
+          Text(
+            c('storefront_screen.brand_tagline'),
             textAlign: TextAlign.center,
-            style: TextStyle(color: _kLink, fontSize: 12, height: 1.6),
+            style: const TextStyle(color: _kLink, fontSize: 12, height: 1.6),
           ),
           const SizedBox(height: 16),
           Row(
@@ -1876,10 +1876,10 @@ class _Footer extends StatelessWidget {
           const SizedBox(height: 6),
           Row(
             mainAxisSize: MainAxisSize.min,
-            children: const [
-              Icon(Icons.mail, size: 13, color: _kAccent),
-              SizedBox(width: 6),
-              Text('medibonetwork@gmail.com', style: _kLinkStyle),
+            children: [
+              const Icon(Icons.mail, size: 13, color: _kAccent),
+              const SizedBox(width: 6),
+              Text(c('storefront_screen.contact_email'), style: _kLinkStyle),
             ],
           ),
         ],
@@ -1891,7 +1891,7 @@ class _Footer extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text('SHOP BY CATEGORY', style: _kHeading),
+        Text(c('storefront_screen.footer_shop_by_category'), style: _kHeading),
         const SizedBox(height: 16),
         for (final c in shown)
           _footerLink(prettyCategory(c), () => onCategory(c)),
@@ -1903,7 +1903,7 @@ class _Footer extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text('OUR SERVICES', style: _kHeading),
+        Text(c('storefront_screen.footer_our_services'), style: _kHeading),
         const SizedBox(height: 16),
         _footerLink('Search Medicines', onSearch),
         _footerLink('Bulk Upload', onBulkUpload),
@@ -1917,7 +1917,7 @@ class _Footer extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text('QUICK LINKS', style: _kHeading),
+        Text(c('storefront_screen.footer_quick_links'), style: _kHeading),
         const SizedBox(height: 16),
         _footerLink('About Us',
             () => Navigator.pushNamed(context, '/about-app')),
@@ -1931,7 +1931,7 @@ class _Footer extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text('LEGAL', style: _kHeading),
+        Text(c('storefront_screen.footer_legal'), style: _kHeading),
         const SizedBox(height: 16),
         _footerLink('Terms & Conditions',
             () => Navigator.pushNamed(context, '/terms')),

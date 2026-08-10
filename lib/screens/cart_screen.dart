@@ -13,6 +13,7 @@ import '../models/product.dart';
 import '../theme.dart';
 import '../user_state.dart';
 import '../util.dart';
+import '../services/ui_copy.dart';
 import '../view_as_state.dart';
 import '../widgets/animations.dart';
 import 'auth/login_screen.dart';
@@ -118,7 +119,7 @@ class _CartScreenState extends State<CartScreen> {
       if (!mounted) return;
       if (message != null && message.isNotEmpty) showToast(context, message);
     } catch (e) {
-      if (mounted) showToast(context, 'Could not update the cart — try again', isError: true);
+      if (mounted) showToast(context, c('cart.strip_failed'), isError: true);
     } finally {
       if (mounted) setState(() => _stripping = false);
     }
@@ -226,9 +227,8 @@ class _CartScreenState extends State<CartScreen> {
       if (inquiryLock.locked) {
         RenderLog.write('c456_viewas_blocked', 'true');
         _showOrderGate(
-          title: 'Ordering paused',
-          message: inquiryLock.message ??
-              'Inquiry running — admin ordering is paused until it completes.',
+          title: c('cart.inquiry_lock_title'),
+          message: inquiryLock.message ?? c('cart.inquiry_lock_message'),
         );
         return;
       }
@@ -238,30 +238,32 @@ class _CartScreenState extends State<CartScreen> {
         RenderLog.write('view_as_order_blocked',
             'unapproved:${viewAs.identity?.userId ?? 'unknown'}');
         if (mounted) {
-          showToast(context,
-              "Cannot place order: ${viewAs.identity?.name ?? 'this customer'}'s account is pending approval.",
+          showToast(
+              context,
+              cf('cart.viewas_pending_approval', {
+                'name': viewAs.identity?.name ?? c('cart.viewas_this_customer')
+              }),
               isError: true);
         }
         return;
       }
 
-      final name = viewAs.identity?.name ?? 'this customer';
+      final name = viewAs.identity?.name ?? c('cart.viewas_this_customer');
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('Place a REAL order?',
-              style: TextStyle(fontWeight: FontWeight.w700)),
-          content: Text(
-              'This will create a real order for $name.\nIt cannot be undone.'),
+          title: Text(c('cart.viewas_confirm_title'),
+              style: const TextStyle(fontWeight: FontWeight.w700)),
+          content: Text(cf('cart.viewas_confirm_body', {'name': name})),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel'),
+              child: Text(c('cart.viewas_confirm_cancel')),
             ),
             FilledButton(
               onPressed: () => Navigator.pop(ctx, true),
               style: FilledButton.styleFrom(backgroundColor: const Color(0xFFD97706)),
-              child: const Text('Yes, Place Order'),
+              child: Text(c('cart.viewas_confirm_place')),
             ),
           ],
         ),
@@ -272,7 +274,7 @@ class _CartScreenState extends State<CartScreen> {
       try {
         final customerId = viewAs.identity?.userId;
         if (customerId == null) {
-          showToast(context, 'Customer id missing for ViewAs order', isError: true);
+          showToast(context, c('cart.viewas_missing_customer_id'), isError: true);
           return;
         }
         // CHANGE #598 — the client sends WHO and WHICH LINES. Prices, totals,
@@ -282,7 +284,7 @@ class _CartScreenState extends State<CartScreen> {
         // own netPayable, so an admin-placed order could be priced by whatever
         // the browser happened to hold.
         if (_viewAsChecked.isEmpty) {
-          if (mounted) showToast(context, 'Select at least one item to order', isError: true);
+          if (mounted) showToast(context, c('cart.viewas_select_one_item'), isError: true);
           return;
         }
         RenderLog.write('actas_order_fix_374', 'userId:$customerId,approved:${viewAs.identity?.isApproved}');
@@ -332,11 +334,9 @@ class _CartScreenState extends State<CartScreen> {
         final msg = e.toString();
         if (mounted) {
           if (msg.contains('account_pending_approval')) {
-            showToast(context, 'Customer not approved', isError: true);
+            showToast(context, c('cart.viewas_customer_not_approved'), isError: true);
           } else if (msg.contains('forbidden') && msg.contains('super_admin')) {
-            showToast(context,
-                'Only a super admin can place orders on behalf of a customer',
-                isError: true);
+            showToast(context, c('cart.viewas_super_admin_only'), isError: true);
           } else if (msg.contains('inquiry_in_progress')) {
             // CHANGE #456 C8 belt-and-braces — the trigger gates admin-as-
             // customer orders (placed_by_admin=true) even if the UI's cached
@@ -346,13 +346,13 @@ class _CartScreenState extends State<CartScreen> {
             await il.refresh();
             if (mounted) {
               _showOrderGate(
-                title: 'Ordering paused',
-                message: il.message ??
-                    'Inquiry running — admin ordering is paused until it completes.',
+                title: c('cart.inquiry_lock_title'),
+                message: il.message ?? c('cart.inquiry_lock_message'),
               );
             }
           } else {
-            showToast(context, 'Could not place order: $e', isError: true);
+            showToast(context, cf('cart.viewas_place_failed', {'error': '$e'}),
+                isError: true);
           }
         }
       } finally {
@@ -504,11 +504,11 @@ class _CartScreenState extends State<CartScreen> {
           secondLine: oh.reopenHint,
         );
       } else {
-        showToast(context, 'Could not place order. Please try again.', isError: true);
+        showToast(context, c('cart.place_order_failed'), isError: true);
       }
     } catch (e) {
       if (!mounted) return;
-      showToast(context, 'Could not place order. Please try again.', isError: true);
+      showToast(context, c('cart.place_order_failed'), isError: true);
     } finally {
       if (mounted) setState(() => _orderInProgress = false);
     }
@@ -554,7 +554,7 @@ class _CartScreenState extends State<CartScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('OK'),
+            child: Text(c('cart.gate_ok')),
           ),
           if (actionLabel != null && onAction != null)
             FilledButton(
@@ -765,7 +765,7 @@ class _AvailabilityBanner extends StatelessWidget {
                     child: CircularProgressIndicator(
                         strokeWidth: 2, color: Colors.white),
                   )
-                : const Text('Remove unavailable items'),
+                : Text(c('cart.remove_unavailable')),
           ),
         ],
       ),
@@ -857,7 +857,7 @@ class _SampleBanner extends StatelessWidget {
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              'Sample products added. Auto-removed in ${cart.sampleCountdown}s.',
+              cf('cart.sample_banner', {'seconds': '${cart.sampleCountdown}'}),
               style: const TextStyle(fontSize: 13, color: Color(0xFF9A3412)),
             ),
           ),
@@ -869,8 +869,8 @@ class _SampleBanner extends StatelessWidget {
               minimumSize: Size.zero,
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ),
-            child: const Text('Dismiss',
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+            child: Text(c('cart.sample_dismiss'),
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
           ),
         ],
       ),
@@ -1030,7 +1030,7 @@ class _ItemListState extends State<_ItemList> {
                       size: 40, color: Color(0xFF9CA3AF)),
                   const SizedBox(height: 12),
                   Text(
-                    'No items found for "${_effectiveQuery.trim()}"',
+                    cf('cart.search_no_results', {'query': _effectiveQuery.trim()}),
                     textAlign: TextAlign.center,
                     style: const TextStyle(
                       fontSize: 14,
@@ -1318,8 +1318,8 @@ class _CartItemCard extends StatelessWidget {
                             border:
                                 Border.all(color: const Color(0xFFFED7AA)),
                           ),
-                          child: const Text('sample',
-                              style: TextStyle(
+                          child: Text(c('cart.badge_sample'),
+                              style: const TextStyle(
                                   fontSize: 9, color: Color(0xFFEA580C))),
                         ),
                       ],
@@ -1336,9 +1336,9 @@ class _CartItemCard extends StatelessWidget {
                             borderRadius: BorderRadius.circular(4),
                             border: Border.all(color: const Color(0xFF6EE7B7)),
                           ),
-                          child: const Text(
-                            'Added by Admin',
-                            style: TextStyle(
+                          child: Text(
+                            c('cart.badge_added_by_admin'),
+                            style: const TextStyle(
                               fontSize: 9,
                               fontWeight: FontWeight.w600,
                               color: Color(0xFF065F46),
@@ -1355,9 +1355,9 @@ class _CartItemCard extends StatelessWidget {
                             borderRadius: BorderRadius.circular(4),
                             border: Border.all(color: const Color(0xFFFDE68A)),
                           ),
-                          child: const Text(
-                            'Added by customer',
-                            style: TextStyle(
+                          child: Text(
+                            c('cart.badge_added_by_customer'),
+                            style: const TextStyle(
                               fontSize: 9,
                               fontWeight: FontWeight.w600,
                               color: Color(0xFF92400E),
@@ -1423,7 +1423,11 @@ class _CartItemCard extends StatelessWidget {
                           borderRadius: BorderRadius.circular(6),
                         ),
                         child: Text(
-                          '+$freeQty $unit${freeQty == 1 ? '' : 's'} free',
+                          cf(
+                              freeQty == 1
+                                  ? 'cart.free_qty_one'
+                                  : 'cart.free_qty_many',
+                              {'qty': '$freeQty', 'unit': unit}),
                           style: const TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w600,
@@ -1534,15 +1538,15 @@ class _CartStepper extends StatefulWidget {
 
   static String _unit(String packSize) {
     final s = packSize.toLowerCase();
-    if (s.contains('strip')) return 'Strip';
-    if (s.contains('bottle')) return 'Bottle';
-    if (s.contains('vial')) return 'Vial';
-    if (s.contains('tube')) return 'Tube';
-    if (s.contains('sachet')) return 'Sachet';
-    if (s.contains('box')) return 'Box';
-    if (s.contains('ampoule') || s.contains('ampule')) return 'Ampoule';
-    if (s.contains('pack')) return 'Pack';
-    return 'Unit';
+    if (s.contains('strip')) return c('cart.unit_strip');
+    if (s.contains('bottle')) return c('cart.unit_bottle');
+    if (s.contains('vial')) return c('cart.unit_vial');
+    if (s.contains('tube')) return c('cart.unit_tube');
+    if (s.contains('sachet')) return c('cart.unit_sachet');
+    if (s.contains('box')) return c('cart.unit_box');
+    if (s.contains('ampoule') || s.contains('ampule')) return c('cart.unit_ampoule');
+    if (s.contains('pack')) return c('cart.unit_pack');
+    return c('cart.unit_default');
   }
 
   @override
@@ -1754,7 +1758,7 @@ class _RemovedByAdminHeader extends StatelessWidget {
           const Icon(Icons.remove_circle_outline, size: 14, color: Color(0xFFDC2626)),
           const SizedBox(width: 6),
           Text(
-            'Removed by admin ($count)',
+            cf('cart.removed_by_admin_header', {'count': '$count'}),
             style: const TextStyle(
                 fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFFDC2626)),
           ),
@@ -1801,7 +1805,10 @@ class _RemovedItemCard extends StatelessWidget {
                       decorationColor: Color(0xFF9CA3AF))),
               const SizedBox(height: 2),
               Text(
-                '×${line.quantity}  ·  ₹${(p.b2bPrice * line.quantity).toStringAsFixed(0)}',
+                cf('cart.removed_line_summary', {
+                  'qty': '${line.quantity}',
+                  'amount': (p.b2bPrice * line.quantity).toStringAsFixed(0),
+                }),
                 style: const TextStyle(fontSize: 11, color: Color(0xFFD1D5DB)),
               ),
             ],
@@ -1813,8 +1820,8 @@ class _RemovedItemCard extends StatelessWidget {
             color: const Color(0xFFFEF2F2),
             borderRadius: BorderRadius.circular(4),
           ),
-          child: const Text('Removed',
-              style: TextStyle(
+          child: Text(c('cart.badge_removed'),
+              style: const TextStyle(
                   fontSize: 10,
                   color: Color(0xFFDC2626),
                   fontWeight: FontWeight.w600)),
@@ -1993,12 +2000,12 @@ class _CheckoutBar extends StatelessWidget {
                                     const SizedBox(width: 8),
                                     Text(
                                       inquiryLocked
-                                          ? 'Ordering paused'
+                                          ? c('cart.inquiry_lock_title')
                                           : (orderHoursClosed
                                               ? (orderHours.buttonLabel ?? '')
                                               : (auth.isAuthenticated
-                                                  ? 'Place Order'
-                                                  : 'Login to Order')),
+                                                  ? c('cart.btn_place_order')
+                                                  : c('cart.btn_login_to_order'))),
                                       style: const TextStyle(
                                         color: Colors.white,
                                         fontSize: 14,
@@ -2129,12 +2136,12 @@ class _OrderSummaryPanel extends StatelessWidget {
                         const SizedBox(width: 8),
                         Text(
                           inquiryLocked
-                              ? 'Ordering paused'
+                              ? c('cart.inquiry_lock_title')
                               : (orderHoursClosed
                                   ? (orderHours.buttonLabel ?? '')
                                   : (auth.isAuthenticated
-                                      ? 'Place Order'
-                                      : 'Login to Order')),
+                                      ? c('cart.btn_place_order')
+                                      : c('cart.btn_login_to_order'))),
                           style: const TextStyle(
                             color: Colors.white,
                             fontSize: 14,
@@ -2154,10 +2161,10 @@ class _OrderSummaryPanel extends StatelessWidget {
           // delivery" pair is gone. There is no delivery fee in the payload,
           // and that second banner hardcoded the ₹999 threshold and did the
           // subtraction in Dart — a rule the backend no longer even has.
-          const Text(
-            'Net 30 credit terms apply',
+          Text(
+            c('cart.credit_terms_note'),
             textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
+            style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
           ),
         ],
       ),
@@ -2206,24 +2213,25 @@ class _OrderPlacedDialog extends StatelessWidget {
                     color: Color(0xFF16A34A), size: 44),
               ),
               const SizedBox(height: 20),
-              const Text(
-                'Order Placed!',
-                style: TextStyle(
+              Text(
+                c('cart.placed_title'),
+                style: const TextStyle(
                     fontSize: 22,
                     fontWeight: FontWeight.w800,
                     color: Color(0xFF111827)),
               ),
               const SizedBox(height: 8),
               Text(
-                'Order $orderNumber • $amount',
+                cf('cart.placed_summary',
+                    {'number': orderNumber, 'amount': amount}),
                 style: const TextStyle(fontSize: 14, color: Color(0xFF374151)),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 6),
-              const Text(
-                'Your order has been placed and is pending confirmation.\nOur team will contact you shortly.',
+              Text(
+                c('cart.placed_note'),
                 textAlign: TextAlign.center,
-                style: TextStyle(
+                style: const TextStyle(
                     fontSize: 12, color: Color(0xFF6B7280), height: 1.5),
               ),
               const SizedBox(height: 24),
@@ -2237,8 +2245,8 @@ class _OrderPlacedDialog extends StatelessWidget {
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(10)),
                   ),
-                  child: const Text('View Orders',
-                      style: TextStyle(
+                  child: Text(c('cart.placed_view_orders'),
+                      style: const TextStyle(
                           fontSize: 15, fontWeight: FontWeight.w700)),
                 ),
               ),

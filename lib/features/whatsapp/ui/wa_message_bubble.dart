@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../services/date_labels.dart';
+import '../../../services/ui_copy.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -76,7 +77,7 @@ class _WaMessageBubbleState extends State<WaMessageBubble> {
         );
       case 'audio':
         return _OpenButton(
-          label: 'Open audio',
+          label: c('wa_message_bubble.open_audio'),
           icon: Icons.headphones_outlined,
           onTap: () => _openUrl(signedUrl),
         );
@@ -140,10 +141,10 @@ class _WaMessageBubbleState extends State<WaMessageBubble> {
             if (p != null && p.isNotEmpty) {
               Clipboard.setData(ClipboardData(text: p));
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Phone number copied'),
+                SnackBar(
+                  content: Text(c('wa_message_bubble.phone_number_copied')),
                   behavior: SnackBarBehavior.floating,
-                  duration: Duration(seconds: 2),
+                  duration: const Duration(seconds: 2),
                 ),
               );
             }
@@ -181,14 +182,14 @@ class _WaMessageBubbleState extends State<WaMessageBubble> {
               if (url == null || url.isEmpty) {
                 return GestureDetector(
                   onTap: () => setState(() {}),
-                  child: const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 8),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
                     child: Row(children: [
-                      Icon(Icons.error_outline,
+                      const Icon(Icons.error_outline,
                           size: 16, color: Color(0xFF9CA3AF)),
-                      SizedBox(width: 4),
-                      Text("Couldn't load — tap to retry",
-                          style: TextStyle(
+                      const SizedBox(width: 4),
+                      Text(c('wa_message_bubble.couldnt_load_tap_to_retry'),
+                          style: const TextStyle(
                               fontSize: 13, color: Color(0xFF9CA3AF))),
                     ]),
                   ),
@@ -222,7 +223,7 @@ class _WaMessageBubbleState extends State<WaMessageBubble> {
         } else {
           // Truly unknown type.
           body = Text(
-            '[${msg.msgType}] message',
+            cf('wa_message_bubble.type_message', {'a': msg.msgType}),
             style: const TextStyle(
                 fontSize: 14, color: Color(0xFF6B7280), height: 1.4),
           );
@@ -230,7 +231,7 @@ class _WaMessageBubbleState extends State<WaMessageBubble> {
       }
     } catch (_) {
       body = Text(
-        '[${msg.msgType}] message',
+        cf('wa_message_bubble.type_message', {'a': msg.msgType}),
         style: const TextStyle(
             fontSize: 14, color: Color(0xFF6B7280), height: 1.4),
       );
@@ -372,7 +373,7 @@ class _DocumentCard extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
-          _MiniButton(label: 'Open', onTap: onOpen),
+          _MiniButton(label: c('wa_message_bubble.open'), onTap: onOpen),
         ],
       ),
     );
@@ -464,7 +465,7 @@ class _LocationCard extends StatelessWidget {
                       fontSize: 11, color: Color(0xFF9CA3AF))),
             ),
           const SizedBox(height: 6),
-          _MiniButton(label: 'Open in Maps', onTap: onOpen),
+          _MiniButton(label: c('wa_message_bubble.open_in_maps'), onTap: onOpen),
         ],
       ),
     );
@@ -533,9 +534,9 @@ class _ContactCard extends StatelessWidget {
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              _MiniButton(label: 'Call', icon: Icons.call, onTap: onCall),
+              _MiniButton(label: c('wa_message_bubble.call'), icon: Icons.call, onTap: onCall),
               const SizedBox(width: 6),
-              _MiniButton(label: 'Copy', icon: Icons.copy, onTap: onCopy),
+              _MiniButton(label: c('wa_message_bubble.copy'), icon: Icons.copy, onTap: onCopy),
             ],
           ),
         ],
@@ -588,11 +589,11 @@ class _WaStatusTick extends StatelessWidget {
         message: (failReason != null && failReason!.isNotEmpty)
             ? failReason!
             : 'Message was not delivered',
-        child: const Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(Icons.error_outline, size: 13, color: Color(0xFFDC2626)),
-          SizedBox(width: 2),
-          Text('Not delivered',
-              style: TextStyle(
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          const Icon(Icons.error_outline, size: 13, color: Color(0xFFDC2626)),
+          const SizedBox(width: 2),
+          Text(c('wa_message_bubble.not_delivered'),
+              style: const TextStyle(
                   fontSize: 10, color: Color(0xFFDC2626), fontWeight: FontWeight.w600)),
         ]),
       );

@@ -36,6 +36,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'ui_copy_fixture.dart';
+
 import 'package:pharma_b2b/screens/admin/wa_campaign_builder_screen.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 
@@ -178,6 +180,7 @@ ElevatedButton _scheduleButton(WidgetTester tester) => tester.widget<ElevatedBut
     );
 
 void main() {
+  setUp(seedUiCopy);
   setUpAll(() => RenderLog.flushEnabled = false);
 
   group('template picker', () {

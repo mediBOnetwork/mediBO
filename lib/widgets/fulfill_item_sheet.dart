@@ -12,6 +12,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../services/ui_copy.dart';
 import '../utils/render_log.dart';
 
 // ── Proof thumbnail widget — shared between dispute surfaces ──────────────────
@@ -76,8 +77,8 @@ class ProofThumbnail extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 3),
-            const Text('Tap to zoom',
-                style: TextStyle(fontSize: 10, color: Color(0xFF6B7280))),
+            Text(c('fulfill_item.proof_tap_to_zoom'),
+                style: const TextStyle(fontSize: 10, color: Color(0xFF6B7280))),
           ],
         ),
       );

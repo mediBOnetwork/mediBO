@@ -15,6 +15,7 @@
 // and the one the admin trusted would be the one that is not enforced.
 import 'package:flutter/material.dart';
 
+import '../../services/ui_copy.dart';
 import '../../features/whatsapp/data/wa_campaign_api.dart';
 import '../../features/whatsapp/ui/wa_campaign_chips.dart';
 import '../../utils/toast.dart';
@@ -253,7 +254,8 @@ class _WaCampaignBuilderScreenState extends State<WaCampaignBuilderScreen> {
 
   Future<void> _save() async {
     if (_template == null) {
-      showToast(context, 'Pick a template first', isError: true);
+      showToast(context, c('wa_campaign_builder_screen.pick_a_template_first'),
+          isError: true);
       return;
     }
     setState(() => _saving = true);
@@ -345,7 +347,7 @@ class _WaCampaignBuilderScreenState extends State<WaCampaignBuilderScreen> {
       // ALWAYS preflight after a save. A save that succeeded is not a campaign
       // that can send.
       await _runPreflight();
-      if (mounted) showToast(context, 'Saved');
+      if (mounted) showToast(context, c('wa_campaign_builder_screen.saved'));
     } catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);
@@ -486,7 +488,7 @@ class _WaCampaignBuilderScreenState extends State<WaCampaignBuilderScreen> {
                           style: ElevatedButton.styleFrom(
                               backgroundColor: _kGreen,
                               foregroundColor: Colors.white),
-                          child: const Text('Retry'),
+                          child: Text(c('wa_campaign_builder_screen.retry')),
                         ),
                       ],
                     ),
@@ -539,7 +541,7 @@ class _WaCampaignBuilderScreenState extends State<WaCampaignBuilderScreen> {
                               valueColor:
                                   AlwaysStoppedAnimation(Colors.white)))
                       : const Icon(Icons.save_outlined, size: 17),
-                  label: const Text('Save'),
+                  label: Text(c('wa_campaign_builder_screen.save')),
                 ),
               ),
               if (_campaignId != null) ...[
@@ -551,7 +553,7 @@ class _WaCampaignBuilderScreenState extends State<WaCampaignBuilderScreen> {
                     dryRunRpc: widget.dryRunRpc,
                   ),
                   icon: const Icon(Icons.science_outlined, size: 16),
-                  label: const Text('Dry run'),
+                  label: Text(c('wa_campaign_builder_screen.dry_run')),
                 ),
               ],
             ],
@@ -572,7 +574,7 @@ class _WaCampaignBuilderScreenState extends State<WaCampaignBuilderScreen> {
                   padding: const EdgeInsets.symmetric(vertical: 14),
                 ),
                 icon: const Icon(Icons.schedule_send_outlined, size: 17),
-                label: const Text('Schedule'),
+                label: Text(c('wa_campaign_builder_screen.schedule')),
               ),
             ),
           ],
@@ -611,9 +613,9 @@ class _WaCampaignBuilderScreenState extends State<WaCampaignBuilderScreen> {
   // Step 1 ─────────────────────────────────────────────────────────────────
   Widget _templateStep() {
     if (_templates.isEmpty) {
-      return const Text(
-        'No approved template yet — a campaign can only use a template Meta has approved.',
-        style: TextStyle(fontSize: 12.5, height: 1.4, color: _kMuted),
+      return Text(
+        c('wa_campaign_builder_screen.no_approved_template'),
+        style: const TextStyle(fontSize: 12.5, height: 1.4, color: _kMuted),
       );
     }
     return Column(
@@ -674,8 +676,8 @@ class _WaCampaignBuilderScreenState extends State<WaCampaignBuilderScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (_savedSegments.isNotEmpty) ...[
-          const Text('Saved segment',
-              style: TextStyle(
+          Text(c('wa_campaign_builder_screen.saved_segment'),
+              style: const TextStyle(
                   fontSize: 11.5, fontWeight: FontWeight.w600, color: _kMuted)),
           const SizedBox(height: 6),
           Wrap(
@@ -711,8 +713,8 @@ class _WaCampaignBuilderScreenState extends State<WaCampaignBuilderScreen> {
           ),
           const SizedBox(height: 12),
         ],
-        const Text('Segment',
-            style: TextStyle(
+        Text(c('wa_campaign_builder_screen.segment'),
+            style: const TextStyle(
                 fontSize: 11.5, fontWeight: FontWeight.w600, color: _kMuted)),
         const SizedBox(height: 6),
         Wrap(
@@ -742,8 +744,8 @@ class _WaCampaignBuilderScreenState extends State<WaCampaignBuilderScreen> {
           ],
         ),
         const SizedBox(height: 12),
-        const Text('Trigger',
-            style: TextStyle(
+        Text(c('wa_campaign_builder_screen.trigger'),
+            style: const TextStyle(
                 fontSize: 11.5, fontWeight: FontWeight.w600, color: _kMuted)),
         const SizedBox(height: 6),
         Wrap(
@@ -785,12 +787,12 @@ class _WaCampaignBuilderScreenState extends State<WaCampaignBuilderScreen> {
   // Step 3 ─────────────────────────────────────────────────────────────────
   Widget _variablesStep() {
     if (_template == null) {
-      return const Text('Pick a template first',
-          style: TextStyle(fontSize: 12.5, color: _kMuted));
+      return Text(c('wa_campaign_builder_screen.pick_a_template_first'),
+          style: const TextStyle(fontSize: 12.5, color: _kMuted));
     }
     if (_vars.isEmpty) {
-      return const Text('This template has no variables',
-          style: TextStyle(fontSize: 12.5, color: _kMuted));
+      return Text(c('wa_campaign_builder_screen.this_template_has_no_variables'),
+          style: const TextStyle(fontSize: 12.5, color: _kMuted));
     }
     return Column(
       children: [
@@ -878,11 +880,11 @@ class _WaCampaignBuilderScreenState extends State<WaCampaignBuilderScreen> {
             children: [
               const Icon(Icons.info_outline, size: 14, color: _kAmber),
               const SizedBox(width: 6),
-              const Expanded(
+              Expanded(
                 child: Text(
-                  'Tracking needs the template to have a URL button ending in {{1}}. '
-                  'Preflight checks this and will say so.',
-                  style: TextStyle(fontSize: 11.5, height: 1.35, color: _kAmber),
+                  c('wa_campaign_builder_screen.tracking_needs_url_button'),
+                  style: const TextStyle(
+                      fontSize: 11.5, height: 1.35, color: _kAmber),
                 ),
               ),
             ],
@@ -900,10 +902,9 @@ class _WaCampaignBuilderScreenState extends State<WaCampaignBuilderScreen> {
             decoration: _dec('Messages per minute'),
           ),
           const SizedBox(height: 8),
-          const Text(
-            'Sending starts automatically once scheduled — the server dispatches '
-            'inside the send window.',
-            style: TextStyle(fontSize: 11.5, height: 1.35, color: _kMuted),
+          Text(
+            c('wa_campaign_builder_screen.sending_starts_automatically'),
+            style: const TextStyle(fontSize: 11.5, height: 1.35, color: _kMuted),
           ),
           if (_estimateLabel.isNotEmpty) ...[
             const SizedBox(height: 10),
@@ -1095,7 +1096,9 @@ class _WaCampaignBuilderScreenState extends State<WaCampaignBuilderScreen> {
             ),
             const SizedBox(height: 6),
             if (_preflightErrors.isEmpty)
-              Text('$_recipients recipients',
+              Text(
+                  cf('wa_campaign_builder_screen.recipients',
+                      {'a': '$_recipients'}),
                   style: const TextStyle(fontSize: 12.5, color: _kMuted))
             else
               waPreflightErrors(_preflightErrors),

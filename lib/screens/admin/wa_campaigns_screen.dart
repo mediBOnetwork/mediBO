@@ -25,6 +25,7 @@ import 'package:flutter/material.dart';
 
 import '../../features/whatsapp/data/wa_campaign_api.dart';
 import '../../features/whatsapp/ui/wa_campaign_chips.dart';
+import '../../services/ui_copy.dart' as uicopy;
 import '../../utils/render_log.dart';
 import '../../utils/toast.dart';
 import 'wa_campaign_builder_screen.dart';
@@ -168,7 +169,10 @@ class _WaCampaignsScreenState extends State<WaCampaignsScreen> {
         return;
       }
       if (res.containsKey('requeued')) {
-        showToast(context, 'Requeued ${res['requeued']}');
+        showToast(
+            context,
+            uicopy.cf('wa_campaigns.toast_requeued',
+                {'n': (res['requeued'] ?? '').toString()}));
       }
       await _load();
     } catch (e) {
@@ -180,21 +184,21 @@ class _WaCampaignsScreenState extends State<WaCampaignsScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Cancel this campaign?'),
+        title: Text(uicopy.c('wa_campaigns.cancel_title')),
         content: Text(
-          'Pending recipients are dropped and will not be sent. '
-          'Messages already sent are not affected.\n\n${c['name'] ?? ''}',
+          uicopy.cf('wa_campaigns.cancel_body',
+              {'name': (c['name'] ?? '').toString()}),
           style: const TextStyle(fontSize: 13.5, height: 1.4),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Keep it'),
+            child: Text(uicopy.c('wa_campaigns.cancel_keep')),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
             style: TextButton.styleFrom(foregroundColor: _kRed),
-            child: const Text('Cancel campaign'),
+            child: Text(uicopy.c('wa_campaigns.cancel_confirm')),
           ),
         ],
       ),
@@ -229,7 +233,7 @@ class _WaCampaignsScreenState extends State<WaCampaignsScreen> {
       await showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('Cannot schedule yet'),
+          title: Text(uicopy.c('wa_campaigns.preflight_failed_title')),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -240,7 +244,7 @@ class _WaCampaignsScreenState extends State<WaCampaignsScreen> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx),
-              child: const Text('Close'),
+              child: Text(uicopy.c('wa_campaigns.close')),
             ),
           ],
         ),
@@ -264,7 +268,9 @@ class _WaCampaignsScreenState extends State<WaCampaignsScreen> {
     await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(status == 'pending_approval' ? 'Needs approval' : 'Scheduled'),
+        title: Text(status == 'pending_approval'
+            ? uicopy.c('wa_campaigns.outcome_needs_approval')
+            : uicopy.c('wa_campaigns.outcome_scheduled')),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -272,7 +278,9 @@ class _WaCampaignsScreenState extends State<WaCampaignsScreen> {
             if (message.isNotEmpty)
               Text(message, style: const TextStyle(fontSize: 14, height: 1.4)),
             if (message.isEmpty)
-              Text('$recipients recipients',
+              Text(
+                  uicopy.cf('wa_campaigns.outcome_recipients',
+                      {'n': recipients}),
                   style: const TextStyle(fontSize: 14, height: 1.4)),
             if (estimateLabel.isNotEmpty) ...[
               const SizedBox(height: 8),
@@ -287,7 +295,7 @@ class _WaCampaignsScreenState extends State<WaCampaignsScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('OK'),
+            child: Text(uicopy.c('wa_campaigns.ok')),
           ),
         ],
       ),
@@ -307,15 +315,15 @@ class _WaCampaignsScreenState extends State<WaCampaignsScreen> {
         backgroundColor: _kCard,
         elevation: 0,
         foregroundColor: _kText,
-        title: const Text('WhatsApp Campaigns',
-            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+        title: Text(uicopy.c('wa_campaigns.title'),
+            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
         bottom: const PreferredSize(
           preferredSize: Size.fromHeight(1),
           child: Divider(height: 1, color: _kBorder),
         ),
         actions: [
           IconButton(
-            tooltip: 'Refresh',
+            tooltip: uicopy.c('wa_campaigns.refresh_tooltip'),
             onPressed: _loading ? null : _load,
             icon: const Icon(Icons.refresh),
           ),
@@ -328,7 +336,7 @@ class _WaCampaignsScreenState extends State<WaCampaignsScreen> {
               backgroundColor: _kGreen,
               foregroundColor: Colors.white,
               icon: const Icon(Icons.add),
-              label: const Text('New campaign'),
+              label: Text(uicopy.c('wa_campaigns.new_campaign')),
             ),
       body: _body(),
     );
@@ -560,7 +568,9 @@ class _CampaignCard extends StatelessWidget {
               // not infer it from runs_done being above zero, because the parent
               // carries runs_done too.
               if (c['is_repeat_child'] == true)
-                WaPlainChip(label: 'run ${c['runs_done'] ?? ''}'),
+                WaPlainChip(
+                    label: uicopy.cf('wa_campaigns.chip_run',
+                        {'n': (c['runs_done'] ?? '').toString()})),
             ],
           ),
           const SizedBox(height: 8),
@@ -585,23 +595,33 @@ class _CampaignCard extends StatelessWidget {
               // Strictly flag-gated. A missing flag is a false, never a guess
               // from `status`.
               if (c['can_edit'] == true)
-                _action(Icons.edit_outlined, 'Edit', onEdit),
+                _action(Icons.edit_outlined,
+                    uicopy.c('wa_campaigns.action_edit'), onEdit),
               if (c['can_schedule'] == true)
-                _action(Icons.schedule_send_outlined, 'Schedule', onSchedule),
+                _action(Icons.schedule_send_outlined,
+                    uicopy.c('wa_campaigns.action_schedule'), onSchedule),
               if (c['can_approve'] == true)
-                _action(Icons.verified_outlined, 'Approve', onApprove,
+                _action(Icons.verified_outlined,
+                    uicopy.c('wa_campaigns.action_approve'), onApprove,
                     primary: true),
               if (c['can_pause'] == true)
-                _action(Icons.pause_circle_outline, 'Pause', onPause),
+                _action(Icons.pause_circle_outline,
+                    uicopy.c('wa_campaigns.action_pause'), onPause),
               if (c['can_resume'] == true)
-                _action(Icons.play_circle_outline, 'Resume', onResume),
+                _action(Icons.play_circle_outline,
+                    uicopy.c('wa_campaigns.action_resume'), onResume),
               if (c['can_resend_failed'] == true)
-                _action(Icons.refresh, 'Resend failed', onResendFailed),
-              _action(Icons.science_outlined, 'Dry run', onDryRun),
-              _action(Icons.receipt_long_outlined, 'View recipients',
+                _action(Icons.refresh,
+                    uicopy.c('wa_campaigns.action_resend_failed'),
+                    onResendFailed),
+              _action(Icons.science_outlined,
+                  uicopy.c('wa_campaigns.action_dry_run'), onDryRun),
+              _action(Icons.receipt_long_outlined,
+                  uicopy.c('wa_campaigns.action_view_recipients'),
                   onViewRecipients),
               if (c['can_edit'] == true)
-                _action(Icons.cancel_outlined, 'Cancel', onCancel,
+                _action(Icons.cancel_outlined,
+                    uicopy.c('wa_campaigns.action_cancel'), onCancel,
                     danger: true),
             ],
           ),
@@ -747,7 +767,7 @@ class _RetryState extends StatelessWidget {
                 onPressed: onRetry,
                 style: ElevatedButton.styleFrom(
                     backgroundColor: _kGreen, foregroundColor: Colors.white),
-                child: const Text('Retry'),
+                child: Text(uicopy.c('wa_campaigns.retry')),
               ),
             ],
           ),
@@ -842,8 +862,8 @@ Future<WaScheduleChoice?> showWaSchedulePicker(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('When should this send?',
-                style: TextStyle(
+            Text(uicopy.c('wa_campaigns.schedule_sheet_title'),
+                style: const TextStyle(
                     fontSize: 15, fontWeight: FontWeight.w700, color: _kText)),
             if (windowLabel.isNotEmpty) ...[
               const SizedBox(height: 6),
@@ -854,19 +874,21 @@ Future<WaScheduleChoice?> showWaSchedulePicker(
             ListTile(
               contentPadding: EdgeInsets.zero,
               leading: const Icon(Icons.bolt_outlined, color: _kGreen),
-              title: const Text('Send at the next window',
-                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-              subtitle: const Text(
-                  'Queued now; the server sends inside the window above',
-                  style: TextStyle(fontSize: 12, color: _kMuted)),
+              title: Text(uicopy.c('wa_campaigns.schedule_next_window_title'),
+                  style: const TextStyle(
+                      fontSize: 14, fontWeight: FontWeight.w600)),
+              subtitle: Text(
+                  uicopy.c('wa_campaigns.schedule_next_window_note'),
+                  style: const TextStyle(fontSize: 12, color: _kMuted)),
               onTap: () => Navigator.pop(ctx, const WaScheduleChoice(null)),
             ),
             const Divider(height: 1, color: _kBorder),
             ListTile(
               contentPadding: EdgeInsets.zero,
               leading: const Icon(Icons.event_outlined, color: _kGreen),
-              title: const Text('Pick a date and time',
-                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+              title: Text(uicopy.c('wa_campaigns.schedule_pick_datetime'),
+                  style: const TextStyle(
+                      fontSize: 14, fontWeight: FontWeight.w600)),
               onTap: () async {
                 final now = DateTime.now();
                 final d = await showDatePicker(
@@ -1003,13 +1025,13 @@ class _DryRunSheetState extends State<_DryRunSheet> {
           controller: scroll,
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
           children: [
-            const Text('Dry run',
-                style: TextStyle(
+            Text(uicopy.c('wa_campaigns.dry_run_title'),
+                style: const TextStyle(
                     fontSize: 16, fontWeight: FontWeight.w700, color: _kText)),
             const SizedBox(height: 12),
             if (body.isNotEmpty) ...[
-              const Text('Template body',
-                  style: TextStyle(
+              Text(uicopy.c('wa_campaigns.dry_run_template_body'),
+                  style: const TextStyle(
                       fontSize: 12, fontWeight: FontWeight.w600, color: _kMuted)),
               const SizedBox(height: 4),
               Container(
@@ -1027,8 +1049,8 @@ class _DryRunSheetState extends State<_DryRunSheet> {
               const SizedBox(height: 14),
             ],
             if (samples.isEmpty)
-              const Text('No pending recipients to preview',
-                  style: TextStyle(fontSize: 13, color: _kMuted))
+              Text(uicopy.c('wa_campaigns.dry_run_empty'),
+                  style: const TextStyle(fontSize: 13, color: _kMuted))
             else
               for (final s in samples)
                 Padding(
@@ -1075,7 +1097,8 @@ class _DryRunSheetState extends State<_DryRunSheet> {
             if (pending.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
-                child: Text('$pending pending',
+                child: Text(
+                    uicopy.cf('wa_campaigns.pending_count', {'n': pending}),
                     style: const TextStyle(fontSize: 12, color: _kMuted)),
               ),
           ],
@@ -1197,7 +1220,7 @@ class _RecipientLogSheetState extends State<_RecipientLogSheet> {
       seen.putIfAbsent(key, () => (r['status_label'] ?? key).toString());
     }
     return [
-      (null, 'All'),
+      (null, uicopy.c('wa_campaigns.filter_all')),
       ...seen.entries.map((e) => (e.key, e.value)),
     ];
   }
@@ -1251,8 +1274,8 @@ class _RecipientLogSheetState extends State<_RecipientLogSheet> {
                         widget.onResendFailed!.call();
                       },
                       icon: const Icon(Icons.refresh, size: 15),
-                      label: const Text('Resend failed',
-                          style: TextStyle(fontSize: 12.5)),
+                      label: Text(uicopy.c('wa_campaigns.action_resend_failed'),
+                          style: const TextStyle(fontSize: 12.5)),
                     ),
                 ],
               ),
@@ -1291,9 +1314,9 @@ class _RecipientLogSheetState extends State<_RecipientLogSheet> {
             const Divider(height: 1, color: _kBorder),
             Expanded(
               child: visible.isEmpty
-                  ? const Center(
-                      child: Text('Nothing here',
-                          style: TextStyle(fontSize: 13, color: _kMuted)),
+                  ? Center(
+                      child: Text(uicopy.c('wa_campaigns.log_empty'),
+                          style: const TextStyle(fontSize: 13, color: _kMuted)),
                     )
                   : ListView.separated(
                       controller: scroll,
@@ -1405,8 +1428,8 @@ class _WaHoldoutSectionState extends State<WaHoldoutSection> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Control group',
-              style: TextStyle(
+          Text(uicopy.c('wa_campaigns.holdout_title'),
+              style: const TextStyle(
                   fontSize: 13, fontWeight: FontWeight.w700, color: _kText)),
           if (summary.isNotEmpty) ...[
             const SizedBox(height: 6),
@@ -1424,9 +1447,13 @@ class _WaHoldoutSectionState extends State<WaHoldoutSection> {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(child: _group('Sent', sent)),
+              Expanded(
+                  child: _group(uicopy.c('wa_campaigns.holdout_group_sent'),
+                      sent)),
               const SizedBox(width: 12),
-              Expanded(child: _group('Held back', held)),
+              Expanded(
+                  child: _group(uicopy.c('wa_campaigns.holdout_group_held'),
+                      held)),
             ],
           ),
           if (measuredFrom.isNotEmpty) ...[
@@ -1519,9 +1546,13 @@ class _RecipientRow extends StatelessWidget {
               runSpacing: 4,
               children: [
                 if (r['clicked'] == true)
-                  const WaToneChip(label: 'Clicked', tone: 'blue'),
+                  WaToneChip(
+                      label: uicopy.c('wa_campaigns.chip_clicked'),
+                      tone: 'blue'),
                 if (r['ordered'] == true)
-                  const WaToneChip(label: 'Ordered', tone: 'green'),
+                  WaToneChip(
+                      label: uicopy.c('wa_campaigns.chip_ordered'),
+                      tone: 'green'),
                 if (revenue.isNotEmpty)
                   WaToneChip(label: revenue, tone: 'green'),
               ],

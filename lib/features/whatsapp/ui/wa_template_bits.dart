@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../services/ui_copy.dart';
 
 /// Shared rendering primitives for the WhatsApp template manager.
 ///
@@ -441,7 +442,7 @@ class WaErrorState extends StatelessWidget {
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(8)),
               ),
-              child: const Text('Retry'),
+              child: Text(c('wa_template_bits.retry')),
             ),
           ],
         ),

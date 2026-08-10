@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:pharma_b2b/services/date_labels.dart';
+import 'package:pharma_b2b/services/ui_copy.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 
 import 'alert_audio.dart';
@@ -14,25 +15,17 @@ import 'alert_audio.dart';
 const _kSkip = {'id', 'user_id', '_alertType'};
 
 String _fmtLabel(String col) {
-  const ov = {
-    'whatsapp_no': 'WhatsApp No.',        'other_contact_no': 'Other Contact',
-    'dl_20b': 'Drug Licence 20B',         'dl_21b': 'Drug Licence 21B',
-    'gst_no': 'GST No.',                  'gstin': 'GSTIN',
-    'store_location_link': 'Store Location','range_zone': 'Range / Zone',
-    'address_local': 'Local Address',     'customer_code': 'Customer Code',
-    'payment_term': 'Payment Term',       'store_type': 'Store Type',
-    'pharmacy_name': 'Pharmacy Name',     'customer_name': 'Customer Name',
-    'owner_name': 'Owner Name',           'created_at': 'Registered',
-    'approved_at': 'Approved At',         'approved_by': 'Approved By',
-    'payment_id': 'Order No.',            'total_amount': 'Total Amount',
-  };
-  if (ov.containsKey(col)) return ov[col]!;
+  // The display label for a known column is backend copy, keyed by the column
+  // name. An unknown column has no backend label, so it keeps the derived
+  // title-cased form rather than rendering blank.
+  final label = c('admin_alert.field_$col');
+  if (label.isNotEmpty) return label;
   return col.split('_').map((w) => w.isEmpty ? '' : '${w[0].toUpperCase()}${w.substring(1)}').join(' ');
 }
 
 String _fmtVal(String col, dynamic v) {
   if (v == null) return '—';
-  if (v is bool) return v ? 'Yes' : 'No';
+  if (v is bool) return v ? c('admin_alert.value_yes') : c('admin_alert.value_no');
   final s = v.toString().trim();
   if (s.isEmpty || s == 'null') return '—';
   // CHANGE #548: the dd/MM/yyyy  HH:mm builder is DELETED. ist_fmt('dmy_hm2')
@@ -376,7 +369,7 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
       }).then((_) {}).catchError((_) {});
     } catch (e) {
       if (mounted) {
-        showToast(context, 'Approve failed: $e', isError: true);
+        showToast(context, cf('admin_alert.toast_approve_failed', {'error': '$e'}), isError: true);
       }
     }
     _advance();
@@ -405,7 +398,7 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
       }).then((_) {}).catchError((_) {});
     } catch (e) {
       if (mounted) {
-        showToast(context, 'Reject failed: $e', isError: true);
+        showToast(context, cf('admin_alert.toast_reject_failed', {'error': '$e'}), isError: true);
       }
     }
     _advance();
@@ -465,9 +458,9 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
     final type = rec['_alertType'] as String? ?? 'registration';
     if (type == 'order') return _buildOrderCard(rec);
     if (type == 'supplier_registration') return _buildSupplierRegCard(rec);
-    if (type == 'mr_registration') return _buildSimpleRegCard(rec, title: 'NEW MR REGISTRATION', color: const Color(0xFF7C3AED), nameKey: 'full_name', subtitleKey: 'company_represented');
-    if (type == 'company_registration') return _buildSimpleRegCard(rec, title: 'NEW COMPANY REGISTRATION', color: const Color(0xFF0369A1), nameKey: 'company_name', subtitleKey: 'contact_person');
-    if (type == 'dp_registration') return _buildSimpleRegCard(rec, title: 'NEW DELIVERY PARTNER', color: const Color(0xFFB45309), nameKey: 'full_name', subtitleKey: 'vehicle_type');
+    if (type == 'mr_registration') return _buildSimpleRegCard(rec, title: c('admin_alert.banner_new_mr'), color: const Color(0xFF7C3AED), nameKey: 'full_name', subtitleKey: 'company_represented');
+    if (type == 'company_registration') return _buildSimpleRegCard(rec, title: c('admin_alert.banner_new_company'), color: const Color(0xFF0369A1), nameKey: 'company_name', subtitleKey: 'contact_person');
+    if (type == 'dp_registration') return _buildSimpleRegCard(rec, title: c('admin_alert.banner_new_delivery_partner'), color: const Color(0xFFB45309), nameKey: 'full_name', subtitleKey: 'vehicle_type');
     return _buildRegistrationCard(rec);
   }
 
@@ -508,8 +501,9 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
               Expanded(
                 child: Text(
                   queueLen > 1
-                      ? 'NEW REGISTRATION  ·  $queueLen pending'
-                      : 'NEW REGISTRATION',
+                      ? cf('admin_alert.banner_new_registration_queued',
+                          {'count': '$queueLen'})
+                      : c('admin_alert.banner_new_registration'),
                   style: const TextStyle(
                       fontSize: 13, fontWeight: FontWeight.w800,
                       color: Colors.white, letterSpacing: 0.5),
@@ -562,8 +556,8 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
             child: Row(children: [
-              const Text('View full details',
-                  style: TextStyle(fontSize: 12, color: Color(0xFF1B7A43),
+              Text(c('admin_alert.view_full_details'),
+                  style: const TextStyle(fontSize: 12, color: Color(0xFF1B7A43),
                       fontWeight: FontWeight.w600)),
               const SizedBox(width: 4),
               AnimatedRotation(
@@ -599,7 +593,8 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
                         padding: const EdgeInsets.symmetric(
                             horizontal: 12, vertical: 10),
                       ),
-                      child: const Text('Skip', style: TextStyle(fontSize: 12)),
+                      child: Text(c('admin_alert.btn_skip'),
+                          style: const TextStyle(fontSize: 12)),
                     ),
                     const SizedBox(width: 8),
                   ],
@@ -613,8 +608,8 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
                             borderRadius: BorderRadius.circular(8)),
                         padding: const EdgeInsets.symmetric(vertical: 12),
                       ),
-                      child: const Text('Reject',
-                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                      child: Text(c('admin_alert.btn_reject'),
+                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -627,8 +622,8 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
                             borderRadius: BorderRadius.circular(8)),
                         padding: const EdgeInsets.symmetric(vertical: 12),
                       ),
-                      child: const Text('Approve',
-                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                      child: Text(c('admin_alert.btn_approve'),
+                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
                     ),
                   ),
                 ]),
@@ -667,7 +662,10 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
               const Icon(Icons.add_business_outlined, color: Colors.white, size: 18),
               const SizedBox(width: 8),
               Expanded(child: Text(
-                queueLen > 1 ? 'NEW SUPPLIER  ·  $queueLen pending' : 'NEW SUPPLIER REGISTRATION',
+                queueLen > 1
+                    ? cf('admin_alert.banner_new_supplier_queued',
+                        {'count': '$queueLen'})
+                    : c('admin_alert.banner_new_supplier'),
                 style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: Colors.white, letterSpacing: 0.5),
               )),
               InkWell(
@@ -702,7 +700,7 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
             child: Row(children: [
-              const Text('View full details', style: TextStyle(fontSize: 12, color: Color(0xFF0284C7), fontWeight: FontWeight.w600)),
+              Text(c('admin_alert.view_full_details'), style: const TextStyle(fontSize: 12, color: Color(0xFF0284C7), fontWeight: FontWeight.w600)),
               const SizedBox(width: 4),
               AnimatedRotation(
                 turns: _detailsOpen ? 0.5 : 0.0,
@@ -723,20 +721,21 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
                     OutlinedButton(
                       onPressed: _dismiss,
                       style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF6B7280), side: const BorderSide(color: Color(0xFFD1D5DB)), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)), padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
-                      child: const Text('Skip', style: TextStyle(fontSize: 12)),
+                      child: Text(c('admin_alert.btn_skip'),
+                          style: const TextStyle(fontSize: 12)),
                     ),
                     const SizedBox(width: 8),
                   ],
                   Expanded(child: OutlinedButton(
                     onPressed: _reject,
                     style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFFDC2626), side: const BorderSide(color: Color(0xFFDC2626)), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)), padding: const EdgeInsets.symmetric(vertical: 12)),
-                    child: const Text('Reject', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                    child: Text(c('admin_alert.btn_reject'), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
                   )),
                   const SizedBox(width: 10),
                   Expanded(child: FilledButton(
                     onPressed: _approve,
                     style: FilledButton.styleFrom(backgroundColor: const Color(0xFF0284C7), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)), padding: const EdgeInsets.symmetric(vertical: 12)),
-                    child: const Text('Approve', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                    child: Text(c('admin_alert.btn_approve'), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
                   )),
                 ]),
         ),
@@ -790,8 +789,9 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
               Expanded(
                 child: Text(
                   queueLen > 1
-                      ? 'NEW ORDER  ·  $queueLen pending'
-                      : 'NEW ORDER',
+                      ? cf('admin_alert.banner_new_order_queued',
+                          {'count': '$queueLen'})
+                      : c('admin_alert.banner_new_order'),
                   style: const TextStyle(
                       fontSize: 13, fontWeight: FontWeight.w800,
                       color: Colors.white, letterSpacing: 0.5),
@@ -842,8 +842,8 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
             child: Row(children: [
-              const Text('View full details',
-                  style: TextStyle(fontSize: 12, color: Color(0xFF15803D),
+              Text(c('admin_alert.view_full_details'),
+                  style: const TextStyle(fontSize: 12, color: Color(0xFF15803D),
                       fontWeight: FontWeight.w600)),
               const SizedBox(width: 4),
               AnimatedRotation(
@@ -875,7 +875,8 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
                   padding: const EdgeInsets.symmetric(
                       horizontal: 12, vertical: 10),
                 ),
-                child: const Text('Skip', style: TextStyle(fontSize: 12)),
+                child: Text(c('admin_alert.btn_skip'),
+                    style: const TextStyle(fontSize: 12)),
               ),
               const SizedBox(width: 8),
             ],
@@ -889,8 +890,8 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
                       borderRadius: BorderRadius.circular(8)),
                   padding: const EdgeInsets.symmetric(vertical: 12),
                 ),
-                child: const Text('Dismiss',
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                child: Text(c('admin_alert.btn_dismiss'),
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
               ),
             ),
             const SizedBox(width: 10),
@@ -906,8 +907,8 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
                       borderRadius: BorderRadius.circular(8)),
                   padding: const EdgeInsets.symmetric(vertical: 12),
                 ),
-                child: const Text('View Orders',
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                child: Text(c('admin_alert.btn_view_orders'),
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
               ),
             ),
           ]),
@@ -985,11 +986,11 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
             const Divider(height: 1, color: Color(0xFFE5E7EB)),
             const SizedBox(height: 8),
             // Header
-            Row(children: const [
-              Expanded(flex: 5, child: Text('Product', style: colHeader)),
-              SizedBox(width: 30, child: Text('Qty',   style: colHeader, textAlign: TextAlign.center)),
-              SizedBox(width: 54, child: Text('MRP',   style: colHeader, textAlign: TextAlign.right)),
-              SizedBox(width: 58, child: Text('Total', style: colHeader, textAlign: TextAlign.right)),
+            Row(children: [
+              Expanded(flex: 5, child: Text(c('admin_alert.col_product'), style: colHeader)),
+              SizedBox(width: 30, child: Text(c('admin_alert.col_qty'),   style: colHeader, textAlign: TextAlign.center)),
+              SizedBox(width: 54, child: Text(c('admin_alert.col_mrp'),   style: colHeader, textAlign: TextAlign.right)),
+              SizedBox(width: 58, child: Text(c('admin_alert.col_total'), style: colHeader, textAlign: TextAlign.right)),
             ]),
             const SizedBox(height: 4),
             // Item rows
@@ -1106,7 +1107,10 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
               const Icon(Icons.person_add_outlined, color: Colors.white, size: 18),
               const SizedBox(width: 8),
               Expanded(child: Text(
-                queueLen > 1 ? '$title  ·  $queueLen pending' : title,
+                queueLen > 1
+                    ? cf('admin_alert.banner_queued',
+                        {'title': title, 'count': '$queueLen'})
+                    : title,
                 style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: Colors.white, letterSpacing: 0.5),
               )),
               InkWell(onTap: _toggleMute, borderRadius: BorderRadius.circular(20), child: Padding(padding: const EdgeInsets.all(4),
@@ -1131,7 +1135,7 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
           onTap: () => setState(() => _detailsOpen = !_detailsOpen),
           child: Padding(padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
             child: Row(children: [
-              Text('View full details', style: TextStyle(fontSize: 12, color: color, fontWeight: FontWeight.w600)),
+              Text(c('admin_alert.view_full_details'), style: TextStyle(fontSize: 12, color: color, fontWeight: FontWeight.w600)),
               const SizedBox(width: 4),
               AnimatedRotation(turns: _detailsOpen ? 0.5 : 0.0, duration: const Duration(milliseconds: 180),
                 child: Icon(Icons.expand_more, size: 16, color: color)),
@@ -1145,12 +1149,13 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
             if (queueLen > 1) ...[
               OutlinedButton(onPressed: _dismiss,
                 style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF6B7280), side: const BorderSide(color: Color(0xFFD1D5DB)), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)), padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
-                child: const Text('Skip', style: TextStyle(fontSize: 12))),
+                child: Text(c('admin_alert.btn_skip'),
+                    style: const TextStyle(fontSize: 12))),
               const SizedBox(width: 8),
             ],
             Expanded(child: OutlinedButton(onPressed: _dismiss,
               style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF6B7280), side: const BorderSide(color: Color(0xFFD1D5DB)), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)), padding: const EdgeInsets.symmetric(vertical: 12)),
-              child: const Text('Dismiss', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)))),
+              child: Text(c('admin_alert.btn_dismiss'), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)))),
           ]),
         ),
       ]),

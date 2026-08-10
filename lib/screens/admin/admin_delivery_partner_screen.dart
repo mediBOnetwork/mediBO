@@ -27,6 +27,7 @@ import '../../fulfill/fulfill_lookups.dart';
 import '../../services/admin_date_scope.dart';
 import '../../services/admin_zone_scope.dart';
 import '../../services/map_config.dart'; // C634: map deep links come from config
+import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 import 'admin_delivery_partners_section.dart';
 
@@ -158,10 +159,10 @@ class _AdminDeliveryPartnerScreenState extends State<AdminDeliveryPartnerScreen>
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,
-        title: const Text('Delivery Partners',
-            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+        title: Text(c('admin_delivery_partner.page_title'),
+            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
         actions: [
-          IconButton(icon: const Icon(Icons.refresh, color: Color(0xFF374151)), onPressed: _load, tooltip: 'Refresh'),
+          IconButton(icon: const Icon(Icons.refresh, color: Color(0xFF374151)), onPressed: _load, tooltip: c('admin_delivery_partner.tooltip_refresh')),
         ],
       ),
       body: _loading

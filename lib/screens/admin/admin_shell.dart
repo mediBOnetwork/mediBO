@@ -6,6 +6,7 @@ import '../../features/whatsapp/ui/wa_home_screen.dart';
 import '../../features/whatsapp/ui/wa_templates_screen.dart';
 import 'wa_campaigns_screen.dart';
 import '../../services/admin_date_scope.dart';
+import '../../services/ui_copy.dart';
 import '../../services/fcm_service.dart';
 import '../../theme.dart';
 import '../../user_state.dart';
@@ -32,24 +33,25 @@ class _NavEntry {
   const _NavEntry(this.icon, this.activeIcon, this.label, this.pageTitle);
 }
 
-const _kNavBase = [
-  _NavEntry(Icons.dashboard_outlined, Icons.dashboard,
-      'Dashboard', 'Dashboard'),
-  _NavEntry(Icons.medication_outlined, Icons.medication,
-      'Add Medicine', 'Add Medicine Details'),
-  _NavEntry(Icons.inventory_2_outlined, Icons.inventory_2,
-      'Suppliers', 'Supplier Dashboard'),
-  _NavEntry(Icons.people_outline, Icons.people,
-      'Customers', 'Customer Dashboard'),
-  _NavEntry(Icons.inbox_outlined, Icons.inbox,
-      'Bills', 'Pending Bills'),
-];
+List<_NavEntry> get _kNavBase => [
+      _NavEntry(Icons.dashboard_outlined, Icons.dashboard,
+          c('admin_shell.nav_dashboard'), c('admin_shell.page_dashboard')),
+      _NavEntry(Icons.medication_outlined, Icons.medication,
+          c('admin_shell.nav_add_medicine'), c('admin_shell.page_add_medicine')),
+      _NavEntry(Icons.inventory_2_outlined, Icons.inventory_2,
+          c('admin_shell.nav_suppliers'), c('admin_shell.page_suppliers')),
+      _NavEntry(Icons.people_outline, Icons.people,
+          c('admin_shell.nav_customers'), c('admin_shell.page_customers')),
+      _NavEntry(Icons.inbox_outlined, Icons.inbox,
+          c('admin_shell.nav_bills'), c('admin_shell.page_bills')),
+    ];
 
-const _kNavAdmins = _NavEntry(
-  Icons.admin_panel_settings_outlined,
-  Icons.admin_panel_settings,
-  'Admins', 'Manage Admins',
-);
+_NavEntry get _kNavAdmins => _NavEntry(
+      Icons.admin_panel_settings_outlined,
+      Icons.admin_panel_settings,
+      c('admin_shell.nav_admins'),
+      c('admin_shell.page_admins'),
+    );
 
 List<_NavEntry> _effectiveNav(bool isSuperAdmin) =>
     isSuperAdmin ? [..._kNavBase, _kNavAdmins] : _kNavBase;
@@ -188,14 +190,14 @@ class _AdminShellState extends State<AdminShell> with WidgetsBindingObserver {
         return;
       case 'manage_admins':
         if (!isSuperAdmin) {
-          showToast(ctx, 'Only super-admins can manage admin accounts', isError: true);
+          showToast(ctx, c('admin_shell.toast_super_admin_only_admins'), isError: true);
           return;
         }
         setState(() { _view = _AdminView.section; _index = 5; });
         return;
       case 'payment_upi':
         if (!isSuperAdmin) {
-          showToast(ctx, 'Only super-admins can manage UPI accounts', isError: true);
+          showToast(ctx, c('admin_shell.toast_super_admin_only_upi'), isError: true);
           return;
         }
         Navigator.of(ctx).push(
@@ -204,14 +206,16 @@ class _AdminShellState extends State<AdminShell> with WidgetsBindingObserver {
         return;
       case 'add_supplier':
         Navigator.of(ctx).push(MaterialPageRoute(
-          builder: (_) => const _QuickLinkPlaceholder(
-              title: 'Add Supplier', icon: Icons.add_business_outlined),
+          builder: (_) => _QuickLinkPlaceholder(
+              title: c('admin_shell.placeholder_add_supplier'),
+              icon: Icons.add_business_outlined),
         ));
         return;
       case 'add_customer':
         Navigator.of(ctx).push(MaterialPageRoute(
-          builder: (_) => const _QuickLinkPlaceholder(
-              title: 'Add Customer', icon: Icons.person_add_outlined),
+          builder: (_) => _QuickLinkPlaceholder(
+              title: c('admin_shell.placeholder_add_customer'),
+              icon: Icons.person_add_outlined),
         ));
         return;
     }
@@ -298,7 +302,7 @@ class _AdminShellState extends State<AdminShell> with WidgetsBindingObserver {
         elevation: 0,
         centerTitle: false,
         title: Tooltip(
-          message: 'Go to Homepage',
+          message: c('admin_shell.logo_tooltip'),
           child: GestureDetector(
             onTap: _onLogoTap,
             child: MouseRegion(
@@ -324,65 +328,67 @@ class _AdminShellState extends State<AdminShell> with WidgetsBindingObserver {
         actions: [
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert, color: Color(0xFF374151)),
-            tooltip: 'More options',
+            tooltip: c('admin_shell.more_options_tooltip'),
             onSelected: (route) => _navigateQuickLink(ctx, route, isSuperAdmin),
             itemBuilder: (_) => [
               if (isSuperAdmin)
-                const PopupMenuItem(
+                PopupMenuItem(
                   value: 'manage_admins',
                   child: _PopupRow(
                     icon: Icons.admin_panel_settings_outlined,
-                    label: 'Manage Admins',
-                    color: Color(0xFF1B7A43),
+                    label: c('admin_shell.menu_manage_admins'),
+                    color: const Color(0xFF1B7A43),
                   ),
                 ),
               if (isSuperAdmin)
-                const PopupMenuItem(
+                PopupMenuItem(
                   value: 'payment_upi',
                   child: _PopupRow(
                     icon: Icons.qr_code_outlined,
-                    label: 'Payment / UPI',
-                    color: Color(0xFF1B7A43),
+                    label: c('admin_shell.menu_payment_upi'),
+                    color: const Color(0xFF1B7A43),
                   ),
                 ),
-              const PopupMenuItem(
+              PopupMenuItem(
                 value: 'whatsapp',
                 child: _PopupRow(
                     icon: Icons.forum_outlined,
-                    label: 'WhatsApp',
-                    color: Color(0xFF1B7A43)),
+                    label: c('admin_shell.menu_whatsapp'),
+                    color: const Color(0xFF1B7A43)),
               ),
-              const PopupMenuItem(
+              PopupMenuItem(
                 value: 'wa_templates',
                 child: _PopupRow(
                     icon: Icons.description_outlined,
-                    label: 'WhatsApp Templates',
-                    color: Color(0xFF1B7A43)),
+                    label: c('admin_shell.menu_wa_templates'),
+                    color: const Color(0xFF1B7A43)),
               ),
-              const PopupMenuItem(
+              PopupMenuItem(
                 value: 'wa_campaigns',
                 child: _PopupRow(
                     icon: Icons.campaign_outlined,
-                    label: 'WA Campaigns',
-                    color: Color(0xFF1B7A43)),
+                    label: c('admin_shell.menu_wa_campaigns'),
+                    color: const Color(0xFF1B7A43)),
               ),
-              const PopupMenuItem(
+              PopupMenuItem(
                 value: 'add_supplier',
                 child: _PopupRow(
-                    icon: Icons.add_business_outlined, label: 'Add Supplier'),
+                    icon: Icons.add_business_outlined,
+                    label: c('admin_shell.menu_add_supplier')),
               ),
-              const PopupMenuItem(
+              PopupMenuItem(
                 value: 'add_customer',
                 child: _PopupRow(
-                    icon: Icons.person_add_outlined, label: 'Add Customer'),
+                    icon: Icons.person_add_outlined,
+                    label: c('admin_shell.menu_add_customer')),
               ),
               const PopupMenuDivider(),
-              const PopupMenuItem(
+              PopupMenuItem(
                 value: 'logout',
                 child: _PopupRow(
                     icon: Icons.logout,
-                    label: 'Logout',
-                    color: Color(0xFFDC2626)),
+                    label: c('admin_shell.menu_logout'),
+                    color: const Color(0xFFDC2626)),
               ),
             ],
           ),
@@ -477,24 +483,24 @@ class _AdminNewDesktopHeader extends StatelessWidget {
           ),
           const Spacer(),
           // Nav tabs
-          _DesktopNavLink(label: 'Dashboard', icon: Icons.dashboard_outlined, selected: false, onTap: () => onNav('dashboard')),
+          _DesktopNavLink(label: c('admin_shell.nav_dashboard'), icon: Icons.dashboard_outlined, selected: false, onTap: () => onNav('dashboard')),
           const SizedBox(width: 2),
-          _DesktopNavLink(label: 'Add Medicine', icon: Icons.medication_outlined, selected: false, onTap: () => onNav('add_medicine')),
+          _DesktopNavLink(label: c('admin_shell.nav_add_medicine'), icon: Icons.medication_outlined, selected: false, onTap: () => onNav('add_medicine')),
           const SizedBox(width: 2),
-          _DesktopNavLink(label: 'Suppliers', icon: Icons.inventory_2_outlined, selected: false, onTap: () => onNav('suppliers')),
+          _DesktopNavLink(label: c('admin_shell.nav_suppliers'), icon: Icons.inventory_2_outlined, selected: false, onTap: () => onNav('suppliers')),
           const SizedBox(width: 2),
-          _DesktopNavLink(label: 'Customers', icon: Icons.people_outline, selected: false, onTap: () => onNav('customers')),
+          _DesktopNavLink(label: c('admin_shell.nav_customers'), icon: Icons.people_outline, selected: false, onTap: () => onNav('customers')),
           const SizedBox(width: 2),
           _BillsNavLink(count: pendingBillsCount, onTap: () => onNav('bills')),
           const SizedBox(width: 2),
-          _DesktopNavLink(label: 'WhatsApp', icon: Icons.forum_outlined, selected: false, onTap: () => onNav('whatsapp')),
+          _DesktopNavLink(label: c('admin_shell.nav_whatsapp'), icon: Icons.forum_outlined, selected: false, onTap: () => onNav('whatsapp')),
           const SizedBox(width: 2),
-          _DesktopNavLink(label: 'Templates', icon: Icons.description_outlined, selected: false, onTap: () => onNav('wa_templates')),
+          _DesktopNavLink(label: c('admin_shell.nav_templates'), icon: Icons.description_outlined, selected: false, onTap: () => onNav('wa_templates')),
           const SizedBox(width: 2),
-          _DesktopNavLink(label: 'WA Campaigns', icon: Icons.campaign_outlined, selected: false, onTap: () => onNav('wa_campaigns')),
+          _DesktopNavLink(label: c('admin_shell.nav_wa_campaigns'), icon: Icons.campaign_outlined, selected: false, onTap: () => onNav('wa_campaigns')),
           if (isSuperAdmin) ...[
             const SizedBox(width: 2),
-            _DesktopNavLink(label: 'Payment / UPI', icon: Icons.qr_code_outlined, selected: false, onTap: () => onNav('payment_upi')),
+            _DesktopNavLink(label: c('admin_shell.menu_payment_upi'), icon: Icons.qr_code_outlined, selected: false, onTap: () => onNav('payment_upi')),
           ],
           const SizedBox(width: 8),
           _AdminProfileChip(),
@@ -564,8 +570,8 @@ class _BillsHdrBtn extends StatelessWidget {
           else
             const Icon(Icons.inbox_outlined, size: 14, color: color),
           const SizedBox(width: 4),
-          const Text('Bills',
-              style: TextStyle(
+          Text(c('admin_shell.nav_bills'),
+              style: const TextStyle(
                   fontSize: 12, fontWeight: FontWeight.w500, color: color)),
         ]),
       ),
@@ -587,7 +593,7 @@ class _QuickLinksButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return PopupMenuButton<String>(
-      tooltip: 'Quick links',
+      tooltip: c('admin_shell.quick_links_tooltip'),
       offset: const Offset(0, 44),
       onSelected: onSelected,
       child: Container(
@@ -596,37 +602,39 @@ class _QuickLinksButton extends StatelessWidget {
           border: Border.all(color: const Color(0xFFE5E7EB)),
           borderRadius: BorderRadius.circular(8),
         ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: const [
-          Icon(Icons.bolt, size: 14, color: Color(0xFF374151)),
-          SizedBox(width: 5),
-          Text('Quick Links',
-              style: TextStyle(
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          const Icon(Icons.bolt, size: 14, color: Color(0xFF374151)),
+          const SizedBox(width: 5),
+          Text(c('admin_shell.quick_links_label'),
+              style: const TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w500,
                   color: Color(0xFF374151))),
-          SizedBox(width: 2),
-          Icon(Icons.arrow_drop_down, size: 17, color: Color(0xFF374151)),
+          const SizedBox(width: 2),
+          const Icon(Icons.arrow_drop_down, size: 17, color: Color(0xFF374151)),
         ]),
       ),
       itemBuilder: (_) => [
         if (isSuperAdmin)
-          const PopupMenuItem(
+          PopupMenuItem(
             value: 'manage_admins',
             child: _PopupRow(
               icon: Icons.admin_panel_settings_outlined,
-              label: 'Manage Admins',
-              color: Color(0xFF1B7A43),
+              label: c('admin_shell.menu_manage_admins'),
+              color: const Color(0xFF1B7A43),
             ),
           ),
-        const PopupMenuItem(
+        PopupMenuItem(
           value: 'add_supplier',
           child: _PopupRow(
-              icon: Icons.add_business_outlined, label: 'Add Supplier'),
+              icon: Icons.add_business_outlined,
+              label: c('admin_shell.menu_add_supplier')),
         ),
-        const PopupMenuItem(
+        PopupMenuItem(
           value: 'add_customer',
           child: _PopupRow(
-              icon: Icons.person_add_outlined, label: 'Add Customer'),
+              icon: Icons.person_add_outlined,
+              label: c('admin_shell.menu_add_customer')),
         ),
       ],
     );
@@ -686,10 +694,10 @@ class _PageBody extends StatelessWidget {
                 fontWeight: FontWeight.w800,
                 color: Color(0xFF111827))),
         const SizedBox(height: 10),
-        const Text(
-          'Coming soon — this section will be built out.',
+        Text(
+          c('admin_shell.coming_soon'),
           textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 14, color: Color(0xFF6B7280)),
+          style: const TextStyle(fontSize: 14, color: Color(0xFF6B7280)),
         ),
       ]),
     );
@@ -746,10 +754,10 @@ class _QuickLinkPlaceholder extends StatelessWidget {
                   fontWeight: FontWeight.w800,
                   color: Color(0xFF111827))),
           const SizedBox(height: 10),
-          const Text(
-            'Coming soon — this section will be built out.',
+          Text(
+            c('admin_shell.coming_soon'),
             textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 14, color: Color(0xFF6B7280)),
+            style: const TextStyle(fontSize: 14, color: Color(0xFF6B7280)),
           ),
         ]),
       ),
@@ -808,7 +816,7 @@ class _BillsNavLink extends StatelessWidget {
             else
               const Icon(Icons.inbox_outlined, size: 16, color: Color(0xFF374151)),
             const SizedBox(width: 6),
-            const Text('Bills', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF374151))),
+            Text(c('admin_shell.nav_bills'), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF374151))),
           ]),
         ),
       ),
@@ -848,7 +856,7 @@ class _AdminProfileChip extends StatelessWidget {
               const SizedBox(width: 8),
               Flexible(
                 child: Text(
-                  'Hello $shortName',
+                  cf('admin_shell.profile_greeting', {'name': shortName}),
                   style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF111827)),
                   overflow: TextOverflow.ellipsis,
                   maxLines: 1,

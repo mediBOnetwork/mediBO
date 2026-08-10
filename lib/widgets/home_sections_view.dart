@@ -6,6 +6,7 @@ import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import '../data/medicine_repository.dart';
 import '../models/home_sections.dart';
 import '../models/storefront_p3.dart';
+import '../services/ui_copy.dart';
 import '../theme.dart';
 import 'animations.dart';
 import 'compact_product_card.dart';
@@ -1039,7 +1040,7 @@ class _Retry extends StatelessWidget {
             side: const BorderSide(color: Brand.green),
             shape: const StadiumBorder(),
           ),
-          child: const Text('Retry'),
+          child: Text(c('home_sections_view.retry')),
         ),
       ],
     ),

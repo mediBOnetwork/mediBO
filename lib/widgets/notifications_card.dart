@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:pharma_b2b/services/ui_copy.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/widgets/animations.dart';
 import 'package:pharma_b2b/features/whatsapp/data/wa_template_api.dart';
@@ -235,7 +236,7 @@ class _NotificationsCardState extends State<NotificationsCard> {
       if (mounted) {
         setState(() => row.enabled = prev);
         final messenger = ScaffoldMessenger.maybeOf(context);
-        messenger?.showSnackBar(const SnackBar(content: Text("Couldn't update, try again")));
+        messenger?.showSnackBar(SnackBar(content: Text(c('notifications.snack_update_failed'))));
       }
     } finally {
       if (mounted) setState(() => _busyKeys.remove(row.actionKey));
@@ -376,8 +377,8 @@ class _NotificationsCardState extends State<NotificationsCard> {
       if (m['ok'] != true) {
         final err = m['error'] as String?;
         setState(() => _allowlistError = err == 'need_10_digits'
-            ? 'Enter a valid 10-digit number'
-            : "Couldn't add — try again");
+            ? c('notifications.allowlist_error_bad_phone')
+            : c('notifications.allowlist_error_add_failed'));
         return;
       }
       RenderLog.write('c506_allowlist_added', '$_audience:${m['phone10']}');
@@ -385,7 +386,10 @@ class _NotificationsCardState extends State<NotificationsCard> {
       _allowlistLabelCtl.clear();
       await _loadAllowlist();
     } catch (_) {
-      if (mounted) setState(() => _allowlistError = "Couldn't add — try again");
+      if (mounted) {
+        setState(() =>
+            _allowlistError = c('notifications.allowlist_error_add_failed'));
+      }
     } finally {
       if (mounted) setState(() => _allowlistAdding = false);
     }
@@ -403,7 +407,7 @@ class _NotificationsCardState extends State<NotificationsCard> {
     } catch (_) {
       if (mounted) {
         final messenger = ScaffoldMessenger.maybeOf(context);
-        messenger?.showSnackBar(const SnackBar(content: Text("Couldn't remove, try again")));
+        messenger?.showSnackBar(SnackBar(content: Text(c('notifications.snack_remove_failed'))));
       }
     } finally {
       if (mounted) setState(() => _allowlistRemoving.remove(entry.phone10));
@@ -596,9 +600,9 @@ class _NotificationsCardState extends State<NotificationsCard> {
           padding: EdgeInsets.symmetric(vertical: 10),
           child: Divider(height: 1, color: Color(0xFFE5E7EB)),
         ),
-        const Text(
-          'ALLOWED TEST NUMBERS',
-          style: TextStyle(
+        Text(
+          c('notifications.allowlist_heading'),
+          style: const TextStyle(
             fontSize: 10.5,
             fontWeight: FontWeight.w700,
             letterSpacing: 0.5,
@@ -606,10 +610,9 @@ class _NotificationsCardState extends State<NotificationsCard> {
           ),
         ),
         const SizedBox(height: 4),
-        const Text(
-          'Numbers here always receive these notifications, even when a toggle '
-          'above is off. For testing during build.',
-          style: TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
+        Text(
+          c('notifications.allowlist_note'),
+          style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
         ),
         const SizedBox(height: 8),
         if (_allowlistLoading)
@@ -621,9 +624,10 @@ class _NotificationsCardState extends State<NotificationsCard> {
             ),
           )
         else if (entries.isEmpty)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 4),
-            child: Text('None yet.', style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Text(c('notifications.allowlist_empty'),
+                style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
           )
         else
           Column(children: entries.map((e) {
@@ -633,7 +637,10 @@ class _NotificationsCardState extends State<NotificationsCard> {
               child: Row(children: [
                 Expanded(
                   child: Text(
-                    (e.label != null && e.label!.isNotEmpty) ? '${e.label} — ${e.phone10}' : e.phone10,
+                    (e.label != null && e.label!.isNotEmpty)
+                        ? cf('notifications.allowlist_entry_labelled',
+                            {'label': e.label!, 'phone': e.phone10})
+                        : e.phone10,
                     style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -660,12 +667,12 @@ class _NotificationsCardState extends State<NotificationsCard> {
             flex: 3,
             child: TextField(
               controller: _allowlistPhoneCtl,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 isDense: true,
-                hintText: 'Phone number',
-                hintStyle: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
-                contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                border: OutlineInputBorder(),
+                hintText: c('notifications.allowlist_hint_phone'),
+                hintStyle: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                border: const OutlineInputBorder(),
               ),
               style: const TextStyle(fontSize: 12.5),
             ),
@@ -675,12 +682,12 @@ class _NotificationsCardState extends State<NotificationsCard> {
             flex: 3,
             child: TextField(
               controller: _allowlistLabelCtl,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 isDense: true,
-                hintText: 'Label (optional)',
-                hintStyle: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
-                contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                border: OutlineInputBorder(),
+                hintText: c('notifications.allowlist_hint_label'),
+                hintStyle: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                border: const OutlineInputBorder(),
               ),
               style: const TextStyle(fontSize: 12.5),
             ),
@@ -697,7 +704,7 @@ class _NotificationsCardState extends State<NotificationsCard> {
                   icon: const Icon(Icons.add_circle, size: 26, color: _green),
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                  tooltip: 'Add',
+                  tooltip: c('notifications.allowlist_tooltip_add'),
                 ),
         ]),
         if (_allowlistError != null)
@@ -731,9 +738,9 @@ class _NotificationsCardState extends State<NotificationsCard> {
               children: [
                 const Icon(Icons.notifications_none, size: 16, color: Color(0xFF374151)),
                 const SizedBox(width: 7),
-                const Text(
-                  'NOTIFICATIONS',
-                  style: TextStyle(
+                Text(
+                  c('notifications.card_title'),
+                  style: const TextStyle(
                     fontSize: 11.5,
                     fontWeight: FontWeight.w700,
                     letterSpacing: 0.6,

@@ -25,6 +25,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'geo_position.dart';
+import '../services/ui_copy.dart';
 import '../utils/render_log.dart';
 
 /// Fields whose per_field_confidence is below this are flagged for review.
@@ -476,7 +477,7 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
       padding: const EdgeInsets.only(bottom: 12),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          Text(required ? '$label *' : label,
+          Text(required ? cf('import_customer.required_label', {'label': label}) : label,
               style: const TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w500,
@@ -489,8 +490,8 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
                 color: const Color(0xFFFEF3C7),
                 borderRadius: BorderRadius.circular(20),
               ),
-              child: const Text('Check this',
-                  style: TextStyle(
+              child: Text(c('import_customer.flag_check_this'),
+                  style: const TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w500,
                       color: Color(0xFF92400E))),
@@ -545,7 +546,7 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
       padding: const EdgeInsets.only(bottom: 12),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          Text(required ? '$label *' : label,
+          Text(required ? cf('import_customer.required_label', {'label': label}) : label,
               style: const TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w500,
@@ -558,8 +559,8 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
                 color: const Color(0xFFFEF3C7),
                 borderRadius: BorderRadius.circular(20),
               ),
-              child: const Text('Check this',
-                  style: TextStyle(
+              child: Text(c('import_customer.flag_check_this'),
+                  style: const TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w500,
                       color: Color(0xFF92400E))),
@@ -603,7 +604,7 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
 
   Widget _section(String title) => Padding(
         padding: const EdgeInsets.only(top: 8, bottom: 12),
-        child: Text(title.toUpperCase(),
+        child: Text(title,
             style: const TextStyle(
                 fontSize: 10,
                 fontWeight: FontWeight.w700,
@@ -627,9 +628,9 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 18, 12, 12),
             child: Row(children: [
-              const Expanded(
-                child: Text('Complete Registration',
-                    style: TextStyle(
+              Expanded(
+                child: Text(c('import_customer.title'),
+                    style: const TextStyle(
                         fontSize: 17,
                         fontWeight: FontWeight.w800,
                         color: Color(0xFF111827))),
@@ -682,7 +683,7 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Text(
-                        '${_review.length} field(s) marked "Check this" — the scan was unsure. Review before saving.',
+                        cf('import_customer.review_banner', {'n': '${_review.length}'}),
                         style: const TextStyle(
                             fontSize: 13, color: Color(0xFF92400E))),
                   ),
@@ -701,7 +702,7 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
                             child: CircularProgressIndicator(
                                 strokeWidth: 2, color: Color(0xFF1B7A43)))
                         : const Icon(Icons.document_scanner_outlined, size: 16),
-                    label: const Text('Photograph licence / GST board'),
+                    label: Text(c('import_customer.btn_scan')),
                     style: OutlinedButton.styleFrom(
                       foregroundColor: const Color(0xFF1B7A43),
                       side: const BorderSide(color: Color(0xFF1B7A43)),
@@ -713,18 +714,18 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
                   ),
                 ),
 
-                _section('Business'),
-                _field('pharmacy_name', 'Pharmacy name'),
-                _field('customer_name', 'Customer name'),
-                _field('store_type', 'Store type'),
+                _section(c('import_customer.section_business')),
+                _field('pharmacy_name', c('import_customer.field_pharmacy_name')),
+                _field('customer_name', c('import_customer.field_customer_name')),
+                _field('store_type', c('import_customer.field_store_type')),
 
-                _section('Contact'),
-                _field('phone', 'Phone'),
-                _field('whatsapp_no', 'WhatsApp number'),
-                _field('other_contact_no', 'Other contact number'),
-                _field('email', 'Email'),
+                _section(c('import_customer.section_contact')),
+                _field('phone', c('import_customer.field_phone')),
+                _field('whatsapp_no', c('import_customer.field_whatsapp_no')),
+                _field('other_contact_no', c('import_customer.field_other_contact_no')),
+                _field('email', c('import_customer.field_email')),
 
-                _section('Address'),
+                _section(c('import_customer.section_address')),
                 // CHANGE #549 — two backend-driven location actions.
                 //  • Fetch current location : device GPS -> mode 'geocode'
                 //  • Fill coordinates       : typed address -> mode 'forward'
@@ -741,7 +742,7 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
                               child: CircularProgressIndicator(
                                   strokeWidth: 2, color: Color(0xFF1B7A43)))
                           : const Icon(Icons.my_location, size: 16),
-                      label: const Text('Fetch current location'),
+                      label: Text(c('import_customer.btn_fetch_location')),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: const Color(0xFF1B7A43),
                         side: const BorderSide(color: Color(0xFF1B7A43)),
@@ -762,7 +763,7 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
                               child: CircularProgressIndicator(
                                   strokeWidth: 2, color: Color(0xFF1B7A43)))
                           : const Icon(Icons.place_outlined, size: 16),
-                      label: const Text('Fill coordinates'),
+                      label: Text(c('import_customer.btn_fill_coordinates')),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: const Color(0xFF1B7A43),
                         side: const BorderSide(color: Color(0xFF1B7A43)),
@@ -775,48 +776,48 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
                     ),
                   ]),
                 ),
-                _field('address', 'Address', maxLines: 2),
+                _field('address', c('import_customer.field_address'), maxLines: 2),
                 if (isNarrow) ...[
-                  _field('city', 'City'),
-                  _field('district', 'District'),
+                  _field('city', c('import_customer.field_city')),
+                  _field('district', c('import_customer.field_district')),
                 ] else
                   Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Expanded(child: _field('city', 'City')),
+                    Expanded(child: _field('city', c('import_customer.field_city'))),
                     const SizedBox(width: 12),
-                    Expanded(child: _field('district', 'District')),
+                    Expanded(child: _field('district', c('import_customer.field_district'))),
                   ]),
                 if (isNarrow) ...[
-                  _field('state', 'State'),
-                  _field('pincode', 'Pincode'),
+                  _field('state', c('import_customer.field_state')),
+                  _field('pincode', c('import_customer.field_pincode')),
                 ] else
                   Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Expanded(child: _field('state', 'State')),
+                    Expanded(child: _field('state', c('import_customer.field_state'))),
                     const SizedBox(width: 12),
-                    Expanded(child: _field('pincode', 'Pincode')),
+                    Expanded(child: _field('pincode', c('import_customer.field_pincode'))),
                   ]),
                 if (isNarrow) ...[
-                  _field('latitude', 'Latitude'),
-                  _field('longitude', 'Longitude'),
+                  _field('latitude', c('import_customer.field_latitude')),
+                  _field('longitude', c('import_customer.field_longitude')),
                 ] else
                   Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Expanded(child: _field('latitude', 'Latitude')),
+                    Expanded(child: _field('latitude', c('import_customer.field_latitude'))),
                     const SizedBox(width: 12),
-                    Expanded(child: _field('longitude', 'Longitude')),
+                    Expanded(child: _field('longitude', c('import_customer.field_longitude'))),
                   ]),
-                _field('store_location_link', 'Store location link'),
-                _field('range_zone', 'Range zone'),
-                _field('payment_term', 'Payment term'),
+                _field('store_location_link', c('import_customer.field_store_location_link')),
+                _field('range_zone', c('import_customer.field_range_zone')),
+                _field('payment_term', c('import_customer.field_payment_term')),
 
-                _section('Statutory'),
-                _field('gstin', 'GSTIN'),
+                _section(c('import_customer.section_statutory')),
+                _field('gstin', c('import_customer.field_gstin')),
                 if (isNarrow) ...[
-                  _field('dl_20b', 'DL 20B'),
-                  _field('dl_21b', 'DL 21B'),
+                  _field('dl_20b', c('import_customer.field_dl_20b')),
+                  _field('dl_21b', c('import_customer.field_dl_21b')),
                 ] else
                   Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Expanded(child: _field('dl_20b', 'DL 20B')),
+                    Expanded(child: _field('dl_20b', c('import_customer.field_dl_20b'))),
                     const SizedBox(width: 12),
-                    Expanded(child: _field('dl_21b', 'DL 21B')),
+                    Expanded(child: _field('dl_21b', c('import_customer.field_dl_21b'))),
                   ]),
               ]),
             ),
@@ -840,8 +841,8 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
               const Spacer(),
               TextButton(
                 onPressed: _saving ? null : () => Navigator.of(context).pop(false),
-                child: const Text('Cancel',
-                    style: TextStyle(color: Color(0xFF6B7280))),
+                child: Text(c('import_customer.btn_cancel'),
+                    style: const TextStyle(color: Color(0xFF6B7280))),
               ),
               const SizedBox(width: 8),
               ElevatedButton(
@@ -861,8 +862,8 @@ class _ImportCustomerSheetState extends State<ImportCustomerSheet> {
                         height: 16,
                         child: CircularProgressIndicator(
                             strokeWidth: 2, color: Colors.white))
-                    : const Text('Save customer',
-                        style: TextStyle(
+                    : Text(c('import_customer.btn_save'),
+                        style: const TextStyle(
                             fontSize: 14, fontWeight: FontWeight.w600)),
               ),
             ]),

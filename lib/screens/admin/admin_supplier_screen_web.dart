@@ -24,6 +24,7 @@ import '../../utils/safe_parse.dart';
 import '../../services/admin_date_scope.dart'; // CHANGE #545
 import '../../services/admin_zone_scope.dart'; // CHANGE #609
 import '../../services/date_labels.dart'; // CHANGE #548
+import '../../services/ui_copy.dart';
 import '../../widgets/backend_chip.dart'; // CHANGE #606
 import '../../widgets/backend_table.dart'; // CHANGE #607
 import '../../widgets/code_field.dart';
@@ -997,9 +998,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       await client.rpc('admin_supplier_action',
           params: {'p_supplier_id': row.id, 'p_action': 'delete'});
       _load(showSpinner: false);
-      if (mounted) showToast(context, 'Supplier deleted.');
+      if (mounted) showToast(context, c('admin_supplier.supplier_deleted'));
     } catch (e) {
-      if (mounted) showToast(context, 'Delete failed: $e', isError: true);
+      if (mounted) showToast(context, cf('admin_supplier.delete_failed', {'a': '$e'}), isError: true);
     }
   }
 
@@ -1014,16 +1015,16 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       context: context,
       builder: (_) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: Text('Permanently delete $displayName?',
+        title: Text(cf('admin_supplier.permanently_delete_name_q', {'a': displayName}),
             style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-        content: const Text('This cannot be undone.',
-            style: TextStyle(fontSize: 13, color: Color(0xFF374151))),
+        content: Text(c('admin_supplier.this_cannot_be_undone'),
+            style: const TextStyle(fontSize: 13, color: Color(0xFF374151))),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: Text(c('admin_supplier.cancel'))),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
             style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
-            child: const Text('Delete'),
+            child: Text(c('admin_supplier.delete')),
           ),
         ],
       ),
@@ -1038,11 +1039,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                params: {'p_id': deletedRow['id']});
       _load(showSpinner: false);
       if (mounted) {
-        showToast(context, '$displayName permanently deleted.', isError: true, duration: const Duration(seconds: 3));
+        showToast(context, cf('admin_supplier.name_permanently_deleted', {'a': displayName}), isError: true, duration: const Duration(seconds: 3));
       }
     } catch (e) {
       if (mounted) {
-        showToast(context, 'Delete failed: $e', isError: true);
+        showToast(context, cf('admin_supplier.delete_failed', {'a': '$e'}), isError: true);
       }
     }
   }
@@ -1057,16 +1058,16 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       context: context,
       builder: (_) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: const Text('Permanently delete all?',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-        content: Text('Permanently delete all $count recently-deleted supplier${count == 1 ? '' : 's'}? This cannot be undone.',
+        title: Text(c('admin_supplier.permanently_delete_all_q'),
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+        content: Text(cf('admin_supplier.permanently_delete_all_count', {'a': '$count', 'b': count == 1 ? '' : 's'}),
             style: const TextStyle(fontSize: 13, color: Color(0xFF374151))),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: Text(c('admin_supplier.cancel'))),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
             style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
-            child: const Text('Delete All'),
+            child: Text(c('admin_supplier.delete_all')),
           ),
         ],
       ),
@@ -1077,11 +1078,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           .rpc('admin_purge_deleted_supplier');
       _load(showSpinner: false);
       if (mounted) {
-        showToast(context, '$count supplier${count == 1 ? '' : 's'} permanently deleted.', isError: true, duration: const Duration(seconds: 3));
+        showToast(context, cf('admin_supplier.count_permanently_deleted', {'a': '$count', 'b': count == 1 ? '' : 's'}), isError: true, duration: const Duration(seconds: 3));
       }
     } catch (e) {
       if (mounted) {
-        showToast(context, 'Clear all failed: $e', isError: true);
+        showToast(context, cf('admin_supplier.clear_all_failed', {'a': '$e'}), isError: true);
       }
     }
   }
@@ -1097,16 +1098,16 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       context: context,
       builder: (_) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: Text('Restore $displayName?',
+        title: Text(cf('admin_supplier.restore_name_q', {'a': displayName}),
             style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-        content: const Text('This will restore the supplier to the active Suppliers list.',
-            style: TextStyle(fontSize: 13, color: Color(0xFF374151))),
+        content: Text(c('admin_supplier.restore_to_active_list'),
+            style: const TextStyle(fontSize: 13, color: Color(0xFF374151))),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: Text(c('admin_supplier.cancel'))),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
             style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43)),
-            child: const Text('Restore'),
+            child: Text(c('admin_supplier.restore')),
           ),
         ],
       ),
@@ -1119,11 +1120,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       });
       _load(showSpinner: false);
       if (mounted) {
-        showToast(context, 'Supplier restored.', duration: const Duration(seconds: 3));
+        showToast(context, c('admin_supplier.supplier_restored'), duration: const Duration(seconds: 3));
       }
     } catch (e) {
       if (mounted) {
-        showToast(context, 'Restore failed: $e', isError: true);
+        showToast(context, cf('admin_supplier.restore_failed', {'a': '$e'}), isError: true);
       }
     }
   }
@@ -1246,9 +1247,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                       isDense: true,
                       icon: const Icon(Icons.unfold_more, size: 13, color: Color(0xFF6B7280)),
                       style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
-                      items: const [
-                        DropdownMenuItem(value: _SupSortMode.spnDesc, child: Text('SPN')),
-                        DropdownMenuItem(value: _SupSortMode.nameAsc, child: Text('N')),
+                      items: [
+                        DropdownMenuItem(value: _SupSortMode.spnDesc, child: Text(c('admin_supplier.spn'))),
+                        const DropdownMenuItem(value: _SupSortMode.nameAsc, child: Text('N')),
                       ],
                       onChanged: (mode) {
                         if (mode == null || mode == _sortMode) return;
@@ -1288,7 +1289,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                 RenderLog.write('allocation_toggle_rendered', _allocationMode);
                 final isOn = _allocationMode == 'fewest_baskets';
                 return Row(mainAxisSize: MainAxisSize.min, children: [
-                  Text('Bundle', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF6B7280))),
+                  Text(c('admin_supplier.bundle'), style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF6B7280))),
                   const SizedBox(width: 2),
                   _allocationLoading
                       ? const SizedBox(width: 28, height: 16,
@@ -1305,9 +1306,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                   if (isOn && !_allocationLoading) ...[
                     GestureDetector(
                       onTap: _reoptimize,
-                      child: const Tooltip(
-                        message: 'Re-optimize bundles',
-                        child: Icon(Icons.auto_fix_high_outlined, size: 16, color: Color(0xFF1B7A43)),
+                      child: Tooltip(
+                        message: c('admin_supplier.re_optimize_bundles'),
+                        child: const Icon(Icons.auto_fix_high_outlined, size: 16, color: Color(0xFF1B7A43)),
                       ),
                     ),
                   ],
@@ -1337,7 +1338,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                 onPressed: () => Navigator.of(context).push(
                     MaterialPageRoute(builder: (_) => const UnmappedCompaniesScreen())),
                 icon: const Icon(Icons.rule_outlined, color: Color(0xFF6B7280), size: 20),
-                tooltip: 'Map Companies',
+                tooltip: c('admin_supplier.map_companies'),
                 visualDensity: VisualDensity.compact,
               ),
             ],
@@ -1349,7 +1350,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
               IconButton(
                 onPressed: _load,
                 icon: const Icon(Icons.refresh_outlined, color: Color(0xFF6B7280), size: 20),
-                tooltip: 'Refresh',
+                tooltip: c('admin_supplier.refresh'),
                 visualDensity: VisualDensity.compact,
               ),
           ],
@@ -1363,7 +1364,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     return PopupMenuButton<String>(
       padding: EdgeInsets.zero,
       icon: const Icon(Icons.more_vert, color: Color(0xFF6B7280)),
-      tooltip: 'More',
+      tooltip: c('admin_supplier.more'),
       itemBuilder: (ctx) {
         final items = <PopupMenuEntry<String>>[];
         if (_filter == _SupFilter.inquiry) {
@@ -1371,10 +1372,10 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           items.add(PopupMenuItem<String>(
             enabled: false,
             child: StatefulBuilder(
-              builder: (c, setM) => Row(
+              builder: (_, setM) => Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text('AutoFlow', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
+                  Text(c('admin_supplier.autoflow'), style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
                   Switch(
                     value: _autoMeta,
                     onChanged: _autoMetaLoading ? null : (v) {
@@ -1394,12 +1395,12 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           items.add(PopupMenuItem<String>(
             enabled: false,
             child: StatefulBuilder(
-              builder: (c, setM) {
+              builder: (_, setM) {
                 final isOn = _allocationMode == 'fewest_baskets';
                 return Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text('Bundle', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
+                    Text(c('admin_supplier.bundle'), style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
                     Switch(
                       value: isOn,
                       onChanged: _allocationLoading ? null : (v) {
@@ -1422,10 +1423,10 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           items.add(PopupMenuItem<String>(
             enabled: false,
             child: StatefulBuilder(
-              builder: (c, setM) => Row(
+              builder: (_, setM) => Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text('AutoFlow', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
+                  Text(c('admin_supplier.autoflow'), style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
                   Switch(
                     value: _orderAutoMeta,
                     onChanged: _orderAutoMetaLoading ? null : (v) {
@@ -1465,12 +1466,12 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           }
           items.add(const PopupMenuDivider());
           // CHANGE #430: entry point for the Unmapped Companies review screen.
-          items.add(const PopupMenuItem<String>(
+          items.add(PopupMenuItem<String>(
             value: 'map_companies',
             child: Row(children: [
-              Icon(Icons.rule_outlined, size: 18, color: Color(0xFF6B7280)),
-              SizedBox(width: 10),
-              Text('Map Companies', style: TextStyle(fontSize: 14)),
+              const Icon(Icons.rule_outlined, size: 18, color: Color(0xFF6B7280)),
+              const SizedBox(width: 10),
+              Text(c('admin_supplier.map_companies'), style: const TextStyle(fontSize: 14)),
             ]),
           ));
         }
@@ -1548,22 +1549,20 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         context: context,
         builder: (ctx) => AlertDialog(
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Text('Pause admin ordering?',
-              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
-          content: const Text(
-            'While the inquiry runs, YOU cannot place orders — including when '
-            'acting as a customer. Customers are unaffected; they are governed '
-            'by Order Hours.',
-            style: TextStyle(fontSize: 13, color: Color(0xFF374151)),
+          title: Text(c('admin_supplier.pause_admin_ordering_q'),
+              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+          content: Text(
+            c('admin_supplier.pause_admin_ordering_body'),
+            style: const TextStyle(fontSize: 13, color: Color(0xFF374151)),
           ),
           actions: [
             TextButton(
                 onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('Cancel')),
+                child: Text(c('admin_supplier.cancel'))),
             FilledButton(
               style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43)),
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Start inquiry'),
+              child: Text(c('admin_supplier.start_inquiry')),
             ),
           ],
         ),
@@ -1591,7 +1590,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _lockToggling = false);
-        showToast(context, 'Failed to update inquiry lock: $e', isError: true);
+        showToast(context, cf('admin_supplier.failed_update_inquiry_lock', {'a': '$e'}), isError: true);
       }
     }
   }
@@ -1629,7 +1628,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     } catch (e) {
       if (mounted) {
         setState(() { _autoMeta = !val; _autoMetaLoading = false; });
-        showToast(context, 'Failed to save setting: $e', isError: true);
+        showToast(context, cf('admin_supplier.failed_save_setting', {'a': '$e'}), isError: true);
       }
     }
   }
@@ -1663,7 +1662,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         if (data['error'] == 'meta_not_configured') {
           RenderLog.write('order_meta_not_configured', 'true');
           if (mounted) {
-            showToast(context, 'Meta not configured — Automatic disabled', isError: true);
+            showToast(context, c('admin_supplier.meta_not_configured_disabled'), isError: true);
             setState(() { _orderAutoMeta = false; _orderAutoMetaLoading = false; });
           }
           await Supabase.instance.client.rpc('set_app_setting', params: {
@@ -1684,7 +1683,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     } catch (e) {
       if (mounted) {
         setState(() { _orderAutoMeta = !val; _orderAutoMetaLoading = false; });
-        showToast(context, 'Failed to save setting: $e', isError: true);
+        showToast(context, cf('admin_supplier.failed_save_setting', {'a': '$e'}), isError: true);
       }
     }
   }
@@ -1716,22 +1715,22 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           final detail = res['detail'] as Map? ?? {};
           final n = detail['items_assigned'] ?? 0;
           final b = detail['baskets'] ?? 0;
-          showToast(context, 'Bundled $n items into $b supplier baskets.');
+          showToast(context, cf('admin_supplier.bundled_items', {'a': n, 'b': b}));
           RenderLog.write('allocation_mode_on', 'items:$n baskets:$b');
         } else {
-          showToast(context, 'Back to first-available (by SPN).');
+          showToast(context, c('admin_supplier.back_to_first_available'));
           RenderLog.write('allocation_mode_off', 'true');
         }
         _fetchInquiryOverview(silent: true);
         _fetchUnassignedItems(silent: true);
       } else {
         setState(() { _allocationMode = prevMode; _allocationLoading = false; });
-        showToast(context, 'Error: ${res['error'] ?? 'unknown'}', isError: true);
+        showToast(context, cf('admin_supplier.error_detail', {'a': res['error'] ?? 'unknown'}), isError: true);
       }
     } catch (e) {
       if (mounted) {
         setState(() { _allocationMode = prevMode; _allocationLoading = false; });
-        showToast(context, 'Failed: $e', isError: true);
+        showToast(context, cf('admin_supplier.failed', {'a': '$e'}), isError: true);
       }
     }
   }
@@ -1747,17 +1746,17 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       if (res['status'] == 'ok') {
         final n = res['items_assigned'] ?? 0;
         final b = res['baskets'] ?? 0;
-        showToast(context, 'Re-optimized: $n items, $b baskets.');
+        showToast(context, cf('admin_supplier.re_optimized', {'a': n, 'b': b}));
         RenderLog.write('allocation_reoptimize_ok', 'items:$n baskets:$b');
         _fetchInquiryOverview(silent: true);
         _fetchUnassignedItems(silent: true);
       } else {
-        showToast(context, 'Error: ${res['error'] ?? 'unknown'}', isError: true);
+        showToast(context, cf('admin_supplier.error_detail', {'a': res['error'] ?? 'unknown'}), isError: true);
       }
     } catch (e) {
       if (mounted) {
         setState(() => _allocationLoading = false);
-        showToast(context, 'Re-optimize failed: $e', isError: true);
+        showToast(context, cf('admin_supplier.re_optimize_failed', {'a': '$e'}), isError: true);
       }
     }
   }
@@ -1783,7 +1782,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       final row = (raw is List ? raw.first : raw) as Map;
       productId = (row['product_id'] as num).toInt();
     } catch (e) {
-      if (mounted) showToast(context, 'Could not load product: $e', isError: true);
+      if (mounted) showToast(context, cf('admin_supplier.could_not_load_product', {'a': '$e'}), isError: true);
       return;
     }
     // 2. Load options
@@ -1793,11 +1792,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           .rpc('get_item_supplier_options', params: {'p_product_id': productId}) as List;
       options = rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
     } catch (e) {
-      if (mounted) showToast(context, 'Could not load options: $e', isError: true);
+      if (mounted) showToast(context, cf('admin_supplier.could_not_load_options', {'a': '$e'}), isError: true);
       return;
     }
     if (options.isEmpty) {
-      if (mounted) showToast(context, 'No eligible suppliers for this item.');
+      if (mounted) showToast(context, c('admin_supplier.no_eligible_suppliers'));
       return;
     }
     // Sort: available first, then by SPN desc, then name
@@ -1845,10 +1844,10 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       if (res['status'] == 'ok') {
         final isClearing = supplierName.isEmpty;
         if (isClearing) {
-          showToast(context, 'Pin cleared — auto-assigned.');
+          showToast(context, c('admin_supplier.pin_cleared'));
           RenderLog.write('allocation_manual_clear_ok', '$inquiryId');
         } else {
-          showToast(context, 'Moved to $supplierName.');
+          showToast(context, cf('admin_supplier.moved_to', {'a': supplierName}));
           RenderLog.write('allocation_manual_move_ok', '$inquiryId:$supplierName');
         }
         // Refresh inquiry items for the expanded supplier
@@ -1857,12 +1856,12 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         }
         _fetchInquiryOverview(silent: true);
       } else {
-        showToast(context, 'Error: ${res['error'] ?? 'unknown'}', isError: true);
+        showToast(context, cf('admin_supplier.error_detail', {'a': res['error'] ?? 'unknown'}), isError: true);
       }
     } catch (e) {
       if (mounted) {
         setState(() => _moveInFlight.remove(inquiryId));
-        showToast(context, 'Move failed: $e', isError: true);
+        showToast(context, cf('admin_supplier.move_failed', {'a': '$e'}), isError: true);
       }
     }
   }
@@ -1897,7 +1896,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         params: {'p_audience': 'supplier', 'p_action_key': 'supplier_inquiry_sent'});
     if (on == false) {
       RenderLog.write('c498_supplier_send_blocked', 'supplier_inquiry_sent:send_all');
-      if (mounted) showToast(context, 'Supplier inquiry notifications are turned off', isError: true);
+      if (mounted) showToast(context, c('admin_supplier.supplier_inquiry_notifs_off'), isError: true);
       return;
     }
     if (mounted) setState(() => _inquiryLoading = true);
@@ -1926,7 +1925,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       final data = resp.data as Map<String, dynamic>? ?? {};
       if (data['error'] == 'meta_not_configured') {
         RenderLog.write('meta_not_configured', 'true');
-        if (mounted) showToast(context, "Meta not configured yet — turn off Automatic to send manually", isError: true);
+        if (mounted) showToast(context, c('admin_supplier.meta_not_configured_yet'), isError: true);
         if (mounted) setState(() => _inquiryLoading = false);
         return;
       }
@@ -1934,13 +1933,13 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       // Meta sent — now stamp ALL timers
       await Supabase.instance.client.rpc('start_inquiry_for_suppliers');
       RenderLog.write('inquiry_send_all', 'meta:sent');
-      if (mounted) showToast(context, 'Sent via Meta WhatsApp');
+      if (mounted) showToast(context, c('admin_supplier.sent_via_meta_whatsapp'));
       await _fetchInquiryOverview(silent: true);
       if (mounted) setState(() => _inquiryLoading = false);
     } catch (e) {
       if (mounted) {
         setState(() => _inquiryLoading = false);
-        showToast(context, 'Failed to send via Meta: $e', isError: true);
+        showToast(context, cf('admin_supplier.failed_send_via_meta', {'a': '$e'}), isError: true);
       }
     }
   }
@@ -1964,7 +1963,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _inquiryLoading = false);
-        showToast(context, 'Failed: $e', isError: true);
+        showToast(context, cf('admin_supplier.failed', {'a': '$e'}), isError: true);
       }
     }
   }
@@ -1988,7 +1987,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _inquiryLoading = false);
-        showToast(context, 'Failed: $e', isError: true);
+        showToast(context, cf('admin_supplier.failed', {'a': '$e'}), isError: true);
       }
     }
   }
@@ -2007,8 +2006,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         Row(children: [
           const Icon(Icons.link, size: 16, color: Color(0xFF065F46)),
           const SizedBox(width: 8),
-          const Text('Inquiry Links — share via WhatsApp',
-              style: TextStyle(
+          Text(c('admin_supplier.inquiry_links_header'),
+              style: const TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w700,
                   color: Color(0xFF065F46))),
@@ -2067,7 +2066,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                 GestureDetector(
                   onTap: () {
                     Clipboard.setData(ClipboardData(text: link));
-                    showToast(context, 'Link copied!');
+                    showToast(context, c('admin_supplier.link_copied_excl'));
                     RenderLog.write('inquiry_link_copied', supplierName);
                   },
                   child: Container(
@@ -2077,8 +2076,8 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                       color: const Color(0xFF1B7A43),
                       borderRadius: BorderRadius.circular(6),
                     ),
-                    child: const Text('Copy',
-                        style: TextStyle(
+                    child: Text(c('admin_supplier.copy'),
+                        style: const TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w600,
                             color: Colors.white)),
@@ -2202,7 +2201,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _inquiryOverviewLoading = false);
-        if (!silent) showToast(context, 'Failed to load inquiry overview: $e', isError: true);
+        if (!silent) showToast(context, cf('admin_supplier.failed_load_inquiry_overview', {'a': '$e'}), isError: true);
       }
     }
     // CHANGE #446: refresh send-all readiness alongside the overview — this
@@ -2229,7 +2228,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _readinessLoading = false);
-        if (!silent) showToast(context, 'Failed to load send readiness: $e', isError: true);
+        if (!silent) showToast(context, cf('admin_supplier.failed_load_send_readiness', {'a': '$e'}), isError: true);
       }
     }
   }
@@ -2398,7 +2397,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _inquiryItemsLoading = false);
-        if (!silent) showToast(context, 'Failed to load items: $e', isError: true);
+        if (!silent) showToast(context, cf('admin_supplier.failed_load_items', {'a': '$e'}), isError: true);
       }
     }
   }
@@ -2444,11 +2443,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       if (res['error'] != null) {
         final code = res['error'] as String;
         final msg = switch (code) {
-          'not_authorized'             => 'Only admins can set responses.',
-          'invalid_answer'             => 'Invalid response value.',
-          'not_found'                  => 'Inquiry item not found (refresh).',
-          'no_supplier'                => 'No supplier to answer for this item.',
-          'supplier_not_in_inquiry'    => 'No supplier to answer for this item.',
+          'not_authorized'             => c('admin_supplier.err_not_authorized'),
+          'invalid_answer'             => c('admin_supplier.err_invalid_answer'),
+          'not_found'                  => c('admin_supplier.err_inquiry_not_found'),
+          'no_supplier'                => c('admin_supplier.err_no_supplier_to_answer'),
+          'supplier_not_in_inquiry'    => c('admin_supplier.err_no_supplier_to_answer'),
           _                            => 'Error: $code',
         };
         if (mounted) showToast(context, msg, isError: true);
@@ -2863,7 +2862,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                                 child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF1B7A43))),
                           )
                         else if (readiness == null)
-                          const Text('Readiness unavailable.',
+                          Text(c('admin_supplier.readiness_unavailable'),
                               style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)))
                         else ...[
                           if (progressLabel != null) ...[
@@ -3000,13 +2999,13 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       else if (_inquiryOverview.isEmpty && _noSupplierItems.isEmpty && _allOosItems.isEmpty)
         Padding(
           padding: EdgeInsets.fromLTRB(pad, 40, pad, 40),
-          child: const Center(child: Column(children: [
-            Icon(Icons.check_circle_outline, size: 40, color: Color(0xFF1B7A43)),
+          child: Center(child: Column(children: [
+            const Icon(Icons.check_circle_outline, size: 40, color: Color(0xFF1B7A43)),
             SizedBox(height: 12),
-            Text('No pending inquiries',
+            Text(c('admin_supplier.inq_empty_title'),
                 style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
             SizedBox(height: 4),
-            Text('All suppliers have answered or nothing is in the inquiry loop.',
+            Text(c('admin_supplier.inq_empty_body'),
                 style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)), textAlign: TextAlign.center),
           ])),
         )
@@ -3039,28 +3038,28 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         _buildUnassignedDropdown(
           key: 'no_supplier',
-          title: 'No Supplier Available',
+          title: c('admin_supplier.bucket_no_supplier_title'),
           count: listNoSupplier.length,
           iconColor: const Color(0xFFDC2626),
           badgeBg: const Color(0xFFFEE2E2),
           badgeFg: const Color(0xFF991B1B),
           borderColor: const Color(0xFFFECACA),
           items: listNoSupplier,
-          badgeLabel: 'No supplier carries this',
+          badgeLabel: c('admin_supplier.bucket_no_supplier_badge'),
           itemBadgeBg: const Color(0xFFF3F4F6),
           itemBadgeFg: const Color(0xFF374151),
         ),
         const SizedBox(height: 8),
         _buildUnassignedDropdown(
           key: 'all_oos',
-          title: 'All Suppliers Out of Stock',
+          title: c('admin_supplier.bucket_all_oos_title'),
           count: listAllOOS.length,
           iconColor: const Color(0xFFD97706),
           badgeBg: const Color(0xFFFEF3C7),
           badgeFg: const Color(0xFF92400E),
           borderColor: const Color(0xFFFDE68A),
           items: listAllOOS,
-          badgeLabel: 'All suppliers out of stock',
+          badgeLabel: c('admin_supplier.bucket_all_oos_badge'),
           itemBadgeBg: const Color(0xFFFEF3C7),
           itemBadgeFg: const Color(0xFF92400E),
         ),
@@ -3419,7 +3418,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                     child: CircularProgressIndicator(
                         color: Color(0xFF1B7A43), strokeWidth: 2)))
               : _inquiryItems.isEmpty
-                  ? const Text('No pending items for this supplier.',
+                  ? Text(c('admin_supplier.inq_no_pending_items'),
                       style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)))
                   : Builder(builder: (_) {
                   RenderLog.write('inquiry_v12_admin_dropdown', supName);
@@ -3481,7 +3480,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                               : Text(
                                   allAnswered
                                       ? 'Submit response ($selectedCount)'
-                                      : 'Respond to all to submit',
+                                      : c('admin_supplier.btn_respond_all_first'),
                                   style: const TextStyle(
                                       fontSize: 14,
                                       fontWeight: FontWeight.w600,
@@ -3521,16 +3520,16 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
-                      'Response submitted ✓',
+                    Text(
+                      c('admin_supplier.receipt_title'),
                       style: TextStyle(
                           fontSize: 15,
                           fontWeight: FontWeight.w700,
                           color: Color(0xFF065F46)),
                     ),
                     const SizedBox(height: 2),
-                    const Text(
-                      "You've already answered. Here's what you submitted.",
+                    Text(
+                      c('admin_supplier.receipt_body'),
                       style: TextStyle(
                           fontSize: 12, color: Color(0xFF065F46)),
                     ),
@@ -3733,7 +3732,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           borderRadius: BorderRadius.circular(6),
           border: Border.all(color: const Color(0xFFD1D5DB)),
         ),
-        child: const Text('No supplier available',
+        child: Text(c('admin_supplier.no_supplier_available'),
             style: TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Color(0xFF6B7280))),
       );
     } else {
@@ -3883,7 +3882,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   Future<void> _copyInquiryLink(String supName) async {
     final link = await _getInquiryShortLink(supName);
     if (link == null || link.isEmpty) {
-      if (mounted) showToast(context, 'Send the inquiry first', isError: true);
+      if (mounted) showToast(context, c('admin_supplier.toast_send_inquiry_first'), isError: true);
       return;
     }
     RenderLog.write('c319_share_uses_rpc_link', 'copy:$supName');
@@ -3926,7 +3925,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     _closeSendPopover();
     final link = await _getInquiryShortLink(supName);
     if (link == null || link.isEmpty) {
-      if (mounted) showToast(context, 'Send the inquiry first', isError: true);
+      if (mounted) showToast(context, c('admin_supplier.toast_send_inquiry_first'), isError: true);
       return;
     }
     if (!mounted) return;
@@ -4158,7 +4157,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           textInputAction: TextInputAction.search,
           style: const TextStyle(fontSize: 13),
           decoration: InputDecoration(
-            hintText: 'Search suppliers by name, company, code, city, phone',
+            hintText: c('admin_supplier.hint_search_suppliers'),
             prefixIcon: const Icon(Icons.search, size: 18),
             suffixIcon: _supplierQuery.isEmpty
                 ? null
@@ -4178,7 +4177,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       if (_suppliers.isEmpty)
         _emptyState('0 approved suppliers')
       else if (visibleSuppliers.isEmpty)
-        _emptyState('No suppliers found')
+        _emptyState(c('admin_supplier.empty_no_suppliers_found'))
       else ...[
         if (isDesktop) _suppliersTableHeader(),
         ...visibleSuppliers.map((r) => isDesktop ? _desktopSupRow(r) : _mobileSupCard(r)),
@@ -4300,7 +4299,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             child: _deletedRows.isEmpty
                 ? Padding(
                     padding: EdgeInsets.symmetric(horizontal: pad, vertical: 20),
-                    child: const Text('No deleted suppliers.',
+                    child: Text(c('admin_supplier.empty_no_deleted'),
                         style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
                   )
                 : Column(
@@ -4664,7 +4663,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       opts = result is Map ? Map<String, dynamic>.from(result) : <String, dynamic>{};
     } catch (e) {
       dismissLoading();
-      if (mounted) showToast(context, 'Failed to load send options', isError: true);
+      if (mounted) showToast(context, c('admin_supplier.err_load_send_options'), isError: true);
       return;
     }
     if (opts['ok'] != true) {
@@ -4673,7 +4672,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       final msg = switch (error) {
         'not_authorized' => "You don't have permission to send",
         'no_order' => 'Order not found',
-        _ => 'Failed to load send options',
+        _ => c('admin_supplier.err_load_send_options'),
       };
       if (mounted) showToast(context, msg, isError: true);
       return;
@@ -5100,7 +5099,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     }
 
     return Row(children: [
-      Expanded(child: toggleBtn('View Bill', billOpen, () {
+      Expanded(child: toggleBtn(c('admin_supplier.view_bill'), billOpen, () {
         final willOpen = !billOpen;
         setState(() {
           _orderBillOpen[orderId] = willOpen;
@@ -5109,7 +5108,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         if (willOpen) _loadOrderPanel(orderId);
       })),
       const SizedBox(width: 8),
-      Expanded(child: toggleBtn('View Payment', payOpen, () {
+      Expanded(child: toggleBtn(c('admin_supplier.view_payment'), payOpen, () {
         final willOpen = !payOpen;
         setState(() {
           _orderPayOpen[orderId] = willOpen;
@@ -5138,7 +5137,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(children: [
-              const Text('View Bill', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+              Text(c('admin_supplier.view_bill'), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
               const Spacer(),
               GestureDetector(
                 onTap: () => _loadOrderPanel(orderId, refresh: true),
@@ -5153,15 +5152,15 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
               ))
             else if (error != null)
               Row(children: [
-                const Text('Failed to load.', style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+                Text(c('admin_supplier.failed_to_load'), style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
                 const SizedBox(width: 8),
                 GestureDetector(
                   onTap: () => _loadOrderPanel(orderId, refresh: true),
-                  child: const Text('Retry', style: TextStyle(fontSize: 13, color: Color(0xFF1B7A43), fontWeight: FontWeight.w600)),
+                  child: Text(c('admin_supplier.retry'), style: const TextStyle(fontSize: 13, color: Color(0xFF1B7A43), fontWeight: FontWeight.w600)),
                 ),
               ])
             else if (data == null || data['found'] != true)
-              const Text('Bill details unavailable.', style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)))
+              Text(c('admin_supplier.bill_details_unavailable'), style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)))
             else
               _AdminBillPanelBody(
                 data: data,
@@ -5192,7 +5191,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(children: [
-              const Text('Payment Summary', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+              Text(c('admin_supplier.payment_summary'), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
               const Spacer(),
               GestureDetector(
                 onTap: () => _loadOrderPanel(orderId, refresh: true),
@@ -5207,15 +5206,15 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
               ))
             else if (error != null)
               Row(children: [
-                const Text('Failed to load.', style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+                Text(c('admin_supplier.failed_to_load'), style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
                 const SizedBox(width: 8),
                 GestureDetector(
                   onTap: () => _loadOrderPanel(orderId, refresh: true),
-                  child: const Text('Retry', style: TextStyle(fontSize: 13, color: Color(0xFF1B7A43), fontWeight: FontWeight.w600)),
+                  child: Text(c('admin_supplier.retry'), style: const TextStyle(fontSize: 13, color: Color(0xFF1B7A43), fontWeight: FontWeight.w600)),
                 ),
               ])
             else if (data == null || data['found'] != true)
-              const Text('Payment details unavailable.', style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)))
+              Text(c('admin_supplier.payment_details_unavailable'), style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)))
             else
               SupPayPanel(
                 data: data,
@@ -5241,9 +5240,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
       child: items.isEmpty
-          ? const Padding(
-              padding: EdgeInsets.all(8),
-              child: Text('No items.', style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+          ? Padding(
+              padding: const EdgeInsets.all(8),
+              child: Text(c('admin_supplier.no_items'), style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
             )
           : Column(
               children: items.map((item) => OrderItemCard(item: item)).toList(),
@@ -5386,14 +5385,14 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     return Padding(
       padding: EdgeInsets.fromLTRB(pad, 16, pad, 32),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('Supplier Leads',
+        Text(c('admin_supplier.supplier_leads_title'),
             style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
         const SizedBox(height: 2),
-        const Text('CSV-imported and manually added supplier leads',
+        Text(c('admin_supplier.supplier_leads_subtitle'),
             style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
         const SizedBox(height: 10),
         if (_leads.isEmpty)
-          const Text('No leads yet', style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)))
+          Text(c('admin_supplier.no_leads_yet'), style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)))
         else
           for (final lead in _leads) _buildLeadRow(lead, isDesktop),
         const SizedBox(height: 32),
@@ -5529,15 +5528,15 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       const Divider(),
       const SizedBox(height: 8),
-      const Text('Import CSV', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
+      Text(c('admin_supplier.import_csv'), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
       const SizedBox(height: 4),
-      const Text('Columns: name, email, mobile (header row required; order flexible)',
+      Text(c('admin_supplier.csv_columns_hint'),
           style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
       const SizedBox(height: 10),
       ElevatedButton.icon(
         onPressed: _pickAndImportCsv,
         icon: const Icon(Icons.upload_file_outlined, size: 16),
-        label: const Text('Upload CSV'),
+        label: Text(c('admin_supplier.upload_csv')),
         style: ElevatedButton.styleFrom(
           backgroundColor: const Color(0xFF1B7A43), foregroundColor: Colors.white,
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -5933,14 +5932,14 @@ class _StatusPillState extends State<_StatusPill> {
       RenderLog.write('status_pill_result', res.isEmpty ? 'EMPTY' : 'OK');
       if (!mounted) return null;
       if (res.isEmpty) {
-        showToast(context, 'Save failed — try again', isError: true);
+        showToast(context, c('admin_supplier.toast_save_failed_retry'), isError: true);
         return null;
       }
-      showToast(context, 'Status updated ✓', duration: const Duration(milliseconds: 800));
+      showToast(context, c('admin_supplier.toast_status_updated'), duration: const Duration(milliseconds: 800));
       return res.first['SPN'] as num?;
     } catch (e) {
       RenderLog.write('status_pill_error', e.toString());
-      if (mounted) showToast(context, 'Error: $e', isError: true);
+      if (mounted) showToast(context, cf('admin_supplier.toast_error_e', {'a': '$e'}), isError: true);
       return null;
     }
   }
@@ -6085,7 +6084,7 @@ class _ApproveActionsState extends State<_ApproveActions> {
     if (_busy) return;
     setState(() => _busy = true);
     try { await fn(); } catch (e) {
-      if (mounted) showToast(context, 'Action failed: $e', isError: true);
+      if (mounted) showToast(context, cf('admin_supplier.toast_action_failed', {'a': '$e'}), isError: true);
     }
     if (mounted) setState(() => _busy = false);
   }
@@ -6164,7 +6163,7 @@ class _SupplierEditDialogState extends State<_SupplierEditDialog> {
     final upiRaw = _ctrls['payment_address']!.text.trim();
     if (upiRaw.isNotEmpty &&
         !RegExp(r'^[0-9A-Za-z._\-]{2,}@[A-Za-z]{2,}$').hasMatch(upiRaw)) {
-      setState(() => _upiError = 'Enter a valid UPI id (name@bank)');
+      setState(() => _upiError = c('admin_supplier.err_invalid_upi'));
       return;
     }
     setState(() { _saving = true; _upiError = null; });
@@ -6183,13 +6182,13 @@ class _SupplierEditDialogState extends State<_SupplierEditDialog> {
                params: {'p_id': widget.row.id, 'p_patch': update});
       if (mounted) {
         RenderLog.write('supplier_edit_saved', 'true');
-        showToast(context, 'Saved ✓');
+        showToast(context, c('admin_supplier.toast_saved'));
         Navigator.pop(context, true);
       }
     } catch (e) {
       if (mounted) {
         setState(() => _saving = false);
-        showToast(context, 'Save failed: $e', isError: true);
+        showToast(context, cf('admin_supplier.toast_save_failed_e', {'a': '$e'}), isError: true);
       }
     }
   }
@@ -6204,7 +6203,7 @@ class _SupplierEditDialogState extends State<_SupplierEditDialog> {
           padding: const EdgeInsets.all(24),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Row(children: [
-              const Expanded(child: Text('Edit Supplier', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827)))),
+              Expanded(child: Text(c('admin_supplier.edit_supplier'), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827)))),
               IconButton(icon: const Icon(Icons.close, size: 18), onPressed: () => Navigator.pop(context), visualDensity: VisualDensity.compact),
             ]),
             const SizedBox(height: 16),
@@ -6253,12 +6252,12 @@ class _SupplierEditDialogState extends State<_SupplierEditDialog> {
             ),
             const SizedBox(height: 16),
             Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel', style: TextStyle(color: Color(0xFF6B7280)))),
+              TextButton(onPressed: () => Navigator.pop(context), child: Text(c('admin_supplier.btn_cancel_word'), style: const TextStyle(color: Color(0xFF6B7280)))),
               const SizedBox(width: 8),
               FilledButton(
                 onPressed: (_saving || _supCodeStatus == CodeStatus.taken || _supCodeStatus == CodeStatus.invalid) ? null : _save,
                 style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
-                child: _saving ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('Save'),
+                child: _saving ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : Text(c('admin_supplier.btn_save')),
               ),
             ]),
           ]),
@@ -6402,12 +6401,12 @@ class _SupCsvImportDialogState extends State<_SupCsvImportDialog> {
       if (mounted) {
         Navigator.of(context).pop();
         widget.onImported();
-        showToast(context, 'Imported ${toInsert.length} lead${toInsert.length == 1 ? '' : 's'}');
+        showToast(context, cf('admin_supplier.toast_imported_n_leads', {'a': '${toInsert.length}', 'b': '${toInsert.length == 1 ? '' : 's'}'}));
       }
     } catch (e) {
       if (mounted) {
         setState(() { _step = _SupCsvStep.mapping; });
-        showToast(context, 'Import failed: $e', isError: true);
+        showToast(context, cf('admin_supplier.toast_import_failed_e', {'a': '$e'}), isError: true);
       }
     }
   }
@@ -6432,7 +6431,7 @@ class _SupCsvImportDialogState extends State<_SupCsvImportDialog> {
       const SizedBox(height: 12),
       Text(_error!, textAlign: TextAlign.center, style: const TextStyle(fontSize: 14, color: Color(0xFF111827))),
       const SizedBox(height: 16),
-      TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close')),
+      TextButton(onPressed: () => Navigator.of(context).pop(), child: Text(c('admin_supplier.btn_close'))),
     ]);
   }
 
@@ -6447,11 +6446,11 @@ class _SupCsvImportDialogState extends State<_SupCsvImportDialog> {
     }
     return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
-        const Expanded(child: Text('Map CSV Columns', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827)))),
+        Expanded(child: Text(c('admin_supplier.map_csv_columns'), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827)))),
         IconButton(icon: const Icon(Icons.close, size: 20), onPressed: () => Navigator.of(context).pop(), padding: EdgeInsets.zero, constraints: const BoxConstraints()),
       ]),
       const SizedBox(height: 4),
-      const Text('Gemini has auto-mapped your columns. Correct any mismatches before importing.',
+      Text(c('admin_supplier.gemini_automapped_note'),
           style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
       const SizedBox(height: 16),
       ...List.generate(_cols.length, (i) {
@@ -6474,11 +6473,11 @@ class _SupCsvImportDialogState extends State<_SupCsvImportDialog> {
                 child: DropdownButton<String>(
                   value: col.mappedTo, isExpanded: true,
                   style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
-                  items: const [
-                    DropdownMenuItem(value: 'name',   child: Text('name')),
-                    DropdownMenuItem(value: 'email',  child: Text('email')),
-                    DropdownMenuItem(value: 'mobile', child: Text('mobile')),
-                    DropdownMenuItem(value: 'ignore', child: Text('ignore')),
+                  items: [
+                    DropdownMenuItem(value: 'name',   child: Text(c('admin_supplier.leadfield_name'))),
+                    DropdownMenuItem(value: 'email',  child: Text(c('admin_supplier.leadfield_email'))),
+                    DropdownMenuItem(value: 'mobile', child: Text(c('admin_supplier.leadfield_mobile'))),
+                    DropdownMenuItem(value: 'ignore', child: Text(c('admin_supplier.leadfield_ignore'))),
                   ],
                   onChanged: (v) => setState(() => col.mappedTo = v ?? 'ignore'),
                 ),
@@ -6488,16 +6487,16 @@ class _SupCsvImportDialogState extends State<_SupCsvImportDialog> {
         );
       }),
       const SizedBox(height: 8),
-      Text('${_dataRows.length} row${_dataRows.length == 1 ? '' : 's'} will be imported',
+      Text(cf('admin_supplier.rows_will_be_imported', {'a': '${_dataRows.length}', 'b': '${_dataRows.length == 1 ? '' : 's'}'}),
           style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
       const SizedBox(height: 16),
       Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Cancel', style: TextStyle(color: Color(0xFF6B7280)))),
+        TextButton(onPressed: () => Navigator.of(context).pop(), child: Text(c('admin_supplier.btn_cancel_word'), style: const TextStyle(color: Color(0xFF6B7280)))),
         const SizedBox(width: 8),
         FilledButton(
           onPressed: _doImport,
           style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
-          child: const Text('Import', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+          child: Text(c('admin_supplier.btn_import'), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
         ),
       ]),
     ]);
@@ -6847,15 +6846,15 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
     for (final col in _cols.where((c) => c.mappedTo == 'create_new')) {
       final name = (_newColCtrls[col.index]?.text ?? '').trim();
       if (name.isEmpty) {
-        showToast(context, 'Enter a name for the new column "${col.header.isNotEmpty ? col.header : "Column ${col.index + 1}"}"');
+        showToast(context, cf('admin_supplier.toast_enter_col_name', {'a': '${col.header.isNotEmpty ? col.header : "Column ${col.index + 1}"}'}));
         return;
       }
       if (!RegExp(r'^[a-z][a-z0-9_]*$').hasMatch(name)) {
-        showToast(context, '"$name" is invalid — use lowercase letters, numbers, underscores, starting with a letter');
+        showToast(context, cf('admin_supplier.toast_col_invalid', {'a': '$name'}));
         return;
       }
       if (_profileFields.contains(name)) {
-        showToast(context, '"$name" already exists — map directly to that column instead');
+        showToast(context, cf('admin_supplier.toast_col_exists', {'a': '$name'}));
         return;
       }
       col.newColName = name;
@@ -6878,7 +6877,7 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
         } catch (e) {
           if (!mounted) return;
           setState(() { _step = _SupProfStep.mapping; });
-          showToast(context, 'Could not create column "${col.newColName}": ${e.toString().replaceFirst('Exception: ', '')}', duration: const Duration(seconds: 8));
+          showToast(context, cf('admin_supplier.toast_col_create_failed', {'a': '${col.newColName}', 'b': '${e.toString().replaceFirst('Exception: ', '')}'}), duration: const Duration(seconds: 8));
           return;
         }
       }
@@ -7003,7 +7002,7 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
     } catch (e) {
       if (mounted) {
         setState(() { _step = _SupProfStep.mapping; });
-        showToast(context, 'Import failed: ${e.toString().replaceFirst("Exception: ", "")}', isError: true, duration: const Duration(seconds: 8));
+        showToast(context, cf('admin_supplier.toast_import_failed_ex1', {'a': '${e.toString().replaceFirst("Exception: ", "")}'}), isError: true, duration: const Duration(seconds: 8));
       }
     }
   }
@@ -7019,7 +7018,7 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
             const SizedBox(height: 12),
             Text(_error!, textAlign: TextAlign.center, style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
             const SizedBox(height: 16),
-            TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close')),
+            TextButton(onPressed: () => Navigator.of(context).pop(), child: Text(c('admin_supplier.btn_close'))),
           ]))),
       );
     }
@@ -7045,10 +7044,10 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
             padding: const EdgeInsets.fromLTRB(24, 20, 16, 0),
             child: Row(children: [
               Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                const Text('Import Suppliers — Map Columns',
+                Text(c('admin_supplier.import_suppliers_map_columns'),
                     style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
                 const SizedBox(height: 2),
-                Text('${widget.file.name} · Gemini auto-mapped columns. Correct mismatches before importing.',
+                Text(cf('admin_supplier.file_gemini_automapped', {'a': widget.file.name}),
                     style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
               ])),
               IconButton(icon: const Icon(Icons.close, size: 20), onPressed: () => Navigator.of(context).pop(),
@@ -7063,10 +7062,10 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 if (!isMobile) ...[
                   Padding(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
-                    child: Row(children: const [
-                      Expanded(flex: 4, child: Text('FILE COLUMN', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF6B7280), letterSpacing: 0.5))),
-                      Expanded(flex: 5, child: Text('SAMPLE VALUES', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF6B7280), letterSpacing: 0.5))),
-                      Expanded(flex: 5, child: Text('MAPS TO', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF6B7280), letterSpacing: 0.5))),
+                    child: Row(children: [
+                      Expanded(flex: 4, child: Text(c('admin_supplier.col_file_column'), style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF6B7280), letterSpacing: 0.5))),
+                      Expanded(flex: 5, child: Text(c('admin_supplier.col_sample_values'), style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF6B7280), letterSpacing: 0.5))),
+                      Expanded(flex: 5, child: Text(c('admin_supplier.col_maps_to'), style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF6B7280), letterSpacing: 0.5))),
                     ])),
                   const Divider(color: Color(0xFFE5E7EB)),
                 ],
@@ -7101,8 +7100,8 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
                             items: [
                               ..._fields.map((f) => DropdownMenuItem(value: f,
                                   child: Text(_fieldLabel(f), style: const TextStyle(fontSize: 13)))),
-                              const DropdownMenuItem(value: 'create_new',
-                                  child: Text('+ Create new field', style: TextStyle(fontSize: 13, color: Color(0xFF1B7A43), fontWeight: FontWeight.w600))),
+                              DropdownMenuItem(value: 'create_new',
+                                  child: Text(c('admin_supplier.create_new_field'), style: const TextStyle(fontSize: 13, color: Color(0xFF1B7A43), fontWeight: FontWeight.w600))),
                             ],
                             onChanged: (v) { if (v != null) setState(() => col.mappedTo = v); },
                           ),
@@ -7111,7 +7110,7 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
                             TextFormField(
                               controller: _newColCtrls[col.index] ??= TextEditingController(),
                               onChanged: (v) => col.newColName = v,
-                              decoration: InputDecoration(isDense: true, hintText: 'new_column_name',
+                              decoration: InputDecoration(isDense: true, hintText: c('admin_supplier.hint_new_column_name'),
                                 hintStyle: const TextStyle(color: Color(0xFFD1D5DB)),
                                 contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1B7A43))),
@@ -7152,8 +7151,8 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
                             items: [
                               ..._fields.map((f) => DropdownMenuItem(value: f,
                                   child: Text(_fieldLabel(f), style: const TextStyle(fontSize: 13)))),
-                              const DropdownMenuItem(value: 'create_new',
-                                  child: Text('+ Create new field', style: TextStyle(fontSize: 13, color: Color(0xFF1B7A43), fontWeight: FontWeight.w600))),
+                              DropdownMenuItem(value: 'create_new',
+                                  child: Text(c('admin_supplier.create_new_field'), style: const TextStyle(fontSize: 13, color: Color(0xFF1B7A43), fontWeight: FontWeight.w600))),
                             ],
                             onChanged: (v) { if (v != null) setState(() => col.mappedTo = v); },
                             style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
@@ -7168,7 +7167,7 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
                             Expanded(flex: 3, child: TextFormField(
                               controller: ctrl,
                               onChanged: (v) => col.newColName = v,
-                              decoration: InputDecoration(isDense: true, hintText: 'new_column_name',
+                              decoration: InputDecoration(isDense: true, hintText: c('admin_supplier.hint_new_column_name'),
                                 hintStyle: const TextStyle(color: Color(0xFFD1D5DB)),
                                 contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1B7A43))),
@@ -7178,7 +7177,7 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
                               style: const TextStyle(fontSize: 13),
                             )),
                             const SizedBox(width: 10),
-                            const Text('Type:', style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+                            Text(c('admin_supplier.label_type'), style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
                             const SizedBox(width: 6),
                             Expanded(flex: 2, child: DropdownButtonFormField<String>(
                               value: col.newColType,
@@ -7188,11 +7187,11 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
                                 enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1B7A43))),
                                 filled: true, fillColor: const Color(0xFFECFDF5),
                               ),
-                              items: const [
-                                DropdownMenuItem(value: 'text', child: Text('text', style: TextStyle(fontSize: 13))),
-                                DropdownMenuItem(value: 'numeric', child: Text('number', style: TextStyle(fontSize: 13))),
-                                DropdownMenuItem(value: 'date', child: Text('date', style: TextStyle(fontSize: 13))),
-                                DropdownMenuItem(value: 'boolean', child: Text('boolean', style: TextStyle(fontSize: 13))),
+                              items: [
+                                DropdownMenuItem(value: 'text', child: Text(c('admin_supplier.coltype_text'), style: const TextStyle(fontSize: 13))),
+                                DropdownMenuItem(value: 'numeric', child: Text(c('admin_supplier.coltype_number'), style: const TextStyle(fontSize: 13))),
+                                DropdownMenuItem(value: 'date', child: Text(c('admin_supplier.coltype_date'), style: const TextStyle(fontSize: 13))),
+                                DropdownMenuItem(value: 'boolean', child: Text(c('admin_supplier.coltype_boolean'), style: const TextStyle(fontSize: 13))),
                               ],
                               onChanged: (v) { if (v != null) setState(() => col.newColType = v); },
                               style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
@@ -7205,7 +7204,7 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
                   ]);
                 }),
                 const SizedBox(height: 8),
-                Text('${_dataRows.length} row${_dataRows.length == 1 ? '' : 's'} will be imported (suppliers + companies auto-split)',
+                Text(cf('admin_supplier.rows_will_be_imported_split', {'a': '${_dataRows.length}', 'b': '${_dataRows.length == 1 ? '' : 's'}'}),
                     style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
               ]),
             );
@@ -7215,14 +7214,14 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
             child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
               TextButton(onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('Cancel', style: TextStyle(color: Color(0xFF6B7280)))),
+                  child: Text(c('admin_supplier.btn_cancel_word'), style: const TextStyle(color: Color(0xFF6B7280)))),
               const SizedBox(width: 8),
               FilledButton(
                 onPressed: _confirmMapping,
                 style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                     padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12)),
-                child: Text('Import ${_dataRows.length} Row${_dataRows.length == 1 ? '' : 's'}',
+                child: Text(cf('admin_supplier.btn_import_n_rows', {'a': '${_dataRows.length}', 'b': '${_dataRows.length == 1 ? '' : 's'}'}),
                     style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
               ),
             ]),
@@ -7284,7 +7283,7 @@ class _SupplierCompaniesButton extends StatelessWidget {
           borderRadius: BorderRadius.circular(6),
           border: Border.all(color: const Color(0xFF93C5FD)),
         ),
-        child: Text('Companies ($count)',
+        child: Text(cf('admin_supplier.companies_count', {'a': '$count'}),
             style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
                 color: Color(0xFF2563EB))),
       ),
@@ -7327,7 +7326,7 @@ class _MatchStatusChip extends StatelessWidget {
           ),
           const SizedBox(width: 5),
           Text(
-            'Matching… ${s.pending} left',
+            cf('admin_supplier.matching_n_left', {'a': '${s.pending}'}),
             style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Color(0xFF92400E)),
           ),
         ]),
@@ -7343,7 +7342,7 @@ class _MatchStatusChip extends StatelessWidget {
           border: Border.all(color: const Color(0xFF065F46).withValues(alpha: 0.3)),
         ),
         child: Text(
-          '${s.matched}/${s.total} matched',
+          cf('admin_supplier.n_of_m_matched', {'a': '${s.matched}', 'b': '${s.total}'}),
           style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Color(0xFF065F46)),
         ),
       ),
@@ -7356,7 +7355,7 @@ class _MatchStatusChip extends StatelessWidget {
             borderRadius: BorderRadius.circular(20),
           ),
           child: Text(
-            '${s.needsReview} review',
+            cf('admin_supplier.n_review', {'a': '${s.needsReview}'}),
             style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: Color(0xFF92400E)),
           ),
         ),
@@ -7393,7 +7392,7 @@ class _MatchStatusHeader extends StatelessWidget {
               Expanded(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text(
-                    'Matching… ${s.pending} of ${s.total} remaining',
+                    cf('admin_supplier.matching_n_of_m_remaining', {'a': '${s.pending}', 'b': '${s.total}'}),
                     style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF1E40AF)),
                   ),
                   const SizedBox(height: 4),
@@ -7410,7 +7409,7 @@ class _MatchStatusHeader extends StatelessWidget {
               ),
             ])
           : Text(
-              '${s.matched}/${s.total} matched'
+              '${cf('admin_supplier.n_of_m_matched', {'a': '${s.matched}', 'b': '${s.total}'})}'
               '${s.noMatch > 0 ? ' · ${s.noMatch} no match' : ''}'
               '${s.needsReview > 0 ? ' · ${s.needsReview} need review' : ''}',
               style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF1E40AF)),
@@ -7437,7 +7436,7 @@ class _ReMatchButton extends StatelessWidget {
         } catch (e) {
           if (context.mounted) {
             ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-              content: Text('Re-match failed: $e'),
+              content: Text(cf('admin_supplier.rematch_failed', {'a': '$e'})),
               backgroundColor: const Color(0xFFDC2626),
               duration: const Duration(seconds: 4),
             ));
@@ -7608,7 +7607,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
       RenderLog.write('change76_import_inserted_background',
           {'supplierId': widget.supplierId, 'rowCount': 1});
       await _load();
-      if (mounted) showToast(context, 'Saved. Matching companies in the background…');
+      if (mounted) showToast(context, c('admin_supplier.toast_saved_matching_bg'));
     } catch (_) {
       if (mounted) setState(() => _saving = false);
     }
@@ -7804,7 +7803,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
 
       if (!mounted) return;
       if (resp.statusCode != 200) {
-        showToast(context, 'Match failed (${resp.statusCode})', isError: true);
+        showToast(context, cf('admin_supplier.toast_match_failed_code', {'a': '${resp.statusCode}'}), isError: true);
         return;
       }
 
@@ -7842,10 +7841,10 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
         _needsReview = needsReview;
         _flaggedRows = flaggedSet;
       });
-      showToast(context, '$matched matched${needsReview > 0 ? ' · $needsReview need review' : ''}');
+      showToast(context, cf('admin_supplier.toast_n_matched_review', {'a': '$matched', 'b': '${needsReview > 0 ? ' · $needsReview need review' : ''}'}));
     } catch (e) {
       if (mounted) {
-        showToast(context, 'Error: $e', isError: true);
+        showToast(context, cf('admin_supplier.toast_error_e', {'a': '$e'}), isError: true);
       }
     } finally {
       if (mounted) setState(() { _mappingMode = null; _aiProgress = 0; _aiTotal = 0; _aiStage = null; });
@@ -7935,7 +7934,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
           _needsReview = 0;
           _flaggedRows = {};
         });
-        showToast(context, 'Saved.', duration: const Duration(seconds: 3));
+        showToast(context, c('admin_supplier.toast_saved_dot'), duration: const Duration(seconds: 3));
       }
     } finally {
       if (mounted) setState(() => _mappingMode = null);
@@ -7982,7 +7981,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
       ).timeout(const Duration(seconds: 90));
       if (!mounted) return;
       if (resp.statusCode != 200) {
-        showToast(context, 'Match failed (${resp.statusCode})', isError: true);
+        showToast(context, cf('admin_supplier.toast_match_failed_code', {'a': '${resp.statusCode}'}), isError: true);
         return;
       }
       final data = jsonDecode(resp.body) as Map<String, dynamic>;
@@ -8000,9 +7999,9 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
           break;
         }
       }
-      showToast(context, 'Matched.');
+      showToast(context, c('admin_supplier.toast_matched'));
     } catch (e) {
-      if (mounted) showToast(context, 'Error: $e', isError: true);
+      if (mounted) showToast(context, cf('admin_supplier.toast_error_e', {'a': '$e'}), isError: true);
     } finally {
       if (mounted) setState(() => _rowMappingMode.remove(ri));
     }
@@ -8024,10 +8023,10 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
           _masterExpanded = false;
           _c69CollapsedAfterSave = true;
         });
-        showToast(context, 'Saved.', duration: const Duration(seconds: 2));
+        showToast(context, c('admin_supplier.toast_saved_dot'), duration: const Duration(seconds: 2));
       }
     } catch (e) {
-      if (mounted) showToast(context, 'Error: $e', isError: true);
+      if (mounted) showToast(context, cf('admin_supplier.toast_error_e', {'a': '$e'}), isError: true);
     } finally {
       if (mounted) setState(() => _rowMappingMode.remove(ri));
     }
@@ -8073,7 +8072,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(14, 10, 8, 6),
                 child: Row(children: [
-                  const Text("Supplier's Companies",
+                  Text(c('admin_supplier.suppliers_companies'),
                       style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
                   const Spacer(),
                   if (_rows.isNotEmpty && !isMobileWidth) ...[
@@ -8097,7 +8096,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                         icon: _mappingMode == 'save'
                             ? const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
                             : const Icon(Icons.save_outlined, size: 15),
-                        label: Text(_mappingMode == 'save' ? 'Saving…' : 'Save',
+                        label: Text(_mappingMode == 'save' ? 'Saving…' : c('admin_supplier.btn_save'),
                             style: const TextStyle(fontSize: 12)),
                         style: TextButton.styleFrom(
                             foregroundColor: const Color(0xFF1B7A43),
@@ -8160,16 +8159,16 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                   child: Row(children: [
                     const Icon(Icons.flag, size: 14, color: Color(0xFFD97706)),
                     const SizedBox(width: 6),
-                    Text('Needs review (${ _needsReview }) — flagged rows could not be matched by Gemini.',
+                    Text(cf('admin_supplier.needs_review_flagged', {'a': '${ _needsReview }'}),
                         style: const TextStyle(fontSize: 12, color: Color(0xFF92400E))),
                   ]),
                 ),
               // ── Grid: responsive (wide = frozen-left + h-scroll; narrow = stacked cards) ──
               if (_rows.isEmpty && !_showAddForm)
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-                  child: Text('No companies linked yet.',
-                      style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                  child: Text(c('admin_supplier.no_companies_linked'),
+                      style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
                 )
               else
                 LayoutBuilder(builder: (ctx, constraints) {
@@ -8205,7 +8204,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                           color: const Color(0xFFEFF6FF),
                           padding: const EdgeInsets.fromLTRB(14, 8, 12, 8),
                           child: Row(children: [
-                            Text("Supplier's Companies (${_rows.length})",
+                            Text(cf('admin_supplier.suppliers_companies_count', {'a': '${_rows.length}'}),
                               style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
                                   color: Color(0xFF1E40AF))),
                             const Spacer(),
@@ -8250,7 +8249,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                               icon: _mappingMode == 'save'
                                   ? const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF1B7A43)))
                                   : const Icon(Icons.save_outlined, size: 14),
-                              label: Text(_mappingMode == 'save' ? 'Saving…' : 'Save',
+                              label: Text(_mappingMode == 'save' ? 'Saving…' : c('admin_supplier.btn_save'),
                                   style: const TextStyle(fontSize: 12), overflow: TextOverflow.ellipsis, maxLines: 1),
                               style: TextButton.styleFrom(
                                   foregroundColor: const Color(0xFF1B7A43),
@@ -8340,7 +8339,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                           color: const Color(0xFFF0F7FF),
                           alignment: Alignment.centerLeft,
                           padding: const EdgeInsets.fromLTRB(14, 0, 8, 0),
-                          child: const Text('SUPPLIER COMPANY', style: TextStyle(
+                          child: Text(c('admin_supplier.col_supplier_company'), style: const TextStyle(
                               fontSize: 10, fontWeight: FontWeight.w700,
                               color: Color(0xFF6B7280), letterSpacing: 0.4),
                             overflow: TextOverflow.ellipsis),
@@ -8367,7 +8366,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                                             Text(_rows[ri]['supplier_company'] as String? ?? '—',
                                               style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
                                               maxLines: 1, overflow: TextOverflow.ellipsis),
-                                            const Text('No match in catalog — map manually',
+                                            Text(c('admin_supplier.no_match_map_manually'),
                                               style: TextStyle(fontSize: 10, color: Color(0xFFD97706), fontStyle: FontStyle.italic),
                                               maxLines: 1, overflow: TextOverflow.ellipsis),
                                           ],
@@ -8395,7 +8394,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                           child: Row(children: [
                             for (int i = 1; i <= 30; i++) ...[
                               const SizedBox(width: 4),
-                              SizedBox(width: 220, child: Text('COMPANY $i', style: const TextStyle(
+                              SizedBox(width: 220, child: Text(cf('admin_supplier.col_company_n', {'a': '$i'}), style: const TextStyle(
                                   fontSize: 10, fontWeight: FontWeight.w700,
                                   color: Color(0xFF6B7280), letterSpacing: 0.4),
                                 overflow: TextOverflow.ellipsis)),
@@ -8446,7 +8445,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                       autofocus: true,
                       style: const TextStyle(fontSize: 13),
                       decoration: InputDecoration(
-                        hintText: 'Company name as supplier wrote it',
+                        hintText: c('admin_supplier.hint_company_as_written'),
                         hintStyle: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)),
                         isDense: true,
                         contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -8458,7 +8457,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                     const SizedBox(width: 8),
                     TextButton(
                       onPressed: () => setState(() { _showAddForm = false; _supplierCompanyCtrl.clear(); }),
-                      child: const Text('Cancel', style: TextStyle(fontSize: 13)),
+                      child: Text(c('admin_supplier.btn_cancel_word'), style: const TextStyle(fontSize: 13)),
                     ),
                     const SizedBox(width: 4),
                     FilledButton(
@@ -8467,7 +8466,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10)),
                       child: _saving
                           ? const SizedBox(width: 13, height: 13, child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.white))
-                          : const Text('Add', style: TextStyle(fontSize: 13)),
+                          : Text(c('admin_supplier.btn_add'), style: const TextStyle(fontSize: 13)),
                     ),
                   ]),
                 ),
@@ -8480,7 +8479,7 @@ class _CompaniesInlineSectionState extends State<_CompaniesInlineSection> {
                     TextButton.icon(
                       onPressed: () => setState(() => _showAddForm = true),
                       icon: const Icon(Icons.add, size: 15),
-                      label: const Text('Add Company', style: TextStyle(fontSize: 13)),
+                      label: Text(c('admin_supplier.add_company'), style: const TextStyle(fontSize: 13)),
                       style: TextButton.styleFrom(foregroundColor: const Color(0xFF2563EB), visualDensity: VisualDensity.compact),
                     ),
                   ]),
@@ -8684,7 +8683,7 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
       if (!allOk) {
         if (mounted) {
           setState(() => _saving = false);
-          showToast(context, 'Save failed — try again', isError: true);
+          showToast(context, c('admin_supplier.toast_save_failed_retry'), isError: true);
         }
         return;
       }
@@ -8701,7 +8700,7 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
           _saving = false;
         });
         _userCache.remove(id);
-        showToast(context, 'Saved ✓', duration: const Duration(milliseconds: 800));
+        showToast(context, c('admin_supplier.toast_saved'), duration: const Duration(milliseconds: 800));
         // Trigger parent re-fetch + re-sort so the row jumps to its new SPN position.
         widget.onSaved?.call();
       }
@@ -8709,7 +8708,7 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
       RenderLog.write('spn_save_error', e.toString());
       if (mounted) {
         setState(() => _saving = false);
-        showToast(context, 'Save error: $e', isError: true);
+        showToast(context, cf('admin_supplier.toast_save_error_e', {'a': '$e'}), isError: true);
       }
     }
   }
@@ -8736,7 +8735,7 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
         child: _saving
             ? const SizedBox(width: 14, height: 14,
                 child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.white))
-            : Text('Save',
+            : Text(c('admin_supplier.btn_save'),
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
@@ -8780,7 +8779,7 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
       Padding(
         padding: const EdgeInsets.fromLTRB(14, 10, 8, 6),
         child: Row(children: [
-          const Text('Supplier Points — Terms',
+          Text(c('admin_supplier.supplier_points_terms'),
               style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
           const Spacer(),
           Builder(builder: (_) => _saveButton()),
@@ -8796,7 +8795,7 @@ class _SpnInlineSectionState extends State<_SpnInlineSection> {
               height: 32, color: const Color(0xFFF0F7FF),
               alignment: Alignment.centerLeft,
               padding: const EdgeInsets.fromLTRB(14, 0, 8, 0),
-              child: const Text('SUPPLIER', style: TextStyle(
+              child: Text(c('admin_supplier.col_supplier'), style: const TextStyle(
                   fontSize: 10, fontWeight: FontWeight.w700,
                   color: Color(0xFF6B7280), letterSpacing: 0.4),
                 overflow: TextOverflow.ellipsis),
@@ -8977,7 +8976,7 @@ class _SpnDropdownState extends State<_SpnDropdown> {
         ),
       DropdownMenuItem<String>(
         value: _kAddNewSpnOption,
-        child: Text('+ Add new option…',
+        child: Text(c('admin_supplier.add_new_option'),
             style: TextStyle(
                 fontSize: widget.formLabel != null ? 13 : 11,
                 fontWeight: FontWeight.w600,
@@ -9062,14 +9061,14 @@ Future<SpnOption?> _promptAddSpnOption(BuildContext context, String field) {
   return showDialog<SpnOption>(
     context: context,
     builder: (dialogCtx) => StatefulBuilder(builder: (dialogCtx, setSt) => AlertDialog(
-      title: Text('Add ${spnFieldDisplayLabel[field] ?? field} option'),
+      title: Text(cf('admin_supplier.add_field_option', {'a': '${spnFieldDisplayLabel[field] ?? field}'})),
       content: SizedBox(
         width: 320,
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           TextField(
             controller: labelCtrl,
             autofocus: true,
-            decoration: const InputDecoration(labelText: 'Label'),
+            decoration: InputDecoration(labelText: c('admin_supplier.input_label')),
           ),
           if (needsPoints) ...[
             const SizedBox(height: 12),
@@ -9077,7 +9076,7 @@ Future<SpnOption?> _promptAddSpnOption(BuildContext context, String field) {
               controller: pointsCtrl,
               keyboardType: const TextInputType.numberWithOptions(signed: true),
               inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9\-]'))],
-              decoration: const InputDecoration(labelText: 'Points'),
+              decoration: InputDecoration(labelText: c('admin_supplier.input_points')),
             ),
           ],
           if (error != null) ...[
@@ -9089,7 +9088,7 @@ Future<SpnOption?> _promptAddSpnOption(BuildContext context, String field) {
       actions: [
         TextButton(
           onPressed: submitting ? null : () => Navigator.of(dialogCtx).pop(),
-          child: const Text('Cancel'),
+          child: Text(c('admin_supplier.btn_cancel_word')),
         ),
         ElevatedButton(
           onPressed: submitting ? null : () async {
@@ -9111,7 +9110,7 @@ Future<SpnOption?> _promptAddSpnOption(BuildContext context, String field) {
           child: submitting
               ? const SizedBox(width: 16, height: 16,
                   child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-              : const Text('Add'),
+              : Text(c('admin_supplier.btn_add')),
         ),
       ],
     )),
@@ -9191,7 +9190,7 @@ class _MarketersPickerDialogState extends State<_MarketersPickerDialog> {
               autofocus: true,
               onChanged: (v) => setState(() => _q = v),
               decoration: InputDecoration(
-                hintText: 'Search MEDICINE company…',
+                hintText: c('admin_supplier.hint_search_medicine_company'),
                 hintStyle: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)),
                 prefixIcon: const Icon(Icons.search, size: 18, color: Color(0xFF9CA3AF)),
                 isDense: true,
@@ -9205,12 +9204,12 @@ class _MarketersPickerDialogState extends State<_MarketersPickerDialog> {
           if (widget.current != null && widget.current!.isNotEmpty)
             InkWell(
               onTap: () => Navigator.of(context).pop(''),
-              child: const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 child: Row(children: [
-                  Icon(Icons.clear, size: 14, color: Color(0xFF9CA3AF)),
-                  SizedBox(width: 8),
-                  Text('Clear selection', style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+                  const Icon(Icons.clear, size: 14, color: Color(0xFF9CA3AF)),
+                  const SizedBox(width: 8),
+                  Text(c('admin_supplier.clear_selection'), style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
                 ]),
               ),
             ),
@@ -9578,13 +9577,13 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
     RenderLog.write('c67_import_tapped', 'true');
     if (name.isEmpty) {
       RenderLog.write('c67_insert_attempted', 'false');
-      showToast(context, 'Supplier name is required', isError: true);
+      showToast(context, c('admin_supplier.toast_supplier_name_required'), isError: true);
       return;
     }
     final upiRaw = _upiCtrl.text.trim();
     if (upiRaw.isNotEmpty &&
         !RegExp(r'^[0-9A-Za-z._\-]{2,}@[A-Za-z]{2,}$').hasMatch(upiRaw)) {
-      showToast(context, 'Enter a valid UPI id (name@bank)', isError: true);
+      showToast(context, c('admin_supplier.err_invalid_upi'), isError: true);
       return;
     }
     RenderLog.write('c67_insert_attempted', 'true');
@@ -9637,13 +9636,13 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
       if (mounted) {
         Navigator.of(context).pop();
         widget.onImported();
-        showToast(context, 'Imported $name with ${companies.length} compan${companies.length == 1 ? 'y' : 'ies'}', duration: const Duration(seconds: 5));
+        showToast(context, cf('admin_supplier.toast_imported_supplier', {'a': name, 'b': '${companies.length}', 'c': '${companies.length == 1 ? 'y' : 'ies'}'}), duration: const Duration(seconds: 5));
       }
     } catch (e) {
       RenderLog.write('c67_insert_status', 'error:${e.toString().substring(0, e.toString().length > 80 ? 80 : e.toString().length)}');
       if (mounted) {
         setState(() => _step = _SupCardStep.review);
-        showToast(context, 'Import failed: ${e.toString().replaceFirst('Exception: ', '')}', isError: true, duration: const Duration(seconds: 8));
+        showToast(context, cf('admin_supplier.toast_import_failed_ex2', {'a': '${e.toString().replaceFirst('Exception: ', '')}'}), isError: true, duration: const Duration(seconds: 8));
       }
     }
   }
@@ -9683,7 +9682,7 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
             Text(_error!, textAlign: TextAlign.center,
                 style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
             const SizedBox(height: 16),
-            TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close')),
+            TextButton(onPressed: () => Navigator.of(context).pop(), child: Text(c('admin_supplier.btn_close'))),
           ]))),
       );
     }
@@ -9715,7 +9714,7 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
             padding: const EdgeInsets.fromLTRB(24, 20, 16, 0),
             child: Row(children: [
               Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                const Text('Import from Image — Review',
+                Text(c('admin_supplier.import_from_image_review'),
                     style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
                 const SizedBox(height: 2),
                 Text(widget.file.name,
@@ -9732,7 +9731,7 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
             padding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               // Supplier details
-              const Text('SUPPLIER DETAILS', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
+              Text(c('admin_supplier.section_supplier_details'), style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
                   color: Color(0xFF6B7280), letterSpacing: 0.5)),
               const SizedBox(height: 10),
               _field('Supplier Name *', _nameCtrl),
@@ -9759,7 +9758,7 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
                 child: Padding(
                   padding: const EdgeInsets.symmetric(vertical: 8),
                   child: Row(children: [
-                    const Expanded(child: Text('SPN points (optional)',
+                    Expanded(child: Text(c('admin_supplier.section_spn_points_optional'),
                         style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6B7280)))),
                     Icon(_spnExpanded ? Icons.expand_less : Icons.expand_more,
                         size: 18, color: const Color(0xFF9CA3AF)),
@@ -9790,7 +9789,7 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
                 child: Padding(
                   padding: const EdgeInsets.symmetric(vertical: 8),
                   child: Row(children: [
-                    const Expanded(child: Text('Other details (optional)',
+                    Expanded(child: Text(c('admin_supplier.section_other_details_optional'),
                         style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6B7280)))),
                     Icon(_otherExpanded ? Icons.expand_less : Icons.expand_more,
                         size: 18, color: const Color(0xFF9CA3AF)),
@@ -9806,17 +9805,17 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
               const SizedBox(height: 10),
               // Company list
               Row(children: [
-                const Expanded(child: Text('COMPANY LIST', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
+                Expanded(child: Text(c('admin_supplier.section_company_list'), style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
                     color: Color(0xFF6B7280), letterSpacing: 0.5))),
-                Text('${_companies.length} compan${_companies.length == 1 ? 'y' : 'ies'}',
+                Text(cf('admin_supplier.n_companies', {'a': '${_companies.length}', 'b': '${_companies.length == 1 ? 'y' : 'ies'}'}),
                     style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
               ]),
               const SizedBox(height: 10),
               if (_companies.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.only(bottom: 8),
-                  child: Text('No companies extracted. Add manually below.',
-                      style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(c('admin_supplier.no_companies_extracted'),
+                      style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
                 ),
               ...List.generate(_companies.length, (i) {
                 final co = _companies[i];
@@ -9871,7 +9870,7 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
                   controller: _newCompCtrl,
                   style: const TextStyle(fontSize: 13),
                   decoration: InputDecoration(
-                    hintText: 'Add company…',
+                    hintText: c('admin_supplier.hint_add_company'),
                     hintStyle: const TextStyle(color: Color(0xFF9CA3AF)),
                     filled: true, fillColor: const Color(0xFFF5F6F8),
                     contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -9913,7 +9912,7 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
             child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
               TextButton(
                 onPressed: () => Navigator.of(context).pop(),
-                child: const Text('Cancel', style: TextStyle(color: Color(0xFF6B7280))),
+                child: Text(c('admin_supplier.btn_cancel_word'), style: const TextStyle(color: Color(0xFF6B7280))),
               ),
               const SizedBox(width: 8),
               FilledButton(
@@ -9923,7 +9922,7 @@ class _SupCardImportDialogState extends State<_SupCardImportDialog> {
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                   padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                 ),
-                child: const Text('Import', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                child: Text(c('admin_supplier.btn_import'), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
               ),
             ]),
           ),

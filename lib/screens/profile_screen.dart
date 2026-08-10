@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/account_registration.dart';
 import '../models/app_session.dart';
 import '../models/user_profile.dart';
+import '../services/ui_copy.dart';
 import '../user_state.dart';
 import '../utils/render_log.dart';
 import '../view_as_state.dart';
@@ -141,10 +142,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     // The header name is the backend's display_name; the profile row is only a
     // fallback for the brief window before the row lands.
     final headerName = isViewAs
-        ? (profile?.displayName ?? 'My Account')
+        ? (profile?.displayName ?? c('profile.header_name_fallback'))
         : ((session?.displayName.isNotEmpty ?? false)
             ? session!.displayName
-            : (profile?.displayName ?? 'My Account'));
+            : (profile?.displayName ?? c('profile.header_name_fallback')));
 
     // #402: while the fetch is still in flight, wait for it instead of judging
     // isRegistered on a not-yet-loaded session (which would flash the
@@ -180,9 +181,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
               size: 20, color: Color(0xFF1B5E20)),
           onPressed: () => Navigator.of(context).pop(),
         ),
-        title: const Text(
-          'My Profile',
-          style: TextStyle(
+        title: Text(
+          c('profile.app_bar_title'),
+          style: const TextStyle(
             fontSize: 18,
             fontWeight: FontWeight.w800,
             color: Color(0xFF111827),
@@ -264,15 +265,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          const Row(
+                          Row(
                             children: [
-                              Icon(Icons.wifi_off,
+                              const Icon(Icons.wifi_off,
                                   size: 18, color: Color(0xFFC2410C)),
-                              SizedBox(width: 8),
+                              const SizedBox(width: 8),
                               Expanded(
                                 child: Text(
-                                  "Couldn't load your profile. Check your connection and try again.",
-                                  style: TextStyle(
+                                  c('profile.fetch_error_message'),
+                                  style: const TextStyle(
                                     fontSize: 13,
                                     fontWeight: FontWeight.w600,
                                     color: Color(0xFFC2410C),
@@ -292,8 +293,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(8)),
                               ),
-                              child: const Text('Retry',
-                                  style: TextStyle(
+                              child: Text(c('profile.btn_retry'),
+                                  style: const TextStyle(
                                       fontWeight: FontWeight.w700, fontSize: 14)),
                             ),
                           ),
@@ -317,15 +318,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          const Row(
+                          Row(
                             children: [
-                              Icon(Icons.info_outline,
+                              const Icon(Icons.info_outline,
                                   size: 18, color: Color(0xFF15803D)),
-                              SizedBox(width: 8),
+                              const SizedBox(width: 8),
                               Expanded(
                                 child: Text(
-                                  'Registration required to place orders',
-                                  style: TextStyle(
+                                  c('profile.registration_required'),
+                                  style: const TextStyle(
                                     fontSize: 13,
                                     fontWeight: FontWeight.w600,
                                     color: Color(0xFF15803D),
@@ -357,9 +358,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                     borderRadius: BorderRadius.circular(8)),
                                 elevation: 0,
                               ),
-                              child: const Text(
-                                'Complete Registration',
-                                style: TextStyle(
+                              child: Text(
+                                c('profile.btn_complete_registration'),
+                                style: const TextStyle(
                                     fontWeight: FontWeight.w700, fontSize: 14),
                               ),
                             ),
@@ -381,15 +382,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(color: const Color(0xFFFCD34D)),
                     ),
-                    child: const Row(
+                    child: Row(
                       children: [
-                        Icon(Icons.access_time,
+                        const Icon(Icons.access_time,
                             size: 16, color: Color(0xFFD97706)),
-                        SizedBox(width: 8),
+                        const SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            'Your account is pending admin approval. You will be able to place orders once approved.',
-                            style: TextStyle(
+                            c('profile.notice_pending'),
+                            style: const TextStyle(
                               fontSize: 12,
                               color: Color(0xFF92400E),
                             ),
@@ -413,14 +414,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(color: const Color(0xFFFCA5A5)),
                     ),
-                    child: const Row(
+                    child: Row(
                       children: [
-                        Icon(Icons.block, size: 16, color: Color(0xFFDC2626)),
-                        SizedBox(width: 8),
+                        const Icon(Icons.block, size: 16, color: Color(0xFFDC2626)),
+                        const SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            'Your account has been suspended. You cannot place orders. Contact support to reactivate.',
-                            style: TextStyle(
+                            c('profile.notice_suspended'),
+                            style: const TextStyle(
                               fontSize: 12,
                               color: Color(0xFF991B1B),
                             ),
@@ -442,15 +443,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(color: const Color(0xFFE5E7EB)),
                     ),
-                    child: const Row(
+                    child: Row(
                       children: [
-                        Icon(Icons.info_outline,
+                        const Icon(Icons.info_outline,
                             size: 16, color: Color(0xFF9CA3AF)),
-                        SizedBox(width: 8),
+                        const SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            'To update your details, contact support.',
-                            style: TextStyle(
+                            c('profile.notice_update_details'),
+                            style: const TextStyle(
                               fontSize: 12,
                               color: Color(0xFF6B7280),
                             ),
@@ -463,25 +464,25 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   // Business details
                   _SectionCard(
                     icon: Icons.storefront_outlined,
-                    title: 'Business Details',
+                    title: c('profile.sec_business'),
                     children: [
                       _InfoRow(
-                        label: 'Customer / Contact Name',
+                        label: c('profile.row_customer_name'),
                         value: profile?.customerName,
                         icon: Icons.person_outline,
                       ),
                       _InfoRow(
-                        label: 'Pharmacy / Clinic Name',
+                        label: c('profile.row_pharmacy_name'),
                         value: profile?.pharmacyName,
                         icon: Icons.storefront_outlined,
                       ),
                       _InfoRow(
-                        label: 'Store Type',
+                        label: c('profile.row_store_type'),
                         value: profile?.storeType,
                         icon: Icons.category_outlined,
                       ),
                       _InfoRow(
-                        label: 'Delivery Range',
+                        label: c('profile.row_delivery_range'),
                         value: profile?.rangeZone,
                         icon: Icons.local_shipping_outlined,
                         isLast: true,
@@ -492,30 +493,30 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   // Address
                   _SectionCard(
                     icon: Icons.location_on_outlined,
-                    title: 'Address',
+                    title: c('profile.sec_address'),
                     children: [
                       _InfoRow(
-                        label: 'Local Address',
+                        label: c('profile.row_local_address'),
                         value: profile?.addressLocal,
                         icon: Icons.home_outlined,
                       ),
                       _InfoRow(
-                        label: 'City',
+                        label: c('profile.row_city'),
                         value: profile?.city,
                         icon: Icons.location_city_outlined,
                       ),
                       _InfoRow(
-                        label: 'State',
+                        label: c('profile.row_state'),
                         value: profile?.state,
                         icon: Icons.map_outlined,
                       ),
                       _InfoRow(
-                        label: 'Pincode',
+                        label: c('profile.row_pincode'),
                         value: profile?.pincode,
                         icon: Icons.pin_drop_outlined,
                       ),
                       _InfoRow(
-                        label: 'Store Location Link',
+                        label: c('profile.row_store_link'),
                         value: profile?.storeLocationLink,
                         icon: Icons.link_outlined,
                         isLast: true,
@@ -526,20 +527,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   // Contact
                   _SectionCard(
                     icon: Icons.phone_outlined,
-                    title: 'Contact',
+                    title: c('profile.sec_contact'),
                     children: [
                       _InfoRow(
-                        label: 'WhatsApp Number',
+                        label: c('profile.row_whatsapp'),
                         value: profile?.whatsappNo,
                         icon: Icons.phone_outlined,
                       ),
                       _InfoRow(
-                        label: 'Other Contact',
+                        label: c('profile.row_other_contact'),
                         value: profile?.otherContactNo,
                         icon: Icons.phone_callback_outlined,
                       ),
                       _InfoRow(
-                        label: 'Email',
+                        label: c('profile.row_email'),
                         value: (profile?.email.isNotEmpty == true)
                             ? profile!.email
                             : (authEmail.isNotEmpty ? authEmail : null),
@@ -552,20 +553,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   // Drug Licenses
                   _SectionCard(
                     icon: Icons.verified_outlined,
-                    title: 'Drug Licenses',
+                    title: c('profile.sec_drug_licenses'),
                     children: [
                       _InfoRow(
-                        label: 'DL 20B',
+                        label: c('profile.row_dl20b'),
                         value: profile?.dl20b,
                         icon: Icons.receipt_long_outlined,
                       ),
                       _InfoRow(
-                        label: 'DL 21B',
+                        label: c('profile.row_dl21b'),
                         value: profile?.dl21b,
                         icon: Icons.receipt_outlined,
                       ),
                       _InfoRow(
-                        label: 'GST Number',
+                        label: c('profile.row_gst'),
                         value: profile?.gstNo,
                         icon: Icons.account_balance_outlined,
                         isLast: true,
@@ -576,15 +577,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   // Account Setup
                   _SectionCard(
                     icon: Icons.manage_accounts_outlined,
-                    title: 'Account Setup',
+                    title: c('profile.sec_account_setup'),
                     children: [
                       _InfoRow(
-                        label: 'Payment Term',
+                        label: c('profile.row_payment_term'),
                         value: profile?.paymentTerm,
                         icon: Icons.payments_outlined,
                       ),
                       _InfoRow(
-                        label: 'Customer Code',
+                        label: c('profile.row_customer_code'),
                         value: profile?.customerCode,
                         icon: Icons.tag_outlined,
                         isLast: true,
@@ -629,7 +630,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     },
                     icon: const Icon(Icons.logout,
                         size: 18, color: Color(0xFFDC2626)),
-                    label: const Text('Logout'),
+                    label: Text(c('profile.btn_logout')),
                     style: OutlinedButton.styleFrom(
                       foregroundColor: const Color(0xFFDC2626),
                       side: const BorderSide(
@@ -677,22 +678,22 @@ class _AccountStatusBadge extends StatelessWidget {
       bg = const Color(0xFFF3F4F6);
       fg = const Color(0xFF6B7280);
       icon = Icons.person_off_outlined;
-      label = 'Not Registered';
+      label = c('profile.badge_not_registered');
     } else if (isApproved && status == 'suspended') {
       bg = const Color(0xFFFFE4E6);
       fg = const Color(0xFFDC2626);
       icon = Icons.block;
-      label = 'Suspended';
+      label = c('profile.badge_suspended');
     } else if (isApproved) {
       bg = const Color(0xFFDCFCE7);
       fg = const Color(0xFF15803D);
       icon = Icons.verified_outlined;
-      label = 'Approved';
+      label = c('profile.badge_approved');
     } else {
       bg = const Color(0xFFFEF3C7);
       fg = const Color(0xFFD97706);
       icon = Icons.access_time;
-      label = 'Pending Approval';
+      label = c('profile.badge_pending');
     }
 
     return Container(
@@ -856,23 +857,22 @@ class _ViewAsCard extends StatelessWidget {
         title: Row(children: [
           const Icon(Icons.warning_amber_rounded, color: Color(0xFFD97706), size: 22),
           const SizedBox(width: 8),
-          Expanded(child: Text('Act as ${identity.name}?',
+          Expanded(child: Text(cf('profile.viewas_confirm_title', {'name': identity.name}),
               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700))),
         ]),
         content: Text(
-          'Any changes (cart, orders, profile) will be SAVED to '
-          '${identity.name}\'s real account.\n\nThis cannot be undone.',
+          cf('profile.viewas_confirm_body', {'name': identity.name}),
           style: const TextStyle(fontSize: 14),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
+            child: Text(c('profile.viewas_btn_cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
             style: FilledButton.styleFrom(backgroundColor: const Color(0xFFD97706)),
-            child: const Text('Continue — I understand'),
+            child: Text(c('profile.viewas_btn_continue')),
           ),
         ],
       ),
@@ -898,12 +898,12 @@ class _ViewAsCard extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
             child: Row(
-              children: const [
-                Icon(Icons.preview_outlined, size: 16, color: _amber),
-                SizedBox(width: 6),
+              children: [
+                const Icon(Icons.preview_outlined, size: 16, color: _amber),
+                const SizedBox(width: 6),
                 Text(
-                  'VIEW AS (Dev)',
-                  style: TextStyle(
+                  c('profile.viewas_card_title'),
+                  style: const TextStyle(
                     fontSize: 11, fontWeight: FontWeight.w700,
                     color: _amber, letterSpacing: 0.4,
                   ),
@@ -914,8 +914,8 @@ class _ViewAsCard extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
             child: Text(
-              'Preview any account\'s interface without logging out.',
-              style: TextStyle(fontSize: 12, color: Color(0xFF92400E)),
+              c('profile.viewas_card_subtitle'),
+              style: const TextStyle(fontSize: 12, color: Color(0xFF92400E)),
             ),
           ),
           const Divider(color: _amberBorder, height: 1),
@@ -925,10 +925,10 @@ class _ViewAsCard extends StatelessWidget {
               spacing: 8,
               runSpacing: 8,
               children: [
-                _ViewAsChip(label: 'Customer',         icon: Icons.person_outline,          onTap: () => _pick(context, ViewAsRole.customer)),
-                _ViewAsChip(label: 'Supplier',         icon: Icons.store_outlined,           onTap: () => _pick(context, ViewAsRole.supplier)),
-                _ViewAsChip(label: 'Company',          icon: Icons.business_outlined,        onTap: () => _pick(context, ViewAsRole.company)),
-                _ViewAsChip(label: 'Delivery Partner', icon: Icons.delivery_dining_outlined, onTap: () => _pick(context, ViewAsRole.deliveryPartner)),
+                _ViewAsChip(label: c('profile.viewas_chip_customer'),  icon: Icons.person_outline,          onTap: () => _pick(context, ViewAsRole.customer)),
+                _ViewAsChip(label: c('profile.viewas_chip_supplier'),  icon: Icons.store_outlined,           onTap: () => _pick(context, ViewAsRole.supplier)),
+                _ViewAsChip(label: c('profile.viewas_chip_company'),   icon: Icons.business_outlined,        onTap: () => _pick(context, ViewAsRole.company)),
+                _ViewAsChip(label: c('profile.viewas_chip_delivery'),  icon: Icons.delivery_dining_outlined, onTap: () => _pick(context, ViewAsRole.deliveryPartner)),
               ],
             ),
           ),

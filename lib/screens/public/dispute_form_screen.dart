@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 import '../../widgets/fulfill_item_sheet.dart' show ProofThumbnail;
 import '../admin/dispute/dispute_models.dart';
@@ -85,17 +86,18 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
       builder: (ctx) => AlertDialog(
         title: Text(action.label),
         content: Text(
-          '${item.productName}\nConfirm: ${action.label}?',
+          cf('dispute_form_screen.confirm_body',
+              {'a': item.productName, 'b': action.label}),
           style: const TextStyle(fontSize: 14),
         ),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
+              child: Text(c('dispute_form_screen.cancel'))),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: _kGreen),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Confirm'),
+            child: Text(c('dispute_form_screen.confirm')),
           ),
         ],
       ),
@@ -121,14 +123,14 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
       }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Thanks — response recorded.')));
+        SnackBar(content: Text(c('dispute_form_screen.response_recorded'))));
       await _load();
     } on DisputeException catch (e) {
       if (!mounted) return;
       if (e.message == 'already_responded') {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              content: Text('Already answered — refreshing.')));
+          SnackBar(
+              content: Text(c('dispute_form_screen.already_answered'))));
         await _load();
       } else if (e.message == 'invalid') {
         setState(() { _error = 'invalid'; _loading = false; });
@@ -136,13 +138,13 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-              content: Text('Error: ${e.message}'),
+              content: Text(cf('dispute_form_screen.error', {'a': e.message})),
               backgroundColor: _kRed));
       }
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Submission failed. Please try again.')));
+        SnackBar(content: Text(c('dispute_form_screen.submission_failed'))));
     } finally {
       if (mounted) setState(() => _submitting.remove(item.disputeId));
     }
@@ -157,10 +159,10 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 640),
             child: _loading
-                ? const Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-                    CircularProgressIndicator(color: _kGreen, strokeWidth: 2.5),
-                    SizedBox(height: 12),
-                    Text('Loading…', style: TextStyle(fontSize: 14, color: _kTextMuted)),
+                ? Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    const CircularProgressIndicator(color: _kGreen, strokeWidth: 2.5),
+                    const SizedBox(height: 12),
+                    Text(c('dispute_form_screen.loading'), style: const TextStyle(fontSize: 14, color: _kTextMuted)),
                   ]))
                 : _error != null ? _buildErrorState() : _buildPage(),
           ),
@@ -209,7 +211,7 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
               ),
               icon: const Icon(Icons.refresh_rounded, size: 16),
-              label: const Text('Retry'),
+              label: Text(c('dispute_form_screen.retry')),
             ),
           ],
           const SizedBox(height: 32),
@@ -236,14 +238,14 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         _buildHeader(),
         const SizedBox(height: 16),
-        const Text('Please confirm the disputed items below.',
-            style: TextStyle(fontSize: 15, color: _kTextMuted, height: 1.35)),
+        Text(c('dispute_form_screen.confirm_items_below'),
+            style: const TextStyle(fontSize: 15, color: _kTextMuted, height: 1.35)),
         const SizedBox(height: 12),
         if (rows.isEmpty)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 12),
-            child: Text('No disputes.',
-                style: TextStyle(fontSize: 13, color: _kTextMuted)),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            child: Text(c('dispute_form_screen.no_disputes'),
+                style: const TextStyle(fontSize: 13, color: _kTextMuted)),
           )
         else
           ...rows.map((item) => Padding(
@@ -312,7 +314,7 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
                     // (a) wrong product name
                     if ((isWrong || hasFewWrong) && (item.wrongProductName ?? '').isNotEmpty) ...[
                       const SizedBox(height: 3),
-                      Text('They say we sent: ${item.wrongProductName}',
+                      Text(cf('dispute_form_screen.they_say_we_sent', {'a': item.wrongProductName ?? ''}),
                           style: const TextStyle(fontSize: 12, color: _kRed),
                           maxLines: 2, overflow: TextOverflow.ellipsis),
                     ],
@@ -386,8 +388,8 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
         if (agg.disputedQty > 0) ...[
           const SizedBox(height: 6),
           Text(
-              'In dispute: ${agg.disputedQty.toInt()} units'
-              '${agg.lines.length > 1 ? ' (${agg.lines.length} orders)' : ''}',
+              cf('dispute_form_screen.in_dispute_units', {'a': '${agg.disputedQty.toInt()}'})
+              + (agg.lines.length > 1 ? cf('dispute_form_screen.orders_suffix', {'a': '${agg.lines.length}'}) : ''),
               style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
                   color: _kAmberText)),
         ],
@@ -426,8 +428,8 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
         if ((item.proofUrl ?? '').isNotEmpty) ...[
           const SizedBox(height: 10),
           Row(children: [
-            const Text('Proof photo:',
-                style: TextStyle(
+            Text(c('dispute_form_screen.proof_photo'),
+                style: const TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
                     color: _kTextMuted)),
@@ -582,12 +584,12 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
       const SizedBox(width: 14),
       Expanded(
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('mediBO · Delivery Dispute',
+          Text(c('dispute_form_screen.header_kicker'),
               style: TextStyle(color: Colors.white.withValues(alpha: 0.70),
                   fontSize: 11, fontWeight: FontWeight.w500,
                   letterSpacing: 0.5, height: 1.3)),
           const SizedBox(height: 4),
-          Text('Hi $_supplierName',
+          Text(cf('dispute_form_screen.hi_supplier', {'a': _supplierName}),
               style: const TextStyle(color: Colors.white, fontSize: 21,
                   fontWeight: FontWeight.w800, height: 1.2),
               maxLines: 2, overflow: TextOverflow.ellipsis),
@@ -596,8 +598,8 @@ class _DisputeFormScreenState extends State<DisputeFormScreen> {
     ]),
   );
 
-  Widget _footer() => const Center(
-    child: Text('mediBO · B2B Pharmacy Platform',
-        style: TextStyle(fontSize: 11, color: _kTextMuted)),
+  Widget _footer() => Center(
+    child: Text(c('dispute_form_screen.footer'),
+        style: const TextStyle(fontSize: 11, color: _kTextMuted)),
   );
 }

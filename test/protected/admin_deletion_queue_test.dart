@@ -8,6 +8,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'ui_copy_fixture.dart';
+
 import 'package:pharma_b2b/screens/admin/admin_deletion_request_screen.dart';
 import 'package:pharma_b2b/screens/admin/admin_nav_entries.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
@@ -33,6 +35,7 @@ Map<String, dynamic> _listPayload() => {
     };
 
 void main() {
+  setUp(seedUiCopy);
   setUpAll(() => RenderLog.flushEnabled = false);
 
   testWidgets('lists rows verbatim and Approve calls the review RPC',

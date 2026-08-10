@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import '../services/ui_copy.dart';
+
 /// CHANGE #642 — the payment QR sheet's visible copy, rendered verbatim.
 ///
 /// The bug this file exists to kill: the sheet composed its own headings out of
@@ -194,7 +196,7 @@ class C330CopyRow extends StatelessWidget {
           onPressed: () {
             Clipboard.setData(ClipboardData(text: v));
             ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(
-              content: Text('Copied: $v',
+              content: Text(cf('pay_qr.snack_copied', {'value': v}),
                   maxLines: 1, overflow: TextOverflow.ellipsis),
               duration: const Duration(seconds: 1),
             ));

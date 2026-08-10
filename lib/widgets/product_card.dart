@@ -9,6 +9,7 @@ import '../utils/render_log.dart';
 import '../utils/toast.dart';
 import '../models/product.dart';
 import '../screens/auth/login_screen.dart';
+import '../services/ui_copy.dart';
 import '../theme.dart';
 import '../user_state.dart';
 import '../util.dart';
@@ -374,7 +375,7 @@ class AvailabilityButton extends StatelessWidget {
             ),
             onPressed: onAdd,
             icon: const Icon(Icons.add, size: 16),
-            label: const Text('Add to cart'),
+            label: Text(c('product_card.add_to_cart')),
           ),
         ),
       );
@@ -700,15 +701,15 @@ class _ImageBlockState extends State<_ImageBlock> {
                   color: const Color(0xFFD97706),
                   borderRadius: BorderRadius.circular(6),
                 ),
-                child: const Row(
+                child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.local_fire_department_rounded,
+                    const Icon(Icons.local_fire_department_rounded,
                         size: 12, color: Colors.white),
-                    SizedBox(width: 4),
+                    const SizedBox(width: 4),
                     Text(
-                      'Best Seller',
-                      style: TextStyle(
+                      c('product_card.best_seller'),
+                      style: const TextStyle(
                         fontSize: 10,
                         fontWeight: FontWeight.w700,
                         color: Colors.white,

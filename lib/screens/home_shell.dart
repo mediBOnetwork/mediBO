@@ -11,6 +11,7 @@ import '../models/cart_model.dart';
 import '../theme.dart';
 import '../url_sync.dart';
 import '../user_state.dart';
+import '../services/ui_copy.dart';
 import '../util.dart';
 import '../view_as_state.dart';
 import '../utils/render_log.dart';
@@ -1199,7 +1200,7 @@ class _MobileProfileAvatar extends StatelessWidget {
               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
             ),
             const SizedBox(height: 4),
-            const Text('Administrator', style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+            Text(c('home_shell.administrator'), style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
             const SizedBox(height: 4),
             Builder(builder: (_) {
               RenderLog.write('c209_debug_banner_shown', 1);
@@ -1209,14 +1210,14 @@ class _MobileProfileAvatar extends StatelessWidget {
             const SizedBox(height: 16),
             const Divider(),
             Builder(builder: (_) { RenderLog.write('c473_profile_menu_built', 1); return const SizedBox.shrink(); }),
-            AdminSheetTile(icon: Icons.person_outline, label: 'View Profile', onTap: () {
+            AdminSheetTile(icon: Icons.person_outline, label: c('home_shell.view_profile'), onTap: () {
               Navigator.pop(context);
               Navigator.push(context, MaterialPageRoute(builder: (_) => const ProfileScreen()));
             }),
             AdminProfileMenuTiles(isSuperAdmin: isSuperAdmin, nav: nav, deletionCount: deletionCount),
             AdminSheetTile(
               icon: Icons.qr_code_2,
-              label: 'Bags',
+              label: c('home_shell.bags'),
               onTap: () {
                 RenderLog.write('c250_bags_menu', 'tapped');
                 Navigator.pop(context);
@@ -1226,7 +1227,7 @@ class _MobileProfileAvatar extends StatelessWidget {
             const Divider(),
             AdminSheetTile(
               icon: Icons.logout,
-              label: 'Logout',
+              label: c('home_shell.logout'),
               color: const Color(0xFFDC2626),
               onTap: () { Navigator.pop(context); nav('logout'); },
             ),
@@ -1441,14 +1442,14 @@ class _MobileSearchBarState extends State<_MobileSearchBar> {
                 enableSuggestions: false,
                 keyboardType: TextInputType.text,
                 style: const TextStyle(fontSize: 14, color: Brand.ink),
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                   border: InputBorder.none,
                   enabledBorder: InputBorder.none,
                   focusedBorder: InputBorder.none,
-                  hintText: 'Search for medicines',
-                  hintStyle: TextStyle(color: Brand.inkMuted, fontSize: 14),
+                  hintText: c('home_shell.search_for_medicines'),
+                  hintStyle: const TextStyle(color: Brand.inkMuted, fontSize: 14),
                   isDense: true,
-                  contentPadding: EdgeInsets.symmetric(vertical: 13),
+                  contentPadding: const EdgeInsets.symmetric(vertical: 13),
                   filled: false,
                 ),
               ),
@@ -1757,7 +1758,7 @@ class _CartPanelContentState extends State<_CartPanelContent> {
                     onPressed: widget.onClose,
                     icon: const Icon(Icons.arrow_back_ios_new,
                         size: 18, color: Color(0xFF111827)),
-                    tooltip: 'Close cart',
+                    tooltip: c('home_shell.close_cart'),
                   ),
                   // Animated area: full-width search field OR collapsed toolbar.
                   // LayoutBuilder provides the exact available width so the
@@ -1799,7 +1800,7 @@ class _CartPanelContentState extends State<_CartPanelContent> {
                                   onChanged: (v) =>
                                       setState(() => _searchQuery = v),
                                   decoration: InputDecoration(
-                                    hintText: 'Search in cart…',
+                                    hintText: c('home_shell.search_in_cart'),
                                     hintStyle: const TextStyle(
                                         color: Color(0xFF9CA3AF),
                                         fontSize: 13),
@@ -1887,18 +1888,18 @@ class _CartPanelContentState extends State<_CartPanelContent> {
                                                   color: const Color(
                                                       0xFFDC2626)),
                                             ),
-                                            child: const Row(
+                                            child: Row(
                                               mainAxisSize: MainAxisSize.min,
                                               children: [
-                                                Icon(
+                                                const Icon(
                                                   Icons.remove_shopping_cart,
                                                   size: 13,
                                                   color: Color(0xFFDC2626),
                                                 ),
-                                                SizedBox(width: 5),
+                                                const SizedBox(width: 5),
                                                 Text(
-                                                  'Clear Cart',
-                                                  style: TextStyle(
+                                                  c('home_shell.clear_cart'),
+                                                  style: const TextStyle(
                                                     fontSize: 11,
                                                     fontWeight:
                                                         FontWeight.w600,
@@ -2080,12 +2081,12 @@ class _ConfirmContent extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          'This will clear all items',
+        Text(
+          c('home_shell.this_will_clear_all_items'),
           maxLines: 1,
           softWrap: false,
           overflow: TextOverflow.ellipsis,
-          style: TextStyle(
+          style: const TextStyle(
             fontSize: 13,
             color: Color(0xFF6B7280),
           ),
@@ -2106,8 +2107,8 @@ class _ConfirmContent extends StatelessWidget {
                   elevation: 0,
                   shadowColor: Colors.transparent,
                 ),
-                child: const Text('Cancel',
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                child: Text(c('home_shell.cancel'),
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
               ),
             ),
             const SizedBox(width: 8),
@@ -2122,8 +2123,8 @@ class _ConfirmContent extends StatelessWidget {
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(10)),
                 ),
-                child: const Text('Clear all',
-                    style: TextStyle(
+                child: Text(c('home_shell.clear_all'),
+                    style: const TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w600)),
               ),
@@ -2489,14 +2490,14 @@ class _LoginPanelContentState extends State<_LoginPanelContent> {
                 icon: const Icon(Icons.arrow_back_ios_new, size: 18),
                 color: const Color(0xFF6B7280),
                 onPressed: _backToLogin,
-                tooltip: 'Back',
+                tooltip: c('home_shell.back'),
               ),
             const Spacer(),
             IconButton(
               icon: const Icon(Icons.close, size: 22),
               color: const Color(0xFF6B7280),
               onPressed: widget.onClose,
-              tooltip: 'Close',
+              tooltip: c('home_shell.close'),
             ),
           ]),
         ),
@@ -2522,12 +2523,12 @@ class _LoginPanelContentState extends State<_LoginPanelContent> {
       children: [
         const Center(child: _LoginPanelLogo()),
         const SizedBox(height: 28),
-        const Text('Welcome to mediBO', textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800,
+        Text(c('home_shell.welcome_to_medibo'), textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w800,
                 color: Color(0xFF111827), letterSpacing: -0.5)),
         const SizedBox(height: 6),
-        const Text('B2B Pharmacy Platform', textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 15, color: Color(0xFF6B7280))),
+        Text(c('home_shell.b2b_pharmacy_platform'), textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 15, color: Color(0xFF6B7280))),
         const SizedBox(height: 40),
 
         TextField(
@@ -2566,8 +2567,8 @@ class _LoginPanelContentState extends State<_LoginPanelContent> {
               child: _resetLoading
                   ? const SizedBox(width: 14, height: 14,
                       child: CircularProgressIndicator(color: _green, strokeWidth: 2))
-                  : const Text('Forgot password?',
-                      style: TextStyle(fontSize: 13, color: _green,
+                  : Text(c('home_shell.forgot_password'),
+                      style: const TextStyle(fontSize: 13, color: _green,
                           fontWeight: FontWeight.w600, decoration: TextDecoration.underline)),
             ),
           ),
@@ -2585,14 +2586,14 @@ class _LoginPanelContentState extends State<_LoginPanelContent> {
           onPressed: _onContinueTap,
           child: _busy
               ? _spinner()
-              : const Text('Continue',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+              : Text(c('home_shell.continue'),
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
         ),
 
         const SizedBox(height: 40),
-        const Text('By continuing you agree to our Terms & Privacy Policy',
+        Text(c('home_shell.by_continuing_you_agree_to_our_terms_privacy_policy'),
             textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 11, color: Color(0xFF9CA3AF), height: 1.5)),
+            style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF), height: 1.5)),
       ],
     );
   }
@@ -2605,8 +2606,8 @@ class _LoginPanelContentState extends State<_LoginPanelContent> {
       children: [
         const Center(child: _LoginPanelLogo()),
         const SizedBox(height: 28),
-        const Text('Check your email', textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800,
+        Text(c('home_shell.check_your_email'), textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800,
                 color: Color(0xFF111827), letterSpacing: -0.5)),
         const SizedBox(height: 8),
         RichText(
@@ -2642,8 +2643,8 @@ class _LoginPanelContentState extends State<_LoginPanelContent> {
 
         _greenButtonNullable(
           onPressed: _resetLoading ? null : _verifyOtp,
-          child: _resetLoading ? _spinner() : const Text('Verify Code',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+          child: _resetLoading ? _spinner() : Text(c('home_shell.verify_code'),
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
         ),
         const SizedBox(height: 16),
         Center(
@@ -2651,8 +2652,8 @@ class _LoginPanelContentState extends State<_LoginPanelContent> {
             onTap: _resetLoading ? null : () {
               setState(() { _resetStep = _ResetStep.none; _resetError = null; _showForgot = true; });
             },
-            child: const Text('Resend code or use different email',
-                style: TextStyle(fontSize: 13, color: _green,
+            child: Text(c('home_shell.resend_code_or_use_different_email'),
+                style: const TextStyle(fontSize: 13, color: _green,
                     fontWeight: FontWeight.w500, decoration: TextDecoration.underline)),
           ),
         ),
@@ -2668,13 +2669,13 @@ class _LoginPanelContentState extends State<_LoginPanelContent> {
       children: [
         const Center(child: _LoginPanelLogo()),
         const SizedBox(height: 28),
-        const Text('Set new password', textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800,
+        Text(c('home_shell.set_new_password'), textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800,
                 color: Color(0xFF111827), letterSpacing: -0.5)),
         const SizedBox(height: 8),
-        const Text('Choose a strong password for your account.',
+        Text(c('home_shell.choose_a_strong_password_for_your_account'),
             textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 14, color: Color(0xFF6B7280))),
+            style: const TextStyle(fontSize: 14, color: Color(0xFF6B7280))),
         const SizedBox(height: 36),
 
         TextField(
@@ -2715,8 +2716,8 @@ class _LoginPanelContentState extends State<_LoginPanelContent> {
 
         _greenButtonNullable(
           onPressed: _resetLoading ? null : _setNewPassword,
-          child: _resetLoading ? _spinner() : const Text('Set Password',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+          child: _resetLoading ? _spinner() : Text(c('home_shell.set_password'),
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
         ),
       ],
     );
@@ -2818,15 +2819,15 @@ class _MobileBottomBar extends StatelessWidget {
       elevation: 8,
       onTap: onNavTap,
       items: [
-        const BottomNavigationBarItem(
-          icon: Icon(Icons.home_outlined),
-          activeIcon: Icon(Icons.home),
-          label: 'Home',
+        BottomNavigationBarItem(
+          icon: const Icon(Icons.home_outlined),
+          activeIcon: const Icon(Icons.home),
+          label: c('home_shell.home'),
         ),
-        const BottomNavigationBarItem(
-          icon: Icon(Icons.grid_view_outlined),
-          activeIcon: Icon(Icons.grid_view),
-          label: 'Catalogue',
+        BottomNavigationBarItem(
+          icon: const Icon(Icons.grid_view_outlined),
+          activeIcon: const Icon(Icons.grid_view),
+          label: c('home_shell.catalogue'),
         ),
         BottomNavigationBarItem(
           icon: Badge(
@@ -2839,12 +2840,12 @@ class _MobileBottomBar extends StatelessWidget {
             label: Text('${cart.orders.length}'),
             child: const Icon(Icons.receipt_long),
           ),
-          label: 'Orders',
+          label: c('home_shell.orders'),
         ),
-        const BottomNavigationBarItem(
-          icon: Icon(Icons.upload_file_outlined),
-          activeIcon: Icon(Icons.upload_file),
-          label: 'Bulk',
+        BottomNavigationBarItem(
+          icon: const Icon(Icons.upload_file_outlined),
+          activeIcon: const Icon(Icons.upload_file),
+          label: c('home_shell.bulk'),
         ),
       ],
     );
@@ -3340,14 +3341,14 @@ class _DesktopHeader extends StatelessWidget {
           const Spacer(),
           // Customer nav: Bulk Upload, Orders, Cart
           _DesktopNavLink(
-            label: 'Bulk Upload',
+            label: c('home_shell.bulk_upload'),
             icon: Icons.upload_file_outlined,
             selected: isBulk,
             onTap: onBulk,
           ),
           const SizedBox(width: 4),
           _DesktopNavLink(
-            label: 'Orders',
+            label: c('home_shell.orders'),
             icon: Icons.receipt_long_outlined,
             selected: isOrders,
             onTap: onOrders,
@@ -3372,9 +3373,9 @@ class _DesktopHeader extends StatelessWidget {
                           size: 22, color: Brand.ink),
                     ),
                     const SizedBox(width: 6),
-                    const Text(
-                      'Cart',
-                      style: TextStyle(
+                    Text(
+                      c('home_shell.cart'),
+                      style: const TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w600,
                         color: Brand.ink,
@@ -3490,14 +3491,14 @@ class _DesktopSearchRowState extends State<_DesktopSearchRow> {
                 enableSuggestions: false,
                 keyboardType: TextInputType.text,
                 style: const TextStyle(fontSize: 14, color: Brand.ink),
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                   border: InputBorder.none,
                   enabledBorder: InputBorder.none,
                   focusedBorder: InputBorder.none,
-                  hintText: 'Search for medicines',
-                  hintStyle: TextStyle(color: Brand.inkMuted, fontSize: 14),
+                  hintText: c('home_shell.search_for_medicines'),
+                  hintStyle: const TextStyle(color: Brand.inkMuted, fontSize: 14),
                   isDense: true,
-                  contentPadding: EdgeInsets.symmetric(vertical: 14),
+                  contentPadding: const EdgeInsets.symmetric(vertical: 14),
                   filled: false,
                 ),
               ),
@@ -3531,10 +3532,10 @@ class _DesktopSearchRowState extends State<_DesktopSearchRow> {
                     bottomRight: Radius.circular(9),
                   ),
                 ),
-                child: const Center(
+                child: Center(
                   child: Text(
-                    'Search',
-                    style: TextStyle(
+                    c('home_shell.search'),
+                    style: const TextStyle(
                       color: Colors.white,
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
@@ -3577,9 +3578,9 @@ class _DesktopProfileButton extends StatelessWidget {
               color: const Color(0xFF1D9E75),
               borderRadius: BorderRadius.circular(8),
             ),
-            child: const Text(
-              'Login',
-              style: TextStyle(
+            child: Text(
+              c('home_shell.login'),
+              style: const TextStyle(
                 fontSize: 14,
                 fontWeight: FontWeight.w700,
                 color: Colors.white,
@@ -3613,117 +3614,117 @@ class _DesktopProfileButton extends StatelessWidget {
         return [
         PopupMenuItem(
           value: 'profile',
-          child: const Row(
+          child: Row(
             children: [
-              Icon(Icons.person_outline, size: 16, color: Color(0xFF374151)),
-              SizedBox(width: 10),
-              Text('View Profile',
-                  style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
+              const Icon(Icons.person_outline, size: 16, color: Color(0xFF374151)),
+              const SizedBox(width: 10),
+              Text(c('home_shell.view_profile'),
+                  style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
             ],
           ),
         ),
         if (hasAdminNav) ...[
           const PopupMenuDivider(),
           if (isSuperAdmin)
-            const PopupMenuItem(
+            PopupMenuItem(
               value: 'manage_admins',
               child: Row(children: [
-                Icon(Icons.admin_panel_settings_outlined, size: 16, color: Color(0xFF1B7A43)),
-                SizedBox(width: 10),
-                Text('Manage Admins', style: TextStyle(fontSize: 14, color: Color(0xFF1B7A43))),
+                const Icon(Icons.admin_panel_settings_outlined, size: 16, color: Color(0xFF1B7A43)),
+                const SizedBox(width: 10),
+                Text(c('home_shell.manage_admins'), style: const TextStyle(fontSize: 14, color: Color(0xFF1B7A43))),
               ]),
             ),
           if (isSuperAdmin)
-            const PopupMenuItem(
+            PopupMenuItem(
               value: 'payment_upi',
               child: Row(children: [
-                Icon(Icons.qr_code_outlined, size: 16, color: Color(0xFF1B7A43)),
-                SizedBox(width: 10),
-                Text('Payment and Partner', style: TextStyle(fontSize: 14, color: Color(0xFF1B7A43))),
+                const Icon(Icons.qr_code_outlined, size: 16, color: Color(0xFF1B7A43)),
+                const SizedBox(width: 10),
+                Text(c('home_shell.payment_and_partner'), style: const TextStyle(fontSize: 14, color: Color(0xFF1B7A43))),
               ]),
             ),
-          const PopupMenuItem(
+          PopupMenuItem(
             value: 'add_supplier',
             child: Row(children: [
-              Icon(Icons.add_business_outlined, size: 16, color: Color(0xFF374151)),
-              SizedBox(width: 10),
-              Text('Add Supplier', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
+              const Icon(Icons.add_business_outlined, size: 16, color: Color(0xFF374151)),
+              const SizedBox(width: 10),
+              Text(c('home_shell.add_supplier'), style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
             ]),
           ),
-          const PopupMenuItem(
+          PopupMenuItem(
             value: 'add_customer',
             child: Row(children: [
-              Icon(Icons.person_add_outlined, size: 16, color: Color(0xFF374151)),
-              SizedBox(width: 10),
-              Text('Add Customer', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
+              const Icon(Icons.person_add_outlined, size: 16, color: Color(0xFF374151)),
+              const SizedBox(width: 10),
+              Text(c('home_shell.add_customer'), style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
             ]),
           ),
-          const PopupMenuItem(
+          PopupMenuItem(
             value: 'add_medicine',
             child: Row(children: [
-              Icon(Icons.medication_outlined, size: 16, color: Color(0xFF374151)),
-              SizedBox(width: 10),
-              Text('Add Medicine', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
+              const Icon(Icons.medication_outlined, size: 16, color: Color(0xFF374151)),
+              const SizedBox(width: 10),
+              Text(c('home_shell.add_medicine'), style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
             ]),
           ),
-          const PopupMenuItem(
+          PopupMenuItem(
             value: 'bags',
             child: Row(children: [
-              Icon(Icons.qr_code_2, size: 16, color: Color(0xFF374151)),
-              SizedBox(width: 10),
-              Text('Bags', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
+              const Icon(Icons.qr_code_2, size: 16, color: Color(0xFF374151)),
+              const SizedBox(width: 10),
+              Text(c('home_shell.bags'), style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
             ]),
           ),
-          const PopupMenuItem(
+          PopupMenuItem(
             value: 'mr',
             child: Row(children: [
-              Icon(Icons.badge_outlined, size: 16, color: Color(0xFF374151)),
-              SizedBox(width: 10),
-              Text('MR Registrations', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
+              const Icon(Icons.badge_outlined, size: 16, color: Color(0xFF374151)),
+              const SizedBox(width: 10),
+              Text(c('home_shell.mr_registrations'), style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
             ]),
           ),
-          const PopupMenuItem(
+          PopupMenuItem(
             value: 'companies',
             child: Row(children: [
-              Icon(Icons.business_outlined, size: 16, color: Color(0xFF374151)),
-              SizedBox(width: 10),
-              Text('Company Registrations', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
+              const Icon(Icons.business_outlined, size: 16, color: Color(0xFF374151)),
+              const SizedBox(width: 10),
+              Text(c('home_shell.company_registrations'), style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
             ]),
           ),
-          const PopupMenuItem(
+          PopupMenuItem(
             value: 'delivery_partners',
             child: Row(children: [
-              Icon(Icons.delivery_dining_outlined, size: 16, color: Color(0xFF374151)),
-              SizedBox(width: 10),
-              Text('Delivery Partners', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
+              const Icon(Icons.delivery_dining_outlined, size: 16, color: Color(0xFF374151)),
+              const SizedBox(width: 10),
+              Text(c('home_shell.delivery_partners'), style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
             ]),
           ),
-          const PopupMenuItem(
+          PopupMenuItem(
             value: 'wa_templates',
             child: Row(children: [
-              Icon(Icons.description_outlined, size: 16, color: Color(0xFF374151)),
-              SizedBox(width: 10),
-              Text('WhatsApp Templates', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
+              const Icon(Icons.description_outlined, size: 16, color: Color(0xFF374151)),
+              const SizedBox(width: 10),
+              Text(c('home_shell.whatsapp_templates'), style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
             ]),
           ),
-          const PopupMenuItem(
+          PopupMenuItem(
             value: 'wa_campaigns',
             child: Row(children: [
-              Icon(Icons.campaign_outlined, size: 16, color: Color(0xFF374151)),
-              SizedBox(width: 10),
-              Text('WhatsApp Campaigns', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
+              const Icon(Icons.campaign_outlined, size: 16, color: Color(0xFF374151)),
+              const SizedBox(width: 10),
+              Text(c('home_shell.whatsapp_campaigns'), style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
             ]),
           ),
           const PopupMenuDivider(),
         ],
         PopupMenuItem(
           value: 'logout',
-          child: const Row(
+          child: Row(
             children: [
-              Icon(Icons.logout, size: 16, color: Color(0xFFDC2626)),
-              SizedBox(width: 10),
-              Text('Logout',
-                  style: TextStyle(fontSize: 14, color: Color(0xFFDC2626))),
+              const Icon(Icons.logout, size: 16, color: Color(0xFFDC2626)),
+              const SizedBox(width: 10),
+              Text(c('home_shell.logout'),
+                  style: const TextStyle(fontSize: 14, color: Color(0xFFDC2626))),
             ],
           ),
         ),
@@ -3742,7 +3743,7 @@ class _DesktopProfileButton extends StatelessWidget {
         } else if (val == 'logout') {
           if (isCustomerViewAs) {
             if (context.mounted) {
-              showToast(context, 'Exit View As first, then sign out.', isError: true);
+              showToast(context, c('home_shell.exit_view_as_first_then_sign_out'), isError: true);
             }
           } else {
             await UserState.read(context).signOut();
@@ -3783,7 +3784,7 @@ class _DesktopProfileButton extends StatelessWidget {
             const SizedBox(width: 9),
             Flexible(
               child: Text(
-                'Hello $shortName',
+                cf('home_shell.hello_a', {'a': shortName}),
                 style: const TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w600,
@@ -3822,12 +3823,12 @@ class _DashboardButton extends StatelessWidget {
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
-            children: const [
-              Icon(Icons.dashboard_outlined, size: 15, color: Brand.green),
-              SizedBox(width: 6),
+            children: [
+              const Icon(Icons.dashboard_outlined, size: 15, color: Brand.green),
+              const SizedBox(width: 6),
               Text(
-                'Dashboard',
-                style: TextStyle(
+                c('home_shell.dashboard'),
+                style: const TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w600,
                   color: Brand.green,
@@ -3950,16 +3951,16 @@ class _MobileProfileButton extends StatelessWidget {
                     MaterialPageRoute(builder: (_) => const ProfileScreen()));
               },
               borderRadius: BorderRadius.circular(8),
-              child: const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 4, vertical: 12),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 12),
                 child: Row(
                   children: [
-                    Icon(Icons.person_outline,
+                    const Icon(Icons.person_outline,
                         size: 20, color: Color(0xFF374151)),
-                    SizedBox(width: 12),
+                    const SizedBox(width: 12),
                     Text(
-                      'View Profile',
-                      style: TextStyle(
+                      c('home_shell.view_profile'),
+                      style: const TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w600,
                         color: Color(0xFF374151),
@@ -3975,17 +3976,17 @@ class _MobileProfileButton extends StatelessWidget {
                 await auth.signOut();
               },
               borderRadius: BorderRadius.circular(8),
-              child: const Padding(
+              child: Padding(
                 padding:
-                    EdgeInsets.symmetric(horizontal: 4, vertical: 12),
+                    const EdgeInsets.symmetric(horizontal: 4, vertical: 12),
                 child: Row(
                   children: [
-                    Icon(Icons.logout,
+                    const Icon(Icons.logout,
                         size: 20, color: Color(0xFFDC2626)),
-                    SizedBox(width: 12),
+                    const SizedBox(width: 12),
                     Text(
-                      'Logout',
-                      style: TextStyle(
+                      c('home_shell.logout'),
+                      style: const TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w600,
                         color: Color(0xFFDC2626),
@@ -4214,11 +4215,11 @@ class _DesktopCategorySidebar extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Padding(
-            padding: EdgeInsets.fromLTRB(16, 20, 16, 12),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 20, 16, 12),
             child: Text(
-              'CATEGORIES',
-              style: TextStyle(
+              c('home_shell.categories'),
+              style: const TextStyle(
                 fontSize: 11,
                 fontWeight: FontWeight.w700,
                 color: Color(0xFF9CA3AF),
@@ -4410,9 +4411,9 @@ class _AdminSuppliersPage extends StatelessWidget {
           child: const Icon(Icons.inventory_2_outlined, size: 40, color: Color(0xFF1B7A43)),
         ),
         const SizedBox(height: 20),
-        const Text('Suppliers', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
+        Text(c('home_shell.suppliers'), style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
         const SizedBox(height: 10),
-        const Text('Coming soon — this section will be built out.', textAlign: TextAlign.center, style: TextStyle(fontSize: 14, color: Color(0xFF6B7280))),
+        Text(c('home_shell.coming_soon_this_section_will_be_built_out'), textAlign: TextAlign.center, style: const TextStyle(fontSize: 14, color: Color(0xFF6B7280))),
       ]),
     );
   }
@@ -4508,7 +4509,7 @@ class _ViewAsBanner extends StatelessWidget {
             const SizedBox(width: 6),
             Expanded(
               child: Text(
-                '⚠ Acting as $_roleLabel: ${identity.name} — changes are SAVED to their account',
+                cf('home_shell.acting_as_banner', {'a': _roleLabel, 'b': identity.name}),
                 style: const TextStyle(
                   fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF991B1B),
                 ),
@@ -4523,7 +4524,7 @@ class _ViewAsBanner extends StatelessWidget {
                 minimumSize: Size.zero,
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
-              child: const Text('Exit', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+              child: Text(c('home_shell.exit'), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
             ),
           ],
         ),

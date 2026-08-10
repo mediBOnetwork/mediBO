@@ -18,6 +18,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../screens/admin/admin_customer_screen.dart' show AdminCustomerScreen;
+import '../services/ui_copy.dart';
 import '../utils/toast.dart';
 import 'adaptive_map.dart';
 
@@ -97,8 +98,8 @@ class _SupplierMapGroupsPanelState extends State<SupplierMapGroupsPanel> {
       showToast(
         context,
         triggered
-            ? 'Optimizing routes — check the Customer → Route tab for progress.'
-            : 'Open the Customer → Route tab once first, then try again.',
+            ? c('supplier_map_groups.toast_optimizing')
+            : c('supplier_map_groups.toast_open_route_tab_first'),
         isError: !triggered,
       );
       return;

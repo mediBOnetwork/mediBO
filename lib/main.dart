@@ -39,6 +39,7 @@ import 'features/whatsapp/ui/wa_templates_screen.dart'; // admin WhatsApp templa
 import 'screens/about_screen.dart';
 import 'screens/contact_screen.dart';
 import 'screens/legal_pages.dart';
+import 'services/ui_copy.dart';
 import 'supabase_config.dart';
 import 'theme.dart';
 import 'user_state.dart';
@@ -208,6 +209,17 @@ void main() {
       }
     } catch (_) {}
 
+    // Every screen string that has no dedicated RPC field comes from
+    // ui_copy_all(). Cache-first so a weak connection still paints words, and
+    // crash-isolated so copy can never white-screen the boot.
+    try {
+      await UiCopy.load();
+      RenderLog.write('ui_copy_keys', UiCopy.count);
+      RenderLog.write('ui_copy_source', UiCopy.fromNetwork ? 'network' : 'cache');
+    } catch (_) {
+      try { RenderLog.write('boot_error', 'ui_copy_failed'); } catch (_) {}
+    }
+
     runApp(const PharmaB2BApp());
   }, (error, stack) {
     // Zone-level catch-all: uncaught async errors are logged and swallowed.
@@ -240,6 +252,14 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
     WidgetsBinding.instance.addObserver(this);
     _viewAs.addListener(_onViewAsChanged);
     _auth.addListener(_onAuthChanged);
+    // Boot may have painted from the ui_copy cache (or from nothing at all on
+    // a first run with no network). Re-render the moment the real payload
+    // lands so no screen is left showing yesterday's words.
+    UiCopy.revision.addListener(_onCopyChanged);
+  }
+
+  void _onCopyChanged() {
+    if (mounted) setState(() {});
   }
 
   // Foreground resume is one of the three moments a WhatsApp logout must take
@@ -368,6 +388,7 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
     WidgetsBinding.instance.removeObserver(this);
     _viewAs.removeListener(_onViewAsChanged);
     _auth.removeListener(_onAuthChanged);
+    UiCopy.revision.removeListener(_onCopyChanged);
     _cart.dispose();
     _auth.dispose();
     _viewAs.dispose();

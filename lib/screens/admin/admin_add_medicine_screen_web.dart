@@ -14,6 +14,7 @@ import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:xml/xml.dart' as xmlp;
 
 import '../../config/api_keys.dart';
+import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 import '../../models/product.dart';
 import '../../supabase_config.dart';
@@ -372,11 +373,11 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
   }
 
   Future<void> _startFromBytes(Uint8List bytes, String fileName) async {
-    setState(() { _step = _ImpStep.parsing; _statusMsg = 'Reading file…'; });
+    setState(() { _step = _ImpStep.parsing; _statusMsg = c('admin_add_medicine.status_reading_file'); });
     try {
       final table = await _parseBytesFile(bytes, fileName);
       if (table.rows.isEmpty) throw Exception('No data rows found in the file');
-      setState(() { _step = _ImpStep.geminiCols; _statusMsg = 'Mapping columns with Gemini…'; });
+      setState(() { _step = _ImpStep.geminiCols; _statusMsg = c('admin_add_medicine.status_mapping_columns'); });
       final cols = await _geminiMapCols(table.headers, table.rows);
       for (final c in _newColCtrls.values) c.dispose();
       _newColCtrls.clear();
@@ -543,11 +544,11 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
     if (files == null || files.isEmpty) return;
     final file = files.first;
 
-    setState(() { _step = _ImpStep.parsing; _statusMsg = 'Reading file…'; });
+    setState(() { _step = _ImpStep.parsing; _statusMsg = c('admin_add_medicine.status_reading_file'); });
     try {
       final table = await _parseFile(file);
       if (table.rows.isEmpty) throw Exception('No data rows found in the file');
-      setState(() { _step = _ImpStep.geminiCols; _statusMsg = 'Mapping columns with Gemini…'; });
+      setState(() { _step = _ImpStep.geminiCols; _statusMsg = c('admin_add_medicine.status_mapping_columns'); });
       final cols = await _geminiMapCols(table.headers, table.rows);
       for (final c in _newColCtrls.values) c.dispose();
       _newColCtrls.clear();
@@ -567,32 +568,36 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
   // ── Confirm mapping ───────────────────────────────────────────────────────────
 
   Future<void> _confirmMapping() async {
-    if (!_cols.any((c) => c.mappedTo == 'product_name')) {
-      showToast(context, 'Map at least one column to "product_name" — it is required for matching.');
+    if (!_cols.any((col) => col.mappedTo == 'product_name')) {
+      showToast(context, c('admin_add_medicine.err_map_product_name'));
       return;
     }
     // Validate create_new entries
-    for (final col in _cols.where((c) => c.mappedTo == 'create_new')) {
+    for (final col in _cols.where((col) => col.mappedTo == 'create_new')) {
       final name = (_newColCtrls[col.fileIndex]?.text ?? '').trim();
       if (name.isEmpty) {
-        showToast(context, 'Enter a name for the new column "${col.header.isNotEmpty ? col.header : "Column ${col.fileIndex + 1}"}"');
+        showToast(context, cf('admin_add_medicine.err_new_column_name_empty', {
+          'column': col.header.isNotEmpty
+              ? col.header
+              : cf('admin_add_medicine.column_fallback', {'n': '${col.fileIndex + 1}'}),
+        }));
         return;
       }
       if (!RegExp(r'^[a-z][a-z0-9_]*$').hasMatch(name)) {
-        showToast(context, '"$name" is invalid — use lowercase letters, numbers, underscores, starting with a letter');
+        showToast(context, cf('admin_add_medicine.err_new_column_name_invalid', {'name': name}));
         return;
       }
       if (_kMedCols.contains(name)) {
-        showToast(context, '"$name" already exists — map directly to that column instead');
+        showToast(context, cf('admin_add_medicine.err_new_column_name_exists', {'name': name}));
         return;
       }
       col.newColName = name;
     }
 
     // Create new columns via RPC
-    final toCreate = _cols.where((c) => c.mappedTo == 'create_new').toList();
+    final toCreate = _cols.where((col) => col.mappedTo == 'create_new').toList();
     if (toCreate.isNotEmpty) {
-      setState(() { _step = _ImpStep.geminiCols; _statusMsg = 'Creating new columns…'; });
+      setState(() { _step = _ImpStep.geminiCols; _statusMsg = c('admin_add_medicine.status_creating_columns'); });
       for (final col in toCreate) {
         try {
           await Supabase.instance.client.rpc('add_medicine_column', params: {
@@ -603,7 +608,10 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
         } catch (e) {
           if (!mounted) return;
           setState(() { _step = _ImpStep.mapping; });
-          showToast(context, 'Could not create column "${col.newColName}": ${e.toString().replaceFirst('Exception: ', '')}', duration: const Duration(seconds: 8));
+          showToast(context, cf('admin_add_medicine.err_create_column_failed', {
+            'name': col.newColName,
+            'error': e.toString().replaceFirst('Exception: ', ''),
+          }), duration: const Duration(seconds: 8));
           return;
         }
       }
@@ -762,7 +770,7 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
   // ── Final write ───────────────────────────────────────────────────────────────
 
   Future<void> _doWrite() async {
-    setState(() { _step = _ImpStep.writing; _statusMsg = 'Saving to database…'; });
+    setState(() { _step = _ImpStep.writing; _statusMsg = c('admin_add_medicine.status_saving_db'); });
     int skipped = 0;
     final client = Supabase.instance.client;
 
@@ -894,7 +902,7 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
         }(),
     ];
     await Clipboard.setData(ClipboardData(text: lines.join('\n')));
-    if (mounted) showToast(context, 'List copied — paste it to the supplier');
+    if (mounted) showToast(context, c('admin_add_medicine.toast_list_copied'));
   }
 
   // ── B — file → rows, through the SAME pipeline the medicine import uses ────
@@ -908,12 +916,12 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
     final files = input.files;
     if (files == null || files.isEmpty) return;
 
-    setState(() { _bcStep = _BcStep.busy; _bcStatusMsg = 'Reading file…'; });
+    setState(() { _bcStep = _BcStep.busy; _bcStatusMsg = c('admin_add_medicine.status_reading_file'); });
     try {
       final table = await _parseFile(files.first);
       if (table.rows.isEmpty) throw Exception('No data rows found in the file');
       if (!mounted) return;
-      setState(() => _bcStatusMsg = 'Mapping columns with Gemini…');
+      setState(() => _bcStatusMsg = c('admin_add_medicine.status_mapping_columns'));
       final cols = await _geminiMapColsBarcode(table.headers, table.rows);
       if (!mounted) return;
       setState(() {
@@ -941,11 +949,11 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
     final bcCol   = _bcColFor('barcode');
     final idCol   = _bcColFor('product_id');
     if (bcCol == null) {
-      showToast(context, 'Map one column to "barcode" — it is required.');
+      showToast(context, c('admin_add_medicine.err_map_barcode'));
       return;
     }
     if (nameCol == null && idCol == null) {
-      showToast(context, 'Map one column to "product_name" (or "product_id") so rows can be matched.');
+      showToast(context, c('admin_add_medicine.err_map_barcode_product'));
       return;
     }
 
@@ -964,7 +972,7 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
       });
     }
     if (rows.isEmpty) {
-      showToast(context, 'No usable rows found in that file.');
+      showToast(context, c('admin_add_medicine.err_no_usable_rows'));
       return;
     }
     _bcRows = rows;
@@ -974,7 +982,7 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
   // ── C — preview ───────────────────────────────────────────────────────────
 
   Future<void> _bcRunPreview() async {
-    setState(() { _bcStep = _BcStep.busy; _bcStatusMsg = 'Checking rows…'; });
+    setState(() { _bcStep = _BcStep.busy; _bcStatusMsg = c('admin_add_medicine.status_checking_rows'); });
     try {
       final res = await Supabase.instance.client.rpc('barcode_import_preview', params: {
         'p_rows': _bcRows,
@@ -1002,7 +1010,7 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
   // ── D — apply (send the SAME rows; the backend re-runs the preview) ───────
 
   Future<void> _bcApplyNow() async {
-    setState(() { _bcStep = _BcStep.busy; _bcStatusMsg = 'Saving barcodes…'; });
+    setState(() { _bcStep = _BcStep.busy; _bcStatusMsg = c('admin_add_medicine.status_saving_barcodes'); });
     try {
       final res = await Supabase.instance.client.rpc('barcode_import_apply', params: {
         'p_rows': _bcRows,
@@ -1112,8 +1120,8 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
                 enabled: !saving,
                 keyboardType: TextInputType.text,
                 decoration: InputDecoration(
-                  labelText: 'Barcode',
-                  hintText: 'Leave empty to clear',
+                  labelText: c('admin_add_medicine.barcode_field_label'),
+                  hintText: c('admin_add_medicine.barcode_field_hint'),
                   hintStyle: const TextStyle(color: Color(0xFF9CA3AF)),
                   filled: true,
                   fillColor: const Color(0xFFF5F6F8),
@@ -1140,7 +1148,8 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
           actions: [
             TextButton(
               onPressed: saving ? null : () => Navigator.of(dctx).pop(),
-              child: const Text('Cancel', style: TextStyle(color: Color(0xFF6B7280), fontWeight: FontWeight.w600)),
+              child: Text(c('admin_add_medicine.btn_cancel'),
+                  style: const TextStyle(color: Color(0xFF6B7280), fontWeight: FontWeight.w600)),
             ),
             FilledButton(
               onPressed: saving ? null : save,
@@ -1149,7 +1158,8 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
               child: saving
                   ? const SizedBox(width: 16, height: 16,
                       child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                  : const Text('Save', style: TextStyle(fontWeight: FontWeight.w700)),
+                  : Text(c('admin_add_medicine.btn_save'),
+                      style: const TextStyle(fontWeight: FontWeight.w700)),
             ),
           ],
         );
@@ -1219,31 +1229,31 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
                         decoration: BoxDecoration(color: const Color(0xFFECFDF5), borderRadius: BorderRadius.circular(12)),
                         child: const Icon(Icons.upload_file, color: Color(0xFF1B7A43), size: 22)),
                     const SizedBox(width: 14),
-                    const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text('Import medicine', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-                      SizedBox(height: 2),
-                      Text('Gemini auto-maps columns — you confirm before anything writes',
-                          style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(c('admin_add_medicine.import_medicine_title'),
+                          style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+                      const SizedBox(height: 2),
+                      Text(c('admin_add_medicine.import_medicine_subtitle'),
+                          style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
                     ])),
                   ]),
                   const SizedBox(height: 20),
                   Row(children: [
-                    Expanded(child: _InfoTile(icon: Icons.table_chart_outlined, label: 'Files', sub: 'CSV · Excel · ODS · PDF · DOCX · TXT')),
+                    Expanded(child: _InfoTile(icon: Icons.table_chart_outlined, label: c('admin_add_medicine.info_files_label'), sub: c('admin_add_medicine.info_files_sub'))),
                     const SizedBox(width: 12),
-                    Expanded(child: _InfoTile(icon: Icons.photo_camera_outlined, label: 'Photos', sub: 'JPG · PNG · WEBP — Gemini reads the table')),
+                    Expanded(child: _InfoTile(icon: Icons.photo_camera_outlined, label: c('admin_add_medicine.info_photos_label'), sub: c('admin_add_medicine.info_photos_sub'))),
                   ]),
                   const SizedBox(height: 16),
                   Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(color: const Color(0xFFFFF7ED), borderRadius: BorderRadius.circular(8),
                         border: Border.all(color: const Color(0xFFFED7AA))),
-                    child: const Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Icon(Icons.info_outline, size: 15, color: Color(0xFFEA580C)),
-                      SizedBox(width: 8),
+                    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      const Icon(Icons.info_outline, size: 15, color: Color(0xFFEA580C)),
+                      const SizedBox(width: 8),
                       Expanded(child: Text(
-                        'Matched rows → UPDATE existing medicine (company/marketer never overwritten)\n'
-                        'Unrecognized rows → INSERT new medicine (status: Available)',
-                        style: TextStyle(fontSize: 12, color: Color(0xFF9A3412), height: 1.5),
+                        c('admin_add_medicine.import_medicine_note'),
+                        style: const TextStyle(fontSize: 12, color: Color(0xFF9A3412), height: 1.5),
                       )),
                     ]),
                   ),
@@ -1253,7 +1263,8 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
                     child: FilledButton.icon(
                       onPressed: _pickFile,
                       icon: const Icon(Icons.upload_rounded, size: 18),
-                      label: const Text('Import medicine', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+                      label: Text(c('admin_add_medicine.import_medicine_title'),
+                          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
                       style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
                     ),
@@ -1287,11 +1298,12 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
               decoration: BoxDecoration(color: const Color(0xFFEFF6FF), borderRadius: BorderRadius.circular(12)),
               child: const Icon(Icons.qr_code_2, color: Color(0xFF1E40AF), size: 22)),
           const SizedBox(width: 14),
-          const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('Import barcode', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-            SizedBox(height: 2),
-            Text('Same file types, same column mapping — barcodes only',
-                style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(c('admin_add_medicine.import_barcode_title'),
+                style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+            const SizedBox(height: 2),
+            Text(c('admin_add_medicine.import_barcode_subtitle'),
+                style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
           ])),
         ]),
         const SizedBox(height: 20),
@@ -1299,14 +1311,14 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
           final stacked = bc.maxWidth < 520;
           final itemBtn = _BcModeButton(
             icon: Icons.inventory_2_outlined,
-            label: 'Item wise',
-            sub: 'Match against the whole catalogue',
+            label: c('admin_add_medicine.bc_mode_item_label'),
+            sub: c('admin_add_medicine.bc_mode_item_sub'),
             onTap: () => _bcStart('item'),
           );
           final orderBtn = _BcModeButton(
             icon: Icons.event_note_outlined,
-            label: 'Order wise',
-            sub: 'Match only items ordered on a date',
+            label: c('admin_add_medicine.bc_mode_order_label'),
+            sub: c('admin_add_medicine.bc_mode_order_sub'),
             onTap: () => _bcStart('order'),
           );
           if (stacked) {
@@ -1338,11 +1350,12 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
               decoration: BoxDecoration(color: const Color(0xFFF3F4F6), borderRadius: BorderRadius.circular(12)),
               child: const Icon(Icons.edit_outlined, color: Color(0xFF374151), size: 22)),
           const SizedBox(width: 14),
-          const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('Barcode', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-            SizedBox(height: 2),
-            Text('Find a medicine and set or clear its barcode',
-                style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(c('admin_add_medicine.manual_barcode_title'),
+                style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+            const SizedBox(height: 2),
+            Text(c('admin_add_medicine.manual_barcode_subtitle'),
+                style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
           ])),
         ]),
         const SizedBox(height: 20),
@@ -1365,15 +1378,18 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
 
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       _StageHeader(
-        title: isOrder ? 'Import barcode — Order wise' : 'Import barcode — Item wise',
+        title: isOrder
+            ? c('admin_add_medicine.bc_setup_title_order')
+            : c('admin_add_medicine.bc_setup_title_item'),
         subtitle: isOrder
-            ? 'Only items ordered on the chosen date are matched'
-            : 'Rows are matched against the whole catalogue',
+            ? c('admin_add_medicine.bc_setup_subtitle_order')
+            : c('admin_add_medicine.bc_setup_subtitle_item'),
         onBack: _bcExit,
         action: FilledButton.icon(
           onPressed: _bcPickFile,
           icon: const Icon(Icons.upload_rounded, size: 16),
-          label: const Text('Choose file', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+          label: Text(c('admin_add_medicine.btn_choose_file'),
+              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
           style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
         ),
@@ -1406,7 +1422,8 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
                         await _bcLoadTargets();
                       }
                     },
-                    child: const Text('Change', style: TextStyle(color: Color(0xFF1B7A43), fontWeight: FontWeight.w600)),
+                    child: Text(c('admin_add_medicine.btn_change_date'),
+                        style: const TextStyle(color: Color(0xFF1B7A43), fontWeight: FontWeight.w600)),
                   ),
                 ]),
               ),
@@ -1434,7 +1451,8 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
                       OutlinedButton.icon(
                         onPressed: rows.isEmpty ? null : _bcShareTargets,
                         icon: const Icon(Icons.ios_share, size: 16),
-                        label: const Text('Share list', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                        label: Text(c('admin_add_medicine.btn_share_list'),
+                            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
                         style: OutlinedButton.styleFrom(
                           foregroundColor: const Color(0xFF1B7A43),
                           side: const BorderSide(color: Color(0xFF1B7A43)),
@@ -1455,15 +1473,16 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
             SizedBox(height: 48, child: FilledButton.icon(
               onPressed: _bcPickFile,
               icon: const Icon(Icons.upload_rounded, size: 18),
-              label: const Text('Choose file', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+              label: Text(c('admin_add_medicine.btn_choose_file'),
+                  style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
               style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
             )),
             const SizedBox(height: 12),
             Row(children: [
-              Expanded(child: _InfoTile(icon: Icons.table_chart_outlined, label: 'Files', sub: 'CSV · Excel · ODS · PDF · DOCX · TXT')),
+              Expanded(child: _InfoTile(icon: Icons.table_chart_outlined, label: c('admin_add_medicine.info_files_label'), sub: c('admin_add_medicine.info_files_sub'))),
               const SizedBox(width: 12),
-              Expanded(child: _InfoTile(icon: Icons.photo_camera_outlined, label: 'Photos', sub: 'JPG · PNG · WEBP — Gemini reads the table')),
+              Expanded(child: _InfoTile(icon: Icons.photo_camera_outlined, label: c('admin_add_medicine.info_photos_label'), sub: c('admin_add_medicine.info_photos_sub'))),
             ]),
           ]),
         )),
@@ -1532,19 +1551,22 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
 
   Widget _bcBuildMapping(bool isDesktop) {
     final items = <DropdownMenuItem<String>>[
-      ..._kBcCols.map((c) => DropdownMenuItem(value: c, child: Text(_colLabel(c), style: const TextStyle(fontSize: 13)))),
-      const DropdownMenuItem(value: 'ignore', child: Text('— Ignore —', style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)))),
+      ..._kBcCols.map((col) => DropdownMenuItem(value: col, child: Text(_colLabel(col), style: const TextStyle(fontSize: 13)))),
+      DropdownMenuItem(value: 'ignore',
+          child: Text(c('admin_add_medicine.dropdown_ignore'),
+              style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)))),
     ];
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       _StageHeader(
-        title: 'Confirm columns',
-        subtitle: 'Map the product and the barcode — everything else can be ignored',
+        title: c('admin_add_medicine.bc_mapping_title'),
+        subtitle: c('admin_add_medicine.bc_mapping_subtitle'),
         onBack: () => setState(() => _bcStep = _BcStep.setup),
         action: FilledButton(
           onPressed: _bcConfirmMapping,
           style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
-          child: const Text('Confirm & Check →', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+          child: Text(c('admin_add_medicine.btn_confirm_check'),
+              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
         ),
       ),
       Expanded(child: SingleChildScrollView(
@@ -1554,10 +1576,10 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
             final isMobile = bc.maxWidth < 600;
             return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               if (!isMobile)
-                Padding(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6), child: Row(children: const [
-                  Expanded(flex: 4, child: Text('FILE COLUMN', style: _kTh)),
-                  Expanded(flex: 6, child: Text('SAMPLE VALUES', style: _kTh)),
-                  Expanded(flex: 5, child: Text('MAPS TO', style: _kTh)),
+                Padding(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6), child: Row(children: [
+                  Expanded(flex: 4, child: Text(c('admin_add_medicine.th_file_column'), style: _kTh)),
+                  Expanded(flex: 6, child: Text(c('admin_add_medicine.th_sample_values'), style: _kTh)),
+                  Expanded(flex: 5, child: Text(c('admin_add_medicine.th_maps_to'), style: _kTh)),
                 ])),
               if (!isMobile) const Divider(color: Color(0xFFE5E7EB)),
               for (int i = 0; i < _bcCols.length; i++) ...[
@@ -1570,7 +1592,8 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
                 onPressed: _bcConfirmMapping,
                 style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-                child: const Text('Confirm Mapping & Check Rows', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+                child: Text(c('admin_add_medicine.btn_confirm_mapping_check_rows'),
+                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
               )),
             ]);
           }))),
@@ -1589,7 +1612,7 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
       _StageHeader(
         // C2 — header IS summary_label; nothing counted here.
         title: _str(p, 'summary_label'),
-        subtitle: 'Rows that will not be written are listed below with the reason',
+        subtitle: c('admin_add_medicine.bc_preview_subtitle'),
         onBack: () => setState(() => _bcStep = _BcStep.mapping),
         action: FilledButton(
           onPressed: canApply ? _bcApplyNow : null,
@@ -1681,7 +1704,7 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
                     style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
                         color: Color(0xFF111827), fontFeatures: [FontFeature.tabularFigures()])),
                 if (currentBc.isNotEmpty)
-                  Text('was $currentBc',
+                  Text(cf('admin_add_medicine.bc_was_barcode', {'barcode': currentBc}),
                       style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF),
                           decoration: TextDecoration.lineThrough)),
               ]),
@@ -1731,13 +1754,14 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
             }),
             style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-            child: const Text('Import Another File', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+            child: Text(c('admin_add_medicine.btn_import_another_file'),
+                style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
           )),
           const SizedBox(height: 10),
           SizedBox(width: double.infinity, height: 44, child: TextButton(
             onPressed: _bcExit,
-            child: const Text('Back to Add Medicine',
-                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14, color: Color(0xFF6B7280))),
+            child: Text(c('admin_add_medicine.btn_back_to_add_medicine'),
+                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14, color: Color(0xFF6B7280))),
           )),
         ]),
       )),
@@ -1763,9 +1787,12 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
     return Center(child: ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 380),
       child: Padding(padding: const EdgeInsets.all(32), child: Column(mainAxisSize: MainAxisSize.min, children: [
-        const Text('Matching medicines…', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+        Text(c('admin_add_medicine.matching_title'),
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
         const SizedBox(height: 8),
-        Text('$_matchProgress of $_matchTotal rows', style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+        Text(cf('admin_add_medicine.matching_progress',
+                {'done': '$_matchProgress', 'total': '$_matchTotal'}),
+            style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
         const SizedBox(height: 22),
         ClipRRect(borderRadius: BorderRadius.circular(4),
             child: LinearProgressIndicator(value: pct, minHeight: 6, color: const Color(0xFF1B7A43), backgroundColor: const Color(0xFFE5E7EB))),
@@ -1778,8 +1805,8 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
   Widget _buildMapping(bool isDesktop) {
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       _StageHeader(
-        title: 'Stage 1 — Column Mapping',
-        subtitle: 'Confirm how each uploaded column maps to the medicine database',
+        title: c('admin_add_medicine.stage1_title'),
+        subtitle: c('admin_add_medicine.stage1_subtitle'),
         onBack: widget.preloadedBytes != null
             ? () => Navigator.of(context).maybePop()
             : () => setState(() => _step = _ImpStep.idle),
@@ -1787,7 +1814,8 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
           onPressed: _confirmMapping,
           style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
-          child: const Text('Confirm & Match →', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+          child: Text(c('admin_add_medicine.btn_confirm_match'),
+              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
         ),
       ),
       Expanded(child: SingleChildScrollView(
@@ -1797,10 +1825,10 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
           return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           // Column headers — desktop only
           if (!isMobile)
-            Padding(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6), child: Row(children: const [
-              Expanded(flex: 4, child: Text('FILE COLUMN', style: _kTh)),
-              Expanded(flex: 6, child: Text('SAMPLE VALUES', style: _kTh)),
-              Expanded(flex: 5, child: Text('MAPS TO', style: _kTh)),
+            Padding(padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6), child: Row(children: [
+              Expanded(flex: 4, child: Text(c('admin_add_medicine.th_file_column'), style: _kTh)),
+              Expanded(flex: 6, child: Text(c('admin_add_medicine.th_sample_values'), style: _kTh)),
+              Expanded(flex: 5, child: Text(c('admin_add_medicine.th_maps_to'), style: _kTh)),
             ])),
           if (!isMobile) const Divider(color: Color(0xFFE5E7EB)),
           for (int i = 0; i < _cols.length; i++) ...[
@@ -1813,7 +1841,8 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
             onPressed: _confirmMapping,
             style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-            child: const Text('Confirm Mapping & Start Matching', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+            child: Text(c('admin_add_medicine.btn_confirm_mapping_start_matching'),
+                style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
           )),
         ]); }))),
       )),
@@ -1827,8 +1856,8 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
     final isCreate = col.mappedTo == 'create_new';
     final items = itemsOverride ?? <DropdownMenuItem<String>>[
       ..._kMedCols.map((c) => DropdownMenuItem(value: c, child: Text(_colLabel(c), style: const TextStyle(fontSize: 13)))),
-      const DropdownMenuItem(value: 'ignore', child: Text('— Ignore —', style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)))),
-      const DropdownMenuItem(value: 'create_new', child: Text('Create new column…', style: TextStyle(fontSize: 13, color: Color(0xFF1B7A43)))),
+      DropdownMenuItem(value: 'ignore', child: Text(c('admin_add_medicine.dropdown_ignore'), style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)))),
+      DropdownMenuItem(value: 'create_new', child: Text(c('admin_add_medicine.dropdown_create_new'), style: const TextStyle(fontSize: 13, color: Color(0xFF1B7A43)))),
     ];
 
     if (isMobile) {
@@ -1843,7 +1872,7 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
           padding: const EdgeInsets.all(12),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(
-              col.header.isNotEmpty ? col.header : 'Column ${col.fileIndex + 1}',
+              col.header.isNotEmpty ? col.header : cf('admin_add_medicine.column_fallback', {'n': '${col.fileIndex + 1}'}),
               style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
                   color: col.header.isNotEmpty ? const Color(0xFF111827) : const Color(0xFF9CA3AF)),
             ),
@@ -1873,7 +1902,7 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
               TextFormField(
                 controller: ctrl,
                 onChanged: (v) => col.newColName = v,
-                decoration: InputDecoration(isDense: true, hintText: 'new_column_name',
+                decoration: InputDecoration(isDense: true, hintText: c('admin_add_medicine.new_column_hint'),
                   hintStyle: const TextStyle(color: Color(0xFFD1D5DB)),
                   contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1B7A43))),
@@ -1893,7 +1922,7 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
           Expanded(flex: 4, child: Text(
-            col.header.isNotEmpty ? '"${col.header}"' : 'Column ${col.fileIndex + 1}',
+            col.header.isNotEmpty ? '"${col.header}"' : cf('admin_add_medicine.column_fallback', {'n': '${col.fileIndex + 1}'}),
             style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
                 color: col.header.isNotEmpty ? const Color(0xFF111827) : const Color(0xFF9CA3AF)),
             overflow: TextOverflow.ellipsis,
@@ -1923,7 +1952,7 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
             Expanded(flex: 3, child: TextFormField(
               controller: ctrl,
               onChanged: (v) => col.newColName = v,
-              decoration: InputDecoration(isDense: true, hintText: 'new_column_name',
+              decoration: InputDecoration(isDense: true, hintText: c('admin_add_medicine.new_column_hint'),
                 hintStyle: const TextStyle(color: Color(0xFFD1D5DB)),
                 contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1B7A43))),
@@ -1933,7 +1962,7 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
               style: const TextStyle(fontSize: 13),
             )),
             const SizedBox(width: 10),
-            const Text('Type:', style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+            Text(c('admin_add_medicine.type_label'), style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
             const SizedBox(width: 6),
             Expanded(flex: 2, child: DropdownButtonFormField<String>(
               value: col.newColType,
@@ -1943,11 +1972,11 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
                 enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF1B7A43))),
                 filled: true, fillColor: const Color(0xFFECFDF5),
               ),
-              items: const [
-                DropdownMenuItem(value: 'text', child: Text('text', style: TextStyle(fontSize: 13))),
-                DropdownMenuItem(value: 'numeric', child: Text('number', style: TextStyle(fontSize: 13))),
-                DropdownMenuItem(value: 'date', child: Text('date', style: TextStyle(fontSize: 13))),
-                DropdownMenuItem(value: 'boolean', child: Text('boolean', style: TextStyle(fontSize: 13))),
+              items: [
+                DropdownMenuItem(value: 'text', child: Text(c('admin_add_medicine.type_text'), style: const TextStyle(fontSize: 13))),
+                DropdownMenuItem(value: 'numeric', child: Text(c('admin_add_medicine.type_number'), style: const TextStyle(fontSize: 13))),
+                DropdownMenuItem(value: 'date', child: Text(c('admin_add_medicine.type_date'), style: const TextStyle(fontSize: 13))),
+                DropdownMenuItem(value: 'boolean', child: Text(c('admin_add_medicine.type_boolean'), style: const TextStyle(fontSize: 13))),
               ],
               onChanged: (v) { if (v != null) setState(() => col.newColType = v); },
               style: const TextStyle(fontSize: 13, color: Color(0xFF111827)),
@@ -1991,15 +2020,15 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
             IconButton(
               icon: const Icon(Icons.arrow_back_ios_new, size: 18, color: Color(0xFF374151)),
               onPressed: () => setState(() => _step = _ImpStep.mapping),
-              tooltip: 'Back to column mapping',
+              tooltip: c('admin_add_medicine.tooltip_back_to_mapping'),
             ),
             const SizedBox(width: 6),
-            const Text('Stage 2 — Smart Match Preview',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+            Text(c('admin_add_medicine.stage2_title'),
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
             const SizedBox(width: 10),
             Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                 decoration: BoxDecoration(color: const Color(0xFFF3F4F6), borderRadius: BorderRadius.circular(4)),
-                child: Text('${_rows.length} rows', style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)))),
+                child: Text(cf('admin_add_medicine.rows_count', {'n': '${_rows.length}'}), style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)))),
             const Spacer(),
             if (_isRetrying)
               SizedBox(width: 32, height: 32, child: Padding(padding: const EdgeInsets.all(6),
@@ -2007,18 +2036,18 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
                       color: const Color(0xFF6B7280), backgroundColor: const Color(0xFFE5E7EB))))
             else
               IconButton(icon: const Icon(Icons.refresh, size: 20), onPressed: _retryAll,
-                  tooltip: 'Re-match all', color: const Color(0xFF6B7280)),
+                  tooltip: c('admin_add_medicine.tooltip_rematch_all'), color: const Color(0xFF6B7280)),
             const SizedBox(width: 6),
             FilledButton(
               onPressed: approved > 0 ? _doWrite : null,
               style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
-              child: Text('Import $approved approved', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+              child: Text(cf('admin_add_medicine.btn_import_approved', {'n': '$approved'}), style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
             ),
           ]),
           const SizedBox(height: 4),
           Padding(padding: const EdgeInsets.only(left: 44),
-              child: Text('$matched matched · $manual manually matched · $partial partial · $unrec unrecognized',
+              child: Text(cf('admin_add_medicine.review_summary', {'matched': '$matched', 'manual': '$manual', 'partial': '$partial', 'unrec': '$unrec'}),
                   style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)))),
         ]),
       ),
@@ -2035,15 +2064,15 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
         child: Container(
           decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 8, offset: const Offset(0, 2))]),
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            Padding(padding: const EdgeInsets.fromLTRB(20, 12, 12, 12), child: Row(children: const [
-              Expanded(flex: 18, child: Text('LINE ITEM', style: _kTh)),
-              Expanded(flex: 20, child: Text('MATCHED SKU', style: _kTh)),
-              Expanded(flex: 8,  child: Text('PACK', style: _kTh)),
-              Expanded(flex: 12, child: Text('COMPANY', style: _kTh)),
-              Expanded(flex: 9,  child: Text('MRP', style: _kTh)),
-              Expanded(flex: 8,  child: Text('STATUS', style: _kTh)),
-              SizedBox(width: 36, child: Text('HIDE', style: _kTh)),
-              SizedBox(width: 36, child: Text('✓', style: _kTh, textAlign: TextAlign.center)),
+            Padding(padding: const EdgeInsets.fromLTRB(20, 12, 12, 12), child: Row(children: [
+              Expanded(flex: 18, child: Text(c('admin_add_medicine.th_line_item'), style: _kTh)),
+              Expanded(flex: 20, child: Text(c('admin_add_medicine.th_matched_sku'), style: _kTh)),
+              Expanded(flex: 8,  child: Text(c('admin_add_medicine.th_pack'), style: _kTh)),
+              Expanded(flex: 12, child: Text(c('admin_add_medicine.th_company'), style: _kTh)),
+              Expanded(flex: 9,  child: Text(c('admin_add_medicine.th_mrp'), style: _kTh)),
+              Expanded(flex: 8,  child: Text(c('admin_add_medicine.th_status'), style: _kTh)),
+              SizedBox(width: 36, child: Text(c('admin_add_medicine.th_hide'), style: _kTh)),
+              const SizedBox(width: 36, child: Text('✓', style: _kTh, textAlign: TextAlign.center)),
             ])),
             const Divider(height: 1, color: Color(0xFFE5E7EB)),
             for (int i = 0; i < _rows.length; i++)
@@ -2104,27 +2133,27 @@ class _AdminAddMedicineScreenState extends State<AdminAddMedicineScreen> {
               decoration: BoxDecoration(color: const Color(0xFFECFDF5), borderRadius: BorderRadius.circular(18)),
               child: const Icon(Icons.check_circle_outline, color: Color(0xFF1B7A43), size: 38)),
           const SizedBox(height: 18),
-          const Text('Import Complete', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
+          Text(c('admin_add_medicine.import_complete_title'), style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
           const SizedBox(height: 24),
-          _SumRow(icon: Icons.edit_outlined, color: const Color(0xFF3B82F6), label: 'Updated', count: _updatedCount),
+          _SumRow(icon: Icons.edit_outlined, color: const Color(0xFF3B82F6), label: c('admin_add_medicine.sum_updated'), count: _updatedCount),
           const SizedBox(height: 10),
-          _SumRow(icon: Icons.add_circle_outline, color: const Color(0xFF1B7A43), label: 'Inserted', count: _insertedCount),
+          _SumRow(icon: Icons.add_circle_outline, color: const Color(0xFF1B7A43), label: c('admin_add_medicine.sum_inserted'), count: _insertedCount),
           const SizedBox(height: 10),
-          _SumRow(icon: Icons.remove_circle_outline, color: const Color(0xFF9CA3AF), label: 'Skipped', count: _skippedCount),
+          _SumRow(icon: Icons.remove_circle_outline, color: const Color(0xFF9CA3AF), label: c('admin_add_medicine.sum_skipped'), count: _skippedCount),
           const SizedBox(height: 28),
           if (widget.onImportComplete != null)
             SizedBox(width: double.infinity, height: 48, child: FilledButton(
               onPressed: () { widget.onImportComplete!(); Navigator.of(context).pop(); },
               style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-              child: const Text('Mark as Imported & Go Back', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+              child: Text(c('admin_add_medicine.btn_mark_imported_go_back'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
             ))
           else
             SizedBox(width: double.infinity, height: 48, child: FilledButton(
               onPressed: () => setState(() => _step = _ImpStep.idle),
               style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-              child: const Text('Import Another File', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+              child: Text(c('admin_add_medicine.btn_import_another_file_2'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
             )),
         ]),
       )),
@@ -2572,7 +2601,7 @@ class _ImportMobileCardState extends State<_ImportMobileCard> with SingleTickerP
                     Row(children: [
                       _RetryBtn(retrying: _retrying, progress: _retryP, onRetry: _doRetry),
                       const SizedBox(width: 8),
-                      const Text('Re-run matching', style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+                      Text(c('admin_add_medicine.rerun_matching'), style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
                     ]),
                     const SizedBox(height: 10),
                     _SearchPanel(onSelect: widget.onSearchSelect),
@@ -2603,7 +2632,7 @@ class _RetryBtn extends StatelessWidget {
               color: const Color(0xFF6B7280), backgroundColor: const Color(0xFFE5E7EB))));
     }
     return IconButton(icon: const Icon(Icons.refresh, size: 18), onPressed: onRetry,
-        tooltip: 'Re-run matching', color: const Color(0xFF6B7280),
+        tooltip: c('admin_add_medicine.rerun_matching'), color: const Color(0xFF6B7280),
         padding: EdgeInsets.zero, visualDensity: VisualDensity.compact,
         constraints: const BoxConstraints(minWidth: 32, minHeight: 32));
   }
@@ -2655,7 +2684,7 @@ class _SearchPanelState extends State<_SearchPanel> {
         onChanged: _onChanged,
         decoration: InputDecoration(
           isDense: true,
-          hintText: 'Search all medicines…',
+          hintText: c('admin_add_medicine.search_all_medicines_hint'),
           hintStyle: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
           prefixIcon: _searching
               ? const SizedBox(width: 20, height: 20, child: Padding(padding: EdgeInsets.all(10), child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF6B7280))))
@@ -2823,7 +2852,7 @@ class _BarcodeQuickSetState extends State<_BarcodeQuickSet> {
         controller: _ctrl,
         onChanged: _onChanged,
         decoration: InputDecoration(
-          hintText: 'Search a medicine…',
+          hintText: c('admin_add_medicine.search_medicine_hint'),
           hintStyle: const TextStyle(color: Color(0xFF9CA3AF)),
           prefixIcon: const Icon(Icons.search, size: 20, color: Color(0xFF9CA3AF)),
           suffixIcon: _busy

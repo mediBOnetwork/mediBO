@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../services/ui_copy.dart';
 import '../../supabase_config.dart';
 import '../../utils/render_log.dart';
 import '../../utils/toast.dart';
@@ -48,10 +49,10 @@ class _SupplierAddMedicineScreenState extends State<SupplierAddMedicineScreen>
           labelColor: const Color(0xFF1B7A43),
           unselectedLabelColor: const Color(0xFF6B7280),
           indicatorColor: const Color(0xFF1B7A43),
-          tabs: const [
-            Tab(text: 'Add Company'),
-            Tab(text: 'Add Medicine'),
-            Tab(text: 'Add Scheme'),
+          tabs: [
+            Tab(text: c('supplier_add_medicine.tab_add_company')),
+            Tab(text: c('supplier_add_medicine.tab_add_medicine')),
+            Tab(text: c('supplier_add_medicine.tab_add_scheme')),
           ],
         ),
       ),
@@ -103,12 +104,12 @@ class _AddCompanyTabState extends State<_AddCompanyTab> {
           params: {'p_company_name': _nameCtrl.text.trim()});
       _nameCtrl.clear();
       if (mounted) {
-        showToast(context, 'Company submitted for admin approval');
+        showToast(context, c('supplier_add_medicine.toast_company_submitted'));
         RenderLog.write('supplier_pending_company_submit', 'ok');
         await _loadPending();
       }
     } catch (e) {
-      if (mounted) showToast(context, 'Failed: $e', isError: true);
+      if (mounted) showToast(context, cf('supplier_add_medicine.toast_failed', {'error': '$e'}), isError: true);
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
@@ -119,27 +120,28 @@ class _AddCompanyTabState extends State<_AddCompanyTab> {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('Add a company you stock',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+        Text(c('supplier_add_medicine.company_title'),
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
         const SizedBox(height: 4),
-        const Text('Admin will review and add it to the catalog.',
-          style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+        Text(c('supplier_add_medicine.company_subtitle'),
+          style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
         const SizedBox(height: 16),
         Form(key: _formKey, child: Column(children: [
           TextFormField(controller: _nameCtrl,
-            decoration: _inp('Company name', 'e.g. Sun Pharmaceutical Industries'),
-            validator: (v) => (v?.trim().isEmpty ?? true) ? 'Required' : null),
+            decoration: _inp(c('supplier_add_medicine.field_company_name_label'),
+                c('supplier_add_medicine.field_company_name_hint')),
+            validator: (v) => (v?.trim().isEmpty ?? true) ? c('supplier_add_medicine.validator_required') : null),
           const SizedBox(height: 12),
           SizedBox(width: double.infinity, child: ElevatedButton(
             onPressed: _submitting ? null : _submit,
             style: _btnStyle(),
-            child: _submitting ? _spinner() : const Text('Submit for Approval'),
+            child: _submitting ? _spinner() : Text(c('supplier_add_medicine.btn_submit_for_approval')),
           )),
         ])),
         if (_pending.isNotEmpty) ...[
           const SizedBox(height: 24),
-          const Text('Your Submissions',
-            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+          Text(c('supplier_add_medicine.your_submissions'),
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
           const SizedBox(height: 8),
           ..._pending.map((p) => _PendingRow(
             label: p['company_name'] as String? ?? '',
@@ -199,12 +201,12 @@ class _AddMedicineTabState extends State<_AddMedicineTab> {
       });
       _nameCtrl.clear(); _markCtrl.clear(); _classCtrl.clear(); _mrpCtrl.clear();
       if (mounted) {
-        showToast(context, 'Medicine submitted for admin approval');
+        showToast(context, c('supplier_add_medicine.toast_medicine_submitted'));
         RenderLog.write('supplier_pending_medicine_submit', 'ok');
         await _loadPending();
       }
     } catch (e) {
-      if (mounted) showToast(context, 'Failed: $e', isError: true);
+      if (mounted) showToast(context, cf('supplier_add_medicine.toast_failed', {'error': '$e'}), isError: true);
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
@@ -215,34 +217,42 @@ class _AddMedicineTabState extends State<_AddMedicineTab> {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('Add a new medicine',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+        Text(c('supplier_add_medicine.medicine_title'),
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
         const SizedBox(height: 4),
-        const Text('Admin will review before it appears in the catalog.',
-          style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+        Text(c('supplier_add_medicine.medicine_subtitle'),
+          style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
         const SizedBox(height: 16),
         Form(key: _formKey, child: Column(children: [
-          TextFormField(controller: _nameCtrl, decoration: _inp('Product name *', 'e.g. Amoxicillin 500mg'),
-            validator: (v) => (v?.trim().isEmpty ?? true) ? 'Required' : null),
+          TextFormField(controller: _nameCtrl,
+            decoration: _inp(c('supplier_add_medicine.field_product_name_label'),
+                c('supplier_add_medicine.field_product_name_hint')),
+            validator: (v) => (v?.trim().isEmpty ?? true) ? c('supplier_add_medicine.validator_required') : null),
           const SizedBox(height: 10),
-          TextFormField(controller: _markCtrl, decoration: _inp('Marketer / Company *', 'e.g. Sun Pharma'),
-            validator: (v) => (v?.trim().isEmpty ?? true) ? 'Required' : null),
+          TextFormField(controller: _markCtrl,
+            decoration: _inp(c('supplier_add_medicine.field_marketer_label'),
+                c('supplier_add_medicine.field_marketer_hint')),
+            validator: (v) => (v?.trim().isEmpty ?? true) ? c('supplier_add_medicine.validator_required') : null),
           const SizedBox(height: 10),
-          TextFormField(controller: _classCtrl, decoration: _inp('Therapeutic class', 'e.g. ANTIBIOTICS')),
+          TextFormField(controller: _classCtrl,
+            decoration: _inp(c('supplier_add_medicine.field_therapeutic_class_label'),
+                c('supplier_add_medicine.field_therapeutic_class_hint'))),
           const SizedBox(height: 10),
-          TextFormField(controller: _mrpCtrl, decoration: _inp('MRP (₹)', 'e.g. 120'),
+          TextFormField(controller: _mrpCtrl,
+            decoration: _inp(c('supplier_add_medicine.field_mrp_label'),
+                c('supplier_add_medicine.field_mrp_hint')),
             keyboardType: const TextInputType.numberWithOptions(decimal: true)),
           const SizedBox(height: 12),
           SizedBox(width: double.infinity, child: ElevatedButton(
             onPressed: _submitting ? null : _submit,
             style: _btnStyle(),
-            child: _submitting ? _spinner() : const Text('Submit for Approval'),
+            child: _submitting ? _spinner() : Text(c('supplier_add_medicine.btn_submit_for_approval')),
           )),
         ])),
         if (_pending.isNotEmpty) ...[
           const SizedBox(height: 24),
-          const Text('Your Submissions',
-            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+          Text(c('supplier_add_medicine.your_submissions'),
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
           const SizedBox(height: 8),
           ..._pending.map((p) => _PendingRow(
             label: '${p['product_name']} — ${p['marketer']}',
@@ -310,13 +320,13 @@ class _AddSchemeTabState extends State<_AddSchemeTab> {
     final disc = double.tryParse(_discCtrl.text.trim());
     final price = double.tryParse(_priceCtrl.text.trim());
     if (_schemeType == 'free_goods' && (oQty == null || fQty == null)) {
-      showToast(context, 'Enter buy qty and free qty', isError: true); return;
+      showToast(context, c('supplier_add_medicine.err_enter_buy_free_qty'), isError: true); return;
     }
     if (_schemeType == 'discount_pct' && disc == null) {
-      showToast(context, 'Enter discount %', isError: true); return;
+      showToast(context, c('supplier_add_medicine.err_enter_discount_pct'), isError: true); return;
     }
     if (_schemeType == 'special_price' && price == null) {
-      showToast(context, 'Enter special price', isError: true); return;
+      showToast(context, c('supplier_add_medicine.err_enter_special_price'), isError: true); return;
     }
     setState(() => _saving = true);
     try {
@@ -330,7 +340,7 @@ class _AddSchemeTabState extends State<_AddSchemeTab> {
         'p_special_price': price,
       });
       if (mounted) {
-        showToast(context, 'Scheme saved');
+        showToast(context, c('supplier_add_medicine.toast_scheme_saved'));
         RenderLog.write('supplier_scheme_upsert', '${_selected!['id']}:$_schemeType');
         setState(() {
           _selected = null; _searchCtrl.clear(); _results = [];
@@ -338,7 +348,7 @@ class _AddSchemeTabState extends State<_AddSchemeTab> {
         });
       }
     } catch (e) {
-      if (mounted) showToast(context, 'Failed: $e', isError: true);
+      if (mounted) showToast(context, cf('supplier_add_medicine.toast_failed', {'error': '$e'}), isError: true);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -383,7 +393,7 @@ class _AddSchemeTabState extends State<_AddSchemeTab> {
       setState(() => _ocrReview = parsed.map((r) => Map<String, dynamic>.from(r as Map)).toList());
       RenderLog.write('supplier_ocr_review', _ocrReview.length);
     } catch (e) {
-      if (mounted) showToast(context, 'OCR error: $e', isError: true);
+      if (mounted) showToast(context, cf('supplier_add_medicine.toast_ocr_error', {'error': '$e'}), isError: true);
     } finally {
       if (mounted) setState(() => _ocrLoading = false);
     }
@@ -402,12 +412,13 @@ class _AddSchemeTabState extends State<_AddSchemeTab> {
       final count = await Supabase.instance.client
           .rpc('import_supplier_schemes', params: {'p_schemes': schemes}) as int?;
       if (mounted) {
-        showToast(context, '${count ?? _ocrReview.length} schemes imported');
+        showToast(context, cf('supplier_add_medicine.toast_schemes_imported',
+            {'count': '${count ?? _ocrReview.length}'}));
         RenderLog.write('supplier_ocr_imported', count ?? _ocrReview.length);
         setState(() => _ocrReview = []);
       }
     } catch (e) {
-      if (mounted) showToast(context, 'Import failed: $e', isError: true);
+      if (mounted) showToast(context, cf('supplier_add_medicine.toast_import_failed', {'error': '$e'}), isError: true);
     } finally {
       if (mounted) setState(() => _ocrImporting = false);
     }
@@ -419,13 +430,14 @@ class _AddSchemeTabState extends State<_AddSchemeTab> {
       padding: const EdgeInsets.all(16),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         // ── Search & manual ──────────────────────────────────────────────────
-        const Text('Search & add scheme',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+        Text(c('supplier_add_medicine.scheme_title'),
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
         const SizedBox(height: 12),
         TextField(
           controller: _searchCtrl,
           onChanged: _onSearch,
-          decoration: _inp('Search medicine', 'Type product name…'),
+          decoration: _inp(c('supplier_add_medicine.field_search_medicine_label'),
+              c('supplier_add_medicine.field_search_medicine_hint')),
         ),
         if (_searching)
           const Padding(padding: EdgeInsets.symmetric(vertical: 8),
@@ -474,46 +486,50 @@ class _AddSchemeTabState extends State<_AddSchemeTab> {
           const SizedBox(height: 10),
           DropdownButtonFormField<String>(
             value: _schemeType,
-            decoration: _inp('Scheme type', ''),
-            items: const [
-              DropdownMenuItem(value: 'free_goods',    child: Text('Free Goods (e.g. 10+1)')),
-              DropdownMenuItem(value: 'discount_pct',  child: Text('Discount %')),
-              DropdownMenuItem(value: 'special_price', child: Text('Special Price (₹)')),
+            decoration: _inp(c('supplier_add_medicine.field_scheme_type_label'), ''),
+            items: [
+              DropdownMenuItem(value: 'free_goods',    child: Text(c('supplier_add_medicine.scheme_type_free_goods'))),
+              DropdownMenuItem(value: 'discount_pct',  child: Text(c('supplier_add_medicine.scheme_type_discount_pct'))),
+              DropdownMenuItem(value: 'special_price', child: Text(c('supplier_add_medicine.scheme_type_special_price'))),
             ],
             onChanged: (v) => setState(() => _schemeType = v ?? 'free_goods'),
           ),
           const SizedBox(height: 10),
           if (_schemeType == 'free_goods') Row(children: [
             Expanded(child: TextField(controller: _orderQtyCtrl,
-              decoration: _inp('Buy qty', 'e.g. 10'),
+              decoration: _inp(c('supplier_add_medicine.field_buy_qty_label'),
+                  c('supplier_add_medicine.field_buy_qty_hint')),
               keyboardType: const TextInputType.numberWithOptions(decimal: true))),
             const SizedBox(width: 10),
             Expanded(child: TextField(controller: _freeQtyCtrl,
-              decoration: _inp('Free qty', 'e.g. 1'),
+              decoration: _inp(c('supplier_add_medicine.field_free_qty_label'),
+                  c('supplier_add_medicine.field_free_qty_hint')),
               keyboardType: const TextInputType.numberWithOptions(decimal: true))),
           ]),
           if (_schemeType == 'discount_pct') TextField(controller: _discCtrl,
-            decoration: _inp('Discount %', 'e.g. 5'),
+            decoration: _inp(c('supplier_add_medicine.field_discount_pct_label'),
+                c('supplier_add_medicine.field_discount_pct_hint')),
             keyboardType: const TextInputType.numberWithOptions(decimal: true)),
           if (_schemeType == 'special_price') TextField(controller: _priceCtrl,
-            decoration: _inp('Special price (₹)', 'e.g. 95'),
+            decoration: _inp(c('supplier_add_medicine.field_special_price_label'),
+                c('supplier_add_medicine.field_special_price_hint')),
             keyboardType: const TextInputType.numberWithOptions(decimal: true)),
           const SizedBox(height: 12),
           SizedBox(width: double.infinity, child: ElevatedButton(
             onPressed: _saving ? null : _saveScheme,
             style: _btnStyle(),
-            child: _saving ? _spinner() : const Text('Save Scheme'),
+            child: _saving ? _spinner() : Text(c('supplier_add_medicine.btn_save_scheme')),
           )),
         ],
         const SizedBox(height: 28),
         const Divider(color: Color(0xFFE5E7EB)),
         const SizedBox(height: 16),
         // ── OCR upload ───────────────────────────────────────────────────────
-        const Text('Upload scheme list image',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+        Text(c('supplier_add_medicine.ocr_title'),
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
         const SizedBox(height: 4),
-        const Text('Upload a photo of your scheme list. Items are extracted verbatim for your review.',
-          style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+        Text(c('supplier_add_medicine.ocr_subtitle'),
+          style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
         const SizedBox(height: 12),
         OutlinedButton.icon(
           onPressed: _ocrLoading ? null : _pickAndOcr,
@@ -521,7 +537,9 @@ class _AddSchemeTabState extends State<_AddSchemeTab> {
               ? const SizedBox(width: 16, height: 16,
                   child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF1B7A43)))
               : const Icon(Icons.upload_file, size: 18),
-          label: Text(_ocrLoading ? 'Extracting…' : 'Upload scheme image'),
+          label: Text(_ocrLoading
+              ? c('supplier_add_medicine.btn_extracting')
+              : c('supplier_add_medicine.btn_upload_scheme_image')),
           style: OutlinedButton.styleFrom(
             foregroundColor: const Color(0xFF1B7A43),
             side: const BorderSide(color: Color(0xFF1B7A43)),
@@ -530,8 +548,8 @@ class _AddSchemeTabState extends State<_AddSchemeTab> {
         ),
         if (_ocrReview.isNotEmpty) ...[
           const SizedBox(height: 16),
-          const Text('Review before importing',
-            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
+          Text(c('supplier_add_medicine.ocr_review_title'),
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF374151))),
           const SizedBox(height: 8),
           Container(
             decoration: BoxDecoration(
@@ -542,12 +560,12 @@ class _AddSchemeTabState extends State<_AddSchemeTab> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 color: const Color(0xFFF3F4F6),
-                child: const Row(children: [
-                  Expanded(flex: 3, child: Text('Product name (verbatim)', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF6B7280)))),
-                  SizedBox(width: 8),
-                  SizedBox(width: 48, child: Text('Buy', textAlign: TextAlign.center, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF6B7280)))),
-                  SizedBox(width: 8),
-                  SizedBox(width: 48, child: Text('Free', textAlign: TextAlign.center, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF6B7280)))),
+                child: Row(children: [
+                  Expanded(flex: 3, child: Text(c('supplier_add_medicine.ocr_col_product_name'), style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF6B7280)))),
+                  const SizedBox(width: 8),
+                  SizedBox(width: 48, child: Text(c('supplier_add_medicine.ocr_col_buy'), textAlign: TextAlign.center, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF6B7280)))),
+                  const SizedBox(width: 8),
+                  SizedBox(width: 48, child: Text(c('supplier_add_medicine.ocr_col_free'), textAlign: TextAlign.center, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF6B7280)))),
                 ]),
               ),
               ..._ocrReview.asMap().entries.map((e) {
@@ -576,7 +594,9 @@ class _AddSchemeTabState extends State<_AddSchemeTab> {
                 ? const SizedBox(width: 16, height: 16,
                     child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
                 : const Icon(Icons.check, size: 18),
-            label: Text(_ocrImporting ? 'Importing…' : 'Confirm & Import (${_ocrReview.length} items)'),
+            label: Text(_ocrImporting
+                ? c('supplier_add_medicine.btn_importing')
+                : cf('supplier_add_medicine.btn_confirm_import', {'count': '${_ocrReview.length}'})),
             style: _btnStyle(),
           )),
         ],

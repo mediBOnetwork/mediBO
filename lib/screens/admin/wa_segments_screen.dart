@@ -22,6 +22,7 @@ import 'package:flutter/material.dart';
 
 import '../../features/whatsapp/data/wa_campaign_api.dart';
 import '../../features/whatsapp/ui/wa_campaign_chips.dart';
+import '../../services/ui_copy.dart' as uicopy;
 import '../../utils/render_log.dart';
 import '../../utils/toast.dart';
 
@@ -130,17 +131,17 @@ class _WaSegmentsScreenState extends State<WaSegmentsScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Delete this segment?'),
+        title: Text(uicopy.c('wa_segments.delete_title')),
         content: Text((s['name'] ?? '').toString(),
             style: const TextStyle(fontSize: 13.5)),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Keep it')),
+              child: Text(uicopy.c('wa_segments.delete_keep'))),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
             style: TextButton.styleFrom(foregroundColor: _kRed),
-            child: const Text('Delete'),
+            child: Text(uicopy.c('wa_segments.delete_confirm')),
           ),
         ],
       ),
@@ -171,15 +172,15 @@ class _WaSegmentsScreenState extends State<WaSegmentsScreen> {
         backgroundColor: _kCard,
         elevation: 0,
         foregroundColor: _kText,
-        title: const Text('Segments',
-            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+        title: Text(uicopy.c('wa_segments.title'),
+            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
         bottom: const PreferredSize(
           preferredSize: Size.fromHeight(1),
           child: Divider(height: 1, color: _kBorder),
         ),
         actions: [
           IconButton(
-            tooltip: 'Refresh',
+            tooltip: uicopy.c('wa_segments.refresh_tooltip'),
             onPressed: _loading ? null : _load,
             icon: const Icon(Icons.refresh),
           ),
@@ -192,7 +193,7 @@ class _WaSegmentsScreenState extends State<WaSegmentsScreen> {
               backgroundColor: _kGreen,
               foregroundColor: Colors.white,
               icon: const Icon(Icons.add),
-              label: const Text('New segment'),
+              label: Text(uicopy.c('wa_segments.new_segment')),
             ),
       body: _body(),
     );
@@ -222,7 +223,7 @@ class _WaSegmentsScreenState extends State<WaSegmentsScreen> {
                 onPressed: _load,
                 style: ElevatedButton.styleFrom(
                     backgroundColor: _kGreen, foregroundColor: Colors.white),
-                child: const Text('Retry'),
+                child: Text(uicopy.c('wa_segments.retry')),
               ),
             ],
           ),
@@ -320,11 +321,11 @@ class _SegmentCard extends StatelessWidget {
           const SizedBox(height: 8),
           Row(
             children: [
-              _stat('Rules', _v('rule_count')),
+              _stat(uicopy.c('wa_segments.stat_rules'), _v('rule_count')),
               const SizedBox(width: 20),
               // The live count. It is refetched with the list rather than
               // recalculated when a rule changes — one number, one source.
-              _stat('Matches', _v('matches')),
+              _stat(uicopy.c('wa_segments.stat_matches'), _v('matches')),
             ],
           ),
           if (_v('updated_label').isNotEmpty)
@@ -341,7 +342,8 @@ class _SegmentCard extends StatelessWidget {
               TextButton.icon(
                 onPressed: onEdit,
                 icon: const Icon(Icons.edit_outlined, size: 15),
-                label: const Text('Edit', style: TextStyle(fontSize: 12.5)),
+                label: Text(uicopy.c('wa_segments.action_edit'),
+                    style: const TextStyle(fontSize: 12.5)),
               ),
               // can_delete is the backend's answer to "is anything still using
               // this?". Never inferred from rule_count or from matches.
@@ -351,7 +353,8 @@ class _SegmentCard extends StatelessWidget {
                     foregroundColor: _kRed,
                     disabledForegroundColor: const Color(0xFF9CA3AF)),
                 icon: const Icon(Icons.delete_outline, size: 15),
-                label: const Text('Delete', style: TextStyle(fontSize: 12.5)),
+                label: Text(uicopy.c('wa_segments.action_delete'),
+                    style: const TextStyle(fontSize: 12.5)),
               ),
             ],
           ),
@@ -538,14 +541,20 @@ class _WaSegmentEditorState extends State<WaSegmentEditor> {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 40),
         children: [
-          _card('Name', [
-            TextField(controller: _nameCtrl, decoration: _dec('Segment name')),
+          _card(uicopy.c('wa_segments.card_name'), [
+            TextField(
+                controller: _nameCtrl,
+                decoration: _dec(uicopy.c('wa_segments.hint_segment_name'))),
             const SizedBox(height: 8),
-            TextField(controller: _keyCtrl, decoration: _dec('Key')),
+            TextField(
+                controller: _keyCtrl,
+                decoration: _dec(uicopy.c('wa_segments.hint_key'))),
             const SizedBox(height: 8),
-            TextField(controller: _descCtrl, decoration: _dec('Description')),
+            TextField(
+                controller: _descCtrl,
+                decoration: _dec(uicopy.c('wa_segments.hint_description'))),
           ]),
-          _card('Audience', [
+          _card(uicopy.c('wa_segments.card_audience'), [
             Wrap(
               spacing: 6,
               runSpacing: 6,
@@ -573,7 +582,7 @@ class _WaSegmentEditorState extends State<WaSegmentEditor> {
               ],
             ),
           ]),
-          _card('Match', [
+          _card(uicopy.c('wa_segments.card_match'), [
             Wrap(
               spacing: 6,
               runSpacing: 6,
@@ -592,7 +601,7 @@ class _WaSegmentEditorState extends State<WaSegmentEditor> {
               ],
             ),
           ]),
-          _card('Rules', [
+          _card(uicopy.c('wa_segments.card_rules'), [
             for (var i = 0; i < _rules.length; i++)
               Padding(
                 padding: const EdgeInsets.only(bottom: 12),
@@ -603,7 +612,8 @@ class _WaSegmentEditorState extends State<WaSegmentEditor> {
               child: TextButton.icon(
                 onPressed: () => setState(() => _rules.add(_RuleRow())),
                 icon: const Icon(Icons.add, size: 16),
-                label: const Text('Add rule', style: TextStyle(fontSize: 13)),
+                label: Text(uicopy.c('wa_segments.add_rule'),
+                    style: const TextStyle(fontSize: 13)),
               ),
             ),
           ]),
@@ -625,7 +635,7 @@ class _WaSegmentEditorState extends State<WaSegmentEditor> {
                           strokeWidth: 2,
                           valueColor: AlwaysStoppedAnimation(Colors.white)))
                   : const Icon(Icons.save_outlined, size: 17),
-              label: const Text('Save'),
+              label: Text(uicopy.c('wa_segments.save')),
             ),
           ),
         ],

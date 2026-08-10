@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../../services/ui_copy.dart';
+
 /// CHANGE #485: the client never signs URLs or picks buckets/paths anymore —
 /// it asks the backend (`wa-media-url` edge function) for a ready-to-use
 /// signed URL by message id. Both the inline thumbnail and the full-screen
@@ -87,13 +89,14 @@ class _WaMediaThumbnailState extends State<WaMediaThumbnail> {
         child: Container(
           color: _kPlaceholderBg,
           alignment: Alignment.center,
-          child: const Column(
+          child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.broken_image_outlined, size: 28, color: _kErrorColor),
-              SizedBox(height: 4),
-              Text("Couldn't load — tap to retry",
-                  style: TextStyle(fontSize: 12, color: _kErrorColor)),
+              const Icon(Icons.broken_image_outlined,
+                  size: 28, color: _kErrorColor),
+              const SizedBox(height: 4),
+              Text(c('wa_media.load_error_retry'),
+                  style: const TextStyle(fontSize: 12, color: _kErrorColor)),
             ],
           ),
         ),
@@ -185,14 +188,14 @@ class _WaFullscreenMediaViewerState extends State<WaFullscreenMediaViewer> {
                 if (url == null || url.isEmpty) {
                   return GestureDetector(
                     onTap: _retry,
-                    child: const Column(
+                    child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(Icons.broken_image_outlined,
+                        const Icon(Icons.broken_image_outlined,
                             color: Colors.white, size: 48),
-                        SizedBox(height: 8),
-                        Text("Couldn't load — tap to retry",
-                            style: TextStyle(color: Colors.white)),
+                        const SizedBox(height: 8),
+                        Text(c('wa_media.load_error_retry'),
+                            style: const TextStyle(color: Colors.white)),
                       ],
                     ),
                   );

@@ -10,6 +10,7 @@ import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:pharma_b2b/utils/toast.dart';
+import 'package:pharma_b2b/services/ui_copy.dart';
 
 import '../../widgets/geo_position.dart' as geo;
 import '../../utils/file_pick_io.dart' as filepick;
@@ -411,21 +412,21 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
             .clamp(0.0, overlay.size.width),
         0,
       ),
-      items: const [
+      items: [
         PopupMenuItem<String>(
           value: 'manual',
           child: Row(children: [
-            Icon(Icons.edit_outlined, size: 18, color: Color(0xFF6B7280)),
-            SizedBox(width: 10),
-            Text('Import Manually', style: TextStyle(fontSize: 14)),
+            const Icon(Icons.edit_outlined, size: 18, color: Color(0xFF6B7280)),
+            const SizedBox(width: 10),
+            Text(c('admin_customer.import_manually'), style: const TextStyle(fontSize: 14)),
           ]),
         ),
         PopupMenuItem<String>(
           value: 'file',
           child: Row(children: [
-            Icon(Icons.photo_library_outlined, size: 18, color: Color(0xFF6B7280)),
-            SizedBox(width: 10),
-            Text('Import by File', style: TextStyle(fontSize: 14)),
+            const Icon(Icons.photo_library_outlined, size: 18, color: Color(0xFF6B7280)),
+            const SizedBox(width: 10),
+            Text(c('admin_customer.import_by_file'), style: const TextStyle(fontSize: 14)),
           ]),
         ),
       ],
@@ -510,7 +511,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                     child: CircularProgressIndicator(
                         strokeWidth: 2, color: Colors.white))
                 : const Icon(Icons.upload_file_outlined, size: 18),
-            label: const Text('Import Customer'),
+            label: Text(c('admin_customer.import_customer')),
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xFF1B7A43),
               foregroundColor: Colors.white,
@@ -1001,7 +1002,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
-        showToast(context, 'Failed to load: $e', isError: true);
+        showToast(context, cf('admin_customer.failed_to_load', {'a': '$e'}), isError: true);
       }
     } finally {
       _loadInFlight = false;
@@ -1308,22 +1309,21 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       context: context,
       builder: (_) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: const Text('Suspend Customer',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+        title: Text(c('admin_customer.suspend_customer'),
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
         content: Text(
-          'Suspend ${row.pharmacyName.isNotEmpty ? row.pharmacyName : row.customerName}? '
-          'They will be blocked from placing orders until reactivated.',
+          cf('admin_customer.suspend_confirm_prompt', {'a': row.pharmacyName.isNotEmpty ? row.pharmacyName : row.customerName}),
           style: const TextStyle(fontSize: 13),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+            child: Text(c('admin_customer.cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
             style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
-            child: const Text('Suspend'),
+            child: Text(c('admin_customer.suspend')),
           ),
         ],
       ),
@@ -1338,7 +1338,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       _load(showSpinner: false);
     } catch (e) {
       if (mounted) {
-        showToast(context, 'Suspend failed: $e', isError: true);
+        showToast(context, cf('admin_customer.suspend_failed', {'a': '$e'}), isError: true);
       }
     }
   }
@@ -1351,7 +1351,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       _load(showSpinner: false);
     } catch (e) {
       if (mounted) {
-        showToast(context, 'Reactivate failed: $e', isError: true);
+        showToast(context, cf('admin_customer.reactivate_failed', {'a': '$e'}), isError: true);
       }
     }
   }
@@ -1372,23 +1372,22 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       context: context,
       builder: (_) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: Text('Delete $displayName?',
+        title: Text(cf('admin_customer.delete_confirm_title', {'a': displayName}),
             style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700,
                 color: Color(0xFF111827))),
-        content: const Text(
-          'This will remove their login access and all registration data. '
-          'They must re-register to use mediBO.',
-          style: TextStyle(fontSize: 13, color: Color(0xFF374151)),
+        content: Text(
+          c('admin_customer.delete_login_access_warning'),
+          style: const TextStyle(fontSize: 13, color: Color(0xFF374151)),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+            child: Text(c('admin_customer.cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
             style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
-            child: const Text('Delete'),
+            child: Text(c('admin_customer.delete')),
           ),
         ],
       ),
@@ -1414,11 +1413,11 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       }
       _load(showSpinner: false);
       if (mounted) {
-        showToast(context, 'Customer deleted.', duration: const Duration(seconds: 3));
+        showToast(context, c('admin_customer.customer_deleted'), duration: const Duration(seconds: 3));
       }
     } catch (e) {
       if (mounted) {
-        showToast(context, 'Delete failed: $e', isError: true);
+        showToast(context, cf('admin_customer.delete_failed', {'a': '$e'}), isError: true);
       }
     }
   }
@@ -1435,24 +1434,24 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       context: context,
       builder: (_) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: Text('Restore $displayName?',
+        title: Text(cf('admin_customer.restore_confirm_title', {'a': displayName}),
             style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700,
                 color: Color(0xFF111827))),
         content: Text(
           email.isNotEmpty
-              ? 'This will restore their profile. A magic link will be sent to $email so they can log back in.'
-              : 'This will restore their profile to the active customer list.',
+              ? cf('admin_customer.restore_with_magic_link', {'a': email})
+              : c('admin_customer.restore_active_list'),
           style: const TextStyle(fontSize: 13, color: Color(0xFF374151)),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+            child: Text(c('admin_customer.cancel')),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
             style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43)),
-            child: const Text('Restore'),
+            child: Text(c('admin_customer.restore')),
           ),
         ],
       ),
@@ -1477,12 +1476,12 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       _load(showSpinner: false);
       if (mounted) {
         showToast(context, email.isNotEmpty
-            ? 'Customer restored. Magic link sent to $email.'
-            : 'Customer restored.');
+            ? cf('admin_customer.customer_restored_magic_link', {'a': email})
+            : c('admin_customer.customer_restored'));
       }
     } catch (e) {
       if (mounted) {
-        showToast(context, 'Restore failed: $e', isError: true);
+        showToast(context, cf('admin_customer.restore_failed', {'a': '$e'}), isError: true);
       }
     }
   }
@@ -1516,7 +1515,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     } catch (e) {
       RenderLog.write('order_status_err', e.toString());
       if (mounted) {
-        showToast(context, 'Update failed: $e', isError: true);
+        showToast(context, cf('admin_customer.update_failed', {'a': '$e'}), isError: true);
       }
     }
   }
@@ -1531,7 +1530,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       _load(showSpinner: false);
     } catch (e) {
       if (mounted) {
-        showToast(context, 'Remove failed: $e', isError: true);
+        showToast(context, cf('admin_customer.remove_failed', {'a': '$e'}), isError: true);
       }
     }
   }
@@ -1630,20 +1629,18 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dCtx) => AlertDialog(
-        title: Text('Delete order $code?'),
-        content: const Text(
-            'This permanently removes the order, its items, supplier orders, '
-            'disputes and payments. The WhatsApp lead will be restored so you '
-            'can convert it again.'),
+        title: Text(cf('admin_customer.delete_order_confirm_title', {'a': code})),
+        content: Text(
+            c('admin_customer.delete_order_warning')),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dCtx, false),
-            child: const Text('Cancel'),
+            child: Text(c('admin_customer.cancel')),
           ),
           TextButton(
             style: TextButton.styleFrom(foregroundColor: const Color(0xFFDC2626)),
             onPressed: () => Navigator.pop(dCtx, true),
-            child: const Text('Delete'),
+            child: Text(c('admin_customer.delete')),
           ),
         ],
       ),
@@ -1657,12 +1654,12 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       final map = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
       if (!mounted) return;
       if (map['error'] != null) {
-        showToast(context, 'Delete failed: ${map['error']}', isError: true);
+        showToast(context, cf('admin_customer.delete_failed_map', {'a': map['error']}), isError: true);
       } else {
-        showToast(context, 'Order deleted — lead restored');
+        showToast(context, c('admin_customer.order_deleted_lead_restored'));
       }
     } catch (e) {
-      if (mounted) showToast(context, 'Delete error: $e', isError: true);
+      if (mounted) showToast(context, cf('admin_customer.delete_error', {'a': '$e'}), isError: true);
     } finally {
       if (mounted) setState(() => _deletingOrders.remove(orderId));
     }
@@ -2092,7 +2089,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         child: Row(children: [
           const Icon(Icons.chat_outlined, size: 15, color: Color(0xFF4338CA)),
           const SizedBox(width: 6),
-          Text('Leads (${_leads.length})',
+          Text(cf('admin_customer.leads_count', {'a': '${_leads.length}'}),
               style: const TextStyle(
                   fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF4338CA))),
         ]),
@@ -2101,8 +2098,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       SizedBox(height: isDesktop ? 20 : 16),
       Padding(
         padding: EdgeInsets.fromLTRB(pad, 0, pad, 8),
-        child: const Text('Orders',
-            style: TextStyle(
+        child: Text(c('admin_customer.orders'),
+            style: const TextStyle(
                 fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
       ),
     ];
@@ -2126,7 +2123,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           IconButton(
             onPressed: () => _deleteLeadGroup(lead),
             icon: const Icon(Icons.delete_outline, size: 18, color: Color(0xFFDC2626)),
-            tooltip: 'Delete all order lists from today',
+            tooltip: c('admin_customer.delete_all_order_lists_today'),
             visualDensity: VisualDensity.compact,
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
@@ -2176,16 +2173,16 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dCtx) => AlertDialog(
-        title: Text('Delete all order lists from $displayName today?'),
+        title: Text(cf('admin_customer.delete_all_order_lists_from_today', {'a': displayName})),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dCtx, false),
-            child: const Text('Cancel'),
+            child: Text(c('admin_customer.cancel')),
           ),
           TextButton(
             onPressed: () => Navigator.pop(dCtx, true),
             style: TextButton.styleFrom(foregroundColor: const Color(0xFFDC2626)),
-            child: const Text('Delete'),
+            child: Text(c('admin_customer.delete')),
           ),
         ],
       ),
@@ -2201,7 +2198,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         });
       }
     } catch (e) {
-      if (mounted) showToast(context, 'Delete failed: $e', isError: true);
+      if (mounted) showToast(context, cf('admin_customer.delete_failed', {'a': '$e'}), isError: true);
     }
   }
 
@@ -2209,16 +2206,16 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dCtx) => AlertDialog(
-        title: const Text('Delete this order list?'),
+        title: Text(c('admin_customer.delete_this_order_list')),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dCtx, false),
-            child: const Text('Cancel'),
+            child: Text(c('admin_customer.cancel')),
           ),
           TextButton(
             onPressed: () => Navigator.pop(dCtx, true),
             style: TextButton.styleFrom(foregroundColor: const Color(0xFFDC2626)),
-            child: const Text('Delete'),
+            child: Text(c('admin_customer.delete')),
           ),
         ],
       ),
@@ -2247,7 +2244,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         });
       }
     } catch (e) {
-      if (mounted) showToast(context, 'Delete failed: $e', isError: true);
+      if (mounted) showToast(context, cf('admin_customer.delete_failed', {'a': '$e'}), isError: true);
     }
   }
 
@@ -2258,7 +2255,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         .rpc('wa_convert_start', params: {'p_image_id': image.id});
     final data = Map<String, dynamic>.from(res as Map);
     if (data['ok'] != true) {
-      if (mounted) showToast(scaffoldCtx, 'Convert start failed', isError: true);
+      if (mounted) showToast(scaffoldCtx, c('admin_customer.toast_convert_start_failed'), isError: true);
       return;
     }
     final filePath = data['file_path'] as String;
@@ -2632,8 +2629,11 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                       size: 12, color: Color(0xFF9CA3AF)),
                   const SizedBox(width: 4),
                   Text(
-                    '${row.items.length} item${row.items.length == 1 ? '' : 's'}'
-                    '  ·  ₹${row.netPayable.toStringAsFixed(0)}',
+                    cf('admin_customer.items_count_value', {
+                      'a': '${row.items.length}',
+                      'b': row.items.length == 1 ? '' : 's',
+                      'c': row.netPayable.toStringAsFixed(0),
+                    }),
                     style: const TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
@@ -2841,9 +2841,9 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       return Container(
         color: const Color(0xFFF9FAFB),
         padding: EdgeInsets.fromLTRB(lpad, 10, rpad, 14),
-        child: const Text(
-          'WhatsApp order items unavailable.',
-          style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+        child: Text(
+          c('admin_customer.whatsapp_order_items_unavailable'),
+          style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
         ),
       );
     }
@@ -2856,8 +2856,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       return Container(
         color: const Color(0xFFF9FAFB),
         padding: EdgeInsets.fromLTRB(lpad, 10, rpad, 14),
-        child: const Text('No items recorded.',
-            style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
+        child: Text(c('admin_customer.no_items_recorded'),
+            style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
       );
     }
     // CHANGE #606 — items_label and amount_label, verbatim. This line used to
@@ -2909,7 +2909,10 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           const SizedBox(width: 4),
           Expanded(
             child: Text(
-              'Ordered by: ${row.name}${row.pharmacy.isNotEmpty ? ' · ${row.pharmacy}' : ''}',
+              cf('admin_customer.ordered_by', {
+                'a': row.name,
+                'b': row.pharmacy.isNotEmpty ? ' · ${row.pharmacy}' : '',
+              }),
               style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
               overflow: TextOverflow.ellipsis,
             ),
@@ -3095,7 +3098,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
             Text(
-              'Cart Items (${row.items.length})',
+              cf('admin_customer.cart_items_count', {'a': '${row.items.length}'}),
               style: const TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w700,
@@ -3105,7 +3108,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
             TextButton.icon(
               onPressed: () => _adminAddCartItem(row.userId),
               icon: const Icon(Icons.add, size: 14),
-              label: const Text('Add Item', style: TextStyle(fontSize: 12)),
+              label: Text(c('admin_customer.add_item'), style: const TextStyle(fontSize: 12)),
               style: TextButton.styleFrom(
                 foregroundColor: const Color(0xFF1B7A43),
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -3115,10 +3118,10 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           ]),
           const SizedBox(height: 6),
           if (row.items.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 6),
-              child: Text('No active items.',
-                  style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Text(c('admin_customer.no_active_items'),
+                  style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
             )
           else ...[
             if (isWide) ...[
@@ -3326,7 +3329,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
             const Divider(height: 1, color: Color(0xFFE5E7EB)),
             const SizedBox(height: 8),
             Text(
-              'Removed by admin (${row.removedItems.length})',
+              cf('admin_customer.removed_by_admin', {'n': '${row.removedItems.length}'}),
               style: const TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.w600,
@@ -3972,12 +3975,12 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       ('CONTACT', [
         ('Email',         val(rawData['email'])),
         ('WhatsApp',      val(rawData['whatsapp_no'])),
-        ('Phone',         val(rawData['phone'])),
+        (c('admin_customer.phone'),         val(rawData['phone'])),
         ('Other Contact', val(rawData['other_contact_no'])),
       ]),
       ('LOCATION', [
-        ('Address',          val(rawData['address_local'] ?? rawData['address'])),
-        ('City',             val(rawData['city'])),
+        (c('admin_customer.address'),          val(rawData['address_local'] ?? rawData['address'])),
+        (c('admin_customer.city'),             val(rawData['city'])),
         ('State',            val(rawData['state'])),
         ('PIN Code',         val(rawData['pincode'])),
         ('Range / Zone',     val(rawData['range_zone'])),
@@ -4147,13 +4150,13 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
               style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700,
                   color: Color(0xFF111827))),
           const SizedBox(height: 2),
-          const Text('Authenticated users who have not completed registration',
+          Text(c('admin_customer.leads_logged_in_subtitle'),
               style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
           const SizedBox(height: 10),
           if (_loggedInLeads.isEmpty)
-            const Padding(
-              padding: EdgeInsets.only(bottom: 16),
-              child: Text('No logged-in leads',
+            Padding(
+              padding: const EdgeInsets.only(bottom: 16),
+              child: Text(c('admin_customer.leads_logged_in_empty'),
                   style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
             )
           else
@@ -4167,7 +4170,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
               style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700,
                   color: Color(0xFF111827))),
           const SizedBox(height: 2),
-          const Text('Manually added and CSV-imported leads',
+          Text(c('admin_customer.leads_other_subtitle'),
               style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
           const SizedBox(height: 10),
           if (_otherLeads.isEmpty)
@@ -4504,7 +4507,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                   ? Padding(
                       padding:
                           EdgeInsets.symmetric(horizontal: pad, vertical: 20),
-                      child: const Text('No deleted customers.',
+                      child: Text(c('admin_customer.no_deleted_customers'),
                           style: TextStyle(
                               fontSize: 13, color: Color(0xFF9CA3AF))),
                     )
@@ -4571,7 +4574,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                         borderRadius: BorderRadius.circular(20),
                         border: Border.all(color: const Color(0xFFF59E0B)),
                       ),
-                      child: const Text('New account exists',
+                      child: Text(c('admin_customer.badge_new_account_exists'),
                           style: TextStyle(
                               fontSize: 10,
                               fontWeight: FontWeight.w600,
@@ -4965,7 +4968,7 @@ class _AdminAddItemDialogState extends State<_AdminAddItemDialog> {
       if (mounted) {
         setState(() => _adding = false);
         showToast(context, e.toString().contains('column')
-            ? 'DB migration required — run the migration SQL in Supabase Studio first'
+            ? c('admin_customer.toast_db_migration_required')
             : 'Failed to add item: $e', isError: true);
       }
     }
@@ -5007,7 +5010,7 @@ class _AdminAddItemDialogState extends State<_AdminAddItemDialog> {
                 controller: _searchCtrl,
                 autofocus: true,
                 decoration: InputDecoration(
-                  hintText: 'Search medicine name…',
+                  hintText: c('admin_customer.hint_search_medicine'),
                   prefixIcon: const Icon(Icons.search, size: 18),
                   suffixIcon: _searching
                       ? const SizedBox(
@@ -5117,7 +5120,7 @@ class _AdminAddItemDialogState extends State<_AdminAddItemDialog> {
                     ? Center(
                         child: Text(
                           _searchCtrl.text.isEmpty
-                              ? 'Search for a medicine above'
+                              ? c('admin_customer.search_medicine_prompt')
                               : 'No results found',
                           style: const TextStyle(
                               color: Color(0xFF9CA3AF), fontSize: 13),
@@ -5338,7 +5341,7 @@ class _CustomerEditDialogState extends State<_CustomerEditDialog> {
     } catch (e) {
       if (mounted) {
         setState(() => _saving = false);
-        showToast(context, 'Save failed: $e', isError: true);
+        showToast(context, cf('admin_customer.save_failed_e', {'e': '$e'}), isError: true);
       }
     }
   }
@@ -5354,8 +5357,8 @@ class _CustomerEditDialogState extends State<_CustomerEditDialog> {
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 18, 12, 0),
             child: Row(children: [
-              const Expanded(
-                child: Text('Edit Customer',
+              Expanded(
+                child: Text(c('admin_customer.edit_customer'),
                     style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w700,
@@ -5427,7 +5430,7 @@ class _CustomerEditDialogState extends State<_CustomerEditDialog> {
                         borderRadius: BorderRadius.circular(8)),
                     padding: const EdgeInsets.symmetric(vertical: 11),
                   ),
-                  child: const Text('Cancel',
+                  child: Text(c('admin_customer.cancel'),
                       style: TextStyle(
                           fontSize: 13, fontWeight: FontWeight.w600)),
                 ),
@@ -5448,7 +5451,7 @@ class _CustomerEditDialogState extends State<_CustomerEditDialog> {
                           height: 16,
                           child: CircularProgressIndicator(
                               strokeWidth: 2, color: Colors.white))
-                      : const Text('Save Changes',
+                      : Text(c('admin_customer.save_changes'),
                           style: TextStyle(
                               fontSize: 13, fontWeight: FontWeight.w600)),
                 ),
@@ -5622,12 +5625,12 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
       if (mounted) {
         Navigator.of(context).pop();
         widget.onImported();
-        showToast(context, 'Imported ${toInsert.length} lead${toInsert.length == 1 ? '' : 's'}');
+        showToast(context, cf('admin_customer.imported_leads', {'n': '${toInsert.length}', 's': '${toInsert.length == 1 ? '' : 's'}'}));
       }
     } catch (e) {
       if (mounted) {
         setState(() { _step = _CsvStep.mapping; });
-        showToast(context, 'Import failed: $e', isError: true);
+        showToast(context, cf('admin_customer.import_failed_e', {'e': '$e'}), isError: true);
       }
     }
   }
@@ -5653,7 +5656,7 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
       Text(_error!, textAlign: TextAlign.center,
           style: const TextStyle(fontSize: 14, color: Color(0xFF111827))),
       const SizedBox(height: 16),
-      TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close')),
+      TextButton(onPressed: () => Navigator.of(context).pop(), child: Text(c('admin_customer.close'))),
     ]);
   }
 
@@ -5671,8 +5674,8 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
     return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
       // Header
       Row(children: [
-        const Expanded(
-          child: Text('Map CSV Columns',
+        Expanded(
+          child: Text(c('admin_customer.map_csv_columns'),
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
         ),
         IconButton(
@@ -5683,7 +5686,7 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
         ),
       ]),
       const SizedBox(height: 4),
-      const Text('Gemini has auto-mapped your columns. Correct any mismatches before importing.',
+      Text(c('admin_customer.gemini_automapped_hint'),
           style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
       const SizedBox(height: 16),
 
@@ -5736,14 +5739,14 @@ class _CsvImportDialogState extends State<_CsvImportDialog> {
       }),
 
       const SizedBox(height: 8),
-      Text('${_dataRows.length} row${_dataRows.length == 1 ? '' : 's'} will be imported',
+      Text(cf('admin_customer.rows_will_import', {'n': '${_dataRows.length}', 's': '${_dataRows.length == 1 ? '' : 's'}'}),
           style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
       const SizedBox(height: 16),
 
       Row(mainAxisAlignment: MainAxisAlignment.end, children: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancel', style: TextStyle(color: Color(0xFF6B7280))),
+          child: Text(c('admin_customer.cancel'), style: const TextStyle(color: Color(0xFF6B7280))),
         ),
         const SizedBox(width: 8),
         FilledButton(
@@ -5803,7 +5806,7 @@ class _ViewPayBtn extends StatelessWidget {
         ),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           Text(
-            'View Payment',
+            c('admin_customer.view_payment'),
             style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w600,
@@ -5895,7 +5898,7 @@ class _AdminBillRowActionsState extends State<_AdminBillRowActions> {
       final bytes = picked?.bytes;
       if (picked == null || bytes == null) return; // user cancelled the picker
       if (bytes.length > 15 * 1024 * 1024) {
-        if (mounted) showToast(context, 'File too large (max 15MB)', isError: true);
+        if (mounted) showToast(context, c('admin_customer.file_too_large'), isError: true);
         return;
       }
       // Namespaced by order_id so files can't collide across orders.
@@ -5914,14 +5917,14 @@ class _AdminBillRowActionsState extends State<_AdminBillRowActions> {
       final res = raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
       if (!mounted) return;
       if (res['status'] == 'ok') {
-        showToast(context, 'Bill uploaded');
+        showToast(context, c('admin_customer.bill_uploaded'));
         await _load();
         widget.onBillChanged?.call();
       } else {
-        showToast(context, res['error']?.toString() ?? 'Could not upload the bill', isError: true);
+        showToast(context, res['error']?.toString() ?? c('admin_customer.upload_bill_fail'), isError: true);
       }
     } catch (_) {
-      if (mounted) showToast(context, 'Could not upload the bill', isError: true);
+      if (mounted) showToast(context, c('admin_customer.upload_bill_fail'), isError: true);
     } finally {
       if (mounted) setState(() => _uploading = false);
     }
@@ -5932,11 +5935,11 @@ class _AdminBillRowActionsState extends State<_AdminBillRowActions> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dCtx) => AlertDialog(
-        title: const Text('Delete bill?'),
-        content: const Text(
-            'This removes the uploaded bill for this order. The customer will no longer see it.'),
+        title: Text(c('admin_customer.delete_bill_q')),
+        content: Text(
+            c('admin_customer.delete_bill_body')),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(dCtx, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(dCtx, false), child: Text(c('admin_customer.cancel'))),
           TextButton(
             onPressed: () => Navigator.pop(dCtx, true),
             child: const Text('Delete', style: TextStyle(color: Colors.red)),
@@ -5952,15 +5955,15 @@ class _AdminBillRowActionsState extends State<_AdminBillRowActions> {
       final res = raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
       if (!mounted) return;
       if (res['status'] == 'ok') {
-        showToast(context, 'Bill deleted');
+        showToast(context, c('admin_customer.bill_deleted'));
         setState(() => _viewBillOpen = false);
         await _load();
         widget.onBillChanged?.call();
       } else {
-        showToast(context, res['error']?.toString() ?? 'Could not delete the bill', isError: true);
+        showToast(context, res['error']?.toString() ?? c('admin_customer.delete_bill_fail'), isError: true);
       }
     } catch (_) {
-      if (mounted) showToast(context, 'Could not delete the bill', isError: true);
+      if (mounted) showToast(context, c('admin_customer.delete_bill_fail'), isError: true);
     } finally {
       if (mounted) setState(() => _deleting = false);
     }
@@ -5976,12 +5979,12 @@ class _AdminBillRowActionsState extends State<_AdminBillRowActions> {
           child: _hasFile
               ? _CompactActionButton(
                   icon: Icons.receipt_long_outlined,
-                  label: 'View Bill',
+                  label: c('admin_customer.view_bill'),
                   onTap: () => setState(() => _viewBillOpen = !_viewBillOpen),
                 )
               : _CompactActionButton(
                   icon: Icons.upload_outlined,
-                  label: 'Upload Bill',
+                  label: c('admin_customer.upload_bill'),
                   loading: _uploading,
                   onTap: loading ? null : _upload,
                 ),
@@ -6192,7 +6195,7 @@ class _BucketCard extends StatelessWidget {
                         color: const Color(0xFFEFF6FF),
                         borderRadius: BorderRadius.circular(6)),
                     child: Text(
-                      'Advance extra ${_rupee(advanceCarry)} adjusted',
+                      cf('admin_customer.advance_extra_adjusted', {'amt': _rupee(advanceCarry)}),
                       style: const TextStyle(
                           fontSize: 10,
                           fontWeight: FontWeight.w500,
@@ -6204,7 +6207,7 @@ class _BucketCard extends StatelessWidget {
                 if (expected != null) ...[
                   const SizedBox(height: 4),
                   Text(
-                    'Paid ${_rupee(received)} of ${_rupee(expected)}',
+                    cf('admin_customer.paid_of', {'a': _rupee(received), 'b': _rupee(expected)}),
                     style: const TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w500,
@@ -6292,7 +6295,7 @@ class _AdminBillViewState extends State<_AdminBillView> {
       final url = await Supabase.instance.client.storage.from(bucket).createSignedUrl(path, 3600);
       await launchUrl(Uri.parse(url), webOnlyWindowName: '_blank');
     } catch (_) {
-      if (mounted) showToast(context, 'Could not open the bill', isError: true);
+      if (mounted) showToast(context, c('admin_customer.open_bill_fail'), isError: true);
     }
   }
 
@@ -6307,7 +6310,7 @@ class _AdminBillViewState extends State<_AdminBillView> {
       final bytes = await Supabase.instance.client.storage.from(bucket).download(path);
       downloadBytes(bytes, name, mimeFromBillName(name));
     } catch (_) {
-      if (mounted) showToast(context, 'Could not download the bill', isError: true);
+      if (mounted) showToast(context, c('admin_customer.download_bill_fail'), isError: true);
     } finally {
       if (mounted) setState(() => _downloading = false);
     }
@@ -6553,12 +6556,12 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
             style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
         content: Text(msg),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(c('admin_customer.cancel'))),
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, true),
             style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF1B7A43), foregroundColor: Colors.white),
-            child: const Text('Mark Received'),
+            child: Text(c('admin_customer.mark_received')),
           ),
         ],
       ),
@@ -6579,7 +6582,7 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed: $e'), backgroundColor: const Color(0xFFDC2626)),
+        SnackBar(content: Text(cf('admin_customer.failed_e', {'e': '$e'})), backgroundColor: const Color(0xFFDC2626)),
       );
     } finally {
       if (mounted) setState(() => _acting.remove(claimId));
@@ -6595,15 +6598,15 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
     final reason = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Reject Payment',
+        title: Text(c('admin_customer.reject_payment'),
             style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
         content: TextField(
           controller: ctrl,
-          decoration: const InputDecoration(labelText: 'Reason'),
+          decoration: InputDecoration(labelText: c('admin_customer.reason')),
           autofocus: true,
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(c('admin_customer.cancel'))),
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
             style: ElevatedButton.styleFrom(
@@ -6622,13 +6625,13 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
       RenderLog.write('c217_reject_ok', 1);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Payment rejected'), backgroundColor: Color(0xFF6B7280)),
+        SnackBar(content: Text(c('admin_customer.payment_rejected')), backgroundColor: const Color(0xFF6B7280)),
       );
       await _load();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Reject failed: $e'), backgroundColor: const Color(0xFFDC2626)),
+        SnackBar(content: Text(cf('admin_customer.reject_failed_e', {'e': '$e'})), backgroundColor: const Color(0xFFDC2626)),
       );
     } finally {
       if (mounted) setState(() => _acting.remove(claimId));
@@ -6680,7 +6683,7 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
           return OutlinedButton.icon(
             onPressed: addCashTap,
             icon: const Icon(Icons.add, size: 16),
-            label: const Text('+ Add Cash Payment'),
+            label: Text(c('admin_customer.add_cash_payment')),
             style: OutlinedButton.styleFrom(
               foregroundColor: const Color(0xFF2E7D32),
               side: const BorderSide(color: Color(0xFF2E7D32)),
@@ -6710,7 +6713,7 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
         const SizedBox(height: 12),
         if (_error != null)
           Row(children: [
-            Expanded(child: Text('Error: $_error',
+            Expanded(child: Text(cf('admin_customer.error_e', {'e': '$_error'}),
                 style: const TextStyle(fontSize: 12, color: Color(0xFFDC2626)))),
             TextButton(onPressed: _load, child: const Text('Retry')),
           ])
@@ -6742,7 +6745,7 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
       scrollDirection: Axis.horizontal,
       child: Row(children: [
         _PayChip(
-          label: 'All',
+          label: c('admin_customer.all'),
           selected: _selectedClaimId == null,
           selectedBg: const Color(0xFF1B7A43),
           selectedFg: Colors.white,
@@ -6883,7 +6886,7 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              const Text('Advance payment',
+              Text(c('admin_customer.advance_payment'),
                   style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500,
                       color: Color(0xFF9CA3AF))),
               if (d.advExpected > 0 && advShown >= d.advExpected)
@@ -6895,10 +6898,10 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
                       color: const Color(0xFF1B7A3E),
                       borderRadius: BorderRadius.circular(20),
                     ),
-                    child: Row(mainAxisSize: MainAxisSize.min, children: const [
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
                       Icon(Icons.check_circle, size: 14, color: Colors.white),
                       SizedBox(width: 5),
-                      Text('Ready to accept order',
+                      Text(c('admin_customer.ready_to_accept'),
                         style: TextStyle(color: Colors.white, fontSize: 12,
                             fontWeight: FontWeight.w600)),
                     ]),
@@ -6934,8 +6937,8 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
-            const Expanded(
-              child: Text('Remaining balance',
+            Expanded(
+              child: Text(c('admin_customer.remaining_balance'),
                   style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500,
                       color: Color(0xFF9CA3AF))),
             ),
@@ -6945,17 +6948,17 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
                 decoration: BoxDecoration(
                     color: const Color(0xFFD1FAE5),
                     borderRadius: BorderRadius.circular(20)),
-                child: const Text('Fully settled ✓',
+                child: Text(c('admin_customer.fully_settled'),
                     style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
                         color: Color(0xFF065F46))),
               ),
           ]),
           const SizedBox(height: 4),
-          Text('${_rupee(remaining)} left',
+          Text(cf('admin_customer.amt_left', {'amt': _rupee(remaining)}),
               style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700,
                   color: isSettled ? const Color(0xFF065F46) : const Color(0xFF111827))),
           const SizedBox(height: 2),
-          Text('of ${_rupee(d.totalValue)} total',
+          Text(cf('admin_customer.of_total', {'amt': _rupee(d.totalValue)}),
               style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280))),
           const SizedBox(height: 8),
           ClipRRect(
@@ -6986,7 +6989,7 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
           ),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-              const Text('Cash vs Online',
+              Text(c('admin_customer.cash_vs_online'),
                   style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500,
                       color: Color(0xFF9CA3AF))),
               Text('💵 ${_rupee(cashTotal)}  ·  📱 ${_rupee(onlineTotal)}',
@@ -7147,10 +7150,10 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
                           borderRadius: BorderRadius.circular(8),
                           child: Padding(
                             padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 10),
-                            child: Row(mainAxisSize: MainAxisSize.min, children: const [
+                            child: Row(mainAxisSize: MainAxisSize.min, children: [
                               Icon(Icons.location_on, size: 18, color: Color(0xFF1A73E8)),
                               SizedBox(width: 6),
-                              Text('View in Maps',
+                              Text(c('admin_customer.view_in_maps'),
                                 style: TextStyle(color: Color(0xFF1A73E8),
                                     fontWeight: FontWeight.w600, fontSize: 14)),
                             ]),
@@ -7160,8 +7163,8 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
                           onTap: () {
                             Clipboard.setData(ClipboardData(text: locAddr));
                             ScaffoldMessenger.of(mCtx).showSnackBar(
-                              const SnackBar(content: Text('Address copied'),
-                                  duration: Duration(seconds: 1)),
+                              SnackBar(content: Text(c('admin_customer.address_copied')),
+                                  duration: const Duration(seconds: 1)),
                             );
                           },
                           borderRadius: BorderRadius.circular(8),
@@ -7171,10 +7174,10 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
                               color: const Color(0xFFE8F5E9),
                               borderRadius: BorderRadius.circular(8),
                             ),
-                            child: Row(mainAxisSize: MainAxisSize.min, children: const [
+                            child: Row(mainAxisSize: MainAxisSize.min, children: [
                               Icon(Icons.copy_rounded, size: 16, color: Color(0xFF1B7A43)),
                               SizedBox(width: 6),
-                              Text('Copy', style: TextStyle(color: Color(0xFF1B7A43),
+                              Text(c('admin_customer.copy'), style: const TextStyle(color: Color(0xFF1B7A43),
                                   fontWeight: FontWeight.w600, fontSize: 13)),
                             ]),
                           ),
@@ -7241,10 +7244,10 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
                         border: Border.all(color: const Color(0xFFE5E7EB))),
                     child: Center(
                       child: errored
-                          ? Column(mainAxisSize: MainAxisSize.min, children: const [
+                          ? Column(mainAxisSize: MainAxisSize.min, children: [
                               Icon(Icons.refresh, size: 20, color: Color(0xFF9CA3AF)),
                               SizedBox(height: 4),
-                              Text("Couldn't load proof — tap to retry",
+                              Text(c('admin_customer.proof_load_fail'),
                                   style: TextStyle(fontSize: 11.5, color: Color(0xFF6B7280)),
                                   textAlign: TextAlign.center),
                             ])
@@ -7311,7 +7314,7 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
                   ? const SizedBox(width: 18, height: 18,
                       child: CircularProgressIndicator(strokeWidth: 2))
                   : claimId.isEmpty
-                      ? const Text('Missing claim ID',
+                      ? Text(c('admin_customer.missing_claim_id'),
                           style: TextStyle(fontSize: 11, color: Color(0xFFDC2626)))
                       : Wrap(spacing: 8, runSpacing: 6, children: [
                           ElevatedButton(
@@ -7379,8 +7382,8 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
       try { RenderLog.write('c242_share_invoked', 'path=opentab'); } catch (_) {}
       if (ctx.mounted) {
         ScaffoldMessenger.of(ctx).showSnackBar(
-          const SnackBar(
-            content: Text('Opening image…'),
+          SnackBar(
+            content: Text(c('admin_customer.opening_image')),
             duration: Duration(seconds: 1),
           ),
         );
@@ -7419,7 +7422,7 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
             Clipboard.setData(ClipboardData(text: v));
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text('Copied: $v',
+                content: Text(cf('admin_customer.copied_v', {'v': '$v'}),
                     maxLines: 1, overflow: TextOverflow.ellipsis),
                 duration: const Duration(seconds: 1),
               ),
@@ -7806,7 +7809,7 @@ class _WaOrderPanelState extends State<_WaOrderPanel> {
         'wa_convert_start', params: {'p_image_id': imageId});
       final data = Map<String, dynamic>.from(res as Map);
       if (data['ok'] != true) {
-        if (mounted) showToast(scaffoldCtx, 'Convert start failed', isError: true);
+        if (mounted) showToast(scaffoldCtx, c('admin_customer.toast_convert_start_failed'), isError: true);
         return;
       }
       final filePath = data['file_path'] as String;
@@ -7875,7 +7878,7 @@ class _WaOrderPanelState extends State<_WaOrderPanel> {
           child: Row(children: [
             const Icon(Icons.chat_outlined, size: 16, color: Color(0xFF1B7A43)),
             const SizedBox(width: 8),
-            const Text('WhatsApp Orders',
+            Text(c('admin_customer.whatsapp_orders'),
                 style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF1B7A43))),
             const Spacer(),
             if (!_loading)
@@ -7887,24 +7890,24 @@ class _WaOrderPanelState extends State<_WaOrderPanel> {
         ),
 
         if (_loading)
-          const Padding(
+          Padding(
             padding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
             child: Row(children: [
               SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
               SizedBox(width: 10),
-              Text('Loading…', style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+              Text(c('admin_customer.loading'), style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
             ]),
           )
         else if (_error != null)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-            child: Text('Error: $_error',
+            child: Text(cf('admin_customer.error_e', {'e': '$_error'}),
                 style: const TextStyle(fontSize: 12, color: Color(0xFF991B1B))),
           )
         else if (_data == null || _data!['found'] != true)
-          const Padding(
+          Padding(
             padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-            child: Text('No WhatsApp order images yet.',
+            child: Text(c('admin_customer.no_wa_images'),
                 style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
           )
         else ...[
@@ -7924,7 +7927,7 @@ class _WaOrderPanelState extends State<_WaOrderPanel> {
         scrollDirection: Axis.horizontal,
         child: Row(children: [
           _WaTabChip(
-            label: 'All',
+            label: c('admin_customer.all'),
             selected: _selectedTab == null,
             isAll: true,
             onTap: () => setState(() => _selectedTab = null),
@@ -7937,7 +7940,7 @@ class _WaOrderPanelState extends State<_WaOrderPanel> {
             return Padding(
               padding: const EdgeInsets.only(left: 8),
               child: _WaTabChip(
-                label: 'Order ${idx + 1}',
+                label: cf('admin_customer.order_idx', {'n': '${idx + 1}'}),
                 selected: _selectedTab == imageId,
                 isDone: isDone,
                 onTap: () => setState(() => _selectedTab = imageId),
@@ -8011,7 +8014,7 @@ class _WaOrderPanelState extends State<_WaOrderPanel> {
         if (leadCode != null) ...[
           const SizedBox(height: 8),
           Row(children: [
-            Text('Lead $leadCode',
+            Text(cf('admin_customer.lead_code', {'code': '$leadCode'}),
                 style: const TextStyle(
                     fontSize: 11, color: Color(0xFF4338CA), fontFamily: 'monospace')),
             if (isDone && convertedCode != null) ...[
@@ -8019,13 +8022,13 @@ class _WaOrderPanelState extends State<_WaOrderPanel> {
                 padding: EdgeInsets.symmetric(horizontal: 4),
                 child: Icon(Icons.arrow_forward, size: 11, color: Color(0xFF9CA3AF)),
               ),
-              Text('Order $convertedCode',
+              Text(cf('admin_customer.order_converted_code', {'code': '$convertedCode'}),
                   style: const TextStyle(
                       fontSize: 11, color: Color(0xFF065F46), fontFamily: 'monospace')),
             ] else
-              const Padding(
+              Padding(
                 padding: EdgeInsets.only(left: 6),
-                child: Text('(not yet converted)',
+                child: Text(c('admin_customer.not_yet_converted'),
                     style: TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
               ),
           ]),
@@ -8072,7 +8075,7 @@ class _WaOrderPanelState extends State<_WaOrderPanel> {
                     ),
                     alignment: Alignment.center,
                     child: isConverting
-                        ? const Row(
+                        ? Row(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
                               SizedBox(
@@ -8083,14 +8086,14 @@ class _WaOrderPanelState extends State<_WaOrderPanel> {
                                     color: Color(0xFF92400E)),
                               ),
                               SizedBox(width: 8),
-                              Text('Opening…',
+                              Text(c('admin_customer.opening'),
                                   style: TextStyle(
                                       fontSize: 13,
                                       fontWeight: FontWeight.w700,
                                       color: Color(0xFF92400E))),
                             ],
                           )
-                        : const Text('Convert to Order',
+                        : Text(c('admin_customer.convert_to_order'),
                             style: TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w700,
@@ -8248,7 +8251,7 @@ class _LeadImageTileState extends State<_LeadImageTile> {
     return Padding(
       padding: const EdgeInsets.only(top: 12),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text('Order ${img.orderSeq}',
+        Text(cf('admin_customer.order_seq', {'seq': '${img.orderSeq}'}),
             style: const TextStyle(
                 fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF374151))),
         const SizedBox(height: 6),
@@ -8261,8 +8264,8 @@ class _LeadImageTileState extends State<_LeadImageTile> {
           ),
           clipBehavior: Clip.hardEdge,
           child: _error != null
-              ? const Center(
-                  child: Text('Couldn’t load photo',
+              ? Center(
+                  child: Text(c('admin_customer.photo_load_fail'),
                       style: TextStyle(fontSize: 12, color: Color(0xFF991B1B))))
               : (_imgUrl != null
                   ? NativeSignedImage(
@@ -8326,7 +8329,7 @@ class _LeadImageTileState extends State<_LeadImageTile> {
                       height: 14,
                       child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                   : const Icon(Icons.shopping_cart_checkout, size: 16),
-              label: Text(_converting ? 'Opening…' : 'Convert',
+              label: Text(_converting ? c('admin_customer.opening') : 'Convert',
                   style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
             ),
           ),
@@ -8770,18 +8773,18 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (dCtx) => AlertDialog(
-        title: const Text('Update warehouse?'),
+        title: Text(c('admin_customer.update_warehouse_q')),
         content: Text('This recalculates delivery zones and route start points '
             'for all $total leads. Continue?'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dCtx, false),
-            child: const Text('Cancel'),
+            child: Text(c('admin_customer.cancel')),
           ),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43)),
             onPressed: () => Navigator.pop(dCtx, true),
-            child: const Text('Update warehouse'),
+            child: Text(c('admin_customer.update_warehouse_btn')),
           ),
         ],
       ),
@@ -9086,7 +9089,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     } catch (e) {
       if (mounted) {
         setState(() => _rowsLoading = false);
-        showToast(context, 'Failed to load leads: $e', isError: true);
+        showToast(context, cf('admin_customer.load_leads_fail_e', {'e': '$e'}), isError: true);
       }
     }
   }
@@ -9259,7 +9262,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
           params: {'p_run_id': _activeRunId, 'p_extra_calls': 500});
       await _refreshStatus();
     } catch (e) {
-      if (mounted) showToast(context, 'Resume failed: $e', isError: true);
+      if (mounted) showToast(context, cf('admin_customer.resume_failed_e', {'e': '$e'}), isError: true);
     } finally {
       if (mounted) setState(() => _resuming = false);
     }
@@ -9308,14 +9311,14 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         _runChannel?.unsubscribe();
         _runChannel = null;
         final newLeads = (status['leads_new'] as num?)?.toInt() ?? 0;
-        showToast(context, 'Scrape complete — $newLeads new leads found.');
+        showToast(context, cf('admin_customer.scrape_complete', {'n': '$newLeads'}));
         await Future.wait([_refreshSummaryAndUsage(), _loadRows(reset: true), _loadPastRuns()]);
         if (mounted) setState(() => _activeRunId = null);
       } else if (s == 'error') {
         _stopPolling();
         _runChannel?.unsubscribe();
         _runChannel = null;
-        showToast(context, 'Scrape error: ${status['error'] ?? 'unknown'}', isError: true);
+        showToast(context, cf('admin_customer.scrape_error', {'e': '${status['error'] ?? 'unknown'}'}), isError: true);
         await _loadPastRuns();
         if (mounted) setState(() => _activeRunId = null);
       }
@@ -9341,7 +9344,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (_loadError != null) ...[
-            Text('Failed to load: $_loadError',
+            Text(cf('admin_customer.failed_to_load', {'e': '$_loadError'}),
                 style: const TextStyle(color: Color(0xFFDC2626), fontSize: 13)),
             const SizedBox(height: 12),
           ],
@@ -9385,12 +9388,12 @@ class _SLeadsTabState extends State<_SLeadsTab> {
                 runSpacing: 4,
                 children: [
                   Text(
-                    'Warehouse: ${_hubNameCtrl.text.isNotEmpty ? _hubNameCtrl.text : "Not set"}',
+                    cf('admin_customer.warehouse_name', {'name': _hubNameCtrl.text.isNotEmpty ? _hubNameCtrl.text : "Not set"}),
                     style: const TextStyle(
                         fontSize: 13.5, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
                   ),
                   Text(
-                    '·  ${_hubCounts['core']} core · ${_hubCounts['extended']} extended',
+                    cf('admin_customer.hub_counts', {'a': '${_hubCounts['core']}', 'b': '${_hubCounts['extended']}'}),
                     style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280)),
                   ),
                 ],
@@ -9398,7 +9401,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
             ),
             TextButton(
               onPressed: () => setState(() => _hubExpanded = !_hubExpanded),
-              child: Text(_hubExpanded ? 'Close' : 'Change'),
+              child: Text(_hubExpanded ? c('admin_customer.close') : 'Change'),
             ),
           ]),
         ),
@@ -9462,11 +9465,11 @@ class _SLeadsTabState extends State<_SLeadsTab> {
               ),
           ]),
           const SizedBox(height: 4),
-          Text('Last updated: ${_fmtUpdatedAt(_hubUpdatedAt)}',
+          Text(cf('admin_customer.last_updated', {'t': _fmtUpdatedAt(_hubUpdatedAt)}),
               style: const TextStyle(fontSize: 11.5, color: Color(0xFF9CA3AF))),
           const SizedBox(height: 14),
           // ── Radii ────────────────────────────────────────────────────
-          const Text('Delivery radii (km)',
+          Text(c('admin_customer.delivery_radii'),
               style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6B7280))),
           const SizedBox(height: 8),
           Wrap(spacing: 10, runSpacing: 10, children: [
@@ -9489,7 +9492,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
           const Divider(height: 1, color: Color(0xFFE5E7EB)),
           const SizedBox(height: 14),
           // ── (a) Search by address ───────────────────────────────────
-          const Text('Search & set',
+          Text(c('admin_customer.search_and_set'),
               style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
           const SizedBox(height: 8),
           SizedBox(
@@ -9512,16 +9515,16 @@ class _SLeadsTabState extends State<_SLeadsTab> {
             ),
           ),
           if (_hubBusy)
-            const Padding(
+            Padding(
               padding: EdgeInsets.only(top: 6),
-              child: Text('Recomputing distances for all leads…',
+              child: Text(c('admin_customer.recomputing_distances'),
                   style: TextStyle(fontSize: 11.5, color: Color(0xFF6B7280))),
             ),
           const SizedBox(height: 18),
           const Divider(height: 1, color: Color(0xFFE5E7EB)),
           const SizedBox(height: 14),
           // ── (b) Use my current location ─────────────────────────────
-          const Text('Use my current location',
+          Text(c('admin_customer.use_current_location'),
               style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
           const SizedBox(height: 8),
           Wrap(spacing: 10, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
@@ -9539,7 +9542,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
                   style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
             ),
             if (_hubGpsLat != null && _hubGpsLng != null) ...[
-              Text('Captured: ${_hubGpsLat!.toStringAsFixed(6)}, ${_hubGpsLng!.toStringAsFixed(6)}'
+              Text(cf('admin_customer.gps_captured', {'lat': '${_hubGpsLat!.toStringAsFixed(6)}', 'lng': '${_hubGpsLng!.toStringAsFixed(6)}'}) +
                       '${_hubGpsAddress != null ? " — $_hubGpsAddress" : ""}',
                   style: const TextStyle(fontSize: 12, color: Color(0xFF374151))),
               ElevatedButton(
@@ -9549,7 +9552,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
                   foregroundColor: Colors.white,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                 ),
-                child: const Text('Confirm & Save', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700)),
+                child: Text(c('admin_customer.confirm_and_save'), style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700)),
               ),
             ],
           ]),
@@ -9561,7 +9564,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
           const Divider(height: 1, color: Color(0xFFE5E7EB)),
           const SizedBox(height: 14),
           // ── (c) Paste coordinates or a Maps link ─────────────────────
-          const Text('Paste coordinates or a Google Maps link',
+          Text(c('admin_customer.paste_coords_label'),
               style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
           const SizedBox(height: 8),
           widget.isDesktop
@@ -9585,7 +9588,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
       controller: _hubNameCtrl,
       onChanged: (_) => setState(() {}),
       decoration: InputDecoration(
-        labelText: 'Name',
+        labelText: c('admin_customer.name_label'),
         labelStyle: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
         contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -9601,7 +9604,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
       onChanged: (_) => setState(() {}),
       decoration: InputDecoration(
         labelText: 'Address',
-        hintText: 'Sai Mandir, Daganiya, Raipur',
+        hintText: c('admin_customer.hub_name_hint'),
         labelStyle: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
         contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -9618,7 +9621,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
       inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*$'))],
       decoration: InputDecoration(
-        labelText: '$label km',
+        labelText: cf('admin_customer.radius_km', {'label': '$label'}),
         labelStyle: const TextStyle(fontSize: 11.5, color: Color(0xFF6B7280)),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
         contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
@@ -9635,7 +9638,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         if (_hubError != null) setState(() => _hubError = null);
       },
       decoration: InputDecoration(
-        hintText: '21.238713, 81.6069852  or a Google Maps link',
+        hintText: c('admin_customer.coords_hint'),
         hintStyle: const TextStyle(fontSize: 12.5, color: Color(0xFF9CA3AF)),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
         contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -10005,12 +10008,12 @@ class _SLeadsTabState extends State<_SLeadsTab> {
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text(
-          '$used / $freeLimit used this month · $remaining left · resets $resetsOn',
+          cf('admin_customer.quota_line', {'used': '$used', 'limit': '$freeLimit', 'remaining': '$remaining', 'resets': '$resetsOn'}),
           style: const TextStyle(fontSize: 12, color: Color(0xFF4B5563)),
         ),
         if (over > 0 && cost != null) ...[
           const SizedBox(height: 4),
-          Text('$over over the free tier · ₹$cost',
+          Text(cf('admin_customer.over_free_tier', {'over': '$over', 'cost': '$cost'}),
               style: const TextStyle(
                   fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFFDC2626))),
         ],
@@ -10074,12 +10077,12 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         ),
         const SizedBox(height: 8),
         Text(
-          '$cellsDone / $cellsTotal cells · $apiCalls/$maxCalls calls · $leadsNew new leads',
+          cf('admin_customer.scrape_progress', {'done': '$cellsDone', 'total': '$cellsTotal', 'calls': '$apiCalls', 'maxcalls': '$maxCalls', 'newleads': '$leadsNew'}),
           style: const TextStyle(fontSize: 12, color: Color(0xFF4B5563)),
         ),
         if (s == 'paused_budget') ...[
           const SizedBox(height: 10),
-          Text('Budget limit reached ($apiCalls calls).',
+          Text(cf('admin_customer.budget_reached', {'calls': '$apiCalls'}),
               style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFFD97706))),
           const SizedBox(height: 8),
           OutlinedButton.icon(
@@ -10092,7 +10095,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
             icon: _resuming
                 ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
                 : const Icon(Icons.play_arrow, size: 16),
-            label: const Text('Resume (+500 calls)', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
+            label: Text(c('admin_customer.resume_500'), style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
           ),
         ],
       ]),
@@ -10119,7 +10122,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text('Scraped leads',
+        Text(c('admin_customer.scraped_leads'),
             style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
         const SizedBox(height: 12),
         _resultScopeBar(),
@@ -10162,10 +10165,10 @@ class _SLeadsTabState extends State<_SLeadsTab> {
       DropdownButton<String?>(
         value: _resultsRunId,
         underline: const SizedBox.shrink(),
-        hint: const Text('All leads', style: TextStyle(fontSize: 12.5)),
+        hint: Text(c('admin_customer.all_leads'), style: const TextStyle(fontSize: 12.5)),
         items: [
-          const DropdownMenuItem<String?>(
-              value: null, child: Text('All leads', style: TextStyle(fontSize: 12.5))),
+          DropdownMenuItem<String?>(
+              value: null, child: Text(c('admin_customer.all_leads'), style: const TextStyle(fontSize: 12.5))),
           ..._runs.map((r) => DropdownMenuItem<String?>(
                 value: r['run_id']?.toString(),
                 child: Text(
@@ -10198,7 +10201,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
           materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
           visualDensity: VisualDensity.compact,
         ),
-        Text('Select all (${_selectedLeadIds.length}/${ids.length})',
+        Text(cf('admin_customer.select_all', {'sel': '${_selectedLeadIds.length}', 'total': '${ids.length}'}),
             style: const TextStyle(fontSize: 12.5, color: Color(0xFF374151))),
       ]),
       // Both buttons, their labels and their action keys come from
@@ -10308,10 +10311,10 @@ class _SLeadsTabState extends State<_SLeadsTab> {
 
     final cityDropdown = DropdownButton<String?>(
       value: _cityFilter,
-      hint: const Text('All cities', style: TextStyle(fontSize: 12.5)),
+      hint: Text(c('admin_customer.all_cities'), style: const TextStyle(fontSize: 12.5)),
       underline: const SizedBox.shrink(),
       items: [
-        const DropdownMenuItem<String?>(value: null, child: Text('All cities', style: TextStyle(fontSize: 12.5))),
+        DropdownMenuItem<String?>(value: null, child: Text(c('admin_customer.all_cities'), style: const TextStyle(fontSize: 12.5))),
         ...cities.map((c) => DropdownMenuItem<String?>(
               value: c['city']?.toString(),
               child: Text('${c['city']} (${c['n']})', style: const TextStyle(fontSize: 12.5)),
@@ -10328,7 +10331,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
     final searchBox = TextField(
       controller: _searchCtrl,
       decoration: InputDecoration(
-        hintText: 'Search name / phone / address / pincode / area',
+        hintText: c('admin_customer.search_leads_hint'),
         hintStyle: const TextStyle(fontSize: 12.5),
         prefixIcon: const Icon(Icons.search, size: 18),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
@@ -10859,7 +10862,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
       decoration: BoxDecoration(color: const Color(0xFFF9FAFB), borderRadius: BorderRadius.circular(8)),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         if (hours.isNotEmpty) ...[
-          const Text('Hours', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF6B7280))),
+          Text(c('admin_customer.hours'), style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF6B7280))),
           const SizedBox(height: 4),
           ...hours.map((h) => Padding(
               padding: const EdgeInsets.only(bottom: 2),
@@ -10903,7 +10906,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
           const SizedBox(height: 10),
         ],
         if (fullReviews != null && fullReviews.isNotEmpty) ...[
-          const Text('Reviews', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF6B7280))),
+          Text(c('admin_customer.reviews'), style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF6B7280))),
           const SizedBox(height: 4),
           ...fullReviews.take(3).map((rv) {
             final m = Map<String, dynamic>.from(rv as Map);
@@ -10912,14 +10915,14 @@ class _SLeadsTabState extends State<_SLeadsTab> {
             final text = (m['text'] as Map?)?['text']?.toString() ?? '';
             return Padding(
               padding: const EdgeInsets.only(bottom: 6),
-              child: Text('$author${rrating.isNotEmpty ? ' ($rrating★)' : ''}: $text',
+              child: Text(cf('admin_customer.review_line', {'author': '$author', 'rating': rrating.isNotEmpty ? ' ($rrating★)' : '', 'text': '$text'}),
                   maxLines: 2, overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontSize: 11.5, fontStyle: FontStyle.italic, color: Color(0xFF4B5563))),
             );
           }),
           const SizedBox(height: 4),
         ] else if (reviewSnippets.isNotEmpty) ...[
-          const Text('Reviews', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF6B7280))),
+          Text(c('admin_customer.reviews'), style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF6B7280))),
           const SizedBox(height: 4),
           ...reviewSnippets.take(3).map((s) => Padding(
               padding: const EdgeInsets.only(bottom: 6),
@@ -10930,7 +10933,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         ],
         if (websitePhones.isNotEmpty || (intlPhone != null && intlPhone.isNotEmpty)) ...[
           Text(
-              'More numbers: '
+              c('admin_customer.more_numbers') +
               '${[if (intlPhone != null && intlPhone.isNotEmpty) intlPhone, ...websitePhones].join(', ')}',
               style: const TextStyle(fontSize: 12, color: Color(0xFF374151))),
           const SizedBox(height: 10),
@@ -10940,10 +10943,10 @@ class _SLeadsTabState extends State<_SLeadsTab> {
               style: const TextStyle(fontSize: 12, fontStyle: FontStyle.italic, color: Color(0xFF6B7280))),
         if (loading) ...[
           const SizedBox(height: 10),
-          const Row(children: [
+          Row(children: [
             SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2)),
             SizedBox(width: 6),
-            Text('Loading full detail…', style: TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
+            Text(c('admin_customer.loading_full_detail'), style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
           ]),
         ],
       ]),
@@ -10957,7 +10960,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         onPressed: _page > 0 ? () => _goToPage(_page - 1) : null,
         icon: const Icon(Icons.chevron_left, size: 20),
       ),
-      Text('Page ${_page + 1} of $totalPages', style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
+      Text(cf('admin_customer.page_of', {'n': '${_page + 1}', 'total': '$totalPages'}), style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
       IconButton(
         onPressed: (_page + 1) * _pageSize < _totalCount ? () => _goToPage(_page + 1) : null,
         icon: const Icon(Icons.chevron_right, size: 20),
@@ -10988,7 +10991,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
         Row(children: [
           const Icon(Icons.history, size: 16, color: Color(0xFF6B7280)),
           const SizedBox(width: 8),
-          Text('Saved scrapes (${_runs.length})',
+          Text(cf('admin_customer.saved_scrapes', {'n': '${_runs.length}'}),
               style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
         ]),
         const SizedBox(height: 10),
@@ -10996,16 +10999,16 @@ class _SLeadsTabState extends State<_SLeadsTab> {
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           decoration: BoxDecoration(color: const Color(0xFFF9FAFB), borderRadius: BorderRadius.circular(8)),
           child: Text(
-            'Enriched $enriched · $errors errors · $withPhoto photos · $withHours with hours · '
+            cf('admin_customer.enrich_summary', {'enriched': '$enriched', 'errors': '$errors', 'photos': '$withPhoto', 'hours': '$withHours'}) +
             '$withWebsite websites · $withEmail emails',
             style: const TextStyle(fontSize: 12, color: Color(0xFF4B5563)),
           ),
         ),
         const SizedBox(height: 14),
         if (_runs.isEmpty)
-          const Padding(
+          Padding(
             padding: EdgeInsets.symmetric(vertical: 20),
-            child: Text('No scrapes yet.', style: TextStyle(fontSize: 12.5, color: Color(0xFF9CA3AF))),
+            child: Text(c('admin_customer.no_scrapes'), style: const TextStyle(fontSize: 12.5, color: Color(0xFF9CA3AF))),
           )
         else
           Column(children: _runs.map(_buildRunCard).toList()),
@@ -11100,11 +11103,11 @@ class _SLeadsTabState extends State<_SLeadsTab> {
       border: TableBorder(
           horizontalInside: BorderSide(color: const Color(0xFFE5E7EB).withValues(alpha: 0.8))),
       children: [
-        const TableRow(children: [
-          Padding(padding: EdgeInsets.symmetric(vertical: 4), child: Text('TYPE', style: head)),
-          Padding(padding: EdgeInsets.symmetric(vertical: 4), child: Text('COUNT', style: head)),
-          Padding(padding: EdgeInsets.symmetric(vertical: 4), child: Text('PHONE', style: head)),
-          Padding(padding: EdgeInsets.symmetric(vertical: 4), child: Text('PHOTO', style: head)),
+        TableRow(children: [
+          Padding(padding: EdgeInsets.symmetric(vertical: 4), child: Text(c('admin_customer.col_type'), style: head)),
+          Padding(padding: EdgeInsets.symmetric(vertical: 4), child: Text(c('admin_customer.col_count'), style: head)),
+          Padding(padding: EdgeInsets.symmetric(vertical: 4), child: Text(c('admin_customer.col_phone'), style: head)),
+          Padding(padding: EdgeInsets.symmetric(vertical: 4), child: Text(c('admin_customer.col_photo'), style: head)),
         ]),
         ...breakdown.map((b) => TableRow(children: [
               Padding(
@@ -11181,7 +11184,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
       context: context,
       builder: (dCtx) => StatefulBuilder(
         builder: (dCtx, setDlg) => AlertDialog(
-          title: const Text('Delete this scrape?'),
+          title: Text(c('admin_customer.delete_scrape_q')),
           content: Column(mainAxisSize: MainAxisSize.min, children: [
             Text('${r['city'] ?? ''} · ${_fmtRunDate(r['created_at']?.toString())}',
                 style: const TextStyle(fontSize: 13)),
@@ -11193,12 +11196,12 @@ class _SLeadsTabState extends State<_SLeadsTab> {
               contentPadding: EdgeInsets.zero,
               dense: true,
               activeColor: const Color(0xFF1B7A43),
-              title: Text('Also delete its ${(r['lead_count'] as num?)?.toInt() ?? 0} leads',
+              title: Text(cf('admin_customer.also_delete_leads', {'n': '${(r['lead_count'] as num?)?.toInt() ?? 0}'}),
                   style: const TextStyle(fontSize: 13)),
             ),
           ]),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(dCtx, false), child: const Text('Cancel')),
+            TextButton(onPressed: () => Navigator.pop(dCtx, false), child: Text(c('admin_customer.cancel'))),
             FilledButton(
               style: FilledButton.styleFrom(backgroundColor: const Color(0xFFB42318)),
               onPressed: () => Navigator.pop(dCtx, true),
@@ -11944,10 +11947,10 @@ class _RoutesTabState extends State<_RoutesTab> {
       final go = await showDialog<bool>(
         context: context,
         builder: (dCtx) => AlertDialog(
-          title: const Text('Optimize routes?'),
-          content: Text('Optimize $toOptimize routes? ~$toOptimize lookups, this may take a few minutes.'),
+          title: Text(c('admin_customer.optimize_routes_q')),
+          content: Text(cf('admin_customer.optimize_body', {'n': '$toOptimize', 'm': '$toOptimize'})),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(dCtx, false), child: const Text('Cancel')),
+            TextButton(onPressed: () => Navigator.pop(dCtx, false), child: Text(c('admin_customer.cancel'))),
             FilledButton(
               style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1E3A8A)),
               onPressed: () => Navigator.pop(dCtx, true),
@@ -12101,15 +12104,14 @@ class _RoutesTabState extends State<_RoutesTab> {
     final go = await showDialog<bool>(
       context: context,
       builder: (dCtx) => AlertDialog(
-        title: const Text('Rebalance routes?'),
-        content: const Text('Unchecked leads will be moved into the remaining '
-            'routes and every route re-optimised. Continue?'),
+        title: Text(c('admin_customer.rebalance_routes_q')),
+        content: Text(c('admin_customer.rebalance_body')),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(dCtx, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(dCtx, false), child: Text(c('admin_customer.cancel'))),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43)),
             onPressed: () => Navigator.pop(dCtx, true),
-            child: const Text('Rebalance'),
+            child: Text(c('admin_customer.rebalance')),
           ),
         ],
       ),
@@ -12194,10 +12196,10 @@ class _RoutesTabState extends State<_RoutesTab> {
     final go = await showDialog<bool>(
       context: context,
       builder: (dCtx) => AlertDialog(
-        title: const Text('Delete this plan?'),
-        content: Text('$title\n\nThis removes all its routes and stops permanently.'),
+        title: Text(c('admin_customer.delete_plan_q')),
+        content: Text(cf('admin_customer.delete_plan_body', {'title': '$title'})),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(dCtx, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(dCtx, false), child: Text(c('admin_customer.cancel'))),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
             onPressed: () => Navigator.pop(dCtx, true),
@@ -12214,7 +12216,7 @@ class _RoutesTabState extends State<_RoutesTab> {
       final map = res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
       if (map['deleted'] != true) {
         ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Couldn't delete, try again")));
+            SnackBar(content: Text(c('admin_customer.delete_fail'))));
         return;
       }
       RenderLog.write('c488c_delete_wired', planId);
@@ -12233,7 +12235,7 @@ class _RoutesTabState extends State<_RoutesTab> {
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Couldn't delete, try again")));
+          SnackBar(content: Text(c('admin_customer.delete_fail'))));
     }
   }
 
@@ -12242,10 +12244,10 @@ class _RoutesTabState extends State<_RoutesTab> {
     final go = await showDialog<bool>(
       context: context,
       builder: (dCtx) => AlertDialog(
-        title: const Text('Clear old plans?'),
-        content: const Text('Delete all plans older than 7 days? This cannot be undone.'),
+        title: Text(c('admin_customer.clear_old_plans_q')),
+        content: Text(c('admin_customer.clear_old_plans_body')),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(dCtx, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(dCtx, false), child: Text(c('admin_customer.cancel'))),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
             onPressed: () => Navigator.pop(dCtx, true),
@@ -12262,7 +12264,7 @@ class _RoutesTabState extends State<_RoutesTab> {
       if (!mounted) return;
       final deleted = (data['deleted_plans'] as num?)?.toInt() ?? 0;
       ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Deleted $deleted old plan(s).')));
+          SnackBar(content: Text(cf('admin_customer.deleted_old_plans', {'n': '$deleted'}))));
       // Realtime DELETE events land per-row already; refetch too so the
       // count is right even if a realtime event is missed.
       final list = await Supabase.instance.client.rpc('route_plan_list', params: {'p_limit': 10});
@@ -12273,7 +12275,7 @@ class _RoutesTabState extends State<_RoutesTab> {
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Couldn't clear old plans, try again")));
+          SnackBar(content: Text(c('admin_customer.clear_old_fail'))));
     }
   }
 
@@ -12283,18 +12285,18 @@ class _RoutesTabState extends State<_RoutesTab> {
     final go = await showDialog<bool>(
       context: context,
       builder: (dCtx) => AlertDialog(
-        title: const Text('Add as customer'),
+        title: Text(c('admin_customer.add_as_customer')),
         content: TextField(
           controller: nameCtrl,
           autofocus: true,
-          decoration: const InputDecoration(
-            labelText: 'Owner name (Google doesn\'t have it)',
+          decoration: InputDecoration(
+            labelText: c('admin_customer.owner_name_hint'),
             border: OutlineInputBorder(),
             isDense: true,
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(dCtx, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(dCtx, false), child: Text(c('admin_customer.cancel'))),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B7A43)),
             onPressed: () => Navigator.pop(dCtx, true),
@@ -12318,7 +12320,7 @@ class _RoutesTabState extends State<_RoutesTab> {
         final code = data['customer_code']?.toString() ?? '';
         final note = data['note']?.toString() ?? '';
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Added as customer $code. $note'),
+          content: Text(cf('admin_customer.added_as_customer', {'code': '$code', 'note': '$note'})),
           backgroundColor: const Color(0xFF1B7A43),
         ));
         onRefresh(); // never splice the list in Dart — re-call the route RPC
@@ -12386,7 +12388,7 @@ class _RoutesTabState extends State<_RoutesTab> {
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             const Icon(Icons.wifi_off_rounded, size: 40, color: Color(0xFF6B7280)),
             const SizedBox(height: 12),
-            Text('Failed to load: $_loadError',
+            Text(cf('admin_customer.failed_to_load', {'e': '$_loadError'}),
                 style: const TextStyle(fontSize: 13, color: Color(0xFFDC2626)),
                 textAlign: TextAlign.center),
             const SizedBox(height: 12),
@@ -12499,12 +12501,12 @@ class _RoutesTabState extends State<_RoutesTab> {
         const SizedBox(height: 10),
       ],
       if (_buildingPlan)
-        const Padding(
+        Padding(
           padding: EdgeInsets.only(top: 24),
           child: Center(child: Column(children: [
             CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2),
             SizedBox(height: 10),
-            Text('Building routes — this can take a few seconds for 1,000+ leads…',
+            Text(c('admin_customer.building_routes'),
                 style: TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
           ])),
         )
@@ -12528,11 +12530,11 @@ class _RoutesTabState extends State<_RoutesTab> {
         Row(children: [
           const Text('🏠', style: TextStyle(fontSize: 16)),
           const SizedBox(width: 8),
-          const Expanded(
-            child: Text('Build routes',
+          Expanded(
+            child: Text(c('admin_customer.build_routes'),
                 style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
           ),
-          TextButton(onPressed: widget.onOpenWarehouseCard, child: const Text('Warehouse')),
+          TextButton(onPressed: widget.onOpenWarehouseCard, child: Text(c('admin_customer.warehouse'))),
         ]),
         const SizedBox(height: 12),
         Wrap(spacing: 12, runSpacing: 12, children: [
@@ -12540,8 +12542,8 @@ class _RoutesTabState extends State<_RoutesTab> {
             width: 160,
             child: DropdownButtonFormField<String>(
               initialValue: _city,
-              decoration: const InputDecoration(labelText: 'City', border: OutlineInputBorder(), isDense: true),
-              items: const [DropdownMenuItem(value: 'Raipur', child: Text('Raipur'))],
+              decoration: InputDecoration(labelText: c('admin_customer.city'), border: const OutlineInputBorder(), isDense: true),
+              items: [DropdownMenuItem(value: 'Raipur', child: Text(c('admin_customer.raipur')))],
               onChanged: (v) {
                 if (v == null) return;
                 setState(() => _city = v);
@@ -12553,7 +12555,7 @@ class _RoutesTabState extends State<_RoutesTab> {
             width: 200,
             child: DropdownButtonFormField<int?>(
               initialValue: _dow,
-              decoration: const InputDecoration(labelText: 'Day', border: OutlineInputBorder(), isDense: true),
+              decoration: InputDecoration(labelText: c('admin_customer.day_label'), border: const OutlineInputBorder(), isDense: true),
               items: _dowOptions
                   .map((o) => DropdownMenuItem(value: o.$1, child: Text(o.$2)))
                   .toList(),
@@ -12577,13 +12579,13 @@ class _RoutesTabState extends State<_RoutesTab> {
               }
             },
             child: InputDecorator(
-              decoration: const InputDecoration(labelText: 'Start time', border: OutlineInputBorder(), isDense: true),
+              decoration: InputDecoration(labelText: c('admin_customer.start_time_label'), border: const OutlineInputBorder(), isDense: true),
               child: Text(TimeOfDay(hour: _startMin ~/ 60, minute: _startMin % 60).format(context)),
             ),
           ),
         ]),
         const SizedBox(height: 14),
-        const Text('Store type',
+        Text(c('admin_customer.store_type_label'),
             style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6B7280))),
         const SizedBox(height: 8),
         // CHANGE #552 — chips from lead_category_tree('route'). A top category
@@ -12620,7 +12622,7 @@ class _RoutesTabState extends State<_RoutesTab> {
           ],
         ]),
         const SizedBox(height: 12),
-        const Text('Visit filter',
+        Text(c('admin_customer.visit_filter'),
             style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6B7280))),
         const SizedBox(height: 8),
         Wrap(spacing: 6, runSpacing: 6, children: [('fresh', 'Fresh'), ('visited', 'Visited')].map((o) {
@@ -12661,7 +12663,7 @@ class _RoutesTabState extends State<_RoutesTab> {
                 if ((_leadCount?['leads'] as num?)?.toInt() != null && (_leadCount!['leads'] as num).toInt() > 0) ...[
                   const SizedBox(height: 4),
                   Text(
-                    '${_leadCount!['leads']} leads → $_autoK routes (~25 stops each)',
+                    cf('admin_customer.leads_routes', {'leads': '${_leadCount!['leads']}', 'routes': '$_autoK'}),
                     style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF1B7A43)),
                   ),
                 ],
@@ -12709,8 +12711,8 @@ class _RoutesTabState extends State<_RoutesTab> {
             child: Row(children: [
               const Icon(Icons.history, size: 18, color: Color(0xFF6B7280)),
               const SizedBox(width: 8),
-              const Expanded(
-                child: Text('Past plans',
+              Expanded(
+                child: Text(c('admin_customer.past_plans'),
                     style: TextStyle(
                         fontSize: 13.5, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
               ),
@@ -12725,7 +12727,7 @@ class _RoutesTabState extends State<_RoutesTab> {
                     minimumSize: Size.zero,
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
-                  child: const Text('Clear old plans', style: TextStyle(fontSize: 11.5)),
+                  child: Text(c('admin_customer.clear_old_plans_btn'), style: const TextStyle(fontSize: 11.5)),
                 ),
               Icon(_pastPlansExpanded ? Icons.expand_less : Icons.expand_more,
                   size: 20, color: const Color(0xFF6B7280)),
@@ -12740,9 +12742,9 @@ class _RoutesTabState extends State<_RoutesTab> {
               child: Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43), strokeWidth: 2)),
             )
           else if (_pastPlans!.isEmpty)
-            const Padding(
+            Padding(
               padding: EdgeInsets.all(14),
-              child: Text('No past plans.', style: TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
+              child: Text(c('admin_customer.no_past_plans'), style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
             )
           else
             ..._pastPlans!.map((p) {
@@ -12776,7 +12778,7 @@ class _RoutesTabState extends State<_RoutesTab> {
                       icon: const Icon(Icons.delete_outline, size: 18, color: Color(0xFF9CA3AF)),
                       padding: EdgeInsets.zero,
                       constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                      tooltip: 'Delete plan',
+                      tooltip: c('admin_customer.delete_plan_tooltip'),
                     ),
                   ]),
                 ),
@@ -12840,10 +12842,10 @@ class _RoutesTabState extends State<_RoutesTab> {
           ],
           const SizedBox(height: 10),
           Wrap(spacing: 8, runSpacing: 4, children: [
-            Text('${summary['routes'] ?? 0} routes',
+            Text(cf('admin_customer.n_routes', {'n': '${summary['routes'] ?? 0}'}),
                 style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
             const Text('·', style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
-            Text('${summary['stops'] ?? 0} stops',
+            Text(cf('admin_customer.n_stops', {'n': '${summary['stops'] ?? 0}'}),
                 style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
             const Text('·', style: TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
             Text(summary['total_km_label']?.toString() ?? '',
@@ -12873,7 +12875,7 @@ class _RoutesTabState extends State<_RoutesTab> {
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
               ),
               icon: const Icon(Icons.balance, size: 15),
-              label: const Text('Rebalance', style: TextStyle(fontSize: 12.5)),
+              label: Text(c('admin_customer.rebalance'), style: const TextStyle(fontSize: 12.5)),
             ),
             OutlinedButton.icon(
               onPressed: _rebuild,
@@ -12883,7 +12885,7 @@ class _RoutesTabState extends State<_RoutesTab> {
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
               ),
               icon: const Icon(Icons.refresh, size: 15),
-              label: const Text('Rebuild', style: TextStyle(fontSize: 12.5)),
+              label: Text(c('admin_customer.rebuild'), style: const TextStyle(fontSize: 12.5)),
             ),
             // CHANGE #489: shown for any plan size/class mix — Google
             // failure never crashes, it just leaves each route as it was.
@@ -13131,14 +13133,14 @@ class _RoutesTabState extends State<_RoutesTab> {
     return IntrinsicHeight(
       child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         button(
-          label: 'Optimize by location',
+          label: c('admin_customer.opt_by_location'),
           icon: Icons.my_location,
           loading: byLocation,
           onTap: () => _optimizeRouteFromMyLocation(routeId),
         ),
         const SizedBox(width: 8),
         button(
-          label: 'Optimize by warehouse',
+          label: c('admin_customer.opt_by_warehouse'),
           icon: Icons.warehouse,
           loading: byWarehouse,
           onTap: () => _optimizeRouteByWarehouse(routeId),
@@ -13161,8 +13163,8 @@ class _RoutesTabState extends State<_RoutesTab> {
     if (data == null) {
       return SizedBox(
         height: mapHeight,
-        child: const Center(
-          child: Text('Nothing to map.', style: TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
+        child: Center(
+          child: Text(c('admin_customer.nothing_to_map'), style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
         ),
       );
     }
@@ -13248,8 +13250,8 @@ class _RoutesTabState extends State<_RoutesTab> {
             child: Row(children: [
               const Icon(Icons.checklist_rtl, size: 18, color: Color(0xFF6B7280)),
               const SizedBox(width: 8),
-              const Expanded(
-                child: Text("Today's visits",
+              Expanded(
+                child: Text(c('admin_customer.todays_visits'),
                     style: TextStyle(
                         fontSize: 13.5, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
               ),
@@ -13270,7 +13272,7 @@ class _RoutesTabState extends State<_RoutesTab> {
                     ),
                   )
                 : report == null
-                    ? const Text('Could not load.', style: TextStyle(color: Color(0xFF6B7280)))
+                    ? Text(c('admin_customer.could_not_load'), style: const TextStyle(color: Color(0xFF6B7280)))
                     : _buildVisitsReportBody(report),
           ),
         ],
@@ -13298,7 +13300,7 @@ class _RoutesTabState extends State<_RoutesTab> {
       ],
       const SizedBox(height: 12),
       if (visits.isEmpty)
-        const Text('No visits yet today.', style: TextStyle(fontSize: 12.5, color: Color(0xFF6B7280)))
+        Text(c('admin_customer.no_visits_today'), style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280)))
       else
         ...visits.map((v) => _visitRow(v)),
     ]);
@@ -14076,7 +14078,7 @@ class _CheckInSheetState extends State<_CheckInSheet> {
         photoPath = null; // never lose the check-in over a failed photo upload
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Photo upload failed — visit still recorded.')));
+            SnackBar(content: Text(c('admin_customer.photo_upload_fail'))));
         }
       }
     }

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:pharma_b2b/utils/toast.dart';
+import '../services/ui_copy.dart';
 import '../theme.dart';
 import '../widgets/policy_page_layout.dart';
 
@@ -47,14 +48,14 @@ class _ContactScreenState extends State<ContactScreen> {
     } catch (_) {
       if (!mounted) return;
       setState(() => _submitting = false);
-      showToast(context, 'Failed to send. Please try again.');
+      showToast(context, c('contact.toast_send_failed'));
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return PolicyPageLayout(
-      title: 'Contact Us',
+      title: c('contact.page_title'),
       child: _submitted ? _buildSuccess() : _buildForm(),
     );
   }
@@ -75,16 +76,16 @@ class _ContactScreenState extends State<ContactScreen> {
                   const Icon(Icons.check_circle, color: Brand.green, size: 48),
             ),
             const SizedBox(height: 24),
-            const Text('Message Sent!',
-                style: TextStyle(
+            Text(c('contact.success_title'),
+                style: const TextStyle(
                     fontSize: 22,
                     fontWeight: FontWeight.w800,
                     color: Brand.ink)),
             const SizedBox(height: 12),
-            const Text(
-              'Thank you for reaching out.\nWe will contact you shortly.',
+            Text(
+              c('contact.success_body'),
               textAlign: TextAlign.center,
-              style: TextStyle(
+              style: const TextStyle(
                   fontSize: 15, color: Brand.inkMuted, height: 1.5),
             ),
             const SizedBox(height: 32),
@@ -95,7 +96,7 @@ class _ContactScreenState extends State<ContactScreen> {
                 padding: const EdgeInsets.symmetric(
                     horizontal: 32, vertical: 14),
               ),
-              child: const Text('Back to Home'),
+              child: Text(c('contact.btn_back_home')),
             ),
           ],
         ),
@@ -109,24 +110,27 @@ class _ContactScreenState extends State<ContactScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Get in Touch',
-              style: TextStyle(
+          Text(c('contact.form_title'),
+              style: const TextStyle(
                   fontSize: 20,
                   fontWeight: FontWeight.w800,
                   color: Brand.ink)),
           const SizedBox(height: 8),
-          const Text(
-            "We're here to help. Send us a message and we'll get back to you soon.",
-            style: TextStyle(
+          Text(
+            c('contact.form_subtitle'),
+            style: const TextStyle(
                 fontSize: 14, color: Brand.inkMuted, height: 1.5),
           ),
           const SizedBox(height: 32),
-          _field('Full Name', 'Enter your full name', _nameCtrl),
+          _field(c('contact.field_name_label'),
+              c('contact.field_name_hint'), _nameCtrl),
           const SizedBox(height: 16),
-          _field('Phone Number', 'Enter your phone number', _phoneCtrl,
+          _field(c('contact.field_phone_label'),
+              c('contact.field_phone_hint'), _phoneCtrl,
               keyboard: TextInputType.phone),
           const SizedBox(height: 16),
-          _field('Message', 'How can we help you?', _messageCtrl,
+          _field(c('contact.field_message_label'),
+              c('contact.field_message_hint'), _messageCtrl,
               maxLines: 5),
           const SizedBox(height: 32),
           SizedBox(
@@ -146,8 +150,8 @@ class _ContactScreenState extends State<ContactScreen> {
                       child: CircularProgressIndicator(
                           strokeWidth: 2, color: Colors.white),
                     )
-                  : const Text('Send Message',
-                      style: TextStyle(
+                  : Text(c('contact.btn_send'),
+                      style: const TextStyle(
                           fontSize: 16, fontWeight: FontWeight.w600)),
             ),
           ),
@@ -189,7 +193,7 @@ class _ContactScreenState extends State<ContactScreen> {
           maxLines: maxLines,
           keyboardType: keyboard,
           validator: (v) =>
-              (v == null || v.trim().isEmpty) ? 'Required' : null,
+              (v == null || v.trim().isEmpty) ? c('contact.validator_required') : null,
           decoration: InputDecoration(
             hintText: hint,
             hintStyle:

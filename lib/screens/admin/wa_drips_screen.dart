@@ -24,6 +24,7 @@ import 'package:flutter/material.dart';
 
 import '../../features/whatsapp/data/wa_campaign_api.dart';
 import '../../features/whatsapp/ui/wa_campaign_chips.dart';
+import '../../services/ui_copy.dart' as uicopy;
 import '../../utils/render_log.dart';
 import '../../utils/toast.dart';
 
@@ -120,7 +121,10 @@ class _WaDripsScreenState extends State<WaDripsScreen> {
       final people =
           int.tryParse((res['people_affected'] ?? '').toString()) ?? 0;
       if (steps > 0 || people > 0) {
-        showToast(context, '$steps steps · $people people');
+        showToast(
+            context,
+            uicopy.cf('wa_drips.toast_affected',
+                {'steps': '$steps', 'people': '$people'}));
       }
       await _load();
     } catch (e) {
@@ -165,15 +169,15 @@ class _WaDripsScreenState extends State<WaDripsScreen> {
         backgroundColor: _kCard,
         elevation: 0,
         foregroundColor: _kText,
-        title: const Text('Sequences',
-            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+        title: Text(uicopy.c('wa_drips.title'),
+            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
         bottom: const PreferredSize(
           preferredSize: Size.fromHeight(1),
           child: Divider(height: 1, color: _kBorder),
         ),
         actions: [
           IconButton(
-            tooltip: 'Refresh',
+            tooltip: uicopy.c('wa_drips.refresh_tooltip'),
             onPressed: _loading ? null : _load,
             icon: const Icon(Icons.refresh),
           ),
@@ -186,7 +190,7 @@ class _WaDripsScreenState extends State<WaDripsScreen> {
               backgroundColor: _kGreen,
               foregroundColor: Colors.white,
               icon: const Icon(Icons.add),
-              label: const Text('New sequence'),
+              label: Text(uicopy.c('wa_drips.new_sequence')),
             ),
       body: _body(),
     );
@@ -216,7 +220,7 @@ class _WaDripsScreenState extends State<WaDripsScreen> {
                 onPressed: _load,
                 style: ElevatedButton.styleFrom(
                     backgroundColor: _kGreen, foregroundColor: Colors.white),
-                child: const Text('Retry'),
+                child: Text(uicopy.c('wa_drips.retry')),
               ),
             ],
           ),
@@ -616,8 +620,8 @@ class _WaDripEditorState extends State<WaDripEditor> {
                 value: _exitOnOrder,
                 activeThumbColor: _kGreen,
                 onChanged: (v) => setState(() => _exitOnOrder = v),
-                title: const Text('Exit on order',
-                    style: TextStyle(fontSize: 13.5)),
+                title: Text(uicopy.c('wa_drips.exit_on_order'),
+                    style: const TextStyle(fontSize: 13.5)),
               ),
               TextField(
                 controller: _windowCtrl,
@@ -643,7 +647,7 @@ class _WaDripEditorState extends State<WaDripEditor> {
                   padding: const EdgeInsets.symmetric(vertical: 14),
                 ),
                 icon: const Icon(Icons.save_outlined, size: 17),
-                label: const Text('Save'),
+                label: Text(uicopy.c('wa_drips.save')),
               ),
             ),
           ],
@@ -839,7 +843,7 @@ class _WaDripStepEditorState extends State<WaDripStepEditor> {
                   padding: const EdgeInsets.symmetric(vertical: 14),
                 ),
                 icon: const Icon(Icons.save_outlined, size: 17),
-                label: const Text('Save'),
+                label: Text(uicopy.c('wa_drips.save')),
               ),
             ),
           ],

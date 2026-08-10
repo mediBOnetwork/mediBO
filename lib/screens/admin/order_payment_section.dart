@@ -1,6 +1,7 @@
 // CHANGE #212 — per-order expandable payment section inside Customer Order card
 import 'package:flutter/material.dart';
 import '../../services/payment_claims_service.dart';
+import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 
 class OrderPaymentSection extends StatefulWidget {
@@ -69,7 +70,9 @@ class _OrderPaymentSectionState extends State<OrderPaymentSection> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Verify failed: $e'), backgroundColor: const Color(0xFFDC2626)),
+        SnackBar(
+            content: Text(cf('order_payment.snack_verify_failed', {'error': '$e'})),
+            backgroundColor: const Color(0xFFDC2626)),
       );
     } finally {
       if (mounted) setState(() => _actingOnClaim = null);
@@ -89,7 +92,9 @@ class _OrderPaymentSectionState extends State<OrderPaymentSection> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Reject failed: $e'), backgroundColor: const Color(0xFFDC2626)),
+        SnackBar(
+            content: Text(cf('order_payment.snack_reject_failed', {'error': '$e'})),
+            backgroundColor: const Color(0xFFDC2626)),
       );
     } finally {
       if (mounted) setState(() => _actingOnClaim = null);
@@ -105,9 +110,10 @@ class _OrderPaymentSectionState extends State<OrderPaymentSection> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Padding(
-            padding: EdgeInsets.only(bottom: 8),
-            child: Text('Payment', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text(c('order_payment.section_title'),
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
           ),
           if (_loading)
             const Padding(
@@ -115,7 +121,8 @@ class _OrderPaymentSectionState extends State<OrderPaymentSection> {
               child: Center(child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))),
             )
           else if (_error != null)
-            Text('Error loading payment: $_error', style: const TextStyle(fontSize: 12, color: Color(0xFFDC2626)))
+            Text(cf('order_payment.err_load', {'error': '$_error'}),
+                style: const TextStyle(fontSize: 12, color: Color(0xFFDC2626)))
           else
             _buildContent(),
         ],
@@ -133,11 +140,17 @@ class _OrderPaymentSectionState extends State<OrderPaymentSection> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (advanceExpected != null && orderTotal != null) ...[
-          _infoRow('Advance required', '${advanceExpected.toStringAsFixed(0)}% of ₹${orderTotal.toStringAsFixed(2)}'),
+          _infoRow(
+              c('order_payment.row_advance_required'),
+              cf('order_payment.advance_required_value', {
+                'pct': advanceExpected.toStringAsFixed(0),
+                'total': orderTotal.toStringAsFixed(2),
+              })),
           const SizedBox(height: 4),
         ],
         if (claims.isEmpty)
-          const Text('No payment claim submitted yet.', style: TextStyle(fontSize: 12, color: Color(0xFF6B7280)))
+          Text(c('order_payment.empty_no_claims'),
+              style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)))
         else
           ...claims.map((c) => _buildClaimCard(c)),
       ],
@@ -188,15 +201,24 @@ class _OrderPaymentSectionState extends State<OrderPaymentSection> {
             ],
           ),
           const SizedBox(height: 8),
-          if (ocrAmt != null) _infoRow('OCR amount', '₹${ocrAmt.toStringAsFixed(2)}'),
-          if (claimedAmt != null) _infoRow('Claimed', '₹${claimedAmt.toStringAsFixed(2)}'),
+          if (ocrAmt != null)
+            _infoRow(c('order_payment.row_ocr_amount'),
+                cf('order_payment.amount_value', {'amount': ocrAmt.toStringAsFixed(2)})),
+          if (claimedAmt != null)
+            _infoRow(c('order_payment.row_claimed'),
+                cf('order_payment.amount_value', {'amount': claimedAmt.toStringAsFixed(2)})),
           if (appAmt != null)
             _infoRow(
-              'App expected',
-              '₹${appAmt.toStringAsFixed(2)}${amountMatch == true ? '  ✓ match' : amountMatch == false ? '  ✗ mismatch' : ''}',
+              c('order_payment.row_app_expected'),
+              cf('order_payment.amount_value', {'amount': appAmt.toStringAsFixed(2)}) +
+                  (amountMatch == true
+                      ? c('order_payment.match_suffix')
+                      : amountMatch == false
+                          ? c('order_payment.mismatch_suffix')
+                          : ''),
               valueColor: amountMatch == true ? const Color(0xFF065F46) : amountMatch == false ? const Color(0xFF991B1B) : null,
             ),
-          if (utr != null && utr.isNotEmpty) _infoRow('UTR', utr),
+          if (utr != null && utr.isNotEmpty) _infoRow(c('order_payment.row_utr'), utr),
           if (screenshotPath != null && screenshotPath.isNotEmpty) ...[
             const SizedBox(height: 8),
             _SignedScreenshot(filePath: screenshotPath, bucket: screenshotBucket),
@@ -217,7 +239,8 @@ class _OrderPaymentSectionState extends State<OrderPaymentSection> {
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                         padding: const EdgeInsets.symmetric(vertical: 10),
                       ),
-                      child: const Text('Verify & Accept', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                      child: Text(c('order_payment.btn_verify_accept'),
+                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
                     ),
                   ),
                 ],
@@ -226,7 +249,7 @@ class _OrderPaymentSectionState extends State<OrderPaymentSection> {
               TextField(
                 controller: _rejectCtrl,
                 decoration: InputDecoration(
-                  hintText: 'Rejection reason (required)',
+                  hintText: c('order_payment.hint_reject_reason'),
                   hintStyle: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
                   filled: true,
                   fillColor: Colors.white,
@@ -249,7 +272,8 @@ class _OrderPaymentSectionState extends State<OrderPaymentSection> {
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                     padding: const EdgeInsets.symmetric(vertical: 10),
                   ),
-                  child: const Text('Reject', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                  child: Text(c('order_payment.btn_reject'),
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
                 ),
               ),
             ],
@@ -259,7 +283,8 @@ class _OrderPaymentSectionState extends State<OrderPaymentSection> {
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                 decoration: BoxDecoration(color: const Color(0xFFD1FAE5), borderRadius: BorderRadius.circular(20)),
-                child: const Text('Paid • Verified', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF065F46))),
+                child: Text(c('order_payment.badge_paid_verified'),
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF065F46))),
               ),
             ),
         ],
@@ -272,7 +297,8 @@ class _OrderPaymentSectionState extends State<OrderPaymentSection> {
       padding: const EdgeInsets.only(bottom: 3),
       child: Row(
         children: [
-          Text('$label: ', style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+          Text(cf('order_payment.info_row_label', {'label': label}),
+              style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
           Flexible(child: Text(value, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: valueColor ?? const Color(0xFF111827)))),
         ],
       ),

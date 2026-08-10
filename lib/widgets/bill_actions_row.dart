@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../services/ui_copy.dart';
 import '../utils/bill_mime.dart';
 import '../utils/download_bytes.dart';
 
@@ -49,7 +50,7 @@ class _UploadedBillActionsRowState extends State<UploadedBillActionsRow> {
       final bytes = await Supabase.instance.client.storage.from(widget.bucket).download(widget.path);
       return (bytes: bytes, filename: widget.fileName);
     } catch (_) {
-      if (mounted) showToast(context, 'Could not load the bill.', isError: true);
+      if (mounted) showToast(context, c('bill_actions.toast_load_failed'), isError: true);
       return null;
     }
   }
@@ -129,7 +130,9 @@ class _UploadedBillActionsRowState extends State<UploadedBillActionsRow> {
       Expanded(
         child: BillActionButton(
           icon: Icons.download_outlined,
-          label: _downloading ? 'Downloading…' : 'Download',
+          label: _downloading
+              ? c('bill_actions.btn_downloading')
+              : c('bill_actions.btn_download'),
           enabled: !_downloading,
           loading: _downloading,
           onTap: _download,
@@ -139,7 +142,7 @@ class _UploadedBillActionsRowState extends State<UploadedBillActionsRow> {
       Expanded(
         child: Builder(builder: (btnContext) => BillActionButton(
               icon: Icons.chat_bubble_outline,
-              label: 'WhatsApp',
+              label: c('bill_actions.btn_whatsapp'),
               enabled: true,
               onTap: () => _showWaPopup(btnContext),
             )),
@@ -148,7 +151,9 @@ class _UploadedBillActionsRowState extends State<UploadedBillActionsRow> {
       Expanded(
         child: BillActionButton(
           icon: Icons.share_outlined,
-          label: _sharing ? 'Sharing…' : 'Share',
+          label: _sharing
+              ? c('bill_actions.btn_sharing')
+              : c('bill_actions.btn_share'),
           enabled: !_sharing,
           loading: _sharing,
           onTap: _share,
@@ -238,7 +243,7 @@ class _WaNumberPickerState extends State<WaNumberPicker> {
           .toList();
       if (mounted) setState(() => _numbers = list);
     } catch (_) {
-      if (mounted) setState(() => _error = 'Could not load numbers.');
+      if (mounted) setState(() => _error = c('bill_actions.wa_err_load'));
     }
   }
 
@@ -252,23 +257,23 @@ class _WaNumberPickerState extends State<WaNumberPicker> {
           params: {'p_order_id': widget.orderId, 'p_phone': phone});
       final res = raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
       if (res['status'] == 'queued') {
-        message = 'Bill sent to $phone on WhatsApp';
+        message = cf('bill_actions.wa_sent', {'phone': phone});
         isError = false;
       } else if (res['error'] == 'no_bill_uploaded') {
-        message = 'Upload a bill first';
+        message = c('bill_actions.wa_err_no_bill');
         isError = true;
       } else if (res['error'] == 'bill_not_ready') {
-        message = 'Bill not ready yet';
+        message = c('bill_actions.wa_err_not_ready');
         isError = true;
       } else if (res['error'] == 'bad_phone') {
-        message = 'Invalid number';
+        message = c('bill_actions.wa_err_bad_phone');
         isError = true;
       } else {
-        message = 'Could not send the bill';
+        message = c('bill_actions.wa_err_send');
         isError = true;
       }
     } catch (_) {
-      message = 'Could not send the bill';
+      message = c('bill_actions.wa_err_send');
       isError = true;
     }
     widget.onDismiss();
@@ -282,10 +287,10 @@ class _WaNumberPickerState extends State<WaNumberPicker> {
       child: Padding(
         padding: const EdgeInsets.all(10),
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-            child: Text('Send bill to',
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+            child: Text(c('bill_actions.wa_send_bill_to'),
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
           ),
           const SizedBox(height: 4),
           if (_error != null)
@@ -300,9 +305,10 @@ class _WaNumberPickerState extends State<WaNumberPicker> {
                   child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))),
             )
           else if (_numbers!.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(8),
-              child: Text('No saved number', style: TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
+            Padding(
+              padding: const EdgeInsets.all(8),
+              child: Text(c('bill_actions.wa_no_saved_number'),
+                  style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B7280))),
             )
           else
             Flexible(
@@ -330,8 +336,8 @@ class _WaNumberPickerState extends State<WaNumberPicker> {
                               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                               decoration: BoxDecoration(
                                   color: const Color(0xFFE8F5E9), borderRadius: BorderRadius.circular(4)),
-                              child: const Text('last used',
-                                  style: TextStyle(
+                              child: Text(c('bill_actions.wa_last_used'),
+                                  style: const TextStyle(
                                       fontSize: 9.5, color: Color(0xFF1B7A43), fontWeight: FontWeight.w600)),
                             ),
                           if (busy) ...[

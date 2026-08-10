@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import 'qr_saver.dart';
+import '../services/ui_copy.dart';
 import '../utils/render_log.dart';
 
 /// Canonical UPI URI builder — single source of truth.
@@ -108,7 +109,7 @@ class _UpiPaySheetState extends State<_UpiPaySheet> {
   void _copy(String value, String label, String logKey) {
     Clipboard.setData(ClipboardData(text: value));
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(
-      content: Text('$label copied'),
+      content: Text(cf('upi_pay.snack_copied', {'label': label})),
       duration: const Duration(seconds: 1),
     ));
     RenderLog.write(logKey, 'v=$value');
@@ -131,7 +132,7 @@ class _UpiPaySheetState extends State<_UpiPaySheet> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-            SnackBar(content: Text('QR save failed: $e')));
+            SnackBar(content: Text(cf('upi_pay.snack_qr_save_failed', {'error': '$e'}))));
       }
     } finally {
       if (mounted) setState(() => _savingQr = false);
@@ -192,7 +193,8 @@ class _UpiPaySheetState extends State<_UpiPaySheet> {
           child: Row(children: [
             Expanded(
               child: Text(
-                'Pay $amtLabel — ${widget.payeeName}',
+                cf('upi_pay.sheet_title',
+                    {'amount': amtLabel, 'payee': widget.payeeName}),
                 style: const TextStyle(
                     fontSize: 16, fontWeight: FontWeight.w700),
                 maxLines: 2,
@@ -232,10 +234,10 @@ class _UpiPaySheetState extends State<_UpiPaySheet> {
                   ),
                 ),
                 const SizedBox(height: 20),
-                _copyRow('UPI ID', widget.vpa, 'c336_copy_vpa'),
-                _copyRow('Amount', _amtDisplay, 'c336_copy_amt'),
+                _copyRow(c('upi_pay.row_upi_id'), widget.vpa, 'c336_copy_vpa'),
+                _copyRow(c('upi_pay.row_amount'), _amtDisplay, 'c336_copy_amt'),
                 if (widget.note.isNotEmpty)
-                  _copyRow('Note', widget.note, 'c336_copy_note'),
+                  _copyRow(c('upi_pay.row_note'), widget.note, 'c336_copy_note'),
                 if (kQrSaveSupported) ...[
                   const SizedBox(height: 8),
                   FilledButton.icon(
@@ -247,7 +249,10 @@ class _UpiPaySheetState extends State<_UpiPaySheet> {
                             child: CircularProgressIndicator(
                                 strokeWidth: 2, color: Colors.white))
                         : const Icon(Icons.download_outlined, size: 18),
-                    label: Text(_savingQr ? 'Saving…' : 'Save QR',
+                    label: Text(
+                        _savingQr
+                            ? c('upi_pay.btn_saving')
+                            : c('upi_pay.btn_save_qr'),
                         style: const TextStyle(
                             fontSize: 14, fontWeight: FontWeight.w600)),
                     style: FilledButton.styleFrom(
@@ -265,24 +270,24 @@ class _UpiPaySheetState extends State<_UpiPaySheet> {
                     color: const Color(0xFFF5F6F8),
                     borderRadius: BorderRadius.circular(10),
                   ),
-                  child: const Column(
+                  child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Same phone: Save QR → open PhonePe/GPay scanner → tap gallery icon → pick QR.',
-                        style: TextStyle(
+                        c('upi_pay.help_same_phone'),
+                        style: const TextStyle(
                             fontSize: 12, color: Color(0xFF6B7280)),
                       ),
-                      SizedBox(height: 4),
+                      const SizedBox(height: 4),
                       Text(
-                        "Ya UPI ID copy karke app me 'To UPI ID' me paste karo.",
-                        style: TextStyle(
+                        c('upi_pay.help_copy_vpa'),
+                        style: const TextStyle(
                             fontSize: 12, color: Color(0xFF6B7280)),
                       ),
-                      SizedBox(height: 4),
+                      const SizedBox(height: 4),
                       Text(
-                        'Dusre phone se: QR seedha scan karo.',
-                        style: TextStyle(
+                        c('upi_pay.help_other_phone'),
+                        style: const TextStyle(
                             fontSize: 12, color: Color(0xFF6B7280)),
                       ),
                     ],

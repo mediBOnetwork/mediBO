@@ -7,6 +7,7 @@ import 'fullscreen_image.dart';
 import 'geo_position.dart';
 import 'image_pick.dart';
 import 'selfie_preview.dart';
+import '../services/ui_copy.dart';
 import '../utils/render_log.dart';
 
 class CashPaymentSheet extends StatefulWidget {
@@ -133,7 +134,7 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
           try { RenderLog.write('c243_selfie_pass', 'human=true'); } catch (_) {}
         } else {
           _selfieVerified = false;
-          _selfieError = 'No human selfie detected. Please upload a selfie.';
+          _selfieError = c('cash_payment.err_selfie_not_human');
           // Clear the file so it is never submitted
           _fileBytes = null;
           _fileDataUrl = null;
@@ -150,7 +151,7 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
       setState(() {
         _selfieVerifying = false;
         _selfieVerified = false;
-        _selfieError = 'Verification failed. Please try again.';
+        _selfieError = c('cash_payment.err_selfie_verify_failed');
         _fileBytes = null;
         _fileDataUrl = null;
         _fileMime = null;
@@ -184,7 +185,7 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
       if (mounted) {
         setState(() {
           _locating = false;
-          _locError = 'Could not get location. Allow location in browser and tap retry.';
+          _locError = c('cash_payment.err_location');
         });
       }
     }
@@ -220,7 +221,7 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
     // Belt-and-suspenders: never submit without a verified selfie
     if (!_selfieVerified) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Upload a verified selfie first')),
+        SnackBar(content: Text(c('cash_payment.snack_need_selfie'))),
       );
       return;
     }
@@ -257,7 +258,8 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
         if (mounted) { Navigator.pop(context); widget.onSuccess(); }
       } else {
         setState(() {
-          _error = result['error']?.toString() ?? 'Submission failed';
+          _error = result['error']?.toString() ??
+              c('cash_payment.err_submit_failed');
           _submitting = false;
           _uploadProgress = 0.0;
         });
@@ -270,12 +272,17 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
   String _missingText() {
     final m = <String>[];
     final amt = double.tryParse(_amountCtrl.text.trim()) ?? 0;
-    if (amt <= 0) m.add('amount');
-    if (_collectedByCtrl.text.trim().isEmpty) m.add('received by');
-    if (_fileBytes == null || !_selfieVerified) m.add('verified selfie');
-    if (_lat == null) m.add('location');
+    if (amt <= 0) m.add(c('cash_payment.missing_amount'));
+    if (_collectedByCtrl.text.trim().isEmpty) {
+      m.add(c('cash_payment.missing_received_by'));
+    }
+    if (_fileBytes == null || !_selfieVerified) {
+      m.add(c('cash_payment.missing_selfie'));
+    }
+    if (_lat == null) m.add(c('cash_payment.missing_location'));
     if (m.isEmpty) return '';
-    return 'Required: ${m.join(', ')}';
+    return cf('cash_payment.missing_prefix',
+        {'items': m.join(c('cash_payment.missing_separator'))});
   }
 
   @override
@@ -298,8 +305,8 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
             Row(children: [
               const Text('\u{1F4B5}', style: TextStyle(fontSize: 20)),
               const SizedBox(width: 8),
-              const Text('Cash Received',
-                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+              Text(c('cash_payment.title'),
+                  style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
               const Spacer(),
               IconButton(
                 icon: const Icon(Icons.close),
@@ -310,8 +317,8 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
             const SizedBox(height: 8),
 
             // AMOUNT
-            const Text('Amount (₹)',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF424242))),
+            Text(c('cash_payment.label_amount'),
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF424242))),
             const SizedBox(height: 6),
             TextField(
               controller: _amountCtrl,
@@ -320,8 +327,8 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
                 FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}')),
               ],
               decoration: InputDecoration(
-                prefixText: '₹ ',
-                hintText: '0.00',
+                prefixText: c('cash_payment.amount_prefix'),
+                hintText: c('cash_payment.amount_hint'),
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
                 contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
               ),
@@ -329,14 +336,14 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
             const SizedBox(height: 16),
 
             // RECEIVED BY
-            const Text('Received by',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF424242))),
+            Text(c('cash_payment.label_received_by'),
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF424242))),
             const SizedBox(height: 6),
             TextField(
               controller: _collectedByCtrl,
               textCapitalization: TextCapitalization.words,
               decoration: InputDecoration(
-                hintText: 'Staff name',
+                hintText: c('cash_payment.hint_staff_name'),
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
                 contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
               ),
@@ -344,8 +351,8 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
             const SizedBox(height: 16),
 
             // FILE UPLOAD + SELFIE VERIFICATION
-            const Text('Upload Selfie',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF424242))),
+            Text(c('cash_payment.label_upload_selfie'),
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF424242))),
             const SizedBox(height: 6),
 
             // Verifying state: spinner + message
@@ -358,12 +365,12 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
                   border: Border.all(color: const Color(0xFFFFB300)),
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: const Row(children: [
-                  SizedBox(width: 18, height: 18,
+                child: Row(children: [
+                  const SizedBox(width: 18, height: 18,
                       child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFFF8F00))),
-                  SizedBox(width: 10),
-                  Text('Verifying selfie…',
-                      style: TextStyle(fontSize: 13, color: Color(0xFF6D4C00))),
+                  const SizedBox(width: 10),
+                  Text(c('cash_payment.verifying_selfie'),
+                      style: const TextStyle(fontSize: 13, color: Color(0xFF6D4C00))),
                 ]),
               ),
             ] else if (_selfieVerified && _fileBytes != null) ...[
@@ -393,11 +400,11 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
                             borderRadius: BorderRadius.circular(20),
                           ),
                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                            Icon(Icons.check_circle, color: Colors.white, size: 13),
-                            SizedBox(width: 4),
-                            Text('Selfie verified ✓',
-                                style: TextStyle(color: Colors.white, fontSize: 11,
+                          child: Row(mainAxisSize: MainAxisSize.min, children: [
+                            const Icon(Icons.check_circle, color: Colors.white, size: 13),
+                            const SizedBox(width: 4),
+                            Text(c('cash_payment.selfie_verified'),
+                                style: const TextStyle(color: Colors.white, fontSize: 11,
                                     fontWeight: FontWeight.w600)),
                           ]),
                         ),
@@ -413,8 +420,8 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
                               borderRadius: BorderRadius.circular(20),
                             ),
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                            child: const Text('Change',
-                                style: TextStyle(color: Colors.white, fontSize: 11)),
+                            child: Text(c('cash_payment.btn_change'),
+                                style: const TextStyle(color: Colors.white, fontSize: 11)),
                           ),
                         ),
                       ),
@@ -430,7 +437,9 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
                 child: OutlinedButton.icon(
                   onPressed: _pickFile,
                   icon: const Icon(Icons.camera_alt_outlined),
-                  label: Text(_selfieError != null ? 'Re-upload selfie' : 'Choose Photo / File'),
+                  label: Text(_selfieError != null
+                      ? c('cash_payment.btn_reupload_selfie')
+                      : c('cash_payment.btn_choose_photo')),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: _selfieError != null
                         ? const Color(0xFFD32F2F)
@@ -452,27 +461,31 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
             const SizedBox(height: 16),
 
             // LOCATION — CHANGE #244: GPS coords + auto-filled editable address
-            const Text('Location',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF424242))),
+            Text(c('cash_payment.label_location'),
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF424242))),
             const SizedBox(height: 6),
             if (_lat != null)
               Row(children: [
                 const Icon(Icons.location_on, color: Color(0xFF2E7D32), size: 18),
                 const SizedBox(width: 6),
                 Expanded(
-                  child: Text('Location captured ✓\n$_locationLabel',
+                  child: Text(
+                      cf('cash_payment.location_captured',
+                          {'coords': _locationLabel ?? ''}),
                       style: const TextStyle(fontSize: 12, color: Color(0xFF2E7D32))),
                 ),
                 TextButton(
                   onPressed: _requestLocation,
-                  child: const Text('Refresh', style: TextStyle(fontSize: 12)),
+                  child: Text(c('cash_payment.btn_refresh'),
+                      style: const TextStyle(fontSize: 12)),
                 ),
               ])
             else if (_locating)
-              const Row(children: [
-                SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
-                SizedBox(width: 8),
-                Text('Getting location...', style: TextStyle(fontSize: 13, color: Color(0xFF757575))),
+              Row(children: [
+                const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                const SizedBox(width: 8),
+                Text(c('cash_payment.getting_location'),
+                    style: const TextStyle(fontSize: 13, color: Color(0xFF757575))),
               ])
             else
               SizedBox(
@@ -481,7 +494,7 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
                   onPressed: _requestLocation,
                   icon: const Icon(Icons.my_location, size: 16),
                   label: Text(
-                    _locError ?? 'Tap to capture location',
+                    _locError ?? c('cash_payment.btn_capture_location'),
                     style: const TextStyle(fontSize: 12),
                     overflow: TextOverflow.ellipsis,
                     maxLines: 2,
@@ -504,16 +517,16 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
             if (_lat != null || _geocoding) ...[
               const SizedBox(height: 10),
               Row(children: [
-                const Text('Address',
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
+                Text(c('cash_payment.label_address'),
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
                         color: Color(0xFF424242))),
                 if (_geocoding) ...[
                   const SizedBox(width: 8),
                   const SizedBox(width: 12, height: 12,
                       child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF757575))),
                   const SizedBox(width: 6),
-                  const Text('Finding address…',
-                      style: TextStyle(fontSize: 11, color: Color(0xFF757575))),
+                  Text(c('cash_payment.finding_address'),
+                      style: const TextStyle(fontSize: 11, color: Color(0xFF757575))),
                 ],
               ]),
               const SizedBox(height: 6),
@@ -526,7 +539,7 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
                   textInputAction: TextInputAction.done,
                   maxLines: 1,
                   decoration: InputDecoration(
-                    hintText: 'Auto-filled from location',
+                    hintText: c('cash_payment.hint_address'),
                     hintStyle: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
                     border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
                     contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
@@ -578,8 +591,8 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
                           ),
                         ],
                       )
-                    : const Text('\u{1F4B5}  Collect Cash',
-                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                    : Text(c('cash_payment.btn_collect_cash'),
+                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
               ),
             ),
             const SizedBox(height: 8),

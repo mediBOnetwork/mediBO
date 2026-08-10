@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../../services/date_labels.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../services/ui_copy.dart';
 import '../../utils/bill_mime.dart';
 import '../../utils/download_bytes.dart';
 import '../../utils/render_log.dart';
@@ -141,8 +142,8 @@ class _SupplierOrdersScreenState extends State<SupplierOrdersScreen> {
           child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
             const Icon(Icons.receipt_long_outlined, size: 56, color: Color(0xFFD1D5DB)),
             const SizedBox(height: 12),
-            const Text('No orders yet.',
-                style: TextStyle(fontSize: 15, color: Color(0xFF6B7280))),
+            Text(c('supplier_orders.empty'),
+                style: const TextStyle(fontSize: 15, color: Color(0xFF6B7280))),
           ]),
         );
       }
@@ -243,13 +244,16 @@ class _OrderCardState extends State<_OrderCard> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Delete bill?'),
-        content: const Text('This will remove the uploaded bill. This cannot be undone.'),
+        title: Text(c('supplier_orders.delete_bill_title')),
+        content: Text(c('supplier_orders.delete_bill_body')),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(c('supplier_orders.cancel'))),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Delete', style: TextStyle(color: Color(0xFF991B1B))),
+            child: Text(c('supplier_orders.delete'),
+                style: const TextStyle(color: Color(0xFF991B1B))),
           ),
         ],
       ),
@@ -267,7 +271,7 @@ class _OrderCardState extends State<_OrderCard> {
       final res = raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
       if (res['ok'] == true) {
         if (mounted) {
-          showToast(context, 'Bill deleted');
+          showToast(context, c('supplier_orders.toast_bill_deleted'));
           setState(() => _billViewOpen = false);
         }
         await _loadBillInfo(refresh: true);
@@ -276,16 +280,20 @@ class _OrderCardState extends State<_OrderCard> {
           showToast(
             context,
             res['message']?.toString() ??
-                'This bill has been imported and can no longer be deleted.',
+                c('supplier_orders.toast_bill_already_imported'),
             isError: true,
           );
         }
         await _loadBillInfo(refresh: true);
       } else {
-        if (mounted) showToast(context, 'Could not delete the bill', isError: true);
+        if (mounted) {
+          showToast(context, c('supplier_orders.toast_delete_failed'), isError: true);
+        }
       }
     } catch (_) {
-      if (mounted) showToast(context, 'Could not delete the bill', isError: true);
+      if (mounted) {
+        showToast(context, c('supplier_orders.toast_delete_failed'), isError: true);
+      }
     } finally {
       if (mounted) setState(() => _deletingBill = false);
     }
@@ -296,7 +304,9 @@ class _OrderCardState extends State<_OrderCard> {
       final bytes = await Supabase.instance.client.storage.from(bucket).download(path);
       return (bytes: bytes, filename: name);
     } catch (_) {
-      if (mounted) showToast(context, 'Could not load the bill.', isError: true);
+      if (mounted) {
+        showToast(context, c('supplier_orders.toast_bill_load_failed'), isError: true);
+      }
       return null;
     }
   }
@@ -367,7 +377,9 @@ class _OrderCardState extends State<_OrderCard> {
 
     // step 2: size guard
     if (bytes.length > 15 * 1024 * 1024) {
-      if (mounted) showToast(context, 'File too large (max 15 MB)', isError: true);
+      if (mounted) {
+        showToast(context, c('supplier_orders.toast_file_too_large'), isError: true);
+      }
       return;
     }
 
@@ -390,7 +402,9 @@ class _OrderCardState extends State<_OrderCard> {
             .from('supplier-bills')
             .uploadBinary(path, bytes, fileOptions: FileOptions(contentType: contentType));
       } catch (e) {
-        if (mounted) showToast(context, 'Upload failed — try again', isError: true);
+        if (mounted) {
+          showToast(context, c('supplier_orders.toast_upload_failed'), isError: true);
+        }
         return;
       }
 
@@ -403,11 +417,11 @@ class _OrderCardState extends State<_OrderCard> {
           'p_file_name': file.name,
           'p_bucket': 'supplier-bills',
         });
-        if (mounted) showToast(context, 'Bill uploaded ✓');
+        if (mounted) showToast(context, c('supplier_orders.toast_bill_uploaded'));
       } catch (e) {
         if (mounted) {
           showToast(context,
-            'Bill saved but not registered — contact mediBO', isError: true);
+            c('supplier_orders.toast_bill_not_registered'), isError: true);
         }
         return;
       }
@@ -435,7 +449,9 @@ class _OrderCardState extends State<_OrderCard> {
       });
       widget.onReload();
     } catch (e) {
-      if (mounted) showToast(context, 'Could not update pack status', isError: true);
+      if (mounted) {
+        showToast(context, c('supplier_orders.toast_pack_failed'), isError: true);
+      }
     } finally {
       if (mounted) setState(() => _togglingPacked = false);
     }
@@ -488,7 +504,9 @@ class _OrderCardState extends State<_OrderCard> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        orderNo.isNotEmpty ? 'Order $orderNo' : 'Order',
+                        orderNo.isNotEmpty
+                            ? cf('supplier_orders.order_no', {'no': orderNo})
+                            : c('supplier_orders.order'),
                         style: const TextStyle(
                           fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827),
                         ),
@@ -528,7 +546,12 @@ class _OrderCardState extends State<_OrderCard> {
                   ],
                   if (itemCount > 0) ...[
                     Text(
-                      '$itemCount item${itemCount == 1 ? '' : 's'}',
+                      cf(
+                        itemCount == 1
+                            ? 'supplier_orders.item_count_one'
+                            : 'supplier_orders.item_count_many',
+                        {'count': '$itemCount'},
+                      ),
                       style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
                     ),
                     const SizedBox(width: 8),
@@ -563,7 +586,10 @@ class _OrderCardState extends State<_OrderCard> {
                           child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF1B7A43)),
                         )
                       : const Icon(Icons.upload_outlined, size: 14),
-                  label: Text(_uploading ? 'Uploading…' : 'Upload Bill',
+                  label: Text(
+                      _uploading
+                          ? c('supplier_orders.uploading')
+                          : c('supplier_orders.upload_bill'),
                       style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
                   style: OutlinedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 6),
@@ -600,7 +626,7 @@ class _OrderCardState extends State<_OrderCard> {
                       children: [
                         Flexible(
                           child: Text(
-                            'View Payment',
+                            c('supplier_orders.view_payment'),
                             style: TextStyle(
                               fontSize: 12, fontWeight: FontWeight.w600,
                               color: _payOpen ? const Color(0xFF1E40AF) : const Color(0xFF374151),
@@ -690,7 +716,7 @@ class _OrderCardState extends State<_OrderCard> {
                           const SizedBox(width: 6),
                           Flexible(
                             child: Text(
-                              'View Bill',
+                              c('supplier_orders.view_bill'),
                               style: TextStyle(
                                 fontSize: 12, fontWeight: FontWeight.w600,
                                 color: _billViewOpen ? const Color(0xFF1E40AF) : const Color(0xFF374151),
@@ -719,8 +745,8 @@ class _OrderCardState extends State<_OrderCard> {
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     decoration: BoxDecoration(
                         color: const Color(0xFFD1FAE5), borderRadius: BorderRadius.circular(20)),
-                    child: const Text('Imported',
-                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF065F46))),
+                    child: Text(c('supplier_orders.imported'),
+                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF065F46))),
                   ),
                 ],
               ]),
@@ -736,8 +762,8 @@ class _OrderCardState extends State<_OrderCard> {
             Padding(
               padding: const EdgeInsets.all(12),
               child: items.isEmpty
-                  ? const Text('No items.',
-                      style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)))
+                  ? Text(c('supplier_orders.no_items'),
+                      style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280)))
                   : Builder(builder: (_) {
                       RenderLog.write('c189_supplier_tab_shared_card', 'true');
                       return Column(
@@ -762,8 +788,8 @@ class _OrderCardState extends State<_OrderCard> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(children: [
-              const Text('Payment Summary',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+              Text(c('supplier_orders.payment_summary'),
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
               const Spacer(),
               GestureDetector(
                 onTap: () => _loadPanel(refresh: true),
@@ -781,10 +807,10 @@ class _OrderCardState extends State<_OrderCard> {
             else if (_panelError != null)
               _PanelError(onRetry: () => _loadPanel(refresh: true))
             else if (_panelData == null || _panelData!['found'] != true)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 12),
-                child: Text('Payment details unavailable.',
-                    style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Text(c('supplier_orders.payment_unavailable'),
+                    style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
               )
             else
               SupPayPanel(
@@ -806,7 +832,7 @@ class _OrderCardState extends State<_OrderCard> {
     final info = _billInfo ?? const <String, dynamic>{};
     final bucket = info['bucket']?.toString() ?? 'supplier-bills';
     final path = info['path']?.toString() ?? '';
-    final name = info['name']?.toString() ?? 'Bill';
+    final name = info['name']?.toString() ?? c('supplier_orders.bill_default_name');
     final canDelete = info['can_delete'] == true;
     if (path.isNotEmpty) RenderLog.write('c479_bill_bucket_resolved', bucket);
 
@@ -820,9 +846,10 @@ class _OrderCardState extends State<_OrderCard> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             if (path.isEmpty)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 12),
-                child: Text('Bill unavailable.', style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Text(c('supplier_orders.bill_unavailable'),
+                    style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
               )
             else ...[
               BillFilePreview(key: ValueKey('$bucket/$path'), bucket: bucket, path: path, name: name),
@@ -831,7 +858,9 @@ class _OrderCardState extends State<_OrderCard> {
                 Expanded(
                   child: BillActionButton(
                     icon: Icons.download_outlined,
-                    label: _downloadingBill ? 'Downloading…' : 'Download',
+                    label: _downloadingBill
+                        ? c('supplier_orders.downloading')
+                        : c('supplier_orders.download'),
                     enabled: !_downloadingBill,
                     loading: _downloadingBill,
                     onTap: () => _downloadBill(bucket, path, name),
@@ -841,7 +870,9 @@ class _OrderCardState extends State<_OrderCard> {
                 Expanded(
                   child: BillActionButton(
                     icon: Icons.share_outlined,
-                    label: _sharingBill ? 'Sharing…' : 'Share',
+                    label: _sharingBill
+                        ? c('supplier_orders.sharing')
+                        : c('supplier_orders.share'),
                     enabled: !_sharingBill,
                     loading: _sharingBill,
                     onTap: () => _shareBill(bucket, path, name),
@@ -860,7 +891,9 @@ class _OrderCardState extends State<_OrderCard> {
                     else
                       const Icon(Icons.delete_outline, size: 15, color: Color(0xFF991B1B)),
                     const SizedBox(width: 6),
-                    Text(_deletingBill ? 'Deleting…' : 'Delete Bill',
+                    Text(_deletingBill
+                            ? c('supplier_orders.deleting')
+                            : c('supplier_orders.delete_bill'),
                         style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFF991B1B))),
                   ]),
                 ),
@@ -890,11 +923,13 @@ class _PanelError extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Row(children: [
-        const Text('Failed to load.', style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+        Text(c('supplier_orders.panel_failed'),
+            style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
         const SizedBox(width: 8),
         GestureDetector(
           onTap: onRetry,
-          child: const Text('Retry', style: TextStyle(fontSize: 13, color: Color(0xFF1B7A43), fontWeight: FontWeight.w600)),
+          child: Text(c('supplier_orders.retry'),
+              style: const TextStyle(fontSize: 13, color: Color(0xFF1B7A43), fontWeight: FontWeight.w600)),
         ),
       ]),
     );

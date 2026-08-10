@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
+import '../../../services/ui_copy.dart';
 import '../data/wa_repository.dart';
 import '../models/wa_conversation.dart';
 import 'wa_conversation_tile.dart';
@@ -14,7 +15,11 @@ class WaHomeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // CHANGE #297: bumped to 3 tabs (Customers / Suppliers / Others)
-    const tabLabels = ['Customers', 'Suppliers', 'Others'];
+    final tabLabels = [
+      c('wa_home.tab_customers'),
+      c('wa_home.tab_suppliers'),
+      c('wa_home.tab_others'),
+    ];
     try {
       RenderLog.write('c297_wa_tabs',
           '[${tabLabels.map((t) => '"$t"').join(',')}]');
@@ -33,22 +38,22 @@ class WaHomeScreen extends StatelessWidget {
                 size: 20, color: Color(0xFF1B7A43)),
             onPressed: () => Navigator.of(context).pop(),
           ),
-          title: const Text(
-            'WhatsApp',
-            style: TextStyle(
+          title: Text(
+            c('wa_home.title'),
+            style: const TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.w800,
                 color: Color(0xFF111827)),
           ),
-          bottom: const TabBar(
-            labelColor: Color(0xFF1B7A43),
-            unselectedLabelColor: Color(0xFF6B7280),
-            indicatorColor: Color(0xFF1B7A43),
+          bottom: TabBar(
+            labelColor: const Color(0xFF1B7A43),
+            unselectedLabelColor: const Color(0xFF6B7280),
+            indicatorColor: const Color(0xFF1B7A43),
             indicatorWeight: 2,
             tabs: [
-              Tab(text: 'Customers'),
-              Tab(text: 'Suppliers'),
-              Tab(text: 'Others'),  // CHANGE #297
+              Tab(text: c('wa_home.tab_customers')),
+              Tab(text: c('wa_home.tab_suppliers')),
+              Tab(text: c('wa_home.tab_others')),  // CHANGE #297
             ],
           ),
         ),
@@ -276,7 +281,7 @@ class _ConversationListViewState extends State<_ConversationListView>
             const Icon(Icons.error_outline, size: 40, color: Color(0xFF6B7280)),
             const SizedBox(height: 12),
             Text(
-              'Could not load ${widget.type} conversations.',
+              cf('wa_home.load_error', {'type': widget.type}),
               style: const TextStyle(fontSize: 14, color: Color(0xFF6B7280)),
               textAlign: TextAlign.center,
             ),
@@ -292,7 +297,7 @@ class _ConversationListViewState extends State<_ConversationListView>
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(8)),
               ),
-              child: const Text('Retry'),
+              child: Text(c('wa_home.retry')),
             ),
           ],
         ),
@@ -303,8 +308,8 @@ class _ConversationListViewState extends State<_ConversationListView>
       return Center(
         child: Text(
           widget.type == 'other'
-              ? 'No conversations yet.'
-              : 'No ${widget.type} conversations yet.',
+              ? c('wa_home.empty_other')
+              : cf('wa_home.empty_typed', {'type': widget.type}),
           style: const TextStyle(fontSize: 15, color: Color(0xFF6B7280)),
           textAlign: TextAlign.center,
         ),

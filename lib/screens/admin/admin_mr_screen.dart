@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../services/ui_copy.dart';
 import '../../user_state.dart';
 
 class AdminMrScreen extends StatefulWidget {
@@ -75,7 +76,7 @@ class _AdminMrScreenState extends State<AdminMrScreen> with SingleTickerProvider
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,
-        title: const Text('MR Registrations', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
+        title: Text(c('admin_mr.title'), style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: Color(0xFF111827))),
         bottom: TabBar(
           controller: _tab,
           labelStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
@@ -84,13 +85,13 @@ class _AdminMrScreenState extends State<AdminMrScreen> with SingleTickerProvider
           labelColor: const Color(0xFF1B5E20),
           unselectedLabelColor: const Color(0xFF6B7280),
           tabs: [
-            Tab(text: 'Pending (${_pending.length})'),
-            Tab(text: 'Approved (${_approved.length})'),
-            Tab(text: 'Rejected (${_rejected.length})'),
+            Tab(text: cf('admin_mr.tab_pending', {'n': '${_pending.length}'})),
+            Tab(text: cf('admin_mr.tab_approved', {'n': '${_approved.length}'})),
+            Tab(text: cf('admin_mr.tab_rejected', {'n': '${_rejected.length}'})),
           ],
         ),
         actions: [
-          IconButton(icon: const Icon(Icons.refresh, color: Color(0xFF374151)), onPressed: _load, tooltip: 'Refresh'),
+          IconButton(icon: const Icon(Icons.refresh, color: Color(0xFF374151)), onPressed: _load, tooltip: c('admin_mr.tooltip_refresh')),
         ],
       ),
       body: _loading
@@ -108,7 +109,7 @@ class _AdminMrScreenState extends State<AdminMrScreen> with SingleTickerProvider
       return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
         const Icon(Icons.badge_outlined, size: 48, color: Color(0xFFD1D5DB)),
         const SizedBox(height: 12),
-        Text(showActions ? 'No pending MR registrations' : 'No records here', style: const TextStyle(fontSize: 15, color: Color(0xFF6B7280))),
+        Text(showActions ? c('admin_mr.empty_pending') : c('admin_mr.empty_other'), style: const TextStyle(fontSize: 15, color: Color(0xFF6B7280))),
       ]));
     }
     return ListView.separated(
@@ -135,8 +136,8 @@ class _AdminMrScreenState extends State<AdminMrScreen> with SingleTickerProvider
           _InfoRow(icon: Icons.location_city_outlined, text: '${r['city'] ?? '—'}, ${r['state'] ?? '—'}'),
           _InfoRow(icon: Icons.phone_outlined, text: r['phone'] ?? '—'),
           if ((r['email'] ?? '').isNotEmpty) _InfoRow(icon: Icons.email_outlined, text: r['email']),
-          if ((r['id_proof_type'] ?? '').isNotEmpty) _InfoRow(icon: Icons.badge_outlined, text: 'ID: ${r['id_proof_type']}'),
-          if ((r['reviewed_by'] ?? '').isNotEmpty) _InfoRow(icon: Icons.admin_panel_settings_outlined, text: 'Reviewed by: ${r['reviewed_by']}', subtle: true),
+          if ((r['id_proof_type'] ?? '').isNotEmpty) _InfoRow(icon: Icons.badge_outlined, text: cf('admin_mr.id_prefix', {'v': '${r['id_proof_type']}'})),
+          if ((r['reviewed_by'] ?? '').isNotEmpty) _InfoRow(icon: Icons.admin_panel_settings_outlined, text: cf('admin_mr.reviewed_by', {'v': '${r['reviewed_by']}'}), subtle: true),
           if (showActions) ...[
             const SizedBox(height: 14),
             const Divider(height: 1, color: Color(0xFFE5E7EB)),
@@ -145,14 +146,14 @@ class _AdminMrScreenState extends State<AdminMrScreen> with SingleTickerProvider
               Expanded(child: OutlinedButton.icon(
                 onPressed: () => _review(r, 'rejected'),
                 icon: const Icon(Icons.close, size: 16),
-                label: const Text('Reject'),
+                label: Text(c('admin_mr.btn_reject')),
                 style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFF991B1B), side: const BorderSide(color: Color(0xFF991B1B)), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
               )),
               const SizedBox(width: 12),
               Expanded(child: FilledButton.icon(
                 onPressed: () => _review(r, 'approved'),
                 icon: const Icon(Icons.check, size: 16),
-                label: const Text('Approve'),
+                label: Text(c('admin_mr.btn_approve')),
                 style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B5E20), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
               )),
             ]),

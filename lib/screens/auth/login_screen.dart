@@ -16,6 +16,7 @@ import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../app_state.dart';
+import '../../services/ui_copy.dart';
 import '../../models/cart_model.dart';
 import '../../services/gis_auth.dart';
 import 'google_flow.dart';
@@ -426,7 +427,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 onPressed: () {
                   if (Navigator.canPop(context)) Navigator.pop(context);
                 },
-                tooltip: 'Back',
+                tooltip: c('login.tooltip_back'),
               ),
             ),
           ],

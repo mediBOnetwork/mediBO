@@ -4,6 +4,7 @@
 
 import 'package:flutter/material.dart';
 import '../screens/admin/dispute/dispute_models.dart';
+import '../services/ui_copy.dart';
 import '../utils/render_log.dart';
 import 'fulfill_item_sheet.dart' show ProofThumbnail;
 
@@ -101,7 +102,7 @@ class DisputeCard extends StatelessWidget {
                     if ((item.wrongProductName ?? '').isNotEmpty) ...[
                       const SizedBox(height: 3),
                       Text(
-                        'They say we sent: ${item.wrongProductName}',
+                        cf('dispute_card.they_say_we_sent', {'a': '${item.wrongProductName}'}),
                         style: const TextStyle(fontSize: 12, color: _kRed),
                         maxLines: 2, overflow: TextOverflow.ellipsis,
                       ),
@@ -175,7 +176,7 @@ class DisputeCard extends StatelessWidget {
         if ((agg?.disputedQty ?? item.disputeQty ?? 0) > 0) ...[
           const SizedBox(height: 6),
           Text(
-            'In dispute: ${(agg?.disputedQty ?? item.disputeQty ?? 0).toInt()} units',
+            cf('dispute_card.in_dispute_units', {'a': '${(agg?.disputedQty ?? item.disputeQty ?? 0).toInt()}'}),
             style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kAmberText),
           ),
         ],
@@ -184,8 +185,8 @@ class DisputeCard extends StatelessWidget {
         if ((item.proofUrl ?? '').isNotEmpty) ...[
           const SizedBox(height: 10),
           Row(children: [
-            const Text('Proof:',
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kSub)),
+            Text(c('dispute_card.proof'),
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kSub)),
             const SizedBox(width: 8),
             ProofThumbnail(proofUrl: item.proofUrl!, size: 68),
           ]),

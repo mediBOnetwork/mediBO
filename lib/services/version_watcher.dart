@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
 import 'page_reload.dart';
+import 'ui_copy.dart';
 import '../utils/render_log.dart';
 
 /// Polls /version.json every 45 s and, when a newer build is detected,
@@ -203,13 +204,13 @@ class VersionWatcher {
           fontSize: 14,
           fontWeight: FontWeight.w500,
         ),
-        content: const Text('New version available — updating in 6 seconds…'),
+        content: Text(c('version_watcher.new_version_banner')),
         actions: [
           TextButton(
             onPressed: _reload,
-            child: const Text(
-              'Update now',
-              style: TextStyle(
+            child: Text(
+              c('version_watcher.update_now'),
+              style: const TextStyle(
                 color: Color(0xFF1B7A43),
                 fontWeight: FontWeight.w700,
               ),

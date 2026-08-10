@@ -3,6 +3,7 @@
 
 import 'package:flutter/material.dart';
 import '../screens/admin/dispute/dispute_models.dart';
+import '../services/ui_copy.dart';
 import '../utils/render_log.dart';
 import '../utils/toast.dart';
 import '../widgets/dispute_card.dart';
@@ -81,7 +82,7 @@ class _SupplierDisputesPageState extends State<SupplierDisputesPage> {
     if (ids.isEmpty || ids.any((id) => _responding[id] == true)) return;
     setState(() { for (final id in ids) { _responding[id] = true; } });
     try {
-      String msg = 'Recorded';
+      String msg = c('supplier_disputes_page.recorded');
       for (final id in ids) {
         final res = await supplierRespondDisputeRpc(
           disputeId: id,
@@ -121,7 +122,9 @@ class _SupplierDisputesPageState extends State<SupplierDisputesPage> {
             Icon(noSup ? Icons.store_outlined : Icons.wifi_off_rounded, size: 48, color: _kSub),
             const SizedBox(height: 12),
             Text(
-              noSup ? 'No supplier account found.' : 'Unable to load disputes.',
+              noSup
+                  ? c('supplier_disputes_page.no_supplier')
+                  : c('supplier_disputes_page.load_failed'),
               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _kSub),
             ),
             if (!noSup) ...[
@@ -136,7 +139,7 @@ class _SupplierDisputesPageState extends State<SupplierDisputesPage> {
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                 ),
                 icon: const Icon(Icons.refresh_rounded, size: 16),
-                label: const Text('Retry'),
+                label: Text(c('supplier_disputes_page.retry')),
               ),
             ],
           ]),
@@ -148,13 +151,13 @@ class _SupplierDisputesPageState extends State<SupplierDisputesPage> {
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           const Icon(Icons.check_circle_outline_rounded, size: 48, color: _kGreen),
           const SizedBox(height: 12),
-          const Text('No disputes 🎉',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _kSub)),
+          Text(c('supplier_disputes_page.empty'),
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _kSub)),
           const SizedBox(height: 16),
           TextButton.icon(
             onPressed: _load,
             icon: const Icon(Icons.refresh_rounded, size: 16),
-            label: const Text('Refresh'),
+            label: Text(c('supplier_disputes_page.refresh')),
           ),
         ]),
       );
@@ -193,7 +196,7 @@ class _SupplierDisputesPageState extends State<SupplierDisputesPage> {
                         size: 16, color: Color(0xFF92400E)),
                     const SizedBox(width: 8),
                     Expanded(
-                      child: Text('Viewing as $_supplierName (admin)',
+                      child: Text(cf('supplier_disputes_page.viewing_as_admin', {'a': _supplierName}),
                           style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
                               color: Color(0xFF92400E))),
                     ),

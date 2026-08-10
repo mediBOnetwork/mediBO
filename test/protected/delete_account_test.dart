@@ -8,6 +8,8 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:pharma_b2b/widgets/delete_account_section.dart';
 
+import 'ui_copy_fixture.dart';
+
 Future<void> _pump(
     WidgetTester tester, DeletionRequestRpc rpc) async {
   await tester.pumpWidget(MaterialApp(
@@ -17,6 +19,8 @@ Future<void> _pump(
 }
 
 void main() {
+  setUp(seedUiCopy);
+
   testWidgets('Delete my account → confirm → request_account_deletion("account")',
       (tester) async {
     String? seenScope;

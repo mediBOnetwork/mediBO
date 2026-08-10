@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../services/ui_copy.dart';
 import '../utils/render_log.dart';
 
 // CHANGE #307: shared code-field widget used by both customer and supplier forms.
@@ -139,9 +140,11 @@ class _CodeFieldState extends State<CodeField> {
           ),
           validator: widget.requiredField
               ? (v) {
-                  if (v == null || v.trim().isEmpty) return 'Required';
+                  if (v == null || v.trim().isEmpty) {
+                    return c('code_field.validator_required');
+                  }
                   if (!_kFmt.hasMatch(v.trim().toUpperCase())) {
-                    return '3 letters + 3 digits (e.g. ABC123)';
+                    return c('code_field.validator_format');
                   }
                   return null;
                 }
@@ -158,26 +161,26 @@ class _CodeFieldState extends State<CodeField> {
         return const SizedBox.shrink();
       case CodeStatus.invalid:
         return _row(Icons.error_outline, const Color(0xFFDC2626),
-            '3 letters + 3 digits, e.g. ABC123');
+            c('code_field.status_invalid'));
       case CodeStatus.checking:
-        return const Padding(
-          padding: EdgeInsets.only(top: 6),
+        return Padding(
+          padding: const EdgeInsets.only(top: 6),
           child: Row(children: [
-            SizedBox(
+            const SizedBox(
                 width: 14,
                 height: 14,
                 child: CircularProgressIndicator(strokeWidth: 2)),
-            SizedBox(width: 6),
-            Text('Checking…',
-                style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+            const SizedBox(width: 6),
+            Text(c('code_field.status_checking'),
+                style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
           ]),
         );
       case CodeStatus.available:
-        return _row(
-            Icons.check_circle_outline, const Color(0xFF16A34A), 'Available ✓');
+        return _row(Icons.check_circle_outline, const Color(0xFF16A34A),
+            c('code_field.status_available'));
       case CodeStatus.taken:
         return _row(Icons.cancel_outlined, const Color(0xFFDC2626),
-            'Already in use — choose another');
+            c('code_field.status_taken'));
     }
   }
 

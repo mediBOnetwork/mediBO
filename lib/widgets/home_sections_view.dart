@@ -97,16 +97,18 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
   @override
   void initState() {
     super.initState();
+    // Instant paint from the memo, then ALWAYS refetch in the background so a
+    // backend change (counts, delivery time, section order) shows on the next
+    // open rather than being pinned to a stale cache. Scroll offset survives
+    // the rebuild via the PageStorageKey. Rule 8: cache renders, never decides.
     final memo = HomeSectionsView._memo;
     if (memo != null) {
       _data = memo;
     }
-    // The strip is per-viewer and clears once seen, so it is always fetched
-    // fresh — it is never served from the sections memo.
-    _load(sectionsFromMemo: memo != null);
+    _load();
   }
 
-  Future<void> _load({bool sectionsFromMemo = false}) async {
+  Future<void> _load() async {
     final loadSections =
         widget.loader ?? () => MedicineRepository().fetchHomeSections();
     final loadNotifs =
@@ -122,18 +124,13 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
     HomeSections sections;
     BackInStock strip;
     try {
-      final results = await Future.wait([
-        sectionsFromMemo
-            ? Future.value(HomeSectionsView._memo!)
-            : loadSections(),
-        loadNotifs(),
-      ]);
+      final results = await Future.wait([loadSections(), loadNotifs()]);
       sections = results[0] as HomeSections;
       strip = results[1] as BackInStock;
     } catch (_) {
-      sections = sectionsFromMemo
-          ? HomeSectionsView._memo!
-          : HomeSections.failed;
+      // Offline / failure — keep whatever is already painted (the memo) rather
+      // than wiping the feed; only show the failed state on a truly cold start.
+      sections = HomeSectionsView._memo ?? HomeSections.failed;
       strip = BackInStock.empty;
     }
 

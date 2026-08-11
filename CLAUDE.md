@@ -240,3 +240,91 @@ extract its decisions into a pure class and test that.
 (Set `RenderLog.flushEnabled = false` in setUpAll for any test that renders a
 widget calling RenderLog.write — its 800 ms debounce is a real Timer and would
 otherwise outlive the test and try to reach Supabase.)
+
+---
+
+# ═══════════════════════════════════════════════
+# DEV QUEUE RUNNER — PERMANENT RULES (NON-NEGOTIABLE)
+# Claude: these rules override everything except safety.
+# Re-read this block before EVERY command you claim.
+# ═══════════════════════════════════════════════
+
+## PRIME DIRECTIVE
+You are an autonomous runner. Your job: claim → build → deploy → verify → record → next.
+You NEVER stop, NEVER wait for a human, NEVER leave a row half-updated.
+
+## 1. NEVER ASK QUESTIONS
+- If a choice arises: pick the recommended/safest option, KEEP BUILDING.
+- Log every choice via the decisions helper: {question, options, picked, reason}.
+- ONLY exception — truly destructive/irreversible actions:
+  dropping tables/columns with data, deleting user data, auth/RLS weakening,
+  payment config changes. For these: call dev_cmd_ask(id, question),
+  then IMMEDIATELY claim the next command. Never idle.
+
+## 2. STATUS DISCIPLINE (every row, every time)
+- Claim ONLY via dev_cmd_claim (SKIP LOCKED). Never SELECT+UPDATE manually.
+- Heartbeat via dev_cmd_heartbeat every 60s with log tail + tokens. A silent
+  runner is treated as crashed at 15 min — do not go silent.
+- Finish EVERY command with exactly one of: dev_cmd_complete / dev_cmd_fail /
+  dev_cmd_ask. A row left in 'building' is a bug you caused.
+
+## 3. DEPLOY LANE — EXACT SEQUENCE, NO SHORTCUTS
+deploy_lock_try → if busy wait 60s retry (NEVER merge to main while another
+agent holds the lock) → git fetch + rebase onto origin/main → flutter test
+test/protected/ (MUST pass) → build → deploy_claim_number → stamp version.json
+with THAT number (never reuse, never go backwards) → deploy → verify live
+(site 200 + version.json shows new number + one smoke RPC) → rg_check() MUST
+be green → deploy_lock_release. Skipping ANY step = failed command.
+
+## 4. BUILD RULES
+- Max-backend: logic, strings, labels, formatting live in Supabase.
+  Flutter renders payloads verbatim. If you write a display string in Dart,
+  you are wrong — move it to the backend.
+- Backend AND frontend both belong to you. Never output "paste this SQL" —
+  run it. Never output "add this to Flutter" — write it.
+- All money in INR. All timestamps IST for display.
+- Never touch test/protected/ tests to make them pass. Fix the code.
+- Never edit another agent's in-flight branch. Your branch, your command only.
+
+## 5. RECORDING (the registry is the memory)
+- result_summary: what built, files touched, migrations run, decisions count.
+- Capture 2–3 screenshots of changed screens → dev-cmd-proofs bucket.
+- Before building: read the spec fully + check dev_commands for related
+  completed rows so you never undo a previous command's work.
+
+## 6. FAILURE RULES
+- Any error: attempt reasonable fix ONCE within the command. If still broken:
+  dev_cmd_fail with the full error. Auto-retry is handled by the system —
+  do not loop yourself.
+- NEVER mark complete with red tests, failed rg_check, or unverified deploy.
+- NEVER fabricate results, deploy numbers, or screenshots.
+
+## 7. FORBIDDEN — INSTANT VIOLATIONS
+✗ Asking the human anything except via dev_cmd_ask
+✗ Idling/waiting when pending commands exist
+✗ Merging to main while deploy lock is held by another agent
+✗ Reusing or guessing a change number
+✗ Hardcoding display strings in Flutter
+✗ Leaving a row in 'building' at exit
+✗ Skipping heartbeat, tests, rg_check, or live verification
+
+## 8. SOLVE, DON'T FLAG
+- You NEVER report a problem and stop. Finding an issue = you fix it
+  in the same command, then record what you fixed in result_summary.
+- "Flagged for review", "needs manual attention", "please check",
+  "recommend Om looks at" — these phrases are FORBIDDEN outputs.
+- Blockers you hit (missing column, broken RPC, failing build, stale
+  data, config gap) are part of the job: repair them, log the repair,
+  continue. The human gives zero manual input.
+- The ONLY thing you may hand back is a dev_cmd_ask for the destructive
+  list in Rule 1. Everything else you solve yourself.
+
+## 9. KNOW THE BUSINESS BEFORE YOU BUILD
+- Before starting EVERY command: read the business context doc —
+  legal_get_page('about') — plus the spec, fully.
+- mediBO decisions must match its real business model as written there
+  (who it serves, how pricing/billing actually works, roles, flows).
+  If your general assumption conflicts with the context doc, the
+  context doc WINS. Wrong-model builds are failed commands.
+- If the context doc is missing or thin, improve it from the codebase
+  truth as part of your command — do not build on guesses.

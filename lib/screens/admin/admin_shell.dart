@@ -18,6 +18,7 @@ import 'admin_supplier_screen.dart';
 import 'admin_dashboard_screen.dart';
 import 'admin_manage_admins_screen.dart';
 import 'admin_upi_screen.dart';
+import 'dev_queue/dev_queue_screen.dart';
 
 // ── View state ────────────────────────────────────────────────────────────────
 
@@ -204,6 +205,16 @@ class _AdminShellState extends State<AdminShell> with WidgetsBindingObserver {
           MaterialPageRoute(builder: (_) => const AdminUpiScreen()),
         );
         return;
+      // Dev Queue — the development registry + runner control (super-admin).
+      case 'dev_queue':
+        if (!isSuperAdmin) {
+          showToast(ctx, c('admin_shell.toast_super_admin_only_upi'), isError: true);
+          return;
+        }
+        Navigator.of(ctx).push(
+          MaterialPageRoute(builder: (_) => const DevQueueScreen()),
+        );
+        return;
       case 'add_supplier':
         Navigator.of(ctx).push(MaterialPageRoute(
           builder: (_) => _QuickLinkPlaceholder(
@@ -346,6 +357,15 @@ class _AdminShellState extends State<AdminShell> with WidgetsBindingObserver {
                   child: _PopupRow(
                     icon: Icons.qr_code_outlined,
                     label: c('admin_shell.menu_payment_upi'),
+                    color: const Color(0xFF1B7A43),
+                  ),
+                ),
+              if (isSuperAdmin)
+                PopupMenuItem(
+                  value: 'dev_queue',
+                  child: _PopupRow(
+                    icon: Icons.terminal,
+                    label: c('dev_queue.nav_label'),
                     color: const Color(0xFF1B7A43),
                   ),
                 ),
@@ -501,6 +521,8 @@ class _AdminNewDesktopHeader extends StatelessWidget {
           if (isSuperAdmin) ...[
             const SizedBox(width: 2),
             _DesktopNavLink(label: c('admin_shell.menu_payment_upi'), icon: Icons.qr_code_outlined, selected: false, onTap: () => onNav('payment_upi')),
+            const SizedBox(width: 2),
+            _DesktopNavLink(label: c('dev_queue.nav_label'), icon: Icons.terminal, selected: false, onTap: () => onNav('dev_queue')),
           ],
           const SizedBox(width: 8),
           _AdminProfileChip(),

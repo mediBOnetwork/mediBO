@@ -1,0 +1,85 @@
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+/// Thin RPC layer for the Dev Queue tab.
+///
+/// THE APP RENDERS. IT NEVER DECIDES. — every method here does exactly one
+/// thing: call one backend RPC and hand back the payload it returned. No
+/// merging, no client-side sorting, no invented fields. The screens render
+/// what these return, verbatim.
+class DevQueueService {
+  DevQueueService({SupabaseClient? client})
+      : _c = client ?? Supabase.instance.client;
+
+  final SupabaseClient _c;
+
+  Map<String, dynamic> _asMap(dynamic raw) {
+    final v = raw is List ? (raw.isEmpty ? null : raw.first) : raw;
+    return v is Map ? Map<String, dynamic>.from(v) : <String, dynamic>{};
+  }
+
+  // ── Reads ──────────────────────────────────────────────────────────────
+  Future<Map<String, dynamic>> list({
+    String? status,
+    String? search,
+    String? batch,
+    int? limit,
+  }) async {
+    final raw = await _c.rpc('dev_cmd_list', params: {
+      'p_status': status,
+      'p_search': (search != null && search.isEmpty) ? null : search,
+      'p_batch': batch,
+      'p_limit': limit,
+    });
+    return _asMap(raw);
+  }
+
+  Future<Map<String, dynamic>> spec(int id) async =>
+      _asMap(await _c.rpc('dev_cmd_spec', params: {'p_id': id}));
+
+  Future<List<Map<String, dynamic>>> templates() async {
+    final raw = await _c.rpc('dev_cmd_template_list');
+    final list = raw is List ? raw : (raw is Map ? (raw['rows'] ?? []) : []);
+    return (list as List)
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+  }
+
+  // ── Writes ─────────────────────────────────────────────────────────────
+  Future<Map<String, dynamic>> bulkAdd(List<Map<String, dynamic>> items,
+          {bool force = false}) async =>
+      _asMap(await _c
+          .rpc('dev_cmd_bulk_add', params: {'p_items': items, 'p_force': force}));
+
+  Future<void> reorder(List<int> ids) async =>
+      _c.rpc('dev_cmd_reorder', params: {'p_ids': ids});
+
+  Future<void> update(int id, Map<String, dynamic> patch) async =>
+      _c.rpc('dev_cmd_update', params: {'p_id': id, 'p_patch': patch});
+
+  Future<void> pause(int id) async =>
+      _c.rpc('dev_cmd_pause', params: {'p_id': id});
+  Future<void> resume(int id) async =>
+      _c.rpc('dev_cmd_resume', params: {'p_id': id});
+  Future<void> cancel(int id) async =>
+      _c.rpc('dev_cmd_cancel', params: {'p_id': id});
+  Future<void> approve(int id) async =>
+      _c.rpc('dev_cmd_approve', params: {'p_id': id});
+  Future<void> reject(int id, String reason) async =>
+      _c.rpc('dev_cmd_reject', params: {'p_id': id, 'p_reason': reason});
+  Future<void> requestAndroid(int id) async =>
+      _c.rpc('dev_cmd_request_android', params: {'p_id': id});
+  Future<void> reply(int id, String body) async =>
+      _c.rpc('dev_cmd_reply', params: {'p_command_id': id, 'p_body': body});
+
+  Future<Map<String, dynamic>> rollback(int id) async =>
+      _asMap(await _c.rpc('dev_cmd_rollback', params: {'p_id': id}));
+
+  Future<void> templateSave(String name, String spec) async =>
+      _c.rpc('dev_cmd_template_save', params: {'p_name': name, 'p_spec': spec});
+
+  /// Signed URL for a screenshot stored in the dev-cmd-proofs bucket.
+  Future<String> proofUrl(String path) => _c.storage
+      .from('dev-cmd-proofs')
+      .createSignedUrl(path, 3600);
+}

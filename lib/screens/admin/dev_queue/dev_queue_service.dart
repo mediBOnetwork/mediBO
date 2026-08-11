@@ -82,4 +82,22 @@ class DevQueueService {
   Future<String> proofUrl(String path) => _c.storage
       .from('dev-cmd-proofs')
       .createSignedUrl(path, 3600);
+
+  // ── Runner control plane ────────────────────────────────────────────────
+  Future<Map<String, dynamic>> ctlGet() async =>
+      _asMap(await _c.rpc('dev_ctl_get'));
+
+  /// Flip one toggle (vm|claude|workflow → on|off). Returns the backend verdict
+  /// (for 'vm' it carries call_edge:true + action so the caller invokes the fn).
+  Future<Map<String, dynamic>> ctlSet(String key, String value) async =>
+      _asMap(await _c.rpc('dev_ctl_set', params: {'p_key': key, 'p_value': value}));
+
+  /// Start/stop/status the GCP VM via the vm-control edge function (carries the
+  /// user's JWT; the function re-checks super_admin and uses GCP_SA_KEY).
+  Future<Map<String, dynamic>> vmControl(String action) async {
+    final res = await _c.functions
+        .invoke('vm-control', body: {'action': action});
+    final d = res.data;
+    return d is Map ? Map<String, dynamic>.from(d) : <String, dynamic>{};
+  }
 }

@@ -6,6 +6,7 @@ import 'dev_queue_common.dart';
 import 'dev_queue_service.dart';
 import 'dev_queue_bulk_add.dart';
 import 'dev_queue_detail.dart';
+import 'dev_queue_control.dart';
 
 /// The Dev Queue registry — the permanent development record, rendered from
 /// `dev_cmd_list` verbatim. Om pastes specs here; the VM runner claims and
@@ -138,6 +139,7 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
       ),
       body: SafeArea(
         child: Column(children: [
+          DevQueueControl(service: _svc),
           _header(),
           _filters(),
           Expanded(

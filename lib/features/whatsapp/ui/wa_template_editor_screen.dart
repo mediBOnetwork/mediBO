@@ -2278,7 +2278,10 @@ Future<String?> _resolveSampleUrl(Map<String, dynamic> header) async {
   final bucket = (header['storage_bucket'] ?? '').toString();
   final path = (header['storage_path'] ?? '').toString();
   if (bucket.isNotEmpty && path.isNotEmpty) {
-    return WaTemplateApi.signedUrl(bucket, path);
+    // Resized render — the sample is a full-res phone photo; the original fails
+    // to decode on mobile. 1280 is sharp enough for both the inline preview and
+    // the tap-to-enlarge viewer on a phone.
+    return WaTemplateApi.signedUrl(bucket, path, renderWidth: 1280);
   }
   return null;
 }

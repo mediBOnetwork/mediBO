@@ -2504,6 +2504,8 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
                         onAddToCart: _addMatchedToCart,
                         onHideToggle: _onRowHideToggle,
                         uploadedImageSize: _uploadedImageSize,
+                        uploadedImageBytes: _uploadedImageBytes,
+                        uploadedMimeType: _uploadedMimeType,
                         onRetry: _retryMatch,
                         isRetrying: _isRetrying,
                         retryProgress: _retryProgress,
@@ -2573,6 +2575,8 @@ class _MainLayout extends StatelessWidget {
   final Future<void> Function() onAddToCart;
   final void Function(int rowIndex) onHideToggle;
   final Size? uploadedImageSize;
+  final Uint8List? uploadedImageBytes;
+  final String? uploadedMimeType;
   final VoidCallback onRetry;
   final bool isRetrying;
   final double retryProgress;
@@ -2592,6 +2596,8 @@ class _MainLayout extends StatelessWidget {
     required this.onAddToCart,
     required this.onHideToggle,
     this.uploadedImageSize,
+    this.uploadedImageBytes,
+    this.uploadedMimeType,
     required this.onRetry,
     required this.isRetrying,
     required this.retryProgress,
@@ -2638,6 +2644,8 @@ class _MainLayout extends StatelessWidget {
               onAddToCart: onAddToCart,
               onHideToggle: onHideToggle,
               uploadedImageSize: uploadedImageSize,
+              uploadedImageBytes: uploadedImageBytes,
+              uploadedMimeType: uploadedMimeType,
               onRetry: onRetry,
               isRetrying: isRetrying,
               retryProgress: retryProgress,
@@ -2667,6 +2675,8 @@ class _MainLayout extends StatelessWidget {
             onAddToCart: onAddToCart,
             onHideToggle: onHideToggle,
             uploadedImageSize: uploadedImageSize,
+            uploadedImageBytes: uploadedImageBytes,
+            uploadedMimeType: uploadedMimeType,
             onRetry: onRetry,
             isRetrying: isRetrying,
             retryProgress: retryProgress,
@@ -2965,36 +2975,18 @@ class _UploadCard extends StatelessWidget {
                       textColor: const Color(0xFF374151),
                     ),
                     const SizedBox(height: 48),
-                    // CHANGE #312: split into Camera | Upload File buttons.
-                    if (fileName != null && !isLoading)
-                      SizedBox(
-                        height: 52,
-                        child: OutlinedButton.icon(
-                          onPressed: onPickFile,
-                          icon: const Icon(Icons.check_circle_outline,
-                              size: 18, color: Color(0xFF16A34A)),
-                          label: Text(
-                            fileName!.length > 22
-                                ? '${fileName!.substring(0, 19)}...'
-                                : fileName!,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w700,
-                              fontSize: 13,
-                              color: Color(0xFF16A34A),
-                            ),
-                          ),
-                          style: OutlinedButton.styleFrom(
-                            side: const BorderSide(color: Color(0xFF16A34A)),
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(10)),
-                          ),
-                        ),
-                      )
-                    else if (isLoading)
+                    // Camera + File whenever idle — BEFORE and AFTER a file is
+                    // processed, so the camera button is never hidden. While
+                    // working, a single DISABLED Processing button. The old
+                    // post-upload state collapsed both buttons into one filename
+                    // button wired to the file picker (which hid the camera and
+                    // reopened the picker on tap); the processed file now
+                    // previews in the Smart-match card instead.
+                    if (isLoading)
                       SizedBox(
                         height: 52,
                         child: FilledButton.icon(
-                          onPressed: onPickFile,
+                          onPressed: null,
                           icon: const SizedBox(
                             width: 16,
                             height: 16,
@@ -3005,6 +2997,10 @@ class _UploadCard extends StatelessWidget {
                           style: FilledButton.styleFrom(
                             backgroundColor: const Color(0xFF1e2a3a),
                             foregroundColor: Colors.white,
+                            // Disabled (onPressed: null) but keep the dark look so
+                            // the white spinner/label stay legible.
+                            disabledBackgroundColor: const Color(0xFF1e2a3a),
+                            disabledForegroundColor: Colors.white,
                             shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(10)),
                             elevation: 0,
@@ -3501,6 +3497,8 @@ class _SmartMatchSection extends StatefulWidget {
   final Future<void> Function() onAddToCart;
   final void Function(int rowIndex) onHideToggle;
   final Size? uploadedImageSize;
+  final Uint8List? uploadedImageBytes;
+  final String? uploadedMimeType;
   final VoidCallback onRetry;
   final bool isRetrying;
   final double retryProgress;
@@ -3518,6 +3516,8 @@ class _SmartMatchSection extends StatefulWidget {
     required this.onAddToCart,
     required this.onHideToggle,
     this.uploadedImageSize,
+    this.uploadedImageBytes,
+    this.uploadedMimeType,
     required this.onRetry,
     required this.isRetrying,
     required this.retryProgress,
@@ -3548,6 +3548,83 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
     }
     setState(() {});
     widget.onHideToggle(index);
+  }
+
+  // The processed file, shown once matching is done: "file name • preview".
+  // Image uploads get a thumbnail; other files (PDF/Excel) get a doc glyph.
+  Widget _processedFilePreview() {
+    if (!widget.isFromFile || widget.isLoading) return const SizedBox.shrink();
+    final name = widget.fileName;
+    if (name == null || name.isEmpty) return const SizedBox.shrink();
+    final bytes = widget.uploadedImageBytes;
+    final mime = widget.uploadedMimeType ?? '';
+    final isImage = bytes != null &&
+        bytes.isNotEmpty &&
+        (mime.startsWith('image/') || _looksLikeImage(name));
+    final Widget thumb = isImage
+        ? ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: Image.memory(bytes,
+                width: 40,
+                height: 40,
+                fit: BoxFit.cover,
+                gaplessPlayback: true,
+                errorBuilder: (_, _, _) => _fileGlyph()),
+          )
+        : _fileGlyph();
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF9FAFB),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF111827)),
+            ),
+          ),
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 8),
+            child: Text('•',
+                style: TextStyle(
+                    color: Color(0xFF9CA3AF), fontWeight: FontWeight.w700)),
+          ),
+          thumb,
+        ],
+      ),
+    );
+  }
+
+  Widget _fileGlyph() => Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: const Color(0xFFEFF6FF),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: const Icon(Icons.description_outlined,
+            size: 22, color: Color(0xFF1E40AF)),
+      );
+
+  bool _looksLikeImage(String n) {
+    final l = n.toLowerCase();
+    return l.endsWith('.jpg') ||
+        l.endsWith('.jpeg') ||
+        l.endsWith('.png') ||
+        l.endsWith('.webp') ||
+        l.endsWith('.heic') ||
+        l.endsWith('.heif') ||
+        l.endsWith('.gif');
   }
 
   @override
@@ -3636,6 +3713,7 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                   );
                 }),
                 const SizedBox(height: 10),
+                _processedFilePreview(),
               ],
             ),
           ),
@@ -3839,6 +3917,10 @@ class _SmartMatchSectionState extends State<_SmartMatchSection> {
                 );
               },
             ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
+            child: _processedFilePreview(),
           ),
           const SizedBox(height: 16),
           if (widget.isLoading)

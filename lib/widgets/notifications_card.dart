@@ -1089,7 +1089,9 @@ class _BubbleMediaState extends State<_BubbleMedia> {
     final bucket = (h['storage_bucket'] ?? '').toString();
     final path = (h['storage_path'] ?? '').toString();
     if (bucket.isNotEmpty && path.isNotEmpty) {
-      return WaTemplateApi.signedUrl(bucket, path);
+      // Resized render — signing the full-res original fails to decode on mobile
+      // (renders fine on web). The bubble media box is small; 1080 is ample.
+      return WaTemplateApi.signedUrl(bucket, path, renderWidth: 1080);
     }
     return null;
   }

@@ -237,13 +237,31 @@ class WaTemplateApi {
     String bucket,
     String path, {
     int expiresIn = 3600,
+    // When set, storage resizes the render SERVER-SIDE so a multi-MB phone photo
+    // is never decoded at full resolution. Signing the original makes the image
+    // load on an admin desktop / web (CanvasKit) but FAIL on mobile — a size
+    // problem that looks exactly like a permissions problem (see #469/#644).
+    // `resize: contain` is mandatory: width-only leaves the other dimension at
+    // full size, yielding an aspect-broken sliver that renders effectively blank.
+    int? renderWidth,
+    int renderQuality = 78,
   }) async {
     final t = signerTransport;
     if (t != null) return t(bucket, path, expiresIn);
     try {
-      return await Supabase.instance.client.storage
-          .from(bucket)
-          .createSignedUrl(path, expiresIn);
+      final storage = Supabase.instance.client.storage.from(bucket);
+      if (renderWidth == null) {
+        return await storage.createSignedUrl(path, expiresIn);
+      }
+      return await storage.createSignedUrl(
+        path,
+        expiresIn,
+        transform: TransformOptions(
+          width: renderWidth,
+          quality: renderQuality,
+          resize: ResizeMode.contain,
+        ),
+      );
     } catch (_) {
       return null;
     }

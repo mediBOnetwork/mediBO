@@ -5,9 +5,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 /// versionCode of THIS build. MUST stay in lockstep with
-/// android/app/build.gradle.kts (`versionCode = 15`). The backend compares its
+/// android/app/build.gradle.kts (`versionCode = 16`). The backend compares its
 /// latest published version_code against this to decide if an update exists.
-const int kAndroidVersionCode = 15;
+const int kAndroidVersionCode = 16;
 
 /// Injectable seams for the widget test (no network, no home_shell import).
 typedef UpdateRpc = Future<Map<String, dynamic>?> Function();

@@ -318,6 +318,10 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
         add('dev_queue.btn_cancel', () => _cancel(),
             color: const Color(0xFF991B1B));
         break;
+      case 'cancelled':
+        add('dev_queue.btn_delete', () => _delete(),
+            color: const Color(0xFF991B1B), icon: Icons.delete_outline);
+        break;
     }
     if (btns.isEmpty) return const SizedBox.shrink();
     return Wrap(spacing: 8, runSpacing: 8, children: btns);
@@ -326,6 +330,20 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
   Future<void> _cancel() async {
     if (await _confirm('dev_queue.confirm_cancel')) {
       _run(() => _svc.cancel(widget.id));
+    }
+  }
+
+  Future<void> _delete() async {
+    if (!await _confirm('dev_queue.confirm_delete')) return;
+    setState(() => _busy = true);
+    try {
+      await _svc.delete(widget.id);
+      if (mounted) Navigator.pop(context, true); // row is gone; refresh list
+    } catch (e) {
+      if (mounted) {
+        setState(() => _busy = false);
+        showToast(context, e.toString(), isError: true);
+      }
     }
   }
 

@@ -525,7 +525,7 @@ class _AdminNewDesktopHeader extends StatelessWidget {
             _DesktopNavLink(label: c('dev_queue.nav_label'), icon: Icons.terminal, selected: false, onTap: () => onNav('dev_queue')),
           ],
           const SizedBox(width: 8),
-          _AdminProfileChip(),
+          _AdminProfileChip(onNav: onNav, isSuperAdmin: isSuperAdmin),
           const SizedBox(width: 24),
         ],
       ),
@@ -847,7 +847,9 @@ class _BillsNavLink extends StatelessWidget {
 }
 
 class _AdminProfileChip extends StatelessWidget {
-  const _AdminProfileChip();
+  final ValueChanged<String> onNav;
+  final bool isSuperAdmin;
+  const _AdminProfileChip({required this.onNav, required this.isSuperAdmin});
 
   @override
   Widget build(BuildContext context) {
@@ -856,38 +858,58 @@ class _AdminProfileChip extends StatelessWidget {
     // fallback ('My Account'), so no Dart string is invented here.
     final displayName = auth.headerTitle;
     final shortName = displayName.length > 16 ? '${displayName.substring(0, 14)}…' : displayName;
-    final initial = shortName[0].toUpperCase();
-    return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 200),
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: GestureDetector(
-          onTap: () => UserState.read(context).signOut(),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: const Color(0xFFECFDF5),
-              borderRadius: BorderRadius.circular(24),
+    final initial = shortName.isEmpty ? '?' : shortName[0].toUpperCase();
+    // The avatar is now a real dropdown: Dev Queue (super-admin) + Sign out,
+    // instead of a bare sign-out tap. The arrow-down already promised a menu.
+    return PopupMenuButton<String>(
+      tooltip: c('admin_shell.quick_links_tooltip'),
+      offset: const Offset(0, 48),
+      onSelected: onNav,
+      itemBuilder: (_) => [
+        if (isSuperAdmin)
+          PopupMenuItem(
+            value: 'dev_queue',
+            child: _PopupRow(
+              icon: Icons.terminal,
+              label: c('dev_queue.nav_label'),
+              color: const Color(0xFF1B7A43),
             ),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              CircleAvatar(
-                radius: 14,
-                backgroundColor: const Color(0xFF1B7A43),
-                child: Text(initial, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700)),
-              ),
-              const SizedBox(width: 8),
-              Flexible(
-                child: Text(
-                  cf('admin_shell.profile_greeting', {'name': shortName}),
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF111827)),
-                  overflow: TextOverflow.ellipsis,
-                  maxLines: 1,
-                ),
-              ),
-              const SizedBox(width: 4),
-              const Icon(Icons.keyboard_arrow_down, size: 16, color: Color(0xFF6B7280)),
-            ]),
           ),
+        PopupMenuItem(
+          value: 'logout',
+          child: _PopupRow(
+            icon: Icons.logout,
+            label: c('admin_shell.menu_logout'),
+            color: const Color(0xFFDC2626),
+          ),
+        ),
+      ],
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 200),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: const Color(0xFFECFDF5),
+            borderRadius: BorderRadius.circular(24),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            CircleAvatar(
+              radius: 14,
+              backgroundColor: const Color(0xFF1B7A43),
+              child: Text(initial, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700)),
+            ),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                cf('admin_shell.profile_greeting', {'name': shortName}),
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF111827)),
+                overflow: TextOverflow.ellipsis,
+                maxLines: 1,
+              ),
+            ),
+            const SizedBox(width: 4),
+            const Icon(Icons.keyboard_arrow_down, size: 16, color: Color(0xFF6B7280)),
+          ]),
         ),
       ),
     );

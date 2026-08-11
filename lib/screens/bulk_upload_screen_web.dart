@@ -14,6 +14,8 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:xml/xml.dart' as xmlp;
 
 import '../utils/file_pick_io.dart';
+import '../utils/doc_scan.dart';
+import '../utils/doc_capture.dart';
 import '../utils/web_image_io.dart' as imgio;
 import '../utils/download_bytes.dart' as dl;
 
@@ -743,13 +745,21 @@ class _BulkUploadScreenState extends State<BulkUploadScreen> {
 
   // ── File picking & orchestration ───────────────────────────────────────────
 
-  // CHANGE #312: camera button — web capture input / native camera plugin.
+  // CHANGE #312: camera button — now the ML Kit Document Scanner on Android
+  // (auto edge-detect/deskew/crop/cleanup, multi-page order lists). On web or
+  // any device without the Play Services scanner module it falls back to the
+  // original capture (pickCameraPhoto) unchanged. Every page feeds the SAME
+  // ingest → OCR pipeline as before, one job per page.
   Future<void> _onCameraTap() async {
     try { RenderLog.write('c312_camera_tap', '1'); } catch (_) {}
-    final picked = await pickCameraPhoto();
-    if (picked == null) return;
-    try { RenderLog.write('c312_camera_got', '1'); } catch (_) {}
-    await _processPickedFile(picked.name, picked.bytes);
+    await captureDocument(
+      scan: () => scanDocuments(pageLimit: 10), // order lists span pages
+      cameraFallback: pickCameraPhoto,
+      handlePage: (page) async {
+        try { RenderLog.write('c312_camera_got', '1'); } catch (_) {}
+        await _processPickedFile(page.name, page.bytes);
+      },
+    );
   }
 
   // CHANGE #312: upload button — keeps existing accept list.

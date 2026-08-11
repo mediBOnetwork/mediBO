@@ -34,6 +34,8 @@ import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../fulfill/fulfill_lookups.dart';
+import '../../utils/doc_scan.dart';
+import '../../utils/doc_capture.dart';
 import '../../utils/render_log.dart';
 
 Color get _kGreen => FulfillLookups.instance.color('c_ff1b7a43', const Color(0xFF1B7A43));
@@ -107,15 +109,25 @@ class _DeliveryIdScanCardState extends State<DeliveryIdScanCard> {
 
   // ── A2: capture ───────────────────────────────────────────────────────────
 
-  /// The camera. On web Chrome this opens the capture intent; when no camera is
-  /// available the picker simply returns null and the form stays typeable.
+  /// The camera. On Android this launches the ML Kit Document Scanner (auto
+  /// edge-detect/deskew/crop/cleanup; front/back + multiple licences in one
+  /// session). On web Chrome, or any device without the Play Services scanner
+  /// module, it falls back to the original capture intent unchanged; when no
+  /// camera is available the picker simply returns null and the form stays
+  /// typeable. Each scanned page runs the SAME _scan() OCR + upload as before.
   Future<void> _fromCamera() async {
     try {
-      final picked = await ImagePicker()
-          .pickImage(source: ImageSource.camera, imageQuality: 85, maxWidth: 1800);
-      if (picked == null) return;
-      await _scan(await picked.readAsBytes(), picked.mimeType ?? 'image/jpeg',
-          picked.name);
+      await captureDocument(
+        scan: () => scanDocuments(pageLimit: 5), // front/back + multiple licences
+        cameraFallback: () async {
+          final picked = await ImagePicker().pickImage(
+              source: ImageSource.camera, imageQuality: 85, maxWidth: 1800);
+          if (picked == null) return null;
+          return (name: picked.name, bytes: await picked.readAsBytes());
+        },
+        handlePage: (page) =>
+            _scan(page.bytes, _mimeFor(page.name), page.name),
+      );
     } catch (e) {
       RenderLog.write('c630_scan_camera_err', e.toString());
     }

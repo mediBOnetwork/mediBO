@@ -47,6 +47,12 @@ dependencies:
   url_launcher: ^6.2.6
   intl: ^0.19.0
   mobile_scanner: ^5.2.3
+  # On-device Google ML Kit Document Scanner (Play Services module — keyless,
+  # offline, Android-only). Used ONLY by the document-camera capture paths via
+  # the `if (dart.library.io)` conditional import in utils/doc_scan.dart; the web
+  # build never compiles it. This is a DIFFERENT ML Kit API from the barcode
+  # scanner (mobile_scanner) — the two do not overlap.
+  google_mlkit_document_scanner: ^0.5.0
   qr_flutter: ^4.1.0
   record: ^5.1.2
   # Realtime Android voice counting: stream raw PCM (record's stream API) to

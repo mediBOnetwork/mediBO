@@ -39,6 +39,7 @@ import '../features/bags/bags_screen.dart';
 import 'admin/admin_supplier_screen.dart';
 import 'admin/admin_fulfillment_screen.dart';
 import 'admin/admin_upi_screen.dart';
+import 'admin/dev_queue/dev_queue_screen.dart';
 import 'auth/login_screen.dart';
 import 'bulk_upload_screen.dart';
 import 'delivery/delivery_home_screen.dart'; // C629: the rider/agency surface
@@ -459,6 +460,13 @@ class _HomeShellState extends State<HomeShell> {
         if (_amISuper) {
           Navigator.push(context,
               MaterialPageRoute(builder: (_) => const AdminUpiScreen()));
+        }
+        break;
+      // Dev Queue — the development registry + runner control (super-admin).
+      case 'dev_queue':
+        if (_amISuper) {
+          Navigator.push(context,
+              MaterialPageRoute(builder: (_) => const DevQueueScreen()));
         }
         break;
       case 'deletion_requests':
@@ -3688,6 +3696,15 @@ class _DesktopProfileButton extends StatelessWidget {
                 Text(c('home_shell.payment_and_partner'), style: const TextStyle(fontSize: 14, color: Color(0xFF1B7A43))),
               ]),
             ),
+          if (isSuperAdmin)
+            PopupMenuItem(
+              value: 'dev_queue',
+              child: Row(children: [
+                const Icon(Icons.terminal, size: 16, color: Color(0xFF1B7A43)),
+                const SizedBox(width: 10),
+                Text(c('dev_queue.nav_label'), style: const TextStyle(fontSize: 14, color: Color(0xFF1B7A43))),
+              ]),
+            ),
           PopupMenuItem(
             value: 'add_supplier',
             child: Row(children: [
@@ -4122,7 +4139,7 @@ class _AdminDesktopHeader extends StatelessWidget {
           ],
           // Overflow rather than two more links: at the 900 px where this shell
           // begins, the row has no room left.
-          AdminMoreNavMenu(onNav: onAdminNav, deletionCount: deletionCount),
+          AdminMoreNavMenu(onNav: onAdminNav, deletionCount: deletionCount, isSuperAdmin: isSuperAdmin),
           const SizedBox(width: 8),
           _DesktopProfileButton(onLogin: () {}, onAdminNav: onAdminNav, isSuperAdmin: isSuperAdmin),
           const SizedBox(width: 24),

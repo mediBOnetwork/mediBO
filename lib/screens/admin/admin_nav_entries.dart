@@ -91,10 +91,16 @@ class AdminMoreNavMenu extends StatelessWidget {
   /// Live count for the Deletion Requests entry (admin_deletion_request_count).
   final int deletionCount;
 
+  /// Dev Queue is the only super-admin-only overflow destination, so it is not
+  /// in [kAdminOverflowNav] (which is shown to every admin) — it is rendered
+  /// here conditionally instead.
+  final bool isSuperAdmin;
+
   const AdminMoreNavMenu({
     super.key,
     required this.onNav,
     this.deletionCount = 0,
+    this.isSuperAdmin = false,
   });
 
   @override
@@ -104,6 +110,19 @@ class AdminMoreNavMenu extends StatelessWidget {
       offset: const Offset(0, 40),
       onSelected: onNav,
       itemBuilder: (_) => [
+        if (isSuperAdmin)
+          PopupMenuItem<String>(
+            value: 'dev_queue',
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              const Icon(Icons.terminal, size: 16, color: Color(0xFF1B7A43)),
+              const SizedBox(width: 10),
+              Flexible(
+                child: Text(c('dev_queue.nav_label'),
+                    style: const TextStyle(
+                        fontSize: 14, color: Color(0xFF1B7A43))),
+              ),
+            ]),
+          ),
         for (final e in kAdminOverflowNav)
           PopupMenuItem<String>(
             value: e.route,
@@ -197,6 +216,13 @@ class AdminProfileMenuTiles extends StatelessWidget {
               onTap: () { Navigator.pop(context); nav('payment_upi'); },
             );
           }),
+        if (isSuperAdmin)
+          AdminSheetTile(
+            icon: Icons.terminal,
+            label: c('dev_queue.nav_label'),
+            color: const Color(0xFF1B7A43),
+            onTap: () { Navigator.pop(context); nav('dev_queue'); },
+          ),
         AdminSheetTile(
           icon: Icons.add_business_outlined,
           label: c('admin_nav.tile_add_supplier'),

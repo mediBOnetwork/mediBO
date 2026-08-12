@@ -28,6 +28,7 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
   late final DevQueueService _svc = widget.service ?? DevQueueService();
   final _reply = TextEditingController();
   List<String> _replyImages = const [];
+  List<Map<String, dynamic>> _replyFiles = const [];
   bool _uploading = false;
   Timer? _poll;
 
@@ -546,13 +547,120 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
     }
   }
 
+  Future<void> _attachReplyFiles() async {
+    if (_uploading) return;
+    setState(() => _uploading = true);
+    try {
+      final files = await pickAndUploadDevFiles(_svc);
+      if (files.isNotEmpty && mounted) {
+        setState(() => _replyFiles = [..._replyFiles, ...files]);
+      }
+    } catch (_) {
+      if (mounted) showToast(context, c('dev_queue.attach_failed'), isError: true);
+    } finally {
+      if (mounted) setState(() => _uploading = false);
+    }
+  }
+
   Future<void> _sendReply() async {
     final b = _reply.text.trim();
     final imgs = _replyImages;
-    if (b.isEmpty && imgs.isEmpty) return;
+    final files = _replyFiles;
+    if (b.isEmpty && imgs.isEmpty && files.isEmpty) return;
     _reply.clear();
-    setState(() => _replyImages = const []);
-    await _run(() => _svc.reply(widget.id, b, images: imgs));
+    setState(() {
+      _replyImages = const [];
+      _replyFiles = const [];
+    });
+    await _run(() => _svc.reply(widget.id, b, images: imgs, attachments: files));
+  }
+
+  IconData _fileIcon(String kind) {
+    switch (kind) {
+      case 'video':
+        return Icons.videocam_outlined;
+      case 'pdf':
+        return Icons.picture_as_pdf_outlined;
+      case 'image':
+        return Icons.image_outlined;
+      default:
+        return Icons.insert_drive_file_outlined;
+    }
+  }
+
+  /// A tappable chip for a non-image attachment (video / pdf / doc) — opens the
+  /// signed URL. `onRemove` shows an x when composing.
+  Widget _fileChip(Map<String, dynamic> a, {VoidCallback? onRemove}) {
+    final kind = (a['kind'] ?? 'file').toString();
+    final name = (a['name'] ?? 'file').toString();
+    return InkWell(
+      onTap: onRemove != null
+          ? null
+          : () async {
+              try {
+                final url = await _svc.attachmentUrl((a['path'] ?? '').toString());
+                await _open(url);
+              } catch (_) {}
+            },
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: kPageBg,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: kBorder),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(_fileIcon(kind), size: 18, color: kBrand),
+          const SizedBox(width: 6),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 160),
+            child: Text(name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 12.5, color: kTextHi)),
+          ),
+          if (onRemove != null) ...[
+            const SizedBox(width: 6),
+            GestureDetector(
+                onTap: onRemove,
+                child: const Icon(Icons.close, size: 16, color: Color(0xFF991B1B))),
+          ],
+        ]),
+      ),
+    );
+  }
+
+  /// Renders both image thumbnails and file chips for a saved message's
+  /// attachments (kind=image → thumbnail; else → chip).
+  Widget _attachmentStrip(dynamic rawImages, dynamic rawAtts) {
+    final imgs = ((rawImages as List?) ?? const [])
+        .map((e) => e.toString())
+        .where((e) => e.isNotEmpty)
+        .toList();
+    final atts = ((rawAtts as List?) ?? const [])
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+    final imgAtts = atts.where((a) => a['kind'] == 'image').toList();
+    final fileAtts = atts.where((a) => a['kind'] != 'image').toList();
+    if (imgs.isEmpty && atts.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Wrap(spacing: 8, runSpacing: 8, children: [
+        for (final p in [...imgs, ...imgAtts.map((a) => a['path'].toString())])
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: SizedBox(
+              width: 120,
+              height: 120,
+              child: PaymentProofImage(
+                  bucket: DevQueueService.uploadsBucket, path: p, fixedHeight: 120),
+            ),
+          ),
+        for (final a in fileAtts) _fileChip(a),
+      ]),
+    );
   }
 
   /// The Remote-Control-style composer: a pending-image strip, then a rounded
@@ -560,10 +668,42 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
   /// arrow. Mirrors the Claude Code Remote Control reply box.
   Widget _composerBar() {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      if (_replyImages.isNotEmpty || _uploading)
+      if (_replyImages.isNotEmpty || _replyFiles.isNotEmpty || _uploading)
         Padding(
           padding: const EdgeInsets.only(bottom: 8),
           child: Wrap(spacing: 8, runSpacing: 8, children: [
+            for (final a in _replyFiles.where((a) => a['kind'] != 'image'))
+              _fileChip(a,
+                  onRemove: () => setState(() =>
+                      _replyFiles = _replyFiles.where((x) => x != a).toList())),
+            for (final a in _replyFiles.where((a) => a['kind'] == 'image'))
+              Stack(clipBehavior: Clip.none, children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: SizedBox(
+                    width: 64,
+                    height: 64,
+                    child: PaymentProofImage(
+                        bucket: DevQueueService.uploadsBucket,
+                        path: a['path'].toString(),
+                        fixedHeight: 64,
+                        tapToEnlarge: false),
+                  ),
+                ),
+                Positioned(
+                  top: -8,
+                  right: -8,
+                  child: GestureDetector(
+                    onTap: () => setState(() =>
+                        _replyFiles = _replyFiles.where((x) => x != a).toList()),
+                    child: const DecoratedBox(
+                      decoration:
+                          BoxDecoration(color: Colors.white, shape: BoxShape.circle),
+                      child: Icon(Icons.cancel, size: 20, color: Color(0xFF991B1B)),
+                    ),
+                  ),
+                ),
+              ]),
             for (final p in _replyImages)
               Stack(clipBehavior: Clip.none, children: [
                 ClipRRect(
@@ -636,6 +776,12 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
           IconButton(
             tooltip: c('dev_queue.btn_attach'),
             onPressed: _uploading ? null : _attachReplyImage,
+            icon: const Icon(Icons.image_outlined, size: 22, color: kTextLo),
+            splashRadius: 20,
+          ),
+          IconButton(
+            tooltip: c('dev_queue.btn_attach_file'),
+            onPressed: _uploading ? null : _attachReplyFiles,
             icon: const Icon(Icons.attach_file, size: 22, color: kTextLo),
             splashRadius: 20,
           ),
@@ -676,39 +822,8 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
           if ((m['body'] ?? '').toString().isNotEmpty)
             Text((m['body'] ?? '').toString(),
                 style: const TextStyle(fontSize: 14, color: kTextHi)),
-          _imageStrip(m['images']),
+          _attachmentStrip(m['images'], m['attachments']),
         ]),
-      ),
-    );
-  }
-
-  /// Renders a horizontal strip of attached images (verbatim paths from the
-  /// backend) through the shared signed-URL image widget.
-  Widget _imageStrip(dynamic raw) {
-    final paths = ((raw as List?) ?? const [])
-        .map((e) => e.toString())
-        .where((e) => e.isNotEmpty)
-        .toList();
-    if (paths.isEmpty) return const SizedBox.shrink();
-    return Padding(
-      padding: const EdgeInsets.only(top: 6),
-      child: Wrap(
-        spacing: 8,
-        runSpacing: 8,
-        children: [
-          for (final p in paths)
-            ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: SizedBox(
-                width: 120,
-                height: 120,
-                child: PaymentProofImage(
-                    bucket: DevQueueService.uploadsBucket,
-                    path: p,
-                    fixedHeight: 120),
-              ),
-            ),
-        ],
       ),
     );
   }
@@ -778,12 +893,13 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
   Widget _attachments() {
     return _sectionRaw(
       c('dev_queue.section_images'),
-      _imageStrip(_spec['images']),
+      _attachmentStrip(_spec['images'], _spec['attachments']),
     );
   }
 
   bool _hasCmdImages() =>
-      ((_spec['images'] as List?) ?? const []).isNotEmpty;
+      ((_spec['images'] as List?) ?? const []).isNotEmpty ||
+      ((_spec['attachments'] as List?) ?? const []).isNotEmpty;
 
   /// A pulsing LIVE chip shown while the runner is actively building, so Om can
   /// see at a glance that the log below is a live tail of the VM session.

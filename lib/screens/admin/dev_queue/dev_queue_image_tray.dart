@@ -1,3 +1,4 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../../services/ui_copy.dart';
@@ -6,6 +7,22 @@ import '../../../widgets/image_pick.dart';
 import '../../../widgets/payment_proof_image.dart';
 import 'dev_queue_common.dart';
 import 'dev_queue_service.dart';
+
+/// Pick one-or-more files of ANY type (photos multi-select, video, pdf, docs)
+/// and upload them, returning a list of {path, kind, name}. Used by the chat
+/// composer and the paste sheet so every input surface accepts every file type.
+Future<List<Map<String, dynamic>>> pickAndUploadDevFiles(
+    DevQueueService service) async {
+  final picked = await FilePicker.pickFiles(allowMultiple: true, withData: true);
+  if (picked == null) return const [];
+  final out = <Map<String, dynamic>>[];
+  for (final f in picked.files) {
+    final bytes = f.bytes;
+    if (bytes == null) continue;
+    out.add(await service.uploadAttachment(bytes, f.name));
+  }
+  return out;
+}
 
 /// Pick one image and upload it to the private dev-cmd-uploads bucket, returning
 /// its stored path (or null if the user cancelled). Shared by the paste-sheet

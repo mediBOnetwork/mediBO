@@ -78,9 +78,43 @@ class DevQueueService {
   Future<void> requestDebug(int id) async =>
       _c.rpc('dev_cmd_request_debug', params: {'p_id': id});
   Future<void> reply(int id, String body,
-          {List<String> images = const []}) async =>
-      _c.rpc('dev_cmd_reply',
-          params: {'p_command_id': id, 'p_body': body, 'p_images': images});
+          {List<String> images = const [],
+          List<Map<String, dynamic>> attachments = const []}) async =>
+      _c.rpc('dev_cmd_reply', params: {
+        'p_command_id': id,
+        'p_body': body,
+        'p_images': images,
+        'p_attachments': attachments,
+      });
+
+  /// Upload any file (image / video / pdf / document) to the private uploads
+  /// bucket and return {path, kind, name} — the backend stores this verbatim and
+  /// the UI renders images inline, everything else as a tappable file chip.
+  Future<Map<String, dynamic>> uploadAttachment(
+      Uint8List bytes, String name) async {
+    final safe = name.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+    final path = '${DateTime.now().microsecondsSinceEpoch}_$safe';
+    final ext = safe.contains('.') ? safe.split('.').last.toLowerCase() : '';
+    String kind = 'file';
+    String mime = 'application/octet-stream';
+    if (['jpg', 'jpeg', 'png', 'webp', 'gif', 'heic'].contains(ext)) {
+      kind = 'image';
+      mime = ext == 'png' ? 'image/png' : (ext == 'webp' ? 'image/webp' : 'image/jpeg');
+    } else if (['mp4', 'mov', 'webm', 'avi', 'mkv', 'm4v'].contains(ext)) {
+      kind = 'video';
+      mime = 'video/mp4';
+    } else if (ext == 'pdf') {
+      kind = 'pdf';
+      mime = 'application/pdf';
+    }
+    await _c.storage.from(uploadsBucket).uploadBinary(path, bytes,
+        fileOptions: FileOptions(contentType: mime, upsert: true));
+    return {'path': path, 'kind': kind, 'name': name};
+  }
+
+  /// A one-year signed URL to open a stored attachment (video / pdf / doc).
+  Future<String> attachmentUrl(String path) =>
+      _c.storage.from(uploadsBucket).createSignedUrl(path, 31536000);
 
   Future<Map<String, dynamic>> rollback(int id) async =>
       _asMap(await _c.rpc('dev_cmd_rollback', params: {'p_id': id}));

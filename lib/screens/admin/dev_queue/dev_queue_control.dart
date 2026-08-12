@@ -132,6 +132,12 @@ class _DevQueueControlState extends State<DevQueueControl> {
         color: Colors.white,
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: kBorder),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.05),
+              blurRadius: 8,
+              offset: const Offset(0, 2)),
+        ],
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [

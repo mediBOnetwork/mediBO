@@ -849,14 +849,23 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
           color: tone?.bg ?? Colors.white,
           borderRadius: BorderRadius.circular(14),
           border: Border.all(color: kBorder),
+          boxShadow: tone == null
+              ? [
+                  BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.05),
+                      blurRadius: 8,
+                      offset: const Offset(0, 2)),
+                ]
+              : null,
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(title,
+          Text(title.toUpperCase(),
               style: TextStyle(
-                  fontSize: 12,
+                  fontSize: 11,
                   fontWeight: FontWeight.w700,
+                  letterSpacing: 0.4,
                   color: tone?.fg ?? kTextLo)),
-          const SizedBox(height: 8),
+          const SizedBox(height: 10),
           child,
         ]),
       );

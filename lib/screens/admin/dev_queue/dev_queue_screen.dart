@@ -368,14 +368,49 @@ class _Row extends StatelessWidget {
     final deploy = row['web_deploy_no'];
     final android = (row['android_status'] ?? 'not_requested').toString();
     final msgs = asInt(row['msg_count']);
+    final age = (row['age_display'] ?? '').toString();
+    final tone = statusTone(status);
+
+    final footer = <Widget>[
+      if (urgent)
+        ToneChip(
+            label: c('dev_queue.flag_urgent'),
+            tone: statusTone('failed'),
+            icon: Icons.priority_high),
+      if (rolledBack)
+        ToneChip(
+            label: c('dev_queue.flag_rolled_back'),
+            tone: statusTone('paused'),
+            icon: Icons.undo),
+      if (batch.isNotEmpty)
+        ToneChip(label: batch, tone: statusTone('paused'), icon: Icons.label_outline),
+      if (android != 'not_requested')
+        ToneChip(
+            label: androidLabel(android),
+            tone: androidTone(android),
+            icon: Icons.android,
+            spinning: android == 'building'),
+      if (row['has_tokens'] == true)
+        ToneChip(
+            label: '${row['tokens_display'] ?? ''} · ${row['cost_display'] ?? ''}',
+            tone: statusTone('paused'),
+            icon: Icons.data_usage),
+      if (msgs > 0)
+        ToneChip(
+            label: '$msgs',
+            tone: statusTone('awaiting_approval'),
+            icon: Icons.chat_bubble_outline),
+    ];
 
     return DqCard(
       onTap: onTap,
+      accent: tone.fg,
+      padding: const EdgeInsets.fromLTRB(14, 14, 12, 14),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           ToneChip(
             label: statusLabel(status),
-            tone: statusTone(status),
+            tone: tone,
             spinning: status == 'building',
           ),
           const SizedBox(width: 8),
@@ -403,6 +438,9 @@ class _Row extends StatelessWidget {
             ),
           ],
           const Spacer(),
+          if (age.isNotEmpty && !draggable && onDelete == null)
+            Text(age,
+                style: const TextStyle(fontSize: 11.5, color: kTextLo)),
           if (draggable)
             const Icon(Icons.drag_handle, size: 18, color: kTextLo),
           if (onDelete != null)
@@ -416,41 +454,23 @@ class _Row extends StatelessWidget {
               ),
             ),
         ]),
-        const SizedBox(height: 8),
+        const SizedBox(height: 10),
         Text((row['title'] ?? '').toString(),
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(
-                fontSize: 15, fontWeight: FontWeight.w600, color: kTextHi)),
-        const SizedBox(height: 10),
-        Wrap(spacing: 8, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
-          if (urgent)
-            ToneChip(
-                label: c('dev_queue.flag_urgent'),
-                tone: statusTone('failed'),
-                icon: Icons.priority_high),
-          if (rolledBack)
-            ToneChip(
-                label: c('dev_queue.flag_rolled_back'),
-                tone: statusTone('paused'),
-                icon: Icons.undo),
-          if (batch.isNotEmpty)
-            ToneChip(label: batch, tone: statusTone('paused'), icon: Icons.label_outline),
-          if (android != 'not_requested')
-            ToneChip(
-                label: androidLabel(android),
-                tone: androidTone(android),
-                icon: Icons.android,
-                spinning: android == 'building'),
-          if (row['has_tokens'] == true)
-            ToneChip(
-                label: '${row['tokens_display'] ?? ''} · ${row['cost_display'] ?? ''}',
-                tone: statusTone('paused'),
-                icon: Icons.data_usage),
-          if (msgs > 0)
-            ToneChip(
-                label: '$msgs', tone: statusTone('awaiting_approval'), icon: Icons.chat_bubble_outline),
-        ]),
+                fontSize: 15.5,
+                fontWeight: FontWeight.w700,
+                height: 1.3,
+                color: kTextHi)),
+        if (footer.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: footer),
+        ],
       ]),
     );
   }

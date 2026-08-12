@@ -123,32 +123,48 @@ class ToneChip extends StatelessWidget {
   }
 }
 
-/// White card wrapper matching the design system.
+/// White card wrapper matching the design system — soft shadow, hairline
+/// border, and an optional coloured status accent bar down the left edge that
+/// makes each card scannable at a glance.
 class DqCard extends StatelessWidget {
   final Widget child;
   final EdgeInsets padding;
   final VoidCallback? onTap;
+  final Color? accent;
   const DqCard(
       {super.key,
       required this.child,
       this.padding = const EdgeInsets.all(16),
-      this.onTap});
+      this.onTap,
+      this.accent});
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(14),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(14),
-        child: Container(
-          padding: padding,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: kBorder),
+    final radius = BorderRadius.circular(14);
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: radius,
+        border: Border.all(color: kBorder),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.05),
+              blurRadius: 8,
+              offset: const Offset(0, 2)),
+        ],
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          child: IntrinsicHeight(
+            child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              if (accent != null)
+                Container(width: 4, color: accent),
+              Expanded(child: Padding(padding: padding, child: child)),
+            ]),
           ),
-          child: child,
         ),
       ),
     );

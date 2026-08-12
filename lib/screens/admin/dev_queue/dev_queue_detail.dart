@@ -337,6 +337,21 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
         Text(
             '↓ ${_spec['tokens_in_display'] ?? '0'}   ↑ ${_spec['tokens_out_display'] ?? '0'}',
             style: const TextStyle(fontSize: 12, color: kTextLo)),
+        if (costNote(_spec).isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Text(costNote(_spec),
+              style: const TextStyle(fontSize: 11, color: kTextLo)),
+        ],
+        if (priceModelChip(_spec).isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: ToneChip(
+                label: priceModelChip(_spec),
+                tone: statusTone('building'),
+                icon: Icons.memory),
+          ),
+        ],
       ]),
     );
   }

@@ -396,7 +396,97 @@ class _DevQueueControlState extends State<DevQueueControl> {
           style: const TextStyle(fontSize: 11, color: kTextLo)),
       Text('${_usage['today_display'] ?? ''}',
           style: const TextStyle(fontSize: 11, color: kTextLo)),
+      const SizedBox(height: 6),
+      Row(children: [
+        Expanded(
+          child: Text(c('dev_queue.plan_note'),
+              style: const TextStyle(
+                  fontSize: 11, fontWeight: FontWeight.w600, color: kBrand)),
+        ),
+        InkWell(
+          onTap: _openRates,
+          borderRadius: BorderRadius.circular(20),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+                color: const Color(0xFFEFF6FF),
+                borderRadius: BorderRadius.circular(20)),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              const Icon(Icons.info_outline, size: 12, color: Color(0xFF1E40AF)),
+              const SizedBox(width: 4),
+              Text(c('dev_queue.rates_open'),
+                  style: const TextStyle(
+                      fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFF1E40AF))),
+            ]),
+          ),
+        ),
+      ]),
     ]);
+  }
+
+  /// Read-only "API-equivalent rates" sheet — the official per-model ₹/Mtok
+  /// table, fed entirely by dev_rates_get(). ₹ = USD × usd_inr, exactly as the
+  /// RPC's own note prescribes; no price is written in Dart.
+  Future<void> _openRates() async {
+    Map<String, dynamic> rates = const {};
+    try {
+      rates = await widget.service.ratesGet();
+    } catch (_) {/* sheet shows empty then */}
+    if (!mounted) return;
+    final models = (rates['models'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final usdInr = rates['usd_inr'];
+    final note = (rates['note'] ?? '').toString();
+    num inr(dynamic usd) =>
+        (usd is num && usdInr is num) ? (usd * usdInr).round() : 0;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (_) => DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.6,
+        maxChildSize: 0.9,
+        builder: (_, ctl) => ListView(
+          controller: ctl,
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
+          children: [
+            Text(c('dev_queue.rates_title'),
+                style: const TextStyle(
+                    fontSize: 16, fontWeight: FontWeight.w700, color: kTextHi)),
+            const SizedBox(height: 4),
+            if (usdInr != null)
+              Text(cf('dev_queue.rates_usd_inr', {'rate': '$usdInr'}),
+                  style: const TextStyle(fontSize: 12, color: kTextLo)),
+            const SizedBox(height: 12),
+            for (final e in models.entries)
+              _rateRow(e.key, (e.value as Map?)?.cast<String, dynamic>() ?? const {}, inr),
+            if (note.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Text(note, style: const TextStyle(fontSize: 11, color: kTextLo)),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _rateRow(String model, Map<String, dynamic> r, num Function(dynamic) inr) {
+    final hasFast = r['fast_in'] != null || r['fast_out'] != null;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(model.replaceFirst('claude-', ''),
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: kTextHi)),
+        const SizedBox(height: 2),
+        Text('${c('dev_queue.rates_in')}: ₹${inr(r['in'])}   ${c('dev_queue.rates_out')}: ₹${inr(r['out'])}',
+            style: const TextStyle(fontSize: 12, color: kTextLo)),
+        if (hasFast)
+          Text('${c('dev_queue.rates_fast_in')}: ₹${inr(r['fast_in'])}   ${c('dev_queue.rates_fast_out')}: ₹${inr(r['fast_out'])}',
+              style: const TextStyle(fontSize: 12, color: Color(0xFF92400E))),
+      ]),
+    );
   }
 
   /// Freshness indicator for the usage block. The string AND the tone come from

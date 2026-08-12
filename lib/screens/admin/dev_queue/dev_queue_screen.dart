@@ -477,6 +477,11 @@ class _Row extends StatelessWidget {
             label: '${row['tokens_display'] ?? ''} · ${row['cost_display'] ?? ''}',
             tone: statusTone('paused'),
             icon: Icons.data_usage),
+      if (row['has_tokens'] == true && priceModelChip(row).isNotEmpty)
+        ToneChip(
+            label: priceModelChip(row),
+            tone: statusTone('building'),
+            icon: Icons.memory),
       if (msgs > 0)
         ToneChip(
             label: '$msgs',

@@ -84,6 +84,17 @@ String rupee(num? v) => '₹${(v ?? 0).toStringAsFixed(2)}';
 
 int asInt(dynamic v) => (v as num?)?.toInt() ?? 0;
 
+/// The backend's render-ready "model · effort · mode" chip (e.g.
+/// "opus-4-8 · high · standard"), or its "opus-4-8 (assumed)" label for a
+/// historical row with no model. Composed in SQL (_dev_model_chip) and rendered
+/// here verbatim — no model id or separator is assembled in Dart.
+String priceModelChip(Map row) => (row['model_chip'] ?? '').toString();
+
+/// The backend's render-ready cost caption, verbatim — e.g.
+/// "₹93 — API-equivalent (included in your Max plan · ₹0 extra)". Empty when the
+/// row has no usage yet. No price is computed or worded in Dart.
+String costNote(Map row) => (row['cost_note'] ?? '').toString();
+
 /// A small pill used for status / android / flags.
 class ToneChip extends StatelessWidget {
   final String label;

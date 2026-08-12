@@ -178,6 +178,12 @@ class DevQueueService {
     return d is Map ? Map<String, dynamic>.from(d) : <String, dynamic>{};
   }
 
+  /// Official per-model API list rates (USD/Mtok in+out, fast variants where
+  /// present) plus usd_inr and the source note — rendered read-only in the
+  /// Rates sheet. Prices come from here, never from Dart literals.
+  Future<Map<String, dynamic>> ratesGet() async =>
+      _asMap(await _c.rpc('dev_rates_get'));
+
   // ── GCP Control plane (all render-ready from the live backend) ────────────
   Future<Map<String, dynamic>> gcpGet() async =>
       _asMap(await _c.rpc('dev_gcp_get'));

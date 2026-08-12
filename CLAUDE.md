@@ -287,7 +287,18 @@ be green → deploy_lock_release. Skipping ANY step = failed command.
 - Never edit another agent's in-flight branch. Your branch, your command only.
 
 ## 5. RECORDING (the registry is the memory)
-- result_summary: what built, files touched, migrations run, decisions count.
+- result_summary FORMAT — Om's rule, mandatory every time:
+  - Bullet points only. Each bullet = **Title** — short description.
+  - Title and description clearly separate.
+  - MAX 10 lines. Each line MAX 5 words. Whole result MAX 50 words.
+  - No paragraphs, no walls of text. Keep the deploy #, tests pass/fail,
+    and decisions count as their own short bullets.
+  - Example:
+    • Change no — CHANGE #707 live.
+    • Built — result banner + pill.
+    • Backend — title auto-derived server-side.
+    • Tests — protected 283 green.
+    • Decisions — 2 logged.
 - Capture 2–3 screenshots of changed screens → dev-cmd-proofs bucket.
 - Before building: read the spec fully + check dev_commands for related
   completed rows so you never undo a previous command's work.

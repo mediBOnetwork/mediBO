@@ -203,6 +203,7 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
           child: CustomScrollView(
             physics: const AlwaysScrollableScrollPhysics(),
             slivers: [
+              SliverToBoxAdapter(child: _gcpEntry()),
               SliverToBoxAdapter(child: DevQueueControl(service: _svc)),
               SliverToBoxAdapter(child: _header()),
               SliverToBoxAdapter(child: _filters()),
@@ -258,6 +259,40 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
       ),
     );
   }
+
+  /// Prominent, unmissable entry to the GCP Control cockpit — a full-width green
+  /// card at the very top of the Dev Queue (in addition to the AppBar icon).
+  Widget _gcpEntry() => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+        child: Material(
+          color: kBrand,
+          borderRadius: BorderRadius.circular(14),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => GcpControlScreen(service: _svc))),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              child: Row(children: [
+                const Icon(Icons.cloud_outlined, color: Colors.white, size: 22),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(c('dev_queue.gcp_open'),
+                        style: const TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.w800, color: Colors.white)),
+                    const SizedBox(height: 2),
+                    Text(c('dev_queue.gcp_entry_sub'),
+                        style: const TextStyle(
+                            fontSize: 12.5, color: Color(0xFFD1FAE5))),
+                  ]),
+                ),
+                const Icon(Icons.chevron_right, color: Colors.white),
+              ]),
+            ),
+          ),
+        ),
+      );
 
   Widget _header() => Padding(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),

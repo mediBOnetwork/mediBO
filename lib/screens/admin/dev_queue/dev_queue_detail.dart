@@ -145,15 +145,9 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
                 const SizedBox(height: 12),
                 _actions(),
                 const SizedBox(height: 12),
-                _section(c('dev_queue.section_spec'), _mono(_spec['spec'])),
-                if (_hasCmdImages()) _attachments(),
                 _chat(),
                 if ((_row['decisions'] as List?)?.isNotEmpty ?? false)
                   _decisions(),
-                if ((_row['result_summary'] ?? '').toString().isNotEmpty)
-                  _section(c('dev_queue.section_result'),
-                      Text(_row['result_summary'].toString(),
-                          style: const TextStyle(fontSize: 14, color: kTextHi))),
                 if ((_row['screenshots'] as List?)?.isNotEmpty ?? false)
                   _screenshots(),
                 if ((_row['error_log'] ?? '').toString().isNotEmpty)
@@ -516,16 +510,33 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
     }
   }
 
-  // ── Chat thread ────────────────────────────────────────────────────────────
+  // ── Conversation thread (WhatsApp-style) ───────────────────────────────────
+  // One chronological thread: the command (spec) is the first message, then
+  // every reply, then each result as it lands — all as chat bubbles, with the
+  // composer pinned at the bottom. The old separate Spec / Result cards are
+  // folded into this so it reads as one conversation.
   Widget _chat() {
-    final msgs = ((_spec['messages'] as List?) ?? const [])
+    final thread = <Map<String, dynamic>>[];
+    // 1. the original command, from Om, carrying its attachments.
+    thread.add({
+      'sender': 'om',
+      'body': (_spec['spec'] ?? _row['title'] ?? '').toString(),
+      'images': _spec['images'] ?? const [],
+      'attachments': _spec['attachments'] ?? const [],
+    });
+    // 2. every chat message in order.
+    thread.addAll(((_spec['messages'] as List?) ?? const [])
         .whereType<Map>()
-        .map((e) => Map<String, dynamic>.from(e))
-        .toList();
+        .map((e) => Map<String, dynamic>.from(e)));
+    // 3. the latest result as an agent bubble.
+    final result = (_row['result_summary'] ?? '').toString();
+    if (result.isNotEmpty) {
+      thread.add({'sender': 'agent', 'body': result, 'is_result': true});
+    }
     return _sectionRaw(
       c('dev_queue.section_chat'),
       Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        for (final m in msgs) _bubble(m),
+        for (final m in thread) _bubble(m),
         const SizedBox(height: 8),
         _composerBar(),
       ]),
@@ -889,17 +900,6 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
       ),
     );
   }
-
-  Widget _attachments() {
-    return _sectionRaw(
-      c('dev_queue.section_images'),
-      _attachmentStrip(_spec['images'], _spec['attachments']),
-    );
-  }
-
-  bool _hasCmdImages() =>
-      ((_spec['images'] as List?) ?? const []).isNotEmpty ||
-      ((_spec['attachments'] as List?) ?? const []).isNotEmpty;
 
   /// A pulsing LIVE chip shown while the runner is actively building, so Om can
   /// see at a glance that the log below is a live tail of the VM session.

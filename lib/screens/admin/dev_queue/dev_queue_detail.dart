@@ -28,6 +28,7 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
   late final DevQueueService _svc = widget.service ?? DevQueueService();
   final _reply = TextEditingController();
   List<String> _replyImages = const [];
+  bool _uploading = false;
   Timer? _poll;
 
   Map<String, dynamic> _row = const {};
@@ -459,48 +460,132 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
       Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         for (final m in msgs) _bubble(m),
         const SizedBox(height: 8),
-        DevQueueImageTray(
-          service: _svc,
-          paths: _replyImages,
-          onChanged: (v) => setState(() => _replyImages = v),
+        _composerBar(),
+      ]),
+    );
+  }
+
+  Future<void> _attachReplyImage() async {
+    if (_uploading) return;
+    setState(() => _uploading = true);
+    try {
+      final path = await pickAndUploadDevImage(_svc);
+      if (path != null && mounted) {
+        setState(() => _replyImages = [..._replyImages, path]);
+      }
+    } catch (_) {
+      if (mounted) showToast(context, c('dev_queue.attach_failed'), isError: true);
+    } finally {
+      if (mounted) setState(() => _uploading = false);
+    }
+  }
+
+  Future<void> _sendReply() async {
+    final b = _reply.text.trim();
+    final imgs = _replyImages;
+    if (b.isEmpty && imgs.isEmpty) return;
+    _reply.clear();
+    setState(() => _replyImages = const []);
+    await _run(() => _svc.reply(widget.id, b, images: imgs));
+  }
+
+  /// The Remote-Control-style composer: a pending-image strip, then a rounded
+  /// bar carrying the text field, a paperclip attach, and a circular send
+  /// arrow. Mirrors the Claude Code Remote Control reply box.
+  Widget _composerBar() {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      if (_replyImages.isNotEmpty || _uploading)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Wrap(spacing: 8, runSpacing: 8, children: [
+            for (final p in _replyImages)
+              Stack(clipBehavior: Clip.none, children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: SizedBox(
+                    width: 64,
+                    height: 64,
+                    child: PaymentProofImage(
+                        bucket: DevQueueService.uploadsBucket,
+                        path: p,
+                        fixedHeight: 64,
+                        tapToEnlarge: false),
+                  ),
+                ),
+                Positioned(
+                  top: -8,
+                  right: -8,
+                  child: GestureDetector(
+                    onTap: () => setState(() => _replyImages =
+                        _replyImages.where((x) => x != p).toList()),
+                    child: Container(
+                      decoration: const BoxDecoration(
+                          color: Colors.white, shape: BoxShape.circle),
+                      child: const Icon(Icons.cancel,
+                          size: 20, color: Color(0xFF991B1B)),
+                    ),
+                  ),
+                ),
+              ]),
+            if (_uploading)
+              Container(
+                width: 64,
+                height: 64,
+                decoration: BoxDecoration(
+                  color: kPageBg,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: kBorder),
+                ),
+                child: const Center(
+                    child: SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: kBrand))),
+              ),
+          ]),
         ),
-        const SizedBox(height: 8),
-        Row(children: [
+      Container(
+        decoration: BoxDecoration(
+          color: kPageBg,
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: kBorder),
+        ),
+        padding: const EdgeInsets.fromLTRB(16, 2, 4, 2),
+        child: Row(children: [
           Expanded(
             child: TextField(
               controller: _reply,
+              minLines: 1,
+              maxLines: 5,
               style: const TextStyle(fontSize: 14),
               decoration: InputDecoration(
                 hintText: c('dev_queue.reply_hint'),
+                border: InputBorder.none,
                 isDense: true,
-                filled: true,
-                fillColor: kPageBg,
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide: const BorderSide(color: kBorder)),
+                contentPadding: const EdgeInsets.symmetric(vertical: 12),
               ),
             ),
           ),
-          const SizedBox(width: 8),
-          FilledButton(
-            onPressed: _busy
-                ? null
-                : () async {
-                    final b = _reply.text.trim();
-                    final imgs = _replyImages;
-                    if (b.isEmpty && imgs.isEmpty) return;
-                    _reply.clear();
-                    setState(() => _replyImages = const []);
-                    await _run(() => _svc.reply(widget.id, b, images: imgs));
-                  },
-            style: FilledButton.styleFrom(backgroundColor: kBrand),
-            child: Text(c('dev_queue.btn_send')),
+          IconButton(
+            tooltip: c('dev_queue.btn_attach'),
+            onPressed: _uploading ? null : _attachReplyImage,
+            icon: const Icon(Icons.attach_file, size: 22, color: kTextLo),
+            splashRadius: 20,
+          ),
+          Container(
+            decoration: const BoxDecoration(
+                color: kBrand, shape: BoxShape.circle),
+            child: IconButton(
+              tooltip: c('dev_queue.btn_send'),
+              onPressed: _busy ? null : _sendReply,
+              icon: const Icon(Icons.arrow_upward, size: 20, color: Colors.white),
+              splashRadius: 22,
+            ),
           ),
         ]),
-      ]),
-    );
+      ),
+    ]);
   }
 
   Widget _bubble(Map<String, dynamic> m) {

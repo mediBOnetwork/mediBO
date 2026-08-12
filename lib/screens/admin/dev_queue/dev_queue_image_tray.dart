@@ -7,6 +7,15 @@ import '../../../widgets/payment_proof_image.dart';
 import 'dev_queue_common.dart';
 import 'dev_queue_service.dart';
 
+/// Pick one image and upload it to the private dev-cmd-uploads bucket, returning
+/// its stored path (or null if the user cancelled). Shared by the paste-sheet
+/// tray and the Remote-Control-style chat composer so both attach identically.
+Future<String?> pickAndUploadDevImage(DevQueueService service) async {
+  final picked = await pickImageBytes();
+  if (picked == null) return null;
+  return service.uploadImage(picked.bytes, picked.name);
+}
+
 /// The ONE image-attach control the Dev Queue reuses everywhere an admin can
 /// add a picture to a command: the paste sheet, and the live chat/reply
 /// composer. It owns nothing but the pick→upload→path round-trip; the paths it
@@ -32,12 +41,10 @@ class _DevQueueImageTrayState extends State<DevQueueImageTray> {
 
   Future<void> _pick() async {
     if (_busy) return;
-    final picked = await pickImageBytes();
-    if (picked == null) return;
     setState(() => _busy = true);
     try {
-      final path = await widget.service.uploadImage(picked.bytes, picked.name);
-      widget.onChanged([...widget.paths, path]);
+      final path = await pickAndUploadDevImage(widget.service);
+      if (path != null) widget.onChanged([...widget.paths, path]);
     } catch (_) {
       if (mounted) showToast(context, c('dev_queue.attach_failed'), isError: true);
     } finally {

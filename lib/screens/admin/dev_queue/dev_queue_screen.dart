@@ -32,6 +32,8 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
   String? _batch;
   List<Map<String, dynamic>> _rows = const [];
   Map<String, int> _counts = const {};
+  Timer? _tick; // 1s ticker for live ATR countdown on building rows
+  DateTime _now = DateTime.now();
 
   bool get _hasActive =>
       _rows.any((r) => r['status'] == 'building' || r['status'] == 'needs_input');
@@ -43,11 +45,15 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
     _poll = Timer.periodic(const Duration(seconds: 5), (_) {
       if (_hasActive) _load(silent: true);
     });
+    _tick = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted && _hasActive) setState(() => _now = DateTime.now());
+    });
   }
 
   @override
   void dispose() {
     _poll?.cancel();
+    _tick?.cancel();
     _debounce?.cancel();
     _searchCtl.dispose();
     super.dispose();
@@ -215,6 +221,7 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
                         index: i,
                         child: _Row(
                             row: _rows[i],
+                            now: _now,
                             draggable: true,
                             onTap: () => _openDetail(_rows[i])),
                       ),
@@ -229,6 +236,7 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
                     separatorBuilder: (_, __) => const SizedBox(height: 12),
                     itemBuilder: (ctx, i) => _Row(
                         row: _rows[i],
+                        now: _now,
                         onTap: () => _openDetail(_rows[i]),
                         onDelete: _rows[i]['status'] == 'cancelled'
                             ? () => _delete(_rows[i])
@@ -349,14 +357,42 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
 
 class _Row extends StatelessWidget {
   final Map<String, dynamic> row;
+  final DateTime now;
   final VoidCallback onTap;
   final VoidCallback? onDelete;
   final bool draggable;
   const _Row(
       {required this.row,
+      required this.now,
       required this.onTap,
       this.onDelete,
       this.draggable = false});
+
+  /// Live "time left" chip (building) or "time taken" chip (done), driven by the
+  /// backend's eta_at / ttt_display. The countdown is client-ticked to the
+  /// server anchor; the estimate itself is the backend's.
+  Widget? _timingChip(String status) {
+    if (status == 'building') {
+      final eta = DateTime.tryParse((row['eta_at'] ?? '').toString());
+      if (eta == null) return null;
+      final rem = eta.difference(now);
+      final over = rem.isNegative;
+      final s = over ? 0 : rem.inSeconds;
+      final label = over
+          ? '${row['tat_display'] ?? ''} · ${c('dev_queue.atr_overrun')}'
+          : '${(s ~/ 60)}:${(s % 60).toString().padLeft(2, '0')} ${c('dev_queue.atr_label').toLowerCase()}';
+      return ToneChip(
+          label: label,
+          tone: statusTone(over ? 'awaiting_approval' : 'building'),
+          icon: Icons.hourglass_bottom);
+    }
+    final ttt = (row['ttt_display'] ?? '').toString();
+    if (ttt.isNotEmpty && (status == 'completed' || status == 'failed')) {
+      return ToneChip(
+          label: ttt, tone: statusTone('paused'), icon: Icons.timer_outlined);
+    }
+    return null;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -371,7 +407,9 @@ class _Row extends StatelessWidget {
     final age = (row['age_display'] ?? '').toString();
     final tone = statusTone(status);
 
+    final timing = _timingChip(status);
     final footer = <Widget>[
+      if (timing != null) timing,
       if (urgent)
         ToneChip(
             label: c('dev_queue.flag_urgent'),

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../../../services/ui_copy.dart';
 import '../../../utils/toast.dart';
 import 'dev_queue_common.dart';
+import 'dev_queue_image_tray.dart';
 import 'dev_queue_service.dart';
 
 /// The ONE paste place. Om drops 10–15 specs separated by `---`, tunes the
@@ -29,6 +30,7 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
   bool _android = false;
   bool _ios = false;
   bool _busy = false;
+  List<String> _images = const [];
 
   List<Map<String, dynamic>> _templates = const [];
   List<Map<String, dynamic>> _warnings = const [];
@@ -96,6 +98,7 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
           'targets_web': true,
           'targets_android': _android,
           'targets_ios': _ios,
+          if (_images.isNotEmpty) 'images': _images,
         }
     ];
   }
@@ -213,6 +216,12 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
                     style: const TextStyle(fontSize: 12, color: kTextLo)),
                 const SizedBox(height: 10),
                 _pasteBox(),
+                const SizedBox(height: 10),
+                DevQueueImageTray(
+                  service: widget.service,
+                  paths: _images,
+                  onChanged: (v) => setState(() => _images = v),
+                ),
                 const SizedBox(height: 10),
                 _templateRow(),
                 const SizedBox(height: 10),

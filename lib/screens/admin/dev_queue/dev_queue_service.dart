@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 /// Thin RPC layer for the Dev Queue tab.
@@ -72,11 +74,32 @@ class DevQueueService {
       _c.rpc('dev_cmd_reject', params: {'p_id': id, 'p_reason': reason});
   Future<void> requestAndroid(int id) async =>
       _c.rpc('dev_cmd_request_android', params: {'p_id': id});
-  Future<void> reply(int id, String body) async =>
-      _c.rpc('dev_cmd_reply', params: {'p_command_id': id, 'p_body': body});
+  Future<void> reply(int id, String body,
+          {List<String> images = const []}) async =>
+      _c.rpc('dev_cmd_reply',
+          params: {'p_command_id': id, 'p_body': body, 'p_images': images});
 
   Future<Map<String, dynamic>> rollback(int id) async =>
       _asMap(await _c.rpc('dev_cmd_rollback', params: {'p_id': id}));
+
+  /// Upload one admin-picked image to the private dev-cmd-uploads bucket and
+  /// return the stored path. The backend keys attachments by these paths; the
+  /// UI renders them back through a signed URL. Business logic stays server-side
+  /// — this is a raw storage put, nothing decided here.
+  static const String uploadsBucket = 'dev-cmd-uploads';
+  Future<String> uploadImage(Uint8List bytes, String name) async {
+    final safe = name.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+    final path = '${DateTime.now().microsecondsSinceEpoch}_$safe';
+    final ext = safe.contains('.') ? safe.split('.').last.toLowerCase() : 'jpg';
+    final mime = ext == 'png'
+        ? 'image/png'
+        : ext == 'webp'
+            ? 'image/webp'
+            : 'image/jpeg';
+    await _c.storage.from(uploadsBucket).uploadBinary(path, bytes,
+        fileOptions: FileOptions(contentType: mime, upsert: true));
+    return path;
+  }
 
   Future<void> templateSave(String name, String spec) async =>
       _c.rpc('dev_cmd_template_save', params: {'p_name': name, 'p_spec': spec});

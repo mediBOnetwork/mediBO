@@ -6,6 +6,7 @@ import '../../../services/ui_copy.dart';
 import '../../../utils/toast.dart';
 import '../../../widgets/payment_proof_image.dart';
 import 'dev_queue_common.dart';
+import 'dev_queue_image_tray.dart';
 import 'dev_queue_service.dart';
 
 /// One command, whole story. The registry row (status, decisions, targets,
@@ -26,6 +27,7 @@ class DevQueueDetail extends StatefulWidget {
 class _DevQueueDetailState extends State<DevQueueDetail> {
   late final DevQueueService _svc = widget.service ?? DevQueueService();
   final _reply = TextEditingController();
+  List<String> _replyImages = const [];
   Timer? _poll;
 
   Map<String, dynamic> _row = const {};
@@ -139,7 +141,8 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
                 _actions(),
                 const SizedBox(height: 12),
                 _section(c('dev_queue.section_spec'), _mono(_spec['spec'])),
-                if (_status == 'needs_input' || _msgCount() > 0) _chat(),
+                if (_hasCmdImages()) _attachments(),
+                _chat(),
                 if ((_row['decisions'] as List?)?.isNotEmpty ?? false)
                   _decisions(),
                 if ((_row['result_summary'] ?? '').toString().isNotEmpty)
@@ -158,7 +161,6 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
     );
   }
 
-  int _msgCount() => asInt(_row['msg_count']);
 
   Widget _titleBlock() => Row(children: [
         ToneChip(
@@ -419,6 +421,12 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
       Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         for (final m in msgs) _bubble(m),
         const SizedBox(height: 8),
+        DevQueueImageTray(
+          service: _svc,
+          paths: _replyImages,
+          onChanged: (v) => setState(() => _replyImages = v),
+        ),
+        const SizedBox(height: 8),
         Row(children: [
           Expanded(
             child: TextField(
@@ -443,9 +451,11 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
                 ? null
                 : () async {
                     final b = _reply.text.trim();
-                    if (b.isEmpty) return;
+                    final imgs = _replyImages;
+                    if (b.isEmpty && imgs.isEmpty) return;
                     _reply.clear();
-                    await _run(() => _svc.reply(widget.id, b));
+                    setState(() => _replyImages = const []);
+                    await _run(() => _svc.reply(widget.id, b, images: imgs));
                   },
             style: FilledButton.styleFrom(backgroundColor: kBrand),
             child: Text(c('dev_queue.btn_send')),
@@ -474,9 +484,42 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
               style: const TextStyle(
                   fontSize: 11, fontWeight: FontWeight.w700, color: kTextLo)),
           const SizedBox(height: 2),
-          Text((m['body'] ?? '').toString(),
-              style: const TextStyle(fontSize: 14, color: kTextHi)),
+          if ((m['body'] ?? '').toString().isNotEmpty)
+            Text((m['body'] ?? '').toString(),
+                style: const TextStyle(fontSize: 14, color: kTextHi)),
+          _imageStrip(m['images']),
         ]),
+      ),
+    );
+  }
+
+  /// Renders a horizontal strip of attached images (verbatim paths from the
+  /// backend) through the shared signed-URL image widget.
+  Widget _imageStrip(dynamic raw) {
+    final paths = ((raw as List?) ?? const [])
+        .map((e) => e.toString())
+        .where((e) => e.isNotEmpty)
+        .toList();
+    if (paths.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          for (final p in paths)
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: SizedBox(
+                width: 120,
+                height: 120,
+                child: PaymentProofImage(
+                    bucket: DevQueueService.uploadsBucket,
+                    path: p,
+                    fixedHeight: 120),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -543,14 +586,56 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
     );
   }
 
+  Widget _attachments() {
+    return _sectionRaw(
+      c('dev_queue.section_images'),
+      _imageStrip(_spec['images']),
+    );
+  }
+
+  bool _hasCmdImages() =>
+      ((_spec['images'] as List?) ?? const []).isNotEmpty;
+
+  /// A pulsing LIVE chip shown while the runner is actively building, so Om can
+  /// see at a glance that the log below is a live tail of the VM session.
+  Widget _liveBadge() => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFEE2E2),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Container(
+            width: 7,
+            height: 7,
+            decoration: const BoxDecoration(
+                color: Color(0xFF991B1B), shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 5),
+          Text(c('dev_queue.live_badge'),
+              style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF991B1B))),
+        ]),
+      );
+
   Widget _buildLog() {
     final log = (_spec['build_log'] ?? _row['build_log_tail'] ?? '').toString();
-    return _section(
+    final live = _spec['is_live'] == true || _status == 'building';
+    return _sectionRaw(
       c('dev_queue.section_log'),
-      log.trim().isEmpty
-          ? Text(c('dev_queue.log_empty'),
-              style: const TextStyle(fontSize: 13, color: kTextLo))
-          : _mono(log),
+      Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        if (live)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Align(alignment: Alignment.centerLeft, child: _liveBadge()),
+          ),
+        log.trim().isEmpty
+            ? Text(c('dev_queue.log_empty'),
+                style: const TextStyle(fontSize: 13, color: kTextLo))
+            : _mono(log),
+      ]),
     );
   }
 

@@ -366,3 +366,38 @@ be green → deploy_lock_release. Skipping ANY step = failed command.
 - Secrets hygiene: never dump env; key files 600; results/build_log never
   contain secret values. Preflight before every mutate. Freeze (`sec_freeze`)
   stops all claims/adds; unlock with PIN.
+
+## 11. FRONTEND IS THE FINISH LINE (100% BACKEND + MANDATORY FRONTEND WIRING)
+
+The app is 100% backend-driven: every piece of logic, computation,
+string, label, format, decision, and state lives in the BACKEND.
+The frontend has exactly TWO permissions: REQUEST the backend and
+RENDER what it returns. Nothing else. A display string written in
+Dart, a calculation done in Flutter, a hardcoded label — all wrong;
+move it to the backend.
+
+But backend alone is HALF a feature. A feature Om cannot see and
+tap in the deployed app DOES NOT EXIST. Multiple times backend was
+built and the frontend was forgotten or left unwired — that is a
+FAILED command, even if every RPC works.
+
+MANDATORY for every build / change / update:
+1. GAP CHECK FIRST: before wiring anything, check whether the
+   backend for it exists. Any logic currently missing, or any
+   logic sitting in the frontend, is a gap — BUILD THE BACKEND
+   FIRST (tables, RPCs, strings, rules), then wire.
+2. FRONTEND WIRING IS COMPULSORY: every backend feature you build
+   or change MUST ship in the SAME command with its frontend:
+   a visible, reachable entry point (menu item, button, chip,
+   card, or screen), wired to the new RPCs, rendering their
+   payloads verbatim.
+3. REACHABILITY PROOF: after deploy, verify on the LIVE site that
+   a super-admin (or the right role) can actually navigate to and
+   use the change. Screenshot it. State the exact click path in
+   the result. "Deployed but not visible/reachable" = incomplete
+   = do NOT mark complete; fix the wiring first.
+4. NO ORPHANS EITHER WAY: no backend without frontend access; no
+   frontend without backend logic. Both, always, in one command.
+
+Definition of done = backend built + frontend wired + deployed +
+reachable + click path reported + screenshot proof.

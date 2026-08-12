@@ -339,20 +339,12 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
             label: c('dev_queue.android_failed'),
             tone: androidTone('failed'),
             icon: Icons.android);
-      default: // not_requested — tap to request (only meaningful once completed)
-        return GestureDetector(
-          onTap: _busy
-              ? null
-              : () async {
-                  if (await _confirm('dev_queue.confirm_android')) {
-                    _run(() => _svc.requestAndroid(widget.id));
-                  }
-                },
-          child: ToneChip(
-              label: c('dev_queue.btn_request_android'),
-              tone: statusTone('pending'),
-              icon: Icons.android),
-        );
+      default: // not_requested — status only. Building is done from the action
+        // row (Build APK / Build AAB) so there is ONE place to build, not two.
+        return ToneChip(
+            label: c('dev_queue.android_not_built'),
+            tone: statusTone('paused'),
+            icon: Icons.android);
     }
   }
 
@@ -362,57 +354,59 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
   }
 
   // ── Actions (status-driven) ────────────────────────────────────────────────
+  // One clean, status-driven action row: exactly one filled PRIMARY action, the
+  // rest outlined, destructive in red. Building is only ever offered here (never
+  // also from the Targets chips) so there are no duplicate buttons.
   Widget _actions() {
     final btns = <Widget>[];
-    void add(String key, VoidCallback onTap, {Color? color, IconData? icon}) {
+    void add(String key, VoidCallback onTap,
+        {Color? color, IconData? icon, bool primary = false}) {
       btns.add(_ActionBtn(
-          label: c(key), onTap: _busy ? null : onTap, color: color, icon: icon));
+          label: c(key),
+          onTap: _busy ? null : onTap,
+          color: color,
+          icon: icon,
+          primary: primary));
     }
+
+    Future<void> apk() => _run(() => _svc.requestAndroid(widget.id, buildType: 'apk'));
+    Future<void> aab() => _run(() => _svc.requestAndroid(widget.id, buildType: 'aab'));
 
     switch (_status) {
       case 'pending':
+        add('dev_queue.btn_edit', _editSpec, icon: Icons.edit_outlined, primary: true);
         add('dev_queue.btn_pause', () => _run(() => _svc.pause(widget.id)));
-        add('dev_queue.btn_edit', _editSpec, icon: Icons.edit_outlined);
-        add('dev_queue.btn_cancel', () => _cancel(),
-            color: const Color(0xFF991B1B));
+        add('dev_queue.btn_cancel', () => _cancel(), color: const Color(0xFF991B1B));
         break;
       case 'paused':
         add('dev_queue.btn_resume', () => _run(() => _svc.resume(widget.id)),
-            color: kBrand);
+            color: kBrand, primary: true);
         add('dev_queue.btn_edit', _editSpec, icon: Icons.edit_outlined);
-        add('dev_queue.btn_cancel', () => _cancel(),
-            color: const Color(0xFF991B1B));
+        add('dev_queue.btn_cancel', () => _cancel(), color: const Color(0xFF991B1B));
         break;
       case 'awaiting_approval':
         add('dev_queue.btn_approve', () => _run(() => _svc.approve(widget.id)),
-            color: kBrand);
+            color: kBrand, primary: true);
         add('dev_queue.btn_reject', _reject, color: const Color(0xFF991B1B));
         add('dev_queue.btn_edit', _editSpec, icon: Icons.edit_outlined);
         break;
       case 'building':
+        add('dev_queue.btn_debug', _debug, icon: Icons.bug_report_outlined, primary: true);
         add('dev_queue.btn_pause', () => _run(() => _svc.pause(widget.id)));
-        add('dev_queue.btn_debug', _debug, icon: Icons.bug_report_outlined);
         break;
       case 'completed':
+        add('dev_queue.btn_build_apk', apk, icon: Icons.android, color: kBrand, primary: true);
+        add('dev_queue.btn_build_aab', aab, icon: Icons.android);
+        add('dev_queue.btn_debug', _debug, icon: Icons.bug_report_outlined);
         add('dev_queue.btn_rollback', _rollback,
             color: const Color(0xFF991B1B), icon: Icons.undo);
-        add('dev_queue.btn_build_apk',
-            () => _run(() => _svc.requestAndroid(widget.id, buildType: 'apk')),
-            icon: Icons.android, color: kBrand);
-        add('dev_queue.btn_build_aab',
-            () => _run(() => _svc.requestAndroid(widget.id, buildType: 'aab')),
-            icon: Icons.android);
-        add('dev_queue.btn_debug', _debug, icon: Icons.bug_report_outlined);
         break;
       case 'failed':
-        add('dev_queue.btn_debug', _debug, icon: Icons.bug_report_outlined);
-        add('dev_queue.btn_build_apk',
-            () => _run(() => _svc.requestAndroid(widget.id, buildType: 'apk')),
-            icon: Icons.android, color: kBrand);
+        add('dev_queue.btn_debug', _debug, icon: Icons.bug_report_outlined, primary: true);
+        add('dev_queue.btn_build_apk', apk, icon: Icons.android);
         break;
       case 'needs_input':
-        add('dev_queue.btn_cancel', () => _cancel(),
-            color: const Color(0xFF991B1B));
+        add('dev_queue.btn_cancel', () => _cancel(), color: const Color(0xFF991B1B));
         break;
       case 'cancelled':
         add('dev_queue.btn_delete', () => _delete(),
@@ -524,15 +518,12 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
       'images': _spec['images'] ?? const [],
       'attachments': _spec['attachments'] ?? const [],
     });
-    // 2. every chat message in order.
+    // 2. every message in time order — replies AND each completion result are
+    // real backend messages, so nothing is force-appended and a later reply can
+    // never sort above an earlier result. The backend owns the order.
     thread.addAll(((_spec['messages'] as List?) ?? const [])
         .whereType<Map>()
         .map((e) => Map<String, dynamic>.from(e)));
-    // 3. the latest result as an agent bubble.
-    final result = (_row['result_summary'] ?? '').toString();
-    if (result.isNotEmpty) {
-      thread.add({'sender': 'agent', 'body': result, 'is_result': true});
-    }
     return _sectionRaw(
       c('dev_queue.section_chat'),
       Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -543,8 +534,10 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
     );
   }
 
+  // Note: the attach handlers do NOT early-return on _uploading, and the buttons
+  // stay tappable — a cancelled picker must never lock the control. _uploading
+  // is only a visual spinner around the actual upload.
   Future<void> _attachReplyImage() async {
-    if (_uploading) return;
     setState(() => _uploading = true);
     try {
       final path = await pickAndUploadDevImage(_svc);
@@ -559,7 +552,6 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
   }
 
   Future<void> _attachReplyFiles() async {
-    if (_uploading) return;
     setState(() => _uploading = true);
     try {
       final files = await pickAndUploadDevFiles(_svc);
@@ -786,13 +778,13 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
           ),
           IconButton(
             tooltip: c('dev_queue.btn_attach'),
-            onPressed: _uploading ? null : _attachReplyImage,
+            onPressed: _attachReplyImage,
             icon: const Icon(Icons.image_outlined, size: 22, color: kTextLo),
             splashRadius: 20,
           ),
           IconButton(
             tooltip: c('dev_queue.btn_attach_file'),
-            onPressed: _uploading ? null : _attachReplyFiles,
+            onPressed: _attachReplyFiles,
             icon: const Icon(Icons.attach_file, size: 22, color: kTextLo),
             splashRadius: 20,
           ),
@@ -939,8 +931,38 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
         log.trim().isEmpty
             ? Text(c('dev_queue.log_empty'),
                 style: const TextStyle(fontSize: 13, color: kTextLo))
-            : _mono(log),
+            : _scrollLog(log),
       ]),
+    );
+  }
+
+  /// The build log can run to hundreds of lines. It lives in a fixed-height box
+  /// with its OWN vertical scroll so a finger-drag inside it scrolls the log
+  /// (previously the SelectableText swallowed the drag and nothing moved).
+  Widget _scrollLog(String log) {
+    return Container(
+      width: double.infinity,
+      constraints: const BoxConstraints(maxHeight: 360),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: kPageBg,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: kBorder),
+      ),
+      child: Scrollbar(
+        thumbVisibility: true,
+        child: SingleChildScrollView(
+          primary: false,
+          child: SelectableText(
+            log,
+            style: const TextStyle(
+                fontSize: 12.5,
+                height: 1.45,
+                fontFamily: 'monospace',
+                color: kTextHi),
+          ),
+        ),
+      ),
     );
   }
 
@@ -1024,16 +1046,43 @@ class _ActionBtn extends StatelessWidget {
   final VoidCallback? onTap;
   final Color? color;
   final IconData? icon;
-  const _ActionBtn({required this.label, this.onTap, this.color, this.icon});
+  final bool primary;
+  const _ActionBtn(
+      {required this.label,
+      this.onTap,
+      this.color,
+      this.icon,
+      this.primary = false});
 
   @override
   Widget build(BuildContext context) {
-    final col = color ?? kTextLo;
+    final col = color ?? (primary ? kBrand : kTextLo);
+    const shape = RoundedRectangleBorder(
+        borderRadius: BorderRadius.all(Radius.circular(10)));
+    if (primary) {
+      // One filled, eye-catching primary action per screen.
+      return FilledButton.icon(
+        onPressed: onTap,
+        icon: Icon(icon ?? Icons.chevron_right, size: 16, color: Colors.white),
+        label: Text(label,
+            style: const TextStyle(
+                fontSize: 13, fontWeight: FontWeight.w600, color: Colors.white)),
+        style: FilledButton.styleFrom(
+            backgroundColor: col,
+            minimumSize: const Size(0, 44),
+            shape: shape,
+            padding: const EdgeInsets.symmetric(horizontal: 16)),
+      );
+    }
     return OutlinedButton.icon(
       onPressed: onTap,
       icon: Icon(icon ?? Icons.chevron_right, size: 16, color: col),
-      label: Text(label, style: TextStyle(fontSize: 13, color: col)),
-      style: OutlinedButton.styleFrom(side: BorderSide(color: col.withValues(alpha: 0.5))),
+      label: Text(label,
+          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: col)),
+      style: OutlinedButton.styleFrom(
+          minimumSize: const Size(0, 44),
+          shape: shape,
+          side: BorderSide(color: col.withValues(alpha: 0.4))),
     );
   }
 }

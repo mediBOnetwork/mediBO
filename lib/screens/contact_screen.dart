@@ -208,7 +208,7 @@ class _ContactScreenState extends State<ContactScreen> {
             ),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(10),
-              borderSide: const BorderSide(color: Brand.green, width: 2),
+              borderSide: const BorderSide(color: Color(0xFFE5E7EB), width: 2),
             ),
             errorBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(10),

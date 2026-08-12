@@ -1258,7 +1258,7 @@ class _AddUpiCard extends StatelessWidget {
           borderSide: const BorderSide(color: Color(0xFFD1D5DB))),
       focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(8),
-          borderSide: const BorderSide(color: Color(0xFF1B7A43), width: 1.5)),
+          borderSide: const BorderSide(color: Color(0xFFE5E7EB), width: 1.5)),
       isDense: true,
     );
 
@@ -1676,7 +1676,7 @@ class _PartnerFormDialogState extends State<_PartnerFormDialog> {
       enabledBorder: _border,
       focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(8),
-          borderSide: const BorderSide(color: Color(0xFF1B7A43), width: 1.5)),
+          borderSide: const BorderSide(color: Color(0xFFE5E7EB), width: 1.5)),
       isDense: true,
     );
 
@@ -1887,7 +1887,7 @@ class _PlatformFormDialogState extends State<_PlatformFormDialog> {
         enabledBorder: _border,
         focusedBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(8),
-            borderSide: const BorderSide(color: Color(0xFF1B7A43), width: 1.5)),
+            borderSide: const BorderSide(color: Color(0xFFE5E7EB), width: 1.5)),
         isDense: true,
       ),
     );
@@ -2088,7 +2088,7 @@ class _PlatformDocDialogState extends State<_PlatformDocDialog> {
         enabledBorder: _border,
         focusedBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(8),
-            borderSide: const BorderSide(color: Color(0xFF1B7A43), width: 1.5)),
+            borderSide: const BorderSide(color: Color(0xFFE5E7EB), width: 1.5)),
         isDense: true,
       );
 

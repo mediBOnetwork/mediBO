@@ -57,7 +57,8 @@ class _DevQueueImageTrayState extends State<DevQueueImageTray> {
   bool _busy = false;
 
   Future<void> _pick() async {
-    if (_busy) return;
+    // No early-return on _busy and the button stays tappable — a cancelled
+    // picker must never lock the control. _busy is only the visual spinner.
     setState(() => _busy = true);
     try {
       final path = await pickAndUploadDevImage(widget.service);
@@ -113,7 +114,7 @@ class _DevQueueImageTrayState extends State<DevQueueImageTray> {
       Align(
         alignment: Alignment.centerLeft,
         child: TextButton.icon(
-          onPressed: _busy ? null : _pick,
+          onPressed: _pick,
           icon: _busy
               ? const SizedBox(
                   width: 16,

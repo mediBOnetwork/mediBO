@@ -218,7 +218,7 @@ class _PaymentsTabState extends State<PaymentsTab> {
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
               focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(8),
-                  borderSide: const BorderSide(color: Color(0xFF1B7A43), width: 1.5)),
+                  borderSide: const BorderSide(color: Color(0xFFE5E7EB), width: 1.5)),
               isDense: true,
             ),
             style: const TextStyle(fontSize: 13),

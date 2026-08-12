@@ -14,6 +14,16 @@ Future<({Uint8List bytes, String name})?> pickImageBytes() async {
   input.multiple = false;
   input.click();
 
+  // Cancel detection: the browser dialog fires NO event on cancel, so the
+  // onChange future would hang forever and lock the attach button. When the
+  // window regains focus after the dialog closes, if no file arrived shortly
+  // after, resolve null so the caller resets and the picker can reopen.
+  html.window.onFocus.first.then((_) {
+    Future.delayed(const Duration(milliseconds: 700), () {
+      if (!completer.isCompleted) completer.complete(null);
+    });
+  });
+
   input.onChange.listen((_) async {
     final files = input.files;
     if (files == null || files.isEmpty) {

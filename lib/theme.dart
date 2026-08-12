@@ -320,9 +320,11 @@ ThemeData buildTheme() {
         borderRadius: BorderRadius.circular(Rad.pill),
         borderSide: BorderSide.none,
       ),
+      // No green border while typing: focus matches the unfocused state so the
+      // input never flashes a coloured outline on focus (Om, CHANGE #25).
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(Rad.pill),
-        borderSide: const BorderSide(color: Brand.green, width: 1.5),
+        borderSide: BorderSide.none,
       ),
     ),
     snackBarTheme: const SnackBarThemeData(behavior: SnackBarBehavior.floating),

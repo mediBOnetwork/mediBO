@@ -132,7 +132,7 @@ class _CodeFieldState extends State<CodeField> {
             ),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(10),
-              borderSide: const BorderSide(color: Color(0xFF1B7A43)),
+              borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
             ),
             isDense: true,
             contentPadding:

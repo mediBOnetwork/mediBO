@@ -398,7 +398,7 @@ class _WaTokenPickerState extends State<WaTokenPicker> {
           ),
           focusedBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(8),
-            borderSide: const BorderSide(color: Color(0xFF1B7A43)),
+            borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
           ),
         ),
       );

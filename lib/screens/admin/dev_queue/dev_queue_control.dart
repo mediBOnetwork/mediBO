@@ -23,6 +23,7 @@ class _DevQueueControlState extends State<DevQueueControl> {
   Map<String, dynamic> _snap = const {};
   Map<String, dynamic> _usage = const {};
   final Set<String> _busy = {}; // keys mid-flip
+  bool _expanded = false; // collapsed by default — tap the header to open
 
   @override
   void initState() {
@@ -139,37 +140,96 @@ class _DevQueueControlState extends State<DevQueueControl> {
               offset: const Offset(0, 2)),
         ],
       ),
+      // The whole card is a tap-to-expand panel: collapsed by default (a slim
+      // summary bar so it never blocks the list), tapped open to reveal the
+      // toggles + real usage. No chevron — the header itself is the control.
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Text(c('dev_queue.ctl_section'),
-              style: const TextStyle(
-                  fontSize: 12, fontWeight: FontWeight.w700, color: kTextLo)),
-          const Spacer(),
-          if (_remoteOn)
-            ToneChip(
-                label: c('dev_queue.ctl_remote_on'),
-                tone: statusTone('completed'),
-                icon: Icons.phone_iphone),
-        ]),
-        const SizedBox(height: 4),
-        _row('vm', c('dev_queue.ctl_vm'), Icons.dns_outlined, _vmChip()),
-        _divider(),
-        _row('claude', c('dev_queue.ctl_claude'), Icons.terminal, _claudeChip()),
-        _divider(),
-        _row('workflow', c('dev_queue.ctl_workflow'), Icons.sync, _workflowChip()),
-        if (_usage.isNotEmpty) ...[
+        InkWell(
+          onTap: () => setState(() => _expanded = !_expanded),
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            child: _expanded ? _expandedHeader() : _collapsedHeader(),
+          ),
+        ),
+        if (_expanded) ...[
+          const SizedBox(height: 4),
+          _row('vm', c('dev_queue.ctl_vm'), Icons.dns_outlined, _vmChip()),
           _divider(),
-          _usageMeter(),
+          _row('claude', c('dev_queue.ctl_claude'), Icons.terminal, _claudeChip()),
+          _divider(),
+          _row('workflow', c('dev_queue.ctl_workflow'), Icons.sync, _workflowChip()),
+          if ((_usage['has_usage'] ?? false) == true) ...[
+            _divider(),
+            _usageMeter(),
+          ],
         ],
       ]),
     );
   }
 
-  /// Session usage meter — tokens/cost used in the rolling window vs the
-  /// configurable budget. Every string + the percent come from the backend.
+  Widget _expandedHeader() => Row(children: [
+        Text(c('dev_queue.ctl_section'),
+            style: const TextStyle(
+                fontSize: 12, fontWeight: FontWeight.w700, color: kTextLo)),
+        const Spacer(),
+        if (_remoteOn)
+          ToneChip(
+              label: c('dev_queue.ctl_remote_on'),
+              tone: statusTone('completed'),
+              icon: Icons.phone_iphone),
+      ]);
+
+  /// Slim one-line summary shown when collapsed: workflow state + the top usage
+  /// percent, so Om reads the essentials without opening the panel.
+  Widget _collapsedHeader() {
+    final wf = _isOn('workflow');
+    final limits = (_usage['limits'] as List?) ?? const [];
+    Map<String, dynamic>? first =
+        limits.isNotEmpty ? Map<String, dynamic>.from(limits.first as Map) : null;
+    return Row(children: [
+      Container(
+        width: 9,
+        height: 9,
+        decoration: BoxDecoration(
+            color: wf && _claudeAlive
+                ? const Color(0xFF1B7A43)
+                : kTextLo.withValues(alpha: 0.5),
+            shape: BoxShape.circle),
+      ),
+      const SizedBox(width: 8),
+      Text(c('dev_queue.ctl_section'),
+          style: const TextStyle(
+              fontSize: 13, fontWeight: FontWeight.w700, color: kTextHi)),
+      const SizedBox(width: 8),
+      Expanded(
+        child: Text(
+            _workflowSummary(),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 12, color: kTextLo)),
+      ),
+      if (first != null) ...[
+        const SizedBox(width: 6),
+        ToneChip(
+            label: '${first['pct_display']}',
+            tone: statusTone((first['tone'] ?? 'completed').toString())),
+      ],
+    ]);
+  }
+
+  String _workflowSummary() {
+    final wf = _isOn('workflow');
+    final id = _buildingId;
+    if (id != null) return '${c('dev_queue.status_building')} #$id';
+    return wf ? c('dev_queue.status_pending') : c('dev_queue.ctl_workflow');
+  }
+
+  /// Real Claude usage — the actual session (5h) + weekly + Fable percentages
+  /// pulled from Anthropic's usage endpoint on the VM. Every string + percent
+  /// comes from the backend; the app only draws the bars.
   Widget _usageMeter() {
-    final pct = (_usage['pct'] as num?)?.toDouble() ?? 0;
-    final tone = statusTone((_usage['tone'] ?? 'completed').toString());
+    final limits = (_usage['limits'] as List?) ?? const [];
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
         const Icon(Icons.data_usage, size: 18, color: kTextLo),
@@ -178,33 +238,50 @@ class _DevQueueControlState extends State<DevQueueControl> {
             style: const TextStyle(
                 fontSize: 14, fontWeight: FontWeight.w600, color: kTextHi)),
         const Spacer(),
-        Text('${_usage['window_label'] ?? ''} · ${_usage['pct_display'] ?? ''}',
-            style: const TextStyle(fontSize: 12, color: kTextLo)),
-      ]),
-      const SizedBox(height: 8),
-      ClipRRect(
-        borderRadius: BorderRadius.circular(6),
-        child: LinearProgressIndicator(
-          value: (pct / 100).clamp(0.0, 1.0),
-          minHeight: 8,
-          backgroundColor: const Color(0xFFF1F2F4),
-          valueColor: AlwaysStoppedAnimation(tone.fg),
-        ),
-      ),
-      const SizedBox(height: 6),
-      Wrap(spacing: 8, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
-        Text('${_usage['window_tokens_display'] ?? ''}',
-            style: const TextStyle(
-                fontSize: 12, fontWeight: FontWeight.w700, color: kTextHi)),
-        ToneChip(label: '${_usage['window_cost_display'] ?? ''}', tone: statusTone('paused')),
-        Text('${_usage['remaining_display'] ?? ''}',
+        Text('${_usage['updated_display'] ?? ''}',
             style: const TextStyle(fontSize: 11, color: kTextLo)),
       ]),
-      const SizedBox(height: 4),
-      Text(
-          '${c('dev_queue.usage_today')} ${_usage['today_tokens_display'] ?? ''} · ${_usage['today_cost_display'] ?? ''} · ${_usage['today_commands'] ?? 0}',
+      const SizedBox(height: 10),
+      for (final raw in limits) _limitBar(Map<String, dynamic>.from(raw as Map)),
+      const SizedBox(height: 2),
+      Text('${_usage['spend_display'] ?? ''}',
+          style: const TextStyle(fontSize: 11, color: kTextLo)),
+      Text('${_usage['today_display'] ?? ''}',
           style: const TextStyle(fontSize: 11, color: kTextLo)),
     ]);
+  }
+
+  Widget _limitBar(Map<String, dynamic> l) {
+    final pct = (l['percent'] as num?)?.toDouble() ?? 0;
+    final tone = statusTone((l['tone'] ?? 'completed').toString());
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(
+            child: Text('${l['label'] ?? ''}',
+                style: const TextStyle(
+                    fontSize: 13, fontWeight: FontWeight.w600, color: kTextHi)),
+          ),
+          Text('${l['pct_display'] ?? ''}',
+              style: TextStyle(
+                  fontSize: 13, fontWeight: FontWeight.w700, color: tone.fg)),
+        ]),
+        const SizedBox(height: 6),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: LinearProgressIndicator(
+            value: (pct / 100).clamp(0.0, 1.0),
+            minHeight: 8,
+            backgroundColor: const Color(0xFFF1F2F4),
+            valueColor: AlwaysStoppedAnimation(tone.fg),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text('${l['resets_display'] ?? ''}',
+            style: const TextStyle(fontSize: 11, color: kTextLo)),
+      ]),
+    );
   }
 
   Widget _divider() =>

@@ -145,7 +145,10 @@ class _DevQueueControlState extends State<DevQueueControl> {
       // toggles + real usage. No chevron — the header itself is the control.
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         InkWell(
-          onTap: () => setState(() => _expanded = !_expanded),
+          onTap: () {
+            setState(() => _expanded = !_expanded);
+            if (_expanded) _load(); // fetch the freshest usage on open
+          },
           borderRadius: BorderRadius.circular(8),
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 2),

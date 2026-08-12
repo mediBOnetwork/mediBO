@@ -8,6 +8,7 @@ import 'dev_queue_service.dart';
 import 'dev_queue_bulk_add.dart';
 import 'dev_queue_detail.dart';
 import 'dev_queue_control.dart';
+import 'dev_queue_gcp.dart';
 
 /// The Dev Queue registry — the permanent development record, rendered from
 /// `dev_cmd_list` verbatim. Om pastes specs here; the VM runner claims and
@@ -172,6 +173,14 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
         title: Text(_title.isEmpty ? c('dev_queue.nav_label') : _title,
             style: const TextStyle(
                 fontSize: 18, fontWeight: FontWeight.w700, color: kTextHi)),
+        actions: [
+          IconButton(
+            tooltip: c('dev_queue.gcp_open'),
+            icon: const Icon(Icons.cloud_outlined, color: kBrand),
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => GcpControlScreen(service: _svc))),
+          ),
+        ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
           child: Container(height: 1, color: kBorder),

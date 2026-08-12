@@ -177,4 +177,42 @@ class DevQueueService {
     final d = res.data;
     return d is Map ? Map<String, dynamic>.from(d) : <String, dynamic>{};
   }
+
+  // ── GCP Control plane (all render-ready from the live backend) ────────────
+  Future<Map<String, dynamic>> gcpGet() async =>
+      _asMap(await _c.rpc('dev_gcp_get'));
+
+  /// One-tap GCP action (enable_api|restart_vm|resize_disk|quotas|billing_now).
+  /// restart_vm carries the PIN. Enqueues an urgent gcp command; returns {id,...}.
+  Future<Map<String, dynamic>> gcpAction(String action, {String? pin}) async =>
+      _asMap(await _c.rpc('dev_gcp_action',
+          params: {'p_action': action, 'p_pin': pin}));
+
+  Future<List<Map<String, dynamic>>> secretList() async =>
+      _asList(await _c.rpc('secret_list'));
+  Future<void> secretSet(String name, String value) async =>
+      _c.rpc('secret_set', params: {'p_name': name, 'p_value': value});
+
+  Future<Map<String, dynamic>> pinSet(String oldPin, String newPin) async =>
+      _asMap(await _c.rpc('sec_pin_set', params: {'p_old': oldPin, 'p_new': newPin}));
+  Future<Map<String, dynamic>> freeze() async => _asMap(await _c.rpc('sec_freeze'));
+  Future<Map<String, dynamic>> unfreeze(String pin) async =>
+      _asMap(await _c.rpc('sec_unfreeze', params: {'p_pin': pin}));
+  Future<Map<String, dynamic>> budgetCapSet(num cap, String pin) async =>
+      _asMap(await _c.rpc('sec_budget_cap_set', params: {'p_cap': cap, 'p_pin': pin}));
+
+  Future<List<Map<String, dynamic>>> auditList({String? search, int limit = 100}) async =>
+      _asList(await _c.rpc('sec_audit_list',
+          params: {'p_limit': limit, 'p_search': search}));
+
+  Future<void> scheduleSave(Map<String, dynamic> row) async =>
+      _c.rpc('gcp_schedule_save', params: {'p': row});
+  Future<void> scheduleDelete(int id) async =>
+      _c.rpc('gcp_schedule_delete', params: {'p_id': id});
+
+  List<Map<String, dynamic>> _asList(dynamic v) => (v as List?)
+          ?.whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList() ??
+      const [];
 }

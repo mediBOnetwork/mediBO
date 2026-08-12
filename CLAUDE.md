@@ -339,3 +339,30 @@ be green → deploy_lock_release. Skipping ANY step = failed command.
   context doc WINS. Wrong-model builds are failed commands.
 - If the context doc is missing or thin, improve it from the codebase
   truth as part of your command — do not build on guesses.
+
+## 10. GCP COMMANDS (kind='gcp')
+- A claimed `kind='gcp'` row does NOT use the web deploy lane: no flutter build,
+  no version.json, complete with `p_deploy_no NULL`.
+- On runner start, `gcp_bootstrap.sh` activates gcloud from the Vault secret
+  `GCP_SA_KEY`. If absent → capability OFF: any gcp command completes with a
+  plain "Google setup pending" summary + copy-chip result_actions (the Cloud
+  Shell one-liner, the secret name `GCP_SA_KEY`) and `dev_cmd_ask` so it resumes
+  after Om saves the key and replies done. NEVER put key material in logs,
+  results, or build_log; key files are chmod 600.
+- Loop: goal → plan gcloud steps → PREFLIGHT with read-only calls (verify
+  roles/APIs); missing → one-line plain_summary + result_actions [copy: exact
+  grant/enable command] + `dev_cmd_ask`. Then run→read→fix→rerun until met.
+  Destructive steps use the is_danger ask path (backend PIN-gates the "yes").
+- PLAIN-LANGUAGE MANDATE: every gcp completion writes `p_plain_summary` (2-4
+  short non-technical sentences: what was done, what it means, what's left) and
+  puts any copyable follow-up (commands, names, links) in `p_result_actions`.
+  Technical output stays in build_log only.
+- Status: `gcp_status.sh` writes VM state/disk/IP/APIs/region via
+  `dev_gcp_status_write` on boot + every 10 min (systemd timer). Billing is
+  best-effort — no billing role → `billing:{available:false}`, no error spam.
+- Backups: `gcp_backup.sh` (01:30 IST timer) pg_dumps the DB + git-bundles the
+  repo to the private `db-backups` bucket, `backup_report()` each. Needs
+  `SUPABASE_DB_URL` in the Vault; absent → one plain setup card, then auto-runs.
+- Secrets hygiene: never dump env; key files 600; results/build_log never
+  contain secret values. Preflight before every mutate. Freeze (`sec_freeze`)
+  stops all claims/adds; unlock with PIN.

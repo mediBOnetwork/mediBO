@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../services/ui_copy.dart';
@@ -142,6 +143,7 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
               children: [
                 _titleBlock(),
+                _plainCard(),
                 if (_row['web_deploy_no'] != null) _changeBanner(),
                 if (_spec['has_tokens'] == true || _status == 'building')
                   _tokensCard(),
@@ -168,6 +170,58 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
   }
 
 
+  /// The plain-language result (for non-technical Om): the backend's own
+  /// `plain_summary` shown prominently, with any `result_actions` as one-tap
+  /// copy chips (commands, names, links). Absent → nothing renders.
+  Widget _plainCard() {
+    final plain = (_spec['plain_summary'] ?? '').toString();
+    final actions = ((_spec['result_actions'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+    if (plain.isEmpty && actions.isEmpty) return const SizedBox.shrink();
+    return Container(
+      margin: const EdgeInsets.only(top: 12),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEFF6FF),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFBFDBFE)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (plain.isNotEmpty)
+          Text(plain,
+              style: const TextStyle(
+                  fontSize: 15, height: 1.4, fontWeight: FontWeight.w600, color: Color(0xFF1E3A8A))),
+        if (actions.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          Wrap(spacing: 8, runSpacing: 8, children: [
+            for (final a in actions) _copyChip(a),
+          ]),
+        ],
+      ]),
+    );
+  }
+
+  Widget _copyChip(Map<String, dynamic> a) {
+    final label = (a['label'] ?? c('dev_queue.result_actions_label')).toString();
+    final copy = (a['copy_text'] ?? '').toString();
+    return ActionChip(
+      avatar: const Icon(Icons.copy_outlined, size: 15, color: Color(0xFF1E40AF)),
+      label: Text(label,
+          style: const TextStyle(
+              fontSize: 12.5, fontWeight: FontWeight.w600, color: Color(0xFF1E40AF))),
+      backgroundColor: Colors.white,
+      side: const BorderSide(color: Color(0xFFBFDBFE)),
+      onPressed: copy.isEmpty
+          ? null
+          : () {
+              Clipboard.setData(ClipboardData(text: copy));
+              showToast(context, c('dev_queue.gcp_copied'));
+            },
+    );
+  }
+
   /// A clean, organised header: the status + urgent chips sit on their own row
   /// (wrapping, never colliding), then the command title stands on its own line,
   /// large and prominent — a clear focal element instead of a cramped strip.
@@ -184,6 +238,11 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
           Text('#${widget.id}',
               style: const TextStyle(
                   fontSize: 12, fontWeight: FontWeight.w700, color: kTextLo)),
+          if (_spec['kind'] == 'gcp')
+            ToneChip(
+                label: c('dev_queue.gcp_cloud_badge'),
+                tone: statusTone('awaiting_approval'),
+                icon: Icons.cloud_outlined),
           if (_row['urgent'] == true)
             ToneChip(
                 label: c('dev_queue.flag_urgent'),

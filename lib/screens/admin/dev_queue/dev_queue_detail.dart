@@ -36,6 +36,8 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
   Map<String, dynamic> _spec = const {};
   bool _loading = true;
   bool _busy = false;
+  Timer? _tick; // 1s ticker for the live ATR countdown while building
+  DateTime _now = DateTime.now();
 
   String get _status => (_row['status'] ?? '').toString();
   bool get _active => _status == 'building' || _status == 'needs_input';
@@ -51,11 +53,15 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
     _poll = Timer.periodic(const Duration(seconds: 5), (_) {
       if (_active) _load(silent: true);
     });
+    _tick = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted && _status == 'building') setState(() => _now = DateTime.now());
+    });
   }
 
   @override
   void dispose() {
     _poll?.cancel();
+    _tick?.cancel();
     _reply.dispose();
     super.dispose();
   }
@@ -139,6 +145,7 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
                 if (_row['web_deploy_no'] != null) _changeBanner(),
                 if (_spec['has_tokens'] == true || _status == 'building')
                   _tokensCard(),
+                _timerCard(),
                 if (_status == 'needs_input') _needsInputBanner(),
                 const SizedBox(height: 12),
                 _targets(),
@@ -273,6 +280,75 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
             style: const TextStyle(fontSize: 12, color: kTextLo)),
       ]),
     );
+  }
+
+  /// Build timing. While building: the estimated total (TAT, backend) and a live
+  /// countdown to the backend's eta_at anchor (ATR). After: the real total time
+  /// taken (TTT, backend). The app only animates the countdown; every estimate
+  /// and label comes from the backend.
+  Widget _timerCard() {
+    final building = _status == 'building';
+    final ttt = (_spec['ttt_display'] ?? '').toString();
+    if (!building && ttt.isEmpty) return const SizedBox.shrink();
+
+    Widget stat(String label, String value, IconData icon, Color col) => Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Icon(icon, size: 15, color: col),
+              const SizedBox(width: 5),
+              Text(label,
+                  style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: kTextLo)),
+            ]),
+            const SizedBox(height: 4),
+            Text(value,
+                style: TextStyle(fontSize: 19, fontWeight: FontWeight.w800, color: col)),
+          ]),
+        );
+
+    final children = <Widget>[];
+    if (building) {
+      final tat = (_spec['tat_display'] ?? '').toString();
+      final eta = DateTime.tryParse((_spec['eta_at'] ?? '').toString());
+      String atr;
+      Color atrCol = kBrand;
+      if (eta != null) {
+        final rem = eta.difference(_now);
+        if (rem.isNegative) {
+          atr = c('dev_queue.atr_overrun');
+          atrCol = const Color(0xFF92400E);
+        } else {
+          atr = _countdown(rem);
+        }
+      } else {
+        atr = '—';
+      }
+      children.add(stat(c('dev_queue.tat_label'), tat, Icons.timelapse_outlined, kTextHi));
+      children.add(const SizedBox(width: 12));
+      children.add(stat(c('dev_queue.atr_label'), atr, Icons.hourglass_bottom, atrCol));
+    } else {
+      children.add(stat(c('dev_queue.ttt_label'), ttt, Icons.check_circle_outline, const Color(0xFF065F46)));
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(top: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: kBorder),
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: children),
+    );
+  }
+
+  /// Live countdown text (client-ticked) toward the backend's eta anchor.
+  String _countdown(Duration d) {
+    final s = d.inSeconds;
+    final h = s ~/ 3600;
+    final m = (s % 3600) ~/ 60;
+    final ss = s % 60;
+    if (h > 0) return '${h}h ${m}m';
+    return '$m:${ss.toString().padLeft(2, '0')}';
   }
 
   Widget _needsInputBanner() => Container(

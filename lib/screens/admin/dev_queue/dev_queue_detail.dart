@@ -161,24 +161,38 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
   }
 
 
-  Widget _titleBlock() => Row(children: [
-        ToneChip(
-            label: statusLabel(_status),
-            tone: statusTone(_status),
-            spinning: _status == 'building'),
-        const SizedBox(width: 8),
-        if (_row['urgent'] == true)
+  /// A clean, organised header: the status + urgent chips sit on their own row
+  /// (wrapping, never colliding), then the command title stands on its own line,
+  /// large and prominent — a clear focal element instead of a cramped strip.
+  Widget _titleBlock() {
+    final title = (_spec['title'] ?? _row['title'] ?? '').toString();
+    return DqCard(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
           ToneChip(
-              label: c('dev_queue.flag_urgent'),
-              tone: statusTone('failed'),
-              icon: Icons.priority_high),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text((_spec['title'] ?? _row['title'] ?? '').toString(),
+              label: statusLabel(_status),
+              tone: statusTone(_status),
+              spinning: _status == 'building'),
+          Text('#${widget.id}',
               style: const TextStyle(
-                  fontSize: 17, fontWeight: FontWeight.w700, color: kTextHi)),
-        ),
-      ]);
+                  fontSize: 12, fontWeight: FontWeight.w700, color: kTextLo)),
+          if (_row['urgent'] == true)
+            ToneChip(
+                label: c('dev_queue.flag_urgent'),
+                tone: statusTone('failed'),
+                icon: Icons.priority_high),
+        ]),
+        const SizedBox(height: 12),
+        Text(title,
+            style: const TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.w800,
+                height: 1.3,
+                color: kTextHi)),
+      ]),
+    );
+  }
 
   /// The deployed change number, shown big at the top of a finished command so
   /// Om reads it without hunting. `web_deploy_no` is the change number the

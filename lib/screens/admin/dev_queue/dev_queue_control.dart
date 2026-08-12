@@ -24,6 +24,13 @@ class _DevQueueControlState extends State<DevQueueControl> {
   Map<String, dynamic> _usage = const {};
   final Set<String> _busy = {}; // keys mid-flip
   bool _expanded = false; // collapsed by default — tap the header to open
+  // Anchors so a lock/confirm popup can float right next to the tapped toggle.
+  final Map<String, GlobalKey> _anchors = {
+    'vm': GlobalKey(),
+    'claude': GlobalKey(),
+    'workflow': GlobalKey(),
+  };
+  OverlayEntry? _mini; // the single live mini popup
 
   @override
   void initState() {
@@ -35,8 +42,19 @@ class _DevQueueControlState extends State<DevQueueControl> {
   @override
   void dispose() {
     _poll?.cancel();
+    _mini?.remove();
+    _mini = null;
     super.dispose();
   }
+
+  Map<String, dynamic> get _controls =>
+      (_snap['controls'] as Map?)?.cast<String, dynamic>() ?? const {};
+
+  bool _locked(String key) =>
+      ((_controls[key] as Map?)?['locked'] ?? false) == true;
+
+  String _lockMsg(String key) =>
+      ((_controls[key] as Map?)?['lock_msg'] ?? '').toString();
 
   Future<void> _load() async {
     try {
@@ -89,32 +107,31 @@ class _DevQueueControlState extends State<DevQueueControl> {
 
   bool get _remoteOn => (_status['remote_control'] ?? 'off') == 'on';
 
-  Future<void> _flip(String key, bool on) async {
-    final val = on ? 'on' : 'off';
-    // Confirm VM Off while a command is building.
-    if (key == 'vm' && !on && _buildingId != null) {
-      final ok = await showDialog<bool>(
-        context: context,
-        builder: (_) => AlertDialog(
-          content: Text(c('dev_queue.ctl_confirm_vm_off')),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: Text(c('dev_queue.btn_cancel'))),
-            FilledButton(
-                onPressed: () => Navigator.pop(context, true),
-                style: FilledButton.styleFrom(backgroundColor: const Color(0xFF991B1B)),
-                child: Text(c('dev_queue.btn_submit'))),
-          ],
-        ),
-      );
-      if (ok != true) return;
+  /// A toggle tap. Locked toggles (per the backend ordering vm→claude→workflow)
+  /// don't flip — they float a mini reason popup next to the switch and keep
+  /// their colour. VM-off while building asks to confirm in that same mini
+  /// popup, never a centre dialog.
+  void _onToggle(String key, bool on) {
+    if (_locked(key)) {
+      _showMini(key, message: _lockMsg(key));
+      return;
     }
+    if (key == 'vm' && !on && _buildingId != null) {
+      _showMini(key,
+          message: c('dev_queue.ctl_confirm_vm_off'),
+          confirmLabel: c('dev_queue.btn_submit'),
+          onConfirm: () => _doFlip(key, on));
+      return;
+    }
+    _doFlip(key, on);
+  }
+
+  Future<void> _doFlip(String key, bool on) async {
+    final val = on ? 'on' : 'off';
     setState(() => _busy.add(key));
     try {
       final res = await widget.service.ctlSet(key, val);
       if (res['call_edge'] == true) {
-        // VM: no-op if already in the target state.
         final cur = (_vm['status'] ?? 'unknown').toString();
         if ((on && cur == 'running') || (!on && cur == 'stopped')) {
           if (mounted) {
@@ -131,9 +148,125 @@ class _DevQueueControlState extends State<DevQueueControl> {
       }
       await _load();
     } catch (e) {
-      if (mounted) showToast(context, e.toString(), isError: true);
+      // Backend also enforces the ordering — surface a refusal as a mini popup.
+      final msg = e.toString();
+      if (mounted && msg.contains('LOCKED')) {
+        _showMini(key, message: _lockMsg(key));
+      } else if (mounted) {
+        showToast(context, msg, isError: true);
+      }
     } finally {
       if (mounted) setState(() => _busy.remove(key));
+    }
+  }
+
+  /// A small floating card anchored just above the tapped toggle. Info popups
+  /// auto-dismiss; confirm popups carry a Cancel / action pair.
+  void _showMini(String key,
+      {required String message, String? confirmLabel, VoidCallback? onConfirm}) {
+    _mini?.remove();
+    _mini = null;
+    final ctx = _anchors[key]?.currentContext;
+    final overlay = Overlay.of(context);
+    if (ctx == null) return;
+    final box = ctx.findRenderObject() as RenderBox;
+    final topLeft = box.localToGlobal(Offset.zero);
+    final screen = MediaQuery.of(context).size;
+    // right-align the card to the switch; place it above, or below if near top.
+    const w = 210.0;
+    final right = (screen.width - (topLeft.dx + box.size.width)).clamp(8.0, screen.width - w - 8);
+    final above = topLeft.dy > 130;
+    final top = above ? topLeft.dy - 8 : topLeft.dy + box.size.height + 8;
+
+    void close() {
+      _mini?.remove();
+      _mini = null;
+    }
+
+    final entry = OverlayEntry(builder: (_) {
+      return Stack(children: [
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onTap: close,
+          ),
+        ),
+        Positioned(
+          right: right,
+          top: above ? null : top,
+          bottom: above ? (screen.height - topLeft.dy + 8) : null,
+          width: w,
+          child: Material(
+            color: Colors.transparent,
+            child: Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: kTextHi,
+                borderRadius: BorderRadius.circular(12),
+                boxShadow: [
+                  BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.22),
+                      blurRadius: 14,
+                      offset: const Offset(0, 4)),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(children: [
+                    Icon(confirmLabel == null ? Icons.lock_outline : Icons.help_outline,
+                        size: 15, color: Colors.white),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(message,
+                          style: const TextStyle(
+                              fontSize: 12.5,
+                              height: 1.3,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.white)),
+                    ),
+                  ]),
+                  if (confirmLabel != null) ...[
+                    const SizedBox(height: 10),
+                    Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                      TextButton(
+                        onPressed: close,
+                        style: TextButton.styleFrom(
+                            minimumSize: const Size(0, 32),
+                            padding: const EdgeInsets.symmetric(horizontal: 10)),
+                        child: Text(c('dev_queue.btn_cancel'),
+                            style: const TextStyle(
+                                fontSize: 12.5, color: Colors.white70)),
+                      ),
+                      const SizedBox(width: 4),
+                      FilledButton(
+                        onPressed: () {
+                          close();
+                          onConfirm?.call();
+                        },
+                        style: FilledButton.styleFrom(
+                            backgroundColor: const Color(0xFF991B1B),
+                            minimumSize: const Size(0, 32),
+                            padding: const EdgeInsets.symmetric(horizontal: 14)),
+                        child: Text(confirmLabel,
+                            style: const TextStyle(fontSize: 12.5)),
+                      ),
+                    ]),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
+      ]);
+    });
+    _mini = entry;
+    overlay.insert(entry);
+    if (confirmLabel == null) {
+      Future.delayed(const Duration(milliseconds: 2200), () {
+        if (_mini == entry) close();
+      });
     }
   }
 
@@ -344,10 +477,16 @@ class _DevQueueControlState extends State<DevQueueControl> {
           child: SizedBox(
               width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
         ),
-      Switch(
-        value: on,
-        activeTrackColor: kBrand,
-        onChanged: busy ? null : (v) => _flip(key, v),
+      // The switch keeps its colour even when locked — a locked tap floats a
+      // reason popup instead of flipping (handled in _onToggle), so we never
+      // grey it out. onChanged stays live unless a real flip is in flight.
+      KeyedSubtree(
+        key: _anchors[key],
+        child: Switch(
+          value: on,
+          activeTrackColor: kBrand,
+          onChanged: busy ? null : (v) => _onToggle(key, v),
+        ),
       ),
     ]);
   }

@@ -72,8 +72,11 @@ class DevQueueService {
       _c.rpc('dev_cmd_approve', params: {'p_id': id});
   Future<void> reject(int id, String reason) async =>
       _c.rpc('dev_cmd_reject', params: {'p_id': id, 'p_reason': reason});
-  Future<void> requestAndroid(int id) async =>
-      _c.rpc('dev_cmd_request_android', params: {'p_id': id});
+  Future<void> requestAndroid(int id, {String buildType = 'apk'}) async =>
+      _c.rpc('dev_cmd_request_android',
+          params: {'p_id': id, 'p_build_type': buildType});
+  Future<void> requestDebug(int id) async =>
+      _c.rpc('dev_cmd_request_debug', params: {'p_id': id});
   Future<void> reply(int id, String body,
           {List<String> images = const []}) async =>
       _c.rpc('dev_cmd_reply',

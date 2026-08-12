@@ -396,10 +396,24 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
         break;
       case 'building':
         add('dev_queue.btn_pause', () => _run(() => _svc.pause(widget.id)));
+        add('dev_queue.btn_debug', _debug, icon: Icons.bug_report_outlined);
         break;
       case 'completed':
         add('dev_queue.btn_rollback', _rollback,
             color: const Color(0xFF991B1B), icon: Icons.undo);
+        add('dev_queue.btn_build_apk',
+            () => _run(() => _svc.requestAndroid(widget.id, buildType: 'apk')),
+            icon: Icons.android, color: kBrand);
+        add('dev_queue.btn_build_aab',
+            () => _run(() => _svc.requestAndroid(widget.id, buildType: 'aab')),
+            icon: Icons.android);
+        add('dev_queue.btn_debug', _debug, icon: Icons.bug_report_outlined);
+        break;
+      case 'failed':
+        add('dev_queue.btn_debug', _debug, icon: Icons.bug_report_outlined);
+        add('dev_queue.btn_build_apk',
+            () => _run(() => _svc.requestAndroid(widget.id, buildType: 'apk')),
+            icon: Icons.android, color: kBrand);
         break;
       case 'needs_input':
         add('dev_queue.btn_cancel', () => _cancel(),
@@ -417,6 +431,12 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
   Future<void> _cancel() async {
     if (await _confirm('dev_queue.confirm_cancel')) {
       _run(() => _svc.cancel(widget.id));
+    }
+  }
+
+  Future<void> _debug() async {
+    if (await _confirm('dev_queue.confirm_debug')) {
+      _run(() => _svc.requestDebug(widget.id));
     }
   }
 

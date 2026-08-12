@@ -26,8 +26,10 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
 
   bool _urgent = false;
   bool _approval = false;
-  bool _android = false;
+  bool _apk = false;
+  bool _aab = false;
   bool _ios = false;
+  bool _debug = false;
   bool _busy = false;
   List<String> _images = const [];
 
@@ -79,8 +81,10 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
           'require_approval': _approval,
           if (_batch.text.trim().isNotEmpty) 'batch_label': _batch.text.trim(),
           'targets_web': true,
-          'targets_android': _android,
+          'android_apk': _apk,
+          'android_aab': _aab,
           'targets_ios': _ios,
+          'debug': _debug,
           if (_images.isNotEmpty) 'images': _images,
         }
     ];
@@ -262,9 +266,9 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
             borderSide: const BorderSide(color: kBorder),
           ),
           focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: const BorderSide(color: kBrand),
-          ),
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: kBorder),
+        ),
         ),
       );
 
@@ -303,9 +307,11 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
             (v) => setState(() => _urgent = v)),
         _toggle(c('dev_queue.toggle_approval'), _approval,
             (v) => setState(() => _approval = v)),
-        _toggle(c('dev_queue.toggle_android'), _android,
-            (v) => setState(() => _android = v)),
+        _toggle(c('dev_queue.toggle_apk'), _apk, (v) => setState(() => _apk = v)),
+        _toggle(c('dev_queue.toggle_aab'), _aab, (v) => setState(() => _aab = v)),
         _toggle(c('dev_queue.toggle_ios'), _ios, (v) => setState(() => _ios = v)),
+        _toggle(c('dev_queue.toggle_debug'), _debug,
+            (v) => setState(() => _debug = v)),
       ]);
 
   Widget _toggle(String label, bool value, ValueChanged<bool>? onChanged) {
@@ -411,7 +417,7 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(8),
-          borderSide: const BorderSide(color: kBrand),
+          borderSide: const BorderSide(color: kBorder),
         ),
       );
 }

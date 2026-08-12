@@ -263,9 +263,9 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
                   borderSide: const BorderSide(color: kBorder),
                 ),
                 focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide: const BorderSide(color: kBrand),
-                ),
+          borderRadius: BorderRadius.circular(8),
+          borderSide: const BorderSide(color: kBorder),
+        ),
               ),
             ),
           ),

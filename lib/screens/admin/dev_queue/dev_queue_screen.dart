@@ -178,52 +178,66 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
         label: Text(c('dev_queue.btn_add'),
             style: const TextStyle(color: Colors.white)),
       ),
+      // One scroll surface — the control strip, search and filters scroll away
+      // with the rows so nothing is trapped behind a fixed header (the whole
+      // Dev Queue page scrolls as one, on mobile and desktop alike).
       body: SafeArea(
-        child: Column(children: [
-          DevQueueControl(service: _svc),
-          _header(),
-          _filters(),
-          if (_status == 'cancelled' && _rows.isNotEmpty) _clearBar(),
-          Expanded(
-            child: _loading
-                ? const Center(child: CircularProgressIndicator(color: kBrand))
-                : _rows.isEmpty
-                    ? _empty()
-                    : RefreshIndicator(
-                        color: kBrand,
-                        onRefresh: _load,
-                        child: reorderable
-                            ? ReorderableListView.builder(
-                                padding: const EdgeInsets.fromLTRB(16, 4, 16, 96),
-                                itemCount: _rows.length,
-                                onReorder: _reorder,
-                                itemBuilder: (ctx, i) => Padding(
-                                  key: ValueKey(_rows[i]['id']),
-                                  padding: const EdgeInsets.only(bottom: 12),
-                                  child: _Row(
-                                      row: _rows[i],
-                                      draggable: true,
-                                      onTap: () =>
-                                          _openDetail(_rows[i])),
-                                ),
-                              )
-                            : ListView.separated(
-                                padding: const EdgeInsets.fromLTRB(16, 4, 16, 96),
-                                itemCount: _rows.length,
-                                separatorBuilder: (_, __) =>
-                                    const SizedBox(height: 12),
-                                itemBuilder: (ctx, i) => _Row(
-                                    row: _rows[i],
-                                    onTap: () =>
-                                        _openDetail(_rows[i]),
-                                    onDelete:
-                                        _rows[i]['status'] == 'cancelled'
-                                            ? () => _delete(_rows[i])
-                                            : null),
-                              ),
+        child: RefreshIndicator(
+          color: kBrand,
+          onRefresh: _load,
+          child: CustomScrollView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            slivers: [
+              SliverToBoxAdapter(child: DevQueueControl(service: _svc)),
+              SliverToBoxAdapter(child: _header()),
+              SliverToBoxAdapter(child: _filters()),
+              if (_status == 'cancelled' && _rows.isNotEmpty)
+                SliverToBoxAdapter(child: _clearBar()),
+              if (_loading)
+                const SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.only(top: 80),
+                    child: Center(child: CircularProgressIndicator(color: kBrand)),
+                  ),
+                )
+              else if (_rows.isEmpty)
+                SliverToBoxAdapter(child: _empty())
+              else if (reorderable)
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 96),
+                  sliver: SliverReorderableList(
+                    itemCount: _rows.length,
+                    onReorder: _reorder,
+                    itemBuilder: (ctx, i) => Padding(
+                      key: ValueKey(_rows[i]['id']),
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: ReorderableDelayedDragStartListener(
+                        index: i,
+                        child: _Row(
+                            row: _rows[i],
+                            draggable: true,
+                            onTap: () => _openDetail(_rows[i])),
                       ),
+                    ),
+                  ),
+                )
+              else
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 96),
+                  sliver: SliverList.separated(
+                    itemCount: _rows.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 12),
+                    itemBuilder: (ctx, i) => _Row(
+                        row: _rows[i],
+                        onTap: () => _openDetail(_rows[i]),
+                        onDelete: _rows[i]['status'] == 'cancelled'
+                            ? () => _delete(_rows[i])
+                            : null),
+                  ),
+                ),
+            ],
           ),
-        ]),
+        ),
       ),
     );
   }
@@ -317,21 +331,20 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
         ),
       );
 
-  Widget _empty() => ListView(children: [
-        const SizedBox(height: 120),
-        Icon(Icons.inbox_outlined, size: 56, color: kTextLo.withValues(alpha: 0.5)),
-        const SizedBox(height: 16),
-        Center(
-          child: Text(c('dev_queue.empty_title'),
+  Widget _empty() => Padding(
+        padding: const EdgeInsets.only(top: 80, bottom: 40),
+        child: Column(children: [
+          Icon(Icons.inbox_outlined,
+              size: 56, color: kTextLo.withValues(alpha: 0.5)),
+          const SizedBox(height: 16),
+          Text(c('dev_queue.empty_title'),
               style: const TextStyle(
                   fontSize: 16, fontWeight: FontWeight.w700, color: kTextHi)),
-        ),
-        const SizedBox(height: 6),
-        Center(
-          child: Text(c('dev_queue.empty_body'),
+          const SizedBox(height: 6),
+          Text(c('dev_queue.empty_body'),
               style: const TextStyle(fontSize: 13, color: kTextLo)),
-        ),
-      ]);
+        ]),
+      );
 }
 
 class _Row extends StatelessWidget {
@@ -355,7 +368,6 @@ class _Row extends StatelessWidget {
     final deploy = row['web_deploy_no'];
     final android = (row['android_status'] ?? 'not_requested').toString();
     final msgs = asInt(row['msg_count']);
-    final cost = row['cost_inr'];
 
     return DqCard(
       onTap: onTap,
@@ -430,8 +442,11 @@ class _Row extends StatelessWidget {
                 tone: androidTone(android),
                 icon: Icons.android,
                 spinning: android == 'building'),
-          if ((cost as num?) != null && cost != 0)
-            ToneChip(label: rupee(cost), tone: statusTone('paused')),
+          if (row['has_tokens'] == true)
+            ToneChip(
+                label: '${row['tokens_display'] ?? ''} · ${row['cost_display'] ?? ''}',
+                tone: statusTone('paused'),
+                icon: Icons.data_usage),
           if (msgs > 0)
             ToneChip(
                 label: '$msgs', tone: statusTone('awaiting_approval'), icon: Icons.chat_bubble_outline),

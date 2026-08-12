@@ -21,6 +21,7 @@ class DevQueueControl extends StatefulWidget {
 class _DevQueueControlState extends State<DevQueueControl> {
   Timer? _poll;
   Map<String, dynamic> _snap = const {};
+  Map<String, dynamic> _usage = const {};
   final Set<String> _busy = {}; // keys mid-flip
 
   @override
@@ -38,8 +39,16 @@ class _DevQueueControlState extends State<DevQueueControl> {
 
   Future<void> _load() async {
     try {
-      final s = await widget.service.ctlGet();
-      if (mounted) setState(() => _snap = s);
+      final results = await Future.wait([
+        widget.service.ctlGet(),
+        widget.service.sessionUsage(),
+      ]);
+      if (mounted) {
+        setState(() {
+          _snap = results[0];
+          _usage = results[1];
+        });
+      }
     } catch (_) {}
   }
 
@@ -142,8 +151,54 @@ class _DevQueueControlState extends State<DevQueueControl> {
         _row('claude', c('dev_queue.ctl_claude'), Icons.terminal, _claudeChip()),
         _divider(),
         _row('workflow', c('dev_queue.ctl_workflow'), Icons.sync, _workflowChip()),
+        if (_usage.isNotEmpty) ...[
+          _divider(),
+          _usageMeter(),
+        ],
       ]),
     );
+  }
+
+  /// Session usage meter — tokens/cost used in the rolling window vs the
+  /// configurable budget. Every string + the percent come from the backend.
+  Widget _usageMeter() {
+    final pct = (_usage['pct'] as num?)?.toDouble() ?? 0;
+    final tone = statusTone((_usage['tone'] ?? 'completed').toString());
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        const Icon(Icons.data_usage, size: 18, color: kTextLo),
+        const SizedBox(width: 8),
+        Text(c('dev_queue.usage_label'),
+            style: const TextStyle(
+                fontSize: 14, fontWeight: FontWeight.w600, color: kTextHi)),
+        const Spacer(),
+        Text('${_usage['window_label'] ?? ''} · ${_usage['pct_display'] ?? ''}',
+            style: const TextStyle(fontSize: 12, color: kTextLo)),
+      ]),
+      const SizedBox(height: 8),
+      ClipRRect(
+        borderRadius: BorderRadius.circular(6),
+        child: LinearProgressIndicator(
+          value: (pct / 100).clamp(0.0, 1.0),
+          minHeight: 8,
+          backgroundColor: const Color(0xFFF1F2F4),
+          valueColor: AlwaysStoppedAnimation(tone.fg),
+        ),
+      ),
+      const SizedBox(height: 6),
+      Wrap(spacing: 8, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+        Text('${_usage['window_tokens_display'] ?? ''}',
+            style: const TextStyle(
+                fontSize: 12, fontWeight: FontWeight.w700, color: kTextHi)),
+        ToneChip(label: '${_usage['window_cost_display'] ?? ''}', tone: statusTone('paused')),
+        Text('${_usage['remaining_display'] ?? ''}',
+            style: const TextStyle(fontSize: 11, color: kTextLo)),
+      ]),
+      const SizedBox(height: 4),
+      Text(
+          '${c('dev_queue.usage_today')} ${_usage['today_tokens_display'] ?? ''} · ${_usage['today_cost_display'] ?? ''} · ${_usage['today_commands'] ?? 0}',
+          style: const TextStyle(fontSize: 11, color: kTextLo)),
+    ]);
   }
 
   Widget _divider() =>

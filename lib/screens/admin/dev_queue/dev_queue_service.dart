@@ -109,6 +109,11 @@ class DevQueueService {
       .from('dev-cmd-proofs')
       .createSignedUrl(path, 3600);
 
+  /// Rolling-window session token/cost usage vs the configurable budget —
+  /// rendered verbatim (all strings + percent come from the backend).
+  Future<Map<String, dynamic>> sessionUsage() async =>
+      _asMap(await _c.rpc('dev_cmd_session_usage'));
+
   // ── Runner control plane ────────────────────────────────────────────────
   Future<Map<String, dynamic>> ctlGet() async =>
       _asMap(await _c.rpc('dev_ctl_get'));

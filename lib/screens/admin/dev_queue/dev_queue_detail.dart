@@ -136,6 +136,8 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
               children: [
                 _titleBlock(),
                 if (_row['web_deploy_no'] != null) _changeBanner(),
+                if (_spec['has_tokens'] == true || _status == 'building')
+                  _tokensCard(),
                 if (_status == 'needs_input') _needsInputBanner(),
                 const SizedBox(height: 12),
                 _targets(),
@@ -216,6 +218,50 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
         if (_row['web_deployed_at'] != null)
           Text(istShort(_row['web_deployed_at'].toString()),
               style: const TextStyle(fontSize: 11, color: Color(0xFF065F46))),
+      ]),
+    );
+  }
+
+  /// Per-command token usage — updates live while building (heartbeat feeds
+  /// cost_input/output_tokens) and shows the final total after. All numbers are
+  /// backend-formatted display strings.
+  Widget _tokensCard() {
+    final live = _status == 'building';
+    return Container(
+      margin: const EdgeInsets.only(top: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: kBorder),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Icon(Icons.data_usage, size: 18, color: kTextLo),
+          const SizedBox(width: 8),
+          Text(c(live ? 'dev_queue.tokens_live' : 'dev_queue.tokens_label'),
+              style: const TextStyle(
+                  fontSize: 12, fontWeight: FontWeight.w700, color: kTextLo)),
+          const Spacer(),
+          if (live) _liveBadge(),
+        ]),
+        const SizedBox(height: 8),
+        Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+          Text('${_spec['tokens_total_display'] ?? '0'}',
+              style: const TextStyle(
+                  fontSize: 24, fontWeight: FontWeight.w800, color: kTextHi)),
+          const SizedBox(width: 8),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 3),
+            child: Text('${_spec['cost_display'] ?? ''}',
+                style: const TextStyle(
+                    fontSize: 14, fontWeight: FontWeight.w700, color: kBrand)),
+          ),
+        ]),
+        const SizedBox(height: 4),
+        Text(
+            '↓ ${_spec['tokens_in_display'] ?? '0'}   ↑ ${_spec['tokens_out_display'] ?? '0'}',
+            style: const TextStyle(fontSize: 12, color: kTextLo)),
       ]),
     );
   }

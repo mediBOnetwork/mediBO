@@ -65,6 +65,7 @@ class DevQueueService {
       _c.rpc('dev_cmd_cancel', params: {'p_id': id});
   Future<void> delete(int id) async =>
       _c.rpc('dev_cmd_delete', params: {'p_id': id});
+  Future<void> deleteCancelled() async => _c.rpc('dev_cmd_delete_cancelled');
   Future<void> approve(int id) async =>
       _c.rpc('dev_cmd_approve', params: {'p_id': id});
   Future<void> reject(int id, String reason) async =>

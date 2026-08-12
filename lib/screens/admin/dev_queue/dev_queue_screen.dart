@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../../services/ui_copy.dart';
+import '../../../utils/toast.dart';
 import 'dev_queue_common.dart';
 import 'dev_queue_service.dart';
 import 'dev_queue_bulk_add.dart';
@@ -99,6 +100,46 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
     _load(silent: true);
   }
 
+  Future<bool> _confirm(String key) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        content: Text(c(key)),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(c('dev_queue.btn_cancel'))),
+          FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF991B1B)),
+              child: Text(c('dev_queue.btn_delete'))),
+        ],
+      ),
+    );
+    return ok == true;
+  }
+
+  Future<void> _delete(Map<String, dynamic> row) async {
+    if (!await _confirm('dev_queue.confirm_delete')) return;
+    try {
+      await _svc.delete(asInt(row['id']));
+    } catch (e) {
+      if (mounted) showToast(context, e.toString(), isError: true);
+    }
+    _load(silent: true);
+  }
+
+  Future<void> _clearCancelled() async {
+    if (!await _confirm('dev_queue.confirm_clear_cancelled')) return;
+    try {
+      await _svc.deleteCancelled();
+    } catch (e) {
+      if (mounted) showToast(context, e.toString(), isError: true);
+    }
+    _load(silent: true);
+  }
+
   Future<void> _reorder(int oldI, int newI) async {
     final rows = [..._rows];
     if (newI > oldI) newI -= 1;
@@ -142,6 +183,7 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
           DevQueueControl(service: _svc),
           _header(),
           _filters(),
+          if (_status == 'cancelled' && _rows.isNotEmpty) _clearBar(),
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator(color: kBrand))
@@ -173,7 +215,11 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
                                 itemBuilder: (ctx, i) => _Row(
                                     row: _rows[i],
                                     onTap: () =>
-                                        _openDetail(_rows[i])),
+                                        _openDetail(_rows[i]),
+                                    onDelete:
+                                        _rows[i]['status'] == 'cancelled'
+                                            ? () => _delete(_rows[i])
+                                            : null),
                               ),
                       ),
           ),
@@ -254,6 +300,23 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
     );
   }
 
+  Widget _clearBar() => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+        child: Align(
+          alignment: Alignment.centerRight,
+          child: TextButton.icon(
+            onPressed: _clearCancelled,
+            icon: const Icon(Icons.delete_sweep_outlined,
+                size: 18, color: Color(0xFF991B1B)),
+            label: Text(c('dev_queue.btn_clear_cancelled'),
+                style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF991B1B))),
+          ),
+        ),
+      );
+
   Widget _empty() => ListView(children: [
         const SizedBox(height: 120),
         Icon(Icons.inbox_outlined, size: 56, color: kTextLo.withValues(alpha: 0.5)),
@@ -274,8 +337,13 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
 class _Row extends StatelessWidget {
   final Map<String, dynamic> row;
   final VoidCallback onTap;
+  final VoidCallback? onDelete;
   final bool draggable;
-  const _Row({required this.row, required this.onTap, this.draggable = false});
+  const _Row(
+      {required this.row,
+      required this.onTap,
+      this.onDelete,
+      this.draggable = false});
 
   @override
   Widget build(BuildContext context) {
@@ -305,6 +373,16 @@ class _Row extends StatelessWidget {
           const Spacer(),
           if (draggable)
             const Icon(Icons.drag_handle, size: 18, color: kTextLo),
+          if (onDelete != null)
+            InkWell(
+              onTap: onDelete,
+              borderRadius: BorderRadius.circular(20),
+              child: const Padding(
+                padding: EdgeInsets.all(4),
+                child: Icon(Icons.delete_outline,
+                    size: 20, color: Color(0xFF991B1B)),
+              ),
+            ),
         ]),
         const SizedBox(height: 8),
         Text((row['title'] ?? '').toString(),

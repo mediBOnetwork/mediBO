@@ -134,6 +134,7 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
               children: [
                 _titleBlock(),
+                if (_row['web_deploy_no'] != null) _changeBanner(),
                 if (_status == 'needs_input') _needsInputBanner(),
                 const SizedBox(height: 12),
                 _targets(),
@@ -180,6 +181,43 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
                   fontSize: 17, fontWeight: FontWeight.w700, color: kTextHi)),
         ),
       ]);
+
+  /// The deployed change number, shown big at the top of a finished command so
+  /// Om reads it without hunting. `web_deploy_no` is the change number the
+  /// deploy lane stamped.
+  Widget _changeBanner() {
+    final n = _row['web_deploy_no'];
+    return Container(
+      margin: const EdgeInsets.only(top: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFD1FAE5),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(children: [
+        const Icon(Icons.cloud_done_outlined, size: 20, color: Color(0xFF065F46)),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(c('dev_queue.section_change'),
+                style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF065F46))),
+            const SizedBox(height: 2),
+            Text('${c('dev_queue.change_prefix')}$n',
+                style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFF065F46))),
+          ]),
+        ),
+        if (_row['web_deployed_at'] != null)
+          Text(istShort(_row['web_deployed_at'].toString()),
+              style: const TextStyle(fontSize: 11, color: Color(0xFF065F46))),
+      ]),
+    );
+  }
 
   Widget _needsInputBanner() => Container(
         margin: const EdgeInsets.only(top: 12),

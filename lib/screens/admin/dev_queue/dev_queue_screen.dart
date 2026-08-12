@@ -370,6 +370,26 @@ class _Row extends StatelessWidget {
           Text('#$id',
               style: const TextStyle(
                   fontSize: 12, fontWeight: FontWeight.w700, color: kTextLo)),
+          if (deploy != null) ...[
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: const Color(0xFFD1FAE5),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.cloud_done_outlined,
+                    size: 13, color: Color(0xFF065F46)),
+                const SizedBox(width: 4),
+                Text('${c('dev_queue.change_prefix')}$deploy',
+                    style: const TextStyle(
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF065F46))),
+              ]),
+            ),
+          ],
           const Spacer(),
           if (draggable)
             const Icon(Icons.drag_handle, size: 18, color: kTextLo),
@@ -410,11 +430,6 @@ class _Row extends StatelessWidget {
                 tone: androidTone(android),
                 icon: Icons.android,
                 spinning: android == 'building'),
-          if (deploy != null)
-            ToneChip(
-                label: '${c('dev_queue.deploy_prefix')}$deploy',
-                tone: statusTone('completed'),
-                icon: Icons.cloud_done_outlined),
           if ((cost as num?) != null && cost != 0)
             ToneChip(label: rupee(cost), tone: statusTone('paused')),
           if (msgs > 0)

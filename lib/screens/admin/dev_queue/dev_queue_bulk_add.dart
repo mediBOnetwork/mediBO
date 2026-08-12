@@ -22,7 +22,6 @@ class DevQueueBulkAdd extends StatefulWidget {
 class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
   final _paste = TextEditingController();
   final _batch = TextEditingController();
-  List<TextEditingController> _titles = [];
   List<String> _specs = [];
 
   bool _urgent = false;
@@ -46,7 +45,6 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
   void dispose() {
     _paste.dispose();
     _batch.dispose();
-    for (final t in _titles) t.dispose();
     super.dispose();
   }
 
@@ -63,34 +61,19 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
       .where((s) => s.isNotEmpty)
       .toList();
 
-  String _defaultTitle(String spec) {
-    final first = spec
-        .split('\n')
-        .map((l) => l.trim())
-        .firstWhere((l) => l.isNotEmpty, orElse: () => '');
-    return first.length > 80 ? '${first.substring(0, 77)}…' : first;
-  }
-
   void _reparse() {
-    final specs = _split(_paste.text);
-    if (specs.length != _specs.length) {
-      for (final t in _titles) t.dispose();
-      _titles =
-          specs.map((s) => TextEditingController(text: _defaultTitle(s))).toList();
-    }
     setState(() {
-      _specs = specs;
+      _specs = _split(_paste.text);
       _warnings = const [];
     });
   }
 
+  // The title is derived by the backend from each spec — the app never invents
+  // or edits it. We send spec + toggles only.
   List<Map<String, dynamic>> _buildItems() {
     return [
       for (var i = 0; i < _specs.length; i++)
         {
-          'title': _titles[i].text.trim().isEmpty
-              ? _defaultTitle(_specs[i])
-              : _titles[i].text.trim(),
           'spec': _specs[i],
           'urgent': _urgent,
           'require_approval': _approval,
@@ -104,12 +87,10 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
   }
 
   Future<void> _submit({bool force = false}) async {
-    final items = force
-        ? _buildItems()
-            .where((it) =>
-                _warnings.any((w) => w['title'] == it['title']))
-            .toList()
-        : _buildItems();
+    // On "add anyway" the backend re-evaluates every item with p_force=true;
+    // we resend the same batch rather than trying to match by title (the app
+    // no longer holds titles — the backend owns them).
+    final items = _buildItems();
     if (items.isEmpty) return;
     setState(() => _busy = true);
     try {
@@ -230,13 +211,23 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
                 _batchField(),
                 if (n > 0) ...[
                   const SizedBox(height: 16),
-                  Text(n == 1 ? c('dev_queue.bulk_count_one') : '$n',
-                      style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: kTextLo)),
-                  const SizedBox(height: 8),
-                  for (var i = 0; i < n; i++) _titleTile(i),
+                  Row(children: [
+                    const Icon(Icons.playlist_add_check,
+                        size: 18, color: kBrand),
+                    const SizedBox(width: 8),
+                    Text(
+                        n == 1
+                            ? c('dev_queue.bulk_count_one')
+                            : c('dev_queue.bulk_count_many')
+                                .replaceFirst('{n}', '$n'),
+                        style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: kTextHi)),
+                  ]),
+                  const SizedBox(height: 4),
+                  Text(c('dev_queue.bulk_autotitle_hint'),
+                      style: const TextStyle(fontSize: 12, color: kTextLo)),
                 ],
                 if (_warnings.isNotEmpty) _warningsBox(),
               ],
@@ -342,32 +333,6 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
         controller: _batch,
         style: const TextStyle(fontSize: 14),
         decoration: _fieldDeco(c('dev_queue.label_batch')),
-      );
-
-  Widget _titleTile(int i) => Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: kBorder),
-        ),
-        child: Row(children: [
-          Text('${i + 1}',
-              style: const TextStyle(
-                  fontSize: 12, fontWeight: FontWeight.w700, color: kTextLo)),
-          const SizedBox(width: 10),
-          Expanded(
-            child: TextField(
-              controller: _titles[i],
-              style: const TextStyle(fontSize: 14, color: kTextHi),
-              decoration: InputDecoration(
-                border: InputBorder.none,
-                hintText: c('dev_queue.label_title'),
-              ),
-            ),
-          ),
-        ]),
       );
 
   Widget _warningsBox() => Container(

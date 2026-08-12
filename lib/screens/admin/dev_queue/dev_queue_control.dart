@@ -53,6 +53,19 @@ class _DevQueueControlState extends State<DevQueueControl> {
     } catch (_) {}
   }
 
+  /// Opening the panel signals the VM to fetch a live reading, then re-reads a
+  /// few times over the next several seconds to catch it — no manual button.
+  /// The VM guards the rate limit, so a rapid re-open just re-serves fresh data.
+  void _refreshUsage() {
+    widget.service.requestUsageRefresh();
+    _load();
+    for (final s in const [2, 5, 9]) {
+      Timer(Duration(seconds: s), () {
+        if (mounted && _expanded) _load();
+      });
+    }
+  }
+
   Map<String, dynamic> get _desired =>
       (_snap['desired_state'] as Map?)?.cast<String, dynamic>() ?? const {};
   Map<String, dynamic> get _status =>
@@ -147,7 +160,7 @@ class _DevQueueControlState extends State<DevQueueControl> {
         InkWell(
           onTap: () {
             setState(() => _expanded = !_expanded);
-            if (_expanded) _load(); // fetch the freshest usage on open
+            if (_expanded) _refreshUsage(); // pull a FRESH reading on open
           },
           borderRadius: BorderRadius.circular(8),
           child: Padding(
@@ -241,8 +254,7 @@ class _DevQueueControlState extends State<DevQueueControl> {
             style: const TextStyle(
                 fontSize: 14, fontWeight: FontWeight.w600, color: kTextHi)),
         const Spacer(),
-        Text('${_usage['updated_display'] ?? ''}',
-            style: const TextStyle(fontSize: 11, color: kTextLo)),
+        _syncChip(),
       ]),
       const SizedBox(height: 10),
       for (final raw in limits) _limitBar(Map<String, dynamic>.from(raw as Map)),
@@ -252,6 +264,29 @@ class _DevQueueControlState extends State<DevQueueControl> {
       Text('${_usage['today_display'] ?? ''}',
           style: const TextStyle(fontSize: 11, color: kTextLo)),
     ]);
+  }
+
+  /// Freshness indicator for the usage block. The string AND the tone come from
+  /// the backend (updated_display / updated_tone): green when live, amber/red
+  /// when the reading is stale — so a minutes-old number can never look current.
+  Widget _syncChip() {
+    final txt = '${_usage['updated_display'] ?? ''}';
+    if (txt.isEmpty) return const SizedBox.shrink();
+    final tone = statusTone((_usage['updated_tone'] ?? 'completed').toString());
+    final fresh = (_usage['stale'] ?? false) != true;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+          color: tone.bg, borderRadius: BorderRadius.circular(20)),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(fresh ? Icons.check_circle : Icons.sync_problem,
+            size: 12, color: tone.fg),
+        const SizedBox(width: 4),
+        Text(txt,
+            style: TextStyle(
+                fontSize: 11, fontWeight: FontWeight.w600, color: tone.fg)),
+      ]),
+    );
   }
 
   Widget _limitBar(Map<String, dynamic> l) {

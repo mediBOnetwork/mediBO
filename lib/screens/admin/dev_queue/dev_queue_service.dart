@@ -151,6 +151,15 @@ class DevQueueService {
   Future<Map<String, dynamic>> sessionUsage() async =>
       _asMap(await _c.rpc('dev_cmd_session_usage'));
 
+  /// Ask the VM to pull a FRESH usage reading now (fired when the panel opens).
+  /// The app only records the intent; the VM poller does the rate-limited fetch
+  /// and pushes the result, which the next sessionUsage() render picks up.
+  Future<void> requestUsageRefresh() async {
+    try {
+      await _c.rpc('dev_request_usage_refresh');
+    } catch (_) {/* best-effort signal; the background poller still refreshes */}
+  }
+
   // ── Runner control plane ────────────────────────────────────────────────
   Future<Map<String, dynamic>> ctlGet() async =>
       _asMap(await _c.rpc('dev_ctl_get'));

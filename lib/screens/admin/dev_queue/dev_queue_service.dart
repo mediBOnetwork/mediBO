@@ -112,9 +112,11 @@ class DevQueueService {
     return {'path': path, 'kind': kind, 'name': name};
   }
 
-  /// A one-year signed URL to open a stored attachment (video / pdf / doc).
+  /// A short-lived (15-minute) signed URL to open a stored attachment
+  /// (video / pdf / doc). Generated on demand each view — never persisted —
+  /// so a tight expiry cannot break a stored link. (CHANGE #92 hardening.)
   Future<String> attachmentUrl(String path) =>
-      _c.storage.from(uploadsBucket).createSignedUrl(path, 31536000);
+      _c.storage.from(uploadsBucket).createSignedUrl(path, 900);
 
   Future<Map<String, dynamic>> rollback(int id) async =>
       _asMap(await _c.rpc('dev_cmd_rollback', params: {'p_id': id}));
@@ -142,9 +144,10 @@ class DevQueueService {
       _c.rpc('dev_cmd_template_save', params: {'p_name': name, 'p_spec': spec});
 
   /// Signed URL for a screenshot stored in the dev-cmd-proofs bucket.
+  /// 15-minute expiry, generated on demand each view. (CHANGE #92 hardening.)
   Future<String> proofUrl(String path) => _c.storage
       .from('dev-cmd-proofs')
-      .createSignedUrl(path, 3600);
+      .createSignedUrl(path, 900);
 
   /// Rolling-window session token/cost usage vs the configurable budget —
   /// rendered verbatim (all strings + percent come from the backend).

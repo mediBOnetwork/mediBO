@@ -444,3 +444,39 @@ Write "Design QA: passed (N checks)" into result_summary.
 6. States — empty state has one-line guidance; loading is a skeleton not a bare
    spinner; errors show backend copy + Retry.
 7. Tokens — zero new style literals (gate green); everything via Ds/theme.
+
+## 13. PARALLEL WORKERS (permanent — CHANGE #74)
+
+The VM runs a WORKER POOL, not a single builder. The supervisor
+(`mediBO-runner/supervisor.sh`) is the orchestrator: every 20s it reads
+`desired_state` + `worker_pool` config (`pool_get`/`pool_set`) + queue depth,
+scales tmux worker sessions `claude-1..claude-N` (agents `runner-1..N`; slot 1
+is the visible primary Om attaches to), and publishes a render-ready snapshot
+via `pool_status_write` that the app draws verbatim (`dev_ctl_get().pool`).
+
+Rules every worker follows, in order:
+1. **Plan → lease → build.** Before editing anything, list the EXACT repo files
+   you will create/edit and call `lease_try_all(command_id, worker_id, paths)`.
+   All-or-nothing, race-safe. NEVER edit an unleased file.
+2. **Conflict → next command, don't block.** `ok:false` → heartbeat a one-line
+   note (`waiting: <file> leased by #x`), lease nothing, and immediately claim
+   the NEXT pending command instead. Re-attempt the blocked one only when
+   re-claimed. Mid-build new file → single-path `lease_try_all` first; conflict
+   you can't route around → finish what you can, note it, `dev_cmd_fail`.
+3. **Leases free themselves.** `complete`/`fail`/`ask`/`cancel`/watchdog and the
+   `lease_sweep` cron all auto-release. Call nothing extra.
+4. **Build semaphore.** At most `build_semaphore` (default 2) concurrent
+   `flutter build` (flock `mediBO-runner/.build.sem`); coding is unlimited.
+5. **Deploy lane stays serialized** (deploy lock). Batching: when the lane frees
+   and ≥2 workers hold ready branches, merge in one lane pass → one CHANGE #;
+   each completed row names the shared number.
+6. **Backend-only command → skip the build.** Touched zero frontend files →
+   no `flutter build`, deploy nothing, `complete` with `p_deploy_no NULL` and
+   say so in `plain_summary`.
+7. **One worker per command.** Never edit another worker's in-flight branch.
+
+Guards (supervisor enforces): `billing_mode=max_subscription` AND Claude usage
+≥ `quota_shrink_pct` → pool shrinks to 1 (`shrink_reason=quota`); loadavg >
+`cpu_load_max` → shrink by one (`cpu`); `workflow=off` or frozen → 0 claims
+(sessions may stay alive idle). Idle ≥ `idle_shutdown_min` with an empty queue →
+VM powers off. The primary session is never killed while it is building.

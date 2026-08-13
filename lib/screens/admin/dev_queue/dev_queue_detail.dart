@@ -36,6 +36,7 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
 
   Map<String, dynamic> _row = const {};
   Map<String, dynamic> _spec = const {};
+  List<Map<String, dynamic>> _leases = const [];
   bool _loading = true;
   bool _busy = false;
   Timer? _tick; // 1s ticker for the live ATR countdown while building
@@ -80,10 +81,21 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
           .map((e) => Map<String, dynamic>.from(e));
       final row = rows.firstWhere((r) => asInt(r['id']) == widget.id,
           orElse: () => _row);
+      // While building, the row holds file leases — show them as path chips so
+      // Om can see exactly what this worker has locked (and any conflict note).
+      List<Map<String, dynamic>> leases = _leases;
+      if ((row['status'] ?? '').toString() == 'building') {
+        try {
+          leases = await _svc.leaseList(widget.id);
+        } catch (_) {/* keep prior */}
+      } else {
+        leases = const [];
+      }
       if (!mounted) return;
       setState(() {
         _spec = spec;
         _row = row;
+        _leases = leases;
         _loading = false;
       });
     } catch (_) {
@@ -152,6 +164,7 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
                 if (_status == 'needs_input') _needsInputBanner(),
                 const SizedBox(height: 12),
                 _targets(),
+                if (_status == 'building') _filesLocked(),
                 const SizedBox(height: 12),
                 _actions(),
                 const SizedBox(height: 12),
@@ -509,6 +522,48 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
               tone: statusTone('paused'),
               icon: Icons.apple),
         ]),
+      ]),
+    );
+  }
+
+  /// Files this building command holds a lease on — path chips from lease_list,
+  /// plus the builder's own conflict/delay note (eta_note) in amber when set.
+  /// Proves, at a glance, that no two workers touch the same file.
+  Widget _filesLocked() {
+    final note = (_spec['eta_note'] ?? '').toString();
+    return _sectionRaw(
+      c('dev_queue.files_locked'),
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (_leases.isEmpty)
+          Text(c('dev_queue.files_locked_none'),
+              style: Ds.t.caption.copyWith(color: Ds.c.textSecondary))
+        else
+          Wrap(spacing: Ds.space.x8, runSpacing: Ds.space.x8, children: [
+            for (final l in _leases)
+              ToneChip(
+                  label: (l['path'] ?? '').toString(),
+                  tone: statusTone('building'),
+                  icon: Icons.lock_outline),
+          ]),
+        if (note.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x8 + 2),
+          Container(
+            width: double.infinity,
+            padding: EdgeInsets.symmetric(
+                horizontal: Ds.space.x8 + 2, vertical: Ds.space.x8),
+            decoration: BoxDecoration(
+                color: Ds.c.warningSoft, borderRadius: Ds.r.rButton),
+            child: Row(children: [
+              Icon(Icons.info_outline, size: Ds.space.x16, color: Ds.c.warning),
+              SizedBox(width: Ds.space.x8),
+              Flexible(
+                child: Text(note,
+                    style: Ds.t.caption.copyWith(
+                        fontWeight: FontWeight.w600, color: Ds.c.warning)),
+              ),
+            ]),
+          ),
+        ],
       ]),
     );
   }

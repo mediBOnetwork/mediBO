@@ -5,6 +5,7 @@ import '../../../services/ui_copy.dart';
 import '../../../utils/toast.dart';
 import 'dev_queue_common.dart';
 import 'dev_queue_service.dart';
+import 'dev_queue_workers.dart';
 
 /// The runner control strip at the top of the Dev Queue tab: three toggles
 /// (VM / Claude / Workflow) with live status chips. Renders `dev_ctl_get`
@@ -308,6 +309,12 @@ class _DevQueueControlState extends State<DevQueueControl> {
           _row('claude', c('dev_queue.ctl_claude'), Icons.terminal, _claudeChip()),
           _divider(),
           _row('workflow', c('dev_queue.ctl_workflow'), Icons.sync, _workflowChip()),
+          _divider(),
+          WorkerGridCard(
+            pool: (_snap['pool'] as Map?)?.cast<String, dynamic>() ?? const {},
+            service: widget.service,
+            onChanged: _load,
+          ),
           if ((_usage['has_usage'] ?? false) == true) ...[
             _divider(),
             _usageMeter(),

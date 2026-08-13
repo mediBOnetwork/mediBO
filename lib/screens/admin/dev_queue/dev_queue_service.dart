@@ -160,6 +160,25 @@ class DevQueueService {
     } catch (_) {/* best-effort signal; the background poller still refreshes */}
   }
 
+  // ── Worker pool plane (parallel build) ──────────────────────────────────
+  /// The live pool snapshot: {config, state, leases}. `state` is what the VM
+  /// orchestrator last published (active_workers, workers[], quota, load,
+  /// shrink) — render-ready. The app never infers pool shape; it draws this.
+  Future<Map<String, dynamic>> poolGet() async =>
+      _asMap(await _c.rpc('pool_get'));
+
+  /// Change one or more pool-config fields (cap / auto / billing_mode /
+  /// idle_shutdown_min). PIN-gated by the backend — the app only passes the
+  /// admin's patch + PIN and renders the verdict it returns.
+  Future<Map<String, dynamic>> poolSet(
+          Map<String, dynamic> patch, String pin) async =>
+      _asMap(await _c.rpc('pool_set', params: {'p_patch': patch, 'p_pin': pin}));
+
+  /// The files a command currently holds a lease on, while it builds — rendered
+  /// verbatim as path chips in the row detail. Empty list when nothing locked.
+  Future<List<Map<String, dynamic>>> leaseList(int commandId) async =>
+      _asList(await _c.rpc('lease_list', params: {'p_command_id': commandId}));
+
   // ── Runner control plane ────────────────────────────────────────────────
   Future<Map<String, dynamic>> ctlGet() async =>
       _asMap(await _c.rpc('dev_ctl_get'));

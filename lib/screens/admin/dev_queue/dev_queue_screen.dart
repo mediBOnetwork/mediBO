@@ -430,8 +430,14 @@ class _Row extends StatelessWidget {
     final age = (row['age_display'] ?? '').toString();
     final tone = statusTone(status);
 
+    final claimedBy = (row['claimed_by'] ?? '').toString();
     final timing = _timingChip(status);
     final footer = <Widget>[
+      if (status == 'building' && claimedBy.isNotEmpty)
+        ToneChip(
+            label: claimedBy,
+            tone: statusTone('building'),
+            icon: Icons.terminal),
       if (timing != null) timing,
       if (urgent)
         ToneChip(

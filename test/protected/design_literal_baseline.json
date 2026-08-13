@@ -42,7 +42,7 @@
   "lib/screens/admin/dev_queue/dev_queue_detail.dart": 109,
   "lib/screens/admin/dev_queue/dev_queue_gcp.dart": 97,
   "lib/screens/admin/dev_queue/dev_queue_image_tray.dart": 4,
-  "lib/screens/admin/dev_queue/dev_queue_screen.dart": 42,
+  "lib/screens/admin/dev_queue/dev_queue_screen.dart": 36,
   "lib/screens/admin/order_payment_section.dart": 47,
   "lib/screens/admin/payments_tab.dart": 83,
   "lib/screens/admin/unmapped_companies_screen.dart": 48,

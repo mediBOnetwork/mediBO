@@ -319,8 +319,14 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
     return FilterChip(
       label: Text(label),
       selected: value,
+      // A locked chip (e.g. Web, always-on for dev commands) reads as a "dead
+      // button" when tapping it does nothing — so it carries a lock avatar to
+      // show it is intentionally on, not broken.
+      avatar: locked
+          ? const Icon(Icons.lock_outline, size: 15, color: Color(0xFF065F46))
+          : null,
       onSelected: locked ? null : (v) => onChanged(v),
-      showCheckmark: true,
+      showCheckmark: !locked,
       disabledColor: const Color(0xFFD1FAE5),
       selectedColor: const Color(0xFFD1FAE5),
       backgroundColor: Colors.white,

@@ -265,7 +265,7 @@ class _CashPaymentSheetState extends State<CashPaymentSheet> {
         });
       }
     } catch (e) {
-      setState(() { _error = e.toString(); _submitting = false; _uploadProgress = 0.0; });
+      if (mounted) setState(() { _error = e.toString(); _submitting = false; _uploadProgress = 0.0; });
     }
   }
 

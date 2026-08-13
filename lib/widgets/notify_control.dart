@@ -77,25 +77,37 @@ class _NotifyControlState extends State<NotifyControl> {
 
     final req = widget.request ??
         (id) => MedicineRepository().stockNotifyRequest(id);
-    final res = await req(widget.productId);
 
-    if (!mounted) return;
-    setState(() => _busy = false);
+    // The await MUST be able to throw without leaving the button dead. Before
+    // this guard, a single network hiccup on the RPC left `_busy` stuck true
+    // forever, so the Notify button "worked sometimes and not others" until a
+    // full page reload. Reset in `finally`, always.
+    NotifyResult? res;
+    try {
+      res = await req(widget.productId);
+    } catch (_) {
+      // The backend owns all wording — a thrown RPC just re-enables the tap.
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+
+    if (!mounted || res == null) return;
+    final r = res;
 
     // The one error the app acts on: send them to log in, then let them try
     // again. Everything else surfaces the backend's own wording.
-    if (res.loginRequired) {
+    if (r.loginRequired) {
       Navigator.of(context).pushNamed('/login');
       return;
     }
 
-    if (res.ok) {
-      if (res.toast.isNotEmpty) showToast(context, res.toast);
-      setState(() => _subscribed = res.subscribed);
+    if (r.ok) {
+      if (r.toast.isNotEmpty) showToast(context, r.toast);
+      setState(() => _subscribed = r.subscribed);
       return;
     }
 
-    if (res.toast.isNotEmpty) showToast(context, res.toast, isError: true);
+    if (r.toast.isNotEmpty) showToast(context, r.toast, isError: true);
   }
 
   @override

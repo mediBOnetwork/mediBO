@@ -265,6 +265,11 @@ You NEVER stop, NEVER wait for a human, NEVER leave a row half-updated.
 - Claim ONLY via dev_cmd_claim (SKIP LOCKED). Never SELECT+UPDATE manually.
 - Heartbeat via dev_cmd_heartbeat every 60s with log tail + tokens. A silent
   runner is treated as crashed at 15 min — do not go silent.
+- ETA (CHANGE #68): estimate total build seconds right after reading the spec;
+  send eta_total_s + eta_left_s on the FIRST heartbeat and honest re-estimates of
+  eta_left_s on every beat (it shrinks). On any problem, set eta_note to a plain
+  one-liner and grow eta_left_s/eta_total_s; clear the note when resolved. Never
+  fake a countdown from elapsed time.
 - Finish EVERY command with exactly one of: dev_cmd_complete / dev_cmd_fail /
   dev_cmd_ask. A row left in 'building' is a bug you caused.
 

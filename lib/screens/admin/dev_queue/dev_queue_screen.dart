@@ -417,18 +417,29 @@ class _Row extends StatelessWidget {
   /// server anchor; the estimate itself is the backend's.
   Widget? _timingChip(String status) {
     if (status == 'building') {
+      // CHANGE #68 — Claude's estimate (has_eta) drives the countdown, anchored
+      // to the backend's eta_at. Rows not reporting an estimate show plain
+      // elapsed — never a fake countdown from elapsed time.
+      final hasEta = row['has_eta'] == true;
       final eta = DateTime.tryParse((row['eta_at'] ?? '').toString());
-      if (eta == null) return null;
-      final rem = eta.difference(now);
-      final over = rem.isNegative;
-      final s = over ? 0 : rem.inSeconds;
-      final label = over
-          ? '${row['tat_display'] ?? ''} · ${c('dev_queue.atr_overrun')}'
-          : '${(s ~/ 60)}:${(s % 60).toString().padLeft(2, '0')} ${c('dev_queue.atr_label').toLowerCase()}';
+      if (hasEta && eta != null) {
+        final rem = eta.difference(now);
+        final over = rem.isNegative || rem == Duration.zero;
+        final s = over ? 0 : rem.inSeconds;
+        final label = over
+            ? '${row['tat_display'] ?? ''} · ${c('dev_queue.atr_overrun')}'
+            : '${(s ~/ 60)}:${(s % 60).toString().padLeft(2, '0')} ${c('dev_queue.atr_label').toLowerCase()}';
+        return ToneChip(
+            label: label,
+            tone: statusTone(over ? 'awaiting_approval' : 'building'),
+            icon: Icons.hourglass_bottom);
+      }
+      final elapsed = (row['elapsed_display'] ?? '').toString();
+      if (elapsed.isEmpty) return null;
       return ToneChip(
-          label: label,
-          tone: statusTone(over ? 'awaiting_approval' : 'building'),
-          icon: Icons.hourglass_bottom);
+          label: '$elapsed ${c('dev_queue.elapsed_label').toLowerCase()}',
+          tone: statusTone('building'),
+          icon: Icons.timelapse_outlined);
     }
     final ttt = (row['ttt_display'] ?? '').toString();
     if (ttt.isNotEmpty && (status == 'completed' || status == 'failed')) {

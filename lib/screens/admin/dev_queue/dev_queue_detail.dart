@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../design_tokens.dart';
 import '../../../services/ui_copy.dart';
 import '../../../utils/toast.dart';
 import '../../../widgets/payment_proof_image.dart';
@@ -379,26 +380,35 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
           ]),
         );
 
+    // CHANGE #68 — the estimate is Claude's own (eta_total_s / eta_left_s), not
+    // an elapsed re-projection. has_eta gates the countdown: with an estimate we
+    // show Est. total + a live countdown to the backend's eta_at anchor; without
+    // one (historical rows, or a build not yet reporting) we show plain elapsed
+    // and NO fake countdown.
     final children = <Widget>[];
+    final note = (_spec['eta_note'] ?? '').toString();
     if (building) {
-      final tat = (_spec['tat_display'] ?? '').toString();
-      final eta = DateTime.tryParse((_spec['eta_at'] ?? '').toString());
-      String atr;
-      Color atrCol = kBrand;
-      if (eta != null) {
-        final rem = eta.difference(_now);
-        if (rem.isNegative) {
+      final hasEta = _spec['has_eta'] == true;
+      if (hasEta) {
+        final tat = (_spec['tat_display'] ?? '').toString();
+        final eta = DateTime.tryParse((_spec['eta_at'] ?? '').toString());
+        String atr;
+        Color atrCol = kBrand;
+        if (eta != null && eta.difference(_now) > Duration.zero) {
+          atr = _countdown(eta.difference(_now));
+        } else {
+          // eta_left exhausted between beats — hold at "wrapping up…" (never
+          // a negative or ticking-past-zero number) until the next heartbeat.
           atr = c('dev_queue.atr_overrun');
           atrCol = const Color(0xFF92400E);
-        } else {
-          atr = _countdown(rem);
         }
+        children.add(stat(c('dev_queue.tat_label'), tat, Icons.timelapse_outlined, kTextHi));
+        children.add(const SizedBox(width: 12));
+        children.add(stat(c('dev_queue.atr_label'), atr, Icons.hourglass_bottom, atrCol));
       } else {
-        atr = '—';
+        final elapsed = (_spec['elapsed_display'] ?? '').toString();
+        children.add(stat(c('dev_queue.elapsed_label'), elapsed, Icons.timelapse_outlined, kTextHi));
       }
-      children.add(stat(c('dev_queue.tat_label'), tat, Icons.timelapse_outlined, kTextHi));
-      children.add(const SizedBox(width: 12));
-      children.add(stat(c('dev_queue.atr_label'), atr, Icons.hourglass_bottom, atrCol));
     } else {
       children.add(stat(c('dev_queue.ttt_label'), ttt, Icons.check_circle_outline, const Color(0xFF065F46)));
     }
@@ -411,7 +421,30 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: kBorder),
       ),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: children),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: children),
+        // The builder's own delay note — a plain amber one-liner explaining why
+        // time-left jumped ("fixing 2 failing tests, +3 min"). Backend text.
+        if (building && note.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x8 + 2),
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: Ds.space.x8 + 2, vertical: Ds.space.x4 + 2),
+            decoration: BoxDecoration(
+              color: Ds.c.warningSoft,
+              borderRadius: BorderRadius.circular(Ds.r.button),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.info_outline, size: 14, color: Ds.c.warning),
+              SizedBox(width: Ds.space.x4 + 2),
+              Flexible(
+                child: Text(note,
+                    style: Ds.t.caption.copyWith(
+                        fontWeight: FontWeight.w600, color: Ds.c.warning)),
+              ),
+            ]),
+          ),
+        ],
+      ]),
     );
   }
 

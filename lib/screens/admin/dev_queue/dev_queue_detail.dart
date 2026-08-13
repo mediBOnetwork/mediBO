@@ -587,10 +587,23 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
             icon: Icons.android,
             spinning: android == 'building');
       case 'failed':
-        return ToneChip(
-            label: c('dev_queue.android_failed'),
-            tone: androidTone('failed'),
-            icon: Icons.android);
+        // Tap the red chip to rebuild the SAME type the row last requested
+        // (default apk). The reason is shown verbatim in the error_log section
+        // above; here we just offer the retry.
+        final retryType =
+            (_row['android_build_type'] ?? 'apk').toString().isEmpty
+                ? 'apk'
+                : (_row['android_build_type'] ?? 'apk').toString();
+        return GestureDetector(
+          onTap: _busy
+              ? null
+              : () => _run(() => _svc.requestAndroid(widget.id,
+                  buildType: retryType)),
+          child: ToneChip(
+              label: c('dev_queue.android_failed'),
+              tone: androidTone('failed'),
+              icon: Icons.refresh),
+        );
       default: // not_requested — status only. Building is done from the action
         // row (Build APK / Build AAB) so there is ONE place to build, not two.
         return ToneChip(

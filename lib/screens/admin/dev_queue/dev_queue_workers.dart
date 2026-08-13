@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show PostgrestException;
 
 import '../../../design_tokens.dart';
 import '../../../services/ui_copy.dart';
@@ -228,6 +229,8 @@ class _PoolSettingsSheetState extends State<_PoolSettingsSheet> {
   late bool _auto;
   late String _billing;
   late final TextEditingController _idle;
+  late final TextEditingController _weekly;
+  late final TextEditingController _session;
   bool _busy = false;
 
   int get _min => asInt(widget.config['min']) == 0 ? 1 : asInt(widget.config['min']);
@@ -241,11 +244,17 @@ class _PoolSettingsSheetState extends State<_PoolSettingsSheet> {
     _billing = (widget.config['billing_mode'] ?? 'max_subscription').toString();
     _idle = TextEditingController(
         text: '${asInt(widget.config['idle_shutdown_min'])}');
+    _weekly = TextEditingController(
+        text: '${asInt(widget.config['quota_shrink_pct'])}');
+    _session = TextEditingController(
+        text: '${asInt(widget.config['quota_shrink_session_pct'])}');
   }
 
   @override
   void dispose() {
     _idle.dispose();
+    _weekly.dispose();
+    _session.dispose();
     super.dispose();
   }
 
@@ -286,6 +295,10 @@ class _PoolSettingsSheetState extends State<_PoolSettingsSheet> {
         'billing_mode': _billing,
         'idle_shutdown_min': int.tryParse(_idle.text.trim()) ??
             asInt(widget.config['idle_shutdown_min']),
+        'quota_shrink_pct': int.tryParse(_weekly.text.trim()) ??
+            asInt(widget.config['quota_shrink_pct']),
+        'quota_shrink_session_pct': int.tryParse(_session.text.trim()) ??
+            asInt(widget.config['quota_shrink_session_pct']),
       }, pin);
       if (!mounted) return;
       if (res['ok'] == false) {
@@ -296,8 +309,10 @@ class _PoolSettingsSheetState extends State<_PoolSettingsSheet> {
       showToast(context, c('dev_queue.pool_saved'));
       Navigator.pop(context, true);
     } catch (e) {
+      // Backend range/PIN checks RAISE with a plain message — surface it verbatim.
       if (mounted) {
-        showToast(context, e.toString(), isError: true);
+        final msg = e is PostgrestException ? e.message : e.toString();
+        showToast(context, msg, isError: true);
         setState(() => _busy = false);
       }
     }
@@ -305,7 +320,7 @@ class _PoolSettingsSheetState extends State<_PoolSettingsSheet> {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
+    return SingleChildScrollView(
       padding: EdgeInsets.fromLTRB(
           Ds.space.x24, Ds.space.x16, Ds.space.x24, Ds.space.x32),
       child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -345,30 +360,22 @@ class _PoolSettingsSheetState extends State<_PoolSettingsSheet> {
         ]),
         _hint(c('dev_queue.pool_billing_hint')),
         SizedBox(height: Ds.space.x16),
+        // Parallel-pause threshold — weekly usage %.
+        _label(c('dev_queue.pool_weekly'), ''),
+        SizedBox(height: Ds.space.x8),
+        _numField(_weekly),
+        _hint(c('dev_queue.pool_weekly_hint')),
+        SizedBox(height: Ds.space.x16),
+        // Parallel-pause threshold — 5h session usage %.
+        _label(c('dev_queue.pool_session'), ''),
+        SizedBox(height: Ds.space.x8),
+        _numField(_session),
+        _hint(c('dev_queue.pool_session_hint')),
+        SizedBox(height: Ds.space.x16),
         // Idle shutdown minutes.
         _label(c('dev_queue.pool_idle'), ''),
         SizedBox(height: Ds.space.x8),
-        SizedBox(
-          width: Ds.space.x48 * 2,
-          child: TextField(
-            controller: _idle,
-            keyboardType: TextInputType.number,
-            style: Ds.t.body,
-            decoration: InputDecoration(
-              isDense: true,
-              filled: true,
-              fillColor: Ds.c.bg,
-              enabledBorder: OutlineInputBorder(
-                borderRadius: Ds.r.rButton,
-                borderSide: BorderSide(color: Ds.c.divider),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: Ds.r.rButton,
-                borderSide: BorderSide(color: Ds.c.brand),
-              ),
-            ),
-          ),
-        ),
+        _numField(_idle),
         _hint(c('dev_queue.pool_idle_hint')),
         SizedBox(height: Ds.space.x24),
         SizedBox(
@@ -424,5 +431,30 @@ class _PoolSettingsSheetState extends State<_PoolSettingsSheet> {
   Widget _hint(String s) => Padding(
         padding: EdgeInsets.only(top: Ds.space.x4),
         child: Text(s, style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+      );
+
+  // A small numeric input (idle minutes / usage thresholds). The backend
+  // range-validates on save and renders any error verbatim.
+  Widget _numField(TextEditingController ctl) => SizedBox(
+        width: Ds.space.x48 * 2,
+        child: TextField(
+          controller: ctl,
+          enabled: !_busy,
+          keyboardType: TextInputType.number,
+          style: Ds.t.body,
+          decoration: InputDecoration(
+            isDense: true,
+            filled: true,
+            fillColor: Ds.c.bg,
+            enabledBorder: OutlineInputBorder(
+              borderRadius: Ds.r.rButton,
+              borderSide: BorderSide(color: Ds.c.divider),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: Ds.r.rButton,
+              borderSide: BorderSide(color: Ds.c.brand),
+            ),
+          ),
+        ),
       );
 }

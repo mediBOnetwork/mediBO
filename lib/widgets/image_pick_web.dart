@@ -7,11 +7,14 @@ import 'dart:typed_data';
 /// Opens a browser file picker for a single image and returns its bytes and
 /// name, or null if nothing was picked. The FileUploadInputElement +
 /// FileReader flow moved here verbatim from the cash sheet.
-Future<({Uint8List bytes, String name})?> pickImageBytes() async {
+Future<({Uint8List bytes, String name})?> pickImageBytes({bool camera = false}) async {
   final completer = Completer<({Uint8List bytes, String name})?>();
   final input = html.FileUploadInputElement();
   input.accept = 'image/*';
   input.multiple = false;
+  // CHANGE #72 — on a phone browser, capture='environment' opens the CAMERA
+  // straight away instead of the gallery. Desktop browsers ignore it.
+  if (camera) input.setAttribute('capture', 'environment');
   input.click();
 
   // Cancel detection: the browser dialog fires NO event on cancel, so the

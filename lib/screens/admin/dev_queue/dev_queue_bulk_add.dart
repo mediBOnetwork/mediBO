@@ -1,10 +1,11 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
+import '../../../design_tokens.dart';
 import '../../../services/ui_copy.dart';
 import '../../../utils/toast.dart';
 import 'dev_queue_common.dart';
-import 'dev_queue_image_tray.dart';
+import 'dev_queue_media_tray.dart';
 import 'dev_queue_service.dart';
 
 /// The ONE paste place. Om drops 10–15 specs separated by `---`, tunes the
@@ -32,6 +33,10 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
   bool _debug = false;
   bool _busy = false;
   List<String> _images = const [];
+  List<Map<String, dynamic>> _attachments = const [];
+  // True while any picked item is still uploading or has failed — submit is
+  // blocked so media can never be dropped silently on Add (CHANGE #72).
+  bool _mediaPending = false;
 
   List<Map<String, dynamic>> _templates = const [];
   List<Map<String, dynamic>> _warnings = const [];
@@ -85,7 +90,10 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
           'android_aab': _aab,
           'targets_ios': _ios,
           'debug': _debug,
-          if (_images.isNotEmpty) 'images': _images,
+          // CHANGE #72 — media attaches to the FIRST spec only (there is no
+          // per-spec attach UI yet); the sheet shows a one-line hint saying so.
+          if (i == 0 && _images.isNotEmpty) 'images': _images,
+          if (i == 0 && _attachments.isNotEmpty) 'attachments': _attachments,
         }
     ];
   }
@@ -96,6 +104,13 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
     // no longer holds titles — the backend owns them).
     final items = _buildItems();
     if (items.isEmpty) return;
+    // CHANGE #72 — never submit while an attachment is still uploading or has
+    // failed: that is exactly how media used to be lost. Make the user resolve
+    // it (retry or remove) first.
+    if (_mediaPending) {
+      showToast(context, c('dev_queue.media_pending_block'), isError: true);
+      return;
+    }
     setState(() => _busy = true);
     try {
       final res = await widget.service.bulkAdd(items, force: force);
@@ -202,11 +217,20 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
                 const SizedBox(height: 10),
                 _pasteBox(),
                 const SizedBox(height: 10),
-                DevQueueImageTray(
+                DevQueueMediaTray(
                   service: widget.service,
-                  paths: _images,
-                  onChanged: (v) => setState(() => _images = v),
+                  onChanged: (images, attachments, pending) => setState(() {
+                    _images = images;
+                    _attachments = attachments;
+                    _mediaPending = pending;
+                  }),
                 ),
+                if (_specs.length > 1 &&
+                    (_images.isNotEmpty || _attachments.isNotEmpty || _mediaPending)) ...[
+                  const SizedBox(height: 4),
+                  Text(c('dev_queue.media_first_spec_hint'),
+                      style: Ds.t.caption.copyWith(color: kTextLo)),
+                ],
                 const SizedBox(height: 10),
                 _templateRow(),
                 const SizedBox(height: 10),
@@ -393,7 +417,7 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
           height: 48,
           width: double.infinity,
           child: FilledButton(
-            onPressed: (n == 0 || _busy) ? null : () => _submit(),
+            onPressed: (n == 0 || _busy || _mediaPending) ? null : () => _submit(),
             style: FilledButton.styleFrom(
                 backgroundColor: kBrand,
                 shape: RoundedRectangleBorder(

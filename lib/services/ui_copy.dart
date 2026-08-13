@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../design_tokens.dart';
+
 /// Every user-visible string that has no dedicated RPC field lives in the
 /// `ui_copy` table and arrives through `ui_copy_all()`.
 ///
@@ -20,7 +22,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 class UiCopy {
   UiCopy._();
 
-  static const _prefsKey = 'ui_copy_cache_v1';
+  // v2: the cached payload is now the whole ui_boot() envelope ({copy, design}),
+  // not the flat copy map. A new key so a v1 cache is ignored, not misread.
+  static const _prefsKey = 'ui_boot_cache_v2';
 
   static Map<String, String> _map = const {};
 
@@ -80,7 +84,16 @@ class UiCopy {
   }
 
   static Future<void> _fetch() async {
-    final raw = await Supabase.instance.client.rpc('ui_copy_all');
+    // ONE call per boot: ui_boot() returns {copy, design}. The app renders copy
+    // and paints the design tokens from the same payload, so the two can never
+    // disagree. Flat-copy compatibility: if ui_boot is unavailable, fall back
+    // to ui_copy_all() so a weak-connection / old-backend boot still gets words.
+    dynamic raw;
+    try {
+      raw = await Supabase.instance.client.rpc('ui_boot');
+    } catch (_) {
+      raw = await Supabase.instance.client.rpc('ui_copy_all');
+    }
     _apply(raw);
     fromNetwork = true;
     try {
@@ -89,10 +102,22 @@ class UiCopy {
     } catch (_) {}
   }
 
+  /// Accepts either the ui_boot envelope ({copy, design}) or a flat copy map
+  /// (ui_copy_all / a v1-shaped payload). Design tokens, when present, are
+  /// handed to [Ds] so the theme repaints from the same revision bump.
   static void _apply(dynamic raw) {
     if (raw is! Map) return;
+
+    // Envelope shape: {copy:{...}, design:{...}}.
+    final bool isEnvelope = raw['copy'] is Map || raw['design'] is Map;
+    final Map copyMap = isEnvelope ? (raw['copy'] is Map ? raw['copy'] as Map : const {}) : raw;
+
+    if (isEnvelope && raw['design'] != null) {
+      Ds.apply(raw['design']); // repaint the theme from backend tokens
+    }
+
     final next = <String, String>{};
-    raw.forEach((k, v) {
+    copyMap.forEach((k, v) {
       if (k is! String) return;
       next[k] = v is String ? v : (v == null ? '' : v.toString());
     });

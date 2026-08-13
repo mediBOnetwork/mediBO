@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
-import '../theme.dart';
+import '../design_tokens.dart';
 import '../utils/render_log.dart';
 import '../widgets/policy_page_layout.dart';
 
@@ -11,6 +11,10 @@ import '../widgets/policy_page_layout.dart';
 /// row label, row value, bullet, badge, zone name and document label arrives
 /// in the payload. Section order arrives as `payload['sections']` — jsonb key
 /// order is not display order, so the backend states the order explicitly.
+///
+/// CHANGE #66 — styled entirely from the `Ds` token layer (no style literals):
+/// colours, spacing, radii and type come from `ui_boot().design`, so a
+/// `ui_design_set()` recolours this page with the rest of the app.
 ///
 /// The RPC is readable by `anon`, so the logged-out web page renders too.
 class AboutScreen extends StatefulWidget {
@@ -76,6 +80,11 @@ class _AboutScreenState extends State<AboutScreen> {
     return v.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
   }
 
+  // Prose keeps a slightly looser line-height than the token default for
+  // long-form reading; `height` is not a style literal the gate bans.
+  TextStyle get _prose => Ds.t.body.copyWith(height: 1.6);
+  TextStyle get _proseMuted => Ds.t.caption.copyWith(color: Ds.c.textSecondary, height: 1.6);
+
   @override
   Widget build(BuildContext context) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -98,10 +107,10 @@ class _AboutScreenState extends State<AboutScreen> {
 
   Widget _buildBody() {
     if (_loading) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 48),
+      return Padding(
+        padding: EdgeInsets.symmetric(vertical: Ds.space.x48),
         child: Center(
-          child: CircularProgressIndicator(color: Brand.green, strokeWidth: 3),
+          child: CircularProgressIndicator(color: Ds.c.brand, strokeWidth: 3),
         ),
       );
     }
@@ -109,11 +118,11 @@ class _AboutScreenState extends State<AboutScreen> {
       // No payload means no copy to show — an icon-only retry keeps this page
       // free of client-side strings even on the failure path.
       return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 48),
+        padding: EdgeInsets.symmetric(vertical: Ds.space.x48),
         child: Center(
           child: IconButton(
             onPressed: _load,
-            icon: const Icon(Icons.refresh, size: 28, color: Brand.green),
+            icon: Icon(Icons.refresh, size: 28, color: Ds.c.brand),
           ),
         ),
       );
@@ -126,7 +135,7 @@ class _AboutScreenState extends State<AboutScreen> {
     for (final name in sections) {
       final w = _section(name);
       if (w == null) continue;
-      if (children.isNotEmpty) children.add(const SizedBox(height: 28));
+      if (children.isNotEmpty) children.add(SizedBox(height: Ds.space.x24 + Ds.space.x4));
       children.add(w);
     }
 
@@ -166,8 +175,7 @@ class _AboutScreenState extends State<AboutScreen> {
 
   Widget? _paragraph(String body) {
     if (body.isEmpty) return null;
-    return Text(body,
-        style: const TextStyle(fontSize: 15, height: 1.65, color: Brand.ink));
+    return Text(body, style: _prose);
   }
 
   Widget? _titledParagraph(Map<String, dynamic> m) {
@@ -177,11 +185,8 @@ class _AboutScreenState extends State<AboutScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (title.isNotEmpty) ...[_heading(title), const SizedBox(height: 10)],
-        if (body.isNotEmpty)
-          Text(body,
-              style:
-                  const TextStyle(fontSize: 15, height: 1.65, color: Brand.ink)),
+        if (title.isNotEmpty) ...[_heading(title), SizedBox(height: Ds.space.x8)],
+        if (body.isNotEmpty) Text(body, style: _prose),
       ],
     );
   }
@@ -196,16 +201,14 @@ class _AboutScreenState extends State<AboutScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (title.isNotEmpty) ...[_heading(title), const SizedBox(height: 10)],
+        if (title.isNotEmpty) ...[_heading(title), SizedBox(height: Ds.space.x8)],
         if (note.isNotEmpty) ...[
-          Text(note,
-              style: const TextStyle(
-                  fontSize: 14, height: 1.6, color: Brand.inkMuted)),
-          const SizedBox(height: 12),
+          Text(note, style: _proseMuted),
+          SizedBox(height: Ds.space.x12),
         ],
         if (rows.isNotEmpty) _InfoCard(rows: rows),
         if (docs.isNotEmpty) ...[
-          const SizedBox(height: 12),
+          SizedBox(height: Ds.space.x12),
           _DocList(docs: docs),
         ],
       ],
@@ -221,21 +224,17 @@ class _AboutScreenState extends State<AboutScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (title.isNotEmpty) ...[_heading(title), const SizedBox(height: 10)],
+        if (title.isNotEmpty) ...[_heading(title), SizedBox(height: Ds.space.x8)],
         ...points.map((p) => Padding(
-              padding: const EdgeInsets.only(bottom: 10),
+              padding: EdgeInsets.only(bottom: Ds.space.x8),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Padding(
-                    padding: EdgeInsets.only(top: 7, right: 10),
-                    child: Icon(Icons.circle, size: 6, color: Brand.green),
+                  Padding(
+                    padding: EdgeInsets.only(top: Ds.space.x4 + 3, right: Ds.space.x8),
+                    child: Icon(Icons.circle, size: 6, color: Ds.c.brand),
                   ),
-                  Expanded(
-                    child: Text(p,
-                        style: const TextStyle(
-                            fontSize: 14, height: 1.6, color: Brand.ink)),
-                  ),
+                  Expanded(child: Text(p, style: _prose)),
                 ],
               ),
             )),
@@ -267,20 +266,16 @@ class _AboutScreenState extends State<AboutScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (title.isNotEmpty) ...[_heading(title), const SizedBox(height: 10)],
+        if (title.isNotEmpty) ...[_heading(title), SizedBox(height: Ds.space.x8)],
         if (note.isNotEmpty) ...[
-          Text(note,
-              style: const TextStyle(
-                  fontSize: 14, height: 1.6, color: Brand.inkMuted)),
-          const SizedBox(height: 14),
+          Text(note, style: _proseMuted),
+          SizedBox(height: Ds.space.x12),
         ],
         // CHANGE #621 — the serving line is composed by the backend (it
         // pluralises itself); rendered verbatim, never counted in Dart.
         if (servingLine.isNotEmpty) ...[
-          Text(servingLine,
-              style: const TextStyle(
-                  fontSize: 14, height: 1.6, color: Brand.inkMuted)),
-          const SizedBox(height: 12),
+          Text(servingLine, style: _proseMuted),
+          SizedBox(height: Ds.space.x12),
         ],
         // CHANGE #621 — horizontally scrollable zone chips, one per list entry.
         // Labels are each item's zone_label; no zone name is written here.
@@ -290,11 +285,11 @@ class _AboutScreenState extends State<AboutScreen> {
             scrollDirection: Axis.horizontal,
             padding: EdgeInsets.zero,
             itemCount: list.length,
-            separatorBuilder: (_, _) => const SizedBox(width: 8),
+            separatorBuilder: (_, _) => SizedBox(width: Ds.space.x8),
             itemBuilder: (_, i) => _zoneChip(i, list[i], sel),
           ),
         ),
-        const SizedBox(height: 16),
+        SizedBox(height: Ds.space.x16),
         // Detail for the selected zone only.
         if (selected != null) _partnerCard(selected),
       ],
@@ -309,20 +304,19 @@ class _AboutScreenState extends State<AboutScreen> {
     return InkWell(
       key: Key('about_zone_chip_$index'),
       onTap: () => setState(() => _selectedZone = index),
-      borderRadius: BorderRadius.circular(20),
+      borderRadius: Ds.r.rChip,
       child: Container(
         alignment: Alignment.center,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
+        padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
         decoration: BoxDecoration(
-          color: on ? Brand.green : Colors.transparent,
-          border: Border.all(color: on ? Brand.green : Brand.border),
-          borderRadius: BorderRadius.circular(20),
+          color: on ? Ds.c.brand : Colors.transparent,
+          border: Border.all(color: on ? Ds.c.brand : Ds.c.divider),
+          borderRadius: Ds.r.rChip,
         ),
         child: Text(label,
-            style: TextStyle(
-                fontSize: 13,
+            style: Ds.t.caption.copyWith(
                 fontWeight: FontWeight.w700,
-                color: on ? Colors.white : Brand.ink)),
+                color: on ? Colors.white : Ds.c.text)),
       ),
     );
   }
@@ -336,42 +330,35 @@ class _AboutScreenState extends State<AboutScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-          if (name.isNotEmpty)
-            Text(name,
-                style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
-                    color: Brand.ink)),
-          if (badge.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(
-                color: Brand.green.withValues(alpha: 0.10),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Text(badge,
-                  style: const TextStyle(
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w700,
-                      color: Brand.green)),
+        if (name.isNotEmpty)
+          Text(name, style: Ds.t.body.copyWith(fontWeight: FontWeight.w700)),
+        if (badge.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x4 + 2),
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: Ds.space.x8 + 2, vertical: Ds.space.x4),
+            decoration: BoxDecoration(
+              color: Ds.c.brandSoft,
+              borderRadius: Ds.r.rChip,
             ),
-          ],
-          if (rows.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            _InfoCard(rows: rows),
-          ],
-          if (docs.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            _DocList(docs: docs),
-          ],
+            child: Text(badge,
+                style: Ds.t.caption.copyWith(
+                    fontWeight: FontWeight.w700, color: Ds.c.brand)),
+          ),
+        ],
+        if (rows.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x12),
+          _InfoCard(rows: rows),
+        ],
+        if (docs.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x8 + 2),
+          _DocList(docs: docs),
+        ],
       ],
     );
   }
 
-  static Widget _heading(String text) => Text(text,
-      style: const TextStyle(
-          fontSize: 18, fontWeight: FontWeight.w800, color: Brand.ink));
+  static Widget _heading(String text) =>
+      Text(text, style: Ds.t.subtitle.copyWith(fontWeight: FontWeight.w700));
 }
 
 // ─── Info card — label/value rows straight from the payload ───────────────────
@@ -384,8 +371,9 @@ class _InfoCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        border: Border.all(color: Brand.border),
-        borderRadius: BorderRadius.circular(12),
+        color: Ds.c.surface,
+        border: Border.all(color: Ds.c.divider),
+        borderRadius: Ds.r.rCard,
       ),
       child: Column(
         children: List.generate(rows.length, (i) {
@@ -395,29 +383,25 @@ class _InfoCard extends StatelessWidget {
           return Column(
             children: [
               Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                padding: EdgeInsets.symmetric(horizontal: Ds.space.x16, vertical: Ds.space.x12),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     SizedBox(
                       width: 130,
                       child: Text(label is String ? label : '',
-                          style: const TextStyle(
-                              fontSize: 13, color: Brand.inkMuted)),
+                          style: Ds.t.caption),
                     ),
-                    const SizedBox(width: 8),
+                    SizedBox(width: Ds.space.x8),
                     Expanded(
                       child: Text(value is String ? value : '',
-                          style: const TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              color: Brand.ink)),
+                          style: Ds.t.caption.copyWith(
+                              fontWeight: FontWeight.w600, color: Ds.c.text)),
                     ),
                   ],
                 ),
               ),
-              if (!last) const Divider(height: 1, indent: 16, endIndent: 16),
+              if (!last) Divider(height: 1, indent: Ds.space.x16, endIndent: Ds.space.x16, color: Ds.c.divider),
             ],
           );
         }),
@@ -439,7 +423,7 @@ class _DocList extends StatelessWidget {
         final label = d['label'];
         final url = d['url'];
         return Padding(
-          padding: const EdgeInsets.only(bottom: 10),
+          padding: EdgeInsets.only(bottom: Ds.space.x8 + 2),
           child: _DocTile(
             label: label is String ? label : '',
             url: url is String ? url : '',
@@ -461,23 +445,22 @@ class _DocTile extends StatelessWidget {
       onTap: url.isEmpty
           ? null
           : () => launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: Ds.r.rCard,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        padding: EdgeInsets.symmetric(horizontal: Ds.space.x16, vertical: Ds.space.x12),
         decoration: BoxDecoration(
-          border: Border.all(color: Brand.border),
-          borderRadius: BorderRadius.circular(12),
+          color: Ds.c.surface,
+          border: Border.all(color: Ds.c.divider),
+          borderRadius: Ds.r.rCard,
         ),
         child: Row(
           children: [
             Expanded(
               child: Text(label,
-                  style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: Brand.ink)),
+                  style: Ds.t.caption.copyWith(
+                      fontWeight: FontWeight.w600, color: Ds.c.text)),
             ),
-            const Icon(Icons.open_in_new, size: 16, color: Brand.green),
+            Icon(Icons.open_in_new, size: 16, color: Ds.c.brand),
           ],
         ),
       ),

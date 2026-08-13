@@ -1,6 +1,8 @@
 import 'package:flutter/cupertino.dart' show CupertinoPageTransitionsBuilder;
 import 'package:flutter/material.dart';
 
+import 'design_tokens.dart';
+
 /// CHANGE #673 — the storefront design system.
 ///
 /// The old palette was one mid-tone green on white. Nothing was ever dark and
@@ -194,20 +196,26 @@ const CategoryStyle _fallbackStyle =
 CategoryStyle categoryStyle(String category) =>
     _categoryStyles[category.toUpperCase()] ?? _fallbackStyle;
 
+/// CHANGE #66 — the theme is now built from backend design tokens (`Ds`), not
+/// from hard-coded literals. `ui_boot().design` lands, `Ds.apply()` sets the
+/// tokens, `UiCopy.revision` bumps, MaterialApp rebuilds and calls this again
+/// with the new values. Change one token (`ui_design_set`) and every
+/// theme-driven surface recolours on the next boot with zero code change.
 ThemeData buildTheme() {
+  final ds = Ds.c;
   final scheme = ColorScheme.fromSeed(
-    seedColor: Brand.green,
+    seedColor: ds.brand,
     brightness: Brightness.light,
   ).copyWith(
-    primary: Brand.green,
+    primary: ds.brand,
     onPrimary: Colors.white,
-    primaryContainer: Brand.mint,
-    onPrimaryContainer: Brand.deep,
-    secondary: Brand.accent,
+    primaryContainer: ds.brandSoft,
+    onPrimaryContainer: ds.brandDark,
+    secondary: ds.brand,
     onSecondary: Colors.white,
-    surface: Colors.white,
-    onSurface: Brand.ink,
-    error: Brand.danger,
+    surface: ds.surface,
+    onSurface: ds.text,
+    error: ds.danger,
   );
 
   const pageTransitions = PageTransitionsTheme(
@@ -223,7 +231,7 @@ ThemeData buildTheme() {
   final base = ThemeData(
     useMaterial3: true,
     colorScheme: scheme,
-    scaffoldBackgroundColor: Colors.white,
+    scaffoldBackgroundColor: ds.bg,
     fontFamily: AppType.family,
     pageTransitionsTheme: pageTransitions,
     splashFactory: NoSplash.splashFactory,
@@ -254,8 +262,8 @@ ThemeData buildTheme() {
         labelSmall: AppType.t1,
       )
       .apply(
-        bodyColor: Brand.ink,
-        displayColor: Brand.ink,
+        bodyColor: ds.text,
+        displayColor: ds.text,
         // Explicitly clear any stray text decoration inherited from the
         // Material 3 base theme — prevents yellow underline on canvas text.
         decoration: TextDecoration.none,
@@ -264,53 +272,53 @@ ThemeData buildTheme() {
 
   return base.copyWith(
     textTheme: text,
-    dividerTheme: const DividerThemeData(color: Brand.border, thickness: 1),
+    dividerTheme: DividerThemeData(color: ds.divider, thickness: 1),
     cardTheme: CardThemeData(
       elevation: 0,
-      color: Colors.white,
+      color: ds.surface,
       surfaceTintColor: Colors.transparent,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(Rad.card),
-        side: const BorderSide(color: Brand.border),
+        borderRadius: Ds.r.rCard,
+        side: BorderSide(color: ds.divider),
       ),
       margin: EdgeInsets.zero,
     ),
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
-        backgroundColor: Brand.green,
+        backgroundColor: ds.brand,
         foregroundColor: Colors.white,
         elevation: 0,
-        minimumSize: const Size(0, 48),
+        minimumSize: Size(0, Ds.touch.minTarget + 4),
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
         textStyle: AppType.l3.copyWith(color: Colors.white),
-        shape: rounded(Rad.tile),
+        shape: rounded(Ds.r.button),
       ).copyWith(
         overlayColor: const WidgetStatePropertyAll(Colors.transparent),
       ),
     ),
     outlinedButtonTheme: OutlinedButtonThemeData(
       style: OutlinedButton.styleFrom(
-        foregroundColor: Brand.green,
-        side: const BorderSide(color: Brand.green, width: 1.4),
-        minimumSize: const Size(0, 48),
+        foregroundColor: ds.brand,
+        side: BorderSide(color: ds.brand, width: 1.4),
+        minimumSize: Size(0, Ds.touch.minTarget + 4),
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-        textStyle: AppType.l3,
-        shape: rounded(Rad.tile),
+        textStyle: AppType.l3.copyWith(color: ds.brand),
+        shape: rounded(Ds.r.button),
       ).copyWith(
         overlayColor: const WidgetStatePropertyAll(Colors.transparent),
       ),
     ),
     chipTheme: base.chipTheme.copyWith(
-      backgroundColor: Brand.field,
-      selectedColor: Brand.green,
-      side: const BorderSide(color: Brand.border),
+      backgroundColor: ds.brandSoft,
+      selectedColor: ds.brand,
+      side: BorderSide(color: ds.divider),
       labelStyle: AppType.l5,
-      shape: rounded(Rad.pill),
+      shape: rounded(Ds.r.chip),
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
-      fillColor: Brand.field,
-      hintStyle: AppType.b2.copyWith(color: Brand.inkFaint),
+      fillColor: ds.bg,
+      hintStyle: AppType.b2.copyWith(color: ds.textSecondary),
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(Rad.pill),

@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:pharma_b2b/utils/toast.dart';
+import '../design_tokens.dart';
 import '../services/ui_copy.dart';
-import '../theme.dart';
 import '../widgets/policy_page_layout.dart';
 
+/// CHANGE #66 — styled from the `Ds` token layer (no style literals). Colours,
+/// spacing, radii and type all come from `ui_boot().design`.
 class ContactScreen extends StatefulWidget {
   const ContactScreen({super.key});
 
@@ -63,39 +65,28 @@ class _ContactScreenState extends State<ContactScreen> {
   Widget _buildSuccess() {
     return Center(
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 32),
+        padding: EdgeInsets.symmetric(vertical: Ds.space.x32),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
               width: 80,
               height: 80,
-              decoration: const BoxDecoration(
-                  color: Brand.mint, shape: BoxShape.circle),
-              child:
-                  const Icon(Icons.check_circle, color: Brand.green, size: 48),
+              decoration: BoxDecoration(color: Ds.c.brandSoft, shape: BoxShape.circle),
+              child: Icon(Icons.check_circle, color: Ds.c.brand, size: 48),
             ),
-            const SizedBox(height: 24),
+            SizedBox(height: Ds.space.x24),
             Text(c('contact.success_title'),
-                style: const TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w800,
-                    color: Brand.ink)),
-            const SizedBox(height: 12),
+                style: Ds.t.title.copyWith(fontWeight: FontWeight.w800)),
+            SizedBox(height: Ds.space.x12),
             Text(
               c('contact.success_body'),
               textAlign: TextAlign.center,
-              style: const TextStyle(
-                  fontSize: 15, color: Brand.inkMuted, height: 1.5),
+              style: Ds.t.body.copyWith(color: Ds.c.textSecondary, height: 1.5),
             ),
-            const SizedBox(height: 32),
+            SizedBox(height: Ds.space.x32),
             FilledButton(
               onPressed: () => Navigator.of(context).pop(),
-              style: FilledButton.styleFrom(
-                backgroundColor: Brand.green,
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 32, vertical: 14),
-              ),
               child: Text(c('contact.btn_back_home')),
             ),
           ],
@@ -111,38 +102,28 @@ class _ContactScreenState extends State<ContactScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(c('contact.form_title'),
-              style: const TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w800,
-                  color: Brand.ink)),
-          const SizedBox(height: 8),
+              style: Ds.t.title.copyWith(fontWeight: FontWeight.w800)),
+          SizedBox(height: Ds.space.x8),
           Text(
             c('contact.form_subtitle'),
-            style: const TextStyle(
-                fontSize: 14, color: Brand.inkMuted, height: 1.5),
+            style: Ds.t.caption.copyWith(color: Ds.c.textSecondary, height: 1.5),
           ),
-          const SizedBox(height: 32),
+          SizedBox(height: Ds.space.x32),
           _field(c('contact.field_name_label'),
               c('contact.field_name_hint'), _nameCtrl),
-          const SizedBox(height: 16),
+          SizedBox(height: Ds.space.x16),
           _field(c('contact.field_phone_label'),
               c('contact.field_phone_hint'), _phoneCtrl,
               keyboard: TextInputType.phone),
-          const SizedBox(height: 16),
+          SizedBox(height: Ds.space.x16),
           _field(c('contact.field_message_label'),
               c('contact.field_message_hint'), _messageCtrl,
               maxLines: 5),
-          const SizedBox(height: 32),
+          SizedBox(height: Ds.space.x32),
           SizedBox(
             width: double.infinity,
             child: FilledButton(
               onPressed: _submitting ? null : _submit,
-              style: FilledButton.styleFrom(
-                backgroundColor: Brand.green,
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10)),
-              ),
               child: _submitting
                   ? const SizedBox(
                       width: 20,
@@ -150,17 +131,15 @@ class _ContactScreenState extends State<ContactScreen> {
                       child: CircularProgressIndicator(
                           strokeWidth: 2, color: Colors.white),
                     )
-                  : Text(c('contact.btn_send'),
-                      style: const TextStyle(
-                          fontSize: 16, fontWeight: FontWeight.w600)),
+                  : Text(c('contact.btn_send')),
             ),
           ),
-          const SizedBox(height: 32),
+          SizedBox(height: Ds.space.x32),
           Container(
-            padding: const EdgeInsets.all(16),
+            padding: EdgeInsets.all(Ds.space.x16),
             decoration: BoxDecoration(
-              color: Brand.mint,
-              borderRadius: BorderRadius.circular(12),
+              color: Ds.c.brandSoft,
+              borderRadius: Ds.r.rCard,
             ),
             // CHANGE #619 — mediBO's own details, from
             // platform_public_identity(). The partner's name, address and
@@ -179,15 +158,17 @@ class _ContactScreenState extends State<ContactScreen> {
     int maxLines = 1,
     TextInputType? keyboard,
   }) {
+    OutlineInputBorder border(Color c, double w) => OutlineInputBorder(
+          borderRadius: Ds.r.rButton,
+          borderSide: BorderSide(color: c, width: w),
+        );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(label,
-            style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: Brand.ink)),
-        const SizedBox(height: 6),
+            style: Ds.t.caption.copyWith(
+                fontWeight: FontWeight.w600, color: Ds.c.text)),
+        SizedBox(height: Ds.space.x4 + 2),
         TextFormField(
           controller: ctrl,
           maxLines: maxLines,
@@ -196,29 +177,15 @@ class _ContactScreenState extends State<ContactScreen> {
               (v == null || v.trim().isEmpty) ? c('contact.validator_required') : null,
           decoration: InputDecoration(
             hintText: hint,
-            hintStyle:
-                const TextStyle(color: Brand.inkMuted, fontSize: 14),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: const BorderSide(color: Brand.border),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: const BorderSide(color: Brand.border),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: const BorderSide(color: Color(0xFFE5E7EB), width: 2),
-            ),
-            errorBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide:
-                  const BorderSide(color: Colors.redAccent, width: 1.5),
-            ),
-            contentPadding: const EdgeInsets.symmetric(
-                horizontal: 14, vertical: 14),
+            hintStyle: Ds.t.caption.copyWith(color: Ds.c.textSecondary),
+            border: border(Ds.c.divider, 1),
+            enabledBorder: border(Ds.c.divider, 1),
+            focusedBorder: border(Ds.c.brand, 1.5),
+            errorBorder: border(Ds.c.danger, 1.5),
+            contentPadding: EdgeInsets.symmetric(
+                horizontal: Ds.space.x16, vertical: Ds.space.x12),
             filled: true,
-            fillColor: Colors.white,
+            fillColor: Ds.c.surface,
           ),
         ),
       ],
@@ -276,33 +243,27 @@ class _DirectContactState extends State<_DirectContact> {
       children: [
         if (title is String && title.isNotEmpty) ...[
           Text(title,
-              style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                  color: Brand.green)),
-          const SizedBox(height: 12),
+              style: Ds.t.caption.copyWith(
+                  fontWeight: FontWeight.w700, color: Ds.c.brand)),
+          SizedBox(height: Ds.space.x12),
         ],
         ...rows.map((r) {
           final label = r['label'];
           final value = r['value'];
           return Padding(
-            padding: const EdgeInsets.only(bottom: 8),
+            padding: EdgeInsets.only(bottom: Ds.space.x8),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 SizedBox(
                   width: 110,
-                  child: Text(label is String ? label : '',
-                      style: const TextStyle(
-                          fontSize: 12.5, color: Brand.inkMuted)),
+                  child: Text(label is String ? label : '', style: Ds.t.caption),
                 ),
-                const SizedBox(width: 8),
+                SizedBox(width: Ds.space.x8),
                 Expanded(
                   child: Text(value is String ? value : '',
-                      style: const TextStyle(
-                          fontSize: 13,
-                          color: Brand.ink,
-                          fontWeight: FontWeight.w500)),
+                      style: Ds.t.caption.copyWith(
+                          color: Ds.c.text, fontWeight: FontWeight.w500)),
                 ),
               ],
             ),

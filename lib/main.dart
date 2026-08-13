@@ -42,6 +42,7 @@ import 'screens/legal_pages.dart';
 import 'services/ui_copy.dart';
 import 'supabase_config.dart';
 import 'theme.dart';
+import 'design_tokens.dart';
 import 'user_state.dart';
 import 'widgets/animations.dart';
 
@@ -216,6 +217,11 @@ void main() {
       await UiCopy.load();
       RenderLog.write('ui_copy_keys', UiCopy.count);
       RenderLog.write('ui_copy_source', UiCopy.fromNetwork ? 'network' : 'cache');
+      // CHANGE #66 — proof the app consumed the backend design tokens. A
+      // headless verifier reads `ds_brand`; flip the brand via ui_design_set
+      // and this value changes on next boot with zero code change.
+      RenderLog.write('ds_brand', Ds.brandHex);
+      RenderLog.write('ds_design_v', UiCopy.fromNetwork ? 'network' : 'cache');
     } catch (_) {
       try { RenderLog.write('boot_error', 'ui_copy_failed'); } catch (_) {}
     }

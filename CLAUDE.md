@@ -401,3 +401,41 @@ MANDATORY for every build / change / update:
 
 Definition of done = backend built + frontend wired + deployed +
 reachable + click path reported + screenshot proof.
+
+## 12. DESIGN CONTRACT (permanent — CHANGE #66)
+
+The app is styled 100% from backend design tokens. `ui_boot().design` →
+`Ds.*` (lib/design_tokens.dart) → `buildTheme()`. Change a token via
+`ui_design_set(patch)` and the WHOLE app recolours on next boot with ZERO code
+change — no deploy. `ui_design_get()` reads current tokens.
+
+Every screen build or change MUST follow **DESIGN.md** (repo root) and use the
+tokens. Hardcoded style literals in a screen are a FAILED command:
+- NO `Color(0x…)` — use `Ds.c.*` (brand, bg, surface, text, textSecondary,
+  divider, success/warning/danger/info + `*Soft` tints).
+- NO `fontSize:` / raw `TextStyle` sizes — use `Ds.t.*` (display/title/subtitle/
+  body/caption) or the theme text slots.
+- NO bare numeric `EdgeInsets`/`SizedBox`/`BorderRadius`/`BoxShadow` — use
+  `Ds.space.*`, `Ds.r.r*`, `Ds.elevation.e1/e2`.
+- One `Ds.c.brand` primary action per screen; red only destructive; ≤3 hues.
+
+Only `lib/design_tokens.dart` and `lib/theme.dart` may hold style literals
+(they DEFINE the tokens). The literal gate `test/protected/design_literal_gate_test.dart`
+runs before every deploy: a NEW literal in a screen, or an increase over a
+file's frozen baseline, FAILS the build. Baselines ratchet DOWN only — every
+polish batch lowers `test/protected/design_literal_baseline.json`, never raises
+it. To legitimately reduce a baseline after migrating a file: run
+`dart run tool/design_baseline.dart --write` and commit the new baseline.
+
+### DESIGN QA GATE (runner — after ANY command that touches UI)
+Before `dev_cmd_complete` on a UI command, self-review the changed screens
+against this checklist; if any check fails, FIX and re-check before completing.
+Write "Design QA: passed (N checks)" into result_summary.
+1. Spacing rhythm — only 4/8/12/16/24/32/48; unrelated blocks ≥24 apart.
+2. Colour discipline — one brand primary; red only destructive; ≤3 hues.
+3. Hierarchy — ≤3 type sizes; a real title; captions in textSecondary.
+4. Components — cards radius16+e1; primary button full-width ≥44; sheets>dialogs.
+5. Touch — every tap target ≥44×44.
+6. States — empty state has one-line guidance; loading is a skeleton not a bare
+   spinner; errors show backend copy + Retry.
+7. Tokens — zero new style literals (gate green); everything via Ds/theme.

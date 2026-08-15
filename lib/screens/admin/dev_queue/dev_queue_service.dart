@@ -81,6 +81,39 @@ class DevQueueService {
       _asMap(await _c
           .rpc('dev_cmd_bulk_add', params: {'p_items': items, 'p_force': force}));
 
+  // ── Generate-Command drafts (ask-doubt-before-building) ──────────────────
+  /// Open a draft: the runner reads the backend and writes back the open
+  /// questions. Returns {id}. The app then polls [draftGet] until it is ready.
+  Future<Map<String, dynamic>> draftCreate(
+          String spec, String mode, int? count, Map<String, dynamic> opts) async =>
+      _asMap(await _c.rpc('draft_create', params: {
+        'p_spec': spec,
+        'p_mode': mode,
+        'p_count': count,
+        'p_opts': opts,
+      }));
+
+  /// The full draft row (status/questions/emit_multi/receipt) — rendered
+  /// verbatim by the Questions screen. Polled while status is `generating`.
+  Future<Map<String, dynamic>> draftGet(int id) async =>
+      _asMap(await _c.rpc('draft_get', params: {'p_id': id}));
+
+  /// Submit the answers → the backend deterministically composes the final
+  /// command(s) and adds them to the queue. Returns {result, receipt}. The app
+  /// only sends [{idx, answer}] rows; a blank answer means "use the
+  /// recommendation" (the backend fills it).
+  Future<Map<String, dynamic>> draftSubmit(int id, List<Map<String, dynamic>> answers,
+          {bool acceptSplit = true, bool savePrefs = true}) async =>
+      _asMap(await _c.rpc('draft_submit', params: {
+        'p_id': id,
+        'p_answers': answers,
+        'p_accept_split': acceptSplit,
+        'p_save_prefs': savePrefs,
+      }));
+
+  Future<void> draftCancel(int id) async =>
+      _c.rpc('draft_cancel', params: {'p_id': id});
+
   Future<void> reorder(List<int> ids) async =>
       _c.rpc('dev_cmd_reorder', params: {'p_ids': ids});
 

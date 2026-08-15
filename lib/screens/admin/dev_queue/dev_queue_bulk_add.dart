@@ -6,6 +6,7 @@ import '../../../services/ui_copy.dart';
 import '../../../utils/toast.dart';
 import 'dev_queue_common.dart';
 import 'dev_queue_media_tray.dart';
+import 'dev_queue_questions.dart';
 import 'dev_queue_service.dart';
 
 /// The ONE paste place. Om drops 10–15 specs separated by `---`, tunes the
@@ -32,6 +33,14 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
   bool _ios = false;
   bool _debug = false;
   bool _busy = false;
+
+  // Generate-Command (ask-doubt-before-building). OFF = today's fire-and-forget
+  // Add. ON = the paste becomes ONE request the runner asks doubts about, then
+  // builds to the answers.
+  bool _generate = false;
+  String _genMode = 'auto'; // auto | command | point
+  int _genCount = 5;
+  static const List<int> _genCounts = [3, 5, 8, 10, 15];
   List<String> _images = const [];
   List<Map<String, dynamic>> _attachments = const [];
   // True while any picked item is still uploading or has failed — submit is
@@ -98,7 +107,61 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
     ];
   }
 
+  // Opts the draft carries into draft_submit → dev_cmd_bulk_add. Same toggles
+  // as a normal Add; the backend still owns the title (never sent).
+  Map<String, dynamic> _draftOpts() => {
+        'urgent': _urgent,
+        'require_approval': _approval,
+        if (_batch.text.trim().isNotEmpty) 'batch_label': _batch.text.trim(),
+        'targets_web': true,
+        'targets_android': _apk || _aab,
+        'targets_ios': _ios,
+      };
+
+  // Generate ON → open a draft for the whole paste (one request the runner asks
+  // doubts about), then push the Questions screen. Everything else is unchanged.
+  Future<void> _generateAndAsk() async {
+    if (_mediaPending) {
+      showToast(context, c('dev_queue.media_pending_block'), isError: true);
+      return;
+    }
+    final spec = _paste.text.trim();
+    if (spec.isEmpty) return;
+    setState(() => _busy = true);
+    try {
+      final res = await widget.service
+          .draftCreate(spec, _genMode, _genMode == 'auto' ? null : _genCount, _draftOpts());
+      final id = (res['id'] as num?)?.toInt() ?? 0;
+      if (!mounted) return;
+      setState(() => _busy = false);
+      if (id <= 0) {
+        showToast(context, (res['error'] ?? '').toString(), isError: true);
+        return;
+      }
+      final queued = await Navigator.of(context).push<bool>(MaterialPageRoute(
+        builder: (_) => DevQueueQuestions(
+          service: widget.service,
+          draftId: id,
+          spec: spec,
+          mode: _genMode,
+          count: _genMode == 'auto' ? null : _genCount,
+          opts: _draftOpts(),
+        ),
+      ));
+      if (queued == true && mounted) Navigator.of(context).pop(true);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _busy = false);
+        showToast(context, e.toString(), isError: true);
+      }
+    }
+  }
+
   Future<void> _submit({bool force = false}) async {
+    if (_generate && !force) {
+      await _generateAndAsk();
+      return;
+    }
     // On "add anyway" the backend re-evaluates every item with p_force=true;
     // we resend the same batch rather than trying to match by title (the app
     // no longer holds titles — the backend owns them).
@@ -247,6 +310,7 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
                 const SizedBox(height: 10),
                 _toggles(),
                 const SizedBox(height: 10),
+                _generateSection(),
                 _batchField(),
                 if (n > 0) ...[
                   const SizedBox(height: 16),
@@ -382,6 +446,69 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
         decoration: _fieldDeco(c('dev_queue.label_batch')),
       );
 
+  // Generate-Command controls. OFF by default so Add stays fire-and-forget.
+  Widget _generateSection() => Container(
+        margin: EdgeInsets.only(bottom: Ds.space.x12),
+        padding: EdgeInsets.all(Ds.space.x12),
+        decoration: BoxDecoration(
+          color: _generate ? Ds.c.brandSoft : Colors.white,
+          borderRadius: Ds.r.rChip,
+          border: Border.all(color: kBorder),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(c('dev_queue.gen_toggle'), style: Ds.t.body),
+                Text(c('dev_queue.gen_hint'), style: Ds.t.caption),
+              ]),
+            ),
+            Switch(
+              value: _generate,
+              activeColor: kBrand,
+              onChanged: (v) => setState(() => _generate = v),
+            ),
+          ]),
+          if (_generate) ...[
+            SizedBox(height: Ds.space.x12),
+            Text(c('dev_queue.gen_mode_title'), style: Ds.t.caption),
+            SizedBox(height: Ds.space.x8),
+            Wrap(spacing: Ds.space.x8, runSpacing: Ds.space.x8, children: [
+              _choice(c('dev_queue.gen_mode_auto'), _genMode == 'auto',
+                  () => setState(() => _genMode = 'auto')),
+              _choice(c('dev_queue.gen_mode_command'), _genMode == 'command',
+                  () => setState(() => _genMode = 'command')),
+              _choice(c('dev_queue.gen_mode_point'), _genMode == 'point',
+                  () => setState(() => _genMode = 'point')),
+            ]),
+            if (_genMode != 'auto') ...[
+              SizedBox(height: Ds.space.x12),
+              Text(c('dev_queue.gen_count_title'), style: Ds.t.caption),
+              SizedBox(height: Ds.space.x8),
+              Wrap(spacing: Ds.space.x8, runSpacing: Ds.space.x8, children: [
+                for (final n in _genCounts)
+                  _choice('$n', _genCount == n, () => setState(() => _genCount = n)),
+              ]),
+            ],
+          ],
+        ]),
+      );
+
+  // A single-select chip that stays on the Ds token layer (no style literals).
+  Widget _choice(String label, bool selected, VoidCallback onTap) => ChoiceChip(
+        label: Text(label),
+        selected: selected,
+        onSelected: (_) => onTap(),
+        showCheckmark: false,
+        selectedColor: Ds.c.brandSoft,
+        backgroundColor: Colors.white,
+        labelStyle: Ds.t.caption.copyWith(color: selected ? kBrand : kTextLo),
+        shape: RoundedRectangleBorder(
+          borderRadius: Ds.r.rChip,
+          side: BorderSide(color: selected ? kBrand : kBorder),
+        ),
+      );
+
   Widget _warningsBox() => Container(
         margin: const EdgeInsets.only(top: 12),
         padding: const EdgeInsets.all(12),
@@ -439,7 +566,8 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
                     height: 20,
                     child: CircularProgressIndicator(
                         strokeWidth: 2, color: Colors.white))
-                : Text('${c('dev_queue.btn_submit')}${n > 0 ? '  ($n)' : ''}',
+                : Text(
+                    '${c('dev_queue.btn_submit')}${(!_generate && n > 0) ? '  ($n)' : ''}',
                     style: const TextStyle(
                         fontSize: 15, fontWeight: FontWeight.w600)),
           ),

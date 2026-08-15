@@ -121,7 +121,18 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
           .toList();
       if (!mounted) return;
       if (warnings.isEmpty || force) {
-        if (added > 0 && mounted) showToast(context, '+$added');
+        if (added > 0 && mounted) {
+          // The backend tags each added item with its lane's own hint string
+          // (e.g. "Will run instantly ⚡" / "Sonnet lane"); show them verbatim.
+          final hints = ((res['added'] as List?) ?? const [])
+              .whereType<Map>()
+              .map((e) => (e['route_hint'] ?? '').toString())
+              .where((s) => s.isNotEmpty)
+              .toSet()
+              .toList();
+          showToast(context,
+              hints.isEmpty ? '+$added' : '+$added · ${hints.join(' · ')}');
+        }
         Navigator.of(context).pop(true);
         return;
       }

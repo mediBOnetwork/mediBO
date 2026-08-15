@@ -157,6 +157,7 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
               children: [
                 _titleBlock(),
                 _plainCard(),
+                if (_spec['has_enriched'] == true) _enrichedCard(),
                 if (_row['web_deploy_no'] != null) _changeBanner(),
                 if (_spec['has_tokens'] == true || _status == 'building')
                   _tokensCard(),
@@ -217,6 +218,15 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
     );
   }
 
+  /// The worker's enriched plan (exact files, RPCs, acceptance bullets) written
+  /// before code starts when a spec was thin. Rendered verbatim from
+  /// `enriched_spec`; absent → the section never appears.
+  Widget _enrichedCard() => _sectionRaw(
+        c('dev_queue.enriched_plan'),
+        _mono(_spec['enriched_spec']),
+        tone: statusTone('building'),
+      );
+
   Widget _copyChip(Map<String, dynamic> a) {
     final label = (a['label'] ?? c('dev_queue.result_actions_label')).toString();
     final copy = (a['copy_text'] ?? '').toString();
@@ -262,6 +272,16 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
                 label: c('dev_queue.flag_urgent'),
                 tone: statusTone('failed'),
                 icon: Icons.priority_high),
+          if ((_spec['route_label'] ?? '').toString().isNotEmpty)
+            ToneChip(
+                label: (_spec['route_label']).toString(),
+                tone: toneByName((_spec['route_tone'] ?? 'neutral').toString()),
+                icon: routeIcon((_spec['route'] ?? '').toString())),
+          if ((_spec['area_label'] ?? '').toString().isNotEmpty)
+            ToneChip(
+                label: (_spec['area_label']).toString(),
+                tone: statusTone('paused'),
+                icon: Icons.category_outlined),
         ]),
         const SizedBox(height: 12),
         Text(title,

@@ -47,6 +47,39 @@ Tone statusTone(String status) {
 
 String statusLabel(String status) => c('dev_queue.status_$status');
 
+/// Maps a backend-chosen tone NAME (the server decides which lane/state colour a
+/// chip wears — the app only resolves the name to the fixed design palette).
+Tone toneByName(String name) {
+  switch (name) {
+    case 'success':
+      return _success;
+    case 'warning':
+      return _warning;
+    case 'error':
+      return _error;
+    case 'info':
+      return _info;
+    default: // neutral
+      return _neutral;
+  }
+}
+
+/// Presentation-only icon for a build route (fast/sonnet/opus). The label and
+/// colour come from the backend; only this glyph is chosen locally, the same way
+/// existing chips pick Icons.cloud / Icons.android for their kind.
+IconData routeIcon(String route) {
+  switch (route) {
+    case 'fast':
+      return Icons.bolt;
+    case 'sonnet':
+      return Icons.auto_awesome;
+    case 'opus':
+      return Icons.psychology_outlined;
+    default:
+      return Icons.memory;
+  }
+}
+
 Tone androidTone(String s) {
   switch (s) {
     case 'built':

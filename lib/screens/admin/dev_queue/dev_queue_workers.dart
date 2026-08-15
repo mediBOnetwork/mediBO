@@ -143,6 +143,7 @@ class _WorkerChip extends StatelessWidget {
     final cmd = worker['command_id'];
     final building = cmd != null;
     final title = (worker['title'] ?? '').toString();
+    final lane = (worker['lane'] ?? '').toString();
     final meta = (worker['meta'] ?? '').toString();
     final eta = (worker['eta_display'] ?? '').toString();
     final tone = building ? statusTone('building') : statusTone('paused');
@@ -172,6 +173,18 @@ class _WorkerChip extends StatelessWidget {
             Text('#$cmd',
                 style: Ds.t.caption.copyWith(
                     fontWeight: FontWeight.w700, color: Ds.c.textSecondary)),
+          ],
+          if (lane.isNotEmpty) ...[
+            SizedBox(width: Ds.space.x8),
+            Container(
+              padding: EdgeInsets.symmetric(
+                  horizontal: Ds.space.x8, vertical: Ds.space.x4),
+              decoration: BoxDecoration(
+                  color: Ds.c.brandSoft, borderRadius: Ds.r.rChip),
+              child: Text(lane,
+                  style: Ds.t.caption.copyWith(
+                      fontWeight: FontWeight.w700, color: Ds.c.brand)),
+            ),
           ],
         ]),
         if (!building)
@@ -231,7 +244,15 @@ class _PoolSettingsSheetState extends State<_PoolSettingsSheet> {
   late final TextEditingController _idle;
   late final TextEditingController _weekly;
   late final TextEditingController _session;
+  late bool _routingEnabled;
+  late final TextEditingController _opusLanes;
+  late final TextEditingController _sonnetLanes;
   bool _busy = false;
+
+  Map<String, dynamic> get _routing =>
+      (widget.config['routing'] as Map?)?.cast<String, dynamic>() ?? const {};
+  Map<String, dynamic> get _lanes =>
+      (_routing['lanes'] as Map?)?.cast<String, dynamic>() ?? const {};
 
   int get _min => asInt(widget.config['min']) == 0 ? 1 : asInt(widget.config['min']);
   int get _max => asInt(widget.config['max']) == 0 ? 8 : asInt(widget.config['max']);
@@ -248,6 +269,9 @@ class _PoolSettingsSheetState extends State<_PoolSettingsSheet> {
         text: '${asInt(widget.config['quota_shrink_pct'])}');
     _session = TextEditingController(
         text: '${asInt(widget.config['quota_shrink_session_pct'])}');
+    _routingEnabled = _routing['enabled'] == true;
+    _opusLanes = TextEditingController(text: '${asInt(_lanes['opus'])}');
+    _sonnetLanes = TextEditingController(text: '${asInt(_lanes['sonnet'])}');
   }
 
   @override
@@ -255,6 +279,8 @@ class _PoolSettingsSheetState extends State<_PoolSettingsSheet> {
     _idle.dispose();
     _weekly.dispose();
     _session.dispose();
+    _opusLanes.dispose();
+    _sonnetLanes.dispose();
     super.dispose();
   }
 
@@ -299,6 +325,17 @@ class _PoolSettingsSheetState extends State<_PoolSettingsSheet> {
             asInt(widget.config['quota_shrink_pct']),
         'quota_shrink_session_pct': int.tryParse(_session.text.trim()) ??
             asInt(widget.config['quota_shrink_session_pct']),
+        // pool_set shallow-merges the top level, so routing is sent whole.
+        'routing': {
+          ..._routing,
+          'enabled': _routingEnabled,
+          'lanes': {
+            ..._lanes,
+            'opus': int.tryParse(_opusLanes.text.trim()) ?? asInt(_lanes['opus']),
+            'sonnet':
+                int.tryParse(_sonnetLanes.text.trim()) ?? asInt(_lanes['sonnet']),
+          },
+        },
       }, pin);
       if (!mounted) return;
       if (res['ok'] == false) {
@@ -377,6 +414,29 @@ class _PoolSettingsSheetState extends State<_PoolSettingsSheet> {
         SizedBox(height: Ds.space.x8),
         _numField(_idle),
         _hint(c('dev_queue.pool_idle_hint')),
+        SizedBox(height: Ds.space.x16),
+        // Lane routing: send small specs to the Sonnet lane, large to Opus.
+        Row(children: [
+          Expanded(child: _label(c('dev_queue.pool_routing'), '')),
+          Switch(
+            value: _routingEnabled,
+            activeTrackColor: Ds.c.brand,
+            onChanged: _busy ? null : (v) => setState(() => _routingEnabled = v),
+          ),
+        ]),
+        _hint(c('dev_queue.pool_routing_hint')),
+        if (_routingEnabled) ...[
+          SizedBox(height: Ds.space.x12),
+          Row(children: [
+            Expanded(child: _label(c('dev_queue.pool_lane_opus'), '')),
+            _numField(_opusLanes),
+          ]),
+          SizedBox(height: Ds.space.x12),
+          Row(children: [
+            Expanded(child: _label(c('dev_queue.pool_lane_sonnet'), '')),
+            _numField(_sonnetLanes),
+          ]),
+        ],
         SizedBox(height: Ds.space.x24),
         SizedBox(
           width: double.infinity,

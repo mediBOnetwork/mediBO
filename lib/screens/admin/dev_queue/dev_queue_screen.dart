@@ -449,6 +449,21 @@ class _Row extends StatelessWidget {
             label: c('dev_queue.flag_rolled_back'),
             tone: statusTone('paused'),
             icon: Icons.undo),
+      if ((row['route_label'] ?? '').toString().isNotEmpty)
+        ToneChip(
+            label: (row['route_label']).toString(),
+            tone: toneByName((row['route_tone'] ?? 'neutral').toString()),
+            icon: routeIcon((row['route'] ?? '').toString())),
+      if ((row['area_label'] ?? '').toString().isNotEmpty)
+        ToneChip(
+            label: (row['area_label']).toString(),
+            tone: statusTone('paused'),
+            icon: Icons.category_outlined),
+      if ((row['speed_display'] ?? '').toString().isNotEmpty)
+        ToneChip(
+            label: (row['speed_display']).toString(),
+            tone: statusTone('completed'),
+            icon: Icons.bolt),
       if (batch.isNotEmpty)
         ToneChip(label: batch, tone: statusTone('paused'), icon: Icons.label_outline),
       if (android != 'not_requested')

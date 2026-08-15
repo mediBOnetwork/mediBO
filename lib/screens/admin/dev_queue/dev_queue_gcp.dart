@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../../design_tokens.dart';
 import '../../../services/ui_copy.dart';
 import '../../../utils/toast.dart';
 import 'dev_queue_common.dart';
@@ -183,10 +184,73 @@ class _GcpControlScreenState extends State<GcpControlScreen> {
                   const SizedBox(height: 12),
                   _auditCard(),
                   const SizedBox(height: 12),
+                  _lessonsCard(),
+                  const SizedBox(height: 12),
                   _dangerCard(),
                 ],
               ],
             ),
+    );
+  }
+
+  // ── Lessons (read-only) ───────────────────────────────────────────────────
+  /// The runner's captured lessons — one-liners it learned resolving non-obvious
+  /// failures, treated as hard constraints on the next build. Rendered verbatim
+  /// from dev_gcp_get().lessons; no client-side filtering (the backend owns the
+  /// list order and contents).
+  Widget _lessonsCard() {
+    final lessons = ((_g['lessons'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+    return DqCard(
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Icon(Icons.school_outlined,
+              size: Ds.space.x16 + 2, color: Ds.c.textSecondary),
+          SizedBox(width: Ds.space.x8),
+          Text(c('dev_queue.gcp_lessons'),
+              style: Ds.t.caption
+                  .copyWith(fontWeight: FontWeight.w700, color: Ds.c.textSecondary)),
+          const Spacer(),
+          Text('${lessons.length}',
+              style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+        ]),
+        SizedBox(height: Ds.space.x8),
+        if (lessons.isEmpty)
+          Text(c('dev_queue.gcp_lessons_empty'),
+              style: Ds.t.caption.copyWith(color: Ds.c.textSecondary))
+        else
+          for (final l in lessons)
+            Padding(
+              padding: EdgeInsets.only(bottom: Ds.space.x8 + 2),
+              child:
+                  Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Icon(Icons.lightbulb_outline,
+                      size: Ds.space.x12 + 2, color: Ds.c.brand),
+                  SizedBox(width: Ds.space.x8),
+                  Expanded(
+                    child: Text((l['title'] ?? '').toString(),
+                        style: Ds.t.body.copyWith(
+                            fontWeight: FontWeight.w700, color: Ds.c.text)),
+                  ),
+                  if ((l['area'] ?? '').toString().isNotEmpty)
+                    ToneChip(
+                        label: (l['area']).toString(),
+                        tone: statusTone('paused'),
+                        icon: Icons.category_outlined),
+                ]),
+                if ((l['lesson'] ?? '').toString().isNotEmpty)
+                  Padding(
+                    padding: EdgeInsets.only(
+                        left: Ds.space.x24, top: Ds.space.x4),
+                    child: Text((l['lesson']).toString(),
+                        style: Ds.t.body.copyWith(color: Ds.c.textSecondary)),
+                  ),
+              ]),
+            ),
+      ]),
     );
   }
 

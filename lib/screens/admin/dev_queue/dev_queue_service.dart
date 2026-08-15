@@ -38,6 +38,34 @@ class DevQueueService {
   Future<Map<String, dynamic>> spec(int id) async =>
       _asMap(await _c.rpc('dev_cmd_spec', params: {'p_id': id}));
 
+  // ── Bug-Loop Prevention: QA findings + journeys ──────────────────────────
+  /// One render-ready payload for a command's QA state: findings[] (severity,
+  /// tone, status all server-decided) + journey runs[] with evidence. The
+  /// detail screen draws this verbatim — nothing computed here.
+  Future<Map<String, dynamic>> qaDetail(int id) async =>
+      _asMap(await _c.rpc('dev_cmd_qa_detail', params: {'p_id': id}));
+
+  /// The known build areas (backend-decided list + labels) for the bug-report
+  /// area picker. Rendered verbatim — the app never invents an area name.
+  Future<List<Map<String, dynamic>>> areasGet() async =>
+      _asList(await _c.rpc('dev_areas_get'));
+
+  /// The journey library: every enabled journey, optionally scoped to an area.
+  /// Rendered verbatim in the Journey Library screen.
+  Future<List<Map<String, dynamic>>> journeysGet({String? area}) async =>
+      _asList(await _c.rpc('journeys_get', params: {'p_area': area}));
+
+  /// File a bug → backend creates a linked fix command + journey stub and
+  /// returns the created command id. The app only sends the text + area.
+  Future<Map<String, dynamic>> bugReport(String text, String area) async =>
+      _asMap(await _c.rpc('bug_report',
+          params: {'p_text': text, 'p_area': area, 'p_from_command': null}));
+
+  /// Waive a failed QA gate with the deploy PIN. Backend re-checks the PIN and
+  /// returns its verdict, rendered verbatim.
+  Future<Map<String, dynamic>> qaWaive(int id, String pin) async =>
+      _asMap(await _c.rpc('qa_waive', params: {'p_command_id': id, 'p_pin': pin}));
+
   Future<List<Map<String, dynamic>>> templates() async {
     final raw = await _c.rpc('dev_cmd_template_list');
     final list = raw is List ? raw : (raw is Map ? (raw['rows'] ?? []) : []);

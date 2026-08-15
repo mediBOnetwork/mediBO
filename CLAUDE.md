@@ -480,3 +480,36 @@ Guards (supervisor enforces): `billing_mode=max_subscription` AND Claude usage
 `cpu_load_max` → shrink by one (`cpu`); `workflow=off` or frozen → 0 claims
 (sessions may stay alive idle). Idle ≥ `idle_shutdown_min` with an empty queue →
 VM powers off. The primary session is never killed while it is building.
+
+## 14. PROOF-BASED COMPLETION (permanent — CHANGE #129, Bug-Loop Prevention)
+
+Completion is EVIDENCE, never a claim. A command is done when it is proven done,
+not when the runner says so. The backend enforces this gate inside
+`dev_cmd_complete` when `worker_pool.bugloop.enforce=true`.
+
+Non-negotiable for every UI-touching command:
+1. **Journeys.** After deploy (to preview when the preview lane is live), run the
+   command's area journeys (+ global) → `journey_report(cmd, results[])`. Every
+   `required=true` journey for the area MUST pass. A journey only becomes
+   `required=true` after it has passed GREEN TWICE — never on first sight, never
+   by hand to make a red command go green.
+2. **QA (L2).** A separate hostile QA agent tests the preview and files
+   `qa_report(cmd, 'passed'|'failed', findings[])`. The gate needs `passed` or an
+   explicit PIN-gated `qa_waive`. Failed → back to the builder (max 2 rounds),
+   then `needs_input` with the findings summary. Skip QA only for
+   docs-only / gcp / mutation commands (`qa_required=false`).
+3. **Screenshot.** ≥1 screenshot of the changed screen in `dev-cmd-proofs`, plus
+   the exact click path in `result_summary`. Backend without a reachable,
+   proven frontend is a FAILED command (§11).
+4. **Bugs become journeys.** Every `bug_report` finding creates a permanent
+   linked journey; the fix cannot complete until that journey passes. This is
+   how a class of bug is retired forever instead of one screenshot at a time.
+
+The chip row on each command (`qa_chip`, `preview_chip`, `journey_chip`) and the
+detail screen's QA & Journeys section render this proof verbatim from
+`dev_cmd_list` / `dev_cmd_qa_detail`. "Report a bug" (Dev Queue header) and the
+Journey Library screen (header map icon) are the Om-facing surfaces.
+
+NEVER flip `bugloop.enforce=true` until the full chain (preview → journeys → QA →
+promote) is rehearsed end-to-end on a harmless command — flipping it early blocks
+every future completion.

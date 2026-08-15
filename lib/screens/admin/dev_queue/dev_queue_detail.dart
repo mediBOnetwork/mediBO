@@ -9,6 +9,7 @@ import '../../../utils/toast.dart';
 import '../../../widgets/payment_proof_image.dart';
 import 'dev_queue_common.dart';
 import 'dev_queue_image_tray.dart';
+import 'dev_queue_qa.dart';
 import 'dev_queue_service.dart';
 
 /// One command, whole story. The registry row (status, decisions, targets,
@@ -168,6 +169,7 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
                 if (_status == 'building') _filesLocked(),
                 const SizedBox(height: 12),
                 _actions(),
+                QaJourneySection(id: widget.id, svc: _svc),
                 const SizedBox(height: 12),
                 _chat(),
                 if ((_row['decisions'] as List?)?.isNotEmpty ?? false)

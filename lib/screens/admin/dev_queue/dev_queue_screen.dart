@@ -9,6 +9,8 @@ import 'dev_queue_bulk_add.dart';
 import 'dev_queue_detail.dart';
 import 'dev_queue_control.dart';
 import 'dev_queue_gcp.dart';
+import 'dev_queue_qa.dart';
+import 'journey_library_screen.dart';
 
 /// The Dev Queue registry — the permanent development record, rendered from
 /// `dev_cmd_list` verbatim. Om pastes specs here; the VM runner claims and
@@ -174,11 +176,34 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
             style: const TextStyle(
                 fontSize: 18, fontWeight: FontWeight.w700, color: kTextHi)),
         actions: [
-          IconButton(
-            tooltip: c('dev_queue.gcp_open'),
-            icon: const Icon(Icons.cloud_outlined, color: kBrand),
-            onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => GcpControlScreen(service: _svc))),
+          Semantics(
+            identifier: 'devq_report_bug',
+            button: true,
+            child: IconButton(
+              tooltip: c('dev_queue.bug_report_tooltip'),
+              icon: const Icon(Icons.bug_report_outlined, color: kBrand),
+              onPressed: () => showBugReportSheet(context, _svc),
+            ),
+          ),
+          Semantics(
+            identifier: 'devq_journey_library',
+            button: true,
+            child: IconButton(
+              tooltip: c('dev_queue.journey_nav_label'),
+              icon: const Icon(Icons.map_outlined, color: kBrand),
+              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => JourneyLibraryScreen(service: _svc))),
+            ),
+          ),
+          Semantics(
+            identifier: 'devq_gcp_open',
+            button: true,
+            child: IconButton(
+              tooltip: c('dev_queue.gcp_open'),
+              icon: const Icon(Icons.cloud_outlined, color: kBrand),
+              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => GcpControlScreen(service: _svc))),
+            ),
           ),
         ],
         bottom: PreferredSize(
@@ -487,6 +512,19 @@ class _Row extends StatelessWidget {
             label: '$msgs',
             tone: statusTone('awaiting_approval'),
             icon: Icons.chat_bubble_outline),
+      // Bug-Loop Prevention chips — all rendered verbatim from dev_cmd_list.
+      if ((row['qa_chip'] ?? '').toString().isNotEmpty)
+        ToneChip(
+            label: (row['qa_chip']).toString(),
+            tone: toneByName((row['qa_tone'] ?? 'neutral').toString())),
+      if ((row['preview_chip'] ?? '').toString().isNotEmpty)
+        ToneChip(
+            label: (row['preview_chip']).toString(),
+            tone: toneByName((row['preview_tone'] ?? 'neutral').toString())),
+      if ((row['journey_chip'] ?? '').toString().isNotEmpty)
+        ToneChip(
+            label: (row['journey_chip']).toString(),
+            tone: statusTone('completed')),
     ];
 
     return DqCard(

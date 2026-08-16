@@ -81,6 +81,25 @@ insert into public.app_settings(key, value) values
 on conflict (key) do nothing;
 
 -- ─────────────────────────────────────────────────────────────────────────────
+-- 2b. Percent formatting. to_char(12,'FM990.99') is '12.' — a trailing dot that
+--     reads as a typo in "GST 12.%". One helper so every percent prints the
+--     same way. (rtrim'ing zeros is NOT safe: '20.0' would rtrim to '2'.)
+-- ─────────────────────────────────────────────────────────────────────────────
+create or replace function public._num_label(v numeric)
+returns text
+language sql
+immutable
+as $$
+  select case
+           when v is null then ''
+           when v = trunc(v) then to_char(v, 'FM999999999990')
+           else trim(to_char(v, 'FM999999999990.99'))
+         end;
+$$;
+
+grant execute on function public._num_label(numeric) to anon, authenticated;
+
+-- ─────────────────────────────────────────────────────────────────────────────
 -- 3. The math — ONE function, pure, used by cards, PDP, cart and reports alike.
 --    Returns null when there is no PTR: callers then fall back to MRP-only.
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -209,7 +228,14 @@ begin
 
   -- No MRP to compare against, or no pricing captured yet → MRP-only. This is
   -- the normal state for most of the catalogue and must never look broken.
-  if not v_has or not coalesce(p_row.pricing_ready, false) then
+  --
+  -- The viewer gate belongs here too: PTR, net rate and "you earn" are TRADE
+  -- terms. The storefront is public, so without this an anonymous visitor would
+  -- read mediBO's buying price off a product page. Everyone else gets the same
+  -- MRP-only block an un-priced product returns — no "hidden price" tell.
+  if not v_has or not coalesce(p_row.pricing_ready, false)
+     or not (public.viewer_is_approved_customer()
+             or public.get_my_role() = any (array['admin','super_admin'])) then
     return v_base;
   end if;
 
@@ -230,7 +256,7 @@ begin
    order by (b->>'min_pct')::numeric desc
    limit 1;
 
-  v_chip := trim(to_char(v_pct, 'FM990.0') || '% ' || v_suffix);
+  v_chip := trim(public._num_label(v_pct) || '% ' || v_suffix);
 
   -- The tax split as printable rows, so the PDP prints a list instead of
   -- assembling labels out of numbers.
@@ -239,14 +265,14 @@ begin
                        'value', public.inr_money((v_calc->>'taxable')::numeric)))
     || case when (v_calc->>'is_igst')::boolean
          then jsonb_build_array(jsonb_build_object(
-                'label', 'IGST ' || trim(to_char((v_calc->>'gst_pct')::numeric, 'FM990.99')) || '%',
+                'label', 'IGST ' || public._num_label((v_calc->>'gst_pct')::numeric) || '%',
                 'value', public.inr_money((v_calc->>'igst')::numeric)))
          else jsonb_build_array(
                 jsonb_build_object(
-                  'label', 'CGST ' || trim(to_char((v_calc->>'gst_pct')::numeric / 2, 'FM990.99')) || '%',
+                  'label', 'CGST ' || public._num_label((v_calc->>'gst_pct')::numeric / 2) || '%',
                   'value', public.inr_money((v_calc->>'cgst')::numeric)),
                 jsonb_build_object(
-                  'label', 'SGST ' || trim(to_char((v_calc->>'gst_pct')::numeric / 2, 'FM990.99')) || '%',
+                  'label', 'SGST ' || public._num_label((v_calc->>'gst_pct')::numeric / 2) || '%',
                   'value', public.inr_money((v_calc->>'sgst')::numeric)))
        end;
 
@@ -275,6 +301,11 @@ begin
       'bg',    coalesce(v_band->>'bg', '#EFF6FF'),
       'fg',    coalesce(v_band->>'fg', '#1E40AF'),
       'band',  coalesce(v_band->>'label', '')),
+    -- The compact grid card already renders a two-line corner ribbon from
+    -- these (empty since #676). Filling them puts the margin on the grid with
+    -- NO change to that card's fixed geometry.
+    'ribbon_top',     public._num_label(v_pct) || '%',
+    'ribbon_bottom',  v_suffix,
     'has_ptr',        true,
     'ptr_display',    public.inr_money((v_calc->>'ptr')::numeric),
     'ptr_caption',    v_ptr_cap,
@@ -283,7 +314,7 @@ begin
     'gst', jsonb_build_object(
       'title',           v_gst_title,
       'pct',             (v_calc->>'gst_pct')::numeric,
-      'pct_display',     'GST ' || trim(to_char((v_calc->>'gst_pct')::numeric, 'FM990.99')) || '%',
+      'pct_display',     'GST ' || public._num_label((v_calc->>'gst_pct')::numeric) || '%',
       'is_igst',         (v_calc->>'is_igst')::boolean,
       'taxable_display', public.inr_money((v_calc->>'taxable')::numeric),
       'amount_display',  public.inr_money((v_calc->>'gst_amount')::numeric),
@@ -586,7 +617,7 @@ begin
       'ready',   v_ready,
       'total',   v_total,
       'pct',     v_pct,
-      'label',   trim(to_char(v_pct, 'FM990.0')) || '% priced',
+      'label',   public._num_label(v_pct) || '% priced',
       'detail',  to_char(v_ready, 'FM9,99,99,999') || ' of ' ||
                  to_char(v_total, 'FM9,99,99,999') || ' buyable products have PTR + GST'),
     'labels', jsonb_build_object(
@@ -668,3 +699,109 @@ grant execute on function public.product_pricing(bigint, uuid) to anon, authenti
 grant execute on function public.product_pricing_upsert(bigint, jsonb, text) to authenticated;
 grant execute on function public.admin_pricing_list(text, integer, integer) to authenticated;
 grant execute on function public.cart_margin_block(jsonb) to anon, authenticated;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 11. Point every storefront_pricing() caller at the id-aware overload.
+--     Done as a text patch on pg_get_functiondef so each caller keeps its own
+--     body; each patch ASSERTS it changed something, because a caller silently
+--     left on the 1/2-arg form would show MRP-only forever — the exact failure
+--     this change exists to remove. storefront_product was missed on the first
+--     pass and caught by the assertion below; that is why it is there.
+-- ─────────────────────────────────────────────────────────────────────────────
+do $$
+declare
+  d text;
+  pairs text[][] := array[
+    array['public.storefront_page(text, integer, integer)',
+          '(SELECT pct FROM disc))))',
+          '(SELECT pct FROM disc), r.id)))'],
+    array['public.storefront_search_page(text, text, integer, integer)',
+          '(SELECT pct FROM disc))))',
+          '(SELECT pct FROM disc), r.id)))'],
+    array['public._sf_cards(bigint[])',
+          E'\'\')::numeric),\n    \'mrp_label\'',
+          E'\'\')::numeric, null::numeric, m.id),\n    \'mrp_label\''],
+    array['public.medicine_page_v2(bigint, integer, text, text, boolean)',
+          E'\'\')::numeric,\n                v_pct))',
+          E'\'\')::numeric,\n                v_pct, m.id))'],
+    array['public.wishlist_get()',
+          E'\'\')::numeric\n        ))->>\'price_display\'',
+          E'\'\')::numeric, null::numeric, m.id\n        ))->>\'price_display\''],
+    array['public.product_detail(bigint)',
+          'public.storefront_pricing(v_mrp)',
+          'public.storefront_pricing(v_mrp, null::numeric, p_product_id)'],
+    array['public.storefront_product(bigint)',
+          E'\'\')::numeric))',
+          E'\'\')::numeric, null::numeric, m.id))']
+  ];
+  i int;
+begin
+  for i in 1 .. array_length(pairs, 1) loop
+    d := pg_get_functiondef(pairs[i][1]::regprocedure);
+    if position(pairs[i][2] in d) = 0 then
+      raise exception 'CHANGE #174: anchor not found in %', pairs[i][1];
+    end if;
+    execute replace(d, pairs[i][2], pairs[i][3]);
+  end loop;
+end $$;
+
+do $$
+declare
+  fns text[] := array[
+    'public.storefront_page(text, integer, integer)',
+    'public.storefront_search_page(text, text, integer, integer)',
+    'public.storefront_product(bigint)',
+    'public.product_detail(bigint)',
+    'public._sf_cards(bigint[])',
+    'public.medicine_page_v2(bigint, integer, text, text, boolean)',
+    'public.wishlist_get()'
+  ];
+  f text; d text; call text; p int;
+begin
+  foreach f in array fns loop
+    d := pg_get_functiondef(f::regprocedure);
+    p := position('storefront_pricing(' in d);
+    if p = 0 then
+      raise exception 'CHANGE #174: % no longer calls storefront_pricing', f;
+    end if;
+    call := substr(d, p, 400);
+    if position('m.id' in call) = 0
+       and position('r.id' in call) = 0
+       and position('p_product_id' in call) = 0 then
+      raise exception 'CHANGE #174: % still calls storefront_pricing without a product id', f;
+    end if;
+  end loop;
+end $$;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 12. Pre-existing bug, found while wiring the auto-capture above and fixed
+--     here because §5's acceptance is untestable without it: every append in
+--     this trigger was `text[] || <untyped literal>`, which Postgres resolves
+--     as array||array and fails with "malformed array literal". So ANY bill
+--     line missing a batch no / expiry / qty / PTR / MRP / GST% threw on
+--     insert — precisely the incomplete lines the trigger exists to flag.
+--     Latent only because bill_lines was still empty. One ::text cast each.
+-- ─────────────────────────────────────────────────────────────────────────────
+create or replace function public.trg_bill_line_needs_fix()
+returns trigger
+language plpgsql
+as $function$
+DECLARE m text[] := '{}';
+BEGIN
+  IF NEW.product_id IS NULL         THEN m := m || 'product not matched'::text; END IF;
+  IF COALESCE(NEW.batch_no,'') = '' THEN m := m || 'batch no'::text; END IF;
+  IF COALESCE(NEW.expiry,'')   = '' THEN m := m || 'expiry'::text;   END IF;
+  IF COALESCE(NEW.qty,0)      <= 0  THEN m := m || 'qty'::text;      END IF;
+  IF COALESCE(NEW.ptr,0)      <= 0  THEN m := m || 'PTR'::text;      END IF;
+  IF COALESCE(NEW.mrp,0)      <= 0  THEN m := m || 'MRP'::text;      END IF;
+  IF NEW.gst_pct IS NULL            THEN m := m || 'GST %'::text;    END IF;
+  NEW.needs_fix := NULLIF(array_to_string(m, ', '), '');
+  IF NEW.needs_fix IS NOT NULL THEN NEW.verified := false; END IF;
+  RETURN NEW;
+END;
+$function$;
+
+-- Backend copy for the admin menu entry (ui_copy, read by c()).
+insert into public.ui_copy(key, value)
+values ('admin_nav.overflow_pricing', '"Product pricing"'::jsonb)
+on conflict (key) do update set value = excluded.value;

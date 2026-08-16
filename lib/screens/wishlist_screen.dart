@@ -130,7 +130,7 @@ class _WishlistScreenState extends State<WishlistScreen> {
             children: [
               Icon(Icons.wifi_off_rounded, size: 48, color: Ds.c.textSecondary),
               SizedBox(height: Ds.space.x16),
-              Text('Could not load wishlist',
+              Text(c('wishlist.error_title'),
                   style: Ds.t.subtitle, textAlign: TextAlign.center),
               SizedBox(height: Ds.space.x8),
               TextButton(

@@ -9,8 +9,10 @@ import '../user_state.dart';
 import '../utils/render_log.dart';
 import '../view_as_state.dart';
 import '../widgets/delete_account_section.dart';
+import '../design_tokens.dart';
 import 'auth/business_details_screen.dart';
 import 'admin/view_as_picker_dialog.dart';
+import 'wishlist_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   // CHANGE #374 — when set (View As Customer), load the impersonated
@@ -594,6 +596,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ),
                 ],
 
+                // My Wishlist — approved customers only (gated:true per backend decision)
+                if (!isViewAs && isRegistered)
+                  _WishlistEntryCard(),
+
                 // View As (Dev) — super-admin only, build-phase gated; hidden in viewAs mode
                 // RULE 1 — the role gating this comes from my_session() too.
                 if (!isViewAs && kEnableViewAs && (session?.isSuperAdmin ?? false))
@@ -970,6 +976,50 @@ class _ViewAsChip extends StatelessWidget {
               fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF92400E),
             )),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _WishlistEntryCard extends StatelessWidget {
+  const _WishlistEntryCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+          Ds.space.x16, Ds.space.x8, Ds.space.x16, 0),
+      child: GestureDetector(
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute<void>(
+              builder: (_) => const WishlistScreen()),
+        ),
+        child: Container(
+          padding: EdgeInsets.symmetric(
+              horizontal: Ds.space.x16, vertical: Ds.space.x16),
+          decoration: BoxDecoration(
+            color: Ds.c.surface,
+            borderRadius: Ds.r.rCard,
+            border: Border.all(color: Ds.c.divider),
+            boxShadow: Ds.elevation.e1,
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.favorite_border_rounded,
+                  size: 22, color: Ds.c.brand),
+              SizedBox(width: Ds.space.x12),
+              Expanded(
+                child: Text(
+                  c('profile.row_wishlist'),
+                  style: Ds.t.body
+                      .copyWith(fontWeight: FontWeight.w600),
+                ),
+              ),
+              Icon(Icons.chevron_right,
+                  size: 20, color: Ds.c.textSecondary),
+            ],
+          ),
         ),
       ),
     );

@@ -74,6 +74,33 @@ class CompanyPage {
   }
 }
 
+/// Result of `wishlist_toggle(p_product_id)`.
+class WishlistResult {
+  final bool ok;
+  final bool isWishlisted;
+  final String toast;
+  final String error;
+
+  const WishlistResult({
+    required this.ok,
+    required this.isWishlisted,
+    required this.toast,
+    required this.error,
+  });
+
+  static const WishlistResult failed =
+      WishlistResult(ok: false, isWishlisted: false, toast: '', error: '');
+
+  bool get loginRequired => error == 'login_required';
+
+  factory WishlistResult.fromMap(Map<String, dynamic> m) => WishlistResult(
+        ok: m['ok'] == true,
+        isWishlisted: m['is_wishlisted'] == true,
+        toast: m['toast']?.toString() ?? '',
+        error: m['error']?.toString() ?? '',
+      );
+}
+
 /// Result of `stock_notify_request(p_product_id)`.
 class NotifyResult {
   final bool ok;

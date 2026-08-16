@@ -409,6 +409,20 @@ class MedicineRepository {
     }
   }
 
+  /// CHANGE #160 — toggle a product in/out of the customer's wishlist.
+  Future<WishlistResult> wishlistToggle(String productId) async {
+    final id = int.tryParse(productId);
+    if (id == null) return WishlistResult.failed;
+    try {
+      final res =
+          await _rpc('wishlist_toggle', params: {'p_product_id': id});
+      if (res is! Map) return WishlistResult.failed;
+      return WishlistResult.fromMap(Map<String, dynamic>.from(res));
+    } catch (_) {
+      return WishlistResult.failed;
+    }
+  }
+
   /// CHANGE #638 — subscribe to a back-in-stock alert.
   Future<NotifyResult> stockNotifyRequest(String productId) async {
     final id = int.tryParse(productId);

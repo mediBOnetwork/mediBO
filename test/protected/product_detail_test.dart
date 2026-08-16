@@ -59,6 +59,8 @@ Map<String, dynamic> _payload({
   bool hasSupplierLabel = true,
   bool rxRequired = false,
   bool hasHistory = false,
+  bool showWishlist = false,
+  bool isWishlisted = false,
   List<Map<String, dynamic>> similar = const [],
 }) =>
     {
@@ -123,6 +125,8 @@ Map<String, dynamic> _payload({
         'has': hasHistory,
         'label': hasHistory ? 'You ordered 12 in the last 90 days' : '',
       },
+      'show_wishlist': showWishlist,
+      'is_wishlisted': isWishlisted,
     };
 
 /// Distinguishes successive pumps in one test. Without a fresh key Flutter
@@ -374,6 +378,44 @@ void main() {
       final d = ProductDetail.fromMap(p);
 
       expect(d.images, ['a.jpg', 'b.jpg']);
+    });
+
+    test('show_wishlist and is_wishlisted default to false when absent', () {
+      final d = ProductDetail.fromMap({'ok': true, 'id': 5});
+      expect(d.showWishlist, isFalse);
+      expect(d.isWishlisted, isFalse);
+    });
+
+    test('show_wishlist and is_wishlisted read from the payload', () {
+      final d = ProductDetail.fromMap(
+          _payload(showWishlist: true, isWishlisted: true));
+      expect(d.showWishlist, isTrue);
+      expect(d.isWishlisted, isTrue);
+    });
+  });
+
+  group('wishlist button', () {
+    testWidgets('hidden when show_wishlist is false (gated / not approved)',
+        (tester) async {
+      await _pump(tester, _payload());
+      expect(find.byIcon(Icons.favorite_border), findsNothing);
+      expect(find.byIcon(Icons.favorite), findsNothing);
+    });
+
+    testWidgets(
+        'shows outline heart when show_wishlist:true and is_wishlisted:false',
+        (tester) async {
+      await _pump(tester, _payload(showWishlist: true, isWishlisted: false));
+      expect(find.byIcon(Icons.favorite_border), findsOneWidget);
+      expect(find.byIcon(Icons.favorite), findsNothing);
+    });
+
+    testWidgets(
+        'shows filled heart when show_wishlist:true and is_wishlisted:true',
+        (tester) async {
+      await _pump(tester, _payload(showWishlist: true, isWishlisted: true));
+      expect(find.byIcon(Icons.favorite), findsOneWidget);
+      expect(find.byIcon(Icons.favorite_border), findsNothing);
     });
   });
 }

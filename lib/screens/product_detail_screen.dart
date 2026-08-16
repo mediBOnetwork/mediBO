@@ -2,12 +2,17 @@ import 'package:flutter/material.dart';
 
 import '../app_state.dart';
 import '../data/medicine_repository.dart';
+import '../design_tokens.dart';
 import '../models/product_detail.dart';
+import '../models/storefront_p3.dart';
 import '../theme.dart';
+import '../utils/toast.dart';
 import '../widgets/animations.dart';
 import '../widgets/compact_product_card.dart';
 import '../widgets/notify_control.dart';
 import '../widgets/product_image.dart';
+
+typedef WishlistToggle = Future<WishlistResult> Function(String productId);
 
 /// CHANGE #636 — the full-page product detail screen (PDP).
 ///
@@ -36,12 +41,17 @@ class ProductDetailScreen extends StatefulWidget {
   final Future<bool> Function(String productId)? notifyStatusLoader;
   final NotifyRequest? notifyRequest;
 
+  /// CHANGE #160 — test seam for the wishlist toggle. Production calls
+  /// `wishlist_toggle` through [MedicineRepository].
+  final WishlistToggle? wishlistToggle;
+
   const ProductDetailScreen({
     super.key,
     required this.productId,
     this.loader,
     this.notifyStatusLoader,
     this.notifyRequest,
+    this.wishlistToggle,
   });
 
   @override
@@ -52,6 +62,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
   ProductDetail? _data;
   bool _loading = true;
   bool _subscribed = false;
+  bool _wishlisted = false;
 
   @override
   void initState() {
@@ -82,6 +93,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     setState(() {
       _data = res;
       _loading = false;
+      _wishlisted = res.isWishlisted;
     });
 
     // Only ask about a subscription for a product that cannot be bought —
@@ -97,9 +109,27 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     setState(() => _subscribed = subscribed);
   }
 
+  Future<void> _toggleWishlist() async {
+    final d = _data;
+    if (d == null) return;
+    final toggle = widget.wishlistToggle ??
+        (id) => MedicineRepository().wishlistToggle(id);
+    final res = await toggle(d.id);
+    if (!mounted) return;
+    if (res.loginRequired) {
+      Navigator.of(context).pushNamed('/login');
+      return;
+    }
+    if (res.ok) {
+      setState(() => _wishlisted = res.isWishlisted);
+      if (res.toast.isNotEmpty) showToast(context, res.toast);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final d = _data;
+    final showWishlistBtn = !_loading && d != null && d.ok && d.showWishlist;
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -111,6 +141,18 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
           icon: const Icon(Icons.arrow_back, color: Color(0xFF111827)),
           onPressed: () => Navigator.of(context).maybePop(),
         ),
+        actions: [
+          if (showWishlistBtn)
+            IconButton(
+              tooltip: d!.label(
+                  _wishlisted ? 'pdp_wishlist_remove' : 'pdp_wishlist_add'),
+              icon: Icon(
+                _wishlisted ? Icons.favorite : Icons.favorite_border,
+                color: _wishlisted ? Ds.c.danger : Ds.c.textSecondary,
+              ),
+              onPressed: _toggleWishlist,
+            ),
+        ],
       ),
       body: _loading
           ? const _PdpSkeleton()

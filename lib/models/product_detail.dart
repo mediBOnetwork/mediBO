@@ -57,6 +57,10 @@ class ProductDetail {
   final bool hasHistory;
   final String historyLabel;
 
+  // wishlist — gated to approved customers; populated by product_detail()
+  final bool showWishlist;
+  final bool isWishlisted;
+
   const ProductDetail({
     required this.ok,
     required this.id,
@@ -82,6 +86,8 @@ class ProductDetail {
     required this.similar,
     required this.hasHistory,
     required this.historyLabel,
+    required this.showWishlist,
+    required this.isWishlisted,
   });
 
   /// One backend label, e.g. `pdp_overview_title`. Missing reads as '' — never
@@ -155,6 +161,8 @@ class ProductDetail {
           .toList(growable: false),
       hasHistory: hist['has'] == true,
       historyLabel: _s(hist['label']),
+      showWishlist: m['show_wishlist'] == true,
+      isWishlisted: m['is_wishlisted'] == true,
     );
   }
 
@@ -185,6 +193,8 @@ class ProductDetail {
         similar: const [],
         hasHistory: false,
         historyLabel: '',
+        showWishlist: false,
+        isWishlisted: false,
       );
 }
 

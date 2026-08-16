@@ -13,6 +13,7 @@ import 'dev_queue_gcp.dart';
 import 'dev_queue_qa.dart';
 import 'dev_queue_questions.dart';
 import 'journey_library_screen.dart';
+import 'memory_screen.dart';
 
 /// The Dev Queue registry — the permanent development record, rendered from
 /// `dev_cmd_list` verbatim. Om pastes specs here; the VM runner claims and
@@ -265,6 +266,16 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
               icon: const Icon(Icons.cloud_outlined, color: kBrand),
               onPressed: () => Navigator.of(context).push(MaterialPageRoute(
                   builder: (_) => GcpControlScreen(service: _svc))),
+            ),
+          ),
+          Semantics(
+            identifier: 'devq_memory_open',
+            button: true,
+            child: IconButton(
+              tooltip: c('dev_queue.memory_nav_label'),
+              icon: const Icon(Icons.memory_outlined, color: kBrand),
+              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => MemoryScreen(service: _svc))),
             ),
           ),
         ],

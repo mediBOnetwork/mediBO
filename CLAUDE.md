@@ -513,3 +513,11 @@ Journey Library screen (header map icon) are the Om-facing surfaces.
 NEVER flip `bugloop.enforce=true` until the full chain (preview → journeys → QA →
 promote) is rehearsed end-to-end on a harmless command — flipping it early blocks
 every future completion.
+
+<!-- BEGIN agent_memory -->
+<!-- AUTO-GENERATED pointer for claude. Do not edit inside these markers. -->
+# Portable agent memory (claude)
+@import RULES.md
+# ^ The full, current rules live in RULES.md (regenerated from Supabase each
+#   session by memory_render.sh). If RULES.md is missing, run that script.
+<!-- END agent_memory -->

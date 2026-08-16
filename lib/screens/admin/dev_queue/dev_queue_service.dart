@@ -249,6 +249,28 @@ class DevQueueService {
   Future<List<Map<String, dynamic>>> leaseList(int commandId) async =>
       _asList(await _c.rpc('lease_list', params: {'p_command_id': commandId}));
 
+  // ── Portable Memory plane (#182) ─────────────────────────────────────────
+  /// The full agent-memory list: {screen_title, subtitle, labels, scopes,
+  /// sections_hint, rows[]} — every string backend-owned, rendered verbatim by
+  /// the Memory screen. One RPC, render-ready.
+  Future<Map<String, dynamic>> memoryList() async =>
+      _asMap(await _c.rpc('memory_list'));
+
+  /// Upsert one rule (scope+section). Backend bumps version + audits. Returns
+  /// the verdict ({ok, message, version}) rendered verbatim.
+  Future<Map<String, dynamic>> memoryPut(
+          String scope, String section, String body, int priority) async =>
+      _asMap(await _c.rpc('memory_put', params: {
+        'p_scope': scope,
+        'p_section': section,
+        'p_body': body,
+        'p_priority': priority,
+      }));
+
+  /// Delete one rule by id. Backend audits. Returns {ok, message}.
+  Future<Map<String, dynamic>> memoryDelete(String id) async =>
+      _asMap(await _c.rpc('memory_delete', params: {'p_id': id}));
+
   // ── Runner control plane ────────────────────────────────────────────────
   Future<Map<String, dynamic>> ctlGet() async =>
       _asMap(await _c.rpc('dev_ctl_get'));

@@ -111,6 +111,12 @@ class DevQueueService {
         'p_save_prefs': savePrefs,
       }));
 
+  /// The drafts inbox: {generating[], ready[], failed[]}. Polled by the
+  /// Dev Queue screen so Om can open a ready draft without waiting on the
+  /// blocking loader.
+  Future<Map<String, dynamic>> draftsInbox() async =>
+      _asMap(await _c.rpc('drafts_inbox'));
+
   Future<void> draftCancel(int id) async =>
       _c.rpc('draft_cancel', params: {'p_id': id});
 

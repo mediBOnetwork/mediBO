@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 
+import '../../../design_tokens.dart';
 import '../../../services/ui_copy.dart';
 import '../../../utils/toast.dart';
 import 'dev_queue_common.dart';
@@ -10,6 +11,7 @@ import 'dev_queue_detail.dart';
 import 'dev_queue_control.dart';
 import 'dev_queue_gcp.dart';
 import 'dev_queue_qa.dart';
+import 'dev_queue_questions.dart';
 import 'journey_library_screen.dart';
 
 /// The Dev Queue registry — the permanent development record, rendered from
@@ -38,6 +40,13 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
   Timer? _tick; // 1s ticker for live ATR countdown on building rows
   DateTime _now = DateTime.now();
 
+  // Drafts inbox (generating / ready / failed)
+  List<Map<String, dynamic>> _draftsReady = const [];
+  List<Map<String, dynamic>> _draftsGenerating = const [];
+  List<Map<String, dynamic>> _draftsFailed = const [];
+  Timer? _draftPoll;
+  int get _draftBadge => _draftsReady.length + _draftsGenerating.length + _draftsFailed.length;
+
   bool get _hasActive =>
       _rows.any((r) => r['status'] == 'building' || r['status'] == 'needs_input');
 
@@ -45,8 +54,12 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
   void initState() {
     super.initState();
     _load();
+    _loadDrafts();
     _poll = Timer.periodic(const Duration(seconds: 5), (_) {
       if (_hasActive) _load(silent: true);
+    });
+    _draftPoll = Timer.periodic(const Duration(seconds: 8), (_) {
+      _loadDrafts();
     });
     _tick = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted && _hasActive) setState(() => _now = DateTime.now());
@@ -56,10 +69,26 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
   @override
   void dispose() {
     _poll?.cancel();
+    _draftPoll?.cancel();
     _tick?.cancel();
     _debounce?.cancel();
     _searchCtl.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadDrafts() async {
+    try {
+      final p = await _svc.draftsInbox();
+      if (!mounted) return;
+      setState(() {
+        _draftsGenerating = ((p['generating'] as List?) ?? const [])
+            .whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+        _draftsReady = ((p['ready'] as List?) ?? const [])
+            .whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+        _draftsFailed = ((p['failed'] as List?) ?? const [])
+            .whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+      });
+    } catch (_) {}
   }
 
   Future<void> _load({bool silent = false}) async {
@@ -176,6 +205,39 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
             style: const TextStyle(
                 fontSize: 18, fontWeight: FontWeight.w700, color: kTextHi)),
         actions: [
+          if (_draftBadge > 0)
+            Semantics(
+              identifier: 'devq_drafts_inbox',
+              button: true,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  IconButton(
+                    tooltip: c('dev_queue.drafts_inbox_title'),
+                    icon: const Icon(Icons.drafts_outlined, color: kBrand),
+                    onPressed: () => _showDraftsInbox(context),
+                  ),
+                  Positioned(
+                    top: Ds.space.x8,
+                    right: Ds.space.x8,
+                    child: Container(
+                      padding: EdgeInsets.all(Ds.space.x4 - 1),
+                      decoration: BoxDecoration(
+                        color: Ds.c.danger,
+                        shape: BoxShape.circle,
+                      ),
+                      constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+                      child: Text('$_draftBadge',
+                          textAlign: TextAlign.center,
+                          style: Ds.t.caption.copyWith(
+                              fontSize: Ds.t.caption.fontSize! - 4,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.white)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           Semantics(
             identifier: 'devq_report_bug',
             button: true,
@@ -232,6 +294,8 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
               // cloud icon is now the single entry point (the card was a
               // duplicate that ate screen space).
               SliverToBoxAdapter(child: DevQueueControl(service: _svc)),
+              if (_draftBadge > 0)
+                SliverToBoxAdapter(child: _draftsStrip()),
               SliverToBoxAdapter(child: _header()),
               SliverToBoxAdapter(child: _filters()),
               if (_status == 'cancelled' && _rows.isNotEmpty)
@@ -285,6 +349,25 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
         ),
       ),
     );
+  }
+
+  void _showDraftsInbox(BuildContext ctx) {
+    showModalBottomSheet<void>(
+      context: ctx,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _DraftsInboxSheet(
+        service: _svc,
+        generating: _draftsGenerating,
+        ready: _draftsReady,
+        failed: _draftsFailed,
+        onRefresh: _loadDrafts,
+        onQueued: () {
+          Navigator.of(ctx).pop();
+          _load();
+        },
+      ),
+    ).then((_) => _loadDrafts());
   }
 
   Widget _header() => Padding(
@@ -390,6 +473,54 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
               style: const TextStyle(fontSize: 13, color: kTextLo)),
         ]),
       );
+
+  // Compact strip shown in the scrollable body when drafts exist.
+  Widget _draftsStrip() {
+    final readyCount = _draftsReady.length;
+    final genCount = _draftsGenerating.length;
+    final failCount = _draftsFailed.length;
+    final parts = <String>[
+      if (genCount > 0) '$genCount ${c('dev_queue.draft_generating_label').toLowerCase()}',
+      if (readyCount > 0) '$readyCount ${c('dev_queue.draft_ready_label').toLowerCase()}',
+      if (failCount > 0) '$failCount ${c('dev_queue.draft_failed_label').toLowerCase()}',
+    ];
+    final accent = readyCount > 0 ? Ds.c.success : genCount > 0 ? Ds.c.info : Ds.c.danger;
+    final bg = readyCount > 0 ? Ds.c.successSoft : genCount > 0 ? Ds.c.infoSoft : Ds.c.dangerSoft;
+    return InkWell(
+      onTap: () => _showDraftsInbox(context),
+      child: Container(
+        margin: EdgeInsets.fromLTRB(Ds.space.x16, Ds.space.x8, Ds.space.x16, 0),
+        padding: EdgeInsets.symmetric(horizontal: Ds.space.x12, vertical: Ds.space.x8),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: Ds.r.rCard,
+          border: Border.all(color: accent, width: 0.5),
+        ),
+        child: Row(children: [
+          if (genCount > 0 && readyCount == 0)
+            SizedBox(
+              width: Ds.space.x12 + 2,
+              height: Ds.space.x12 + 2,
+              child: CircularProgressIndicator(strokeWidth: 1.5, color: Ds.c.info),
+            )
+          else
+            Icon(
+              readyCount > 0 ? Icons.drafts_outlined : Icons.error_outline,
+              size: Ds.space.x16,
+              color: accent,
+            ),
+          SizedBox(width: Ds.space.x8),
+          Expanded(
+            child: Text(
+              '${c('dev_queue.drafts_inbox_title')}: ${parts.join(', ')}',
+              style: Ds.t.caption.copyWith(fontWeight: FontWeight.w600, color: accent),
+            ),
+          ),
+          Icon(Icons.chevron_right, size: Ds.space.x16, color: accent),
+        ]),
+      ),
+    );
+  }
 }
 
 class _Row extends StatelessWidget {
@@ -599,4 +730,250 @@ class _Row extends StatelessWidget {
       ]),
     );
   }
+}
+
+/// Bottom sheet listing generating, ready, and failed drafts. Tapping a ready
+/// draft opens the Questions screen so Om can answer and queue the command.
+class _DraftsInboxSheet extends StatefulWidget {
+  final DevQueueService service;
+  final List<Map<String, dynamic>> generating;
+  final List<Map<String, dynamic>> ready;
+  final List<Map<String, dynamic>> failed;
+  final VoidCallback onRefresh;
+  final VoidCallback onQueued;
+
+  const _DraftsInboxSheet({
+    required this.service,
+    required this.generating,
+    required this.ready,
+    required this.failed,
+    required this.onRefresh,
+    required this.onQueued,
+  });
+
+  @override
+  State<_DraftsInboxSheet> createState() => _DraftsInboxSheetState();
+}
+
+class _DraftsInboxSheetState extends State<_DraftsInboxSheet> {
+  late List<Map<String, dynamic>> _generating = widget.generating;
+  late List<Map<String, dynamic>> _ready = widget.ready;
+  late List<Map<String, dynamic>> _failed = widget.failed;
+  Timer? _poll;
+  final Set<int> _retrying = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _poll = Timer.periodic(const Duration(seconds: 6), (_) => _refresh());
+  }
+
+  @override
+  void dispose() {
+    _poll?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _refresh() async {
+    try {
+      final p = await widget.service.draftsInbox();
+      if (!mounted) return;
+      setState(() {
+        _generating = ((p['generating'] as List?) ?? const [])
+            .whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+        _ready = ((p['ready'] as List?) ?? const [])
+            .whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+        _failed = ((p['failed'] as List?) ?? const [])
+            .whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+      });
+      widget.onRefresh();
+    } catch (_) {}
+  }
+
+  Future<void> _openReady(Map<String, dynamic> draft) async {
+    final id = (draft['id'] as num?)?.toInt() ?? 0;
+    final spec = (draft['spec'] ?? '').toString();
+    final queued = await Navigator.of(context).push<bool>(MaterialPageRoute(
+      builder: (_) => DevQueueQuestions(
+        service: widget.service,
+        draftId: id,
+        spec: spec,
+        mode: 'auto',
+        count: null,
+        opts: const {},
+      ),
+    ));
+    if (queued == true) widget.onQueued();
+    _refresh();
+  }
+
+  Future<void> _retry(Map<String, dynamic> draft) async {
+    final id = (draft['id'] as num?)?.toInt() ?? 0;
+    if (_retrying.contains(id)) return;
+    setState(() => _retrying.add(id));
+    try {
+      final spec = (draft['spec'] ?? '').toString();
+      final mode = (draft['mode'] ?? 'auto').toString();
+      final opts = Map<String, dynamic>.from((draft['opts'] as Map?) ?? {});
+      final res = await widget.service.draftCreate(spec, mode, null, opts);
+      if (!mounted) return;
+      final newId = (res['id'] as num?)?.toInt() ?? 0;
+      if (newId > 0) {
+        showToast(context, c('dev_queue.draft_toast_generating'));
+      } else {
+        showToast(context, (res['error'] ?? '').toString(), isError: true);
+      }
+    } catch (e) {
+      if (mounted) showToast(context, e.toString(), isError: true);
+    } finally {
+      if (mounted) setState(() => _retrying.remove(id));
+      _refresh();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final allEmpty = _generating.isEmpty && _ready.isEmpty && _failed.isEmpty;
+    return Container(
+      decoration: BoxDecoration(
+        color: Ds.c.surface,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(Ds.r.rSheet.topLeft.x)),
+      ),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        // Handle
+        Container(
+          margin: EdgeInsets.symmetric(vertical: Ds.space.x8 + 2),
+          width: Ds.space.x32 + 4,
+          height: Ds.space.x4,
+          decoration: BoxDecoration(color: kBorder, borderRadius: Ds.r.rButton),
+        ),
+        Padding(
+          padding: EdgeInsets.fromLTRB(Ds.space.x16, 0, Ds.space.x16, Ds.space.x12),
+          child: Row(children: [
+            Icon(Icons.drafts_outlined, size: Ds.space.x16 + 4, color: kBrand),
+            SizedBox(width: Ds.space.x8),
+            Text(c('dev_queue.drafts_inbox_title'), style: Ds.t.subtitle),
+          ]),
+        ),
+        const Divider(height: 1),
+        if (allEmpty)
+          Padding(
+            padding: EdgeInsets.symmetric(vertical: Ds.space.x32),
+            child: Column(children: [
+              Icon(Icons.check_circle_outline,
+                  size: Ds.space.x32 + Ds.space.x8, color: kTextLo.withValues(alpha: 0.4)),
+              SizedBox(height: Ds.space.x12),
+              Text(c('dev_queue.empty_title'), style: Ds.t.caption),
+            ]),
+          )
+        else
+          ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(context).size.height * 0.6,
+            ),
+            child: ListView(
+              shrinkWrap: true,
+              padding: EdgeInsets.fromLTRB(Ds.space.x16, Ds.space.x12, Ds.space.x16, Ds.space.x24),
+              children: [
+                ..._generating.map((d) => _genTile(d)),
+                ..._ready.map((d) => _readyTile(d)),
+                ..._failed.map((d) => _failedTile(d)),
+              ],
+            ),
+          ),
+      ]),
+    );
+  }
+
+  Widget _genTile(Map<String, dynamic> d) => _tile(
+        spec: (d['spec'] ?? '').toString(),
+        leading: SizedBox(
+          width: Ds.space.x16 + 2,
+          height: Ds.space.x16 + 2,
+          child: CircularProgressIndicator(strokeWidth: 2, color: Ds.c.info),
+        ),
+        labelText: c('dev_queue.draft_generating_label'),
+        labelColor: Ds.c.info,
+        bgColor: Ds.c.infoSoft,
+      );
+
+  Widget _readyTile(Map<String, dynamic> d) => _tile(
+        spec: (d['spec'] ?? '').toString(),
+        leading: Icon(Icons.check_circle_outline, size: Ds.space.x16 + 2, color: Ds.c.success),
+        labelText: c('dev_queue.draft_ready_label'),
+        labelColor: Ds.c.success,
+        bgColor: Ds.c.successSoft,
+        trailing: Text(c('dev_queue.draft_tap_hint'),
+            style: Ds.t.caption.copyWith(color: Ds.c.success, fontWeight: FontWeight.w600)),
+        onTap: () => _openReady(d),
+      );
+
+  Widget _failedTile(Map<String, dynamic> d) {
+    final id = (d['id'] as num?)?.toInt() ?? 0;
+    return _tile(
+      spec: (d['spec'] ?? '').toString(),
+      leading: Icon(Icons.error_outline, size: Ds.space.x16 + 2, color: Ds.c.danger),
+      labelText: c('dev_queue.draft_failed_label'),
+      labelColor: Ds.c.danger,
+      bgColor: Ds.c.dangerSoft,
+      trailing: _retrying.contains(id)
+          ? SizedBox(
+              width: Ds.space.x16,
+              height: Ds.space.x16,
+              child: CircularProgressIndicator(strokeWidth: 2, color: Ds.c.danger))
+          : TextButton(
+              onPressed: () => _retry(d),
+              style: TextButton.styleFrom(
+                  padding: EdgeInsets.symmetric(horizontal: Ds.space.x8),
+                  foregroundColor: Ds.c.danger),
+              child: Text(c('dev_queue.draft_retry_btn'),
+                  style: Ds.t.caption.copyWith(fontWeight: FontWeight.w700, color: Ds.c.danger)),
+            ),
+    );
+  }
+
+  Widget _tile({
+    required String spec,
+    required Widget leading,
+    required String labelText,
+    required Color labelColor,
+    required Color bgColor,
+    Widget? trailing,
+    VoidCallback? onTap,
+  }) =>
+      Padding(
+        padding: EdgeInsets.only(bottom: Ds.space.x8),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: Ds.r.rCard,
+          child: Container(
+            padding: EdgeInsets.symmetric(horizontal: Ds.space.x12 + 2, vertical: Ds.space.x12),
+            decoration: BoxDecoration(color: bgColor, borderRadius: Ds.r.rCard),
+            child: Row(children: [
+              leading,
+              SizedBox(width: Ds.space.x8 + 2),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Container(
+                    padding: EdgeInsets.symmetric(horizontal: Ds.space.x8 - 2, vertical: Ds.space.x4 - 2),
+                    decoration: BoxDecoration(
+                      color: Ds.c.surface.withValues(alpha: 0.6),
+                      borderRadius: Ds.r.rButton,
+                    ),
+                    child: Text(labelText,
+                        style: Ds.t.caption.copyWith(
+                            fontWeight: FontWeight.w700, color: labelColor)),
+                  ),
+                  SizedBox(height: Ds.space.x4),
+                  Text(spec,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Ds.t.body.copyWith(fontWeight: FontWeight.w500)),
+                ]),
+              ),
+              if (trailing != null) ...[SizedBox(width: Ds.space.x8), trailing],
+            ]),
+          ),
+        ),
+      );
 }

@@ -118,8 +118,8 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
         'targets_ios': _ios,
       };
 
-  // Generate ON → open a draft for the whole paste (one request the runner asks
-  // doubts about), then push the Questions screen. Everything else is unchanged.
+  // Generate ON → fire-and-leave: create the draft and immediately return Om
+  // to the Dev Queue with a toast. He answers when the inbox shows it ready.
   Future<void> _generateAndAsk() async {
     if (_mediaPending) {
       showToast(context, c('dev_queue.media_pending_block'), isError: true);
@@ -138,17 +138,9 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
         showToast(context, (res['error'] ?? '').toString(), isError: true);
         return;
       }
-      final queued = await Navigator.of(context).push<bool>(MaterialPageRoute(
-        builder: (_) => DevQueueQuestions(
-          service: widget.service,
-          draftId: id,
-          spec: spec,
-          mode: _genMode,
-          count: _genMode == 'auto' ? null : _genCount,
-          opts: _draftOpts(),
-        ),
-      ));
-      if (queued == true && mounted) Navigator.of(context).pop(true);
+      // Draft created — close the sheet and let the inbox handle the rest.
+      showToast(context, c('dev_queue.draft_toast_generating'));
+      Navigator.of(context).pop(false);
     } catch (e) {
       if (mounted) {
         setState(() => _busy = false);

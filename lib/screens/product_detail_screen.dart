@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../data/medicine_repository.dart';
 import '../design_tokens.dart';
+import '../models/product.dart';
 import '../models/product_detail.dart';
 import '../models/storefront_p3.dart';
 import '../theme.dart';
@@ -467,7 +468,84 @@ class _PriceRow extends StatelessWidget {
             ),
           ),
         ],
+        // CHANGE #174 — the trade breakdown behind that margin: what the
+        // pharmacy is billed (PTR), the scheme it was captured with, and the
+        // tax split. Every row is a backend string; this widget prints pairs
+        // and nothing else. Absent in mrp_only mode, so a product with no
+        // captured pricing looks exactly as it did before.
+        if (pr.hasPtr || pr.gst != null) ...[
+          const SizedBox(height: 10),
+          _TradeBreakdown(pricing: pr),
+        ],
       ],
+    );
+  }
+}
+
+/// PTR + scheme + GST split, printed verbatim from the `pricing` block.
+class _TradeBreakdown extends StatelessWidget {
+  final Pricing pricing;
+  const _TradeBreakdown({required this.pricing});
+
+  @override
+  Widget build(BuildContext context) {
+    final gst = pricing.gst;
+    final rows = <({String label, String value})>[
+      if (pricing.hasPtr)
+        (label: pricing.ptrCaption, value: pricing.ptrDisplay),
+      if (pricing.schemeText.isNotEmpty)
+        (label: 'Scheme', value: pricing.schemeText),
+      if (gst != null) ...gst.lines,
+    ];
+    if (rows.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      padding: EdgeInsets.all(Ds.space.x12),
+      decoration: BoxDecoration(
+        color: Brand.field,
+        borderRadius: BorderRadius.circular(Rad.card),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (gst != null && gst.title.isNotEmpty) ...[
+            Text(gst.title, style: AppType.t2.copyWith(color: Brand.inkMuted)),
+            const SizedBox(height: 8),
+          ],
+          for (final r in rows) ...[
+            Padding(
+              padding: EdgeInsets.only(bottom: Ds.space.x4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(r.label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppType.b3.copyWith(color: Brand.inkSub)),
+                  ),
+                  const SizedBox(width: 12),
+                  // Numbers right-aligned, as every money column in the app is.
+                  Text(r.value,
+                      style: AppType.b3
+                          .copyWith(fontWeight: FontWeight.w600)),
+                ],
+              ),
+            ),
+          ],
+          if (gst != null && gst.netDisplay.isNotEmpty)
+            Row(
+              children: [
+                Expanded(
+                  child: Text(pricing.netCaption,
+                      style: AppType.t2.copyWith(color: Brand.inkMuted)),
+                ),
+                const SizedBox(width: 12),
+                Text(gst.netDisplay,
+                    style: AppType.l4.copyWith(fontWeight: FontWeight.w800)),
+              ],
+            ),
+        ],
+      ),
     );
   }
 }

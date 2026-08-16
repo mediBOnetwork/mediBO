@@ -32,6 +32,8 @@ import 'screens/code_resolver_page.dart';
 import 'screens/public/wa_link_redirect_page.dart'; // /r/:code — campaign links
 import 'screens/admin/wa_campaigns_screen.dart'; // /admin/wa-campaigns
 import 'screens/product_detail_screen.dart'; // C636: /product/:id
+import 'screens/reorder_screen.dart'; // #173: /reorder
+import 'screens/admin/reorder_admin_screen.dart'; // #173: /admin/reorder
 import 'screens/company_screen.dart'; // C638: /company/:key
 import 'screens/inquiry_link_page.dart';
 import 'screens/dispute_link_page.dart';
@@ -631,6 +633,18 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
               // non-admin callers itself, so the screen renders its own
               // not-authorized state rather than the route guessing a role.
               '/admin/wa-templates': (_) => const WaTemplatesScreen(),
+              // CHANGE #173 — the reorder screen as a real URL. The WhatsApp
+              // reorder nudge can link straight here, and it gives the screen
+              // a shareable address like /product/:id has. The screen asks the
+              // backend who the viewer is (reorder_suggestions uses
+              // my_customer_id), so the route needs no role guard of its own.
+              '/reorder':      (_) => const ReorderScreen(),
+              // CHANGE #173 — the admin side of the same suite. Like
+              // /admin/wa-templates above, the RPC refuses non-admin callers
+              // itself and the screen renders that refusal, so the route
+              // guards nothing. It is also reachable without a URL, from the
+              // dashboard's quick-navigation tile.
+              '/admin/reorder': (_) => const ReorderAdminScreen(),
               '/about-app':    (_) => const AboutScreen(),
               '/contact':      (_) => const ContactScreen(),
               '/terms':        (_) => const TermsScreen(),

@@ -29,6 +29,7 @@ import 'admin/admin_mr_screen.dart';
 import 'admin/admin_alert_overlay.dart';
 import 'admin/admin_nav_entries.dart';
 import 'admin/admin_shell.dart';
+import 'admin/pricing_backfill_screen.dart';
 import '../features/whatsapp/ui/wa_home_screen.dart';
 import '../features/whatsapp/ui/wa_templates_screen.dart';
 import 'admin/wa_campaigns_screen.dart';
@@ -407,6 +408,13 @@ class _HomeShellState extends State<HomeShell> {
       case 'bags':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const BagsScreen()));
+        break;
+      // CHANGE #174 — PTR / GST backfill. Not gated here: admin_pricing_list()
+      // and product_pricing_upsert() both check get_my_role() themselves and
+      // the screen renders their answer, same story as the WhatsApp screens.
+      case 'pricing_backfill':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const PricingBackfillScreen()));
         break;
       case 'mr': setState(() { _index = 7; _cartOpen = false; }); break;
       case 'companies': setState(() { _index = 8; _cartOpen = false; }); break;

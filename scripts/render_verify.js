@@ -23,7 +23,6 @@
  *   8  supplier        (--supplier-keys) supplier inquiry accordion
  *   9  admin-mobile    (--layout) admin measured-width layout proof
  *   10 supplier-mobile (--layout) supplier measured-width layout proof
- *   11 disputes-portal (c175_* keys) supplier disputes portal
  *
  * Lives in the repo (scripts/render_verify.js) so it ships with the code it
  * verifies; ~/render_verify.js is a thin shim onto this file.
@@ -74,8 +73,7 @@ const supplierKeys    = argv.includes('--supplier-keys');
 //   --all              → everything
 //   --phases a,b,c     → exactly these (names below)
 const PHASE_NAMES = ['boot', 'inquiry', 'allocation', 'receiving', 'voice',
-                     'arrivals', 'supplier', 'admin-mobile', 'supplier-mobile',
-                     'disputes-portal'];
+                     'arrivals', 'supplier', 'admin-mobile', 'supplier-mobile'];
 const phasesArg = argVal('--phases');
 const wantAll   = argv.includes('--all');
 const wantApi   = argv.includes('--api');
@@ -95,11 +93,23 @@ if (phasesArg) {
   selected.add('boot');
   if (inquiryToken) selected.add('inquiry');
   if (supplierKeys) selected.add('supplier');
-  if (requiredKeys.some(k => k.startsWith('c175_'))) selected.add('disputes-portal');
   if (wantAll || wantApi) ['allocation', 'receiving', 'voice', 'arrivals'].forEach(p => selected.add(p));
   if (wantAll || wantLayout) ['admin-mobile', 'supplier-mobile'].forEach(p => selected.add(p));
 }
 const wantPhase = name => selected.has(name);
+
+// The c175_*/c174_portal_* render-log keys were removed from the app in the
+// c350 dispute-card rework — nothing in lib/ writes them any more, so Phase 11
+// asserted telemetry that could never appear and was permanently red (#196).
+// The phase is gone; asking for those keys is a config error rather than a
+// silent pass, because Phase 1 filters them out and would otherwise report
+// "all keys present" for a key it never checked.
+const deadKeys = requiredKeys.filter(k => k.startsWith('c175_') || k.startsWith('c174_portal'));
+if (deadKeys.length) {
+  console.error(`render_verify: these keys no longer exist in the app (removed in the c350 dispute-card rework): ${deadKeys.join(', ')}`);
+  console.error('render_verify: use a key the app actually writes, e.g. c350_card / c350_actions.');
+  process.exit(2);
+}
 
 if (wantPhase('inquiry') && !inquiryToken) {
   console.error('render_verify: the inquiry phase needs --inquiry-token TOKEN');
@@ -108,7 +118,7 @@ if (wantPhase('inquiry') && !inquiryToken) {
 
 // Run bookkeeping — written to verify_run_log so the bug-192 journey can assert
 // this class of bug is gone from real evidence instead of a claim.
-const ran = [], skipped = [], failed = [];
+const ran = [], skipped = [], failed = [], notRun = [];
 let mutatedProduction = false;
 PHASE_NAMES.forEach(p => { if (!wantPhase(p)) skipped.push(p); });
 
@@ -392,6 +402,7 @@ async function phaseReceiving(accessToken) {
 
   console.log('\n── Phase 5: Receiving API verification ──────────────────────────────');
   let passed = true;
+  let mutated = false;
 
   // 5a. Verify get_receiving_box returns items for TOP PHARMA
   console.log('  Calling get_receiving_box(TOP PHARMA)...');
@@ -420,10 +431,18 @@ async function phaseReceiving(accessToken) {
   const recRes = await httpsPost(`${SUPABASE_URL}/rest/v1/rpc/set_item_receiving`,
     rpcHeaders, { p_order_item_id: testItemId, p_state: 'received', p_qty: orderedQty });
   console.log(`  Response: ${JSON.stringify(recRes)}`);
-  if (!recRes || recRes.status !== 'ok') {
+  // collect_locked is the count-lock guard doing its job: once a supplier's
+  // shop count is locked, nobody re-writes those quantities — the same class of
+  // deliberate refusal that made Phase 4 permanently red (#192/#196). It is the
+  // expected outcome on a locked item, not an API failure.
+  const collectLocked = !!recRes && recRes.error === 'collect_locked';
+  if (collectLocked) {
+    console.log('  ✓ Expected business refusal — count is locked, receiving quantities are frozen');
+  } else if (!recRes || recRes.status !== 'ok') {
     console.log('  ✗ set_item_receiving FAILED');
     passed = false;
   } else {
+    mutated = true;
     console.log(`  ✓ Recorded received — state=${recRes.state}, qty=${recRes.received_qty}`);
   }
 
@@ -441,15 +460,22 @@ async function phaseReceiving(accessToken) {
     }
   }
 
-  // 5d. Reset to pending
-  console.log(`  Resetting ${testItemId} back to pending...`);
-  const resetRes = await httpsPost(`${SUPABASE_URL}/rest/v1/rpc/set_item_receiving`,
-    rpcHeaders, { p_order_item_id: testItemId, p_state: 'pending' });
-  if (!resetRes || resetRes.status !== 'ok') {
-    console.log(`  ⚠ Reset to pending failed (non-fatal): ${JSON.stringify(resetRes)}`);
+  // 5d. Reset to pending — only if 5b actually wrote something. Asking a locked
+  // item to reset just re-triggers the same refusal.
+  if (collectLocked) {
+    console.log('  – Skipping reset: nothing was recorded, the item is count-locked');
   } else {
-    console.log('  ✓ Reset to pending');
+    console.log(`  Resetting ${testItemId} back to pending...`);
+    const resetRes = await httpsPost(`${SUPABASE_URL}/rest/v1/rpc/set_item_receiving`,
+      rpcHeaders, { p_order_item_id: testItemId, p_state: 'pending' });
+    if (!resetRes || resetRes.status !== 'ok') {
+      console.log(`  ⚠ Reset to pending failed (non-fatal): ${JSON.stringify(resetRes)}`);
+    } else {
+      console.log('  ✓ Reset to pending');
+    }
   }
+
+  if (mutated) mutatedProduction = true;
 
   // 5e. Verify barcode scan flag is false (dormant)
   console.log('  Checking stage1_barcode_scan flag...');
@@ -527,6 +553,7 @@ async function phaseArrivals(accessToken) {
     passed = false;
   } else {
     const n = arrRes.items_arrived || 0;
+    mutatedProduction = true;   // one-way: there is no undo for an arrived box
     console.log(`  ✓ mark_box_arrived ok — ${n} item(s) arrived for ${supplierName}`);
   }
 
@@ -602,6 +629,7 @@ async function phaseVoiceReceive(accessToken) {
   } else {
     const allocated = recRes.allocated || 0;
     const rows = recRes.rows || [];
+    mutatedProduction = true;   // undone below, but production was written to
     console.log(`  ✓ receive_product_qty ok — allocated=${allocated}, rows=${rows.length}`);
     if (!Array.isArray(rows)) {
       console.log('  ✗ rows is not an array');
@@ -829,45 +857,6 @@ async function phaseSupplierMobile(browser, supplierSession, expectedHash) {
   return allPassed;
 }
 
-// ── Phase 11: Supplier disputes portal (c175_* keys) ─────────────────────────
-async function phaseSupplierDisputesPortal(browser, supplierSession, expectedHash) {
-  console.log('\n── Phase 11: Supplier disputes portal (c175_portal_load) ───');
-  let passed = false;
-  for (let attempt = 1; attempt <= MAX_RETRIES && !passed; attempt++) {
-    console.log(`  Attempt ${attempt}/${MAX_RETRIES}`);
-    const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
-    await ctx.addInitScript(({ key, val }) => {
-      localStorage.setItem(key, val);
-    }, { key: STORAGE_KEY, val: JSON.stringify(supplierSession) });
-    const page = await ctx.newPage();
-    page.on('console', () => {});
-    try {
-      await page.goto(TARGET, { waitUntil: 'domcontentloaded', timeout: 30000 });
-      // Wait for boot, then extra time for disputes _load() to complete
-      await waitForFlutter(page, 15, 'boot_status=painted');
-      await page.waitForTimeout(8000); // allow IndexedStack child initState + RPC
-      const logText = await readRenderLog(page);
-      const log = parseLog(logText);
-      const gotHash = log['build'];
-      const hashOk = gotHash === expectedHash;
-      const portalLoad = log['c175_portal_load'];
-      const cardKinds  = log['c175_card_kinds'];
-      const portalErr  = log['c175_portal_error'];
-      console.log(`  build     : ${hashOk ? '✓' : '✗'} got=${gotHash}`);
-      console.log(`  c175_portal_load  : ${portalLoad ?? 'MISSING'}`);
-      console.log(`  c175_card_kinds   : ${cardKinds ?? 'MISSING'}`);
-      if (portalErr) console.log(`  c175_portal_error : ${portalErr} ← error state present`);
-      if (hashOk && portalLoad) passed = true;
-    } catch (err) {
-      console.error(`  Error: ${err.message}`);
-    } finally {
-      await ctx.close();
-    }
-    if (!passed && attempt < MAX_RETRIES) console.log('  Retrying...\n');
-  }
-  return passed;
-}
-
 // ── Main ──────────────────────────────────────────────────────────────────────
 async function main() {
   console.log(`\n🔍 render_verify.js — ${TARGET}`);
@@ -902,31 +891,46 @@ async function main() {
 
   // Every phase runs through here so the run record is complete and no phase
   // can quietly become mandatory again (#192).
+  // Phases that can write to production. Once one of them fails the DB may be
+  // in an unexpected state, so the remaining write phases are held back rather
+  // than piling more writes on top of a failure.
+  const WRITE_PHASES = ['allocation', 'receiving', 'voice', 'arrivals'];
+  let writePhaseFailed = false;
+
   const runPhase = async (name, label, fn) => {
     if (!wantPhase(name)) return true;
+    if (writePhaseFailed && WRITE_PHASES.includes(name)) {
+      console.log(`\n── ${label}: held back — an earlier write phase failed`);
+      notRun.push(name);
+      return true;
+    }
     const ok = await fn();
     ran.push(name);
     if (!ok) {
       failed.push(name);
+      if (WRITE_PHASES.includes(name)) writePhaseFailed = true;
       console.log(`\n❌ VERIFICATION FAILED (${label})`);
     }
     return ok;
   };
 
   // Supplier phases share one session; authenticate once, only if needed.
+  // Memoize the SUCCESS only — caching a failed auth reply would make it
+  // truthy and hand the next phase a session with no access_token.
   let supSession = null;
   const supplierSession = async () => {
     if (supSession) return supSession;
     console.log(`\n🔐 Authenticating ${SUPPLIER_EMAIL}...`);
-    supSession = await httpsPost(
+    const s = await httpsPost(
       `${SUPABASE_URL}/auth/v1/token?grant_type=password`,
       { 'apikey': ANON_KEY, 'Content-Type': 'application/json' },
       { email: SUPPLIER_EMAIL, password: SUPPLIER_PASS },
     );
-    if (!supSession.access_token) {
-      console.log(`   ✗ Supplier auth failed: ${JSON.stringify(supSession)}`);
+    if (!s || !s.access_token) {
+      console.log(`   ✗ Supplier auth failed: ${JSON.stringify(s)}`);
       return null;
     }
+    supSession = s;
     console.log(`   ✓ Got session for ${supSession.user?.email}`);
     return supSession;
   };
@@ -940,6 +944,9 @@ async function main() {
       console.log('\n❌ VERIFICATION FAILED (Phase 1 — admin boot)');
       console.log('Last render log:');
       console.log(phase1.lastLog || '(empty)');
+      // Requested phases that never got their turn are reported as such — a
+      // verifier must never let an ask disappear silently.
+      PHASE_NAMES.forEach(p => { if (p !== 'boot' && wantPhase(p)) notRun.push(p); });
     }
 
     if (phase1.passed) {
@@ -965,11 +972,6 @@ async function main() {
           const s = await supplierSession();
           return s ? phaseSupplier(browser, s, expectedHash) : false;
         });
-      await runPhase('disputes-portal', 'Phase 11 — supplier disputes portal',
-        async () => {
-          const s = await supplierSession();
-          return s ? phaseSupplierDisputesPortal(browser, s, expectedHash) : false;
-        });
     }
   } finally {
     await browser.close();
@@ -981,6 +983,7 @@ async function main() {
   console.log(`  Keys requested : ${requiredKeys.join(', ')}`);
   console.log(`  Phases run     : ${ran.join(', ') || '(none)'}`);
   console.log(`  Phases skipped : ${skipped.join(', ') || '(none)'}   [not requested]`);
+  if (notRun.length) console.log(`  Never ran      : ${notRun.join(', ')}   [requested, but an earlier phase failed]`);
   if (failed.length) console.log(`  Phases failed  : ${failed.join(', ')}`);
   console.log(`  Production data: ${mutatedProduction ? 'MUTATED' : 'untouched'}`);
 

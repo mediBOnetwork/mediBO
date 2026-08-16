@@ -878,6 +878,21 @@ class CartModel extends ChangeNotifier {
   Map<String, dynamic> get pill =>
       (render['pill'] as Map?)?.cast<String, dynamic>() ?? const {};
 
+  /// CHANGE #174 — the trade margin on this basket, computed by
+  /// `cart_margin_block()` from the SAME engine the cards use. Empty map when
+  /// the payload carried none.
+  ///
+  /// `has` is the backend's answer to "is any line in this cart priced yet?".
+  /// The app never sums a margin itself, and never treats an un-priced line as
+  /// zero margin — those lines are excluded and counted in `note` instead.
+  Map<String, dynamic> get margin =>
+      (render['margin'] as Map?)?.cast<String, dynamic>() ?? const {};
+
+  bool get marginHas => margin['has'] == true;
+  String get marginLabel => (margin['label'] ?? '').toString();
+  String get marginTotalDisplay => (margin['total_display'] ?? '').toString();
+  String get marginNote => (margin['note'] ?? '').toString();
+
   bool get pillShow => pill['show'] == true;
   String get pillItemsLabel => (pill['items_label'] ?? '').toString();
   String get pillCta => (pill['cta'] ?? '').toString();

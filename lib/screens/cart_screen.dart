@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 
 import '../app_state.dart';
+import '../design_tokens.dart';
 import '../order_hours_state.dart';
 import '../inquiry_lock_state.dart';
 import '../utils/order_code.dart';
@@ -1915,6 +1916,49 @@ class _CheckoutBar extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                // CHANGE #174 — what the pharmacy earns on this basket. Shown
+                // only when cart_render() says at least one line is priced;
+                // lines with no PTR yet are excluded from the figure and
+                // counted in `note`, never silently added as zero. Hidden
+                // entirely while nothing is priced, so the footer looks exactly
+                // as it did before any pricing was captured.
+                if (selectedTotal == null && cart.marginHas) ...[
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          cart.marginLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Ds.t.body.copyWith(
+                            fontWeight: FontWeight.w600,
+                            color: Ds.c.success,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Text(
+                        cart.marginTotalDisplay,
+                        style: Ds.t.subtitle.copyWith(
+                          fontWeight: FontWeight.w800,
+                          color: Ds.c.success,
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (cart.marginNote.isNotEmpty)
+                    Padding(
+                      padding: EdgeInsets.only(top: Ds.space.x4),
+                      child: Text(
+                        cart.marginNote,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Ds.t.caption,
+                      ),
+                    ),
+                  const SizedBox(height: 8),
+                ],
                 // CHANGE #615 — the whole footer is two backend strings: the
                 // subtotal and the line that explains it ("8 items • MRP worth
                 // ₹6,685.25"). Both arrive formatted from cart_render(); the

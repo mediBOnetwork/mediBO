@@ -271,6 +271,34 @@ class DevQueueService {
   Future<Map<String, dynamic>> memoryDelete(String id) async =>
       _asMap(await _c.rpc('memory_delete', params: {'p_id': id}));
 
+  // ── Permanent Conversations plane (#183) ─────────────────────────────────
+  /// All threads, render-ready ({screen_title, labels, rows[]}). One RPC.
+  Future<Map<String, dynamic>> threadList() async =>
+      _asMap(await _c.rpc('thread_list'));
+
+  /// One thread's full history ({thread, messages[]}) — rendered verbatim.
+  Future<Map<String, dynamic>> threadOpen(String id) async =>
+      _asMap(await _c.rpc('thread_open', params: {'p_id': id}));
+
+  /// Semantic search across ALL threads. Embeds the query via the `embed` edge
+  /// function (gte-small, 384-dim, no GCP) then runs pgvector cosine search. If
+  /// embedding is unavailable the backend falls back to full-text — same RPC,
+  /// so the caller never has to decide.
+  Future<Map<String, dynamic>> conversationSearch(String query) async {
+    List<dynamic>? emb;
+    try {
+      final res = await _c.functions.invoke('embed', body: {'input': query});
+      final d = res.data;
+      if (d is Map && d['embedding'] is List) emb = d['embedding'] as List;
+    } catch (_) {/* fall back to full-text below */}
+    return _asMap(await _c.rpc('conversation_search',
+        params: {'p_query': query, 'p_embedding': emb, 'p_limit': 20}));
+  }
+
+  /// Mark a thread to be resumed by the next agent session. Returns the verdict.
+  Future<Map<String, dynamic>> threadMarkResume(String id) async =>
+      _asMap(await _c.rpc('thread_mark_resume', params: {'p_id': id}));
+
   // ── Runner control plane ────────────────────────────────────────────────
   Future<Map<String, dynamic>> ctlGet() async =>
       _asMap(await _c.rpc('dev_ctl_get'));

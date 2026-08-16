@@ -14,6 +14,7 @@ import 'dev_queue_qa.dart';
 import 'dev_queue_questions.dart';
 import 'journey_library_screen.dart';
 import 'memory_screen.dart';
+import 'threads_screen.dart';
 
 /// The Dev Queue registry — the permanent development record, rendered from
 /// `dev_cmd_list` verbatim. Om pastes specs here; the VM runner claims and
@@ -276,6 +277,16 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
               icon: const Icon(Icons.memory_outlined, color: kBrand),
               onPressed: () => Navigator.of(context).push(MaterialPageRoute(
                   builder: (_) => MemoryScreen(service: _svc))),
+            ),
+          ),
+          Semantics(
+            identifier: 'devq_threads_open',
+            button: true,
+            child: IconButton(
+              tooltip: c('dev_queue.threads_nav_label'),
+              icon: const Icon(Icons.forum_outlined, color: kBrand),
+              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => ThreadsScreen(service: _svc))),
             ),
           ),
         ],

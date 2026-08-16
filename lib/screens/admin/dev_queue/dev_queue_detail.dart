@@ -1151,9 +1151,18 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
   }
 
   // ── Screenshots ────────────────────────────────────────────────────────────
+  // Strips any full Supabase storage URL down to the bare storage path so
+  // createSignedUrl receives 'folder/file.png' not 'https://...'.
+  static String _proofPath(dynamic s) {
+    final raw = s is Map ? (s['path'] ?? s['url'] ?? '').toString() : s.toString();
+    const marker = '/dev-cmd-proofs/';
+    final idx = raw.indexOf(marker);
+    return idx >= 0 ? raw.substring(idx + marker.length) : raw;
+  }
+
   Widget _screenshots() {
     final shots = ((_row['screenshots'] as List?) ?? const [])
-        .map((s) => s is Map ? (s['path'] ?? s['url'] ?? '').toString() : s.toString())
+        .map(_proofPath)
         .where((s) => s.isNotEmpty)
         .toList();
     return _sectionRaw(

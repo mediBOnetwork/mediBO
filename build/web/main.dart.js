@@ -248561,7 +248561,9 @@ p=$.bJ()
 return A.aL(A.A(A.b([s,new A.Q(j,r,j,j),A.c(q,j,j,j,j,j,p.bz(p.e,p.y,$.aF().f),j,j,j)],t.p),B.o,j,B.h,B.F,0,B.t),j,j)}if(k.f){s=$.at().a4(4)
 r=A.aE(B.u_,$.aF().f,j,48)
 q=$.at().a4(3)
-p=A.c("Could not load wishlist",j,j,j,j,j,$.bJ().gof(),B.ad,j,j)
+p=$.j.h(0,"wishlist.error_title")
+if(p==null)p=""
+p=A.c(p,j,j,j,j,j,$.bJ().gof(),B.ad,j,j)
 o=$.at().a4(1)
 n=$.j.h(0,"wishlist.retry_btn")
 if(n==null)n=""

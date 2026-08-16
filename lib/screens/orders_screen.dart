@@ -20,6 +20,8 @@ import '../widgets/bill_viewer.dart';
 import '../widgets/cust_pay_panel.dart';
 import '../widgets/customer_order_item_card.dart'; // #641: the Items-tab card
 import '../services/ui_copy.dart';
+import '../design_tokens.dart'; // #173: Ds tokens for the reorder entry points
+import 'reorder_screen.dart'; // #173: reorder suite (suggestions + smart diff)
 
 // ─── Data models ─────────────────────────────────────────────────────────────
 
@@ -542,8 +544,62 @@ class _OrdersScreenState extends State<OrdersScreen> {
       child: ListView.builder(
         padding: const EdgeInsets.all(16),
         physics: platformScrollPhysics(),
-        itemCount: _orders.length,
-        itemBuilder: (context, i) => _OrderCard(order: _orders[i]),
+        // CHANGE #173 — first row is the reorder entry: it opens the predictive
+        // "Due for reorder" screen (cadence computed server-side from history).
+        itemCount: _orders.length + 1,
+        itemBuilder: (context, i) => i == 0
+            ? const _ReorderEntry()
+            : _OrderCard(order: _orders[i - 1]),
+      ),
+    );
+  }
+}
+
+/// CHANGE #173 — the top-of-Orders entry into the predictive reorder screen.
+/// Words are chrome copy from ui_copy; the screen itself renders backend
+/// payloads. Reachable for every signed-in customer with order history.
+class _ReorderEntry extends StatelessWidget {
+  const _ReorderEntry();
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: Ds.space.x12),
+      child: InkWell(
+        borderRadius: Ds.r.rCard,
+        onTap: () => Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const ReorderScreen())),
+        child: Container(
+          padding: EdgeInsets.all(Ds.space.x12),
+          decoration: BoxDecoration(
+            color: Ds.c.successSoft,
+            borderRadius: Ds.r.rCard,
+          ),
+          child: Row(children: [
+            Icon(Icons.autorenew, color: Ds.c.brandDark),
+            SizedBox(width: Ds.space.x12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    c('reorder.entry_due').isEmpty
+                        ? 'Due for reorder'
+                        : c('reorder.entry_due'),
+                    style: Ds.t.body.copyWith(
+                        fontWeight: FontWeight.w700, color: Ds.c.brandDark),
+                  ),
+                  Text(
+                    c('reorder.entry_open').isEmpty
+                        ? 'View your regular items'
+                        : c('reorder.entry_open'),
+                    style: Ds.t.caption.copyWith(color: Ds.c.brandDark),
+                  ),
+                ],
+              ),
+            ),
+            Icon(Icons.chevron_right, color: Ds.c.brandDark),
+          ]),
+        ),
       ),
     );
   }
@@ -707,6 +763,29 @@ class _OrderCardState extends State<_OrderCard> {
               ),
             ),
           ]),
+          // CHANGE #173 — Reorder this order. Opens the Smart Basket Diff:
+          // the backend reconciles this past order against the current catalog
+          // (unavailable dropped, out-of-stock swapped, price changes flagged)
+          // before anything reaches the cart. The card decides nothing.
+          SizedBox(height: Ds.space.x8),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => ReorderScreen(orderId: order.id))),
+              icon: const Icon(Icons.replay, size: 18),
+              label: Text(c('reorder.order_button').isEmpty
+                  ? 'Reorder'
+                  : c('reorder.order_button')),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Ds.c.brand,
+                side: BorderSide(color: Ds.c.brand),
+                shape:
+                    RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+                minimumSize: const Size(0, 44),
+              ),
+            ),
+          ),
           if (_tab != null) ...[
             const SizedBox(height: 12),
             _buildSectionContent(),

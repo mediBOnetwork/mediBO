@@ -12,6 +12,8 @@ import '../widgets/delete_account_section.dart';
 import '../design_tokens.dart';
 import 'auth/business_details_screen.dart';
 import 'admin/view_as_picker_dialog.dart';
+import 'admin/loyalty_admin_screen.dart';
+import 'rewards_screen.dart';
 import 'wishlist_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -600,6 +602,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 if (!isViewAs && isRegistered)
                   _WishlistEntryCard(),
 
+                // Rewards (CHANGE #176) — tier, points, targets, streak and the
+                // referral code. The screen itself renders the backend's own
+                // "not running yet" state when every programme is switched off,
+                // so this entry does not need to know what is enabled.
+                if (!isViewAs && isRegistered)
+                  _RewardsEntryCard(),
+
+                // Loyalty control panel (CHANGE #176) — super-admin only, and
+                // loyalty_config_get() re-checks the role server-side, so this
+                // mirrors the backend gate rather than being the only one.
+                if (!isViewAs && (session?.isSuperAdmin ?? false))
+                  _LoyaltyAdminEntryCard(),
+
                 // View As (Dev) — super-admin only, build-phase gated; hidden in viewAs mode
                 // RULE 1 — the role gating this comes from my_session() too.
                 if (!isViewAs && kEnableViewAs && (session?.isSuperAdmin ?? false))
@@ -980,6 +995,78 @@ class _ViewAsChip extends StatelessWidget {
       ),
     );
   }
+}
+
+/// CHANGE #176 — one shape for both new profile rows, so a second entry cannot
+/// drift from the first. Modelled on [_WishlistEntryCard]; label text comes from
+/// ui_copy, never a Dart literal.
+class _MenuEntryCard extends StatelessWidget {
+  final IconData icon;
+  final String copyKey;
+  final Widget Function() destination;
+  const _MenuEntryCard({
+    required this.icon,
+    required this.copyKey,
+    required this.destination,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+          Ds.space.x16, Ds.space.x8, Ds.space.x16, 0),
+      child: GestureDetector(
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute<void>(builder: (_) => destination()),
+        ),
+        child: Container(
+          padding: EdgeInsets.symmetric(
+              horizontal: Ds.space.x16, vertical: Ds.space.x16),
+          decoration: BoxDecoration(
+            color: Ds.c.surface,
+            borderRadius: Ds.r.rCard,
+            border: Border.all(color: Ds.c.divider),
+            boxShadow: Ds.elevation.e1,
+          ),
+          child: Row(
+            children: [
+              Icon(icon, size: 22, color: Ds.c.brand),
+              SizedBox(width: Ds.space.x12),
+              Expanded(
+                child: Text(
+                  c(copyKey),
+                  style: Ds.t.body.copyWith(fontWeight: FontWeight.w600),
+                ),
+              ),
+              Icon(Icons.chevron_right, size: 20, color: Ds.c.textSecondary),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RewardsEntryCard extends StatelessWidget {
+  const _RewardsEntryCard();
+
+  @override
+  Widget build(BuildContext context) => _MenuEntryCard(
+        icon: Icons.card_giftcard_outlined,
+        copyKey: 'profile.row_rewards',
+        destination: () => const RewardsScreen(),
+      );
+}
+
+class _LoyaltyAdminEntryCard extends StatelessWidget {
+  const _LoyaltyAdminEntryCard();
+
+  @override
+  Widget build(BuildContext context) => _MenuEntryCard(
+        icon: Icons.workspace_premium_outlined,
+        copyKey: 'profile.row_loyalty_admin',
+        destination: () => const LoyaltyAdminScreen(),
+      );
 }
 
 class _WishlistEntryCard extends StatelessWidget {

@@ -234,6 +234,8 @@ class _Plate extends StatelessWidget {
               child: _Ribbon(
                 top: pricing!.ribbonTop,
                 bottom: pricing!.ribbonBottom,
+                bg: pricing!.marginChip?.bg,
+                fg: pricing!.marginChip?.fg,
               ),
             ),
           Positioned(
@@ -263,7 +265,15 @@ class _Plate extends StatelessWidget {
 class _Ribbon extends StatelessWidget {
   final String top;
   final String bottom;
-  const _Ribbon({required this.top, required this.bottom});
+
+  /// CHANGE #174 — the margin band's colours, when the payload sent a chip.
+  /// Which band a margin falls into is a business rule (`pricing_margin_bands`
+  /// in Postgres), so the colour travels with the words. Null keeps the
+  /// original fixed styling — the geometry is identical either way.
+  final int? bg;
+  final int? fg;
+
+  const _Ribbon({required this.top, required this.bottom, this.bg, this.fg});
 
   static const double w = 40;
   static const double h = 40;
@@ -274,7 +284,7 @@ class _Ribbon extends StatelessWidget {
         child: Container(
           width: w,
           height: h,
-          color: Brand.deep,
+          color: bg == null ? Brand.deep : Color(bg!),
           padding: const EdgeInsets.only(top: 5),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -282,11 +292,17 @@ class _Ribbon extends StatelessWidget {
               Text(top,
                   maxLines: 1,
                   style: AppType.t3.copyWith(
-                      fontSize: 12, height: 14 / 12, letterSpacing: -0.3)),
+                      fontSize: 12,
+                      height: 14 / 12,
+                      letterSpacing: -0.3,
+                      color: fg == null ? null : Color(fg!))),
               Text(bottom,
                   maxLines: 1,
                   overflow: TextOverflow.clip,
-                  style: AppType.t3.copyWith(fontSize: 7, height: 9 / 7)),
+                  style: AppType.t3.copyWith(
+                      fontSize: 7,
+                      height: 9 / 7,
+                      color: fg == null ? null : Color(fg!))),
             ],
           ),
         ),

@@ -79,6 +79,10 @@ List<AdminNavEntry> get kAdminOverflowNav => <AdminNavEntry>[
       AdminNavEntry(c('admin_nav.overflow_deletion_requests'),
           Icons.person_remove_outlined,
           route: 'deletion_requests'),
+      // CHANGE #174 — Product pricing (PTR / GST backfill). Lives here rather
+      // than in the top row for the reason stated above: that row is full.
+      AdminNavEntry(c('admin_nav.overflow_pricing'), Icons.currency_rupee,
+          route: 'pricing_backfill'),
     ];
 
 /// The wide shell's "More" popup, sitting after Fulfillment in the top row.

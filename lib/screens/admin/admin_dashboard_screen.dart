@@ -6,6 +6,7 @@ import 'package:pharma_b2b/widgets/admin_zone_picker.dart'; // CHANGE #609
 import 'package:pharma_b2b/widgets/order_hours_card.dart';
 import 'package:pharma_b2b/widgets/notifications_card.dart';
 import '../../services/ui_copy.dart';
+import 'reorder_admin_screen.dart'; // CHANGE #173
 
 class AdminDashboardScreen extends StatefulWidget {
   const AdminDashboardScreen({super.key});
@@ -215,6 +216,18 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                         label: c('admin_dashboard.quick_bills'),
                         icon: Icons.inbox_outlined,
                         route: 'bills'),
+                    // CHANGE #173 — the reorder suite's admin surface: every
+                    // auto-reorder and every open WhatsApp nudge, with pause /
+                    // resume / cancel. Pushes its own screen because the shell
+                    // route table is not this command's to edit.
+                    _QuickTile(
+                      label: c('admin_dashboard.quick_reorder'),
+                      icon: Icons.autorenew,
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                            builder: (_) => const ReorderAdminScreen()),
+                      ),
+                    ),
                   ]),
                 ],
               ),
@@ -363,18 +376,26 @@ class _StatCard extends StatelessWidget {
 class _QuickTile extends StatelessWidget {
   final String label;
   final IconData icon;
-  final String route;
+
+  /// A shell route key, handled by `_handleAdminNav`. Null for a tile that
+  /// pushes its own screen instead ([onTap]).
+  final String? route;
+
+  /// CHANGE #173 — a tile that opens a screen directly rather than through the
+  /// shell's route table. Exactly one of [route] / [onTap] is set.
+  final VoidCallback? onTap;
 
   const _QuickTile({
     required this.label,
     required this.icon,
-    required this.route,
-  });
+    this.route,
+    this.onTap,
+  }) : assert(route != null || onTap != null);
 
   @override
   Widget build(BuildContext context) {
     return InkWell(
-      onTap: () => QuickLinkNavigator.of(context)?.navigate(route),
+      onTap: onTap ?? () => QuickLinkNavigator.of(context)?.navigate(route!),
       borderRadius: BorderRadius.circular(10),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),

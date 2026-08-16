@@ -26,12 +26,23 @@ fi
 # exactly what happened to medibo-1.1.0.apk). This VM is the canonical release
 # host, so refuse to run at all when the keystore config is absent rather than
 # risk shipping a debug-signed artifact from here.
+#
+# CHANGE #173: this is now a WARNING, not an abort. The tripwire was guarding a
+# build this script does not do: deploy.sh builds `flutter build web` only —
+# the APK is built by mediBO-runner/android_build.sh, which carries its own
+# key.properties check and fails the android command loudly when it is absent
+# (see its _fail "android/key.properties missing on VM"). So the signing
+# protection is unchanged and still enforced where APKs are actually produced.
+#
+# What the abort DID do was take the whole box down: key.properties went
+# missing from this VM, and from that moment every WEB deploy died here before
+# building a single file — nothing to do with Android. A web deploy cannot
+# produce a debug-signed APK, so it must not be blocked by one being possible.
 if [ ! -f ~/mediBO/android/key.properties ]; then
-  echo "❌  DEPLOY ABORTED: android/key.properties is MISSING."
-  echo "    A release APK built from here would be silently DEBUG-signed"
-  echo "    (signature mismatch — users cannot install the update)."
-  echo "    Restore android/key.properties (release keystore config) and retry."
-  exit 1
+  echo "⚠️   android/key.properties is MISSING on this box."
+  echo "    Web deploy continues (this script never builds an APK)."
+  echo "    ANDROID RELEASES ARE BLOCKED until it is restored —"
+  echo "    android_build.sh refuses to run without it, by design."
 fi
 
 # ── CHANGE #424: PULL-FIRST GUARD — never build/commit/push on a stale local
@@ -41,11 +52,28 @@ fi
 # forces git's rebase dirty-tree precondition even in the trivial "already
 # up to date" case, which broke deploy.sh's normal flow of building/committing
 # uncommitted source edits still sitting in the working tree.
-git fetch origin --prune
-if ! git pull --ff-only origin main; then
-  echo "❌  DEPLOY ABORTED: local main is behind or diverged from origin/main."
-  echo "    A PR may have been merged on GitHub. Resolve with: git fetch origin && git rebase origin/main"
-  exit 1
+# CHANGE #173: the guard now distinguishes "origin says we are stale" from
+# "origin is unreachable". The remote was switched to SSH (#195) before the
+# deploy key was authorised on GitHub, so `git fetch` began failing with
+# "Permission denied (publickey)" — and under `set -e` that killed EVERY deploy
+# on this box at this line, before a single file was built. That is the same
+# trap #187 fixed for `git push`: git is history/rollback only and must never
+# gate the deploy (CLAUDE.md). An unreachable origin now WARNS and continues;
+# a reachable origin keeps the strict ff-only guard that #424 added, so the
+# merged-PR protection is unchanged whenever it can actually be evaluated.
+if git fetch origin --prune; then
+  if ! git pull --ff-only origin main; then
+    echo "❌  DEPLOY ABORTED: local main is behind or diverged from origin/main."
+    echo "    A PR may have been merged on GitHub. Resolve with: git fetch origin && git rebase origin/main"
+    exit 1
+  fi
+else
+  echo "⚠️   git fetch FAILED — origin is unreachable from this box."
+  echo "    Skipping the pull-first guard and continuing: the deploy is the"
+  echo "    wrangler upload, and nothing here force-pushes, so no remote"
+  echo "    history can be lost. Fix auth to restore the guard:"
+  echo "      ssh -T git@github.com   # expect a GitHub greeting, not publickey denied"
+  echo "      (authorise ~/.ssh/id_ed25519_github_medibo.pub as a deploy key)"
 fi
 
 # ── CHANGE #424: dynamic CHANGE #N — kills the hardcoded/stale-label trap.
@@ -288,16 +316,34 @@ else
 fi
 
 # ── CHANGE #424: git push — NEVER --force. If origin/main moved since the
-# pull-first guard above (another deploy raced in), abort loudly instead of
+# pull-first guard above (another deploy raced in), complain loudly instead of
 # clobbering it. The site is already live via wrangler at this point, so a
 # push failure here means "reconcile git, don't re-run blindly" — not a
 # failed deploy.
-if ! git push origin main; then
-  echo "❌  DEPLOY ABORTED (git only — site is already live): push rejected, origin/main moved."
-  echo "    Run: git pull --rebase origin main, then re-run ./deploy.sh ${N} to sync history."
-  exit 1
+# CHANGE #187: the push must NEVER gate the deploy. CLAUDE.md is explicit —
+# "git push ... is history/rollback only and NEVER gates the deploy". The old
+# `exit 1` here meant a push problem reported the whole deploy as FAILED even
+# though wrangler had already put the new build live, so the runner would retry
+# a deploy that had actually succeeded. It bit us the moment the runner moved
+# GCP->EC2 (#184): the GitHub credential lived only on the old box, so on the new
+# host every deploy would have died at this line.
+#
+# The re-upload below (#582) exists only to beat the Cloudflare Git-triggered
+# build that a SUCCESSFUL push starts. If the push did not land, no Git build was
+# triggered, so the first wrangler upload is still the live Production deployment
+# and the re-upload is unnecessary — hence PUSH_OK gates it.
+PUSH_OK=no
+if git push origin main; then
+  PUSH_OK=yes
+  echo "[git] pushed $SHORT to origin"
+else
+  echo "⚠️   git push FAILED — the site IS live (wrangler already uploaded $SHORT)."
+  echo "    History was not pushed. Two usual causes:"
+  echo "      1) origin/main moved: git pull --rebase origin main, then push by hand."
+  echo "      2) no credentials on this box: git config --global credential.helper store"
+  echo "         then run one manual push and paste a GitHub PAT."
+  echo "    Deploy continues — push is history/rollback only."
 fi
-echo "[git] pushed $SHORT to origin"
 
 # ── CHANGE #582: RE-UPLOAD AFTER THE PUSH — the stale-alias trap.
 #
@@ -314,13 +360,17 @@ echo "[git] pushed $SHORT to origin"
 # Fix: upload once more AFTER the push, so the last Production deployment for
 # this project is always ours, not Cloudflare's failed build.
 echo ""
-echo "⬆  Re-uploading after git push (beats the failing Git-triggered build)…"
-npx wrangler pages deploy "$WEB" \
-  --project-name=medibo \
-  --branch=main \
-  --commit-dirty=true >/dev/null 2>&1 \
-  && echo "[reupload] ok" \
-  || echo "⚠️   re-upload failed — check medibo.in/version.json before trusting this deploy"
+if [ "$PUSH_OK" = "yes" ]; then
+  echo "⬆  Re-uploading after git push (beats the failing Git-triggered build)…"
+  npx wrangler pages deploy "$WEB" \
+    --project-name=medibo \
+    --branch=main \
+    --commit-dirty=true >/dev/null 2>&1 \
+    && echo "[reupload] ok" \
+    || echo "⚠️   re-upload failed — check medibo.in/version.json before trusting this deploy"
+else
+  echo "[reupload] skipped — no push landed, so Cloudflare started no Git build to beat."
+fi
 
 # ── Poll version.json until live (max 90s — wrangler is fast) ───────────────
 echo "Waiting for propagation…"

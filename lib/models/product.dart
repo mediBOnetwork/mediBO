@@ -141,6 +141,41 @@ class Pricing {
   /// CHANGE #673 — "You earn ₹42.10", already formatted. Empty when none.
   final String marginLabel;
 
+  /// CHANGE #174 — which of the two payloads this is: `full` (the product has
+  /// real PTR + GST, so the net rate and the margin are known) or `mrp_only`
+  /// (nothing has been captured yet). This is the ONLY thing a surface may
+  /// branch on. Never infer the mode from a number being zero — a margin of
+  /// zero and an unknown margin are different facts.
+  final String displayMode;
+
+  /// True when [mrpDisplay] holds a SECOND number worth striking through.
+  /// Explicit rather than reusing [hasDiscount], which older payloads set for
+  /// a different reason.
+  final bool hasStruckMrp;
+
+  /// CHANGE #174 — the trade rate, e.g. "₹82.50", and its caption ("PTR").
+  final bool hasPtr;
+  final String ptrDisplay;
+  final String ptrCaption;
+
+  /// The net payable per unit ("₹84.00") and its caption ("NET"). In full mode
+  /// this is also what [priceDisplay] holds — the headline number on a card IS
+  /// what the pharmacy pays.
+  final bool hasNet;
+  final String netDisplay;
+  final String netCaption;
+
+  /// The scheme exactly as captured, e.g. "10+1". Empty when there is none.
+  final String schemeText;
+
+  /// The margin chip, colours included. Null when the backend sent none —
+  /// which is how an un-priced product stays chip-less.
+  final PricingChip? marginChip;
+
+  /// The tax split, for surfaces with room to print it (the PDP). Null in
+  /// `mrp_only` mode.
+  final GstBreakup? gst;
+
   /// Raw numbers, for anything that must sort or compare. Never for display.
   final double salePrice;
   final double mrp;
@@ -157,7 +192,21 @@ class Pricing {
     this.ribbonTop = '',
     this.ribbonBottom = '',
     this.marginLabel = '',
+    this.displayMode = 'mrp_only',
+    this.hasStruckMrp = false,
+    this.hasPtr = false,
+    this.ptrDisplay = '',
+    this.ptrCaption = '',
+    this.hasNet = false,
+    this.netDisplay = '',
+    this.netCaption = '',
+    this.schemeText = '',
+    this.marginChip,
+    this.gst,
   });
+
+  /// True when the backend has real trade pricing for this product.
+  bool get isFullPricing => displayMode == 'full';
 
   /// True when both ribbon lines arrived. The card never paints a half ribbon.
   bool get hasRibbon => ribbonTop.isNotEmpty && ribbonBottom.isNotEmpty;
@@ -182,6 +231,17 @@ class Pricing {
       ribbonTop: (m['ribbon_top'] ?? '').toString(),
       ribbonBottom: (m['ribbon_bottom'] ?? '').toString(),
       marginLabel: (m['margin_label'] ?? '').toString(),
+      displayMode: (m['display_mode'] ?? 'mrp_only').toString(),
+      hasStruckMrp: m['has_struck_mrp'] == true,
+      hasPtr: m['has_ptr'] == true,
+      ptrDisplay: (m['ptr_display'] ?? '').toString(),
+      ptrCaption: (m['ptr_caption'] ?? '').toString(),
+      hasNet: m['has_net'] == true,
+      netDisplay: (m['net_display'] ?? '').toString(),
+      netCaption: (m['net_caption'] ?? '').toString(),
+      schemeText: (m['scheme_text'] ?? '').toString(),
+      marginChip: PricingChip.fromMap(m['margin_chip']),
+      gst: GstBreakup.fromMap(m['gst']),
     );
   }
 
@@ -197,6 +257,106 @@ class Pricing {
         'ribbon_top': ribbonTop,
         'ribbon_bottom': ribbonBottom,
         'margin_label': marginLabel,
+        'display_mode': displayMode,
+        'has_struck_mrp': hasStruckMrp,
+        'has_ptr': hasPtr,
+        'ptr_display': ptrDisplay,
+        'ptr_caption': ptrCaption,
+        'has_net': hasNet,
+        'net_display': netDisplay,
+        'net_caption': netCaption,
+        'scheme_text': schemeText,
+        'margin_chip': marginChip?.toJson(),
+        'gst': gst?.toJson(),
+      };
+}
+
+/// CHANGE #174 — a small coloured chip the backend fully specifies: the words
+/// AND the two colours. The band a margin falls into is a business rule, so it
+/// is decided in Postgres (`app_settings.pricing_margin_bands`) and can be
+/// re-tuned without a deploy. The app never picks a colour from a number.
+class PricingChip {
+  final String label;
+
+  /// ARGB ints parsed from the `#RRGGBB` the backend sends. Null when the
+  /// payload carried no colour — the caller then keeps its own styling rather
+  /// than inventing one, exactly like [Availability].
+  final int? bg;
+  final int? fg;
+
+  const PricingChip({required this.label, this.bg, this.fg});
+
+  static PricingChip? fromMap(Object? raw) {
+    if (raw is! Map) return null;
+    final m = Map<String, dynamic>.from(raw);
+    final label = (m['label'] ?? '').toString();
+    if (label.isEmpty) return null;
+    return PricingChip(
+      label: label,
+      bg: Availability._argb(m['bg']),
+      fg: Availability._argb(m['fg']),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {'label': label};
+}
+
+/// CHANGE #174 — the tax split, already worded and formatted. [lines] is a
+/// printable list ("CGST 6%" → "₹4.50"): the app prints the pairs in order and
+/// never assembles a label out of a rate, because whether a sale is CGST+SGST
+/// or IGST is a tax decision, not a layout one.
+class GstBreakup {
+  final String title;
+  final String pctDisplay;
+  final String taxableDisplay;
+  final String amountDisplay;
+  final String netDisplay;
+  final List<({String label, String value})> lines;
+
+  const GstBreakup({
+    required this.title,
+    required this.pctDisplay,
+    required this.taxableDisplay,
+    required this.amountDisplay,
+    required this.netDisplay,
+    required this.lines,
+  });
+
+  static GstBreakup? fromMap(Object? raw) {
+    if (raw is! Map) return null;
+    final m = Map<String, dynamic>.from(raw);
+    final rawLines = m['lines'];
+    final lines = <({String label, String value})>[];
+    if (rawLines is List) {
+      for (final l in rawLines) {
+        if (l is Map) {
+          lines.add((
+            label: (l['label'] ?? '').toString(),
+            value: (l['value'] ?? '').toString(),
+          ));
+        }
+      }
+    }
+    if (lines.isEmpty) return null;
+    return GstBreakup(
+      title: (m['title'] ?? '').toString(),
+      pctDisplay: (m['pct_display'] ?? '').toString(),
+      taxableDisplay: (m['taxable_display'] ?? '').toString(),
+      amountDisplay: (m['amount_display'] ?? '').toString(),
+      netDisplay: (m['net_display'] ?? '').toString(),
+      lines: lines,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'title': title,
+        'pct_display': pctDisplay,
+        'taxable_display': taxableDisplay,
+        'amount_display': amountDisplay,
+        'net_display': netDisplay,
+        'lines': [
+          for (final l in lines) {'label': l.label, 'value': l.value},
+        ],
       };
 }
 

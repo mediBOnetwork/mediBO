@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 
+import '../../../design_tokens.dart';
 import '../../../services/ui_copy.dart';
 import '../../../utils/toast.dart';
 import 'dev_queue_common.dart';
@@ -33,12 +34,13 @@ class _DevQueueControlState extends State<DevQueueControl> {
     'workflow': GlobalKey(),
   };
   OverlayEntry? _mini; // the single live mini popup
+  bool _vmChecking = false; // a live EC2 read is already in flight
 
   @override
   void initState() {
     super.initState();
-    _load();
-    _poll = Timer.periodic(const Duration(seconds: 10), (_) => _load());
+    _tick();
+    _poll = Timer.periodic(const Duration(seconds: 10), (_) => _tick());
   }
 
   @override
@@ -71,6 +73,14 @@ class _DevQueueControlState extends State<DevQueueControl> {
         });
       }
     } catch (_) {}
+  }
+
+  /// The 10s refresh, plus the backend's freshness verdict on the VM chip.
+  /// Kept apart from [_load] so the poll chase can re-read without recursing
+  /// back into another live check.
+  Future<void> _tick() async {
+    await _load();
+    await _liveCheckIfStale();
   }
 
   /// Opening the panel signals the VM to fetch a live reading, then re-reads a
@@ -134,22 +144,18 @@ class _DevQueueControlState extends State<DevQueueControl> {
     try {
       final res = await widget.service.ctlSet(key, val);
       // Whether the cloud is touched at all, and with which action, is the
-      // backend's verdict — see VmTogglePolicy.
-      final plan = VmTogglePolicy.plan(
-        verdict: res,
-        on: on,
-        currentStatus: (_vm['status'] ?? 'unknown').toString(),
-      );
-      if (plan.toastCopyKey != null && mounted) {
-        showToast(context, c(plan.toastCopyKey!));
-      }
+      // backend's verdict — see VmTogglePolicy. There is deliberately no
+      // "already in that state, skip it" check here: vm-control answers that
+      // from a live DescribeInstances read, so a stale cache cannot eat a flip.
+      final plan = VmTogglePolicy.plan(res);
       if (plan.invoke) {
-        // The edge function words its own outcome (start sent / stopping / "no
-        // AWS access key saved yet") — print it verbatim. Only a failure with no
-        // wording at all falls back to backend copy.
+        // The edge function words its own outcome (start sent / stopping /
+        // already running / the exact IAM action AWS refused) — print it
+        // verbatim. Only a failure with no wording at all falls back to
+        // backend copy.
         try {
-          final out = VmTogglePolicy.outcome(
-              await widget.service.vmControl(plan.action));
+          final reply = await widget.service.vmControl(plan.action);
+          final out = VmTogglePolicy.outcome(reply);
           if (mounted && !out.isSilent) {
             showToast(
                 context,
@@ -158,6 +164,8 @@ class _DevQueueControlState extends State<DevQueueControl> {
                     : out.message,
                 isError: out.isError);
           }
+          // pending / stopping: keep reading EC2 until it rests.
+          _chaseVmState(reply);
         } catch (_) {
           if (mounted) showToast(context, c('dev_queue.ctl_edge_failed'), isError: true);
         }
@@ -173,6 +181,49 @@ class _DevQueueControlState extends State<DevQueueControl> {
       }
     } finally {
       if (mounted) setState(() => _busy.remove(key));
+    }
+  }
+
+  /// Follow a toggle down to a RESTING EC2 state.
+  ///
+  /// `StartInstances` returns `pending`, not `running`; `StopInstances` returns
+  /// `stopping`. Painting either and walking away is the guessed label the chip
+  /// used to show. So while the backend says the reply is not `settled`, ask
+  /// vm-control for `status` again on the interval IT named, up to the cap IT
+  /// named, refreshing the panel each time. Every number here is payload.
+  Future<void> _chaseVmState(Map<String, dynamic> reply) async {
+    var plan = VmTogglePolicy.poll(reply);
+    for (var i = 0; plan.again && i < plan.maxPolls; i++) {
+      await Future<void>.delayed(plan.delay);
+      if (!mounted) return;
+      try {
+        final next = await widget.service.vmControl('status');
+        plan = VmTogglePolicy.poll(next);
+      } catch (_) {
+        return; // transport trouble: stop chasing, the 10s _load still runs
+      }
+      await _load();
+    }
+  }
+
+  /// One live EC2 read when the BACKEND says the cached chip reading is too old
+  /// to trust (`vm.needs_live_check`). Without this the chip is only as fresh as
+  /// the last writer — and while the box is off, its own status timer is the
+  /// writer that has stopped. The threshold lives in the `vm_poll` config row,
+  /// and the edge function stamps `last_checked`, so this self-limits to about
+  /// one call per staleness window rather than one per 10-second refresh.
+  Future<void> _liveCheckIfStale() async {
+    if (!VmTogglePolicy.needsLiveCheck(_vm)) return;
+    if (_vmChecking) return;
+    _vmChecking = true;
+    try {
+      await widget.service.vmControl('status');
+      if (mounted) await _load();
+    } catch (_) {
+      // A refusal (no key / IAM) already surfaces on a real flip; a background
+      // freshness read must never toast.
+    } finally {
+      _vmChecking = false;
     }
   }
 
@@ -603,6 +654,11 @@ class _DevQueueControlState extends State<DevQueueControl> {
     ]);
   }
 
+  /// The chip is the live EC2 state, and tapping it is the diagnostic: it asks
+  /// vm-control to DryRun each EC2 call against the saved key and toasts the
+  /// backend's verdict — "all 3 permissions present" or the exact IAM actions
+  /// missing. That is the answer to "why won't it start?" without power-cycling
+  /// anything, and it is reachable in one tap from the Dev Queue.
   Widget _vmChip() {
     final s = (_vm['status'] ?? 'unknown').toString();
     const map = {
@@ -612,7 +668,44 @@ class _DevQueueControlState extends State<DevQueueControl> {
       'stopping': ['dev_queue.ctl_vm_stopping', 'awaiting_approval'],
     };
     final e = map[s] ?? const ['dev_queue.ctl_vm_unknown', 'paused'];
-    return ToneChip(label: c(e[0]), tone: statusTone(e[1]));
+    return Semantics(
+      button: true,
+      label: c('dev_queue.ctl_vm_check'),
+      child: InkWell(
+        onTap: _vmPreflight,
+        borderRadius: Ds.r.rChip,
+        // A chip is short; pad the hit box out to the token min target.
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+          child: Center(child: ToneChip(label: c(e[0]), tone: statusTone(e[1]))),
+        ),
+      ),
+    );
+  }
+
+  /// Tap the VM chip → refresh the live state, then report the key's EC2
+  /// permissions. Both sentences are the backend's.
+  Future<void> _vmPreflight() async {
+    if (_vmChecking) return;
+    _vmChecking = true;
+    try {
+      await widget.service.vmControl('status');
+      if (mounted) await _load();
+      final out =
+          VmTogglePolicy.outcome(await widget.service.vmControl('preflight'));
+      if (mounted && !out.isSilent) {
+        showToast(
+            context,
+            out.needsFallbackCopy ? c('dev_queue.ctl_edge_failed') : out.message,
+            isError: out.isError);
+      }
+    } catch (_) {
+      if (mounted) {
+        showToast(context, c('dev_queue.ctl_edge_failed'), isError: true);
+      }
+    } finally {
+      _vmChecking = false;
+    }
   }
 
   Widget _claudeChip() {

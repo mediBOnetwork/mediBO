@@ -12,18 +12,34 @@
 // failure was finally visible (403 from a dead project), but the missing
 // `call_edge` was the older, quieter half of the bug.
 //
-// What this file holds down:
+// WHAT THE FOLLOW-UP CHANGED, AND WHY THIS FILE MOVED WITH IT. Om reported
+// "start is not working, only stop works" after the first fix. The cause was
+// the no-op shortcut this file used to pin: `plan()` compared the flip against
+// the LAST KNOWN `vm_status` and, on a match, toasted "VM already running"
+// without calling EC2. That cached row is only refreshed by a timer running ON
+// the box, so the moment the VM stopped holding a stale 'running', START became
+// permanently unreachable — the app stranded its own builder and reported
+// success. So the shortcut is GONE from Dart: vm-control now answers
+// "already running" from a DescribeInstances read taken microseconds earlier.
+// The three ex-shortcut tests below are replaced by their inverse — proof that
+// NO cached state can suppress a flip.
+//
+// What this file holds down now:
 //   1. A flip only reaches the cloud when the BACKEND says so (`call_edge`), and
 //      the action sent is the backend's word ('start'/'stop') — Dart never
 //      derives a power operation from the switch position.
 //   2. Claude / Workflow flips never touch the VM.
-//   3. Every word Om sees after a flip is the payload's: the "already running"
-//      no-op is a ui_copy KEY, and the outcome toast is the edge function's own
-//      `message` (including its AWS-key setup guidance) printed verbatim.
-//   4. Only a failure that arrived with NO wording may fall back to Dart's
+//   3. NO cached VM state can turn a flip into a no-op. That decision, and its
+//      wording, belong to the edge function that just read EC2.
+//   4. Every word Om sees after a flip is the payload's, printed verbatim —
+//      including the exact IAM action AWS refused.
+//   5. Only a failure that arrived with NO wording may fall back to Dart's
 //      chosen copy key — a backend that worded its refusal is never overridden.
-//   5. The four VM states the chip knows stay exactly the four the backend
-//      writes into vm_status.status.
+//   6. A transitional EC2 state (pending/stopping) is CHASED to a resting one on
+//      the backend's own interval and cap; a failed or settled reply never
+//      starts a poll loop.
+//   7. Whether a stale chip needs a live read is the backend's verdict, not a
+//      timestamp Dart re-derives.
 //
 // Payloads below are the real shapes: `dev_ctl_set` verdicts as returned since
 // this change, and vm-control replies as normalised by
@@ -53,14 +69,8 @@ void main() {
     test('claude / workflow verdicts never invoke vm-control', () {
       for (final key in const ['claude', 'workflow']) {
         for (final on in const [true, false]) {
-          final plan = VmTogglePolicy.plan(
-            verdict: _plainVerdict(key, on ? 'on' : 'off'),
-            on: on,
-            // Even with the VM plainly stopped, a Claude flip must not start it.
-            currentStatus: 'stopped',
-          );
+          final plan = VmTogglePolicy.plan(_plainVerdict(key, on ? 'on' : 'off'));
           expect(plan.invoke, isFalse, reason: '$key must not touch the VM');
-          expect(plan.toastCopyKey, isNull);
         }
       }
     });
@@ -72,70 +82,61 @@ void main() {
       // only visible as this expectation flipping meaning, so keep it explicit:
       // no call_edge => no cloud call, by design, not by accident.
       final plan = VmTogglePolicy.plan(
-        verdict: {'ok': true, 'desired_state': {'vm': 'off'}},
-        on: false,
-        currentStatus: 'running',
-      );
+          {'ok': true, 'desired_state': {'vm': 'off'}});
       expect(plan.invoke, isFalse);
     });
 
     test('the action sent is the backend\'s word, not derived from the switch',
         () {
-      expect(
-        VmTogglePolicy.plan(
-                verdict: _vmVerdict('on'), on: true, currentStatus: 'stopped')
-            .action,
-        'start',
-      );
-      expect(
-        VmTogglePolicy.plan(
-                verdict: _vmVerdict('off'), on: false, currentStatus: 'running')
-            .action,
-        'stop',
-      );
+      expect(VmTogglePolicy.plan(_vmVerdict('on')).action, 'start');
+      expect(VmTogglePolicy.plan(_vmVerdict('off')).action, 'stop');
 
       // A verdict that says call_edge but names no action must READ state, never
-      // guess a power operation from `on`. Guessing here would stop a VM Om
-      // never asked to stop.
-      final plan = VmTogglePolicy.plan(
-        verdict: {'ok': true, 'call_edge': true},
-        on: false,
-        currentStatus: 'running',
-      );
+      // guess a power operation. Guessing here would stop a VM Om never asked
+      // to stop.
+      final plan = VmTogglePolicy.plan({'ok': true, 'call_edge': true});
       expect(plan.invoke, isTrue);
       expect(plan.action, 'status');
     });
   });
 
-  group('a no-op flip is worded by the backend, and spends no cloud call', () {
-    test('ON while already running → ui_copy key, no invoke', () {
-      final plan = VmTogglePolicy.plan(
-          verdict: _vmVerdict('on'), on: true, currentStatus: 'running');
-      expect(plan.invoke, isFalse);
-      expect(plan.toastCopyKey, 'dev_queue.ctl_vm_on_toast');
-    });
-
-    test('OFF while already stopped → ui_copy key, no invoke', () {
-      final plan = VmTogglePolicy.plan(
-          verdict: _vmVerdict('off'), on: false, currentStatus: 'stopped');
-      expect(plan.invoke, isFalse);
-      expect(plan.toastCopyKey, 'dev_queue.ctl_vm_off_toast');
-    });
-
-    test('a mid-transition or unknown status always invokes', () {
-      // 'starting'/'stopping' are what dev_ctl_set writes optimistically, and
-      // 'unknown' is what an AWS box reports before a key is saved. None of
-      // these may short-circuit — otherwise a stuck 'starting' would make the
-      // toggle permanently unable to reach the cloud.
-      for (final s in const ['starting', 'stopping', 'unknown', '']) {
-        expect(
-          VmTogglePolicy.plan(
-                  verdict: _vmVerdict('on'), on: true, currentStatus: s)
-              .invoke,
-          isTrue,
-          reason: 'status "$s" must not short-circuit',
-        );
+  group('no cached VM state may suppress a flip', () {
+    test('every status still invokes — including the two that used to short-circuit',
+        () {
+      // 'running'/'stopped' are the settled states the old code treated as
+      // "nothing to do". They were read from a config row that NOTHING updates
+      // while the box is off, which is precisely how START died: cache says
+      // running, EC2 says stopped, app toasts "already running" forever.
+      //
+      // plan() no longer accepts a status at all — that is the fix, expressed as
+      // an API shape. This test exists so a future edit cannot quietly hand it
+      // one back.
+      for (final verdict in [_vmVerdict('on'), _vmVerdict('off')]) {
+        expect(VmTogglePolicy.plan(verdict).invoke, isTrue);
       }
+    });
+
+    test('the "already running" wording now arrives from the edge function', () {
+      // vm-control checks the live state itself and words the no-op, so the
+      // client just prints it — same sentence Om saw before, now backed by a
+      // DescribeInstances read instead of a cache.
+      final out = VmTogglePolicy.outcome({
+        'ok': true,
+        'status': 'running',
+        'changed': false,
+        'settled': true,
+        'message': 'VM already running',
+      });
+      expect(out.message, 'VM already running');
+      expect(out.isError, isFalse);
+      expect(out.needsFallbackCopy, isFalse);
+      // A no-op is settled: nothing to chase.
+      expect(VmTogglePolicy.poll({
+        'ok': true,
+        'settled': true,
+        'poll_after_ms': 6000,
+        'poll_max': 20,
+      }).again, isFalse);
     });
   });
 
@@ -157,6 +158,27 @@ void main() {
       expect(out.isSilent, isFalse);
       // The backend worded this refusal, so Dart's fallback copy must NOT win.
       expect(out.needsFallbackCopy, isFalse);
+    });
+
+    test('an IAM refusal names the exact missing action, verbatim', () {
+      // Om asked for this by name: a denied StartInstances must not read as a
+      // vague "couldn't reach the cloud", or the fix is un-actionable.
+      const denied =
+          'AWS refused this. The saved access key is missing the IAM permission '
+          'ec2:StartInstances on instance i-0d570e128d49615bd. Add that action '
+          "to the key's IAM policy, then try the toggle again.";
+      final out = VmTogglePolicy.outcome({
+        'ok': false,
+        'error': 'aws_iam_denied',
+        'iam_action': 'ec2:StartInstances',
+        'detail': 'UnauthorizedOperation: You are not authorized',
+        'status': 'unknown',
+        'message': denied,
+      });
+      expect(out.message, denied);
+      expect(out.isError, isTrue);
+      expect(out.needsFallbackCopy, isFalse,
+          reason: 'the named action must never be replaced by generic copy');
     });
 
     test('a successful stop carries the backend\'s message, not an error', () {
@@ -203,6 +225,92 @@ void main() {
     });
   });
 
+  group('a transitional state is chased, on the backend\'s terms', () {
+    test('settled:false schedules another read with the payload\'s interval', () {
+      // What StartInstances actually returns: pending, not running.
+      final p = VmTogglePolicy.poll({
+        'ok': true,
+        'status': 'starting',
+        'changed': true,
+        'settled': false,
+        'poll_after_ms': 6000,
+        'poll_max': 20,
+      });
+      expect(p.again, isTrue);
+      expect(p.delay, const Duration(milliseconds: 6000));
+      expect(p.maxPolls, 20);
+    });
+
+    test('a resting state stops the chase', () {
+      for (final s in const ['running', 'stopped']) {
+        expect(
+          VmTogglePolicy.poll({
+            'ok': true,
+            'status': s,
+            'settled': true,
+            'poll_after_ms': 6000,
+            'poll_max': 20,
+          }).again,
+          isFalse,
+          reason: '$s is settled — nothing left to watch',
+        );
+      }
+    });
+
+    test('a failed call never polls — repeating a refusal is not progress', () {
+      // No key, and IAM denied: both would just re-refuse 20 more times.
+      for (final reply in [
+        {'ok': false, 'error': 'aws_key_missing', 'settled': true},
+        {
+          'ok': false,
+          'error': 'aws_iam_denied',
+          'settled': false,
+          'poll_after_ms': 6000,
+          'poll_max': 20,
+        },
+      ]) {
+        expect(VmTogglePolicy.poll(reply).again, isFalse);
+      }
+    });
+
+    test('a reply that omits settled is treated as settled, not as a loop', () {
+      // Forward/backward compatibility: an older function version, or the GCP
+      // branch, sends no `settled`. Silence must never start an unbounded poll.
+      expect(VmTogglePolicy.poll({'ok': true, 'status': 'starting'}).again,
+          isFalse);
+    });
+
+    test('missing or zero cadence numbers stop the chase', () {
+      // A misconfigured vm_poll row must degrade to "don't poll", never to a
+      // tight zero-delay loop against EC2.
+      for (final reply in [
+        {'ok': true, 'settled': false},
+        {'ok': true, 'settled': false, 'poll_after_ms': 0, 'poll_max': 20},
+        {'ok': true, 'settled': false, 'poll_after_ms': 6000, 'poll_max': 0},
+      ]) {
+        expect(VmTogglePolicy.poll(reply).again, isFalse);
+      }
+    });
+  });
+
+  group('chip freshness is the backend\'s verdict', () {
+    test('needs_live_check is read, never re-derived from a timestamp', () {
+      expect(
+          VmTogglePolicy.needsLiveCheck(
+              {'status': 'running', 'age_s': 4, 'needs_live_check': true}),
+          isTrue);
+      // Even a very old reading is NOT refetched unless the backend says so —
+      // the thresholds live in the vm_poll config row, and differ for settled
+      // and transitional states.
+      expect(
+          VmTogglePolicy.needsLiveCheck(
+              {'status': 'running', 'age_s': 99999, 'needs_live_check': false}),
+          isFalse);
+      // An absent flag is not an invitation to guess.
+      expect(VmTogglePolicy.needsLiveCheck(const {}), isFalse);
+    });
+  });
+
   group('vm_status contract', () {
     test('the states the app renders are exactly what the backend writes', () {
       // dev_vm_status_write() rejects anything outside this set, and the chip in
@@ -213,12 +321,18 @@ void main() {
         const {'running', 'stopped', 'starting', 'stopping', 'unknown'},
         hasLength(5),
       );
-      // The two the no-op short-circuit depends on are the settled states.
-      final onNoop = VmTogglePolicy.plan(
-          verdict: _vmVerdict('on'), on: true, currentStatus: 'running');
-      final offNoop = VmTogglePolicy.plan(
-          verdict: _vmVerdict('off'), on: false, currentStatus: 'stopped');
-      expect(onNoop.invoke || offNoop.invoke, isFalse);
+      // 'starting'/'stopping' are the EC2 pending/stopping states, and they are
+      // the ones the poll loop exists for.
+      expect(
+        VmTogglePolicy.poll({
+          'ok': true,
+          'status': 'stopping',
+          'settled': false,
+          'poll_after_ms': 6000,
+          'poll_max': 20,
+        }).again,
+        isTrue,
+      );
     });
   });
 }

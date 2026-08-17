@@ -36,8 +36,8 @@ android {
         applicationId = "in.medibo.app"
         minSdk = flutter.minSdkVersion
         targetSdk = 36
-        versionCode = 20
-        versionName = "1.3.7"
+        versionCode = 21
+        versionName = "1.3.8"
     }
 
     signingConfigs {
@@ -100,6 +100,16 @@ kotlin {
     compilerOptions {
         jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
     }
+}
+
+dependencies {
+    // CHANGE #225 — DocScanReadiness needs these symbols in the app module.
+    // play-services-base carries GoogleApiAvailability + the ModuleInstall API;
+    // the document-scanner artifact is already on the classpath transitively via
+    // google_mlkit_document_scanner, and is declared here only so the app module
+    // compiles against GmsDocumentScanning directly.
+    implementation("com.google.android.gms:play-services-base:18.5.0")
+    implementation("com.google.android.gms:play-services-mlkit-document-scanner:16.0.0")
 }
 
 flutter {

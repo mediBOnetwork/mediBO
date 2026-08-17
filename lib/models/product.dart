@@ -168,6 +168,12 @@ class Pricing {
   /// The scheme exactly as captured, e.g. "10+1". Empty when there is none.
   final String schemeText;
 
+  /// CHANGE #175 — true when the product has an active scheme with a badge.
+  final bool hasSchemeBadge;
+
+  /// CHANGE #175 — the scheme badge chip (label + colours). Null when none.
+  final PricingChip? schemeBadge;
+
   /// The margin chip, colours included. Null when the backend sent none —
   /// which is how an un-priced product stays chip-less.
   final PricingChip? marginChip;
@@ -201,6 +207,8 @@ class Pricing {
     this.netDisplay = '',
     this.netCaption = '',
     this.schemeText = '',
+    this.hasSchemeBadge = false,
+    this.schemeBadge,
     this.marginChip,
     this.gst,
   });
@@ -240,6 +248,8 @@ class Pricing {
       netDisplay: (m['net_display'] ?? '').toString(),
       netCaption: (m['net_caption'] ?? '').toString(),
       schemeText: (m['scheme_text'] ?? '').toString(),
+      hasSchemeBadge: m['has_scheme'] == true,
+      schemeBadge: PricingChip.fromMap(m['scheme_badge']),
       marginChip: PricingChip.fromMap(m['margin_chip']),
       gst: GstBreakup.fromMap(m['gst']),
     );
@@ -266,6 +276,8 @@ class Pricing {
         'net_display': netDisplay,
         'net_caption': netCaption,
         'scheme_text': schemeText,
+        'has_scheme': hasSchemeBadge,
+        'scheme_badge': schemeBadge?.toJson(),
         'margin_chip': marginChip?.toJson(),
         'gst': gst?.toJson(),
       };

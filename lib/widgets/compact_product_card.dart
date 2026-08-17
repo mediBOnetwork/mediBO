@@ -164,12 +164,24 @@ class CompactProductCard extends StatelessWidget {
             const SizedBox(height: 4),
             SizedBox(
               height: _offerH,
-              // Gated on the backend's boolean, never on "the string is not
-              // empty" — an offer is a fact about the product, not about the
-              // payload.
-              child: (product.hasOffer && product.offerChip.isNotEmpty)
-                  ? _OfferChip(text: product.offerChip)
-                  : const SizedBox.shrink(),
+              // Scheme badge from pricing takes priority; fall back to the
+              // old offerChip. Both gated on the backend's boolean.
+              child: () {
+                final badge = product.pricing?.schemeBadge;
+                if (product.pricing?.hasSchemeBadge == true &&
+                    badge != null &&
+                    badge.label.isNotEmpty) {
+                  return _OfferChip(
+                    text: badge.label,
+                    bg: badge.bg,
+                    fg: badge.fg,
+                  );
+                }
+                if (product.hasOffer && product.offerChip.isNotEmpty) {
+                  return _OfferChip(text: product.offerChip);
+                }
+                return const SizedBox.shrink();
+              }(),
             ),
           ],
         ),
@@ -490,7 +502,9 @@ class _FormChip extends StatelessWidget {
 /// the app answering a question only the catalogue can answer.
 class _OfferChip extends StatelessWidget {
   final String text;
-  const _OfferChip({required this.text});
+  final int? bg;
+  final int? fg;
+  const _OfferChip({required this.text, this.bg, this.fg});
 
   @override
   Widget build(BuildContext context) => Align(
@@ -498,7 +512,7 @@ class _OfferChip extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 7),
           decoration: BoxDecoration(
-            color: Brand.positiveBg,
+            color: bg != null ? Color(bg!) : Brand.positiveBg,
             borderRadius: BorderRadius.circular(Rad.chip),
           ),
           alignment: Alignment.center,
@@ -507,7 +521,8 @@ class _OfferChip extends StatelessWidget {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: AppType.t2.copyWith(
-                color: Brand.positiveFg, fontWeight: FontWeight.w700),
+                color: fg != null ? Color(fg!) : Brand.positiveFg,
+                fontWeight: FontWeight.w700),
           ),
         ),
       );

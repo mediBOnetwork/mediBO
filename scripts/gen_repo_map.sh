@@ -43,8 +43,17 @@ purpose() { # <file>
       ;;
   esac
   [ -z "$p" ] && p="$(basename "$f" | sed -E 's/\.[a-z]+$//; s/_/ /g')"
-  # collapse whitespace, trim to one readable clause
-  printf '%s' "$p" | tr '\n' ' ' | sed -E 's/\s+/ /g; s/^ //; s/ $//' | cut -c1-110
+  # collapse whitespace, trim to one readable clause.
+  #
+  # `cut -c` counts BYTES despite the flag name, so a cut landing inside a
+  # multibyte character left a half em-dash in the map — one invalid byte makes
+  # `grep` treat the WHOLE file as binary and print nothing, so every worker's
+  # map lookup silently returned zero hits and they fell back to grepping the
+  # repo. That is precisely the cost CHANGE #198 removed, reintroduced by a
+  # comment full of box-drawing characters (#224). `iconv -c` drops any partial
+  # sequence the cut created, so the map is always valid UTF-8 and greppable.
+  printf '%s' "$p" | tr '\n' ' ' | sed -E 's/\s+/ /g; s/^ //; s/ $//' \
+    | cut -c1-110 | iconv -f UTF-8 -t UTF-8 -c
 }
 
 # Distinct Supabase RPC names a file calls, comma separated (max 6).

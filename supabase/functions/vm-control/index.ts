@@ -8,7 +8,22 @@
 // AWS credentials are read from the Supabase Vault via `secret_get_runner`
 // (this function holds the service key, which that RPC requires), so Om saves
 // them in the app's own Secrets screen — no Supabase dashboard, no redeploy.
-// Deno.env is only a fallback for a hand-set project secret.
+// Deno.env is the fallback, and it is the live path today: the keys are saved
+// as Edge Function secrets (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY /
+// AWS_REGION). The reply reports `cred_source` — which STORE answered, never
+// the value.
+//
+// CHANGE #224 follow-up — "start does nothing". Two real defects, both fixed
+// here rather than in Dart:
+//   1. the no-op check ("it's already running, skip the call") ran in the app
+//      against a CACHED vm_status row. Nothing refreshes that row while the box
+//      is off, so a stale 'running' silently swallowed every START. The check
+//      now runs here, against a DescribeInstances read taken microseconds ago.
+//   2. an IAM refusal came back as the generic "couldn't reach the cloud". It
+//      now names the exact missing action (`iam_action`, e.g.
+//      ec2:StartInstances) inside backend copy.
+// The reply also carries `settled` + `poll_after_ms`, so the chip chases
+// pending/stopping to a real resting state instead of printing a guess.
 //
 // Every human-facing string comes from `ui_copy`. This function returns copy the
 // client prints verbatim; it never words anything itself.
@@ -97,6 +112,14 @@ function ec2Error(xml: string): string | null {
   const msg = xmlTag(xml, "Message");
   return code || msg ? `${code ?? ""}${code && msg ? ": " : ""}${msg ?? ""}` : null;
 }
+// An IAM refusal must never surface as a generic "couldn't reach the cloud" —
+// Om has to know WHICH action to add to the policy. AWS says "UnauthorizedOperation"
+// (and, on some paths, AccessDenied) without naming the action, so we name it
+// from the call we just made.
+function iamDenied(xml: string): boolean {
+  const code = (xmlTag(xml, "Code") ?? "").toLowerCase();
+  return code.includes("unauthorizedoperation") || code.includes("accessdenied");
+}
 
 // EC2 instance state → the four states the app's chip knows.
 const AWSMAP: Record<string, string> = {
@@ -129,7 +152,7 @@ Deno.serve(async (req) => {
   try {
     const body = await req.json().catch(() => ({}));
     const action = (body.action ?? "status").toString();
-    if (!["start", "stop", "status"].includes(action)) return json({ error: "bad_action" }, 400);
+    if (!["start", "stop", "status", "preflight"].includes(action)) return json({ error: "bad_action" }, 400);
     const auth = req.headers.get("Authorization") ?? "";
 
     let ok = jwtRole(auth) === "service_role" || auth.includes(SVC);
@@ -145,13 +168,28 @@ Deno.serve(async (req) => {
     // Every string this function hands back is a ui_copy row.
     const { data: copyRows } = await admin.from("ui_copy").select("key,value")
       .in("key", ["dev_queue.ctl_vm_no_key", "dev_queue.ctl_vm_stop_queued",
-                  "dev_queue.ctl_vm_start_sent", "dev_queue.ctl_edge_failed"]);
+                  "dev_queue.ctl_vm_start_sent", "dev_queue.ctl_edge_failed",
+                  "dev_queue.ctl_vm_stop_no_key", "dev_queue.ctl_vm_on_toast",
+                  "dev_queue.ctl_vm_off_toast", "dev_queue.ctl_vm_iam_denied",
+                  "dev_queue.ctl_vm_aws_error", "dev_queue.ctl_vm_preflight_ok",
+                  "dev_queue.ctl_vm_preflight_bad"]);
     const copy = (k: string) =>
       String((copyRows ?? []).find((r: any) => r.key === k)?.value ?? "").replace(/^"|"$/g, "");
+    const copyf = (k: string, vars: Record<string, string>) =>
+      Object.entries(vars).reduce((s, [n, v]) => s.split(`{${n}}`).join(v), copy(k));
 
     const { data: idRow } = await admin.from("dev_runner_config").select("value").eq("key", "vm_identity").single();
     const id = idRow?.value ?? {};
     const cloud = (id.cloud ?? "gcp").toString();
+
+    // Polling cadence is config, not a Dart constant: the client chases a
+    // transitional state on the interval THIS row names.
+    const { data: pollRow } = await admin.from("dev_runner_config").select("value").eq("key", "vm_poll").single();
+    const poll = pollRow?.value ?? {};
+    const pollAfterMs = Number(poll.interval_ms ?? 6000);
+    const pollMax = Number(poll.max_polls ?? 20);
+    // running/stopped are the only resting states; everything else is in flight.
+    const settledOf = (s: string) => s === "running" || s === "stopped";
 
     const writeStatus = async (status: string, operation: string | null, source: string) =>
       admin.from("dev_runner_config").upsert({
@@ -161,57 +199,173 @@ Deno.serve(async (req) => {
 
     // ── AWS EC2 ─────────────────────────────────────────────────────────────
     if (cloud === "aws") {
-      const region = (id.region ?? "").toString();
       const instanceId = (id.instance_id ?? "").toString();
-      if (!region || !instanceId) return json({ error: "vm_identity_incomplete", message: copy("dev_queue.ctl_edge_failed") }, 500);
 
-      // Vault first (Om's Secrets screen), project env as a fallback.
+      // Vault first (Om's Secrets screen), project env as a fallback — Om has
+      // saved these as Edge Function secrets, so the env half is load-bearing,
+      // not decoration.
       const vault = async (name: string): Promise<string | null> => {
         const { data, error } = await admin.rpc("secret_get_runner", { p_name: name });
         return error ? null : (data ? String(data) : null);
       };
-      const akid = (await vault("AWS_ACCESS_KEY_ID")) ?? Deno.env.get("AWS_ACCESS_KEY_ID") ?? null;
+      const vaultAkid = await vault("AWS_ACCESS_KEY_ID");
+      const akid = vaultAkid ?? Deno.env.get("AWS_ACCESS_KEY_ID") ?? null;
       const secret = (await vault("AWS_SECRET_ACCESS_KEY")) ?? Deno.env.get("AWS_SECRET_ACCESS_KEY") ?? null;
       const sessTok = (await vault("AWS_SESSION_TOKEN")) ?? Deno.env.get("AWS_SESSION_TOKEN") ?? null;
+      // Which STORE the credential came from — never the credential itself.
+      const credSource = vaultAkid ? "vault" : (Deno.env.get("AWS_ACCESS_KEY_ID") ? "env" : "none");
+
+      // Region: the instance's own identity row wins, then the AWS_REGION
+      // secret Om saved alongside the key. Both name ap-south-1 today; reading
+      // the secret too means a region move needs no config edit.
+      const region = ((id.region ?? "").toString())
+        || (await vault("AWS_REGION")) || Deno.env.get("AWS_REGION") || "";
+      if (!region || !instanceId) return json({ error: "vm_identity_incomplete", message: copy("dev_queue.ctl_edge_failed") }, 500);
 
       if (!akid || !secret) {
         // No credential. STOP still works: the box powers itself off when the
         // supervisor sees desired_state.vm='off' (it is running, by definition,
         // if it can be asked to stop). START is the only half that needs a key.
+        //
+        // But that makes a keyless stop a ONE-WAY DOOR — a stopped instance
+        // cannot start itself, so the app could strand its own builder. Say so
+        // in the same breath as confirming the stop.
         if (action === "stop") {
           await writeStatus("stopping", null, "self_stop");
-          return json({ status: "stopping", operation: null, message: copy("dev_queue.ctl_vm_stop_queued"), needs_key: false });
+          return json({
+            status: "stopping",
+            operation: null,
+            message: copy("dev_queue.ctl_vm_stop_no_key"),
+            needs_key: true,
+            one_way: true,
+            // Nothing to poll: without a key we cannot read EC2 back, and
+            // chasing it would just be a queue of 503s.
+            settled: true,
+          });
         }
-        return json({ error: "aws_key_missing", status: "unknown", message: copy("dev_queue.ctl_vm_no_key"), needs_key: true }, 503);
+        return json({ error: "aws_key_missing", status: "unknown", settled: true, message: copy("dev_queue.ctl_vm_no_key"), needs_key: true }, 503);
       }
 
-      let status = "unknown";
-      let operation: string | null = null;
+      // One shape for every AWS refusal, so an IAM gap is never swallowed by a
+      // generic "couldn't reach the cloud".
+      const awsFailure = async (r: { status: number; body: string }, iamAction: string) => {
+        const detail = ec2Error(r.body) ?? `HTTP ${r.status}`;
+        const denied = iamDenied(r.body);
+        await writeStatus("unknown", null, "edge");
+        return json({
+          error: denied ? "aws_iam_denied" : "aws_error",
+          detail,
+          iam_action: denied ? iamAction : null,
+          instance_id: instanceId,
+          status: "unknown",
+          settled: false,
+          message: denied
+            ? copyf("dev_queue.ctl_vm_iam_denied", { action: iamAction, instance: instanceId })
+            : copyf("dev_queue.ctl_vm_aws_error", { detail }),
+          cloud: "aws",
+        }, 502);
+      };
 
+      // The live instance state, straight from EC2. This is the ONLY source of
+      // truth in this function — nothing below infers a state from the action.
+      const describe = async (): Promise<{ ok: boolean; status: string; raw: { status: number; body: string } }> => {
+        const d = await ec2Call(region, akid, secret, sessTok, { Action: "DescribeInstances", "InstanceId.1": instanceId });
+        if (!d.ok) return { ok: false, status: "unknown", raw: d };
+        const name = xmlStateName(d.body, "instanceState");
+        return { ok: true, status: (name && AWSMAP[name]) || "unknown", raw: d };
+      };
+
+      // ── preflight: does the saved key actually hold the three permissions? ─
+      // EC2's DryRun flag answers this from AWS itself and changes nothing:
+      // "DryRunOperation" means the call WOULD have succeeded (permission held),
+      // "UnauthorizedOperation" means it is missing. That matters because the
+      // only other way to prove ec2:StopInstances is to stop the builder — which
+      // is the machine the build runs on.
+      if (action === "preflight") {
+        const wanted: Array<[string, string]> = [
+          ["DescribeInstances", "ec2:DescribeInstances"],
+          ["StartInstances", "ec2:StartInstances"],
+          ["StopInstances", "ec2:StopInstances"],
+        ];
+        const checks: Array<{ action: string; allowed: boolean; code: string }> = [];
+        for (const [op, iam] of wanted) {
+          const r = await ec2Call(region, akid, secret, sessTok,
+            { Action: op, "InstanceId.1": instanceId, DryRun: "true" });
+          const code = xmlTag(r.body, "Code") ?? (r.ok ? "Ok" : `HTTP ${r.status}`);
+          checks.push({ action: iam, allowed: code === "DryRunOperation" || r.ok, code });
+        }
+        const missing = checks.filter((x) => !x.allowed).map((x) => x.action);
+        return json({
+          checks,
+          ok_count: checks.length - missing.length,
+          missing,
+          cred_source: credSource, region, instance_id: instanceId, cloud: "aws",
+          settled: true,
+          message: missing.length === 0
+            ? copyf("dev_queue.ctl_vm_preflight_ok", {
+                total: String(checks.length),
+                list: checks.map((x) => x.action).join(", "),
+                instance: instanceId,
+                region,
+              })
+            : copyf("dev_queue.ctl_vm_preflight_bad", {
+                missing: missing.join(", "),
+                instance: instanceId,
+              }),
+        }, missing.length === 0 ? 200 : 502);
+      }
+
+      // ── 1. read the TRUE state BEFORE deciding anything ──────────────────
+      // The old code let Dart decide "it's already running, skip the call" from
+      // a cached config row. Nothing refreshes that cache while the box is off,
+      // so a stale 'running' silently ate every START. The no-op check belongs
+      // here, against a reading taken one line ago.
+      const before = await describe();
+      if (!before.ok) return await awsFailure(before.raw, "ec2:DescribeInstances");
+
+      let status = before.status;
+      let operation: string | null = null;
+      let changed = false;
+
+      if ((action === "start" && before.status === "running") ||
+          (action === "stop" && before.status === "stopped")) {
+        await writeStatus(status, null, "edge");
+        return json({
+          status, operation: null, changed: false, settled: true,
+          poll_after_ms: pollAfterMs, poll_max: pollMax,
+          cred_source: credSource, region, instance_id: instanceId, cloud: "aws",
+          message: action === "start" ? copy("dev_queue.ctl_vm_on_toast") : copy("dev_queue.ctl_vm_off_toast"),
+        });
+      }
+
+      // ── 2. act ────────────────────────────────────────────────────────────
       if (action === "start" || action === "stop") {
         const op = action === "start" ? "StartInstances" : "StopInstances";
         const r = await ec2Call(region, akid, secret, sessTok, { Action: op, "InstanceId.1": instanceId });
-        const err = r.ok ? null : (ec2Error(r.body) ?? `HTTP ${r.status}`);
-        if (err) {
-          await writeStatus("unknown", null, "edge");
-          return json({ error: "aws_error", detail: err, status: "unknown", message: copy("dev_queue.ctl_edge_failed") }, 502);
-        }
+        if (!r.ok) return await awsFailure(r, `ec2:${op}`);
+        changed = true;
         operation = xmlTag(r.body, "requestId");
-        status = AWSMAP[xmlStateName(r.body, "currentState") ?? ""] ?? "";
-        if (!status) status = action === "start" ? "starting" : "stopping";
-      }
+        // currentState from the mutation itself: pending / stopping.
+        status = AWSMAP[xmlStateName(r.body, "currentState") ?? ""] ?? status;
 
-      // Always read the truth back.
-      const d = await ec2Call(region, akid, secret, sessTok, { Action: "DescribeInstances", "InstanceId.1": instanceId });
-      if (d.ok) {
-        const name = xmlStateName(d.body, "instanceState");
-        if (name && AWSMAP[name]) status = AWSMAP[name];
+        // ── 3. read the truth back, so the chip never shows an optimistic label
+        const after = await describe();
+        if (after.ok) status = after.status;
       }
 
       await writeStatus(status, operation, "edge");
-      const msg = action === "start" ? copy("dev_queue.ctl_vm_start_sent")
-        : action === "stop" ? copy("dev_queue.ctl_vm_stop_queued") : "";
-      return json({ status, operation, message: msg, cloud: "aws" });
+      const msg = !changed ? ""
+        : action === "start" ? copy("dev_queue.ctl_vm_start_sent")
+        : copy("dev_queue.ctl_vm_stop_queued");
+      return json({
+        status, operation, changed,
+        // pending/stopping => the client keeps calling 'status' on this cadence
+        // until EC2 itself says running/stopped.
+        settled: settledOf(status),
+        poll_after_ms: pollAfterMs, poll_max: pollMax,
+        cred_source: credSource, region, instance_id: instanceId,
+        message: msg, cloud: "aws",
+      });
     }
 
     // ── GCP Compute (legacy path, config-selected) ───────────────────────────

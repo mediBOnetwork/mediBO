@@ -9,3 +9,6 @@ typedef ScannedPage = ({String name, Uint8List bytes});
 /// is unavailable on web. Returns null so the caller falls back to its existing
 /// camera-capture behaviour unchanged.
 Future<List<ScannedPage>?> scanDocuments({int pageLimit = 1}) async => null;
+
+/// Mirrors the native seam so shared code compiles on web. No-op here.
+void debugResetDocScanReadiness() {}

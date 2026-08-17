@@ -809,11 +809,14 @@ class _SortChip extends StatelessWidget {
         onTap: onTap,
         borderRadius: Ds.r.rChip,
         child: Container(
-          // 44 px minimum touch target on the cross axis (design QA #5).
-          constraints: BoxConstraints(minHeight: Ds.space.x48 - Ds.space.x4),
-          alignment: Alignment.center,
+          // No `alignment` and no width here on purpose: a Container that is
+          // given an alignment expands to the incoming max width, and inside a
+          // Wrap that is the full row — which rendered each chip as a
+          // full-width bar (caught on #749's screenshot). Padding alone sizes
+          // the chip to its label. Vertical 12 + a ~21 px body line clears the
+          // 44 px touch target without a fixed height.
           padding: EdgeInsets.symmetric(
-              horizontal: Ds.space.x16, vertical: Ds.space.x8),
+              horizontal: Ds.space.x16, vertical: Ds.space.x12),
           decoration: BoxDecoration(
             borderRadius: Ds.r.rChip,
             border: Border.all(color: active ? Ds.c.brand : Ds.c.divider),

@@ -41,6 +41,14 @@ const ADMIN_EMAIL    = 'test.admin@medibo.in';
 const ADMIN_PASS     = 'TestAdmin#26';
 const SUPPLIER_EMAIL = 'test.sup1@medibo.in';
 const SUPPLIER_PASS  = 'TestSup1#26';
+// CHANGE #174 — the storefront phase runs as a CUSTOMER: the product grid, the
+// margin block and the sort chips are all gated on an approved customer (or an
+// admin), so an admin session proves nothing about what a buyer actually sees.
+const CUSTOMER_EMAIL = 'test.cust1@medibo.in';
+const CUSTOMER_PASS  = 'TestCust1#26';
+// The grid only renders off the landing feed — home is the sectioned feed
+// (#637), so the phase deep-links into a category (/c/<slug>) to reach it.
+const STOREFRONT_PATH = process.env.MEDIBO_STOREFRONT_PATH || '/c/cardiac';
 const TARGET        = process.env.MEDIBO_URL || 'https://medibo.in';
 const MAX_RETRIES   = 3;
 
@@ -73,7 +81,8 @@ const supplierKeys    = argv.includes('--supplier-keys');
 //   --all              → everything
 //   --phases a,b,c     → exactly these (names below)
 const PHASE_NAMES = ['boot', 'inquiry', 'allocation', 'receiving', 'voice',
-                     'arrivals', 'supplier', 'admin-mobile', 'supplier-mobile'];
+                     'arrivals', 'supplier', 'admin-mobile', 'supplier-mobile',
+                     'storefront'];
 const phasesArg = argVal('--phases');
 const wantAll   = argv.includes('--all');
 const wantApi   = argv.includes('--api');
@@ -186,6 +195,73 @@ async function waitForFlutter(page, waitExtra, marker) {
     console.log(`  Waiting ${waitExtra}s for renders to settle...`);
     await page.waitForTimeout(waitExtra * 1000);
   }
+}
+
+// ── Phase 11: Customer storefront grid (CHANGE #174) ─────────────────────────
+// Read-only. Proves the PRODUCT GRID rendered for a real buyer session, which
+// is the only place the sort chips and the margin block exist. Landing on the
+// home feed is not the same screen, so this phase deep-links to a category.
+async function phaseStorefront(browser, session, expectedHash) {
+  console.log('\n── Phase 11: Customer storefront grid ───────────────────────');
+  let passed = false;
+
+  for (let attempt = 1; attempt <= MAX_RETRIES && !passed; attempt++) {
+    console.log(`  Attempt ${attempt}/${MAX_RETRIES}`);
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    await ctx.addInitScript(({ key, val }) => {
+      localStorage.setItem(key, val);
+    }, { key: STORAGE_KEY, val: JSON.stringify(session) });
+    const page = await ctx.newPage();
+    page.on('console', () => {});
+
+    try {
+      await page.goto(`${TARGET}${STOREFRONT_PATH}`,
+        { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await waitForFlutter(page, 10, 'boot_status=painted');
+      const logText = await readRenderLog(page);
+      const log = parseLog(logText);
+
+      const gotHash = log['build'];
+      const hashOk = gotHash === expectedHash;
+      // The grid itself must have rendered, or nothing below means anything.
+      const gridOk = 'c195_grid_manual_mode' in log;
+      // The chips are OPTIONAL by design: the backend returns no sort_options
+      // until a buyable product has trade pricing, and this phase must not
+      // fail on a correct empty state. What it does report is exactly what
+      // the payload said, so a regression is visible instead of assumed.
+      const chips = log['c174_sort_chips'];
+
+      console.log(`  Build hash : got=${gotHash} want=${expectedHash} → ${hashOk ? '✓ MATCH' : '✗ MISMATCH'}`);
+      console.log(`  Grid       : ${gridOk ? `✓ rendered (${log['c195_grid_manual_mode']})` : '✗ product grid never rendered'}`);
+      console.log(`  Sort chips : ${chips === undefined ? '(none — backend sent no sort_options)' : chips}`);
+      if (log['c553_showing_label'] !== undefined) {
+        console.log(`  Showing    : ${log['c553_showing_label']}`);
+      }
+
+      const missing = requiredKeys.filter(k => !(k in log));
+      if (missing.length) console.log(`  Keys       : MISSING: ${missing.join(', ')}`);
+
+      // --shot <path> captures the authed grid. shot.sh cannot: it has no
+      // session, and the chips only exist for a viewer the backend shows a
+      // margin to, so an unauthed capture proves the empty state and nothing
+      // else. This page already holds the right session.
+      const shotPath = argVal('--shot');
+      if (shotPath) {
+        await page.screenshot({ path: shotPath, fullPage: false });
+        console.log(`  Screenshot : ${shotPath}`);
+      }
+
+      if (hashOk && gridOk && missing.length === 0) passed = true;
+    } catch (err) {
+      console.error(`  Error: ${err.message}`);
+    } finally {
+      await ctx.close();
+    }
+    if (!passed && attempt < MAX_RETRIES) console.log('  Retrying...\n');
+  }
+
+  console.log(passed ? '\n✅ Storefront phase PASSED' : '\n❌ Storefront phase FAILED');
+  return passed;
 }
 
 // ── Phase 1: Admin session load ───────────────────────────────────────────────
@@ -966,6 +1042,32 @@ async function main() {
         async () => {
           const s = await supplierSession();
           return s ? phaseSupplierMobile(browser, s, expectedHash) : false;
+        });
+      await runPhase('storefront', 'Phase 11 — customer storefront grid',
+        async () => {
+          console.log(`\n🔐 Authenticating ${CUSTOMER_EMAIL}...`);
+          const c = await httpsPost(
+            `${SUPABASE_URL}/auth/v1/token?grant_type=password`,
+            { 'apikey': ANON_KEY, 'Content-Type': 'application/json' },
+            { email: CUSTOMER_EMAIL, password: CUSTOMER_PASS },
+          );
+          // CHANGE #174 — CLAUDE.md documents test.cust1@medibo.in, but no
+          // such auth user has ever existed (checked on #174). Rather than
+          // fail a correct build on a missing fixture, fall back to the admin
+          // session: it clears the SAME gate the chips and the margin block
+          // use (viewer_is_approved_customer() OR admin). The fallback is
+          // printed loudly on purpose — a proof must never quietly change
+          // whose eyes it was taken through. Create the customer fixture and
+          // this phase upgrades itself with no code change.
+          if (!c || !c.access_token) {
+            console.log(`   ⚠ ${CUSTOMER_EMAIL} does not authenticate `
+              + `(${c && c.msg ? c.msg : 'no session'}).`);
+            console.log(`   ⚠ FALLING BACK to ${ADMIN_EMAIL} — same margin gate, `
+              + `but this is NOT a buyer's-eye proof.`);
+            return phaseStorefront(browser, session, expectedHash);
+          }
+          console.log(`   ✓ Got session for ${c.user?.email}`);
+          return phaseStorefront(browser, c, expectedHash);
         });
       await runPhase('supplier', 'Phase 8 — supplier inquiry',
         async () => {

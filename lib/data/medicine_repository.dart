@@ -60,6 +60,11 @@ typedef FetchPageResult = ({
   // under a seconds'); rewording them is now an UPDATE.
   String? moreLabel,
   String? endLabel,
+  // CHANGE #174 — the sort chips, exactly as the backend sent them:
+  // [{key, label, active}]. Empty means "this viewer gets no sort control",
+  // which is the normal state until a product has trade pricing. The grid
+  // never builds this list itself and never decides which sort is active.
+  List<Map<String, dynamic>> sortOptions,
 });
 
 /// CHANGE #553 — one product plus the backend's availability verdict, as
@@ -367,6 +372,10 @@ class MedicineRepository {
       hasMore: env['has_more'] == true,
       moreLabel: env['more_label']?.toString(),
       endLabel: env['end_label']?.toString(),
+      // #174 — absent on the search envelope, which has no sort control.
+      sortOptions: ((env['sort_options'] as List?) ?? const [])
+          .map((o) => Map<String, dynamic>.from(o as Map))
+          .toList(growable: false),
     );
   }
 
@@ -613,6 +622,11 @@ class MedicineRepository {
     String? afterId,
     int? limit,
     bool onlyBuyable = false,
+    // CHANGE #174 — the key of the sort chip the user tapped, echoed back to
+    // the backend exactly as it was received. 'default' is not a client
+    // preference: it is what the backend calls its own ranked feed, and any
+    // key it did not send us can never get here because the chips are its own.
+    String sort = 'default',
   }) async {
     // Strip characters that break PostgREST's or()/ilike syntax.
     final term = query.replaceAll(RegExp(r'[,()*%_]'), ' ').trim();
@@ -626,9 +640,12 @@ class MedicineRepository {
     // with different page sizes are different pages, and merging them was how
     // a 250-row first page could be served a cached 20-row one.
     final lim = limit?.toString() ?? 'plan';
+    // #174 — the sort is part of the key. The margin lane and the ranked feed
+    // are different pages at the same offset; sharing a key served one for the
+    // other on every chip tap.
     final cacheKey = onlyBuyable && term.isEmpty
-        ? '$viewer|${term.toLowerCase()}|$category|$offset|$lim|buyable'
-        : '$viewer|${term.toLowerCase()}|$category|$offset|$lim';
+        ? '$viewer|${term.toLowerCase()}|$category|$offset|$lim|$sort|buyable'
+        : '$viewer|${term.toLowerCase()}|$category|$offset|$lim|$sort';
     final cached = _resultCache[cacheKey];
     if (cached != null) {
       lastCallWasCacheHit = true;
@@ -672,6 +689,7 @@ class MedicineRepository {
           hasMore: items.isNotEmpty,
           moreLabel: null,
           endLabel: null,
+          sortOptions: const <Map<String, dynamic>>[],
         );
       }
       _cacheSet(_resultCache, cacheKey, result);
@@ -684,14 +702,22 @@ class MedicineRepository {
     // and category pages.
     if (onlyBuyable) {
       try {
-        final env = await _rpc('storefront_page', params: {
-          'category_filter': category,
-          'page_offset': offset,
-          // #677 — null on purpose. The backend picks the size from
-          // app_settings; this is the one call site that must NOT substitute
-          // a client default.
-          'page_limit': limit,
-        });
+        // #174 — the margin lane is its own RPC, returning the same envelope
+        // and the same item shape. Which lane to use is decided by the key the
+        // backend put on the chip, not by anything the grid knows about margin.
+        final env = sort == 'margin'
+            ? await _rpc('storefront_margin_page', params: {
+                'p_offset': offset,
+                'p_limit': limit,
+              })
+            : await _rpc('storefront_page', params: {
+                'category_filter': category,
+                'page_offset': offset,
+                // #677 — null on purpose. The backend picks the size from
+                // app_settings; this is the one call site that must NOT
+                // substitute a client default.
+                'page_limit': limit,
+              });
         final result = _parseEnvelope(env);
         _cacheSet(_resultCache, cacheKey, result);
         return result;
@@ -719,6 +745,7 @@ class MedicineRepository {
           hasMore: items.isNotEmpty,
           moreLabel: null,
           endLabel: null,
+          sortOptions: const <Map<String, dynamic>>[],
         );
         _cacheSet(_resultCache, cacheKey, result);
         return result;
@@ -756,6 +783,8 @@ class MedicineRepository {
       hasMore: items.isNotEmpty,
       moreLabel: null,
       endLabel: null,
+      // #174 — no envelope on the outage path, so no sort control is offered.
+      sortOptions: const <Map<String, dynamic>>[],
     );
     _cacheSet(_resultCache, cacheKey, result);
     return result;

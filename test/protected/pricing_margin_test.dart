@@ -40,7 +40,10 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:pharma_b2b/screens/admin/admin_nav_entries.dart';
 
+import 'package:supabase_flutter/supabase_flutter.dart';
+
 import 'package:pharma_b2b/app_state.dart';
+import 'package:pharma_b2b/data/medicine_repository.dart';
 import 'package:pharma_b2b/models/cart_model.dart';
 import 'package:pharma_b2b/models/product.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
@@ -173,6 +176,10 @@ Future<CartModel> _loadedCart(Map<String, dynamic> payload) async {
   await cart.refresh();
   return cart;
 }
+
+/// A [SupabaseClient] only exists to satisfy the repository constructor — the
+/// rpc hook below intercepts every call, so nothing here touches the network.
+final _dummyClient = SupabaseClient('https://example.invalid', 'anon-key');
 
 void main() {
   setUpAll(() => RenderLog.flushEnabled = false);
@@ -342,6 +349,103 @@ void main() {
           reason: 'route key with no case = a menu row that does nothing');
       expect(src.contains('PricingBackfillScreen'), isTrue,
           reason: 'the case must actually push the screen');
+    });
+  });
+
+  // ── CHANGE #174 part 2 — sort by margin, where a margin exists ────────────
+  //
+  // The rule: the sort control is a PAYLOAD. The grid does not own a list of
+  // sorts, does not know which one means "margin", and does not decide which
+  // is active. Two ways this regresses, both one-liners: hardcoding
+  // ['Popular', 'Highest margin'] in Dart so the chips appear even where no
+  // product is priced, and re-using one cache entry for both lanes so tapping
+  // a chip re-renders the list it just left.
+  group('the storefront sort control is the backend\'s, not the grid\'s', () {
+    Map<String, dynamic> envelope({List<Map<String, dynamic>>? sortOptions}) => {
+          'status': 'ok',
+          'items': <Map<String, dynamic>>[],
+          'total': 0,
+          'has_more': false,
+          'next_offset': 0,
+          if (sortOptions != null) 'sort_options': sortOptions,
+        };
+
+    test('the margin chip routes to storefront_margin_page, not storefront_page',
+        () async {
+      final calls = <Map<String, dynamic>>[];
+      final repo = MedicineRepository(_dummyClient, (fn, {params}) async {
+        calls.add({'fn': fn, 'params': params});
+        return envelope();
+      });
+
+      await repo.fetchPage(
+          offset: 0, category: 'SORT_A', onlyBuyable: true, sort: 'margin');
+
+      expect(calls.single['fn'], 'storefront_margin_page');
+      expect((calls.single['params'] as Map)['p_offset'], 0);
+    });
+
+    test('the default chip keeps the normal feed RPC', () async {
+      final calls = <Map<String, dynamic>>[];
+      final repo = MedicineRepository(_dummyClient, (fn, {params}) async {
+        calls.add({'fn': fn, 'params': params});
+        return envelope();
+      });
+
+      await repo.fetchPage(
+          offset: 0, category: 'CARDIAC', onlyBuyable: true, sort: 'default');
+
+      expect(calls.single['fn'], 'storefront_page');
+      expect((calls.single['params'] as Map)['category_filter'], 'CARDIAC');
+    });
+
+    test('chips are carried through verbatim — words, keys and the active flag',
+        () async {
+      final repo = MedicineRepository(_dummyClient, (fn, {params}) async {
+        return envelope(sortOptions: [
+          {'key': 'default', 'label': 'Popular', 'active': false},
+          {'key': 'margin', 'label': 'Highest margin', 'active': true},
+        ]);
+      });
+
+      final res = await repo.fetchPage(
+          offset: 0, category: 'SORT_B', onlyBuyable: true, sort: 'margin');
+
+      expect(res.sortOptions.length, 2);
+      expect(res.sortOptions[1]['label'], 'Highest margin',
+          reason: 'the chip word is an UPDATE in storefront_ui_label, '
+              'never a Dart literal');
+      expect(res.sortOptions[1]['active'], isTrue);
+      expect(res.sortOptions[0]['active'], isFalse);
+    });
+
+    test('a payload with no sort_options yields no control at all', () async {
+      final repo = MedicineRepository(
+          _dummyClient, (fn, {params}) async => envelope());
+
+      final res =
+          await repo.fetchPage(offset: 0, category: 'SORT_C', onlyBuyable: true);
+
+      expect(res.sortOptions, isEmpty,
+          reason: 'no priced product (or a viewer who sees no margin) must '
+              'render the pre-#174 storefront — not an empty chip row');
+    });
+
+    test('the two lanes do not share a cached page', () async {
+      final seen = <String>[];
+      final repo = MedicineRepository(_dummyClient, (fn, {params}) async {
+        seen.add(fn);
+        return envelope();
+      });
+
+      await repo.fetchPage(
+          offset: 0, category: 'SORT_D', onlyBuyable: true, sort: 'default');
+      await repo.fetchPage(
+          offset: 0, category: 'SORT_D', onlyBuyable: true, sort: 'margin');
+
+      expect(seen, ['storefront_page', 'storefront_margin_page'],
+          reason: 'a shared cache key served the ranked feed for the margin '
+              'lane, so the chip looked broken');
     });
   });
 }

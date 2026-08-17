@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'storefront_scrollbar.dart';
 import '../app_state.dart'; // CHANGE #454
 import '../data/medicine_repository.dart';
+import '../design_tokens.dart';
 import '../models/product.dart';
 import '../services/ui_copy.dart';
 import '../theme.dart';
@@ -120,6 +121,13 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   // "Showing 0 of 32133". Null only on the outage fallback, which prints
   // nothing rather than a number it made up.
   String? _showingLabel;
+
+  /// CHANGE #174 — the sort control, exactly as the backend sent it.
+  /// [_sortOptions] empty means there is no control to draw (no viewer margin,
+  /// or nothing priced yet); [_sort] is the key of the chip currently active,
+  /// which is only ever a key the backend itself put on a chip.
+  List<Map<String, dynamic>> _sortOptions = const [];
+  String _sort = 'default';
   String? _emptyLabel;
 
   // #677 — the Load-more button word and the end-of-feed line, both backend
@@ -209,6 +217,10 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
     if (old.category != widget.category ||
         old.query != widget.query ||
         old.browseAll != widget.browseAll) {
+      // #174 — the margin lane is its own list, not a filter on this category.
+      // Changing category or query asks a different question, so it returns to
+      // the backend's default ranking rather than silently staying on margin.
+      _sort = 'default';
       _resetAndLoad();
     }
     if (old.category != widget.category) {
@@ -329,6 +341,16 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   bool get _isHome =>
       widget.query.trim().isEmpty && widget.category == 'All' && !widget.browseAll;
 
+  /// CHANGE #174 — a sort chip was tapped. The key is the backend's own, sent
+  /// straight back on the next request; nothing here knows what 'margin' means
+  /// or how the resulting list is ordered.
+  void _onSortSelected(String key) {
+    if (key == _sort) return;
+    RenderLog.write('c174_sort_tap', key);
+    setState(() => _sort = key);
+    _resetAndLoad();
+  }
+
   Future<void> _resetAndLoad() async {
     // Home does not render the paged grid any more, so fetching a page of
     // storefront_page() for it would be a round trip nobody displays.
@@ -352,6 +374,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
       _buyableCategoryTotal = null;
       _showingLabel = null;
       _emptyLabel = null;
+      _sortOptions = const [];
       _moreLabel = '';
       _endLabel = '';
     });
@@ -362,6 +385,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         offset: 0,
         afterId: null,
         onlyBuyable: _onlyBuyable,
+        sort: _sort,
       );
       sw.stop();
       if (token != _loadToken || !mounted) return;
@@ -470,6 +494,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         _emptyLabel = pageResult.emptyLabel;
         _moreLabel = pageResult.moreLabel ?? '';
         _endLabel = pageResult.endLabel ?? '';
+        _sortOptions = pageResult.sortOptions;
         _loadingFirst = false;
         // #677 — end-of-feed is the backend's word, not a short page. A
         // fallback response carries no plan, and then hasMore is false only
@@ -522,6 +547,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         // before any envelope has arrived, and then it picks its own again.
         limit: _moreLimit,
         onlyBuyable: _onlyBuyable,
+        sort: _sort,
       );
       if (token != _loadToken || !mounted) return;
       final page = pageResult.items;
@@ -546,6 +572,7 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         if (pageResult.emptyLabel != null) _emptyLabel = pageResult.emptyLabel;
         if (pageResult.moreLabel != null) _moreLabel = pageResult.moreLabel!;
         if (pageResult.endLabel != null) _endLabel = pageResult.endLabel!;
+        if (pageResult.sortOptions.isNotEmpty) _sortOptions = pageResult.sortOptions;
         _loadingMore = false;
         _hasMore = pageResult.hasMore;
         _nextOffset = pageResult.nextOffset ?? (offset + page.length);
@@ -671,6 +698,8 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
                 categoryTotal: _categoryTotal(),
                 showingLabel: _showingLabel,
                 emptyLabel: _emptyLabel,
+                sortOptions: _sortOptions,
+                onSortSelected: _onSortSelected,
                 query: widget.query,
                 category: widget.category,
                 loadingFirst: _loadingFirst,
@@ -723,6 +752,78 @@ class _Section extends StatelessWidget {
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: _kMaxContent),
           child: Padding(padding: padding, child: child),
+        ),
+      ),
+    );
+  }
+}
+
+/// CHANGE #174 — the storefront sort control.
+///
+/// Every part of it is the payload's: the chips that exist, their words, and
+/// which one is active. This widget decides nothing — it does not know that
+/// one of them means "margin", does not track a selection of its own, and does
+/// not appear at all when `options` is empty (a viewer with no trade pricing
+/// sees the storefront exactly as it was before #174).
+class _SortChips extends StatelessWidget {
+  final List<Map<String, dynamic>> options;
+  final ValueChanged<String> onSelected;
+  const _SortChips({required this.options, required this.onSelected});
+
+  @override
+  Widget build(BuildContext context) {
+    RenderLog.write(
+        'c174_sort_chips',
+        options
+            .map((o) => '${o['key']}${o['active'] == true ? '*' : ''}')
+            .join(','));
+    return Wrap(
+      spacing: Ds.space.x8,
+      runSpacing: Ds.space.x8,
+      children: [
+        for (final o in options)
+          _SortChip(
+            label: (o['label'] ?? '').toString(),
+            // Absent is not active. The backend marks exactly one chip.
+            active: o['active'] == true,
+            onTap: () => onSelected((o['key'] ?? '').toString()),
+          ),
+      ],
+    );
+  }
+}
+
+class _SortChip extends StatelessWidget {
+  final String label;
+  final bool active;
+  final VoidCallback onTap;
+  const _SortChip(
+      {required this.label, required this.active, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: active ? Ds.c.brand : Ds.c.surface,
+      borderRadius: Ds.r.rChip,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: Ds.r.rChip,
+        child: Container(
+          // 44 px minimum touch target on the cross axis (design QA #5).
+          constraints: BoxConstraints(minHeight: Ds.space.x48 - Ds.space.x4),
+          alignment: Alignment.center,
+          padding: EdgeInsets.symmetric(
+              horizontal: Ds.space.x16, vertical: Ds.space.x8),
+          decoration: BoxDecoration(
+            borderRadius: Ds.r.rChip,
+            border: Border.all(color: active ? Ds.c.brand : Ds.c.divider),
+          ),
+          child: Text(
+            label,
+            style: active
+                ? Ds.t.body.copyWith(color: Ds.c.surface)
+                : Ds.t.body.copyWith(color: Ds.c.text),
+          ),
         ),
       ),
     );
@@ -994,6 +1095,12 @@ class _ProductsSection extends StatelessWidget {
   /// verbatim; never derived from [items].length.
   final String? showingLabel;
   final String? emptyLabel;
+
+  /// CHANGE #174 — the sort chips, straight from the payload. Empty draws no
+  /// control at all: a storefront with no trade pricing looks exactly as it
+  /// did before #174 shipped.
+  final List<Map<String, dynamic>> sortOptions;
+  final ValueChanged<String> onSortSelected;
   final String query;
   final String category;
   final bool loadingFirst;
@@ -1020,6 +1127,8 @@ class _ProductsSection extends StatelessWidget {
     required this.categoryTotal,
     required this.showingLabel,
     required this.emptyLabel,
+    required this.sortOptions,
+    required this.onSortSelected,
     required this.query,
     required this.category,
     required this.loadingFirst,
@@ -1090,6 +1199,10 @@ class _ProductsSection extends StatelessWidget {
             ),
           ),
         _SectionHeader(title: title, subtitle: _buildSubtitle()),
+        if (sortOptions.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x12),
+          _SortChips(options: sortOptions, onSelected: onSortSelected),
+        ],
         const SizedBox(height: 20),
         // Cross-fade the grid on category change OR on each new search query.
         AnimatedSwitcher(

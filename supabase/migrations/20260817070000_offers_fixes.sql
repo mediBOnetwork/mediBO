@@ -1215,7 +1215,10 @@ begin
       coalesce(m.marketer,'')     as company,
       -- supplier identity ONLY for admin
       sol.supplier_id,
-      coalesce(sc.supplier_company, sc.supplier_name, '(no name)') as supplier_name,
+      -- QA finding (#223): the admin panel is the ONLY place identity may show,
+      -- and it read supplier_company only — a supplier with no row there (the
+      -- common case; supplier_profiles is the registry) displayed "(no name)".
+      coalesce(sp.supplier_name, sc.supplier_company, sc.supplier_name, '(no name)') as supplier_name,
       sol.moderation_note,
       case sol.status when 'active' then '#D1FAE5' else '#FEE2E2' end as status_bg,
       case sol.status when 'active' then '#065F46' else '#991B1B' end as status_fg,
@@ -1223,6 +1226,8 @@ begin
     from public.supplier_offer_listings sol
     join "MEDICINE" m on m.id = sol.product_id
     left join supplier_company sc on sc.supplier_id = sol.supplier_id
+    left join supplier_profiles sp on sp.user_id = sol.supplier_id
+                                  and coalesce(sp.is_deleted,false) = false
     where (p_status is null or sol.status = p_status)
     order by sol.created_at desc
     limit p_limit offset p_offset

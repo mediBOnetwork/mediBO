@@ -71,6 +71,8 @@ IconData routeIcon(String route) {
   switch (route) {
     case 'fast':
       return Icons.bolt;
+    case 'haiku':
+      return Icons.eco_outlined;
     case 'sonnet':
       return Icons.auto_awesome;
     case 'opus':

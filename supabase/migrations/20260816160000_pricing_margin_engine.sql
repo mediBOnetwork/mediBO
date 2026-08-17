@@ -184,6 +184,8 @@ declare
   v_ptr_cap text := coalesce((select value from storefront_ui_label where key = 'ptr_caption'), 'PTR');
   v_earn  text := coalesce((select value from storefront_ui_label where key = 'margin_earn_prefix'), 'You earn');
   v_suffix text := coalesce((select value from storefront_ui_label where key = 'margin_chip_suffix'), 'margin');
+  v_loss text := coalesce((select value from storefront_ui_label where key = 'margin_loss_prefix'), 'Above MRP by');
+  v_over text := coalesce((select value from storefront_ui_label where key = 'margin_chip_over_suffix'), 'above MRP');
   v_gst_title text := coalesce((select value from storefront_ui_label where key = 'gst_breakup_title'), 'GST breakup');
   v_tax_label text := coalesce((select value from storefront_ui_label where key = 'gst_taxable_label'), 'Taxable value');
   v_base  jsonb;
@@ -256,7 +258,12 @@ begin
    order by (b->>'min_pct')::numeric desc
    limit 1;
 
-  v_chip := trim(public._num_label(v_pct) || '% ' || v_suffix);
+  -- Never a minus sign in front of the word "margin": a PTR above MRP is a
+  -- different sentence, not a negative version of the same one.
+  v_chip := case when v_pct < 0
+                 then trim(public._num_label(abs(v_pct)) || '% ' || v_over)
+                 else trim(public._num_label(v_pct) || '% ' || v_suffix)
+            end;
 
   -- The tax split as printable rows, so the PDP prints a list instead of
   -- assembling labels out of numbers.
@@ -295,7 +302,10 @@ begin
     'discount_label', v_chip,
     'has_margin',     ((v_calc->>'margin_amount')::numeric is not null),
     'margin_pct',     v_pct,
-    'margin_label',   v_earn || ' ' || public.inr_money((v_calc->>'margin_amount')::numeric),
+    'margin_label',   case when (v_calc->>'margin_amount')::numeric < 0
+                           then v_loss || ' ' || public.inr_money(abs((v_calc->>'margin_amount')::numeric))
+                           else v_earn || ' ' || public.inr_money((v_calc->>'margin_amount')::numeric)
+                      end,
     'margin_chip', jsonb_build_object(
       'label', v_chip,
       'bg',    coalesce(v_band->>'bg', '#EFF6FF'),
@@ -304,8 +314,8 @@ begin
     -- The compact grid card already renders a two-line corner ribbon from
     -- these (empty since #676). Filling them puts the margin on the grid with
     -- NO change to that card's fixed geometry.
-    'ribbon_top',     public._num_label(v_pct) || '%',
-    'ribbon_bottom',  v_suffix,
+    'ribbon_top',     public._num_label(abs(v_pct)) || '%',
+    'ribbon_bottom',  case when v_pct < 0 then v_over else v_suffix end,
     'has_ptr',        true,
     'ptr_display',    public.inr_money((v_calc->>'ptr')::numeric),
     'ptr_caption',    v_ptr_cap,
@@ -617,7 +627,9 @@ begin
       'ready',   v_ready,
       'total',   v_total,
       'pct',     v_pct,
-      'label',   public._num_label(v_pct) || '% priced',
+      'label',   case when v_ready > 0 and v_pct < 0.1
+                     then '<0.1% priced'
+                     else public._num_label(v_pct) || '% priced' end,
       'detail',  to_char(v_ready, 'FM9,99,99,999') || ' of ' ||
                  to_char(v_total, 'FM9,99,99,999') || ' buyable products have PTR + GST'),
     'labels', jsonb_build_object(
@@ -805,3 +817,23 @@ $function$;
 insert into public.ui_copy(key, value)
 values ('admin_nav.overflow_pricing', '"Product pricing"'::jsonb)
 on conflict (key) do update set value = excluded.value;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 13. QA pass on the live engine — two ways a NEGATIVE margin read wrong.
+--     A PTR above MRP printed "You earn -₹34.40" and a chip reading
+--     "-34.4% margin": right number, sentence saying the opposite of what it
+--     means. And coverage printed "0% priced" directly above "2 of 75,814",
+--     which is true rounding but reads as a broken save. Both prefixes are
+--     backend copy, so the wording stays retunable without a deploy.
+-- ─────────────────────────────────────────────────────────────────────────────
+insert into public.storefront_ui_label(key, value, note) values
+  ('margin_loss_prefix',     'Above MRP by', 'CHANGE #174 - margin line when net payable exceeds MRP'),
+  ('margin_chip_over_suffix','above MRP',    'CHANGE #174 - margin chip when net payable exceeds MRP')
+on conflict (key) do nothing;
+
+-- The branches themselves live in the _pricing_block and admin_pricing_list
+-- bodies above (sections 4 and 8), so a replay of this file reproduces them:
+--   margin_label   → 'Above MRP by ₹34.40'  when margin_amount < 0
+--   margin_chip    → '34.4% above MRP'      when margin_pct < 0
+--   ribbon_bottom  → 'above MRP'            when margin_pct < 0
+--   coverage.label → '<0.1% priced'         when ready > 0 but pct rounds to 0

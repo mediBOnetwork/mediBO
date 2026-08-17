@@ -30,6 +30,8 @@ import 'admin/admin_alert_overlay.dart';
 import 'admin/admin_nav_entries.dart';
 import 'admin/admin_shell.dart';
 import 'admin/pricing_backfill_screen.dart';
+import 'admin/admin_offers_screen.dart'; // CHANGE #179
+import 'admin/short_dated_admin_screen.dart'; // CHANGE #177
 import '../features/whatsapp/ui/wa_home_screen.dart';
 import '../features/whatsapp/ui/wa_templates_screen.dart';
 import 'admin/wa_campaigns_screen.dart';
@@ -49,6 +51,7 @@ import 'cart_screen.dart';
 import '../utils/toast.dart';
 import 'orders_screen.dart';
 import 'profile_screen.dart';
+import 'storefront/offers_screen.dart';
 import 'storefront_screen.dart';
 import 'supplier/supplier_shell.dart';
 
@@ -95,7 +98,7 @@ class _HomeShellState extends State<HomeShell> {
   // and all processedCrop values. With a GlobalKey, Flutter reparents the element instead.
   final GlobalKey _bulkUploadKey = GlobalKey();
 
-  int _index = 0; // 0 = storefront, 1 = orders, 2 = bulk upload
+  int _index = 0; // 0 = storefront, 1 = orders, 2 = bulk upload, 3 = offers
   String _viewAsKey = 'none'; // tracks active ViewAs identity; reset _index on change
   String _query = '';
   String _category = 'All';
@@ -387,22 +390,22 @@ class _HomeShellState extends State<HomeShell> {
     }
   }
 
-  // Admin section indices in the pages list: 3=Dashboard, 4=AddMedicine,
-  // 5=Suppliers, 6=Customers
+  // Admin section indices in the pages list: 4=Dashboard, 5=AddMedicine,
+  // 6=Suppliers, 7=Customers (3=OffersScreen for customers)
   void _handleAdminNav(String route) {
     if (!mounted) return;
     switch (route) {
       case 'home': _goHome(); break;
-      case 'dashboard': setState(() { _index = 3; _cartOpen = false; }); break;
-      case 'add_medicine': setState(() { _index = 4; _cartOpen = false; }); break;
+      case 'dashboard': setState(() { _index = 4; _cartOpen = false; }); break;
+      case 'add_medicine': setState(() { _index = 5; _cartOpen = false; }); break;
       case 'suppliers':
       case 'add_supplier':
-        setState(() { _index = 5; _cartOpen = false; });
+        setState(() { _index = 6; _cartOpen = false; });
         WidgetsBinding.instance.addPostFrameCallback((_) => AdminSupplierScreen.triggerFocus());
         break;
       case 'customers':
       case 'add_customer':
-        setState(() { _index = 6; _cartOpen = false; });
+        setState(() { _index = 7; _cartOpen = false; });
         WidgetsBinding.instance.addPostFrameCallback((_) => AdminCustomerScreen.triggerFocus());
         break;
       case 'bags':
@@ -416,11 +419,20 @@ class _HomeShellState extends State<HomeShell> {
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const PricingBackfillScreen()));
         break;
-      case 'mr': setState(() { _index = 7; _cartOpen = false; }); break;
-      case 'companies': setState(() { _index = 8; _cartOpen = false; }); break;
-      case 'delivery_partners': setState(() { _index = 9; _cartOpen = false; }); break;
+      // CHANGE #177 — Short-dated supplier offers
+      case 'short_dated':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const ShortDatedAdminScreen()));
+        break;
+      case 'admin_offers':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const AdminOffersScreen()));
+        break;
+      case 'mr': setState(() { _index = 8; _cartOpen = false; }); break;
+      case 'companies': setState(() { _index = 9; _cartOpen = false; }); break;
+      case 'delivery_partners': setState(() { _index = 10; _cartOpen = false; }); break;
       case 'fulfillment':
-        setState(() { _index = 10; _cartOpen = false; });
+        setState(() { _index = 11; _cartOpen = false; });
         WidgetsBinding.instance.addPostFrameCallback((_) => AdminFulfillmentScreen.triggerFocus());
         break;
       case 'whatsapp':
@@ -783,7 +795,8 @@ class _HomeShellState extends State<HomeShell> {
             refreshSignal: _ordersRefreshSignal,
           ),
           BulkUploadScreen(key: _bulkUploadKey),
-          // Admin-only pages: indices 3–10 (desktop only; built for admin users)
+          const OffersScreen(),
+          // Admin-only pages: indices 4–11 (desktop only; built for admin users)
           // Kept alive in IndexedStack so no state loss on tab switch.
           QuickLinkNavigator(
             navigate: _handleAdminNav,
@@ -856,8 +869,10 @@ class _HomeShellState extends State<HomeShell> {
                       case 1:
                         _setIndex(0);
                       case 2:
-                        _setIndex(1);
+                        _setIndex(3);
                       case 3:
+                        _setIndex(1);
+                      case 4:
                         _setIndex(2);
                     }
                   },
@@ -2869,7 +2884,7 @@ class _MobileBottomBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cart = AppState.of(context);
-    final bottomNavIndex = index == 1 ? 2 : index == 2 ? 3 : 0;
+    final bottomNavIndex = index == 3 ? 2 : index == 1 ? 3 : index == 2 ? 4 : 0;
     return BottomNavigationBar(
       currentIndex: bottomNavIndex,
       type: BottomNavigationBarType.fixed,
@@ -2889,6 +2904,11 @@ class _MobileBottomBar extends StatelessWidget {
           icon: const Icon(Icons.grid_view_outlined),
           activeIcon: const Icon(Icons.grid_view),
           label: c('home_shell.catalogue'),
+        ),
+        BottomNavigationBarItem(
+          icon: const Icon(Icons.local_offer_outlined),
+          activeIcon: const Icon(Icons.local_offer),
+          label: c('offer_nav_label'),
         ),
         BottomNavigationBarItem(
           icon: Badge(

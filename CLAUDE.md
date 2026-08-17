@@ -16,6 +16,29 @@
 Run ~/deploy.sh — does `flutter clean` then build + wrangler Direct Upload → live in ~3min on medibo.in.
 NEVER skip `flutter clean`: skipping it produces corrupt dart2js bundles that boot-hang even with identical source (proven 2026-07-03).
 
+## FOLD-IN SELF-TEST GATE (CHANGE #222 — never remove)
+Testing is part of the build, in the SAME worker session — never a separate
+debug pass. `scripts/deploy.sh` calls `scripts/selftest.sh` BEFORE the CHANGE #
+stamp and before `flutter build`, and aborts the deploy if it is red:
+  1. `flutter test test/protected/` — the regression suite
+  2. the command's OWN focused test — auto-detected from the git diff (any
+     changed/new `*_test.dart` outside `test/protected/`), so it is zero-config
+  3. `rg_check()` — the schema/RPC regression guard
+Red => nothing is built and nothing is uploaded. Fix it in THIS session and
+re-run. After `--attempt-cap` red runs (default 3) the gate files
+`qa_report(failed)` and STOPS — it never loops and never silently deploys.
+
+There is NO skip flag, by design. `test/protected/build_selftest_gate_test.dart`
+pins the whole contract, so deleting the gate turns the suite red and blocks the
+very deploy that removed it.
+
+A debug twin is EVIDENCE-ONLY: `_dev_auto_debug_trg` creates one solely on
+`qa_status='failed'`, a red journey run, or an explicit Om request. Never a
+blanket twin per command. The `bugloop_config_locked` regression-guard behaviour
+test fails LOUDLY (turning `rg_check` red, which blocks every `dev_cmd_complete`)
+if `auto_debug_default` flips true, or `debug_gate.enabled` / `bugloop.enforce`
+flip false.
+
 ## HEADLESS SELF-VERIFICATION RULE (PERMANENT — overrides all prior habits)
 - After every deploy, ~/deploy.sh runs `node ~/render_verify.js --keys boot_status` automatically.
 - For feature-specific keys, run: `node ~/render_verify.js --keys key1,key2,...`

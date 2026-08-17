@@ -245802,6 +245802,7 @@ A.i("view_as_shell_reset",q)}},
 c2P(){var s=this.w
 if(s===1)return"/orders"
 if(s===2)return"/bulk-upload"
+if(s===3)return"/offers"
 s=this.z
 if(s!=="All")return"/c/"+A.b6(s.toLowerCase()," ","-")
 return"/"},
@@ -245816,7 +245817,8 @@ A.i("c109_init_url_diag","path="+p+";hasCode="+r+";hasFragment="+q)
 if(r||q){o.a6r(r?"code":"fragment")
 return}if(B.f.bA(p,"/c/")){s=B.f.bm(p,3)
 o.z=A.b6(s.toUpperCase(),"-"," ")}else if(p==="/orders")o.w=1
-else if(p==="/bulk-upload")o.w=2},
+else if(p==="/bulk-upload")o.w=2
+else if(p==="/offers")o.w=3},
 a6r(a){return this.c_e(a)},
 c_e(a){var s=0,r=A.p(t.H),q,p=this,o,n,m,l
 var $async$a6r=A.l(function(b,c){if(b===1)return A.m(c,r)
@@ -246086,8 +246088,10 @@ s.z=A.b6(q.toUpperCase(),"-"," ")
 s.w=0
 s.as=!1;++s.ay}else if(q==="/orders"){q=r.a
 q.w=1
+q.as=!1}else if(q==="/bulk-upload"){q=r.a
+q.w=2
 q.as=!1}else{s=r.a
-if(q==="/bulk-upload"){s.w=2
+if(q==="/offers"){s.w=3
 s.as=!1}else{s.z="All"
 s.Q=!1
 s.w=0

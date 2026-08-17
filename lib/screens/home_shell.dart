@@ -246,6 +246,7 @@ class _HomeShellState extends State<HomeShell> {
   String _urlForState() {
     if (_index == 1) return '/orders';
     if (_index == 2) return '/bulk-upload';
+    if (_index == 3) return '/offers';   // CHANGE #223
     if (_category != 'All') return '/c/${_catToSlug(_category)}';
     return '/';
   }
@@ -273,6 +274,10 @@ class _HomeShellState extends State<HomeShell> {
       _index = 1;
     } else if (path == '/bulk-upload') {
       _index = 2;
+    } else if (path == '/offers') {
+      // CHANGE #223: the Offers tab is URL-addressable, so a refresh keeps it
+      // and the headless verifier can prove the feed painted.
+      _index = 3;
     }
   }
 
@@ -316,6 +321,9 @@ class _HomeShellState extends State<HomeShell> {
         _cartOpen = false;
       } else if (path == '/bulk-upload') {
         _index = 2;
+        _cartOpen = false;
+      } else if (path == '/offers') {
+        _index = 3;
         _cartOpen = false;
       } else {
         _category = 'All';

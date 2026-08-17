@@ -83,6 +83,12 @@ List<AdminNavEntry> get kAdminOverflowNav => <AdminNavEntry>[
       // than in the top row for the reason stated above: that row is full.
       AdminNavEntry(c('admin_nav.overflow_pricing'), Icons.currency_rupee,
           route: 'pricing_backfill'),
+      // CHANGE #177 — Short-dated supplier offers (near-expiry deals).
+      AdminNavEntry('Short-dated offers', Icons.warning_amber_outlined,
+          route: 'short_dated'),
+      // CHANGE #179 — Offers marketplace admin panel.
+      AdminNavEntry('Offer listings', Icons.local_offer_outlined,
+          route: 'admin_offers'),
     ];
 
 /// The wide shell's "More" popup, sitting after Fulfillment in the top row.

@@ -13,7 +13,7 @@ import 'product.dart';
 /// renderer cannot accidentally half-render it. Same for a section that
 /// arrives with no items. Both are silent — a future backend can ship a new
 /// layout to old clients safely.
-enum HomeSectionLayout { rail, grid, iconGrid, brandGrid, unknown }
+enum HomeSectionLayout { rail, grid, iconGrid, brandGrid, shortDated, unknown }
 
 HomeSectionLayout _layoutOf(String raw) {
   switch (raw) {
@@ -28,6 +28,9 @@ HomeSectionLayout _layoutOf(String raw) {
       return HomeSectionLayout.iconGrid;
     case 'brand_grid':
       return HomeSectionLayout.brandGrid;
+    // CHANGE #177 — short-dated supplier offers rail
+    case 'short_dated':
+      return HomeSectionLayout.shortDated;
     default:
       return HomeSectionLayout.unknown;
   }
@@ -36,6 +39,64 @@ HomeSectionLayout _layoutOf(String raw) {
 /// True for the layouts whose items are products rather than tiles.
 bool _isProductLayout(HomeSectionLayout l) =>
     l == HomeSectionLayout.rail || l == HomeSectionLayout.grid;
+
+// CHANGE #177 — one short-dated offer row from short_dated_feed()
+class ShortDatedOffer {
+  final String offerId;
+  final int productId;
+  final String productName;
+  final String batchNo;
+  final String batchExpiry;
+  final double monthsToExpiry;
+  final String monthsLabel;
+  final double remainingQty;
+  final double discountPct;
+  final String discountLabel;
+  final bool hasBulkClear;
+  final double bulkClearExtraPct;
+  final String disclosureTitle;
+  final String disclosureBody;
+  final Map<String, dynamic> expiryWarning;
+
+  const ShortDatedOffer({
+    required this.offerId,
+    required this.productId,
+    required this.productName,
+    required this.batchNo,
+    required this.batchExpiry,
+    required this.monthsToExpiry,
+    required this.monthsLabel,
+    required this.remainingQty,
+    required this.discountPct,
+    required this.discountLabel,
+    required this.hasBulkClear,
+    required this.bulkClearExtraPct,
+    required this.disclosureTitle,
+    required this.disclosureBody,
+    required this.expiryWarning,
+  });
+
+  static ShortDatedOffer fromMap(Map<String, dynamic> m) => ShortDatedOffer(
+        offerId: m['offer_id']?.toString() ?? '',
+        productId: _asInt(m['product_id']),
+        productName: m['product_name']?.toString() ?? '',
+        batchNo: m['batch_no']?.toString() ?? '',
+        batchExpiry: m['batch_expiry']?.toString() ?? '',
+        monthsToExpiry: (m['months_to_expiry'] as num?)?.toDouble() ?? 0,
+        monthsLabel: m['months_label']?.toString() ?? '',
+        remainingQty: (m['remaining_qty'] as num?)?.toDouble() ?? 0,
+        discountPct: (m['discount_pct'] as num?)?.toDouble() ?? 0,
+        discountLabel: m['discount_label']?.toString() ?? '',
+        hasBulkClear: m['has_bulk_clear'] == true,
+        bulkClearExtraPct:
+            (m['bulk_clear_extra_pct'] as num?)?.toDouble() ?? 0,
+        disclosureTitle: m['disclosure_title']?.toString() ?? 'Short-dated stock',
+        disclosureBody: m['disclosure_body']?.toString() ?? '',
+        expiryWarning: m['expiry_warning'] is Map
+            ? Map<String, dynamic>.from(m['expiry_warning'] as Map)
+            : const {},
+      );
+}
 
 /// PostgREST sends jsonb numbers as int or double depending on the value, and
 /// a `total` that arrives as "3068" must not become 0.
@@ -213,6 +274,10 @@ class HomeSection {
   /// Populated for the tile layouts (icon_grid, brand_grid); empty otherwise.
   final List<HomeTile> tiles;
 
+  // CHANGE #177 — populated for short_dated layout; empty otherwise.
+  final List<ShortDatedOffer> shortDatedOffers;
+  final String disclosureNote;
+
   /// CHANGE #677 — the backend's paging plan for this section.
   ///
   /// [infinite] is the backend saying "keep going" — the app must never decide
@@ -234,6 +299,8 @@ class HomeSection {
     required this.seeAll,
     required this.cards,
     required this.tiles,
+    this.shortDatedOffers = const [],
+    this.disclosureNote = '',
     this.band = '',
     this.accent = '',
     this.seeAllLabel = '',
@@ -272,7 +339,8 @@ class HomeSection {
         total: total,
       );
 
-  bool get isEmpty => cards.isEmpty && tiles.isEmpty;
+  bool get isEmpty =>
+      cards.isEmpty && tiles.isEmpty && shortDatedOffers.isEmpty;
 
   /// Splits [title] around [accentWord] into (before, accent, after).
   ///
@@ -305,12 +373,17 @@ class HomeSection {
     if (maps.isEmpty) return null;
 
     final isProduct = _isProductLayout(layout);
+    final isShortDated = layout == HomeSectionLayout.shortDated;
+
     final cards = isProduct
         ? maps.map(Product.fromHomeCard).toList(growable: false)
         : const <Product>[];
-    final tiles = isProduct
+    final tiles = (isProduct || isShortDated)
         ? const <HomeTile>[]
         : maps.map(HomeTile.fromMap).toList(growable: false);
+    final shortDatedOffers = isShortDated
+        ? maps.map(ShortDatedOffer.fromMap).toList(growable: false)
+        : const <ShortDatedOffer>[];
 
     final section = HomeSection(
       id: m['id']?.toString() ?? '',
@@ -321,6 +394,8 @@ class HomeSection {
       seeAll: SeeAll.fromMap(m['see_all']),
       cards: cards,
       tiles: tiles,
+      shortDatedOffers: shortDatedOffers,
+      disclosureNote: m['disclosure_note']?.toString() ?? '',
       band: m['band']?.toString() ?? '',
       accent: m['accent']?.toString() ?? '',
       seeAllLabel: m['see_all_label']?.toString() ?? '',

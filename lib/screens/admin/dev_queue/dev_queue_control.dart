@@ -6,6 +6,7 @@ import '../../../utils/toast.dart';
 import 'dev_queue_common.dart';
 import 'dev_queue_service.dart';
 import 'dev_queue_workers.dart';
+import 'vm_toggle_policy.dart';
 
 /// The runner control strip at the top of the Dev Queue tab: three toggles
 /// (VM / Claude / Workflow) with live status chips. Renders `dev_ctl_get`
@@ -132,19 +133,33 @@ class _DevQueueControlState extends State<DevQueueControl> {
     setState(() => _busy.add(key));
     try {
       final res = await widget.service.ctlSet(key, val);
-      if (res['call_edge'] == true) {
-        final cur = (_vm['status'] ?? 'unknown').toString();
-        if ((on && cur == 'running') || (!on && cur == 'stopped')) {
-          if (mounted) {
-            showToast(context,
-                c(on ? 'dev_queue.ctl_vm_on_toast' : 'dev_queue.ctl_vm_off_toast'));
+      // Whether the cloud is touched at all, and with which action, is the
+      // backend's verdict — see VmTogglePolicy.
+      final plan = VmTogglePolicy.plan(
+        verdict: res,
+        on: on,
+        currentStatus: (_vm['status'] ?? 'unknown').toString(),
+      );
+      if (plan.toastCopyKey != null && mounted) {
+        showToast(context, c(plan.toastCopyKey!));
+      }
+      if (plan.invoke) {
+        // The edge function words its own outcome (start sent / stopping / "no
+        // AWS access key saved yet") — print it verbatim. Only a failure with no
+        // wording at all falls back to backend copy.
+        try {
+          final out = VmTogglePolicy.outcome(
+              await widget.service.vmControl(plan.action));
+          if (mounted && !out.isSilent) {
+            showToast(
+                context,
+                out.needsFallbackCopy
+                    ? c('dev_queue.ctl_edge_failed')
+                    : out.message,
+                isError: out.isError);
           }
-        } else {
-          try {
-            await widget.service.vmControl(res['action']?.toString() ?? 'status');
-          } catch (_) {
-            if (mounted) showToast(context, c('dev_queue.ctl_edge_failed'), isError: true);
-          }
+        } catch (_) {
+          if (mounted) showToast(context, c('dev_queue.ctl_edge_failed'), isError: true);
         }
       }
       await _load();

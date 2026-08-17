@@ -149,6 +149,10 @@ class _PricingBackfillScreenState extends State<PricingBackfillScreen> {
   }
 
   Widget _body() {
+    final schemePct =
+        ((_coverage['scheme_pct'] as num?)?.toDouble() ?? 0) / 100.0;
+    final schemeReady = (_coverage['scheme_ready'] as num?)?.toInt() ?? 0;
+    final total = (_coverage['total'] as num?)?.toInt() ?? 0;
     return ListView(
       padding: EdgeInsets.fromLTRB(
           Ds.space.x16, Ds.space.x16, Ds.space.x16, Ds.space.x32),
@@ -157,7 +161,14 @@ class _PricingBackfillScreenState extends State<PricingBackfillScreen> {
           subtitle: (_payload['subtitle'] ?? '').toString(),
           label: (_coverage['label'] ?? '').toString(),
           detail: (_coverage['detail'] ?? '').toString(),
-          pct: ((_coverage['pct'] as num?)?.toDouble() ?? 0) / 100.0,
+          pct: ((_coverage['pricing_pct'] as num?)?.toDouble() ?? 0) / 100.0,
+        ),
+        SizedBox(height: Ds.space.x8),
+        _CoverageCard(
+          subtitle: '',
+          label: 'Scheme Coverage',
+          detail: '$schemeReady of $total products have active schemes',
+          pct: schemePct,
         ),
         SizedBox(height: Ds.space.x16),
         TextField(
@@ -269,6 +280,7 @@ class _PricingRowCardState extends State<_PricingRowCard> {
   late final TextEditingController _gst;
   late final TextEditingController _disc;
   late final TextEditingController _scheme;
+  late final TextEditingController _schemeEnds;
   bool _open = false;
   bool _saving = false;
 
@@ -280,6 +292,10 @@ class _PricingRowCardState extends State<_PricingRowCard> {
     _gst = TextEditingController(text: s(widget.row['gst_pct']));
     _disc = TextEditingController(text: s(widget.row['discount_pct']));
     _scheme = TextEditingController(text: s(widget.row['scheme_text']));
+    // scheme_ends_at arrives as ISO; show as YYYY-MM-DD for easy editing.
+    final endsRaw = widget.row['scheme_ends_at']?.toString() ?? '';
+    _schemeEnds = TextEditingController(
+        text: endsRaw.length >= 10 ? endsRaw.substring(0, 10) : endsRaw);
   }
 
   @override
@@ -288,6 +304,7 @@ class _PricingRowCardState extends State<_PricingRowCard> {
     _gst.dispose();
     _disc.dispose();
     _scheme.dispose();
+    _schemeEnds.dispose();
     super.dispose();
   }
 
@@ -302,6 +319,7 @@ class _PricingRowCardState extends State<_PricingRowCard> {
   Future<void> _save() async {
     setState(() => _saving = true);
     final (buy, free) = _scheme2();
+    final ends = _schemeEnds.text.trim();
     await widget.onSave({
       'ptr': _ptr.text.trim(),
       'gst_pct': _gst.text.trim(),
@@ -309,6 +327,7 @@ class _PricingRowCardState extends State<_PricingRowCard> {
       'scheme_text': _scheme.text.trim(),
       'scheme_buy_qty': buy,
       'scheme_free_qty': free,
+      if (ends.isNotEmpty) 'scheme_ends_at': ends,
     });
     if (mounted) setState(() => _saving = false);
   }
@@ -407,6 +426,13 @@ class _PricingRowCardState extends State<_PricingRowCard> {
                   ),
                 ),
               ],
+            ),
+            SizedBox(height: Ds.space.x12),
+            TextField(
+              controller: _schemeEnds,
+              decoration: const InputDecoration(
+                  labelText: 'Scheme ends (YYYY-MM-DD)',
+                  hintText: 'e.g. 2026-09-30'),
             ),
             SizedBox(height: Ds.space.x16),
             SizedBox(

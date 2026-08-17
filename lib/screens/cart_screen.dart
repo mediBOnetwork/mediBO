@@ -49,6 +49,11 @@ class _CartScreenState extends State<CartScreen> {
   String? _unresolvedNote;
   bool _stripping = false;
 
+  // CHANGE #175 — scheme data: free lines + savings + nudges
+  List<Map<String, dynamic>> _freeLines = [];
+  String _totalSavingsDisplay = '';
+  List<Map<String, dynamic>> _schemeNudges = [];
+
   /// Product-id signature of the cart the last availability fetch covered —
   /// a change means the cart moved and the verdicts need re-reading.
   String? _availSignature;
@@ -99,6 +104,28 @@ class _CartScreenState extends State<CartScreen> {
         _blockingLabel = null;
         _unresolvedNote = null;
       });
+    }
+    _refreshSchemes();
+  }
+
+  Future<void> _refreshSchemes() async {
+    try {
+      final res = await Supabase.instance.client.rpc('cart_apply_schemes');
+      final nudgeRes = await Supabase.instance.client.rpc('cart_scheme_nudge');
+      if (!mounted) return;
+      final m = Map<String, dynamic>.from(res as Map);
+      final nm = Map<String, dynamic>.from(nudgeRes as Map);
+      setState(() {
+        _freeLines = ((m['free_lines'] as List?) ?? [])
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+        _totalSavingsDisplay = (m['total_savings_display'] ?? '').toString();
+        _schemeNudges = ((nm['nudges'] as List?) ?? [])
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+      });
+    } catch (_) {
+      // Scheme display is advisory — never block on failure.
     }
   }
 
@@ -683,6 +710,14 @@ class _CartScreenState extends State<CartScreen> {
           );
         }
 
+        final schemeSection = (_freeLines.isNotEmpty || _schemeNudges.isNotEmpty)
+            ? _SchemeSection(
+                freeLines: _freeLines,
+                totalSavingsDisplay: _totalSavingsDisplay,
+                nudges: _schemeNudges,
+              )
+            : null;
+
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -700,6 +735,7 @@ class _CartScreenState extends State<CartScreen> {
                 lineAvailability: _lineAvailability,
               ),
             ),
+            if (schemeSection != null) schemeSection,
             _CheckoutBar(
               cart: cart,
               onPlaceOrder: _placeOrder,
@@ -837,6 +873,72 @@ class _UnavailableChip extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+// CHANGE #175 — scheme section: free lines + savings banner + nudge cards
+class _SchemeSection extends StatelessWidget {
+  final List<Map<String, dynamic>> freeLines;
+  final String totalSavingsDisplay;
+  final List<Map<String, dynamic>> nudges;
+  const _SchemeSection({
+    required this.freeLines,
+    required this.totalSavingsDisplay,
+    required this.nudges,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final successBg = Ds.c.successSoft;
+    final successFg = Ds.c.success;
+    return Container(
+      color: successBg,
+      padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x16, vertical: Ds.space.x8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (freeLines.isNotEmpty) ...[
+            for (final line in freeLines)
+              Padding(
+                padding: EdgeInsets.only(bottom: Ds.space.x4),
+                child: Row(
+                  children: [
+                    Icon(Icons.card_giftcard_outlined,
+                        size: 16, color: successFg),
+                    SizedBox(width: Ds.space.x8),
+                    Expanded(
+                      child: Text(
+                        (line['label'] ?? '').toString(),
+                        style: Ds.t.caption.copyWith(
+                            color: successFg,
+                            fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            if (totalSavingsDisplay.isNotEmpty)
+              Text(
+                totalSavingsDisplay,
+                style: Ds.t.caption.copyWith(
+                    color: successFg, fontWeight: FontWeight.w700),
+              ),
+          ],
+          if (nudges.isNotEmpty) ...[
+            if (freeLines.isNotEmpty) SizedBox(height: Ds.space.x8),
+            for (final nudge in nudges)
+              Padding(
+                padding: EdgeInsets.only(bottom: Ds.space.x4),
+                child: Text(
+                  (nudge['label'] ?? '').toString(),
+                  style: Ds.t.caption.copyWith(color: successFg),
+                ),
+              ),
+          ],
+        ],
       ),
     );
   }

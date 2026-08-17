@@ -308,13 +308,26 @@ class DevQueueService {
   Future<Map<String, dynamic>> ctlSet(String key, String value) async =>
       _asMap(await _c.rpc('dev_ctl_set', params: {'p_key': key, 'p_value': value}));
 
-  /// Start/stop/status the GCP VM via the vm-control edge function (carries the
-  /// user's JWT; the function re-checks super_admin and uses GCP_SA_KEY).
+  /// Start/stop/status the builder VM via the vm-control edge function (carries
+  /// the user's JWT; the function re-checks super_admin). Which cloud it drives
+  /// is the backend's business — since CHANGE #224 that is AWS EC2, selected by
+  /// `vm_identity.cloud`, and the caller never knows or cares.
+  ///
+  /// A refusal is DATA, not an exception: the function words its own outcome in
+  /// `message` (e.g. "AWS access key not saved yet…") and returns a non-2xx for
+  /// it, which the SDK throws. Unwrapping that body here is what lets the UI
+  /// print the backend's guidance verbatim instead of a generic Dart fallback.
   Future<Map<String, dynamic>> vmControl(String action) async {
-    final res = await _c.functions
-        .invoke('vm-control', body: {'action': action});
-    final d = res.data;
-    return d is Map ? Map<String, dynamic>.from(d) : <String, dynamic>{};
+    try {
+      final res = await _c.functions.invoke('vm-control', body: {'action': action});
+      final d = res.data;
+      final m = d is Map ? Map<String, dynamic>.from(d) : <String, dynamic>{};
+      return {...m, 'ok': true};
+    } on FunctionException catch (e) {
+      final d = e.details;
+      final m = d is Map ? Map<String, dynamic>.from(d) : <String, dynamic>{};
+      return {...m, 'ok': false};
+    }
   }
 
   /// Official per-model API list rates (USD/Mtok in+out, fast variants where

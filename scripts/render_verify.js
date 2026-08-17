@@ -218,13 +218,35 @@ async function phaseStorefront(browser, session, expectedHash) {
       await page.goto(`${TARGET}${STOREFRONT_PATH}`,
         { waitUntil: 'domcontentloaded', timeout: 30000 });
       await waitForFlutter(page, 10, 'boot_status=painted');
-      const logText = await readRenderLog(page);
-      const log = parseLog(logText);
+
+      // c195_grid_manual_mode is written on the FIRST build of the section —
+      // while it is still loading. Reading the log there caught a grid with no
+      // items and no chips and reported "no sort_options", which looked like a
+      // backend regression and was not (#751). c553_showing_label is the
+      // backend's own counter, so it only exists once the page RPC landed:
+      // poll for THAT before judging anything.
+      let logText = '', log = {};
+      for (let waited = 0; waited <= 40; waited += 2) {
+        logText = await readRenderLog(page);
+        log = parseLog(logText);
+        // A PRESENT-but-EMPTY label is the home fetch that ran before the
+        // category landed — waiting for a non-empty one is what makes this
+        // poll actually mean "the category page finished".
+        if ((log['c553_showing_label'] || '').length > 0) break;
+        await page.waitForTimeout(2000);
+      }
+
+      if (argv.includes('--dump')) {
+        console.log('\n  ── Storefront render log ────────────────────────────');
+        console.log(logText || '  (empty)');
+        console.log('  ──────────────────────────────────────────────────────\n');
+      }
 
       const gotHash = log['build'];
       const hashOk = gotHash === expectedHash;
-      // The grid itself must have rendered, or nothing below means anything.
-      const gridOk = 'c195_grid_manual_mode' in log;
+      // A grid that never finished loading proves nothing about what it shows.
+      const gridOk = 'c195_grid_manual_mode' in log
+        && (log['c553_showing_label'] || '').length > 0;
       // The chips are OPTIONAL by design: the backend returns no sort_options
       // until a buyable product has trade pricing, and this phase must not
       // fail on a correct empty state. What it does report is exactly what
@@ -232,7 +254,7 @@ async function phaseStorefront(browser, session, expectedHash) {
       const chips = log['c174_sort_chips'];
 
       console.log(`  Build hash : got=${gotHash} want=${expectedHash} → ${hashOk ? '✓ MATCH' : '✗ MISMATCH'}`);
-      console.log(`  Grid       : ${gridOk ? `✓ rendered (${log['c195_grid_manual_mode']})` : '✗ product grid never rendered'}`);
+      console.log(`  Grid       : ${gridOk ? `✓ rendered (${log['c195_grid_manual_mode']})` : '✗ product grid never finished loading'}`);
       console.log(`  Sort chips : ${chips === undefined ? '(none — backend sent no sort_options)' : chips}`);
       if (log['c553_showing_label'] !== undefined) {
         console.log(`  Showing    : ${log['c553_showing_label']}`);

@@ -558,7 +558,7 @@ begin
     from medicine_pricing mp
     join "MEDICINE" m on m.id = mp.product_id
     where mp.scheme_ready = true
-      and m.deleted_at is null
+      and lower(coalesce(m.buyable::text, '')) in ('true', 't')
       and (mp.scheme_ends_at is null or mp.scheme_ends_at > now())
     order by
       -- ending soon first, then by free_qty ratio desc (best schemes first)
@@ -602,7 +602,7 @@ begin
 
   select count(*) into v_total
   from "MEDICINE" m
-  where m.deleted_at is null and (m.mrp is not null and m.mrp != '');
+  where (m.mrp is not null and m.mrp != '');
 
   select count(*) into v_ready
   from medicine_pricing where pricing_ready = true;
@@ -633,7 +633,7 @@ begin
       mp.pricing_updated_at
     from "MEDICINE" m
     left join medicine_pricing mp on mp.product_id = m.id
-    where m.deleted_at is null
+    where m.mrp is not null and m.mrp != ''
       and (m.mrp is not null and m.mrp != '')
       and (p_search is null or lower(m."NAME") like '%' || lower(p_search) || '%'
            or lower(m."COMPANY") like '%' || lower(p_search) || '%')

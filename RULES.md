@@ -9,7 +9,7 @@
      Dev Queue → Memory screen, or via the MCP memory server. Do NOT hand-edit
      this block; it is rewritten on every session start. Target: generic -->
 
-# Agent memory (generic) — 38 rules
+# Agent memory (generic) — 39 rules
 # Canonical fallback: see RULES.md in the repo root (git-committed).
 
 ## GLOBAL · style  (priority 10, v2)
@@ -100,6 +100,21 @@ You NEVER stop, NEVER wait for a human, NEVER leave a row half-updated.
   payment config changes. For these: call dev_cmd_ask(id, question),
   then IMMEDIATELY claim the next command. Never idle.
 
+
+
+## PROJECT · token_efficiency  (priority 59, v1)
+
+Token discipline (CHANGE #198). Five levers, all config-driven from dev_runner_config.worker_pool — change a knob with pool_set(), no deploy.
+
+1. **Read REPO_MAP.md first, never scan the repo.** `~/mediBO/REPO_MAP.md` is a one-line-per-file index (path → purpose → exports → RPCs it calls) of every screen, service, migration, edge function, script and protected test. deploy.sh regenerates it every deploy via `scripts/gen_repo_map.sh`, so it is never stale. Find the ≤5 files your command touches and open ONLY those. A `grep -r`/`rg` across all of `lib/` was costing 200-400k input tokens on jobs that changed one widget — it is allowed ONLY when a map lookup genuinely fails, and you must say so in the build log.
+
+2. **A debug pass is EVIDENCE, not habit.** `_dev_auto_debug_trg` creates a "Debug pass — verify & fix #N" twin only when qa_status='failed', a linked dev_journey_runs row came back red, or Om explicitly asked (dev_cmd_request_debug). QA passed = done, debug_status='not_needed', no twin. Never re-enable blanket twinning: measured at the time, 17 of 92 rows were twins burning 25% of ALL tokens spent.
+
+3. **Routing is three lanes, not one.** `_route_detect` returns (route, area, size_class, reason): haiku for <400-char single-file jobs, sonnet under 2000 chars with no schema/migration/payment/auth marker, opus only for genuinely multi-system work. Keep `opus_markers` narrow — it once contained 'rpc'/'engine'/'pipeline'/'end-to-end'/'realtime', which matched 91 of 92 specs and forced everything to Opus. Every row stores `route_reason`, rendered verbatim on the command detail screen so a misroute is visible.
+
+4. **Standard effort is the default.** `_dev_effort_for()` returns 'standard'; the backend escalates to 'high' by itself only on a retry, on size_class='xlarge', or when the spec literally says "effort: high". Do not silently work harder than the row asked for.
+
+5. **Batch the small stuff.** `devcmd.sh claim_batch <agent> [routes] [area] [max]` → `dev_cmd_claim_batch` claims up to worker_pool.batch_max SMALL commands from the SAME area: one worker boot, one repo read, one deploy-lane pass. Finish every row with its own complete/fail — a failing sub-item is failed alone and never sinks its siblings.
 
 
 ## PROJECT · workflow  (priority 60, v2)

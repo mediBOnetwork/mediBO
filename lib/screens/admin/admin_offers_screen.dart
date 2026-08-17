@@ -17,6 +17,8 @@ class _AdminOffersScreenState extends State<AdminOffersScreen> {
   String? _error;
   final _marginCtrl = TextEditingController();
   bool _savingMargin = false;
+  // CHANGE #223: label + result copy come from admin_offers_list / the push RPC
+  String _pushLabel = '';
 
   @override
   void initState() {
@@ -42,9 +44,33 @@ class _AdminOffersScreenState extends State<AdminOffersScreen> {
       }
       final rows = List<Map<String, dynamic>>.from(
         (data['rows'] as List? ?? []).map((e) => Map<String, dynamic>.from(e as Map)));
-      if (mounted) setState(() { _rows = rows; _loading = false; });
+      if (mounted) setState(() {
+        _rows = rows;
+        _pushLabel = data['push_label'] as String? ?? '';
+        _loading = false;
+      });
     } catch (e) {
       if (mounted) setState(() { _error = e.toString(); _loading = false; });
+    }
+  }
+
+  /// CHANGE #223 (#178 §3): WhatsApp this listing to the pharmacies that
+  /// already buy the product. The match set and the result sentence are both
+  /// computed server-side; this only shows what came back.
+  Future<void> _pushMatched(int listingId) async {
+    try {
+      final raw = await Supabase.instance.client.rpc('offer_push_matched',
+        params: {'p_listing_id': listingId});
+      final data = Map<String, dynamic>.from((raw is List ? raw.first : raw) as Map);
+      if (!mounted) return;
+      final ok = data['ok'] == true;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text((data['message'] ?? data['error'] ?? '').toString()),
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: ok ? Ds.c.brand : Ds.c.danger));
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString())));
     }
   }
 
@@ -101,6 +127,8 @@ class _AdminOffersScreenState extends State<AdminOffersScreen> {
                       separatorBuilder: (_, __) => SizedBox(height: Ds.space.x12),
                       itemBuilder: (ctx, i) => _AdminOfferCard(
                         row: _rows[i],
+                        pushLabel: _pushLabel,
+                        onPush: () => _pushMatched(_rows[i]['id'] as int),
                         onModerate: (action, note) => _moderate(_rows[i]['id'] as int, action, note: note),
                       ),
                     ),
@@ -154,8 +182,15 @@ class _MarginBar extends StatelessWidget {
 
 class _AdminOfferCard extends StatelessWidget {
   final Map<String, dynamic> row;
+  final String pushLabel;
+  final VoidCallback onPush;
   final Function(String action, String? note) onModerate;
-  const _AdminOfferCard({required this.row, required this.onModerate});
+  const _AdminOfferCard({
+    required this.row,
+    required this.pushLabel,
+    required this.onPush,
+    required this.onModerate,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -203,8 +238,23 @@ class _AdminOfferCard extends StatelessWidget {
             child: Text('Note: ${row['moderation_note']}',
               style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
           ),
+        if ((row['waitlist_count'] as num? ?? 0) > 0)
+          Padding(
+            padding: EdgeInsets.only(top: Ds.space.x4),
+            child: Text('Waitlist: ${row['waitlist_count']}',
+              style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+          ),
         SizedBox(height: Ds.space.x12),
         Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+          if (status == 'active' && pushLabel.isNotEmpty) ...[
+            OutlinedButton(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Ds.c.brand, side: BorderSide(color: Ds.c.brand)),
+              onPressed: onPush,
+              child: Text(pushLabel),
+            ),
+            SizedBox(width: Ds.space.x8),
+          ],
           if (status == 'active')
             OutlinedButton(
               style: OutlinedButton.styleFrom(

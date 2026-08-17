@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../design_tokens.dart';
 import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
+import '../../widgets/offer_card.dart';
 
 class OffersScreen extends StatefulWidget {
   const OffersScreen({super.key});
@@ -17,6 +18,11 @@ class _OffersScreenState extends State<OffersScreen> {
   String? _error;
   bool _hasMore = false;
   int _offset = 0;
+  int? _busyListingId;
+  // Chrome served by offers_feed — never a Dart literal.
+  String _loadMoreLabel = '';
+  String _retryLabel = '';
+  String _emptyLabel = '';
   static const _limit = 20;
 
   @override
@@ -35,7 +41,10 @@ class _OffersScreenState extends State<OffersScreen> {
       });
       final data = Map<String, dynamic>.from((raw is List ? raw.first : raw) as Map);
       if (!(data['ok'] as bool? ?? false)) {
-        if (mounted) setState(() { _error = data['error']?.toString(); _loading = false; });
+        if (mounted) setState(() {
+          _error = (data['message'] ?? data['error'])?.toString();
+          _loading = false;
+        });
         return;
       }
       final rows = List<Map<String, dynamic>>.from(
@@ -44,11 +53,97 @@ class _OffersScreenState extends State<OffersScreen> {
         _rows = append ? [..._rows, ...rows] : rows;
         _hasMore = data['has_more'] == true;
         _offset = (append ? _offset : 0) + rows.length;
+        _loadMoreLabel = data['load_more_label'] as String? ?? '';
+        _retryLabel = data['retry_label'] as String? ?? '';
+        _emptyLabel = data['empty'] as String? ?? _emptyLabel;
         _loading = false;
       });
       RenderLog.write('offers_rows', _rows.length);
     } catch (e) {
       if (mounted) setState(() { _error = e.toString(); _loading = false; });
+    }
+  }
+
+  void _toast(String message, {bool ok = true}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(message),
+      behavior: SnackBarBehavior.floating,
+      backgroundColor: ok ? Ds.c.brand : Ds.c.danger));
+  }
+
+  /// The short-dated opt-in. The sheet's words and the accept label come from
+  /// the backend; the answer is sent back as p_disclosure_seen so the SERVER
+  /// records the acceptance — the tick alone proves nothing.
+  Future<bool> _confirmDisclosure() async {
+    return await showModalBottomSheet<bool>(
+      context: context,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(Ds.r.sheet))),
+      builder: (_) => Padding(
+        padding: EdgeInsets.all(Ds.space.x24),
+        child: Column(mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(c('offer_near_expiry_title'), style: Ds.t.subtitle),
+          SizedBox(height: Ds.space.x12),
+          Text(c('offer_near_expiry_disclosure'),
+            style: Ds.t.body.copyWith(color: Ds.c.textSecondary)),
+          SizedBox(height: Ds.space.x24),
+          SizedBox(
+            width: double.infinity, height: 48,
+            child: ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Ds.c.brand, foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton)),
+              onPressed: () => Navigator.pop(context, true),
+              child: Text(c('offer_near_expiry_accept')),
+            ),
+          ),
+          SizedBox(height: Ds.space.x8),
+          SizedBox(width: double.infinity,
+            child: TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(c('offer_cancel_btn')))),
+        ]),
+      ),
+    ) ?? false;
+  }
+
+  Future<void> _add(Map<String, dynamic> row) async {
+    var accepted = true;
+    if (row['requires_disclosure'] == true) accepted = await _confirmDisclosure();
+    if (!accepted) return;
+    setState(() => _busyListingId = row['id'] as int?);
+    try {
+      final raw = await Supabase.instance.client.rpc('offer_add_to_cart', params: {
+        'p_listing_id': row['id'],
+        'p_qty': row['min_order_qty'] ?? 1,
+        'p_disclosure_seen': accepted,
+      });
+      final data = Map<String, dynamic>.from((raw is List ? raw.first : raw) as Map);
+      final ok = data['ok'] == true;
+      _toast((data['message'] ?? data['error'] ?? '').toString(), ok: ok);
+      if (ok) await _load();
+    } catch (e) {
+      _toast(e.toString(), ok: false);
+    } finally {
+      if (mounted) setState(() => _busyListingId = null);
+    }
+  }
+
+  Future<void> _waitlist(Map<String, dynamic> row) async {
+    setState(() => _busyListingId = row['id'] as int?);
+    try {
+      final raw = await Supabase.instance.client.rpc('offer_waitlist_join',
+        params: {'p_listing_id': row['id']});
+      final data = Map<String, dynamic>.from((raw is List ? raw.first : raw) as Map);
+      final ok = data['ok'] == true;
+      _toast((data['message'] ?? data['error'] ?? '').toString(), ok: ok);
+      if (ok) await _load();
+    } catch (e) {
+      _toast(e.toString(), ok: false);
+    } finally {
+      if (mounted) setState(() => _busyListingId = null);
     }
   }
 
@@ -77,9 +172,11 @@ class _OffersScreenState extends State<OffersScreen> {
         Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
           Icon(Icons.error_outline, color: Ds.c.danger, size: 40),
           SizedBox(height: Ds.space.x12),
-          Text(_error!, style: Ds.t.caption.copyWith(color: Ds.c.danger), textAlign: TextAlign.center),
+          Text(_error!, style: Ds.t.caption.copyWith(color: Ds.c.danger),
+            textAlign: TextAlign.center),
           SizedBox(height: Ds.space.x16),
-          TextButton(onPressed: () => _load(), child: const Text('Retry')),
+          TextButton(onPressed: () => _load(),
+            child: Text(_retryLabel.isEmpty ? c('offer_retry') : _retryLabel)),
         ])),
       ]);
     }
@@ -89,7 +186,8 @@ class _OffersScreenState extends State<OffersScreen> {
         Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
           Icon(Icons.local_offer_outlined, color: Ds.c.textSecondary, size: 48),
           SizedBox(height: Ds.space.x12),
-          Text(c('offers_feed_empty'), style: Ds.t.body.copyWith(color: Ds.c.textSecondary)),
+          Text(_emptyLabel.isEmpty ? c('offers_feed_empty') : _emptyLabel,
+            style: Ds.t.body.copyWith(color: Ds.c.textSecondary)),
         ])),
       ]);
     }
@@ -104,176 +202,19 @@ class _OffersScreenState extends State<OffersScreen> {
             child: Center(
               child: TextButton(
                 onPressed: () => _load(append: true),
-                child: Text('Load more', style: TextStyle(color: Ds.c.brand)),
+                child: Text(_loadMoreLabel, style: TextStyle(color: Ds.c.brand)),
               ),
             ),
           );
         }
-        return _OfferCard(row: _rows[i], onAdded: () => _load());
+        final row = _rows[i];
+        return OfferCard(
+          row: row,
+          busy: _busyListingId == row['id'],
+          onAdd: () => _add(row),
+          onWaitlist: () => _waitlist(row),
+        );
       },
-    );
-  }
-}
-
-class _OfferCard extends StatefulWidget {
-  final Map<String, dynamic> row;
-  final VoidCallback onAdded;
-  const _OfferCard({required this.row, required this.onAdded});
-
-  @override
-  State<_OfferCard> createState() => _OfferCardState();
-}
-
-class _OfferCardState extends State<_OfferCard> {
-  bool _adding = false;
-
-  Future<void> _addToCart() async {
-    final row = widget.row;
-    if (row['sold_out'] == true) return;
-    if (row['requires_disclosure'] == true) {
-      final accepted = await _showDisclosureModal();
-      if (!accepted) return;
-    }
-    setState(() => _adding = true);
-    try {
-      final raw = await Supabase.instance.client.rpc('offer_add_to_cart', params: {
-        'p_listing_id': row['id'],
-        'p_qty': row['min_order_qty'] ?? 1,
-      });
-      final data = Map<String, dynamic>.from((raw is List ? raw.first : raw) as Map);
-      if (!mounted) return;
-      final ok = data['ok'] == true;
-      final msg = data['message']?.toString() ?? (ok ? 'Added' : data['error']?.toString() ?? 'Error');
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(msg), behavior: SnackBarBehavior.floating,
-        backgroundColor: ok ? Ds.c.brand : Ds.c.danger));
-      if (ok) widget.onAdded();
-    } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.toString()), behavior: SnackBarBehavior.floating));
-    } finally {
-      if (mounted) setState(() => _adding = false);
-    }
-  }
-
-  Future<bool> _showDisclosureModal() async {
-    return await showModalBottomSheet<bool>(
-      context: context,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(Ds.r.sheet))),
-      builder: (_) => Padding(
-        padding: EdgeInsets.all(Ds.space.x24),
-        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(c('offer_near_expiry_title'), style: Ds.t.subtitle),
-          SizedBox(height: Ds.space.x12),
-          Text(c('offer_near_expiry_disclosure'), style: Ds.t.body.copyWith(color: Ds.c.textSecondary)),
-          SizedBox(height: Ds.space.x24),
-          SizedBox(
-            width: double.infinity, height: 48,
-            child: ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: Ds.c.brand, foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton)),
-              onPressed: () => Navigator.pop(context, true),
-              child: Text(c('offer_near_expiry_accept')),
-            ),
-          ),
-          SizedBox(height: Ds.space.x8),
-          SizedBox(width: double.infinity,
-            child: TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel'))),
-        ]),
-      ),
-    ) ?? false;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final row = widget.row;
-    final badge = row['type_badge'] as Map? ?? {};
-    final soldOut = row['sold_out'] == true;
-    final qtyLow = row['qty_low'] == true;
-    final bgHex = badge['bg'] as String? ?? '#EFF6FF';
-    final fgHex = badge['fg'] as String? ?? '#1E40AF';
-    final bgColor = Color(int.parse(bgHex.replaceFirst('#', 'FF'), radix: 16));
-    final fgColor = Color(int.parse(fgHex.replaceFirst('#', 'FF'), radix: 16));
-
-    return Container(
-      decoration: BoxDecoration(
-        color: Ds.c.surface,
-        borderRadius: Ds.r.rCard,
-        boxShadow: Ds.elevation.e1,
-      ),
-      padding: EdgeInsets.all(Ds.space.x16),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          if (badge.isNotEmpty)
-            Container(
-              padding: EdgeInsets.symmetric(horizontal: Ds.space.x8, vertical: Ds.space.x4),
-              decoration: BoxDecoration(color: bgColor, borderRadius: Ds.r.rChip),
-              child: Text(badge['label'] as String? ?? '',
-                style: Ds.t.caption.copyWith(color: fgColor, fontWeight: FontWeight.w600)),
-            ),
-          const Spacer(),
-          if ((row['discount_label'] as String? ?? '').isNotEmpty)
-            Text(row['discount_label'] as String,
-              style: Ds.t.caption.copyWith(color: Ds.c.brand, fontWeight: FontWeight.w700)),
-        ]),
-        SizedBox(height: Ds.space.x8),
-        Text(row['product_name'] as String? ?? '',
-          style: Ds.t.body.copyWith(fontWeight: FontWeight.w600)),
-        if ((row['company'] as String? ?? '').isNotEmpty)
-          Text(row['company'] as String, style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
-        if ((row['pack'] as String? ?? '').isNotEmpty)
-          Text(row['pack'] as String, style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
-        SizedBox(height: Ds.space.x8),
-        Row(children: [
-          if ((row['price_display'] as String? ?? '').isNotEmpty)
-            Text(row['price_display'] as String,
-              style: Ds.t.subtitle.copyWith(color: Ds.c.brand, fontWeight: FontWeight.w700)),
-          SizedBox(width: Ds.space.x8),
-          if ((row['mrp_display'] as String? ?? '').isNotEmpty)
-            Text(row['mrp_display'] as String,
-              style: Ds.t.caption.copyWith(
-                decoration: TextDecoration.lineThrough, color: Ds.c.textSecondary)),
-        ]),
-        if ((row['scheme_text'] as String? ?? '').isNotEmpty)
-          Padding(
-            padding: EdgeInsets.only(top: Ds.space.x4),
-            child: Text(row['scheme_text'] as String,
-              style: Ds.t.caption.copyWith(color: Ds.c.brand, fontWeight: FontWeight.w600)),
-          ),
-        if ((row['near_expiry_label'] as String? ?? '').isNotEmpty)
-          Padding(
-            padding: EdgeInsets.only(top: Ds.space.x4),
-            child: Text(row['near_expiry_label'] as String,
-              style: Ds.t.caption.copyWith(color: Ds.c.warning)),
-          ),
-        SizedBox(height: Ds.space.x12),
-        Row(children: [
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(row['qty_display'] as String? ?? '',
-              style: Ds.t.caption.copyWith(
-                color: qtyLow ? Ds.c.warning : Ds.c.textSecondary)),
-            if ((row['seller_display'] as String? ?? '').isNotEmpty)
-              Text(row['seller_display'] as String,
-                style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
-          ])),
-          SizedBox(
-            height: 44,
-            child: ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: soldOut ? Ds.c.divider : Ds.c.brand,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
-                padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
-              ),
-              onPressed: soldOut || _adding ? null : _addToCart,
-              child: _adding
-                ? const SizedBox(width: 18, height: 18,
-                    child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                : Text(soldOut ? 'Sold Out' : 'Add to Cart'),
-            ),
-          ),
-        ]),
-      ]),
     );
   }
 }

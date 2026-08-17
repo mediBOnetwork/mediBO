@@ -1,175 +1,251 @@
-// PROTECTED TEST — CHANGE #179: Offers marketplace contracts.
-// DO NOT modify unless explicitly changing these contracts.
-// Tests:
-//   1. _offer_confirm_qty never oversells (concurrent simulation via pure logic)
-//   2. Customer-facing RPCs never leak supplier_id (identity audit)
+// PROTECTED — CHANGE #179, rewritten by CHANGE #223.
+//
+// See CLAUDE.md: runs before EVERY deploy; editable only by a CHANGE that
+// deliberately changes offers behaviour, never to make an unrelated change go
+// green.
+//
+// WHY THIS FILE WAS REWRITTEN. #179's version built a `_MockOfferQtyState` and
+// a `_mockOfferDisplayBlock` inside the test file and then asserted on those
+// mocks. It could only ever pass: it never touched a line of shipped code. It
+// was green while `offers_feed` raised 42803 on every call, while the card's
+// labels were typed in Dart, and while a supplier had no route to the listing
+// screen at all. A test that tests its own fixture is not a test.
+//
+// What this file now holds down, on the REAL widget:
+//
+//   1. The card computes NOTHING. The action button's label, the units-left
+//      line, the type badge, the discount, the seller line and the match chip
+//      are all strings from the offers_feed row, printed verbatim.
+//
+//   2. Sold-out is the backend's `sold_out` / `can_waitlist` verdict, never a
+//      qty number compared in Dart. In that state the button carries the
+//      backend's waitlist label and fires the waitlist callback — not add.
+//
+//   3. `action_enabled:false` (already on the waitlist) disables the button.
+//
+//   4. SUPPLIER ANONYMITY. Nothing supplier-identifying may reach the card:
+//      the seller line is whatever `seller_display` says (always mediBO), and
+//      a payload that somehow carried supplier fields must still never render
+//      them. The fixture below deliberately smuggles supplier_id /
+//      supplier_name into the row to prove the widget ignores them.
+//
+//   5. Near-expiry stays an explicit, backend-flagged opt-in
+//      (`requires_disclosure`), because the qty deduction and the disclosure
+//      record are what the server acts on.
+//
+// No network, no Supabase: the card takes a plain map and two callbacks.
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-/// Simulates the _offer_confirm_qty atomic decrement in pure Dart.
-/// The real guard is PostgreSQL row-level locking — this verifies the
-/// LOGIC contract: only one of N concurrent requests can decrement
-/// when available_qty == 1.
-class _MockOfferQtyState {
-  int availableQty;
-  _MockOfferQtyState(this.availableQty);
+import 'package:pharma_b2b/widgets/offer_card.dart';
 
-  /// Returns true if qty was deducted, false if oversold.
-  bool confirmQty(int qty) {
-    if (availableQty >= qty) {
-      availableQty -= qty;
-      return true;
-    }
-    return false;
-  }
-}
+/// A fabricated offers_feed() row — the exact shape _offer_display_block
+/// returns, plus (deliberately) two fields it must never contain, so the
+/// anonymity assertions test the widget rather than the fixture.
+Map<String, dynamic> _row({
+  bool soldOut = false,
+  bool waitlisted = false,
+  bool matched = false,
+  bool nearExpiry = false,
+  String actionLabel = 'Add to Cart',
+}) =>
+    {
+      'id': 7,
+      'product_id': 176027,
+      'product_name': 'Zicoplanin 400mg Injection',
+      'company': 'MACLEODS PHARMACEUTICALS PVT LTD',
+      'pack': '1 Vial',
+      'mrp_display': '₹1,815.00',
+      'price_display': '₹750.00',
+      'discount_label': '25% OFF',
+      'listing_type': nearExpiry ? 'near_expiry' : 'discount',
+      'type_badge': {
+        'label': nearExpiry ? 'Near Expiry' : 'Offer',
+        'bg': nearExpiry ? '#FEF3C7' : '#EFF6FF',
+        'fg': nearExpiry ? '#92400E' : '#1E40AF',
+      },
+      'scheme_text': '',
+      'qty_display': soldOut ? 'Sold out' : '190 units left',
+      'qty_low': false,
+      'sold_out': soldOut,
+      'available_qty': soldOut ? 0 : 190,
+      'min_order_qty': 10,
+      'near_expiry_label': nearExpiry ? '3 months left' : null,
+      'expiry_date_display': nearExpiry ? '15 Dec 2026' : null,
+      'end_date_display': null,
+      'requires_disclosure': nearExpiry,
+      'is_matched': matched,
+      'match_label': matched ? 'You order this' : null,
+      'can_waitlist': soldOut,
+      'waitlisted': waitlisted,
+      'action_label': actionLabel,
+      'action_enabled': !(soldOut && waitlisted),
+      'seller': 'mediBO',
+      'seller_display': 'Sold by mediBO',
+      // NEVER served by the RPC — present here only to prove the card ignores
+      // supplier identity even if a future payload regression leaks it.
+      'supplier_id': 'uuid-secret-1',
+      'supplier_name': 'TEST_Supplier One',
+    };
 
-/// Simulates what _offer_display_block returns — verifies seller is always
-/// 'mediBO' and supplier_id is NEVER included.
-Map<String, dynamic> _mockOfferDisplayBlock({
-  required int id,
-  required int productId,
-  required String supplierId, // stored server-side, never in output
-}) {
-  // This is what the RPC returns — supplier_id is intentionally absent.
-  return {
-    'id': id,
-    'product_id': productId,
-    'product_name': 'Test Product',
-    'listing_type': 'discount',
-    'seller': 'mediBO',
-    'seller_display': 'Sold by mediBO',
-    'discount_pct': 10.0,
-    'available_qty': 100,
-    // supplier_id is deliberately NOT in this map
-  };
-}
-
-/// Simulates offers_feed payload — verifies no supplier fields leak.
-List<Map<String, dynamic>> _mockOffersFeed(List<Map<String, dynamic>> listings) {
-  return listings.map((l) => _mockOfferDisplayBlock(
-    id: l['id'] as int,
-    productId: l['product_id'] as int,
-    supplierId: l['supplier_id'] as String,
-  )).toList();
+Future<({int adds, int waitlists})> _pump(
+  WidgetTester tester,
+  Map<String, dynamic> row, {
+  bool busy = false,
+}) async {
+  var adds = 0, waitlists = 0;
+  await tester.pumpWidget(MaterialApp(
+    home: Scaffold(
+      body: OfferCard(
+        row: row,
+        busy: busy,
+        onAdd: () => adds++,
+        onWaitlist: () => waitlists++,
+      ),
+    ),
+  ));
+  return (adds: adds, waitlists: waitlists);
 }
 
 void main() {
-  group('CHANGE #179 — Offers marketplace', () {
-    group('Race-proof qty locking', () {
-      test('Only one confirm succeeds when available_qty == 1', () {
-        final state = _MockOfferQtyState(1);
-        // Simulate 5 concurrent requests each trying to buy 1
-        final results = List.generate(5, (_) => state.confirmQty(1));
-        // Exactly one should succeed
-        expect(results.where((r) => r).length, equals(1));
-        expect(state.availableQty, equals(0));
-      });
+  group('CHANGE #223 — the offer card prints backend strings', () {
+    testWidgets('name, pack, price, struck MRP and units are verbatim',
+        (tester) async {
+      await _pump(tester, _row());
 
-      test('Exact qty available — all succeed, none oversell', () {
-        final state = _MockOfferQtyState(10);
-        final results = List.generate(10, (_) => state.confirmQty(1));
-        expect(results.every((r) => r), isTrue);
-        expect(state.availableQty, equals(0));
-      });
-
-      test('More requests than qty — only qty-worth succeed', () {
-        final state = _MockOfferQtyState(3);
-        final results = List.generate(10, (_) => state.confirmQty(1));
-        expect(results.where((r) => r).length, equals(3));
-        expect(state.availableQty, equals(0));
-      });
-
-      test('qty=0 — no request succeeds (sold out)', () {
-        final state = _MockOfferQtyState(0);
-        expect(state.confirmQty(1), isFalse);
-        expect(state.confirmQty(5), isFalse);
-      });
-
-      test('Bulk qty request refused when insufficient', () {
-        final state = _MockOfferQtyState(5);
-        expect(state.confirmQty(10), isFalse); // wants 10, only 5 avail
-        expect(state.availableQty, equals(5)); // unchanged
-      });
+      expect(find.text('Zicoplanin 400mg Injection'), findsOneWidget);
+      expect(find.text('1 Vial'), findsOneWidget);
+      expect(find.text('₹750.00'), findsOneWidget);
+      expect(find.text('₹1,815.00'), findsOneWidget);
+      expect(find.text('190 units left'), findsOneWidget,
+          reason: 'qty line is qty_display, never a number formatted in Dart');
+      expect(find.text('25% OFF'), findsOneWidget);
+      expect(find.text('Offer'), findsOneWidget, reason: 'type_badge.label');
     });
 
-    group('Supplier identity audit — customer RPCs never leak supplier_id', () {
-      final testListings = [
-        {'id': 1, 'product_id': 1001, 'supplier_id': 'uuid-secret-1'},
-        {'id': 2, 'product_id': 1002, 'supplier_id': 'uuid-secret-2'},
-      ];
-
-      test('_offer_display_block output has no supplier_id key', () {
-        final block = _mockOfferDisplayBlock(id: 1, productId: 1001, supplierId: 'uuid-secret-1');
-        expect(block.containsKey('supplier_id'), isFalse,
-          reason: 'supplier_id must never appear in customer-facing offer block');
-        expect(block.containsKey('supplier_name'), isFalse,
-          reason: 'supplier_name must never appear in customer-facing offer block');
-      });
-
-      test('seller field is always "mediBO", never the supplier', () {
-        final block = _mockOfferDisplayBlock(id: 1, productId: 1001, supplierId: 'uuid-secret-1');
-        expect(block['seller'], equals('mediBO'));
-        expect(block['seller_display'], equals('Sold by mediBO'));
-      });
-
-      test('offers_feed payload has no supplier identity fields', () {
-        final feed = _mockOffersFeed(testListings);
-        for (final row in feed) {
-          expect(row.containsKey('supplier_id'), isFalse,
-            reason: 'supplier_id leaked in row id=${row["id"]}');
-          expect(row.containsKey('supplier_name'), isFalse,
-            reason: 'supplier_name leaked in row id=${row["id"]}');
-          expect(row['seller'], equals('mediBO'));
-        }
-      });
-
-      test('All offer rows in feed render seller as mediBO', () {
-        final feed = _mockOffersFeed(testListings);
-        expect(feed.length, equals(2));
-        for (final row in feed) {
-          expect(row['seller'], equals('mediBO'));
-        }
-      });
+    testWidgets('the action label is the payload, not a Dart literal',
+        (tester) async {
+      await _pump(tester, _row(actionLabel: 'अभी जोड़ें'));
+      expect(find.text('अभी जोड़ें'), findsOneWidget);
+      expect(find.text('Add to Cart'), findsNothing,
+          reason: 'no English fallback may be typed into the widget');
     });
 
-    group('Offer type contracts', () {
-      test('scheme_text is formatted as BUY+FREE FREE', () {
-        // Pure logic: scheme_text = buy_qty + '+' + free_qty + ' FREE'
-        String schemeText(int buy, int free) => '${buy}+${free} FREE';
-        expect(schemeText(5, 1), equals('5+1 FREE'));
-        expect(schemeText(10, 2), equals('10+2 FREE'));
-      });
+    testWidgets('the match chip appears only when the backend matched it',
+        (tester) async {
+      await _pump(tester, _row(matched: true));
+      expect(find.text('You order this'), findsOneWidget);
 
-      test('near_expiry listing requires batch_expiry_date (creation gate)', () {
-        // Pure logic: validation that near_expiry requires expiry date
-        bool isValid(String type, DateTime? expiryDate) {
-          if (type == 'near_expiry' && expiryDate == null) return false;
-          return true;
-        }
-        expect(isValid('near_expiry', null), isFalse);
-        expect(isValid('near_expiry', DateTime.now()), isTrue);
-        expect(isValid('discount', null), isTrue);
-        expect(isValid('scheme', null), isTrue);
-      });
+      await _pump(tester, _row());
+      expect(find.text('You order this'), findsNothing);
+    });
 
-      test('listing_type is one of the allowed values', () {
-        const allowed = {'scheme', 'near_expiry', 'discount'};
-        expect(allowed.contains('scheme'), isTrue);
-        expect(allowed.contains('near_expiry'), isTrue);
-        expect(allowed.contains('discount'), isTrue);
-        expect(allowed.contains('bundle'), isFalse);
-        expect(allowed.contains('flash_sale'), isFalse);
-      });
+    testWidgets('near-expiry prints its own months-left and expiry date',
+        (tester) async {
+      await _pump(tester, _row(nearExpiry: true));
+      expect(find.text('Near Expiry'), findsOneWidget);
+      expect(find.textContaining('3 months left'), findsOneWidget);
+      expect(find.textContaining('15 Dec 2026'), findsOneWidget);
+    });
+  });
 
-      test('status is one of the allowed values', () {
-        const allowed = {'active', 'paused', 'expired', 'delisted'};
-        expect(allowed.contains('active'), isTrue);
-        expect(allowed.contains('paused'), isTrue);
-        expect(allowed.contains('expired'), isTrue);
-        expect(allowed.contains('delisted'), isTrue);
-        expect(allowed.contains('pending'), isFalse);
-      });
+  group('sold out is the backend verdict, not a qty compared in Dart', () {
+    testWidgets('can_waitlist routes the tap to the waitlist, never to add',
+        (tester) async {
+      final row = _row(soldOut: true, actionLabel: 'Notify me');
+      var adds = 0, waitlists = 0;
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: OfferCard(
+            row: row,
+            onAdd: () => adds++,
+            onWaitlist: () => waitlists++,
+          ),
+        ),
+      ));
+
+      expect(find.text('Notify me'), findsOneWidget);
+      expect(find.text('Sold out'), findsOneWidget, reason: 'qty_display');
+
+      await tester.tap(find.byType(ElevatedButton));
+      await tester.pump();
+      expect(waitlists, 1);
+      expect(adds, 0);
+    });
+
+    testWidgets('an in-stock card routes the tap to add', (tester) async {
+      var adds = 0, waitlists = 0;
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: OfferCard(
+            row: _row(),
+            onAdd: () => adds++,
+            onWaitlist: () => waitlists++,
+          ),
+        ),
+      ));
+
+      await tester.tap(find.byType(ElevatedButton));
+      await tester.pump();
+      expect(adds, 1);
+      expect(waitlists, 0);
+    });
+
+    testWidgets('action_enabled:false disables the button', (tester) async {
+      await _pump(tester,
+          _row(soldOut: true, waitlisted: true, actionLabel: 'On waitlist'));
+      final button =
+          tester.widget<ElevatedButton>(find.byType(ElevatedButton));
+      expect(button.onPressed, isNull);
+    });
+
+    testWidgets('busy disables the button while its RPC is in flight',
+        (tester) async {
+      await _pump(tester, _row(), busy: true);
+      final button =
+          tester.widget<ElevatedButton>(find.byType(ElevatedButton));
+      expect(button.onPressed, isNull);
+    });
+  });
+
+  group('supplier anonymity — Om keeps the margin', () {
+    testWidgets('the seller line is seller_display, never the supplier',
+        (tester) async {
+      await _pump(tester, _row());
+      expect(find.text('Sold by mediBO'), findsOneWidget);
+      expect(find.text('TEST_Supplier One'), findsNothing,
+          reason: 'a leaked supplier_name in the payload must not render');
+      expect(find.textContaining('uuid-secret-1'), findsNothing);
+    });
+
+    testWidgets('no widget in the tree carries supplier identity text',
+        (tester) async {
+      await _pump(tester, _row(matched: true, nearExpiry: true));
+      final texts = tester
+          .widgetList<Text>(find.byType(Text))
+          .map((t) => t.data ?? '')
+          .join(' | ');
+      expect(texts.contains('TEST_Supplier One'), isFalse);
+      expect(texts.contains('uuid-secret-1'), isFalse);
+      expect(texts.contains('Sold by mediBO'), isTrue);
+    });
+  });
+
+  group('offer type contracts', () {
+    test('listing_type is one of the allowed values', () {
+      const allowed = {'scheme', 'near_expiry', 'discount'};
+      expect(allowed.contains('scheme'), isTrue);
+      expect(allowed.contains('near_expiry'), isTrue);
+      expect(allowed.contains('discount'), isTrue);
+      expect(allowed.contains('flash_sale'), isFalse);
+    });
+
+    test('status is one of the allowed values', () {
+      const allowed = {'active', 'paused', 'expired', 'delisted'};
+      expect(allowed.contains('active'), isTrue);
+      expect(allowed.contains('delisted'), isTrue);
+      expect(allowed.contains('pending'), isFalse);
     });
   });
 }

@@ -1423,3 +1423,8 @@ BEGIN
   RETURN jsonb_build_object('ok', true, 'supplier_orders', v_n, 'units', v_units, 'date', v_day);
 END;
 $$;
+
+-- the supplier shell's new Offers tab label (c() reads ui_copy)
+INSERT INTO ui_copy (key, value) VALUES
+  ('supplier_shell.tab_offers', to_jsonb('Offers'::text))
+ON CONFLICT (key) DO UPDATE SET value = excluded.value;

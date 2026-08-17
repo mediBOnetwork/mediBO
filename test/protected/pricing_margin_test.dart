@@ -448,4 +448,34 @@ void main() {
               'lane, so the chip looked broken');
     });
   });
+
+  // The sticky bar prints ONE number and ONE word. #174 shipped with the word
+  // hardcoded upstream as `mrp_note` (always "MRP") while the number became
+  // the NET rate — so a priced product advertised its trade rate as the MRP.
+  // price_caption is the backend's word for whatever price_display holds.
+  group('the price caption names the number above it', () {
+    test('full mode captions the net rate NET, not MRP', () {
+      final p = Pricing.fromMap(_full())!;
+
+      expect(p.priceCaption, 'NET');
+      expect(p.priceDisplay, isNot(p.mrpDisplay),
+          reason: 'in full mode the headline number is the net rate, so a '
+              'caption reading "MRP" would name the wrong number');
+    });
+
+    test('mrp_only keeps the MRP caption', () {
+      final p = Pricing.fromMap(_mrpOnly())!;
+
+      expect(p.priceCaption, 'MRP');
+    });
+
+    test('the sticky bar reads price_caption, not mrp_note', () {
+      final src =
+          File('lib/screens/product_detail_screen.dart').readAsStringSync();
+
+      expect(src.contains('pr.priceCaption.isNotEmpty'), isTrue,
+          reason: 'the bottom bar caption must come from the same pricing '
+              'block as the number it labels');
+    });
+  });
 }

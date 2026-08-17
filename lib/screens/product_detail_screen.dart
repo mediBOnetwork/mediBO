@@ -856,7 +856,17 @@ class _StickyBar extends StatelessWidget {
                       ),
                     ),
                     Text(
-                      data.mrpNote,
+                      // CHANGE #174 — the caption must name the number ABOVE
+                      // it. `mrp_note` is always the word "MRP", so once a
+                      // product had trade pricing this bar printed the NET
+                      // rate under the caption "MRP" — the exact mislabelling
+                      // this change exists to prevent. `price_caption` is the
+                      // backend's own word for whatever price_display holds:
+                      // 'NET' in full mode, 'MRP' in mrp_only, so no branch is
+                      // needed here and the two modes cannot drift apart.
+                      pr.priceCaption.isNotEmpty
+                          ? pr.priceCaption
+                          : data.mrpNote,
                       style: const TextStyle(
                         fontSize: 10.5,
                         color: Color(0xFF9CA3AF),

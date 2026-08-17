@@ -76,6 +76,46 @@ else
   echo "      (authorise ~/.ssh/id_ed25519_github_medibo.pub as a deploy key)"
 fi
 
+# ── CHANGE #222: FOLD-IN SELF-TEST GATE — THE HARD GATE ─────────────────────
+# Testing is part of the build, not a separate pass. Until #222 "run the
+# protected suite before every deploy" was prose in CLAUDE.md and this script
+# ran ZERO tests, so a red suite shipped, QA failed after the fact, and a
+# "Debug pass — verify & fix #N" twin was created to clean it up — a second
+# full-price build for a bug that was catchable in the first session.
+#
+# scripts/selftest.sh runs, in THIS session, before a single byte is built:
+#   1. flutter test test/protected/   (the regression suite)
+#   2. the command's own focused test (auto-detected from the git diff)
+#   3. rg_check()                     (schema/RPC regression guard)
+#
+# It sits ABOVE the CHANGE #N stamp on purpose: a red suite must not burn a
+# change number on a deploy that never happens (observed while building #222 —
+# an aborted run still auto-incremented version.json 758 -> 759).
+#
+# There is deliberately NO skip flag and no env escape hatch: an opt-out is how
+# a gate quietly stops being a gate. Red tests => we exit here, so no bundle is
+# ever built and there is nothing to roll back. Fix the code and re-run.
+echo ""
+echo "🧪 [gate] fold-in self-test (CHANGE #222) — tests run BEFORE the build…"
+# NOTE: this script runs under `set -e`, so the exit code must be captured with
+# `|| STATUS=$?` — a bare call would abort before the diagnosis below prints.
+SELFTEST_STATUS=0
+bash scripts/selftest.sh --rg || SELFTEST_STATUS=$?
+if [ "$SELFTEST_STATUS" -ne 0 ]; then
+  echo ""
+  echo "❌  DEPLOY ABORTED — self-test gate is RED (exit $SELFTEST_STATUS)."
+  if [ "$SELFTEST_STATUS" -eq 2 ]; then
+    echo "    Attempt cap reached: qa_status was set to 'failed'. STOP and fix the"
+    echo "    root cause — do not re-run blindly."
+  else
+    echo "    Fix the failing test(s) in THIS session and run ~/deploy.sh again."
+  fi
+  echo "    Nothing was built and nothing was uploaded — production is untouched."
+  exit 1
+fi
+echo "✅ [gate] self-test GREEN — proceeding to build."
+echo ""
+
 # ── CHANGE #424: dynamic CHANGE #N — kills the hardcoded/stale-label trap.
 # Pass it explicitly: ./deploy.sh 424.
 #

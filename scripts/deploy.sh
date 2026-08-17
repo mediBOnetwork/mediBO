@@ -109,6 +109,14 @@ json.dump(d, open('web/version.json', 'w'))
 "
 CHANGE_LABEL="$N"
 
+# ── CHANGE #198 (LEVER 4): regenerate REPO_MAP.md ───────────────────────────
+# The map is the worker context diet: a builder reads REPO_MAP.md and opens only
+# the files its task touches instead of grep -r'ing all of lib/. Regenerating it
+# on every deploy is what keeps it trustworthy — a stale map sends the worker
+# back to the expensive blanket scan. ~0.2s, deterministic, no network. Never
+# fatal: a broken map must not block a deploy.
+bash scripts/gen_repo_map.sh || echo "⚠️  REPO_MAP generation failed (continuing)"
+
 # Build release — flutter clean is MANDATORY: skipping it produces a corrupt dart2js
 # bundle (different byte count, fails to boot) even with identical source code.
 flutter clean

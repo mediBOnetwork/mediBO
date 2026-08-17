@@ -284,7 +284,27 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
                 label: (_spec['area_label']).toString(),
                 tone: statusTone('paused'),
                 icon: Icons.category_outlined),
+          // CHANGE #198 — the size + effort the backend picked for this row.
+          // Both strings are pre-worded server-side (_dev_size_label /
+          // _dev_effort_label) and printed verbatim.
+          if ((_spec['size_label'] ?? '').toString().isNotEmpty)
+            ToneChip(
+                label: (_spec['size_label']).toString(),
+                tone: statusTone('paused'),
+                icon: Icons.straighten_outlined),
+          if ((_spec['effort_label'] ?? '').toString().isNotEmpty)
+            ToneChip(
+                label: (_spec['effort_label']).toString(),
+                tone: statusTone('paused'),
+                icon: Icons.speed_outlined),
         ]),
+        // CHANGE #198 — WHY this command landed on that lane, in the backend's
+        // own words. A misroute is now visible on the command instead of buried
+        // in a log, which is the whole point of logging route decisions.
+        if (_spec['has_route_reason'] == true) ...[
+          SizedBox(height: Ds.space.x8),
+          Text((_spec['route_reason']).toString(), style: Ds.t.caption),
+        ],
         const SizedBox(height: 12),
         Text(title,
             style: const TextStyle(

@@ -519,12 +519,6 @@ BEGIN
     'kind', coalesce(d.kind,'dev'), 'is_danger', coalesce(d.is_danger,false),
     'route', d.route, 'area', d.area,
     'route_label', _route_label(d.route), 'route_tone', _route_tone(d.route), 'area_label', _area_label(d.area),
-    'route_reason', coalesce(d.route_reason,''),
-    'has_route_reason', (coalesce(d.route_reason,'') <> ''),
-    'size_class', coalesce(d.size_class,'normal'),
-    'size_label', _dev_size_label(d.size_class),
-    'effort_label', _dev_effort_label(d.effort),
-    'batch_label', coalesce(d.batch_label,''),
     'enriched_spec', coalesce(d.enriched_spec,''),
     'has_enriched', (d.enriched_spec IS NOT NULL AND length(coalesce(d.enriched_spec,'')) > 0),
     'plain_summary', coalesce(d.plain_summary,''), 'result_actions', coalesce(d.result_actions,'[]'::jsonb),
@@ -553,6 +547,18 @@ BEGIN
         'sender',sender,'body',body,'at',created_at,
         'images', coalesce(images,'[]'::jsonb), 'attachments', coalesce(attachments,'[]'::jsonb)) ORDER BY created_at, id),'[]')
       FROM dev_command_messages WHERE command_id=p_id))
+  -- CHANGE #198 — routing story. This MUST stay a separate jsonb_build_object:
+  -- the base object above is already close to postgres's hard limit of 100
+  -- arguments per function call, and adding these seven pairs inline raised
+  -- 54023 "cannot pass more than 100 arguments to a function", which returned
+  -- NULL for the whole command-detail payload.
+  || jsonb_build_object(
+    'route_reason', coalesce(d.route_reason,''),
+    'has_route_reason', (coalesce(d.route_reason,'') <> ''),
+    'size_class', coalesce(d.size_class,'normal'),
+    'size_label', _dev_size_label(d.size_class),
+    'effort_label', _dev_effort_label(d.effort),
+    'batch_label', coalesce(d.batch_label,''))
   INTO v
   FROM dev_commands d,
        LATERAL _dev_cmd_timing(d.started_at, d.finished_at, d.status, v_tat,

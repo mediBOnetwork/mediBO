@@ -861,7 +861,7 @@ COMPANY NAMING RULE (absolute). Gemini never generates or normalizes company nam
 
 
 
-## PROJECT · latency  (priority 100, v1)
+## PROJECT · latency  (priority 100, v2)
 
 Latency lessons — every one of these cost hours. Check them BEFORE proposing hardware.
 
@@ -870,6 +870,9 @@ Latency lessons — every one of these cost hours. Check them BEFORE proposing h
 - **MEDICINE visibility map / autovacuum.** The big `MEDICINE` table (quoted, uppercase) goes slow when its visibility map is stale — index-only scans stop being index-only. VACUUM (and healthy autovacuum settings for that table) is the fix; more compute is not.
 - **Count caches exist — use them.** `medicine_count_cache` and `medicine_category_counts_cache` hold the counts. Never `count(*)` the 563 k-row table on a user path; read the cache and refresh it on a schedule/trigger.
 - **~1 GB RAM constraint.** The database instance is small on purpose. Do NOT propose a Supabase compute upgrade as the fix for a slow query — every latency problem so far has been a query, an index, a trigger loop, or a stale visibility map. Fix the SQL.
+
+- **Connection exhaustion is a real outage mode — max_connections is 60.** On 2026-08-18 the site served Cloudflare 520/522 for 29 minutes (02:00:27–02:29:27 UTC). Nothing crashed and Postgres never restarted: 35 of the 60 active pg_cron jobs were scheduled on minute 0 (15 on `* * * * *`, 10 on `*/5`, 4 on `*/10`, 3 on `*/15`, plus `*/2`, `*/30` and the hourly jobs — every bare step expression collides on minute 0). The burst plus the PostgREST/GoTrue/realtime/storage pools took every slot; Postgres logged "remaining connection slots are reserved for roles with the SUPERUSER attribute", Kong could not reach ANY upstream, and pg_cron recorded the per-minute jobs as `job startup timeout` for 19m30s. Fixed by phase-shifting the schedules (same frequency, different offsets — see migration `20260818023000_cron_stagger_outage_fix.sql`); worst-case simultaneous starts went 35 → ~20. **Never add a recurring cron job with a bare `*/N` schedule — always give it an offset (`7-59/10`).** Diagnose this with `cron.job_run_details` (look for `job startup timeout`) and `select count(*) from pg_stat_activity` vs `max_connections`; the management API's `execute_sql` times out too, so a total blackout across REST + auth + admin SQL means slot starvation, not a dead instance.
+- **`rg_check` baselines cron schedules.** Changing any `cron.alter_job` schedule turns the guard red under `diffs.cron`. Verify the new schedules are what you intended, then `devcmd.sh rebaseline` → `rgcheck` true. That is expected, not a regression.
 
 
 ## PROJECT · vm_traps  (priority 102, v1)

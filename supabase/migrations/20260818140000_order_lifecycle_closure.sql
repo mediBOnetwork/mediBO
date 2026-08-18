@@ -53,6 +53,10 @@ alter table public.supplier_orders
   add column if not exists settled_reason text,
   add column if not exists settle_mode    text;
 
+alter table public.pending_bills
+  add column if not exists settled_at        timestamptz,
+  add column if not exists settled_order_id  uuid;
+
 create index if not exists idx_orders_open_closure
   on public.orders (created_at desc) where closed_at is null;
 create index if not exists idx_supplier_orders_open_settle
@@ -455,7 +459,7 @@ language plpgsql
 security definer
 set search_path to 'public'
 as $fn$
-declare st jsonb; so supplier_orders%rowtype; v_day date;
+declare st jsonb; so supplier_orders%rowtype; v_day date; v_sid uuid;
 begin
   select * into so from supplier_orders where id = p_supplier_order_id;
   if not found then return jsonb_build_object('ok',false,'error','supplier_order_not_found'); end if;
@@ -474,6 +478,8 @@ begin
 
   perform set_config('medibo.closing', '1', true);
   v_day := coalesce(so.order_date, (so.created_at at time zone 'Asia/Kolkata')::date);
+  v_sid := coalesce(so.supplier_id,
+             (select id from supplier_profiles where lower(supplier_name)=lower(so.supplier_name) limit 1));
 
   update supplier_orders
      set status         = 'closed',
@@ -482,6 +488,21 @@ begin
          settled_reason = p_reason,
          settle_mode    = case when p_mode = 'override' then 'override' else 'auto' end
    where id = p_supplier_order_id;
+
+  -- The bill itself is stamped settled — same supplier, same IST day, which is
+  -- the exact pairing sup_order_bill_panel() totals the money from. A NEW
+  -- column, not a new pending_bills.status: every reader detects an imported
+  -- bill as `imported_at is not null OR lower(status)='imported'`, so
+  -- overwriting status would un-import the bill the moment it was paid.
+  update pending_bills pb
+     set settled_at = now(), settled_order_id = p_supplier_order_id
+   where pb.settled_at is null
+     and lower(coalesce(pb.verdict,'')) <> 'fake'
+     and (pb.imported_at is not null or lower(coalesce(pb.status,'')) = 'imported')
+     and (pb.received_at at time zone 'Asia/Kolkata')::date = v_day
+     and ((v_sid is not null and pb.supplier_id = v_sid::text)
+       or (pb.supplier_id is null and pb.supplier_name is not null
+           and lower(pb.supplier_name) = lower(so.supplier_name)));
 
   -- 'shipped' IS the removal from the supplier open-order scope: it is the
   -- filter bill_lines_from_scan() matches against, and the one every open
@@ -589,9 +610,12 @@ begin
   return NEW;
 end $fn$;
 
+-- Both columns: a claim is very often VERIFIED before
+-- payment_claim_autolink() attaches it to an order, and that later write
+-- touches order_id, not status.
 drop trigger if exists trg_close_on_payment on public.payment_claims;
 create trigger trg_close_on_payment
-  after insert or update of status on public.payment_claims
+  after insert or update of status, order_id on public.payment_claims
   for each row execute function public._trg_close_on_payment();
 
 create or replace function public._trg_close_on_bill_sent()
@@ -1118,6 +1142,11 @@ begin
     raise exception 'RG_FAIL: settled supplier lines still sit in the bill-matching scope'; end if;
   if not exists (select 1 from order_closure_log where supplier_order_id=v_soid and event='settled') then
     raise exception 'RG_FAIL: settlement not logged'; end if;
+  if not exists (select 1 from pending_bills where settled_order_id = v_soid and settled_at is not null) then
+    raise exception 'RG_FAIL: the supplier bill itself was not stamped settled'; end if;
+  if not exists (select 1 from pending_bills where settled_order_id = v_soid
+                   and (imported_at is not null or lower(coalesce(status,''))='imported')) then
+    raise exception 'RG_FAIL: settling un-imported the bill'; end if;
 
   raise exception 'RG_ROLLBACK';
 end $rg$;

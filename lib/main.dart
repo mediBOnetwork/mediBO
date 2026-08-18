@@ -38,6 +38,7 @@ import 'screens/company_screen.dart'; // C638: /company/:key
 import 'screens/inquiry_link_page.dart';
 import 'screens/dispute_link_page.dart';
 import 'features/whatsapp/ui/wa_templates_screen.dart'; // admin WhatsApp templates
+import 'screens/admin/wa_ops_screen.dart'; // admin WhatsApp ops + template pipeline
 import 'screens/about_screen.dart';
 import 'screens/contact_screen.dart';
 import 'screens/legal_pages.dart';
@@ -633,6 +634,14 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
               // non-admin callers itself, so the screen renders its own
               // not-authorized state rather than the route guessing a role.
               '/admin/wa-templates': (_) => const WaTemplatesScreen(),
+              // CHANGE #228 — Admin > WhatsApp > Ops, at a real URL for the
+              // same reason /admin/wa-templates has one: the Template pipeline
+              // section is the page you send someone to when they ask "is that
+              // message live yet?". wa_event_routes_screen / wa_waba_status /
+              // wa_contact_ledger / wa_template_pipeline each refuse non-admin
+              // callers themselves and the screen renders that refusal, so the
+              // route guards nothing.
+              '/admin/wa-ops': (_) => const WaOpsScreen(),
               // CHANGE #173 — the reorder screen as a real URL. The WhatsApp
               // reorder nudge can link straight here, and it gives the screen
               // a shareable address like /product/:id has. The screen asks the

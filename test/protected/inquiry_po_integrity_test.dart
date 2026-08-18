@@ -267,7 +267,7 @@ void main() {
     test('it proves it painted, so a live deploy can be verified', () {
       // Whitespace-tolerant: the formatter is free to wrap the call.
       for (final key in <String>['c240_inq_po_block', 'c240_inq_po_rows']) {
-        expect(RegExp("RenderLog\\.write\\(\\s*'" + key + "'").hasMatch(screen),
+        expect(RegExp("RenderLog\\.write\\(\\s*'$key'").hasMatch(screen),
             isTrue,
             reason: '$key is not written to the render log — the live deploy '
                 'of this block could not be proven');

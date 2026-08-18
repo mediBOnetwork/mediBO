@@ -88,6 +88,11 @@ $$;
 -- The product_id parse is also guarded: a supplier_orders.items entry with a
 -- non-numeric or absent product_id used to raise 22P02 and take the whole panel
 -- down.
+-- Part 1 shipped this helper WITHOUT po_units/demand_units, and Postgres
+-- refuses to CREATE OR REPLACE a set-returning function whose OUT columns
+-- changed (42P13). Drop first; it is referenced only from plpgsql bodies,
+-- which resolve at call time, so nothing else has to be rebuilt. Idempotent.
+DROP FUNCTION IF EXISTS public._order_item_states(uuid);
 CREATE OR REPLACE FUNCTION public._order_item_states(p_order_id uuid)
 RETURNS TABLE(
   order_item_id uuid, product_id bigint, product_name text, quantity numeric,
@@ -182,9 +187,11 @@ UPDATE app_settings SET value = value || jsonb_build_object(
   'status_no_supplier', 'No supplier left to ask')
 WHERE key = 'order_item_panel_copy';
 
+-- ui_copy.value is jsonb (every existing row is a JSON string), so the copy has
+-- to be cast, not passed as bare text.
 INSERT INTO ui_copy (key, value) VALUES
-  ('admin_customer.items_load_failed', 'Could not load this order''s items.'),
-  ('admin_customer.retry', 'Retry')
+  ('admin_customer.items_load_failed', to_jsonb('Could not load this order''s items.'::text)),
+  ('admin_customer.retry',             to_jsonb('Retry'::text))
 ON CONFLICT (key) DO NOTHING;
 
 -- ─────────────────────────────────────────────────────────────────────────────

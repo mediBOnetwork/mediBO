@@ -17,6 +17,8 @@ import '../../utils/file_pick_io.dart' as filepick;
 
 import '../../utils/download_bytes.dart'; // CHANGE #463
 import '../../utils/render_log.dart';
+import '../../design_tokens.dart'; // CHANGE #238 — Ds tokens for the new panel chrome
+import '../../models/order_item_panel_view.dart'; // CHANGE #238
 import '../../fulfill/fulfill_lookups.dart'; // C639: backend-owned entry label
 import 'demand_preview_sheet.dart'; // C639 PART D
 import '../../services/admin_date_scope.dart'; // CHANGE #545
@@ -575,8 +577,10 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   // above orders in the Customer Orders tab. Sourced solely from
   // get_leads_grouped_today(), one Lead per sender phone with N LeadImages.
   List<Lead> _leads = [];
-  // orderId → per-product inquiry status from get_order_item_inquiry_status
-  final Map<String, List<Map<String, dynamic>>> _orderItemStatuses = {};
+  // CHANGE #238 — orderId → the render-ready item lines from
+  // order_item_status_panel(), and that order's reconciliation block. Both are
+  // stored verbatim: nothing in this file re-counts, re-orders or re-words them.
+  final Map<String, OrderItemPanelView> _orderPanels = {};
   // CHANGE #384 — MEDICINE.id → brief catalog row (image_url_1, marketer,
   // pack_qty/pack_type/pack_size, salt_composition), keyed by product_id, for
   // the Customer Orders item cards. Merged-into across loads so re-expanding
@@ -1581,32 +1585,45 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     });
   }
 
+  /// CHANGE #238 — one RPC feeds the whole expanded panel.
+  ///
+  /// It replaces get_order_item_inquiry_status, which returned rows keyed only
+  /// by product name (the caller had to name-match them against the orders
+  /// JSONB) and hid `current_supplier` behind `asked_at is not null` — NULL for
+  /// the entire manual lane, which blanked the supplier badge on every item.
+  /// order_item_status_panel returns one line per order_items row, in backend
+  /// order, plus the reconciliation block for the order as a whole.
   Future<void> _fetchOrderItemStatus(String orderId) async {
     try {
-      final rows = await Supabase.instance.client.rpc(
-        'get_order_item_inquiry_status',
+      final raw = await Supabase.instance.client.rpc(
+        'order_item_status_panel',
         params: {'p_order_id': orderId},
-      ) as List;
+      );
+      final view = OrderItemPanelView.fromPayload(raw);
+      final lines = view.lines;
+      final recon = view.reconcile.raw;
       if (mounted) {
-        setState(() {
-          _orderItemStatuses[orderId] =
-              rows.map((r) => Map<String, dynamic>.from(r as Map)).toList();
-        });
-        RenderLog.write('order_item_status', 'orderId:$orderId count:${rows.length}');
-        // CHANGE #625 — proof the three new columns arrived and that the chip
-        // is painting from them rather than from a colour map in Dart.
-        final unf = rows
-            .where((r) => (r as Map)['unfulfillable'] == true)
-            .length;
-        final withColors = rows
-            .where((r) => (r as Map)['status_colors'] is Map)
-            .length;
-        RenderLog.write('c625_unfulfilled_items',
-            'admin;order:$orderId;rows:${rows.length};unfulfillable:$unf;colors:$withColors');
-        for (final r in rows) {
-          final m = r as Map;
-          RenderLog.write('order_item_rpc_row',
-              '${m['product_name']}:pid=${m['product_id']}:status=${m['current_status']}:sup=${m['current_supplier']}');
+        setState(() => _orderPanels[orderId] = view);
+        RenderLog.write('order_item_status', 'orderId:$orderId count:${lines.length}');
+        // CHANGE #238 — proof the panel painted from the RPC: how many lines
+        // arrived, and whether the backend says this order reconciles.
+        RenderLog.write(
+            'c238_reconcile',
+            'admin;order:$orderId;lines:${lines.length}'
+            ';balanced:${recon['balanced']}'
+            ';assigned:${recon['assigned']}'
+            ';unfulfillable:${recon['unfulfillable']}'
+            ';in_inquiry:${recon['in_inquiry']}'
+            ';unaccounted:${recon['unaccounted']}'
+            ';missing_po:${recon['missing_po']}');
+        final withSupplier = lines.where((l) => l.hasSupplier).length;
+        RenderLog.write('c238_supplier_labels',
+            'order:$orderId;lines:${lines.length};with_supplier:$withSupplier');
+        for (final l in lines) {
+          RenderLog.write(
+              'order_item_rpc_row',
+              '${l.productName}:state=${l.state}'
+              ':status=${l.statusLabel}:sup=${l.supplierLabel}');
         }
       }
     } catch (e) {
@@ -2748,7 +2765,10 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   /// when an item could not be sourced, so C2's reason text needs no branch
   /// here — the same field carries it.
   Widget _itemInquiryBadge(Map<String, dynamic>? s) {
-    final text = (s?['current_status'] ?? '').toString().trim();
+    // CHANGE #238 — `status_label` from order_item_status_panel; it already
+    // resolves to the unfulfillable reason, the live inquiry status, or the
+    // backend's own "not accounted for" wording.
+    final text = (s?['status_label'] ?? '').toString().trim();
     if (text.isEmpty) return const SizedBox.shrink();
     final colors = s?['status_colors'] is Map
         ? (s!['status_colors'] as Map).cast<String, dynamic>()
@@ -2769,9 +2789,14 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   /// #625 — the assigned supplier, when there is one. It used to be glued into
   /// the status chip's sentence in Dart; it is a value, so it renders as a
   /// value beside the chip instead of being written into a phrase.
+  ///
+  /// CHANGE #238 — it prints `supplier_label`, the backend's finished phrase:
+  /// "Accepted by X" once a supplier has taken the line, "Asking X" while the
+  /// waterfall is still on X. The app no longer reads the bare name and no
+  /// longer decides which of those two things is happening.
   Widget _itemSupplierBadge(Map<String, dynamic>? s) {
-    final name = (s?['current_supplier'] ?? '').toString().trim();
-    if (name.isEmpty) return const SizedBox.shrink();
+    final name = (s?['supplier_label'] ?? '').toString().trim();
+    if (s?['has_supplier'] != true || name.isEmpty) return const SizedBox.shrink();
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
@@ -2852,7 +2877,27 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       return _buildCartExpandedItems(row, lpad: lpad, rpad: rpad);
     }
 
-    if (row.items.isEmpty) {
+    // ── CHANGE #238 — the item list is the BACKEND's list ────────────────────
+    //
+    // What was here: `row.items` (parsed out of the orders.items JSONB) joined
+    // in Dart against get_order_item_inquiry_status rows by lower-cased,
+    // whitespace-collapsed product NAME. Any item whose JSONB name differed
+    // from order_items.product_name lost its status, its supplier and its
+    // unfulfillable flag — silently, with a dash where the answer should be.
+    // That name-match is also the app deciding what the list is.
+    //
+    // order_item_status_panel() returns one line per order_items row, in the
+    // backend's order, with state, status_label, supplier_label, qty_label,
+    // price_label and the reconciliation block already decided. Nothing on
+    // this panel is computed here anymore.
+    final panel = row.orderId != null
+        ? (_orderPanels[row.orderId!] ?? OrderItemPanelView.loading)
+        : OrderItemPanelView.loading;
+    final panelLines = panel.lines;
+    final loaded = panel.loaded;
+    final reconcile = panel.reconcile;
+
+    if (panel.isEmpty) {
       return Container(
         color: const Color(0xFFF9FAFB),
         padding: EdgeInsets.fromLTRB(lpad, 10, rpad, 14),
@@ -2860,44 +2905,18 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
             style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
       );
     }
+
     // CHANGE #606 — items_label and amount_label, verbatim. This line used to
     // be `'Order Items (${row.items.length})' + ' · ₹' + total.toStringAsFixed(2)`
     // — a Dart count, a Dart rupee prefix and a Dart decimal format, all three
     // of which the backend already returns as finished strings.
     final itemsLabel  = row.rs('items_label');
     final amountLabel = row.rs('amount_label');
-    final rawStatuses = row.orderId != null
-        ? (_orderItemStatuses[row.orderId!] ?? <Map<String, dynamic>>[])
-        : <Map<String, dynamic>>[];
 
-    // orders.items JSONB has product_name but no product_id — match by normalized name
-    String _norm(String s) => s.toLowerCase().trim().replaceAll(RegExp(r'\s+'), ' ');
-    final statusByName = <String, Map<String, dynamic>>{};
-    for (final s in rawStatuses) {
-      final pname = s['product_name'] as String?;
-      if (pname != null) statusByName[_norm(pname)] = s;
-    }
-
-    RenderLog.write('order_items_expanded',
-        'orderId:${row.orderId ?? "?"}:items:${row.items.length}:statuses:${rawStatuses.length}');
-
-    // Per-item resolved status instrumentation
-    var anyDash = false;
-    for (final item in row.items) {
-      final s = statusByName[_norm(item.name)];
-      final resolved = s?['current_status'] as String? ?? '—';
-      if (resolved == '—') anyDash = true;
-      RenderLog.write('order_item_resolved',
-          '${item.name}:status=$resolved:supplier=${s?['current_supplier'] ?? "none"}');
-    }
-    if (anyDash && rawStatuses.isNotEmpty) {
-      RenderLog.write('order_item_FAIL', 'accepted order has dash items — name mismatch?');
-    }
-
-    // CHANGE #442 — instrumentation counters for image/company/pack/qty_label
-    // coverage across this order's item cards, written once per card below.
-    var c442Total = 0, c442Image = 0, c442Company = 0, c442Pack = 0, c442Qty = 0;
-    String? c442Sample;
+    RenderLog.write('c238_panel_lines',
+        'orderId:${row.orderId ?? "?"}:lines:${panelLines.length}'
+        ':balanced:${reconcile.balanced}'
+        ':unaccounted:${reconcile.raw['unaccounted']}');
 
     final content = Container(
       color: const Color(0xFFF9FAFB),
@@ -2945,62 +2964,32 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                     color: Color(0xFF111827))),
           ],
         ]),
+        // CHANGE #238 — the reconciliation banner. It says, in the backend's
+        // own words, whether every customer item is accounted for: on a
+        // purchase order, explicitly unfulfillable, or explicitly still under
+        // inquiry. An order that does not add up says so here instead of
+        // looking complete while items are missing downstream.
+        _reconcileBanner(reconcile),
         const SizedBox(height: 8),
-        // CHANGE #382 — replaced the fixed 4-column Product/Qty/Price/Status
-        // table (its fixed-width header cells wrapped "Product" to vertical
-        // letters on narrow admin viewports) with a responsive per-item row:
-        // thumbnail + name/pack/company/qty+price+status. Status pill logic
-        // (_itemInquiryBadge above, untouched) and every other field on this
-        // card — total, "Order Items (N)" count, Accept/Reject, View
-        // Payment, delete — are unchanged; only this item-row layout changed.
-        ...row.items.map((item) {
-          final s = statusByName[_norm(item.name)];
-          // CHANGE #625 C2 — the backend says whether we could source this
-          // item; the card is flagged on that boolean alone. The items are NOT
-          // regrouped in Dart: splitting or reordering server rows is the app
-          // deciding what the list is. The flag rides on the row in place.
-          final unfulfillable = s?['unfulfillable'] == true;
-          try {
-            RenderLog.write('cust_order_items_redesign_382',
-                'orderId:${row.orderId ?? "?"}:item:${item.name}');
-          } catch (_) {}
-
-          // Null-guarded derived text — a missing value hides its line/token,
-          // never renders "null"/"undefined"/"NaN"/"₹null".
-          // CHANGE #442 — image/company/pack/qty_label now come straight off
-          // `s`, the get_order_item_inquiry_status row already matched by
-          // normalized product name above. That RPC now returns these fields
-          // pre-formatted server-side (image_url, company, pack_label,
-          // qty_label) — no client-side MEDICINE lookup, no string logic here.
-          // The old CHANGE #384 MEDICINE-table lookup (_medDisplayFields) is
-          // left in place for cart_items (_buildCartExpandedItems) where a
-          // real product_id column exists; real orders never populated it
-          // reliably (orders.items JSONB product_id is unreliable), which was
-          // the actual root cause of this bug.
-          String? nz(String? s) => (s != null && s.trim().isNotEmpty) ? s.trim() : null;
-          final imageUrl = nz(s?['image_url'] as String?);
-          final company = nz(s?['company'] as String?);
-          final packLine = nz(s?['pack_label'] as String?) ??
-              (item.packSize?.trim().isNotEmpty == true ? item.packSize!.trim() : null);
-          final qtyLabel = nz(s?['qty_label'] as String?) ?? '${item.qty}';
-          c442Total++;
-          if (imageUrl != null) c442Image++;
-          if (company != null) c442Company++;
-          if (packLine != null) c442Pack++;
-          if (nz(s?['qty_label'] as String?) != null) c442Qty++;
-          c442Sample ??= '${item.name}|$qtyLabel|${packLine ?? ''}|${company ?? ''}';
-          final priceVal = (item.price != null && item.price! > 0)
-              ? item.price
-              : ((item.mrp != null && item.mrp! > 0) ? item.mrp : null);
-          final priceText =
-              priceVal != null ? '₹${priceVal.toStringAsFixed(2)}' : null;
+        if (!loaded) ..._itemSkeletons(),
+        // CHANGE #382 — responsive per-item row: thumbnail + name/pack/company
+        // /qty+price+status. CHANGE #238 drives every field off the backend
+        // line; there is no orders.items JSONB and no name match left.
+        ...panelLines.map((line) {
+          final unfulfillable = line.isFlagged;
+          final imageUrl   = line.imageUrl;
+          final company    = line.company;
+          final packLine   = line.packLabel;
+          final qtyLabel   = line.qtyLabel;
+          final priceText  = line.priceLabel;
+          final name       = line.productName;
+          final poWarning  = line.poWarning;
+          final nextLabel  = line.nextSupplierLabel;
 
           // #625 — an unfulfilled item is tinted with the SAME status_colors
           // its chip uses, so the card and the chip cannot disagree about
           // which items we could not source.
-          final rowColors = s?['status_colors'] is Map
-              ? (s!['status_colors'] as Map).cast<String, dynamic>()
-              : const <String, dynamic>{};
+          final rowColors = line.statusColors;
           return Container(
             margin: const EdgeInsets.only(top: 10),
             padding: const EdgeInsets.all(10),
@@ -3016,20 +3005,21 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                   width: unfulfillable ? 1 : 0.5),
             ),
             child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              _custOrderItemThumb(imageUrl, isDesktop: isDesktop),
+              _custOrderItemThumb(imageUrl.isEmpty ? null : imageUrl,
+                  isDesktop: isDesktop),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(item.name,
+                    Text(name,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                             fontSize: 15,
                             fontWeight: FontWeight.w600,
                             color: Color(0xFF111827))),
-                    if (company != null) ...[
+                    if (company.isNotEmpty) ...[
                       const SizedBox(height: 2),
                       Text(company,
                           maxLines: 1,
@@ -3040,7 +3030,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                               color: Color(0xFF9CA3AF),
                               letterSpacing: 0.8)),
                     ],
-                    if (packLine != null) ...[
+                    if (packLine.isNotEmpty) ...[
                       const SizedBox(height: 2),
                       Text(packLine,
                           maxLines: 1,
@@ -3054,17 +3044,31 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
                       runSpacing: 8,
                       crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
-                        _custOrderItemQtyPill(qtyLabel),
-                        if (priceText != null)
+                        if (qtyLabel.isNotEmpty) _custOrderItemQtyPill(qtyLabel),
+                        if (priceText.isNotEmpty)
                           Text(priceText,
                               style: const TextStyle(
                                   fontSize: 15,
                                   fontWeight: FontWeight.w700,
                                   color: Color(0xFF111827))),
-                        _itemInquiryBadge(s),
-                        _itemSupplierBadge(s),
+                        _itemInquiryBadge(line.raw),
+                        _itemSupplierBadge(line.raw),
                       ],
                     ),
+                    // CHANGE #238 — who is next in the waterfall, and the loud
+                    // case: an item assigned to a supplier that never reached
+                    // that supplier's purchase order. Both are backend strings.
+                    if (nextLabel.isNotEmpty) ...[
+                      SizedBox(height: Ds.space.x4),
+                      Text(nextLabel, style: Ds.t.caption),
+                    ],
+                    if (poWarning.isNotEmpty) ...[
+                      SizedBox(height: Ds.space.x4),
+                      Text(poWarning,
+                          style: Ds.t.caption.copyWith(
+                              fontWeight: FontWeight.w600,
+                              color: Ds.c.danger)),
+                    ],
                   ],
                 ),
               ),
@@ -3077,16 +3081,55 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         // delete_lead_group in the grouped Leads section above.)
       ]),
     );
-    // CHANGE #442 — render-log proof that image/company/pack/qty_label
-    // resolved from the RPC row, not just compiled into the bundle.
-    RenderLog.write('c442_items_total', c442Total);
-    RenderLog.write('c442_with_image', c442Image);
-    RenderLog.write('c442_with_company', c442Company);
-    RenderLog.write('c442_with_pack', c442Pack);
-    RenderLog.write('c442_with_qtylabel', c442Qty);
-    if (c442Sample != null) RenderLog.write('c442_sample', c442Sample!);
     return content;
   }
+
+  /// CHANGE #238 — the reconciliation banner, printed exactly as
+  /// order_reconcile() returned it. The app never counts the items itself and
+  /// never decides whether an order balances: `label`, `detail` and the three
+  /// tone colours all arrive in the payload.
+  Widget _reconcileBanner(OrderItemPanelReconcile v) {
+    if (!v.show) return const SizedBox.shrink();
+    final r = v.raw;
+    final label = v.label;
+    final detail = v.detail;
+    return Container(
+      margin: EdgeInsets.only(top: Ds.space.x8),
+      padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x12, vertical: Ds.space.x8),
+      decoration: BoxDecoration(
+        color: _hex(r['bg'], Ds.c.brandSoft),
+        borderRadius: Ds.r.rButton,
+        border: Border.all(color: _hex(r['border'], Ds.c.divider), width: 0.5),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(label,
+            style: Ds.t.caption.copyWith(
+                fontWeight: FontWeight.w600,
+                color: _hex(r['fg'], Ds.c.text))),
+        if (detail.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x4),
+          Text(detail,
+              style: Ds.t.caption
+                  .copyWith(color: _hex(r['fg'], Ds.c.textSecondary))),
+        ],
+      ]),
+    );
+  }
+
+  /// CHANGE #238 — a skeleton while order_item_status_panel is in flight, so
+  /// an expanding row never flashes an "no items" state it is about to
+  /// contradict.
+  List<Widget> _itemSkeletons() => List<Widget>.generate(
+      3,
+      (_) => Container(
+            margin: EdgeInsets.only(top: Ds.space.x8),
+            height: Ds.space.x48 + Ds.space.x24,
+            decoration: BoxDecoration(
+              color: Ds.c.bg,
+              borderRadius: Ds.r.rButton,
+            ),
+          ));
 
   Widget _buildCartExpandedItems(_CustRow row,
       {required double lpad, required double rpad}) {

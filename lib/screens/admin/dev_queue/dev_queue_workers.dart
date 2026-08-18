@@ -46,6 +46,10 @@ class WorkerGridCard extends StatelessWidget {
     final shrink = (_state['shrink_display'] ?? '').toString();
     final quota = (_state['quota_display'] ?? '').toString();
     final load = (_state['load_display'] ?? '').toString();
+    // CHANGE #233B — the backend blanks workers/counts/countdowns and hands
+    // down this one line the moment the pool's own heartbeat goes stale, so a
+    // stopped VM can never keep drawing a live worker grid.
+    final stale = (_state['stale_display'] ?? '').toString();
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       // Header: title · active/cap count · settings gear.
@@ -70,6 +74,27 @@ class WorkerGridCard extends StatelessWidget {
           ),
         ),
       ]),
+      // Offline banner — same shape as the shrink banner, danger tone.
+      if (stale.isNotEmpty) ...[
+        SizedBox(height: Ds.space.x8),
+        Container(
+          width: double.infinity,
+          padding: EdgeInsets.symmetric(
+              horizontal: Ds.space.x8 + 2, vertical: Ds.space.x8),
+          decoration: BoxDecoration(
+              color: Ds.c.dangerSoft, borderRadius: Ds.r.rButton),
+          child: Row(children: [
+            Icon(Icons.cloud_off_outlined,
+                size: Ds.space.x16, color: Ds.c.danger),
+            SizedBox(width: Ds.space.x8),
+            Flexible(
+              child: Text(stale,
+                  style: Ds.t.caption.copyWith(
+                      fontWeight: FontWeight.w600, color: Ds.c.danger)),
+            ),
+          ]),
+        ),
+      ],
       // Shrink banner (only when the backend supplied a reason string).
       if (shrink.isNotEmpty) ...[
         SizedBox(height: Ds.space.x8),

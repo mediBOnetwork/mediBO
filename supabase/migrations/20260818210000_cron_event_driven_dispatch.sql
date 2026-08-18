@@ -739,3 +739,49 @@ insert into public.ui_copy (key, value) values
  ('dev_queue.cron_health_unreachable',
   to_jsonb('Could not reach the backend. Nothing was changed — tap Refresh to try again.'::text))
 on conflict (key) do update set value = excluded.value;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 11. QA FINDING — the revokes above were not enough
+-- ═══════════════════════════════════════════════════════════════════════════
+-- Found by probing PRODUCTION with the anon key that ships inside the web
+-- bundle and the APK. `revoke all on function ... from public` does NOT close a
+-- public function on Supabase: EXECUTE is granted DIRECTLY to `anon` and
+-- `authenticated` by ALTER DEFAULT PRIVILEGES, and revoking from PUBLIC leaves
+-- a direct grant untouched. All seven functions were anon-callable.
+--
+-- Six were harmless only by accident — SECURITY INVOKER, so anon died at 42501
+-- on the first table read. cron_wake() was NOT: it is SECURITY DEFINER, and an
+-- anonymous POST to /rest/v1/rpc/cron_wake SUCCEEDED, queueing a signal that
+-- makes the dispatcher run that task on its next tick. An unauthenticated
+-- caller could drive dev_auto_heal / route_plan_drain / the lead drains once a
+-- minute, forever — the exact class of self-inflicted load this whole command
+-- exists to delete.
+--
+-- The triggers are unaffected: they call cron_wake() from SECURITY DEFINER
+-- trigger functions owned by postgres, so the privilege check is against the
+-- owner, never against the customer whose transaction fired them.
+revoke execute on function public.cron_wake(text)            from anon, authenticated;
+revoke execute on function public.cron_run(text, text)       from anon, authenticated;
+revoke execute on function public.cron_add(text, text, text) from anon, authenticated;
+revoke execute on function public.cron_dispatch()            from anon, authenticated;
+revoke execute on function public.cron_guard_sweep()         from anon, authenticated;
+revoke execute on function public.cron_is_per_minute(text)   from anon, authenticated;
+
+-- cron_health() answered an anon request even after that, because Postgres
+-- grants EXECUTE on a new function to PUBLIC by default. It answered with the
+-- backend's refusal payload, not data, so nothing leaked — but "safe because
+-- the body checks" is one edit away from "not safe".
+revoke execute on function public.cron_health() from public, anon;
+grant  execute on function public.cron_health() to authenticated, service_role;
+
+delete from public.cron_signal;   -- anything an anon caller queued before this
+
+-- With anon holding no EXECUTE at all, a logged-out visit to /admin/cron-health
+-- now fails at the transport (42501) instead of reaching the function's own
+-- refusal. Dart cannot tell "denied" from "offline" without parsing the error
+-- string, and parsing one in Dart is the same sin as writing one — so the
+-- single sentence has to be true of both.
+insert into public.ui_copy (key, value) values
+ ('dev_queue.cron_health_unreachable',
+  to_jsonb('Cron health could not be loaded. Sign in as a super-admin and tap Refresh.'::text))
+on conflict (key) do update set value = excluded.value;

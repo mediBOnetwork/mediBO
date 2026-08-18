@@ -47,6 +47,12 @@ class DevQueueService {
 
   /// The known build areas (backend-decided list + labels) for the bug-report
   /// area picker. Rendered verbatim — the app never invents an area name.
+  /// CHANGE #273 — cron health. One RPC, rendered verbatim by CronHealthScreen:
+  /// the headline, the last dispatcher tick, every registered task's state and
+  /// the guard log all arrive as backend strings.
+  Future<Map<String, dynamic>> cronHealth() async =>
+      _asMap(await _c.rpc('cron_health'));
+
   Future<List<Map<String, dynamic>>> areasGet() async =>
       _asList(await _c.rpc('dev_areas_get'));
 

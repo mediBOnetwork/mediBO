@@ -15,11 +15,19 @@
 # pay for.
 #
 # THREE PHASES, ALL MUST BE GREEN
+#   TWO phases gate the build (the third moved off it — see below):
 #   1. protected — flutter test test/protected/  (the regression suite)
 #   2. focused   — the command's OWN test(s), auto-detected from the git diff
 #                  (any *_test.dart changed vs origin/main, staged, unstaged or
 #                  untracked) so a builder gets this for free with zero config
-#   3. rg        — rg_check() must be green (schema/RPC regression guard)
+#   3. rg        — MOVED OUT (CHANGE #273). rg_check() is a heavy read against
+#                  production and firing it from the pre-build gate is what put
+#                  a 13.5-second guard query on top of the per-minute cron burst
+#                  at 10:01:24 UTC on 2026-08-18, 33 seconds before Postgres
+#                  went silent. It now runs AFTER the deploy, from
+#                  scripts/rg_after_deploy.sh. Still mandatory — dev_cmd_complete()
+#                  raises on a red guard — just no longer on the build path.
+#                  --rg re-enables it here for a manual run.
 #
 # ATTEMPT CAP (spec #222.3): a worker fixes red tests in-session and re-runs.
 # After `--attempt-cap` consecutive red runs for the same command (default 3)
@@ -43,7 +51,8 @@ export PATH="$PATH:$HOME/flutter/bin"
 DEVCMD="$HOME/mediBO-runner/devcmd.sh"
 STATE_DIR="$HOME/mediBO-runner"
 CMD_ID=""
-RUN_RG=1
+# CHANGE #273: OFF by default. rg_check() runs post-deploy, not pre-build.
+RUN_RG=0
 ATTEMPT_CAP=3
 RESET=0
 FOCUS_ARGS=()
@@ -129,7 +138,7 @@ else
 fi
 
 # ── PHASE 3: schema/RPC regression guard ───────────────────────────────────
-rule; say "PHASE 3/3 — rg_check()"
+rule; say "PHASE 3/3 — rg_check() (post-deploy since CHANGE #273)"
 if [ "$RUN_RG" = "1" ]; then
   RG_RAW="$("$DEVCMD" rgcheck 2>/dev/null | tr -d '[:space:]')"
   if [ "$RG_RAW" = "true" ]; then
@@ -142,7 +151,7 @@ if [ "$RUN_RG" = "1" ]; then
     say "rg_check: RED — rebaseline intentional schema changes first"
   fi
 else
-  say "rg_check: skipped (--no-rg)"
+  say "rg_check: deferred to scripts/rg_after_deploy.sh (CHANGE #273)"
 fi
 
 rm -f "$LOG"

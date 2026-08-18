@@ -86,7 +86,14 @@ fi
 # scripts/selftest.sh runs, in THIS session, before a single byte is built:
 #   1. flutter test test/protected/   (the regression suite)
 #   2. the command's own focused test (auto-detected from the git diff)
-#   3. rg_check()                     (schema/RPC regression guard)
+#
+# rg_check() used to be phase 3 here. CHANGE #273 took it off the build path:
+# it is a heavy read against production, and running it from the pre-build gate
+# is how a 13,573 ms guard query landed on top of the per-minute cron burst at
+# 10:01:24 UTC on 2026-08-18, 33 seconds before Postgres went silent for two
+# hours. It now runs ONCE, after the live alias is confirmed, from
+# scripts/rg_after_deploy.sh — and dev_cmd_complete() still refuses to complete
+# a command while the guard is red, so nothing is weakened.
 #
 # It sits ABOVE the CHANGE #N stamp on purpose: a red suite must not burn a
 # change number on a deploy that never happens (observed while building #222 —
@@ -100,7 +107,7 @@ echo "🧪 [gate] fold-in self-test (CHANGE #222) — tests run BEFORE the build
 # NOTE: this script runs under `set -e`, so the exit code must be captured with
 # `|| STATUS=$?` — a bare call would abort before the diagnosis below prints.
 SELFTEST_STATUS=0
-bash scripts/selftest.sh --rg || SELFTEST_STATUS=$?
+bash scripts/selftest.sh --no-rg || SELFTEST_STATUS=$?
 if [ "$SELFTEST_STATUS" -ne 0 ]; then
   echo ""
   echo "❌  DEPLOY ABORTED — self-test gate is RED (exit $SELFTEST_STATUS)."
@@ -516,6 +523,12 @@ for i in $(seq 1 $MAX); do
     fi
 
     bash scripts/verify_live.sh
+
+    # CHANGE #273: the schema/RPC guard runs HERE — after the bundle is live —
+    # not in the pre-build gate. It never fails the deploy (the bundle already
+    # shipped); dev_cmd_complete() is what refuses a red guard.
+    bash scripts/rg_after_deploy.sh "${DEPLOY_CMD_ID:-}" || true
+
     exit 0
   fi
   echo "  poll $i/$MAX: live='$LIVE', want='$SHORT' — retrying in ${DELAY}s…"

@@ -13,6 +13,7 @@ import 'dev_queue_control.dart';
 import 'dev_queue_gcp.dart';
 import 'dev_queue_qa.dart';
 import 'dev_queue_questions.dart';
+import 'cron_health_screen.dart';
 import 'journey_library_screen.dart';
 import 'memory_screen.dart';
 import 'threads_screen.dart';
@@ -258,6 +259,16 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
               icon: const Icon(Icons.map_outlined, color: kBrand),
               onPressed: () => Navigator.of(context).push(MaterialPageRoute(
                   builder: (_) => JourneyLibraryScreen(service: _svc))),
+            ),
+          ),
+          Semantics(
+            identifier: 'devq_cron_health',
+            button: true,
+            child: IconButton(
+              tooltip: c('dev_queue.cron_health_nav_label'),
+              icon: const Icon(Icons.schedule_outlined, color: kBrand),
+              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => CronHealthScreen(service: _svc))),
             ),
           ),
           Semantics(

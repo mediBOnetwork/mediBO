@@ -1,8 +1,17 @@
 // CHANGE #222 — the gate that guards the gate.
 //
 // #222 folded testing INTO the build: scripts/deploy.sh now refuses to build
-// unless scripts/selftest.sh (protected suite + focused test + rg_check) is
-// green. That fix is only worth anything if it cannot be quietly undone — a
+// unless scripts/selftest.sh (protected suite + focused test) is green.
+//
+// CHANGE #273 moved the third phase, rg_check(), OFF the build path. It is a
+// heavy read against production, and firing it from the pre-build gate is how a
+// 13,573 ms guard query landed on top of the per-minute cron burst at 10:01:24
+// UTC on 2026-08-18, 33 seconds before Postgres went silent for two hours. It
+// now runs once, after the live alias is confirmed, from
+// scripts/rg_after_deploy.sh. The guard itself is NOT weakened: dev_cmd_complete()
+// still raises on a red rg_check, so no command completes with a schema
+// regression outstanding. This file pins BOTH halves — the build gate stays,
+// and the guard keeps running after every deploy. That fix is only worth anything if it cannot be quietly undone — a
 // future edit that drops the gate line from deploy.sh would restore exactly the
 // old failure mode (ship red, fail QA, pay for a "Debug pass — verify & fix #N"
 // twin) and nothing would notice.
@@ -96,14 +105,12 @@ void main() {
     });
   });
 
-  group('selftest.sh enforces all three phases', () {
-    test('it runs the protected suite, a focused test and rg_check', () {
+  group('selftest.sh gates the build on tests', () {
+    test('it runs the protected suite and the change\'s own focused test', () {
       final code = _code(selftestFile.readAsStringSync());
 
       expect(code.contains('flutter test test/protected/'), isTrue,
           reason: 'phase 1 is the protected regression suite');
-      expect(code.contains('rgcheck') || code.contains('rg_check'), isTrue,
-          reason: 'phase 3 is the schema/RPC regression guard');
       expect(code.contains('_test.dart'), isTrue,
           reason: 'phase 2 must discover the change\'s own focused test(s)');
     });
@@ -125,6 +132,65 @@ void main() {
               'stops — it must never silently deploy or spin');
       expect(RegExp(r'exit 2').hasMatch(code), isTrue,
           reason: 'the cap path exits 2 so deploy.sh can report it distinctly');
+    });
+  });
+
+  group('rg_check runs AFTER the deploy, never on the build path (#273)', () {
+    final rgFile = File('$repoRoot/scripts/rg_after_deploy.sh');
+
+    test('the post-deploy guard script exists', () {
+      expect(rgFile.existsSync(), isTrue,
+          reason: 'scripts/rg_after_deploy.sh is where rg_check() lives since '
+              '#273. Without it the guard stops running at all — which is a '
+              'bigger regression than the latency it was moved to avoid.');
+    });
+
+    test('deploy.sh does not ask the pre-build gate to run rg_check', () {
+      final code = _code(deployFile.readAsStringSync());
+      final gateLine = code
+          .split('\n')
+          .firstWhere((l) => l.contains('scripts/selftest.sh'), orElse: () => '');
+
+      expect(gateLine.contains('--rg'), isFalse,
+          reason: 'the pre-build gate must not run rg_check: a heavy read '
+              'against production has no business standing between a green '
+              'suite and a bundle (see the 2026-08-18 10:01 UTC outage)');
+      expect(gateLine.contains('--no-rg'), isTrue,
+          reason: 'deploy.sh must pass --no-rg explicitly, so a future change '
+              'to selftest.sh defaults cannot silently put it back');
+    });
+
+    test('deploy.sh runs the guard after the upload, and it cannot abort it', () {
+      final code = _code(deployFile.readAsStringSync());
+
+      final rgIndex = code.indexOf('scripts/rg_after_deploy.sh');
+      expect(rgIndex, greaterThan(-1),
+          reason: 'deploy.sh must still run rg_check somewhere — after the '
+              'deploy, not before the build');
+
+      final uploadIndex = code.indexOf('wrangler pages deploy');
+      expect(uploadIndex, greaterThan(-1),
+          reason: 'deploy.sh should still upload the bundle');
+      expect(rgIndex, greaterThan(uploadIndex),
+          reason: 'the guard must run AFTER the upload — that is the whole '
+              'point of #273');
+
+      final rgLine = code
+          .split('\n')
+          .firstWhere((l) => l.contains('scripts/rg_after_deploy.sh'),
+              orElse: () => '');
+      expect(rgLine.contains('|| true'), isTrue,
+          reason: 'a red guard must not fail a deploy that is already live; '
+              'dev_cmd_complete() is what refuses to complete on red');
+    });
+
+    test('the guard script itself never exits non-zero', () {
+      final code = _code(rgFile.readAsStringSync());
+      expect(code.contains('rgcheck') || code.contains('rg_check'), isTrue,
+          reason: 'rg_after_deploy.sh must actually call the guard');
+      expect(RegExp(r'^\s*exit [1-9]', multiLine: true).hasMatch(code), isFalse,
+          reason: 'by the time this runs the bundle is live — exiting non-zero '
+              'would make a healthy deploy look broken');
     });
   });
 }

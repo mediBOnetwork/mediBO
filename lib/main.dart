@@ -31,6 +31,7 @@ import 'screens/delivery/delivery_register_screen.dart'; // C631: PART A
 import 'screens/code_resolver_page.dart';
 import 'screens/public/wa_link_redirect_page.dart'; // /r/:code — campaign links
 import 'screens/admin/wa_campaigns_screen.dart'; // /admin/wa-campaigns
+import 'screens/admin/admin_scope_audit_screen.dart'; // /admin/scope-audit
 import 'screens/product_detail_screen.dart'; // C636: /product/:id
 import 'screens/reorder_screen.dart'; // #173: /reorder
 import 'screens/admin/reorder_admin_screen.dart'; // #173: /admin/reorder
@@ -555,6 +556,19 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
                 return MaterialPageRoute(
                   settings: settings,
                   builder: (_) => const WaCampaignsScreen(),
+                );
+              }
+              // CHANGE #240 — the Scope Audit screen (which now also carries
+              // the inquiry->PO date integrity block) gets a real URL, exactly
+              // like /admin/wa-campaigns above: gated by admin_scope_audit()
+              // returning not_authorized, never by a role check in this file.
+              // It stays reachable from Admin -> Scope audit as well; the URL
+              // is what lets the post-deploy verifier open the screen and prove
+              // it actually painted, instead of trusting a string in the bundle.
+              if (name == '/admin/scope-audit') {
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => const AdminScopeAuditScreen(),
                 );
               }
               if (name.startsWith('/inquiry/')) {

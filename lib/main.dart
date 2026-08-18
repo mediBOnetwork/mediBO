@@ -39,6 +39,7 @@ import 'screens/inquiry_link_page.dart';
 import 'screens/dispute_link_page.dart';
 import 'features/whatsapp/ui/wa_templates_screen.dart'; // admin WhatsApp templates
 import 'screens/admin/wa_ops_screen.dart'; // admin WhatsApp ops + template pipeline
+import 'screens/admin/admin_order_closure_screen.dart'; // CHANGE #229 — /admin/order-closure
 import 'screens/about_screen.dart';
 import 'screens/contact_screen.dart';
 import 'screens/legal_pages.dart';
@@ -642,6 +643,14 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
               // callers themselves and the screen renders that refusal, so the
               // route guards nothing.
               '/admin/wa-ops': (_) => const WaOpsScreen(),
+              // CHANGE #229 — Order closure at a real URL, same reason
+              // /admin/wa-ops has one: this is the page you send someone to
+              // when they ask "why is that order still open?". The screen's
+              // own RPCs (admin_order_closure_list / _detail) refuse a
+              // non-admin caller and it renders that refusal verbatim, so the
+              // route guards nothing — and a headless admin session can reach
+              // it directly, which is what proves the screen actually renders.
+              '/admin/order-closure': (_) => const AdminOrderClosureScreen(),
               // CHANGE #173 — the reorder screen as a real URL. The WhatsApp
               // reorder nudge can link straight here, and it gives the screen
               // a shareable address like /product/:id has. The screen asks the

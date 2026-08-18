@@ -124,6 +124,13 @@ class _DevQueueControlState extends State<DevQueueControl> {
   // Dart no longer decides that "off" simply means "show nothing".
   RemoteBadge get _remote => RemoteBadge(_status);
 
+  // CHANGE #237 — a SECOND, separate badge: the Claude Code app's device list.
+  // _remote above is mediBO's own live-view bridge; this one counts worker
+  // companions that reached Anthropic's session bridge. They read the same
+  // payload but never the same keys — conflating them is exactly how "On phone"
+  // stayed green while Om's app showed no devices at all.
+  PhoneBadge get _phone => PhoneBadge(_status);
+
   /// A toggle tap. Locked toggles (per the backend ordering vm→claude→workflow)
   /// don't flip — they float a mini reason popup next to the switch and keep
   /// their colour. VM-off while building asks to confirm in that same mini
@@ -407,7 +414,66 @@ class _DevQueueControlState extends State<DevQueueControl> {
               icon: _remote.isOn
                   ? Icons.phone_iphone
                   : Icons.mobile_off_outlined),
+        if (_phone.show) ...[
+          SizedBox(width: Ds.space.x8),
+          // Tap target is the whole chip row in the sheet-opening wrapper; the
+          // chip itself is short, so pad it out to the token touch minimum.
+          InkWell(
+            onTap: _openPhoneSessions,
+            borderRadius: BorderRadius.circular(Ds.r.chip),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+              child: Center(
+                child: ToneChip(
+                    label: _phone.display,
+                    tone: toneByName(_phone.tone),
+                    icon: _phone.isOn
+                        ? Icons.smartphone
+                        : Icons.mobile_off_outlined),
+              ),
+            ),
+          ),
+        ],
       ]);
+
+  /// The device list, verbatim: every string (label, hint, session names) is
+  /// composed on the VM or in ui_copy. Dart adds no wording and no count.
+  void _openPhoneSessions() {
+    final badge = _phone;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(
+          borderRadius:
+              BorderRadius.vertical(top: Radius.circular(Ds.r.sheet))),
+      builder: (_) => SafeArea(
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(
+              Ds.space.x16, Ds.space.x16, Ds.space.x16, Ds.space.x24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(badge.display, style: Ds.t.subtitle),
+              SizedBox(height: Ds.space.x4),
+              Text(badge.hint, style: Ds.t.caption),
+              SizedBox(height: Ds.space.x16),
+              for (final n in badge.names)
+                Padding(
+                  padding: EdgeInsets.only(bottom: Ds.space.x8),
+                  child: Row(children: [
+                    Icon(Icons.smartphone,
+                        size: Ds.t.bodySize, color: Ds.c.textSecondary),
+                    SizedBox(width: Ds.space.x8),
+                    Expanded(child: Text(n, style: Ds.t.body)),
+                  ]),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
   /// Slim one-line summary shown when collapsed: workflow state + the top usage
   /// percent, so Om reads the essentials without opening the panel.

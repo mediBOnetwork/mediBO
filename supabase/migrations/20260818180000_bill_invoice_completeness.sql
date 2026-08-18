@@ -236,13 +236,13 @@ begin
       'discount_label',        case when v_pct > 0
                                     then 'Less: Discount @ ' || trim_scale(v_pct)::text || '%'
                                     else 'Less: Discount (below slab)' end,
-      'discount_amount_label', '− ₹' || to_char(v_disc,'FM99,99,990.00'),
+      'discount_amount_label', '- ₹' || to_char(v_disc,'FM99,99,990.00'),
       'taxable_label',         '₹' || to_char(v_taxable,'FM99,99,990.00'),
       'cgst_label',            '₹' || to_char(round(v_gst/2,2),'FM99,99,990.00'),
       'sgst_label',            '₹' || to_char(round(v_gst/2,2),'FM99,99,990.00'),
       'gst_total_label',       '₹' || to_char(v_gst,'FM99,99,990.00'),
       'round_off_label',       case when v_round <> 0
-                                    then (case when v_round > 0 then '+ ₹' else '− ₹' end)
+                                    then (case when v_round > 0 then '+ ₹' else '- ₹' end)
                                          || to_char(abs(v_round),'FM990.00') end,
       'net_payable',           v_final,
       'net_payable_label',     '₹' || to_char(v_final,'FM99,99,990.00'),

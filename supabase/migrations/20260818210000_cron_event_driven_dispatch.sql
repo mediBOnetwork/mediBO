@@ -637,22 +637,20 @@ select cron.schedule('cron-dispatch', '* * * * *',
   $$select public.cron_run('cron-dispatch', 'select public.cron_dispatch()')$$);
 
 -- ═══════════════════════════════════════════════════════════════════════════
--- 9. READ SURFACE — cron health, rendered verbatim by the admin screen
+-- 9. READ SURFACE — cron health, rendered verbatim by CronHealthScreen
 -- ═══════════════════════════════════════════════════════════════════════════
+-- NB: _dev_guard() RETURNS VOID and raises; it is not a boolean. Same door
+-- every other dev-queue RPC uses: service_role or super_admin, nobody else.
 create or replace function public.cron_health()
-returns jsonb
-language plpgsql
-security definer
-set search_path to 'public'
-as $$
+returns jsonb language plpgsql security definer set search_path to 'public' as $$
 declare v jsonb; st record; v_peak int;
 begin
-  if not public._dev_guard() then
-    return jsonb_build_object('ok', false, 'error', 'forbidden');
-  end if;
+  perform public._dev_guard();
 
   select * into st from public.cron_dispatch_state where id;
 
+  -- sweep-line over cron.job_run_details: the real peak concurrency, not a
+  -- point sample of pg_stat_activity
   with ev as (
     select start_time t, 1 d from cron.job_run_details where start_time > now() - interval '1 hour'
     union all
@@ -672,9 +670,9 @@ begin
     'tick', jsonb_build_object(
       'label', 'Last dispatcher tick',
       'at_label', coalesce(to_char(st.last_tick_at at time zone 'Asia/Kolkata', 'DD Mon HH24:MI:SS'), 'never'),
-      'value_label', format('%s ran · %s skipped · %s failed · %s ms',
+      'value_label', format('%s ran · %s skipped as idle · %s failed · %s ms',
                             st.last_ran, st.last_skipped, st.last_failed, st.last_ms),
-      'tone', case when st.last_failed > 0 then 'danger'
+      'tone', case when st.last_failed > 0 then 'error'
                    when st.last_tick_at is null or st.last_tick_at < now() - interval '5 minutes' then 'warning'
                    else 'success' end),
     'runs_last_hour', (select count(*) from cron.job_run_details where start_time > now() - interval '1 hour'),
@@ -688,17 +686,19 @@ begin
         'state_label', case
             when not t.enabled then 'Disabled'
             when t.last_error is not null then 'Last run failed'
-            when t.last_run_at is null then 'Idle — never needed yet'
-            else format('Last ran %s IST · %s ms', to_char(t.last_run_at at time zone 'Asia/Kolkata', 'DD Mon HH24:MI'), t.last_ms) end,
+            when t.last_run_at is null then 'Idle - never needed yet'
+            else format('Last ran %s IST · %s ms',
+                        to_char(t.last_run_at at time zone 'Asia/Kolkata', 'DD Mon HH24:MI'), t.last_ms) end,
         'counts_label', format('%s run · %s skipped as idle', t.runs, t.skips),
-        'tone', case when t.last_error is not null then 'danger'
-                     when not t.enabled then 'warning' else 'success' end,
+        'tone', case when t.last_error is not null then 'error'
+                     when not t.enabled then 'warning'
+                     when t.mode = 'event' then 'info' else 'success' end,
         'error', t.last_error,
         'note', t.note)
       order by t.ord, t.name) from public.cron_task t), '[]'::jsonb),
     'guard', jsonb_build_object(
       'label', 'Guard',
-      'value_label', format('max %s concurrent · %s refusal/repair events',
+      'value_label', format('max %s concurrent · %s refusal/repair events in 7 days',
         (select max_concurrent from public.cron_guard_config where id),
         (select count(*) from public.cron_guard_event where at > now() - interval '7 days')),
       'recent', coalesce((select jsonb_agg(jsonb_build_object(
@@ -711,3 +711,16 @@ begin
 end $$;
 
 grant execute on function public.cron_health() to authenticated, service_role;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 10. COPY — every visible word on the screen is a backend string
+-- ═══════════════════════════════════════════════════════════════════════════
+insert into public.ui_copy (key, value) values
+ ('dev_queue.cron_health_nav_label',  to_jsonb('Cron health'::text)),
+ ('dev_queue.cron_health_refresh',    to_jsonb('Refresh'::text)),
+ ('dev_queue.cron_health_tasks_title',to_jsonb('Registered work'::text)),
+ ('dev_queue.cron_health_runs_hour',  to_jsonb('Runs / hour'::text)),
+ ('dev_queue.cron_health_db_seconds', to_jsonb('DB seconds / hour'::text)),
+ ('dev_queue.cron_health_peak',       to_jsonb('Peak concurrent'::text)),
+ ('dev_queue.cron_health_guard_quiet',to_jsonb('No refusals or repairs in the last 7 days.'::text))
+on conflict (key) do update set value = excluded.value;

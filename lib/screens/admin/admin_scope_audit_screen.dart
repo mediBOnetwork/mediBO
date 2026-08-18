@@ -92,12 +92,20 @@ class _AdminScopeAuditScreenState extends State<AdminScopeAuditScreen> {
   Widget build(BuildContext context) {
     final d = _data;
     final stages = (d?['stages'] as List?) ?? const [];
+    // CHANGE #240 — same payload, same RPC. The block is absent (not empty)
+    // when the backend has nothing to say, so an older backend still renders.
+    final integrity = d?['integrity'] is Map
+        ? Map<String, dynamic>.from(d!['integrity'] as Map)
+        : null;
 
     RenderLog.write('c227_scope_audit_screen', 1);
     RenderLog.write('c227_scope_audit_stages', stages.length);
     final rowCount = stages.fold<int>(
         0, (a, s) => a + (((s as Map)['rows'] as List?)?.length ?? 0));
     RenderLog.write('c227_scope_audit_rows', rowCount);
+    RenderLog.write('c240_inq_po_block', integrity == null ? 0 : 1);
+    RenderLog.write(
+        'c240_inq_po_rows', ((integrity?['rows'] as List?) ?? const []).length);
 
     return Scaffold(
       backgroundColor: Ds.c.bg,
@@ -120,6 +128,10 @@ class _AdminScopeAuditScreenState extends State<AdminScopeAuditScreen> {
                     children: [
                       _Header(d: d),
                       SizedBox(height: Ds.space.x24),
+                      if (integrity != null) ...[
+                        ScopeIntegrityBlock(d: integrity),
+                        SizedBox(height: Ds.space.x24),
+                      ],
                       if (stages.isEmpty)
                         _Empty(label: '${d?['empty_label'] ?? ''}')
                       else
@@ -189,6 +201,74 @@ class _Header extends StatelessWidget {
         ]),
       ),
     ]);
+  }
+}
+
+/// CHANGE #240 — inquiry → PO date integrity. An inquiry line may only point at
+/// the purchase order for its OWN batch_date; 83 of 101 linked lines pointed at
+/// another day's PO, which hid them from the supplier form and from the engine.
+///
+/// This widget computes nothing. Every label, value, tone and hint arrives in
+/// `admin_scope_audit().integrity`; the only mapping owned here is tone → token.
+class ScopeIntegrityBlock extends StatelessWidget {
+  final Map<String, dynamic> d;
+  const ScopeIntegrityBlock({super.key, required this.d});
+
+  @override
+  Widget build(BuildContext context) {
+    final rows = (d['rows'] as List?) ?? const [];
+    final tone = d['banner_tone'];
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Padding(
+        padding: EdgeInsets.only(left: Ds.space.x4, bottom: Ds.space.x8),
+        child: Text('${d['title'] ?? ''}',
+            style: Ds.t.subtitle.copyWith(color: Ds.c.brand)),
+      ),
+      Container(
+        width: double.infinity,
+        padding: EdgeInsets.all(Ds.space.x16),
+        decoration: BoxDecoration(
+          color: Ds.c.surface,
+          borderRadius: Ds.r.rCard,
+          boxShadow: Ds.elevation.e1,
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          _Pill(label: '${d['banner_label'] ?? ''}', tone: tone),
+          SizedBox(height: Ds.space.x8),
+          Text('${d['subtitle'] ?? ''}', style: Ds.t.caption),
+          SizedBox(height: Ds.space.x16),
+          for (final r in rows)
+            _IntegrityRow(row: Map<String, dynamic>.from(r as Map)),
+        ]),
+      ),
+    ]);
+  }
+}
+
+class _IntegrityRow extends StatelessWidget {
+  final Map<String, dynamic> row;
+  const _IntegrityRow({required this.row});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: Ds.space.x12),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Expanded(
+          child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('${row['label'] ?? ''}', style: Ds.t.body),
+                if ('${row['detail'] ?? ''}'.isNotEmpty)
+                  Text('${row['detail']}', style: Ds.t.caption),
+              ]),
+        ),
+        SizedBox(width: Ds.space.x16),
+        Text('${row['value'] ?? ''}',
+            textAlign: TextAlign.right,
+            style: Ds.t.subtitle.copyWith(color: _toneColor(row['tone']))),
+      ]),
+    );
   }
 }
 

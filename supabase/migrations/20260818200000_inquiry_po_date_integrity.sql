@@ -454,11 +454,16 @@ begin
   end if;
 
   -- 7d. THE LINKERS must keep going through the one date-keyed door.
+  --     A linker is date-scoped either because it filters on order_date itself
+  --     (_heal_inquiry_link) or because it delegates to _supplier_po_for_date,
+  --     which is keyed (supplier_name, order_date) (commit_supplier_order).
+  --     Having NEITHER is the #240 defect: picking a PO with no date filter.
   select string_agg(p.proname, ', ' order by p.proname) into v_bad
     from pg_proc p
    where p.pronamespace = 'public'::regnamespace
      and p.proname in ('commit_supplier_order','_heal_inquiry_link')
-     and pg_get_functiondef(p.oid) not like '%order_date%';
+     and pg_get_functiondef(p.oid) not like '%order_date%'
+     and pg_get_functiondef(p.oid) not like '%_supplier_po_for_date%';
   if v_bad is not null then
     raise exception 'RG_FAIL: PO linker(s) lost their date scope -> %', v_bad;
   end if;

@@ -25,6 +25,25 @@
 // The reply also carries `settled` + `poll_after_ms`, so the chip chases
 // pending/stopping to a real resting state instead of printing a guess.
 //
+// CHANGE #225 — "the toggle is not wired". It was wired; the BROWSER never got
+// to use it. medibo.in is a different origin from *.supabase.co, so every
+// `functions.invoke('vm-control')` is preceded by a CORS preflight OPTIONS.
+// This function had no CORS at all: the preflight fell through to the
+// am_i_super() check, which an unauthenticated OPTIONS can never pass, and came
+// back `403 not_authorized` with no Access-Control-Allow-Origin. The browser
+// then blocked the real POST — so start/stop/status/preflight NEVER reached
+// EC2 from the app. Proof was 60+ `OPTIONS | 403` rows in function_edge_logs
+// against zero POSTs. STOP still appeared to work only because dev_ctl_set
+// (PostgREST, which does send CORS) wrote desired_state.vm='off' and the
+// supervisor ON the box powered it down — a path that by definition cannot
+// bring a stopped box back. Hence "off works, on does nothing".
+//
+// So: OPTIONS is answered first, before auth, and `cors` is welded into the one
+// `json()` helper every reply goes through — including the 403 and the 502, so
+// a real refusal reaches the app as its own words instead of an opaque CORS
+// error. Sibling functions the web app already calls (scan-bill, gemini-ocr,
+// voice-receive) carry exactly this header set.
+//
 // Every human-facing string comes from `ui_copy`. This function returns copy the
 // client prints verbatim; it never words anything itself.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
@@ -34,8 +53,20 @@ const URL = Deno.env.get("SUPABASE_URL")!;
 const ANON = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SVC = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
+// The app is served from medibo.in; the function lives on *.supabase.co. Every
+// reply needs these or the browser discards it — errors included.
+const cors = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Max-Age": "86400",
+};
+
 const json = (o: unknown, s = 200) =>
-  new Response(JSON.stringify(o), { status: s, headers: { "Content-Type": "application/json" } });
+  new Response(JSON.stringify(o), {
+    status: s,
+    headers: { ...cors, "Content-Type": "application/json" },
+  });
 
 // ── small crypto/encoding helpers ───────────────────────────────────────────
 const enc = new TextEncoder();
@@ -149,6 +180,10 @@ async function mintGcpToken(sa: any) {
 }
 
 Deno.serve(async (req) => {
+  // The preflight carries no Authorization header by design, so it must be
+  // answered BEFORE the auth check — never routed through it.
+  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
+
   try {
     const body = await req.json().catch(() => ({}));
     const action = (body.action ?? "status").toString();

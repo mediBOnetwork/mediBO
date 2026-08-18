@@ -89,6 +89,11 @@ List<AdminNavEntry> get kAdminOverflowNav => <AdminNavEntry>[
       // CHANGE #179 — Offers marketplace admin panel.
       AdminNavEntry('Offer listings', Icons.local_offer_outlined,
           route: 'admin_offers'),
+      // CHANGE #226 — the automatic customer-billing chain, order by order:
+      // lines unverified -> items uncovered -> bill generated -> WA sent ->
+      // payment received, plus the "waiting on supplier X" chip.
+      AdminNavEntry('Bill pipeline', Icons.receipt_long_outlined,
+          route: 'bill_pipeline'),
     ];
 
 /// The wide shell's "More" popup, sitting after Fulfillment in the top row.

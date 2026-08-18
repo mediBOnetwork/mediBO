@@ -60,6 +60,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../features/whatsapp/ui/wa_campaign_chips.dart';
 import '../../services/ui_copy.dart';
+import '../../design_tokens.dart';
 import '../../utils/render_log.dart';
 
 const _kGreen = Color(0xFF1B7A43);
@@ -97,6 +98,9 @@ typedef WaContactLedgerRpc = Future<Map<String, dynamic>> Function(
 // p_label defaults to null; an empty p_phone clears the number and the zone
 // falls back to the default zone's. The save RPC validates the number itself
 // and returns the reason it refuses — this file never reads a phone.
+// wa_template_pipeline() — the message -> template -> Meta status -> route table.
+// Read-only; every label, tone and sentence in it is written by the backend.
+typedef WaTemplatePipelineRpc = Future<Map<String, dynamic>> Function();
 typedef ZonesContactScreenRpc = Future<Map<String, dynamic>> Function();
 typedef ZoneContactSaveRpc = Future<Map<String, dynamic>> Function(
     Map<String, dynamic> params);
@@ -122,6 +126,9 @@ Future<Map<String, dynamic>> waWabaRefresh() async =>
 Future<Map<String, dynamic>> waContactLedger(int days, String? phone) async =>
     _asMap(await _db
         .rpc('wa_contact_ledger', params: {'p_days': days, 'p_phone': phone}));
+
+Future<Map<String, dynamic>> waTemplatePipeline() async =>
+    _asMap(await _db.rpc('wa_template_pipeline'));
 
 Future<Map<String, dynamic>> zonesContactScreen() async =>
     _asMap(await _db.rpc('zones_contact_screen'));
@@ -168,6 +175,7 @@ class WaOpsScreen extends StatefulWidget {
   final WaWabaStatusRpc? wabaStatusRpc;
   final WaWabaRefreshRpc? wabaRefreshRpc;
   final WaContactLedgerRpc? ledgerRpc;
+  final WaTemplatePipelineRpc? pipelineRpc;
   final ZonesContactScreenRpc? zonesRpc;
   final ZoneContactSaveRpc? zoneSaveRpc;
 
@@ -183,6 +191,7 @@ class WaOpsScreen extends StatefulWidget {
     this.wabaStatusRpc,
     this.wabaRefreshRpc,
     this.ledgerRpc,
+    this.pipelineRpc,
     this.zonesRpc,
     this.zoneSaveRpc,
     this.refreshDelay = const Duration(seconds: 3),
@@ -220,6 +229,12 @@ class _WaOpsScreenState extends State<WaOpsScreen> {
             routesRpc: widget.routesRpc,
             saveRpc: widget.routeSaveRpc,
           ),
+          SizedBox(height: Ds.space.x24),
+          _SectionHeading(
+            icon: Icons.fact_check_outlined,
+            text: 'Template pipeline',
+          ),
+          _TemplatePipelineSection(pipelineRpc: widget.pipelineRpc),
           const SizedBox(height: 22),
           _SectionHeading(
             icon: Icons.verified_outlined,
@@ -1490,4 +1505,175 @@ class _ErrorBlock extends StatelessWidget {
           ),
         ]),
       );
+}
+
+// ── SECTION B — template pipeline ────────────────────────────────────────────
+//
+// CHANGE #228. Every automatic WhatsApp message mediBO sends is one row here:
+// the message, the Meta template behind it, where that template is in Meta's
+// review, whether the route is live, and yes/no on approval.
+//
+// The point of the screen is that there is NOTHING to do on it. mediBO writes
+// the template, lints it, re-uploads its sample file, submits it to Meta, and
+// switches the route on when the verdict comes back. So this section has no
+// buttons: it is a read-out of an automation, not a console for driving one.
+//
+// Nothing is decided here. status_label / status_tone / route_label /
+// route_tone / approved_label / header_label / note / reason all arrive as
+// finished strings and tokens; the file maps tone->colour through the SAME
+// _chipTone adapter section A uses, so "warn" can never mean two colours in one
+// screen. media_ready is a backend boolean, never a date this file compares.
+class _TemplatePipelineSection extends StatefulWidget {
+  final WaTemplatePipelineRpc? pipelineRpc;
+  const _TemplatePipelineSection({this.pipelineRpc});
+
+  @override
+  State<_TemplatePipelineSection> createState() =>
+      _TemplatePipelineSectionState();
+}
+
+class _TemplatePipelineSectionState extends State<_TemplatePipelineSection> {
+  Map<String, dynamic>? _payload;
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final res = await (widget.pipelineRpc ?? waTemplatePipeline)();
+      if (!mounted) return;
+      if (_isError(res)) {
+        setState(() {
+          _loading = false;
+          _error = _errorText(res);
+        });
+        return;
+      }
+      setState(() {
+        _payload = res;
+        _loading = false;
+      });
+      try {
+        RenderLog.write('wa_ops_pipeline', 'rows=${_rows.length}');
+      } catch (_) {}
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = e.toString();
+      });
+    }
+  }
+
+  List<Map<String, dynamic>> get _rows =>
+      ((_payload?['rows'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const _Loading();
+    if (_error != null) {
+      return _ErrorBlock(message: _error!, onRetry: _load);
+    }
+
+    final rows = _rows;
+    final summary = (_payload?['summary_label'] ?? '').toString();
+    final note = (_payload?['note'] ?? '').toString();
+
+    if (rows.isEmpty) {
+      return _NoteBlock((_payload?['empty_label'] ?? '').toString());
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (summary.isNotEmpty)
+          Padding(
+            padding: EdgeInsets.only(bottom: Ds.space.x8),
+            child: Row(children: [
+              WaToneChip(
+                  label: summary,
+                  tone: _chipTone((_payload?['summary_tone'] ?? '').toString())),
+            ]),
+          ),
+        if (note.isNotEmpty) _NoteBlock(note),
+        for (final r in rows) _PipelineRow(row: r),
+      ],
+    );
+  }
+}
+
+class _PipelineRow extends StatelessWidget {
+  final Map<String, dynamic> row;
+  const _PipelineRow({required this.row});
+
+  @override
+  Widget build(BuildContext context) {
+    final message = (row['message'] ?? '').toString();
+    final template = (row['template_name'] ?? '').toString();
+    final status = (row['status_label'] ?? '').toString();
+    final route = (row['route_label'] ?? '').toString();
+    final approved = (row['approved_label'] ?? '').toString();
+    final header = (row['header_label'] ?? '').toString();
+    final note = (row['note'] ?? '').toString();
+    final reason = (row['reason'] ?? '').toString();
+    final mediaReady = row['media_ready'] == true;
+
+    return Container(
+      margin: EdgeInsets.only(bottom: Ds.space.x8),
+      padding: EdgeInsets.all(Ds.space.x12),
+      decoration: BoxDecoration(
+        color: _kCard,
+        borderRadius: Ds.r.rCard,
+        border: Border.all(color: _kBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Expanded(
+              child: Text(message,
+                  style: Ds.t.body.copyWith(fontWeight: FontWeight.w700)),
+            ),
+            WaToneChip(
+                label: status,
+                tone: _chipTone((row['status_tone'] ?? '').toString())),
+          ]),
+          SizedBox(height: Ds.space.x4),
+          Text(template, style: Ds.t.caption),
+          SizedBox(height: Ds.space.x8),
+          Wrap(spacing: Ds.space.x8, runSpacing: Ds.space.x4, children: [
+            WaToneChip(
+                label: route,
+                tone: _chipTone((row['route_tone'] ?? '').toString())),
+            WaToneChip(
+                label: approved,
+                tone: _chipTone((row['approved_tone'] ?? '').toString())),
+            if (header.isNotEmpty)
+              WaToneChip(
+                  label: header, tone: mediaReady ? null : _chipTone('warn')),
+          ]),
+          if (note.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x8),
+            Text(note, style: Ds.t.caption),
+          ],
+          if (reason.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(reason, style: Ds.t.caption.copyWith(color: _kRed)),
+          ],
+        ],
+      ),
+    );
+  }
 }

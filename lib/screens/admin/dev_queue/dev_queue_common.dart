@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../../services/ui_copy.dart';
+import 'restart_safety.dart';
 
 /// Presentation tokens for the Dev Queue tab.
 ///
@@ -61,6 +62,22 @@ Tone toneByName(String name) {
       return _info;
     default: // neutral
       return _neutral;
+  }
+}
+
+/// Presentation-only glyph for a restart-safety chip (CHANGE #233). The label
+/// and the tone arrive from the backend; only this icon is chosen locally, the
+/// same way routeIcon picks a glyph for a route.
+IconData safetyChipIcon(SafetyChipKind kind) {
+  switch (kind) {
+    case SafetyChipKind.offline:
+      return Icons.cloud_off_outlined;
+    case SafetyChipKind.stall:
+      return Icons.report_problem_outlined;
+    case SafetyChipKind.steps:
+      return Icons.checklist_rtl;
+    case SafetyChipKind.resumed:
+      return Icons.restart_alt;
   }
 }
 

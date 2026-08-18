@@ -210,20 +210,29 @@ class _TabChip extends StatelessWidget {
   Widget build(BuildContext context) => InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(Ds.r.chip),
+        // CHANGE #229 (auto-heal) — a Container with `alignment:` set expands
+        // to fill the loose constraints Wrap hands it, so all four tabs came
+        // out full-width and stacked, eating 260px of a 1280px screen. Align
+        // with widthFactor: 1 sizes to the label instead, and the SizedBox
+        // keeps the 44px touch target the design contract requires.
         child: Container(
-          constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
-          alignment: Alignment.center,
-          padding: EdgeInsets.symmetric(
-              horizontal: Ds.space.x16, vertical: Ds.space.x8),
+          padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
           decoration: BoxDecoration(
             color: selected ? Ds.c.brandSoft : Ds.c.bg,
             borderRadius: BorderRadius.circular(Ds.r.chip),
             border: Border.all(color: selected ? Ds.c.brand : Ds.c.divider),
           ),
-          child: Text(label,
-              style: Ds.t.caption.copyWith(
-                  color: selected ? Ds.c.brand : Ds.c.textSecondary,
-                  fontWeight: FontWeight.w600)),
+          child: SizedBox(
+            height: Ds.touch.minTarget,
+            child: Align(
+              alignment: Alignment.center,
+              widthFactor: 1,
+              child: Text(label,
+                  style: Ds.t.caption.copyWith(
+                      color: selected ? Ds.c.brand : Ds.c.textSecondary,
+                      fontWeight: FontWeight.w600)),
+            ),
+          ),
         ),
       );
 }

@@ -1599,7 +1599,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         'order_item_status_panel',
         params: {'p_order_id': orderId},
       );
-      final view = OrderItemPanelView.fromPayload(raw);
+      final view = OrderItemPanelView.fromPayload(raw,
+          errorFallback: c('admin_customer.items_load_failed'));
       final lines = view.lines;
       final recon = view.reconcile.raw;
       if (mounted) {
@@ -1628,6 +1629,10 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
       }
     } catch (e) {
       RenderLog.write('order_item_status_error', 'orderId:$orderId err:$e');
+      if (mounted) {
+        setState(() => _orderPanels[orderId] =
+            OrderItemPanelView.failed(c('admin_customer.items_load_failed')));
+      }
     }
   }
 
@@ -2460,7 +2465,14 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
               ),
               Expanded(
                 flex: 1,
-                child: Text('${row.items.length}',
+                // CHANGE #238 — the backend's own order_items count. This read
+                // `row.items.length` (the orders.items JSONB), so the collapsed
+                // row could say 9 while expanding it listed 18. Cart rows have
+                // no render payload and keep their own list length.
+                child: Text(
+                    row.isOrder
+                        ? '${(row.render['items_count'] as num?)?.toInt() ?? row.items.length}'
+                        : '${row.items.length}',
                     style: const TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
@@ -2862,17 +2874,6 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     final lpad = isDesktop ? 28.0 : 16.0;
     final rpad = isDesktop ? 28.0 : 16.0;
 
-    if (row.source == 'whatsapp' && row.items.isEmpty) {
-      return Container(
-        color: const Color(0xFFF9FAFB),
-        padding: EdgeInsets.fromLTRB(lpad, 10, rpad, 14),
-        child: Text(
-          c('admin_customer.whatsapp_order_items_unavailable'),
-          style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
-        ),
-      );
-    }
-
     if (row.isCartOnly) {
       return _buildCartExpandedItems(row, lpad: lpad, rpad: rpad);
     }
@@ -2897,11 +2898,41 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     final loaded = panel.loaded;
     final reconcile = panel.reconcile;
 
+    // CHANGE #238 — the error state. The catch used to only write a render-log
+    // line, so a failed RPC left the panel skeleton-ing forever with no words
+    // and no way out; and a `{"error": ...}` reply parsed as "this order has no
+    // items" for an order that has eighteen.
+    if (panel.hasError) {
+      return Container(
+        color: const Color(0xFFF9FAFB),
+        padding: EdgeInsets.fromLTRB(lpad, 10, rpad, 14),
+        child: Row(children: [
+          Expanded(
+            child: Text(panel.errorMessage,
+                style: Ds.t.caption.copyWith(color: Ds.c.danger)),
+          ),
+          TextButton(
+            onPressed: row.orderId == null
+                ? null
+                : () => _fetchOrderItemStatus(row.orderId!),
+            child: Text(c('admin_customer.retry')),
+          ),
+        ]),
+      );
+    }
+
+    // The WhatsApp case is decided AFTER the panel has answered. It used to be
+    // an early return keyed on the orders.items JSONB being empty, which meant
+    // a WhatsApp order with real order_items rows printed "items unavailable"
+    // and never rendered a single line, a state, or the reconciliation banner.
     if (panel.isEmpty) {
       return Container(
         color: const Color(0xFFF9FAFB),
         padding: EdgeInsets.fromLTRB(lpad, 10, rpad, 14),
-        child: Text(c('admin_customer.no_items_recorded'),
+        child: Text(
+            row.source == 'whatsapp'
+                ? c('admin_customer.whatsapp_order_items_unavailable')
+                : c('admin_customer.no_items_recorded'),
             style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
       );
     }

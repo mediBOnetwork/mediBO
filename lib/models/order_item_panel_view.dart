@@ -89,10 +89,17 @@ class OrderItemPanelView {
   /// about to contradict.
   final bool loaded;
 
+  /// The backend's error copy, or empty when there was none. A failure is a
+  /// THIRD state: not loading, and emphatically not "this order has no items" —
+  /// printing an empty order for an order of eighteen is the same class of lie
+  /// this whole change exists to stop.
+  final String errorMessage;
+
   const OrderItemPanelView({
     required this.lines,
     required this.reconcile,
     required this.loaded,
+    this.errorMessage = '',
   });
 
   static const OrderItemPanelView loading = OrderItemPanelView(
@@ -101,14 +108,33 @@ class OrderItemPanelView {
     loaded: false,
   );
 
+  /// The RPC threw, or answered with an `error` key. `message` is the backend's
+  /// copy — the caller passes it in rather than this class inventing words.
+  factory OrderItemPanelView.failed(String message) => OrderItemPanelView(
+        lines: const <OrderItemPanelLine>[],
+        reconcile: const OrderItemPanelReconcile(<String, dynamic>{}),
+        loaded: true,
+        errorMessage: message,
+      );
+
+  bool get hasError => errorMessage.isNotEmpty;
+
   /// Parse one `order_item_status_panel` reply. Order is the payload's — this
   /// never sorts, never groups and never drops a line.
-  factory OrderItemPanelView.fromPayload(Object? payload) {
+  factory OrderItemPanelView.fromPayload(Object? payload,
+      {String errorFallback = ''}) {
     final one = payload is List
         ? (payload.isEmpty ? null : payload.first)
         : payload;
     if (one is! Map) return loading;
     final map = one.cast<String, dynamic>();
+    // `{"error": "not_authorized"}` is a FAILURE, not an empty order. Parsing
+    // it as `lines: []` printed "No items recorded" over a full order.
+    final err = (map['error'] ?? '').toString().trim();
+    if (err.isNotEmpty) {
+      return OrderItemPanelView.failed(
+          errorFallback.isNotEmpty ? errorFallback : err);
+    }
     final raw = (map['lines'] as List<dynamic>?) ?? const <dynamic>[];
     return OrderItemPanelView(
       lines: raw
@@ -122,5 +148,5 @@ class OrderItemPanelView {
     );
   }
 
-  bool get isEmpty => loaded && lines.isEmpty;
+  bool get isEmpty => loaded && !hasError && lines.isEmpty;
 }

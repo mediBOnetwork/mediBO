@@ -30,7 +30,8 @@ import 'admin/admin_alert_overlay.dart';
 import 'admin/admin_nav_entries.dart';
 import 'admin/admin_shell.dart';
 import 'admin/pricing_backfill_screen.dart';
-import 'admin/admin_offers_screen.dart'; // CHANGE #179
+import 'admin/admin_offers_screen.dart';
+import 'admin/admin_bill_pipeline_screen.dart'; // CHANGE #226
 import 'admin/short_dated_admin_screen.dart'; // CHANGE #177
 import '../features/whatsapp/ui/wa_home_screen.dart';
 import '../features/whatsapp/ui/wa_templates_screen.dart';
@@ -435,6 +436,11 @@ class _HomeShellState extends State<HomeShell> {
       case 'admin_offers':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const AdminOffersScreen()));
+        break;
+      // CHANGE #226 — Bill pipeline (auto customer billing).
+      case 'bill_pipeline':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const AdminBillPipelineScreen()));
         break;
       case 'mr': setState(() { _index = 8; _cartOpen = false; }); break;
       case 'companies': setState(() { _index = 9; _cartOpen = false; }); break;

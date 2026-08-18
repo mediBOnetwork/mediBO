@@ -83,6 +83,43 @@ class RemoteBadge {
   bool get show => display.isNotEmpty;
 }
 
+/// CHANGE #237 — the CLAUDE CODE device list, which is a different bridge from
+/// [RemoteBadge].
+///
+/// [RemoteBadge] measures mediBO's OWN live-view bridge (medibo-bridge). It read
+/// "On phone" for weeks while Om's Claude Code mobile app listed no devices at
+/// all, because nothing on the build VM had ever opened an ANTHROPIC Remote
+/// Control session: the GCP box typed `/remote-control` into an interactive TUI,
+/// and the headless `claude --print` loop that replaced it never registers.
+/// Conflating the two badges is what hid that for so long, so they stay separate
+/// classes with separate keys.
+///
+/// `phone_sessions` is MEASURED on the VM (a live Anthropic bridgeSessionId per
+/// worker companion) and every string here is composed by the backend.
+class PhoneBadge {
+  final Map<String, dynamic> status;
+  const PhoneBadge(this.status);
+
+  String get display => (status['phone_display'] ?? '').toString();
+  String get tone => (status['phone_tone'] ?? 'neutral').toString();
+
+  /// What to do about it — one line, worded by the backend for BOTH states.
+  String get hint => (status['phone_hint'] ?? '').toString();
+
+  int get count => (status['phone_sessions'] as num?)?.toInt() ?? 0;
+  bool get isOn => count > 0;
+
+  /// The session names exactly as the phone app lists them. Order is the
+  /// backend's; empties are dropped so a partial payload cannot render a blank
+  /// row that looks like a session.
+  List<String> get names => ((status['phone_names'] as List?) ?? const [])
+      .map((e) => (e ?? '').toString())
+      .where((e) => e.isNotEmpty)
+      .toList();
+
+  bool get show => display.isNotEmpty;
+}
+
 /// The worker grid's source of truth.
 class PoolLiveness {
   final Map<String, dynamic> state;

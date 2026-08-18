@@ -94,6 +94,10 @@ List<AdminNavEntry> get kAdminOverflowNav => <AdminNavEntry>[
       // payment received, plus the "waiting on supplier X" chip.
       AdminNavEntry('Bill pipeline', Icons.receipt_long_outlined,
           route: 'bill_pipeline'),
+      // CHANGE #227 — the written date/zone scope audit of the whole
+      // order → delivered flow, checked live against the function source.
+      AdminNavEntry(c('admin_nav.overflow_scope_audit'), Icons.rule_outlined,
+          route: 'scope_audit'),
     ];
 
 /// The wide shell's "More" popup, sitting after Fulfillment in the top row.

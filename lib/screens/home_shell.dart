@@ -32,6 +32,7 @@ import 'admin/admin_shell.dart';
 import 'admin/pricing_backfill_screen.dart';
 import 'admin/admin_offers_screen.dart';
 import 'admin/admin_bill_pipeline_screen.dart'; // CHANGE #226
+import 'admin/admin_scope_audit_screen.dart'; // CHANGE #227
 import 'admin/short_dated_admin_screen.dart'; // CHANGE #177
 import '../features/whatsapp/ui/wa_home_screen.dart';
 import '../features/whatsapp/ui/wa_templates_screen.dart';
@@ -441,6 +442,11 @@ class _HomeShellState extends State<HomeShell> {
       case 'bill_pipeline':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const AdminBillPipelineScreen()));
+        break;
+      // CHANGE #227 — Scope audit (date + zone across order → delivered).
+      case 'scope_audit':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const AdminScopeAuditScreen()));
         break;
       case 'mr': setState(() { _index = 8; _cartOpen = false; }); break;
       case 'companies': setState(() { _index = 9; _cartOpen = false; }); break;

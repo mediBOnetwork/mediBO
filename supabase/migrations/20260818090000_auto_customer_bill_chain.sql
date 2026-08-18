@@ -264,8 +264,17 @@ create trigger trg_bill_line_verify
 -- trigger or a cron can ask it. Same predicate as customer_bill().
 create or replace function public._bill_ready(p_order_id uuid)
 returns jsonb language plpgsql stable security definer set search_path to 'public' as $$
-declare v_uncovered int; v_nosup int; v_sups text[];
+declare v_uncovered int; v_nosup int; v_sups text[]; v_billable int;
 begin
+  -- Nothing billable (every line cancelled, shipped or unfulfillable) is NOT
+  -- "ready" — zero uncovered items would otherwise read as ready and render an
+  -- invoice with no lines.
+  select count(*) into v_billable
+  from order_items oi
+  where oi.order_id = p_order_id
+    and oi.fulfillment_state not in ('shipped','cancelled')
+    and coalesce(oi.unfulfillable,false) = false;
+
   select count(*),
          count(*) filter (where oi.assigned_supplier is null),
          coalesce(array_agg(distinct oi.assigned_supplier)
@@ -280,7 +289,8 @@ begin
                     where a.order_item_id = oi.id and b.verified and b.needs_fix is null);
 
   return jsonb_build_object(
-    'ready', coalesce(v_uncovered,0) = 0,
+    'ready', coalesce(v_uncovered,0) = 0 and coalesce(v_billable,0) > 0,
+    'billable', coalesce(v_billable,0),
     'uncovered', coalesce(v_uncovered,0),
     'items_without_supplier', coalesce(v_nosup,0),
     'waiting_suppliers', to_jsonb(coalesce(v_sups,'{}')));
@@ -931,6 +941,12 @@ revoke all on function public._bill_job_send_wa(uuid)                    from pu
 revoke all on function public._send_customer_bill_wa_auto(uuid,text)     from public, anon, authenticated;
 revoke all on function public._send_payment_qr_wa_auto(uuid,text,numeric,text) from public, anon, authenticated;
 revoke all on function public.bill_jobs_tick()                           from public, anon, authenticated;
+-- bill_job_enqueue is NOT granted to clients: p_force skips every gate, so a
+-- client grant would let any logged-in user force a bill + WhatsApp send on any
+-- order. Admins reach it through admin_bill_pipeline_action, which is role-gated.
+revoke all on function public.bill_job_enqueue(uuid,boolean)             from public, anon, authenticated;
+revoke all on table public.bill_jobs, public.bill_auto_config,
+                    public.bill_pipeline_label, public.bill_chase_log    from anon, authenticated;
 revoke all on function public.bill_chase_tick()                          from public, anon, authenticated;
 revoke all on function public.bill_job_report(uuid,boolean,text,text,text,text) from public, anon, authenticated;
 revoke all on function public.bill_job_render_input(uuid)                from public, anon, authenticated;
@@ -938,7 +954,6 @@ revoke all on function public.bill_job_render_input(uuid)                from pu
 grant execute on function public.admin_bill_pipeline_list(text,int)      to authenticated;
 grant execute on function public.admin_bill_pipeline(uuid)               to authenticated;
 grant execute on function public.admin_bill_pipeline_action(uuid,text)   to authenticated;
-grant execute on function public.bill_job_enqueue(uuid,boolean)          to authenticated;
 
 
 -- ─────────────────────────────────────────────────────────────────────────────

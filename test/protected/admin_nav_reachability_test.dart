@@ -87,4 +87,11 @@ void main() {
     expect(shellSrc, contains('AdminBillPipelineScreen'));
     expect(shellSrc, contains("import 'admin/admin_bill_pipeline_screen.dart'"));
   });
+
+  test('CHANGE #229 — Order closure is reachable from the admin menu', () {
+    expect(offered, contains('order_closure'));
+    expect(handled, contains('order_closure'));
+    expect(shellSrc, contains('AdminOrderClosureScreen'));
+    expect(shellSrc, contains("import 'admin/admin_order_closure_screen.dart'"));
+  });
 }

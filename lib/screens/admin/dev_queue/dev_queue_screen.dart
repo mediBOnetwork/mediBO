@@ -6,6 +6,7 @@ import '../../../services/ui_copy.dart';
 import '../../../utils/toast.dart';
 import 'dev_queue_common.dart';
 import 'dev_queue_service.dart';
+import 'restart_safety.dart';
 import 'dev_queue_bulk_add.dart';
 import 'dev_queue_detail.dart';
 import 'dev_queue_control.dart';
@@ -566,7 +567,7 @@ class _Row extends StatelessWidget {
       // CHANGE #68 — Claude's estimate (has_eta) drives the countdown, anchored
       // to the backend's eta_at. Rows not reporting an estimate show plain
       // elapsed — never a fake countdown from elapsed time.
-      final hasEta = row['has_eta'] == true;
+      final hasEta = RowLiveness(row).showCountdown;
       final eta = DateTime.tryParse((row['eta_at'] ?? '').toString());
       if (hasEta && eta != null) {
         final rem = eta.difference(now);
@@ -609,12 +610,13 @@ class _Row extends StatelessWidget {
     final tone = statusTone(status);
 
     final claimedBy = (row['claimed_by'] ?? '').toString();
+    final live = RowLiveness(row);
     final timing = _timingChip(status);
     final footer = <Widget>[
-      // is_live is the BACKEND's verdict on the heartbeat behind this row.
       // A worker name next to a dead heartbeat is the exact lie #229/#230 told
-      // for hours after a VM restart, so it is gated on the flag, not on status.
-      if (status == 'building' && claimedBy.isNotEmpty && row['is_live'] == true)
+      // for hours after a VM restart. RowLiveness.showWorker gates it on the
+      // backend's is_live verdict — see restart_safety.dart (CHANGE #233).
+      if (live.showWorker)
         ToneChip(
             label: claimedBy,
             tone: statusTone('building'),
@@ -668,29 +670,14 @@ class _Row extends StatelessWidget {
             label: '$msgs',
             tone: statusTone('awaiting_approval'),
             icon: Icons.chat_bubble_outline),
-      // CHANGE #233 — restart-safety chips. Every string, including the
-      // pluralisation and the age, is composed by dev_cmd_list from ui_copy;
-      // Dart only decides which of them is non-empty.
-      if ((row['live_chip'] ?? '').toString().isNotEmpty)
+      // CHANGE #233 — restart-safety chips, in RowLiveness's order (worst news
+      // first). Every string, including the pluralisation and the age, is
+      // composed by dev_cmd_list from ui_copy; Dart picks only the glyph.
+      for (final ch in live.chips)
         ToneChip(
-            label: (row['live_chip']).toString(),
-            tone: statusTone('failed'),
-            icon: Icons.cloud_off_outlined),
-      if ((row['stall_chip'] ?? '').toString().isNotEmpty)
-        ToneChip(
-            label: (row['stall_chip']).toString(),
-            tone: statusTone('awaiting_approval'),
-            icon: Icons.report_problem_outlined),
-      if ((row['steps_chip'] ?? '').toString().isNotEmpty)
-        ToneChip(
-            label: (row['steps_chip']).toString(),
-            tone: statusTone('building'),
-            icon: Icons.checklist_rtl),
-      if ((row['resume_chip'] ?? '').toString().isNotEmpty)
-        ToneChip(
-            label: (row['resume_chip']).toString(),
-            tone: statusTone('paused'),
-            icon: Icons.restart_alt),
+            label: ch.label,
+            tone: toneByName(ch.tone),
+            icon: safetyChipIcon(ch.kind)),
       // Bug-Loop Prevention chips — all rendered verbatim from dev_cmd_list.
       if ((row['qa_chip'] ?? '').toString().isNotEmpty)
         ToneChip(

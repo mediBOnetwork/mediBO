@@ -5,6 +5,7 @@ import '../../../design_tokens.dart';
 import '../../../services/ui_copy.dart';
 import '../../../utils/toast.dart';
 import 'dev_queue_common.dart';
+import 'restart_safety.dart';
 import 'dev_queue_service.dart';
 import 'dev_queue_workers.dart';
 import 'vm_toggle_policy.dart';
@@ -121,8 +122,7 @@ class _DevQueueControlState extends State<DevQueueControl> {
   // backend measures whether the bridge is genuinely reachable (unit active +
   // tmux session alive + fresh beacon) and hands down the label and the tone;
   // Dart no longer decides that "off" simply means "show nothing".
-  String get _remoteDisplay => (_status['remote_display'] ?? '').toString();
-  String get _remoteTone => (_status['remote_tone'] ?? 'neutral').toString();
+  RemoteBadge get _remote => RemoteBadge(_status);
 
   /// A toggle tap. Locked toggles (per the backend ordering vm→claude→workflow)
   /// don't flip — they float a mini reason popup next to the switch and keep
@@ -400,11 +400,11 @@ class _DevQueueControlState extends State<DevQueueControl> {
             style: const TextStyle(
                 fontSize: 12, fontWeight: FontWeight.w700, color: kTextLo)),
         const Spacer(),
-        if (_remoteDisplay.isNotEmpty)
+        if (_remote.show)
           ToneChip(
-              label: _remoteDisplay,
-              tone: toneByName(_remoteTone),
-              icon: _remoteTone == 'success'
+              label: _remote.display,
+              tone: toneByName(_remote.tone),
+              icon: _remote.isOn
                   ? Icons.phone_iphone
                   : Icons.mobile_off_outlined),
       ]);

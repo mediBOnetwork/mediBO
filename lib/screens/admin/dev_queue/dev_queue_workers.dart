@@ -5,6 +5,7 @@ import '../../../design_tokens.dart';
 import '../../../services/ui_copy.dart';
 import '../../../utils/toast.dart';
 import 'dev_queue_common.dart';
+import 'restart_safety.dart';
 import 'dev_queue_detail.dart';
 import 'dev_queue_service.dart';
 
@@ -32,11 +33,8 @@ class WorkerGridCard extends StatelessWidget {
   Map<String, dynamic> get _state =>
       (pool['state'] as Map?)?.cast<String, dynamic>() ?? const {};
 
-  List<Map<String, dynamic>> get _workers =>
-      ((_state['workers'] as List?) ?? const [])
-          .whereType<Map>()
-          .map((e) => Map<String, dynamic>.from(e))
-          .toList();
+  PoolLiveness get _live => PoolLiveness(_state);
+  List<Map<String, dynamic>> get _workers => _live.workers;
 
   @override
   Widget build(BuildContext context) {
@@ -49,7 +47,7 @@ class WorkerGridCard extends StatelessWidget {
     // CHANGE #233B — the backend blanks workers/counts/countdowns and hands
     // down this one line the moment the pool's own heartbeat goes stale, so a
     // stopped VM can never keep drawing a live worker grid.
-    final stale = (_state['stale_display'] ?? '').toString();
+    final stale = _live.staleDisplay;
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       // Header: title · active/cap count · settings gear.

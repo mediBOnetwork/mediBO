@@ -264,6 +264,18 @@ void main() {
               'second RPC would break the one-source-of-truth contract');
     });
 
+    test('the screen has a URL, so a deploy can actually open it', () {
+      // Without this route nothing can reach the screen headlessly (Flutter
+      // canvas taps are banned), so c240_inq_po_block would sit at 0 forever
+      // and "it rendered" could never be proven again.
+      final main = _code(_read('lib/main.dart'));
+      expect(main.contains("name == '/admin/scope-audit'"), isTrue,
+          reason: 'the /admin/scope-audit route is gone — the integrity block '
+              'can no longer be opened or proven by the post-deploy verifier');
+      expect(main.contains('AdminScopeAuditScreen()'), isTrue,
+          reason: 'the route no longer builds the Scope Audit screen');
+    });
+
     test('it proves it painted, so a live deploy can be verified', () {
       // Whitespace-tolerant: the formatter is free to wrap the call.
       for (final key in <String>['c240_inq_po_block', 'c240_inq_po_rows']) {

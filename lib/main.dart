@@ -32,6 +32,7 @@ import 'screens/code_resolver_page.dart';
 import 'screens/public/wa_link_redirect_page.dart'; // /r/:code — campaign links
 import 'screens/admin/wa_campaigns_screen.dart'; // /admin/wa-campaigns
 import 'screens/admin/admin_scope_audit_screen.dart'; // /admin/scope-audit
+import 'screens/admin/dev_queue/cron_health_screen.dart'; // /admin/cron-health
 import 'screens/product_detail_screen.dart'; // C636: /product/:id
 import 'screens/reorder_screen.dart'; // #173: /reorder
 import 'screens/admin/reorder_admin_screen.dart'; // #173: /admin/reorder
@@ -569,6 +570,20 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
                 return MaterialPageRoute(
                   settings: settings,
                   builder: (_) => const AdminScopeAuditScreen(),
+                );
+              }
+              // CHANGE #273 — Cron health gets a real URL for the same reason
+              // #240 gave one to Scope Audit: Flutter canvas cannot be clicked
+              // headlessly, so without a URL the post-deploy verifier can never
+              // prove c273_cron_health painted and "it rendered" would rest on a
+              // string in the bundle. Authorisation stays in the backend —
+              // cron_health() calls _dev_guard() and answers service_role or
+              // super_admin only, never a role check in this file. The screen is
+              // still reachable from Dev Queue -> the clock icon.
+              if (name == '/admin/cron-health') {
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => const CronHealthScreen(),
                 );
               }
               if (name.startsWith('/inquiry/')) {

@@ -48,8 +48,12 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
         _error = d['ok'] == true ? null : (d['error'] as String?);
       });
       final tasks = (d['tasks'] as List?) ?? const [];
+      // Painted-proof for the post-deploy verifier. Written on BOTH paths: a
+      // verifier that loads /admin/cron-health without super-admin still proves
+      // the screen rendered, it just renders the backend's refusal.
       try {
         RenderLog.write('c273_cron_health', 'tasks=${tasks.length}');
+        RenderLog.write('c273_cron_tasks', '${tasks.length}');
       } catch (_) {}
     } catch (e) {
       if (!mounted) return;
@@ -57,6 +61,9 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
         _loading = false;
         _error = e.toString();
       });
+      try {
+        RenderLog.write('c273_cron_health', 'error');
+      } catch (_) {}
     }
   }
 

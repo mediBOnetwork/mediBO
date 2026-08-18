@@ -7,6 +7,8 @@
 // and counts, the guard summary and every tone arrive in the cron_health()
 // payload and are rendered verbatim, in payload order.
 
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -103,6 +105,18 @@ Future<void> _pump(WidgetTester tester, _FakeService svc) async {
 
 void main() {
   setUpAll(() => RenderLog.flushEnabled = false);
+
+  test('the screen has a URL, so a deploy can actually prove it painted', () {
+    // Flutter canvas taps are banned (CLAUDE.md), so without this route
+    // c273_cron_health would sit at 0 forever and "it rendered" could only ever
+    // be argued from a string in the bundle. Same lesson as #240.
+    final main = File('lib/main.dart').readAsStringSync();
+    expect(main.contains("name == '/admin/cron-health'"), isTrue,
+        reason: 'the /admin/cron-health route is gone — Cron health can no '
+            'longer be opened or proven by the post-deploy verifier');
+    expect(main.contains('CronHealthScreen()'), isTrue,
+        reason: 'the route no longer builds the Cron health screen');
+  });
 
   testWidgets('the headline and the tick line are backend strings, printed verbatim',
       (tester) async {

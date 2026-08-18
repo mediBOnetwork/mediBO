@@ -163,6 +163,7 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
                 if (_spec['has_tokens'] == true || _status == 'building')
                   _tokensCard(),
                 _timerCard(),
+                if (asInt(_row['steps_total']) > 0) _stepsCard(),
                 if (_status == 'needs_input') _needsInputBanner(),
                 const SizedBox(height: 12),
                 _targets(),
@@ -1139,6 +1140,51 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
   }
 
   // ── Decisions ────────────────────────────────────────────────────────────
+  // ── Checkpoint plan (CHANGE #233C) ─────────────────────────────────────────
+  // "Steps done versus total" — the answer to "did the restart cost me the
+  // build?". The header line and every step title come from dev_cmd_list; the
+  // only local decision is the tick glyph for a done step.
+  Widget _stepsCard() {
+    final steps = ((_row['steps'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+    final header = (_row['steps_chip'] ?? '').toString();
+    final resumed = (_row['resume_chip'] ?? '').toString();
+    final branch = (_row['resume_branch'] ?? '').toString();
+    return _sectionRaw(
+      header,
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        for (final st in steps)
+          Padding(
+            padding: EdgeInsets.only(bottom: Ds.space.x8),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Icon(
+                  (st['status'] ?? '') == 'done'
+                      ? Icons.check_circle
+                      : Icons.radio_button_unchecked,
+                  size: Ds.space.x16,
+                  color: (st['status'] ?? '') == 'done'
+                      ? Ds.c.success
+                      : Ds.c.textSecondary),
+              SizedBox(width: Ds.space.x8),
+              Expanded(
+                child: Text('${st['n'] ?? ''}. ${st['title'] ?? ''}',
+                    style: Ds.t.caption.copyWith(
+                        color: (st['status'] ?? '') == 'done'
+                            ? Ds.c.text
+                            : Ds.c.textSecondary)),
+              ),
+            ]),
+          ),
+        if (resumed.isNotEmpty || branch.isNotEmpty)
+          Text(
+              [resumed, branch].where((e) => e.isNotEmpty).join(' · '),
+              style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+      ]),
+    );
+  }
+
   Widget _decisions() {
     final ds = ((_row['decisions'] as List?) ?? const [])
         .whereType<Map>()

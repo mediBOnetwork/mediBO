@@ -117,7 +117,12 @@ class _DevQueueControlState extends State<DevQueueControl> {
     return v is num ? v.toInt() : null;
   }
 
-  bool get _remoteOn => (_status['remote_control'] ?? 'off') == 'on';
+  // CHANGE #233A — the live-view badge is now honest in BOTH directions. The
+  // backend measures whether the bridge is genuinely reachable (unit active +
+  // tmux session alive + fresh beacon) and hands down the label and the tone;
+  // Dart no longer decides that "off" simply means "show nothing".
+  String get _remoteDisplay => (_status['remote_display'] ?? '').toString();
+  String get _remoteTone => (_status['remote_tone'] ?? 'neutral').toString();
 
   /// A toggle tap. Locked toggles (per the backend ordering vm→claude→workflow)
   /// don't flip — they float a mini reason popup next to the switch and keep
@@ -395,11 +400,13 @@ class _DevQueueControlState extends State<DevQueueControl> {
             style: const TextStyle(
                 fontSize: 12, fontWeight: FontWeight.w700, color: kTextLo)),
         const Spacer(),
-        if (_remoteOn)
+        if (_remoteDisplay.isNotEmpty)
           ToneChip(
-              label: c('dev_queue.ctl_remote_on'),
-              tone: statusTone('completed'),
-              icon: Icons.phone_iphone),
+              label: _remoteDisplay,
+              tone: toneByName(_remoteTone),
+              icon: _remoteTone == 'success'
+                  ? Icons.phone_iphone
+                  : Icons.mobile_off_outlined),
       ]);
 
   /// Slim one-line summary shown when collapsed: workflow state + the top usage

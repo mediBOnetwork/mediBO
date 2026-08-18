@@ -378,3 +378,748 @@ begin
     'gates', v_gates,
     'blockers', v_block);
 end $fn$;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 6. Executors. These are the ONLY writers of a final state. They are called
+--    from triggers and from the tick — never from a screen.
+-- ─────────────────────────────────────────────────────────────────────────
+create or replace function public.order_try_close(
+  p_order_id uuid,
+  p_mode     text default 'auto',
+  p_actor    text default null,
+  p_reason   text default null)
+returns jsonb
+language plpgsql
+security definer
+set search_path to 'public'
+as $fn$
+declare st jsonb; o orders%rowtype;
+begin
+  select * into o from orders where id = p_order_id;
+  if not found then return jsonb_build_object('ok',false,'error','order_not_found'); end if;
+  if o.closed_at is not null then
+    return public._order_close_state(p_order_id) || jsonb_build_object('already', true);
+  end if;
+  if coalesce(o.status,'') in ('cancelled','rejected')
+     or coalesce(o.fulfillment_status,'') = 'cancelled' then
+    return jsonb_build_object('ok',true,'closed',false,'skipped','cancelled');
+  end if;
+
+  st := public._order_close_state(p_order_id);
+  if coalesce((st->>'ok')::boolean,false) is not true then return st; end if;
+
+  -- Never force-close on missing data. A blocked order stays open, with its
+  -- reasons on the record, unless a human overrides it WITH a reason.
+  if p_mode <> 'override' and coalesce((st->>'can_close')::boolean,false) is not true then
+    return st;
+  end if;
+
+  -- Re-entry guard: the writes below fire order_items / orders triggers that
+  -- would otherwise call straight back into this function.
+  perform set_config('medibo.closing', '1', true);
+
+  update orders
+     set status            = 'delivered',
+         fulfillment_status= case when coalesce(fulfillment_status,'') = 'cancelled'
+                                  then fulfillment_status else 'shipped' end,
+         shipped_at        = coalesce(shipped_at, now()),
+         closed_at         = now(),
+         closed_by         = coalesce(p_actor, 'system'),
+         closed_reason     = p_reason,
+         close_mode        = case when p_mode = 'override' then 'override' else 'auto' end
+   where id = p_order_id;
+
+  -- orders_status_to_order_items_trg already carries status='delivered' down
+  -- to every line; this is the fulfilment side of the same finality.
+  update order_items
+     set fulfillment_state = 'shipped'
+   where order_id = p_order_id
+     and coalesce(fulfillment_state,'') not in ('cancelled','shipped');
+
+  insert into order_closure_log(kind, order_id, event, mode, actor, reason, blockers)
+  values ('order', p_order_id, 'closed',
+          case when p_mode = 'override' then 'override' else 'auto' end,
+          coalesce(p_actor,'system'), p_reason, coalesce(st->'blockers','[]'::jsonb));
+
+  perform set_config('medibo.closing', '', true);
+  return public._order_close_state(p_order_id) || jsonb_build_object('just_closed', true);
+end $fn$;
+
+create or replace function public.supplier_order_try_settle(
+  p_supplier_order_id uuid,
+  p_mode   text default 'auto',
+  p_actor  text default null,
+  p_reason text default null)
+returns jsonb
+language plpgsql
+security definer
+set search_path to 'public'
+as $fn$
+declare st jsonb; so supplier_orders%rowtype; v_day date;
+begin
+  select * into so from supplier_orders where id = p_supplier_order_id;
+  if not found then return jsonb_build_object('ok',false,'error','supplier_order_not_found'); end if;
+  if so.settled_at is not null then
+    return public._supplier_settle_state(p_supplier_order_id) || jsonb_build_object('already', true);
+  end if;
+  if coalesce(so.status,'') = 'cancelled' then
+    return jsonb_build_object('ok',true,'closed',false,'skipped','cancelled');
+  end if;
+
+  st := public._supplier_settle_state(p_supplier_order_id);
+  if coalesce((st->>'ok')::boolean,false) is not true then return st; end if;
+  if p_mode <> 'override' and coalesce((st->>'can_close')::boolean,false) is not true then
+    return st;
+  end if;
+
+  perform set_config('medibo.closing', '1', true);
+  v_day := coalesce(so.order_date, (so.created_at at time zone 'Asia/Kolkata')::date);
+
+  update supplier_orders
+     set status         = 'closed',
+         settled_at     = now(),
+         settled_by     = coalesce(p_actor,'system'),
+         settled_reason = p_reason,
+         settle_mode    = case when p_mode = 'override' then 'override' else 'auto' end
+   where id = p_supplier_order_id;
+
+  -- 'shipped' IS the removal from the supplier open-order scope: it is the
+  -- filter bill_lines_from_scan() matches against, and the one every open
+  -- supplier surface uses.
+  update order_items oi
+     set fulfillment_state = 'shipped'
+    from orders o
+   where o.id = oi.order_id
+     and oi.assigned_supplier = so.supplier_name
+     and (o.created_at at time zone 'Asia/Kolkata')::date = v_day
+     and coalesce(oi.fulfillment_state,'') not in ('cancelled','shipped');
+
+  insert into order_closure_log(kind, supplier_order_id, event, mode, actor, reason, blockers)
+  values ('supplier_order', p_supplier_order_id, 'settled',
+          case when p_mode = 'override' then 'override' else 'auto' end,
+          coalesce(p_actor,'system'), p_reason, coalesce(st->'blockers','[]'::jsonb));
+
+  perform set_config('medibo.closing', '', true);
+  return public._supplier_settle_state(p_supplier_order_id) || jsonb_build_object('just_closed', true);
+end $fn$;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 7. A closed order's fulfilment status is final — recompute must not undo it.
+-- ─────────────────────────────────────────────────────────────────────────
+create or replace function public.recompute_order_fulfillment(p_order_id uuid)
+returns text
+language plpgsql
+security definer
+set search_path to 'public'
+as $fn$
+DECLARE
+  n_total int; n_pending int; n_in_transit int; n_problem int;
+  n_shipped int; n_cancelled int;
+  v_status text; v_closed timestamptz;
+BEGIN
+  -- CHANGE #229: a closed order keeps the status it closed with. Without this
+  -- guard any later item write would recompute a delivered order back open.
+  SELECT closed_at, fulfillment_status INTO v_closed, v_status FROM orders WHERE id = p_order_id;
+  IF v_closed IS NOT NULL THEN RETURN v_status; END IF;
+
+  SELECT
+    count(*),
+    count(*) FILTER (WHERE fulfillment_state = 'pending'),
+    count(*) FILTER (WHERE fulfillment_state IN ('received','short') AND at_warehouse = false),
+    count(*) FILTER (WHERE fulfillment_state IN ('wrong','not_coming')),
+    count(*) FILTER (WHERE fulfillment_state = 'shipped'),
+    count(*) FILTER (WHERE fulfillment_state = 'cancelled')
+  INTO n_total, n_pending, n_in_transit, n_problem, n_shipped, n_cancelled
+  FROM order_items WHERE order_id = p_order_id;
+
+  IF n_total = 0 THEN
+    v_status := 'open';
+  ELSIF n_shipped = n_total THEN
+    v_status := 'shipped';
+  ELSIF n_shipped > 0 THEN
+    v_status := 'partially_shipped';
+  ELSIF n_cancelled = n_total THEN
+    v_status := 'cancelled';
+  ELSIF n_pending > 0 THEN
+    IF n_pending = n_total THEN v_status := 'open'; ELSE v_status := 'collecting'; END IF;
+  ELSIF n_in_transit > 0 THEN
+    v_status := 'in_transit';
+  ELSE
+    IF n_problem > 0 THEN v_status := 'partial_ready'; ELSE v_status := 'ready'; END IF;
+  END IF;
+
+  UPDATE orders SET fulfillment_status = v_status WHERE id = p_order_id;
+  RETURN v_status;
+END;
+$fn$;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 8. Event triggers. Every real closure event pokes the engine; the engine
+--    decides. None of these can close anything on their own.
+-- ─────────────────────────────────────────────────────────────────────────
+create or replace function public._closure_busy()
+returns boolean language sql stable as $$
+  select coalesce(nullif(current_setting('medibo.closing', true), ''), '0') = '1';
+$$;
+
+create or replace function public._trg_close_on_delivery()
+returns trigger language plpgsql security definer set search_path to 'public' as $fn$
+begin
+  if public._closure_busy() then return NEW; end if;
+  if NEW.status = 'delivered' and NEW.order_id is not null then
+    begin perform public.order_try_close(NEW.order_id, 'auto', 'trigger:delivery');
+    exception when others then null; end;
+  end if;
+  return NEW;
+end $fn$;
+
+drop trigger if exists trg_close_on_delivery on public.deliveries;
+create trigger trg_close_on_delivery
+  after insert or update of status on public.deliveries
+  for each row execute function public._trg_close_on_delivery();
+
+create or replace function public._trg_close_on_payment()
+returns trigger language plpgsql security definer set search_path to 'public' as $fn$
+begin
+  if public._closure_busy() then return NEW; end if;
+  if NEW.status = 'verified' and NEW.order_id is not null then
+    begin perform public.order_try_close(NEW.order_id, 'auto', 'trigger:payment');
+    exception when others then null; end;
+  end if;
+  return NEW;
+end $fn$;
+
+drop trigger if exists trg_close_on_payment on public.payment_claims;
+create trigger trg_close_on_payment
+  after insert or update of status on public.payment_claims
+  for each row execute function public._trg_close_on_payment();
+
+create or replace function public._trg_close_on_bill_sent()
+returns trigger language plpgsql security definer set search_path to 'public' as $fn$
+begin
+  if public._closure_busy() then return NEW; end if;
+  if NEW.wa_bill_sent_at is not null
+     and OLD.wa_bill_sent_at is distinct from NEW.wa_bill_sent_at
+     and NEW.order_id is not null then
+    begin perform public.order_try_close(NEW.order_id, 'auto', 'trigger:bill_sent');
+    exception when others then null; end;
+  end if;
+  return NEW;
+end $fn$;
+
+drop trigger if exists trg_close_on_bill_sent on public.bill_jobs;
+create trigger trg_close_on_bill_sent
+  after update of wa_bill_sent_at on public.bill_jobs
+  for each row execute function public._trg_close_on_bill_sent();
+
+create or replace function public._trg_close_on_packed()
+returns trigger language plpgsql security definer set search_path to 'public' as $fn$
+begin
+  if public._closure_busy() then return NEW; end if;
+  -- Only when THIS line was the last unpacked one. Packing is a per-row write
+  -- over a whole order; without this check every line would run the (costly)
+  -- customer_bill() gate and only the last of them could ever win.
+  if coalesce(NEW.packed,false)
+     and coalesce(OLD.packed,false) is distinct from coalesce(NEW.packed,false)
+     and not exists (select 1 from order_items oi
+                      where oi.order_id = NEW.order_id
+                        and coalesce(oi.fulfillment_state,'') not in ('cancelled','unfillable')
+                        and coalesce(oi.unfulfillable,false) = false
+                        and coalesce(oi.packed,false) = false) then
+    begin perform public.order_try_close(NEW.order_id, 'auto', 'trigger:packed');
+    exception when others then null; end;
+  end if;
+  return NEW;
+end $fn$;
+
+drop trigger if exists trg_close_on_packed on public.order_items;
+create trigger trg_close_on_packed
+  after update of packed on public.order_items
+  for each row execute function public._trg_close_on_packed();
+
+create or replace function public._trg_settle_on_supplier_event()
+returns trigger language plpgsql security definer set search_path to 'public' as $fn$
+declare v_id uuid;
+begin
+  if public._closure_busy() then return NEW; end if;
+  if TG_TABLE_NAME = 'supplier_payments' then
+    v_id := NEW.supplier_order_id;
+  else
+    -- a dispute: settle the supplier order its line belongs to
+    select so.id into v_id
+      from supplier_disputes d
+      join order_items oi on oi.id = d.order_item_id
+      join orders o on o.id = oi.order_id
+      join supplier_orders so
+        on so.supplier_name = oi.assigned_supplier
+       and so.order_date = (o.created_at at time zone 'Asia/Kolkata')::date
+     where d.id = NEW.id
+     order by so.created_at limit 1;
+  end if;
+  if v_id is not null then
+    begin perform public.supplier_order_try_settle(v_id, 'auto', 'trigger:' || TG_TABLE_NAME);
+    exception when others then null; end;
+  end if;
+  return NEW;
+end $fn$;
+
+drop trigger if exists trg_settle_on_supplier_payment on public.supplier_payments;
+create trigger trg_settle_on_supplier_payment
+  after insert on public.supplier_payments
+  for each row execute function public._trg_settle_on_supplier_event();
+
+drop trigger if exists trg_settle_on_dispute_resolved on public.supplier_disputes;
+create trigger trg_settle_on_dispute_resolved
+  after update of status on public.supplier_disputes
+  for each row when (NEW.status in ('resolved','cancelled'))
+  execute function public._trg_settle_on_supplier_event();
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 9. The sweep. Triggers catch the event that happens to be last; this
+--    catches everything else (a bill imported by an edge function, a counted
+--    line, a dispute adjusted straight in SQL).
+-- ─────────────────────────────────────────────────────────────────────────
+create or replace function public.order_lifecycle_tick(p_max int default 100)
+returns jsonb
+language plpgsql
+security definer
+set search_path to 'public'
+as $fn$
+declare r record; v_o int := 0; v_s int := 0; v_seen_o int := 0; v_seen_s int := 0;
+begin
+  -- Customer orders: pre-filter on the two CHEAP gates (delivered + packed)
+  -- before touching customer_bill(), which is the expensive one. The DB has
+  -- ~1 GB of RAM; a sweep that bills every open order every 10 minutes is how
+  -- you take it down.
+  for r in
+    select o.id
+      from orders o
+     where o.closed_at is null
+       and coalesce(o.status,'') not in ('cancelled','rejected')
+       and coalesce(o.fulfillment_status,'') <> 'cancelled'
+       and exists (select 1 from deliveries d
+                    where d.order_id = o.id and d.status = 'delivered')
+       and not exists (select 1 from deliveries d
+                        where d.order_id = o.id
+                          and coalesce(d.status,'') not in ('delivered','failed','rto','cancelled'))
+       and not exists (select 1 from order_items oi
+                        where oi.order_id = o.id
+                          and coalesce(oi.fulfillment_state,'') not in ('cancelled','unfillable')
+                          and coalesce(oi.unfulfillable,false) = false
+                          and coalesce(oi.packed,false) = false)
+     order by o.created_at
+     limit p_max
+  loop
+    v_seen_o := v_seen_o + 1;
+    if coalesce((public.order_try_close(r.id, 'auto', 'tick')->>'just_closed')::boolean,false) then
+      v_o := v_o + 1;
+    end if;
+  end loop;
+
+  -- Supplier orders: pre-filter on counted-in lines and no open dispute.
+  for r in
+    select so.id
+      from supplier_orders so
+     where so.settled_at is null
+       and coalesce(so.status,'') not in ('closed','shipped','cancelled')
+       and not exists (
+         select 1 from order_items oi join orders o on o.id = oi.order_id
+          where oi.assigned_supplier = so.supplier_name
+            and (o.created_at at time zone 'Asia/Kolkata')::date =
+                coalesce(so.order_date, (so.created_at at time zone 'Asia/Kolkata')::date)
+            and coalesce(oi.fulfillment_state,'') not in ('cancelled','unfillable')
+            and coalesce(oi.unfulfillable,false) = false
+            and (coalesce(oi.fulfillment_state,'') not in ('received','shipped')
+                 or coalesce(oi.received_locked,false) = false))
+     order by so.order_date
+     limit p_max
+  loop
+    v_seen_s := v_seen_s + 1;
+    if coalesce((public.supplier_order_try_settle(r.id, 'auto', 'tick')->>'just_closed')::boolean,false) then
+      v_s := v_s + 1;
+    end if;
+  end loop;
+
+  return jsonb_build_object('ok',true,
+    'orders_examined', v_seen_o, 'orders_closed', v_o,
+    'supplier_orders_examined', v_seen_s, 'supplier_orders_settled', v_s);
+end $fn$;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 10. Admin override — a reason is MANDATORY and is logged with the exact
+--     blockers that were live at the moment of the override.
+-- ─────────────────────────────────────────────────────────────────────────
+create or replace function public.admin_order_force_close(p_order_id uuid, p_reason text)
+returns jsonb
+language plpgsql
+security definer
+set search_path to 'public'
+as $fn$
+declare v_actor text;
+begin
+  if get_my_role() not in ('admin','super_admin') then
+    return jsonb_build_object('ok',false,'error','not_authorized');
+  end if;
+  if length(btrim(coalesce(p_reason,''))) < 10 then
+    return jsonb_build_object('ok',false,'error','reason_required',
+      'toast', public._ocl('override.required'));
+  end if;
+  v_actor := coalesce(auth.jwt()->>'email','admin');
+  return public.order_try_close(p_order_id, 'override', v_actor, btrim(p_reason))
+         || jsonb_build_object('toast', public._ocl('override.done'));
+end $fn$;
+
+create or replace function public.admin_supplier_order_force_settle(p_supplier_order_id uuid, p_reason text)
+returns jsonb
+language plpgsql
+security definer
+set search_path to 'public'
+as $fn$
+declare v_actor text;
+begin
+  if get_my_role() not in ('admin','super_admin') then
+    return jsonb_build_object('ok',false,'error','not_authorized');
+  end if;
+  if length(btrim(coalesce(p_reason,''))) < 10 then
+    return jsonb_build_object('ok',false,'error','reason_required',
+      'toast', public._ocl('override.required'));
+  end if;
+  v_actor := coalesce(auth.jwt()->>'email','admin');
+  return public.supplier_order_try_settle(p_supplier_order_id, 'override', v_actor, btrim(p_reason))
+         || jsonb_build_object('toast', public._ocl('override.done_sup'));
+end $fn$;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 11. Backfill REPORT. Writes nothing, ever — it only counts what today's
+--     rules would close if the sweep were pointed at history.
+-- ─────────────────────────────────────────────────────────────────────────
+create or replace function public.order_closure_backfill_report()
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path to 'public'
+as $fn$
+declare v_o int := 0; v_s int := 0; v_open_o int := 0; v_open_s int := 0; r record;
+begin
+  select count(*) into v_open_o from orders
+   where closed_at is null and coalesce(status,'') not in ('cancelled','rejected');
+  select count(*) into v_open_s from supplier_orders
+   where settled_at is null and coalesce(status,'') not in ('closed','shipped','cancelled');
+
+  for r in
+    select o.id from orders o
+     where o.closed_at is null
+       and coalesce(o.status,'') not in ('cancelled','rejected')
+       and exists (select 1 from deliveries d where d.order_id = o.id and d.status = 'delivered')
+     order by o.created_at limit 500
+  loop
+    if coalesce((public._order_close_state(r.id)->>'can_close')::boolean,false) then v_o := v_o + 1; end if;
+  end loop;
+
+  for r in
+    select so.id from supplier_orders so
+     where so.settled_at is null
+       and coalesce(so.status,'') not in ('closed','shipped','cancelled')
+     order by so.order_date desc limit 500
+  loop
+    if coalesce((public._supplier_settle_state(r.id)->>'can_close')::boolean,false) then v_s := v_s + 1; end if;
+  end loop;
+
+  return jsonb_build_object(
+    'ok', true,
+    'label', public._ocl('backfill.label'),
+    'note',  public._ocl('backfill.note'),
+    'orders_qualify', v_o,
+    'orders_open', v_open_o,
+    'orders_label', v_o::text || ' / ' || v_open_o::text || ' ' || public._ocl('backfill.orders'),
+    'supplier_orders_qualify', v_s,
+    'supplier_orders_open', v_open_s,
+    'suppliers_label', v_s::text || ' / ' || v_open_s::text || ' ' || public._ocl('backfill.suppliers'));
+end $fn$;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 12. The admin surface. One list RPC, one detail RPC — both render-ready.
+-- ─────────────────────────────────────────────────────────────────────────
+create or replace function public.admin_order_closure_list(p_filter text default 'blocked', p_limit int default 60)
+returns jsonb
+language plpgsql
+security definer
+set search_path to 'public'
+as $fn$
+declare v_rows jsonb := '[]'::jsonb; r record; v_f text := coalesce(nullif(p_filter,''),'blocked');
+begin
+  if get_my_role() not in ('admin','super_admin') then
+    return jsonb_build_object('ok',false,'error','not_authorized');
+  end if;
+
+  if v_f = 'blocked' then
+    for r in select o.id from orders o
+              where o.closed_at is null
+                and coalesce(o.status,'') not in ('cancelled','rejected')
+              order by o.created_at desc limit p_limit
+    loop
+      v_rows := v_rows || jsonb_build_array(public._order_close_state(r.id));
+    end loop;
+  elsif v_f = 'closed' then
+    for r in select o.id from orders o where o.closed_at is not null
+              order by o.closed_at desc limit p_limit
+    loop
+      v_rows := v_rows || jsonb_build_array(public._order_close_state(r.id));
+    end loop;
+  elsif v_f = 'sup_open' then
+    for r in select so.id from supplier_orders so
+              where so.settled_at is null
+                and coalesce(so.status,'') not in ('closed','shipped','cancelled')
+              order by so.order_date desc nulls last, so.created_at desc limit p_limit
+    loop
+      v_rows := v_rows || jsonb_build_array(public._supplier_settle_state(r.id));
+    end loop;
+  else
+    for r in select so.id from supplier_orders so where so.settled_at is not null
+              order by so.settled_at desc limit p_limit
+    loop
+      v_rows := v_rows || jsonb_build_array(public._supplier_settle_state(r.id));
+    end loop;
+  end if;
+
+  return jsonb_build_object(
+    'ok', true,
+    'title',    public._ocl('screen.title'),
+    'subtitle', public._ocl('screen.subtitle'),
+    'auto_note',public._ocl('auto.note'),
+    'filter',   v_f,
+    'tabs', jsonb_build_array(
+      jsonb_build_object('key','blocked',     'label', public._ocl('tab.blocked')),
+      jsonb_build_object('key','closed',      'label', public._ocl('tab.closed')),
+      jsonb_build_object('key','sup_open',    'label', public._ocl('tab.sup_open')),
+      jsonb_build_object('key','sup_settled', 'label', public._ocl('tab.sup_settled'))),
+    'empty_label', case v_f when 'blocked'  then public._ocl('empty.blocked')
+                            when 'closed'   then public._ocl('empty.closed')
+                            when 'sup_open' then public._ocl('empty.sup_open')
+                            else public._ocl('empty.sup_settled') end,
+    'retry_label', public._ocl('retry'),
+    'backfill', public.order_closure_backfill_report(),
+    'rows', v_rows,
+    'count', jsonb_array_length(v_rows));
+end $fn$;
+
+create or replace function public.admin_order_closure_detail(p_kind text, p_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path to 'public'
+as $fn$
+declare st jsonb;
+begin
+  if get_my_role() not in ('admin','super_admin') then
+    return jsonb_build_object('ok',false,'error','not_authorized');
+  end if;
+  st := case when p_kind = 'supplier_order'
+             then public._supplier_settle_state(p_id)
+             else public._order_close_state(p_id) end;
+  if coalesce((st->>'ok')::boolean,false) is not true then return st; end if;
+
+  return st || jsonb_build_object(
+    'override', case when (st->>'closed')::boolean then null else jsonb_build_object(
+      'action_label', case when p_kind = 'supplier_order'
+                          then public._ocl('override.action_sup') else public._ocl('override.action') end,
+      'hint',         public._ocl('override.hint'),
+      'confirm_label',case when p_kind = 'supplier_order'
+                          then public._ocl('override.confirm_sup') else public._ocl('override.confirm') end,
+      'cancel_label', public._ocl('override.cancel'),
+      'required_label', public._ocl('override.required'),
+      'rpc', case when p_kind = 'supplier_order'
+                  then 'admin_supplier_order_force_settle' else 'admin_order_force_close' end) end);
+end $fn$;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 13. Customer-facing final status. my_orders_screen() reads its chip from
+--     app_settings.order_status_config, so this one row IS the closed state
+--     the customer sees — no deploy needed to reword it.
+-- ─────────────────────────────────────────────────────────────────────────
+update app_settings
+   set value = value || jsonb_build_object(
+         'delivered', jsonb_build_object('label','Delivered · Closed','color','#0F6E56'))
+ where key = 'order_status_config';
+
+update app_settings
+   set value = jsonb_set(value, '{fulfillment,delivered}',
+         jsonb_build_object('bg','#E1F5EE','fg','#0F6E56','label','Delivered','border','#1B7A43'), true)
+ where key = 'order_status_chips';
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 14. Cron. OFFSET schedule, never a bare */N — 35 jobs sharing minute 0 is
+--     what starved the 60 connection slots on 18 Aug 2026.
+-- ─────────────────────────────────────────────────────────────────────────
+select cron.unschedule('order-lifecycle-tick')
+ where exists (select 1 from cron.job where jobname = 'order-lifecycle-tick');
+select cron.schedule('order-lifecycle-tick', '16-59/10 * * * *',
+  $$select public.order_lifecycle_tick(100);$$);
+
+grant execute on function public.admin_order_closure_list(text,int)          to authenticated;
+grant execute on function public.admin_order_closure_detail(text,uuid)       to authenticated;
+grant execute on function public.admin_order_force_close(uuid,text)          to authenticated;
+grant execute on function public.admin_supplier_order_force_settle(uuid,text) to authenticated;
+grant execute on function public.order_closure_backfill_report()             to authenticated;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 15. The rg guards. Both build a real fixture, assert the closure, and
+--     roll every write back. Red here turns rg_check red, which blocks
+--     every dev_cmd_complete until closure works again.
+-- ─────────────────────────────────────────────────────────────────────────
+insert into rg_behavior_tests(name, enabled, note, body) values
+  ('order_closure_customer', true, 'CHANGE #229 — a paid, delivered, fully packed, billed-and-sent order DOES close: closed_at stamped, status delivered, every line out of the supplier matching scope, the closure logged, and an override with a stub reason refused. All rolled back.',
+$body$
+do $rg$
+declare
+  v_oid uuid; v_pb uuid; v_bl uuid; li record; v_net numeric; v_st jsonb;
+begin
+  perform set_config('request.jwt.claims',
+    (select json_build_object('sub', u.id, 'email', u.email, 'role','authenticated')::text
+       from auth.users u join admins a on lower(a.email)=lower(u.email) limit 1), true);
+
+  select o.id into v_oid from orders o
+   where o.closed_at is null and coalesce(o.status,'') not in ('cancelled','rejected')
+     and exists (select 1 from order_items x where x.order_id=o.id and x.product_id is not null
+                   and coalesce(x.fulfillment_state,'') not in ('cancelled','unfillable','shipped')
+                   and coalesce(x.unfulfillable,false)=false)
+   order by o.created_at desc limit 1;
+  if v_oid is null then raise exception 'RG_ROLLBACK'; end if;
+
+  update order_items set packed = true
+   where order_id = v_oid and coalesce(fulfillment_state,'') not in ('cancelled','unfillable')
+     and coalesce(unfulfillable,false)=false;
+
+  insert into deliveries(order_id, status, delivered_at, proof_method, proof_photo_path, receiver_name)
+  values (v_oid,'delivered', now(), 'photo', 'rg/proof.jpg', 'RG');
+
+  update orders set cust_bill_path='rg/bill.pdf', cust_bill_bucket='customer-bills',
+                    cust_bill_name='rg.pdf', cust_bill_uploaded_at=now() where id=v_oid;
+  insert into bill_jobs(order_id, idem_key, status, wa_bill_sent_at)
+  values (v_oid, 'rg-'||v_oid::text, 'done', now());
+
+  insert into pending_bills(file_path,file_name,supplier_name,status,received_at)
+  values ('rg/x.pdf','rg.pdf','RG SUPPLIER','imported', now()) returning id into v_pb;
+
+  for li in select x.id, x.product_id, x.product_name,
+                   greatest(coalesce(x.quantity,1),1) qty,
+                   greatest(coalesce(x.price, x.mrp, 1),1) rate
+              from order_items x where x.order_id=v_oid
+               and coalesce(x.fulfillment_state,'') not in ('shipped','cancelled')
+               and coalesce(x.unfulfillable,false)=false
+  loop
+    insert into bill_lines(pending_bill_id, supplier_name, raw_name, product_id, qty, ptr, mrp,
+                           gst_pct, batch_no, expiry, line_amount, verified, auto_verified)
+    values (v_pb,'RG SUPPLIER', li.product_name, li.product_id, li.qty, li.rate, li.rate, 0,
+            'RGBATCH', '2028-12', li.qty*li.rate, true, false) returning id into v_bl;
+    insert into bill_line_allocations(bill_line_id, order_id, order_item_id, product_id, qty)
+    values (v_bl, v_oid, li.id, li.product_id, li.qty);
+  end loop;
+
+  if coalesce((public.customer_bill(v_oid)->>'ready')::boolean,false) is not true then
+    raise exception 'RG_FAIL: fixture bill not ready: %', public.customer_bill(v_oid); end if;
+  v_net := (public.customer_bill(v_oid)->'totals'->>'net_payable')::numeric;
+
+  v_st := public._order_close_state(v_oid);
+  if (v_st->>'can_close')::boolean then raise exception 'RG_FAIL: closable while unpaid'; end if;
+  if not exists (select 1 from jsonb_array_elements(v_st->'blockers') b where b->>'key'='pay') then
+    raise exception 'RG_FAIL: unpaid order does not name the payment blocker: %', v_st->'blockers'; end if;
+
+  insert into payment_claims(order_id, amount, status, sender_type, received_at)
+  values (v_oid, v_net, 'verified', 'customer', now());
+
+  v_st := public._order_close_state(v_oid);
+  if (v_st->>'closed')::boolean is not true then
+    raise exception 'RG_FAIL: paid+delivered+packed+billed order did NOT close: %', v_st; end if;
+  if (select closed_at from orders where id=v_oid) is null then
+    raise exception 'RG_FAIL: closed_at not stamped'; end if;
+  if (select status from orders where id=v_oid) <> 'delivered' then
+    raise exception 'RG_FAIL: closed order status is %', (select status from orders where id=v_oid); end if;
+  if exists (select 1 from order_items where order_id=v_oid
+              and coalesce(fulfillment_state,'') not in ('shipped','cancelled')) then
+    raise exception 'RG_FAIL: closed order still has a line in the supplier matching scope'; end if;
+  if not exists (select 1 from order_closure_log where order_id=v_oid and event='closed' and mode='auto') then
+    raise exception 'RG_FAIL: closure not logged'; end if;
+  if coalesce(public.admin_order_force_close(v_oid,'too short')->>'error','') <> 'reason_required' then
+    raise exception 'RG_FAIL: override accepted a stub reason'; end if;
+
+  raise exception 'RG_ROLLBACK';
+end $rg$;
+$body$)
+on conflict (name) do update set body = excluded.body, note = excluded.note, enabled = excluded.enabled;
+
+insert into rg_behavior_tests(name, enabled, note, body) values
+  ('order_closure_supplier', true, 'CHANGE #229 — a supplier order whose lines are all received+counted, whose disputes are resolved and whose imported bill is paid in full DOES settle: status closed, settled_at stamped, its lines marked shipped (which is what removes them from bill_lines_from_scan matching), and the settlement logged. All rolled back.',
+$body$
+do $rg$
+declare v_soid uuid; v_sname text; v_day date; v_ss jsonb; v_amt numeric; v_panel jsonb;
+begin
+  perform set_config('request.jwt.claims',
+    (select json_build_object('sub', u.id, 'email', u.email, 'role','authenticated')::text
+       from auth.users u join admins a on lower(a.email)=lower(u.email) limit 1), true);
+
+  select so.id, so.supplier_name, coalesce(so.order_date,(so.created_at at time zone 'Asia/Kolkata')::date)
+    into v_soid, v_sname, v_day
+    from supplier_orders so
+   where so.settled_at is null and coalesce(so.status,'') not in ('closed','shipped','cancelled')
+     and exists (select 1 from order_items x join orders o on o.id=x.order_id
+                  where x.assigned_supplier = so.supplier_name
+                    and (o.created_at at time zone 'Asia/Kolkata')::date =
+                        coalesce(so.order_date,(so.created_at at time zone 'Asia/Kolkata')::date)
+                    and coalesce(x.fulfillment_state,'') not in ('cancelled','unfillable','shipped'))
+   order by so.created_at desc limit 1;
+  if v_soid is null then raise exception 'RG_ROLLBACK'; end if;
+
+  insert into supplier_count_mode(assigned_supplier) values (v_sname) on conflict do nothing;
+
+  update order_items x set fulfillment_state='received', received_locked=true
+    from orders o
+   where o.id = x.order_id and x.assigned_supplier = v_sname
+     and (o.created_at at time zone 'Asia/Kolkata')::date = v_day
+     and coalesce(x.fulfillment_state,'') not in ('cancelled','unfillable');
+
+  update supplier_disputes set status='resolved', resolved_at=now()
+   where coalesce(status,'') not in ('resolved','cancelled')
+     and order_item_id in (select x.id from order_items x join orders o on o.id=x.order_id
+                            where x.assigned_supplier=v_sname
+                              and (o.created_at at time zone 'Asia/Kolkata')::date = v_day);
+
+  v_amt := 1234.00;
+  insert into pending_bills(file_path,file_name,supplier_name,status,imported_at,received_at,scan_result,scan_status)
+  values ('rg/sup.pdf','rgsup.pdf', v_sname, 'imported', now(),
+          ((v_day::text || ' 12:00')::timestamp at time zone 'Asia/Kolkata'),
+          jsonb_build_object('total', v_amt::text), 'done');
+
+  v_panel := public.sup_order_bill_panel(v_soid);
+  if coalesce((v_panel->>'any_bill_imported')::boolean,false) is not true then
+    raise exception 'RG_FAIL: fixture bill not attached: %', v_panel; end if;
+
+  v_ss := public._supplier_settle_state(v_soid);
+  if (v_ss->>'can_close')::boolean then raise exception 'RG_FAIL: settleable while the bill is unpaid: %', v_ss; end if;
+
+  insert into supplier_payments(supplier_order_id, supplier_name, amount, mode, kind, created_by)
+  values (v_soid, v_sname,
+          coalesce((v_panel->>'bills_amount_total')::numeric,0) + coalesce((v_panel->>'adjustments_total')::numeric,0)
+            - coalesce((v_panel->>'total_paid')::numeric,0),
+          'online','balance','rg');
+
+  v_ss := public._supplier_settle_state(v_soid);
+  if (v_ss->>'closed')::boolean is not true then
+    raise exception 'RG_FAIL: received+undisputed+paid supplier order did NOT settle: %', v_ss; end if;
+  if (select status from supplier_orders where id=v_soid) <> 'closed' then
+    raise exception 'RG_FAIL: settled supplier order status is %', (select status from supplier_orders where id=v_soid); end if;
+  if (select settled_at from supplier_orders where id=v_soid) is null then
+    raise exception 'RG_FAIL: settled_at not stamped'; end if;
+  if exists (select 1 from order_items x join orders o on o.id=x.order_id
+              where x.assigned_supplier=v_sname
+                and (o.created_at at time zone 'Asia/Kolkata')::date=v_day
+                and coalesce(x.fulfillment_state,'') not in ('shipped','cancelled')) then
+    raise exception 'RG_FAIL: settled supplier lines still sit in the bill-matching scope'; end if;
+  if not exists (select 1 from order_closure_log where supplier_order_id=v_soid and event='settled') then
+    raise exception 'RG_FAIL: settlement not logged'; end if;
+
+  raise exception 'RG_ROLLBACK';
+end $rg$;
+$body$)
+on conflict (name) do update set body = excluded.body, note = excluded.note, enabled = excluded.enabled;

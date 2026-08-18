@@ -26,7 +26,7 @@ import 'package:pharma_b2b/models/order_item_panel_view.dart';
 /// state that used to be silent — assigned to nobody, in no inquiry.
 Map<String, dynamic> _payload() => <String, dynamic>{
       'ok': true,
-      'count': 4,
+      'count': 6,
       'lines': <dynamic>[
         <String, dynamic>{
           'product_name': 'Doberol Capsule',
@@ -75,8 +75,40 @@ Map<String, dynamic> _payload() => <String, dynamic>{
           'supplier_label': '',
           'has_supplier': false,
           'next_supplier_label': '',
-          'po_warning': 'Not on the purchase order',
+          'po_warning': '',
           'qty_label': '5 Strips',
+          'price_label': '',
+          'unfulfillable': false,
+        },
+        // Assigned, but the units never reached the supplier's purchase order —
+        // the units-level form of "18 items, 9 on supplier orders". Only this
+        // state carries po_warning; the backend emits it for nothing else.
+        <String, dynamic>{
+          'product_name': 'Olmy 40 Tablet',
+          'state': 'supplier_assigned',
+          'status_label': 'Available',
+          'status_colors': <String, dynamic>{'bg': '#E1F5EE', 'fg': '#0F6E56'},
+          'supplier_label': 'Accepted by BHARAT SALES',
+          'has_supplier': true,
+          'next_supplier_label': '',
+          'po_warning': 'Not on the purchase order',
+          'in_po': false,
+          'qty_label': '3 Strips',
+          'price_label': '₹42.00',
+          'unfulfillable': false,
+        },
+        // Cancelled: no supplier badge, no "Asking X", no next supplier — the
+        // ladder's live status must not leak onto a line nobody is working.
+        <String, dynamic>{
+          'product_name': 'Zanocin 100 Liquid',
+          'state': 'cancelled',
+          'status_label': 'Cancelled',
+          'status_colors': <String, dynamic>{'bg': '#EFEEE9', 'fg': '#5A5A57'},
+          'supplier_label': 'Cancelled',
+          'has_supplier': false,
+          'next_supplier_label': '',
+          'po_warning': '',
+          'qty_label': '2 Bottles',
           'price_label': '',
           'unfulfillable': false,
         },
@@ -84,14 +116,18 @@ Map<String, dynamic> _payload() => <String, dynamic>{
       'reconcile': <String, dynamic>{
         'balanced': false,
         'show': true,
-        'total': 4,
-        'assigned': 1,
+        'total': 5,
+        'assigned': 2,
+        'on_po': 1,
         'unfulfillable': 1,
         'in_inquiry': 1,
         'unaccounted': 1,
-        'missing_po': 0,
-        'label': '4 items — 1 on purchase orders, 1 unfulfillable, 1 under inquiry',
-        'detail': '1 item(s) have no supplier, no inquiry and no unfulfillable reason.',
+        'missing_po': 1,
+        'label': '5 items — 1 on purchase orders, 1 assigned but not ordered, '
+            '1 unfulfillable, 1 under inquiry, 1 unaccounted',
+        'detail': '1 item(s) have no supplier, no inquiry and no unfulfillable '
+            'reason. 1 assigned item(s) have not reached their supplier\'s '
+            'purchase order.',
         'bg': '#FBE9E7',
         'fg': '#B42318',
         'border': '#B42318',
@@ -104,7 +140,7 @@ void main() {
         () {
       final v = OrderItemPanelView.fromPayload(_payload());
       expect(v.loaded, isTrue);
-      expect(v.lines.length, 4,
+      expect(v.lines.length, 6,
           reason: 'a dropped line is exactly the 18-vs-9 bug');
       // Deliberately NOT alphabetical: a client-side sort would reorder these.
       expect(v.lines.map((l) => l.productName).toList(), <String>[
@@ -112,12 +148,14 @@ void main() {
         'Cyblex S 60XR Tablet SR',
         'Emessa E-Oil',
         'Xtor 5 Tablet',
+        'Olmy 40 Tablet',
+        'Zanocin 100 Liquid',
       ]);
     });
 
     test('a list payload (PostgREST single-row form) parses the same', () {
       final v = OrderItemPanelView.fromPayload(<dynamic>[_payload()]);
-      expect(v.lines.length, 4);
+      expect(v.lines.length, 6);
       expect(v.loaded, isTrue);
     });
   });
@@ -152,8 +190,11 @@ void main() {
       final v = OrderItemPanelView.fromPayload(_payload());
       expect(v.lines[1].nextSupplierLabel, 'Next: PRAKASH MEDICAL STORES');
       expect(v.lines[0].nextSupplierLabel, isEmpty);
-      expect(v.lines[3].poWarning, 'Not on the purchase order');
+      expect(v.lines[4].poWarning, 'Not on the purchase order',
+          reason: 'assigned but the units never reached the PO');
       expect(v.lines[0].poWarning, isEmpty);
+      expect(v.lines[3].poWarning, isEmpty,
+          reason: 'unaccounted carries no PO warning — it was never assigned');
     });
 
     test('a field the backend omitted renders nothing — never "null"', () {
@@ -182,14 +223,61 @@ void main() {
       expect(v.lines[1].isFlagged, isFalse);
     });
 
+    test('a cancelled line shows no supplier and no next supplier', () {
+      final v = OrderItemPanelView.fromPayload(_payload());
+      final cancelled = v.lines[5];
+      expect(cancelled.state, 'cancelled');
+      expect(cancelled.hasSupplier, isFalse,
+          reason: 'nobody is being asked for a cancelled line');
+      expect(cancelled.nextSupplierLabel, isEmpty);
+      expect(cancelled.statusLabel, 'Cancelled',
+          reason: 'the inquiry ladder status must not leak onto a dead line');
+    });
+
     test('the banner is the backend verdict — the app counts nothing', () {
       final r = OrderItemPanelView.fromPayload(_payload()).reconcile;
       expect(r.show, isTrue);
       expect(r.balanced, isFalse);
-      expect(r.label,
-          '4 items — 1 on purchase orders, 1 unfulfillable, 1 under inquiry');
-      expect(r.detail,
-          '1 item(s) have no supplier, no inquiry and no unfulfillable reason.');
+      expect(
+          r.label,
+          '5 items — 1 on purchase orders, 1 assigned but not ordered, '
+          '1 unfulfillable, 1 under inquiry, 1 unaccounted');
+      expect(r.detail, contains('have no supplier'));
+      expect(r.detail, contains('not reached their supplier'));
+    });
+
+    test('the banner names every bucket — its own numbers sum to its own total',
+        () {
+      // The first cut printed assigned + unfulfillable + in_inquiry and left
+      // `unaccounted` out, so the sentence said "4 items — 1, 1, 1" while one
+      // item was missing from its own summary. That is the same silence in
+      // words that the pipeline had in data.
+      final r = OrderItemPanelView.fromPayload(_payload()).reconcile.raw;
+      final total = r['total'] as int;
+      // The five buckets a non-cancelled item can be in. `assigned` is NOT one
+      // of them — it is on_po + missing_po, and printing it instead of both hid
+      // the items that were assigned and still never ordered.
+      final parts = <String>[
+        'on_po', 'missing_po', 'unfulfillable', 'in_inquiry', 'unaccounted'
+      ];
+      final sum = parts.fold<int>(0, (a, k) => a + (r[k] as int));
+      expect(sum, total,
+          reason: 'the banner buckets must partition the order, not sample it');
+      for (final k in parts) {
+        expect(r['label'].toString(), contains('${r[k]}'),
+            reason: '$k is missing from the sentence');
+      }
+    });
+
+    test('assigned counts the assignment; on_po counts what actually shipped to '
+        'the supplier — they are not the same number', () {
+      final r = OrderItemPanelView.fromPayload(_payload()).reconcile.raw;
+      expect(r['assigned'], 2);
+      expect(r['on_po'], 1);
+      expect(r['missing_po'], 1);
+      expect(OrderItemPanelView.fromPayload(_payload()).reconcile.balanced,
+          isFalse,
+          reason: 'an assigned item missing from its PO must break the balance');
     });
 
     test('a balanced order still shows the banner, with the backend\'s words',
@@ -221,6 +309,36 @@ void main() {
             'label': '   ',
           }).show,
           isFalse);
+    });
+  });
+
+  group('a failure is not an empty order', () {
+    test('an {error} reply is an error state, never "no items recorded"', () {
+      final v = OrderItemPanelView.fromPayload(
+          <String, dynamic>{'error': 'not_authorized'},
+          errorFallback: 'Could not load this order\'s items.');
+      expect(v.hasError, isTrue);
+      expect(v.isEmpty, isFalse,
+          reason: 'printing an empty order over a full one is the same lie '
+              'this change exists to stop');
+      expect(v.errorMessage, 'Could not load this order\'s items.');
+      expect(v.loaded, isTrue, reason: 'answered — so stop the skeleton');
+    });
+
+    test('a thrown RPC lands a message and stops the skeleton', () {
+      final v = OrderItemPanelView.failed('Could not load this order.');
+      expect(v.hasError, isTrue);
+      expect(v.loaded, isTrue);
+      expect(v.isEmpty, isFalse);
+      expect(v.lines, isEmpty);
+      expect(v.reconcile.show, isFalse);
+    });
+
+    test('with no fallback copy, the backend error code is surfaced rather than '
+        'swallowed', () {
+      final v = OrderItemPanelView.fromPayload(
+          <String, dynamic>{'error': 'not_authorized'});
+      expect(v.errorMessage, 'not_authorized');
     });
   });
 

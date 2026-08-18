@@ -33,6 +33,7 @@ import 'admin/pricing_backfill_screen.dart';
 import 'admin/admin_offers_screen.dart';
 import 'admin/admin_bill_pipeline_screen.dart'; // CHANGE #226
 import 'admin/admin_scope_audit_screen.dart'; // CHANGE #227
+import 'admin/admin_order_closure_screen.dart'; // CHANGE #229
 import 'admin/short_dated_admin_screen.dart'; // CHANGE #177
 import '../features/whatsapp/ui/wa_home_screen.dart';
 import '../features/whatsapp/ui/wa_templates_screen.dart';
@@ -447,6 +448,11 @@ class _HomeShellState extends State<HomeShell> {
       case 'scope_audit':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const AdminScopeAuditScreen()));
+        break;
+      // CHANGE #229 — Order closure (customer close + supplier settle).
+      case 'order_closure':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const AdminOrderClosureScreen()));
         break;
       case 'mr': setState(() { _index = 8; _cartOpen = false; }); break;
       case 'companies': setState(() { _index = 9; _cartOpen = false; }); break;

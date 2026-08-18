@@ -98,6 +98,10 @@ List<AdminNavEntry> get kAdminOverflowNav => <AdminNavEntry>[
       // order → delivered flow, checked live against the function source.
       AdminNavEntry(c('admin_nav.overflow_scope_audit'), Icons.rule_outlined,
           route: 'scope_audit'),
+      // CHANGE #229 — order closure: what each open order and supplier order
+      // is still waiting on, what already closed, and the reasoned override.
+      AdminNavEntry('Order closure', Icons.task_alt_outlined,
+          route: 'order_closure'),
     ];
 
 /// The wide shell's "More" popup, sitting after Fulfillment in the top row.

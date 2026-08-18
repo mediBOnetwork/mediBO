@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../design_tokens.dart';
+import '../../utils/render_log.dart';
 
 /// CHANGE #226 — the admin surface over the automatic customer-billing chain.
 ///
@@ -140,6 +141,10 @@ class _AdminBillPipelineScreenState extends State<AdminBillPipelineScreen> {
   }
 
   Widget _body(Map<String, dynamic>? d, List rows) {
+    // Reachability proof: a canvas app cannot be clicked by a tool, so the
+    // screen reports itself instead. `curl https://medibo.in/render-log` shows
+    // c226_bill_pipeline_screen once an admin has opened it.
+    RenderLog.write('c226_bill_pipeline_screen', 1);
     if (_loading) return const _Skeleton();
     if (_error != null || d?['ok'] != true) {
       return _ErrorState(
@@ -151,6 +156,7 @@ class _AdminBillPipelineScreenState extends State<AdminBillPipelineScreen> {
     if (rows.isEmpty) {
       return _EmptyState(label: '${d?['empty_label'] ?? ''}');
     }
+    RenderLog.write('c226_bill_pipeline_rows', rows.length);
     return ListView.separated(
       padding: EdgeInsets.all(Ds.space.x16),
       itemCount: rows.length,

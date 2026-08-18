@@ -93,13 +93,18 @@ begin
            coalesce((e->>'ptr')::numeric,0)      ptr,
            coalesce((e->>'gst_pct')::numeric,0)  gst_pct
       from jsonb_array_elements(coalesce(p_lines,'[]'::jsonb)) with ordinality t(e, ord)),
+  -- The three money columns a pharmacist checks by hand are Value, Disc and
+  -- Taxable. Rounding each of them independently off the raw product leaves
+  -- lines where Value - Disc misses Taxable by a paisa, so taxable is DERIVED
+  -- from the two rounded figures actually printed, and GST from that taxable.
   c as (
     select r.*,
            round(qty*mrp, 2)                                  line_mrp,
            round(qty*ptr, 2)                                  line_ptr,
-           round(qty*ptr*v_pct/100, 2)                        disc_amt,
-           round(qty*ptr*(1 - v_pct/100), 2)                  taxable,
-           round(qty*ptr*(1 - v_pct/100)*gst_pct/100, 2)      gst_amt
+           round(round(qty*ptr, 2) * v_pct/100, 2)            disc_amt,
+           round(qty*ptr, 2) - round(round(qty*ptr, 2) * v_pct/100, 2)                     taxable,
+           round((round(qty*ptr, 2) - round(round(qty*ptr, 2) * v_pct/100, 2))
+                 * gst_pct/100, 2)                            gst_amt
       from r)
   select
     (select jsonb_agg(jsonb_build_object(

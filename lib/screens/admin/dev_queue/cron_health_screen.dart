@@ -56,6 +56,10 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
       try {
         RenderLog.write('c273_cron_health', 'tasks=${tasks.length}');
         RenderLog.write('c273_cron_tasks', '${tasks.length}');
+        // The before/after report is the command's deliverable, so it gets its
+        // own painted-proof key rather than hiding inside the screen's.
+        final ba = ((d['before_after'] as Map?)?['rows'] as List?) ?? const [];
+        RenderLog.write('c273_cron_before_after', '${ba.length}');
       } catch (_) {}
     } catch (_) {
       // Never print e.toString(): a Dart-formatted exception is a display
@@ -77,6 +81,8 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
     final tasks = (_data['tasks'] as List?) ?? const [];
     final tick = (_data['tick'] as Map?)?.cast<String, dynamic>() ?? const {};
     final guard = (_data['guard'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final ba =
+        (_data['before_after'] as Map?)?.cast<String, dynamic>() ?? const {};
 
     return Scaffold(
       backgroundColor: kPageBg,
@@ -126,6 +132,10 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
                     _headline(),
                     SizedBox(height: Ds.space.x16),
                     _tickCard(tick),
+                    if (((ba['rows'] as List?) ?? const []).isNotEmpty) ...[
+                      SizedBox(height: Ds.space.x24),
+                      _beforeAfterCard(ba),
+                    ],
                     SizedBox(height: Ds.space.x24),
                     _sectionTitle(c('dev_queue.cron_health_tasks_title')),
                     SizedBox(height: Ds.space.x12),
@@ -217,6 +227,53 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
           ],
         ),
       );
+
+  /// The command's actual answer: what the per-minute storm cost, and what it
+  /// costs now. Every number, label and caption arrives in `before_after` —
+  /// the backend recomputes both windows from `cron.job_run_details` on each
+  /// open, so this stays a measurement rather than a screenshot of one day.
+  Widget _beforeAfterCard(Map<String, dynamic> ba) {
+    final rows = (ba['rows'] as List?) ?? const [];
+    return DqCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text((ba['label'] as String?) ?? '',
+              style: Ds.t.subtitle
+                  .copyWith(fontWeight: FontWeight.w700, color: kTextHi)),
+          SizedBox(height: Ds.space.x4),
+          Text((ba['note'] as String?) ?? '',
+              style: Ds.t.caption.copyWith(color: kTextLo)),
+          for (final r in rows) ...[
+            SizedBox(height: Ds.space.x16),
+            Text(((r as Map)['metric'] as String?) ?? '',
+                style: Ds.t.body
+                    .copyWith(fontWeight: FontWeight.w600, color: kTextHi)),
+            SizedBox(height: Ds.space.x8),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: _stat((ba['before_head'] as String?) ?? '',
+                      '${r['before'] ?? ''}'),
+                ),
+                SizedBox(width: Ds.space.x8),
+                Expanded(
+                  child: _stat((ba['after_head'] as String?) ?? '',
+                      '${r['after'] ?? ''}'),
+                ),
+              ],
+            ),
+            if ((r['note'] as String?)?.isNotEmpty ?? false) ...[
+              SizedBox(height: Ds.space.x8),
+              Text(r['note'] as String,
+                  style: Ds.t.caption.copyWith(color: kTextLo)),
+            ],
+          ],
+        ],
+      ),
+    );
+  }
 
   Widget _taskCard(Map<String, dynamic> t) => DqCard(
         child: Column(

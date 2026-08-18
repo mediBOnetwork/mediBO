@@ -187,6 +187,22 @@ void main() {
         findsOneWidget);
   });
 
+  testWidgets('a backend refusal prints the backend sentence, not a Dart exception',
+      (tester) async {
+    await _pump(
+        tester,
+        _FakeService({
+          'ok': false,
+          'title': 'Cron health',
+          'error': 'Cron health is a super-admin screen.',
+        }));
+
+    expect(find.text('Cron health is a super-admin screen.'), findsOneWidget);
+    expect(find.textContaining('PostgrestException'), findsNothing,
+        reason: 'a Dart-stringified exception is a display string written in '
+            'Dart — the refusal copy belongs to the backend');
+  });
+
   testWidgets('an empty task list is an empty screen, not a crash',
       (tester) async {
     final p = _payload()

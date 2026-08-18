@@ -45,7 +45,9 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
       setState(() {
         _data = d;
         _loading = false;
-        _error = d['ok'] == true ? null : (d['error'] as String?);
+        // ok:false is the BACKEND refusing (not a crash) and it ships its own
+        // sentence — render that, never a locally worded one.
+        _error = d['ok'] == true ? null : ((d['error'] as String?) ?? '');
       });
       final tasks = (d['tasks'] as List?) ?? const [];
       // Painted-proof for the post-deploy verifier. Written on BOTH paths: a
@@ -55,11 +57,14 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
         RenderLog.write('c273_cron_health', 'tasks=${tasks.length}');
         RenderLog.write('c273_cron_tasks', '${tasks.length}');
       } catch (_) {}
-    } catch (e) {
+    } catch (_) {
+      // Never print e.toString(): a Dart-formatted exception is a display
+      // string written in Dart. The transport failed, so the only copy left is
+      // the cached backend sentence for exactly that case.
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = e.toString();
+        _error = c('dev_queue.cron_health_unreachable');
       });
       try {
         RenderLog.write('c273_cron_health', 'error');

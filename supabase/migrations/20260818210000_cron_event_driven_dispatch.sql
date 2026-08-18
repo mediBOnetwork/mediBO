@@ -645,7 +645,18 @@ create or replace function public.cron_health()
 returns jsonb language plpgsql security definer set search_path to 'public' as $$
 declare v jsonb; st record; v_peak int;
 begin
-  perform public._dev_guard();
+  -- Refuse with a PAYLOAD, not a raise. _dev_guard() raises, and a raise leaves
+  -- Dart with nothing to show but its own stringified exception — a display
+  -- string written in Dart, which this app forbids. ok:false + backend copy.
+  begin
+    perform public._dev_guard();
+  exception when others then
+    return jsonb_build_object(
+      'ok', false,
+      'title', 'Cron health',
+      'error', coalesce((select value #>> '{}' from public.ui_copy
+                          where key = 'dev_queue.cron_health_forbidden'), ''));
+  end;
 
   select * into st from public.cron_dispatch_state where id;
 
@@ -722,5 +733,9 @@ insert into public.ui_copy (key, value) values
  ('dev_queue.cron_health_runs_hour',  to_jsonb('Runs / hour'::text)),
  ('dev_queue.cron_health_db_seconds', to_jsonb('DB seconds / hour'::text)),
  ('dev_queue.cron_health_peak',       to_jsonb('Peak concurrent'::text)),
- ('dev_queue.cron_health_guard_quiet',to_jsonb('No refusals or repairs in the last 7 days.'::text))
+ ('dev_queue.cron_health_guard_quiet',to_jsonb('No refusals or repairs in the last 7 days.'::text)),
+ ('dev_queue.cron_health_forbidden',
+  to_jsonb('Cron health is a super-admin screen. Sign in as a super-admin to see the dispatcher, its registered work and the guard log.'::text)),
+ ('dev_queue.cron_health_unreachable',
+  to_jsonb('Could not reach the backend. Nothing was changed — tap Refresh to try again.'::text))
 on conflict (key) do update set value = excluded.value;

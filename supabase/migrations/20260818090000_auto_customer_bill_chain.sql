@@ -393,6 +393,14 @@ create trigger trg_bill_line_auto_allocate
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 4. THE WORKER — render, then WhatsApp.
 -- ─────────────────────────────────────────────────────────────────────────────
+-- The service JWT lives in the Vault, never in a migration file and never in a
+-- log. Server-side only: revoked from every client role.
+create or replace function public._service_key()
+returns text language sql stable security definer set search_path to 'public' as $$
+  select decrypted_secret from vault.decrypted_secrets where name = 'SERVICE_ROLE_KEY';
+$$;
+revoke all on function public._service_key() from public, anon, authenticated;
+
 create or replace function public.bill_jobs_tick()
 returns int language plpgsql security definer set search_path to 'public','net' as $$
 declare cfg public.bill_auto_config%rowtype; r record; n int := 0;
@@ -442,7 +450,7 @@ begin
       -- platform's JWT check and the function's own shared-secret check.
       headers := jsonb_build_object('Content-Type','application/json',
                                     'x-notify-secret','medibo_order_notify_2027',
-                                    'Authorization','Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN3b2pobWFybWFpamtzaHNiZWloIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3OTk3NzY2MCwiZXhwIjoyMDk1NTUzNjYwfQ.xhFoxtmEws4-ElzivfEJTvvkiRO5WPBAS98HtRkk4A0'),
+                                    'Authorization','Bearer ' || public._service_key()),
       body    := jsonb_build_object('job_id', r.id, 'order_id', r.order_id),
       timeout_milliseconds := 20000);
     n := n + 1;
@@ -634,10 +642,17 @@ begin
       and not exists (select 1 from bill_line_allocations a
                        join bill_lines b on b.id = a.bill_line_id
                       where a.order_item_id = oi.id and b.verified and b.needs_fix is null)
+      -- A chase that WENT OUT quiets this pair for chase_repeat_hours. A chase
+      -- that could not go out (no template attached yet, no phone) only quiets
+      -- it for an hour, so the first reminder lands soon after it becomes
+      -- possible instead of half a day later.
       and not exists (select 1 from public.bill_chase_log cl
                       where cl.order_id = o.id
                         and cl.supplier_name = oi.assigned_supplier
-                        and cl.sent_at > now() - make_interval(hours => coalesce(cfg.chase_repeat_hours,12)))
+                        and cl.sent_at > now() - case
+                              when coalesce(cl.result->>'ok','false') = 'true'
+                              then make_interval(hours => coalesce(cfg.chase_repeat_hours,12))
+                              else interval '1 hour' end)
     group by o.id, o.order_code, oi.assigned_supplier
     limit 20
   loop

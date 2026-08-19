@@ -56,6 +56,22 @@ class SignInDiag {
     clientId = null;
   }
 
+  /// CHANGE #282 — where Android says this copy of the app came from.
+  ///
+  /// `com.android.vending` = installed from the Play Store, which is the one
+  /// fact that decides whether an update prompt may offer an APK at all: Play
+  /// re-signs the upload with its own key, so a storage APK dropped on a Play
+  /// install fails the signature check and cannot be installed. The value is
+  /// reported VERBATIM to the backend — nothing here decides what it means.
+  ///
+  /// Null on web/iOS and whenever the platform declines to answer, which the
+  /// backend reads as "unknown" and resolves with its own default.
+  static Future<String?> installSource() async {
+    final facts = await _deviceFacts();
+    final v = facts['install_source'];
+    return v is String && v.isNotEmpty ? v : null;
+  }
+
   static Future<Map<String, dynamic>> _deviceFacts() async {
     if (factsOverride != null) return factsOverride!;
     if (_facts != null) return _facts!;

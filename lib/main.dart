@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'boot_env.dart' as boot;
-import 'services/android_update_check.dart';
+import 'widgets/app_update_prompt.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:flutter/material.dart';
@@ -782,9 +782,12 @@ class _AppRootState extends State<_AppRoot> {
               await VersionWatcher.instance.init();
               VersionWatcher.instance.start();
             } catch (_) {}
-            // Android APK update check (no-op on web/iOS; own try/catch inside).
+            // CHANGE #282 — Android update prompt (no-op on web/iOS; own
+            // try/catch inside). The BACKEND decides the destination from the
+            // install source, so a Play install is sent to the Play listing and
+            // never offered the APK that its signature check would block.
             if (context.mounted) {
-              try { checkAndroidUpdate(context); } catch (_) {}
+              try { showAppUpdatePromptIfAny(context); } catch (_) {}
             }
           });
         }

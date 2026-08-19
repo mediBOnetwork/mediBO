@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
+import '../design_tokens.dart';
 import 'page_reload.dart';
 import 'ui_copy.dart';
 import '../utils/render_log.dart';
@@ -192,27 +193,62 @@ class VersionWatcher {
     reloadPage();
   }
 
+  /// CHANGE #282 — the web half of the redesigned update prompt.
+  ///
+  /// This used to be a bare MaterialBanner with three hardcoded colours and a
+  /// text button. It is now the same visual language as the Android update
+  /// sheet: brand-tinted circular badge, a title over a quiet sub-line, and one
+  /// filled brand action — painted entirely from the Ds token layer, so
+  /// `ui_design_set()` recolours it with the rest of the app and no literal
+  /// lives here. Both strings stay backend copy (ui_copy), so rewording is an
+  /// UPDATE, not a deploy.
   void _showBanner() {
     final m = messengerKey.currentState;
     if (m == null) return;
     m.clearMaterialBanners();
     m.showMaterialBanner(
       MaterialBanner(
-        backgroundColor: const Color(0xFFE8F5E9),
-        contentTextStyle: const TextStyle(
-          color: Color(0xFF1B5E20),
-          fontSize: 14,
-          fontWeight: FontWeight.w500,
+        backgroundColor: Ds.c.surface,
+        surfaceTintColor: Ds.c.surface,
+        dividerColor: Ds.c.divider,
+        padding: EdgeInsets.symmetric(
+            horizontal: Ds.space.x16, vertical: Ds.space.x12),
+        leadingPadding: EdgeInsets.only(right: Ds.space.x12),
+        leading: Container(
+          width: Ds.touch.minTarget,
+          height: Ds.touch.minTarget,
+          decoration: BoxDecoration(
+            color: Ds.c.brandSoft,
+            shape: BoxShape.circle,
+          ),
+          child: Icon(Icons.system_update_alt_rounded,
+              color: Ds.c.brand, size: Ds.t.subtitleSize),
         ),
-        content: Text(c('version_watcher.new_version_banner')),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(c('version_watcher.new_version_title'), style: Ds.t.subtitle),
+            SizedBox(height: Ds.space.x4),
+            Text(c('version_watcher.new_version_banner'),
+                style: Ds.t.caption),
+          ],
+        ),
         actions: [
-          TextButton(
-            onPressed: _reload,
-            child: Text(
-              c('version_watcher.update_now'),
-              style: const TextStyle(
-                color: Color(0xFF1B7A43),
-                fontWeight: FontWeight.w700,
+          Padding(
+            padding: EdgeInsets.only(right: Ds.space.x8),
+            child: FilledButton(
+              onPressed: _reload,
+              style: FilledButton.styleFrom(
+                backgroundColor: Ds.c.brand,
+                foregroundColor: Ds.c.surface,
+                minimumSize: Size(Ds.touch.minTarget, Ds.touch.minTarget),
+                padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+                shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+              ),
+              child: Text(
+                c('version_watcher.update_now'),
+                style: Ds.t.body.copyWith(color: Ds.c.surface),
               ),
             ),
           ),

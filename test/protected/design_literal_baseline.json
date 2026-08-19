@@ -88,7 +88,6 @@
   "lib/screens/supplier/supplier_inquiry_screen.dart": 39,
   "lib/screens/supplier/supplier_orders_screen.dart": 80,
   "lib/screens/supplier/supplier_shell.dart": 33,
-  "lib/services/version_watcher.dart": 4,
   "lib/utils/responsive.dart": 1,
   "lib/utils/toast.dart": 5,
   "lib/widgets/adaptive_map.dart": 12,

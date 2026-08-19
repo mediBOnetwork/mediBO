@@ -5,6 +5,18 @@
 #   bash scripts/publish_play.sh              # drain one queued play_release row
 #   bash scripts/publish_play.sh --now        # queue one for this build and run it
 #   bash scripts/publish_play.sh --now --track internal --draft   # rehearsal
+#   bash scripts/publish_play.sh --tracks     # only read Play's live track state
+#
+# CHANGE #281 — a queued row now carries a KIND, and this script serves all three:
+#   publish  build + sign + upload the current code to `track` (Om's "Test now"
+#            puts that on internal testing, where Play needs no review).
+#   promote  move a versionCode Play ALREADY HAS from one track to another and
+#            submit it for review. NOTHING IS REBUILT — the bytes Om installed
+#            from internal testing are the bytes that reach production.
+#   refresh  read the live per-track state out of the Play API and store it.
+# Every run refreshes track state first, so the app's panel is never more than
+# one timer tick behind Play, and a successful internal publish consults the
+# auto-publish flag (play_autochain) to decide whether to queue its own promote.
 #
 # CHANGE #280. Before this, shipping meant: build an AAB by hand, open the Play
 # Console, upload it, type release notes, click through the review dialog, then
@@ -52,6 +64,7 @@ TRACK="production"; MODE="serve"; DRAFT=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --now)     MODE="now" ;;
+    --tracks)  MODE="tracks" ;;
     --track)   TRACK="${2:?--track needs a value}"; shift ;;
     --draft)   DRAFT="--draft" ;;
     --help|-h) sed -n '2,30p' "$0"; exit 0 ;;
@@ -94,7 +107,41 @@ $body}" --arg t "$(tail_log)" \
   exit 1
 }
 
-# ── 0. the queue row ────────────────────────────────────────────────────────
+# ── 0. the credential — every path below needs it, even a bare track read ───
+umask 077
+SA=$(mktemp /dev/shm/play_sa.XXXX.json)
+"$DEVCMD" rpc secret_get_runner '{"p_name":"PLAY_PUBLISHER_JSON"}' \
+  | jq -r 'if type=="string" then . else empty end' > "$SA"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["type"]=="service_account"' "$SA" 2>/dev/null \
+  || die "PLAY_PUBLISHER_JSON is missing or not a service-account key. Store it with secret_set and re-run."
+
+# ── 0a. live track state (CHANGE #281) ──────────────────────────────────────
+# What the app's per-track panel renders comes from HERE and nowhere else: the
+# Play Developer API's own answer, stored with the moment it was read. A failed
+# read stores Play's error body verbatim and leaves the last good answer alone —
+# the screen would rather say "Play said X" than show a confident wrong version.
+refresh_tracks() {
+  local o e
+  o=$(mktemp /dev/shm/play_tracks.XXXX); e=$(mktemp /dev/shm/play_tracks_err.XXXX)
+  if python3 scripts/play_ops.py tracks --sa "$SA" >"$o" 2>"$e"; then
+    jq -c '{p_tracks:.tracks}' "$o" > "$o.rpc"
+    "$DEVCMD" rpc play_tracks_write "$(cat "$o.rpc")" >/dev/null 2>&1
+    log "track state refreshed: $(jq -rc '[.tracks[]|"\(.track)=\(.version_codes|join(","))"]|join(" ")' "$o")"
+    rm -f "$o.rpc"
+  else
+    jq -nc --arg err "$(cat "$e")" '{p_tracks:[],p_error:$err}' > "$o.rpc"
+    "$DEVCMD" rpc play_tracks_write "$(cat "$o.rpc")" >/dev/null 2>&1
+    log "WARNING: could not read the track state from Play"; cat "$e" >>"$LOG"
+    rm -f "$o.rpc"
+  fi
+  rm -f "$o" "$e"
+}
+refresh_tracks
+if [ "$MODE" = "tracks" ]; then
+  echo '{"ok":true,"tracks":true}'; exit 0
+fi
+
+# ── 0b. the queue row ───────────────────────────────────────────────────────
 if [ "$MODE" = "now" ]; then
   q=$("$DEVCMD" rpc play_publish_request "$(jq -nc --arg t "$TRACK" '{p_track:$t}')")
   [ "$(jq -r '.ok' <<<"$q")" = "true" ] || { echo "$q"; exit 1; }
@@ -105,18 +152,64 @@ if [ "$(jq -r '.empty // false' <<<"$claim")" = "true" ]; then
 fi
 REL_ID=$(jq -r '.id' <<<"$claim")
 TRACK=$(jq -r '.track' <<<"$claim")
+KIND=$(jq -r '.kind // "publish"' <<<"$claim")
+FROM_TRACK=$(jq -r '.from_track // ""' <<<"$claim")
+SRC_CODE=$(jq -r '.source_version_code // ""' <<<"$claim")
+AUTO=$(jq -r '.auto_publish // false' <<<"$claim")
 NOTES_FILE=$(mktemp /dev/shm/notes.XXXX)
 jq -r '.release_notes // ""' <<<"$claim" > "$NOTES_FILE"
-log "── play_release #$REL_ID → track $TRACK ──"
+log "── play_release #$REL_ID ($KIND) → track $TRACK ──"
 
-# ── 1. credential + keystore ────────────────────────────────────────────────
-umask 077
-SA=$(mktemp /dev/shm/play_sa.XXXX.json)
-"$DEVCMD" rpc secret_get_runner '{"p_name":"PLAY_PUBLISHER_JSON"}' \
-  | jq -r 'if type=="string" then . else empty end' > "$SA"
-python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["type"]=="service_account"' "$SA" 2>/dev/null \
-  || die "PLAY_PUBLISHER_JSON is missing or not a service-account key. Store it with secret_set and re-run."
+# finish_ok <json-patch> — the one terminal call, shared by every kind.
+finish_ok() {
+  jq -nc --argjson id "$REL_ID" --argjson p "${1:-{\}}" --arg t "$(tail_log)" \
+     '{p_id:$id,p_ok:true,p_patch:($p+{log_tail:$t})}' > /dev/shm/.play_fin.$$
+  "$DEVCMD" rpc play_publish_finish "$(cat /dev/shm/.play_fin.$$)" >/dev/null
+  rm -f /dev/shm/.play_fin.$$
+}
 
+# ── 0c. refresh rows: the read already happened above ───────────────────────
+if [ "$KIND" = "refresh" ]; then
+  finish_ok '{"review_status":"track state refreshed"}'
+  rm -f "$NOTES_FILE"
+  echo '{"ok":true,"release_id":'"$REL_ID"',"kind":"refresh"}'
+  exit 0
+fi
+
+# ── 0d. promote rows: NO BUILD. Move the tested bundle, submit for review ───
+# Om approved a specific artifact on internal testing; promoting is the only
+# way production gets exactly that artifact. Rebuilding here would ship
+# something he never saw, which is the whole failure this button prevents.
+if [ "$KIND" = "promote" ]; then
+  [ -n "$SRC_CODE" ] || die "promote row #$REL_ID carries no source version code"
+  progress uploading '{}'
+  log "promoting version code $SRC_CODE: ${FROM_TRACK:-internal} → $TRACK"
+  PO=$(mktemp /dev/shm/promo.XXXX); PE=$(mktemp /dev/shm/promo_err.XXXX)
+  if ! python3 scripts/play_ops.py promote --sa "$SA" --code "$SRC_CODE" \
+          --from "${FROM_TRACK:-internal}" --to "$TRACK" \
+          --notes-file "$NOTES_FILE" >"$PO" 2>"$PE"; then
+    BODY=$(cat "$PE"); rm -f "$PO" "$PE"
+    die "Google Play rejected the promotion of version code $SRC_CODE to $TRACK" "$BODY"
+  fi
+  EDIT_ID=$(jq -r '.committed_edit // ""' "$PO")
+  REVIEW=$(jq -r '[.track_state.releases[]? | "\(.status): \(.name // "")"] | join("; ")' "$PO")
+  VNAME=$(jq -r '.tracks[]? | select(.track=="'"$TRACK"'") | .version_name // ""' "$PO" | head -1)
+  cat "$PO" >> "$LOG"; rm -f "$PO" "$PE"
+  log "Play accepted the promotion — $REVIEW"
+
+  finish_ok "$(jq -nc --arg c "$SRC_CODE" --arg e "$EDIT_ID" --arg r "$REVIEW" \
+                  --arg n "$VNAME" --arg no "$(cat "$NOTES_FILE")" \
+                  '{version_code:$c,edit_id:$e,review_status:$r,release_notes:$no}
+                   + (if $n=="" then {} else {version_name:$n} end)')"
+  refresh_tracks
+  rm -f "$NOTES_FILE"
+  jq -nc --argjson id "$REL_ID" --arg c "$SRC_CODE" --arg tr "$TRACK" --arg r "$REVIEW" \
+     '{ok:true,release_id:$id,kind:"promote",version_code:$c,track:$tr,review_status:$r}'
+  log "── done: promoted $SRC_CODE to $TRACK ──"
+  exit 0
+fi
+
+# ── 1. keystore (build path only) ───────────────────────────────────────────
 if [ ! -f android/key.properties ]; then
   log "key.properties absent — restoring the upload keystore from the Vault"
   bash "$RUNNER/restore_keystore.sh" >>"$LOG" 2>&1 \
@@ -258,9 +351,28 @@ jq -nc --argjson id "$REL_ID" --arg n "$NAME" --arg c "$PLAY_CODE" --arg u "$APK
 "$DEVCMD" rpc play_publish_finish "$(cat /dev/shm/.play_fin.$$)" >/dev/null
 rm -f /dev/shm/.play_fin.$$ "$NOTES_FILE"
 
-# ── 6. the report ───────────────────────────────────────────────────────────
+# ── 6. what Play now believes, and the auto-publish chain (CHANGE #281) ─────
+refresh_tracks
+
+# The flag decides, not this script and not the app: play_autochain re-reads
+# play_config itself and queues the promote only when auto-publish is ON and
+# this was a successful INTERNAL release. OFF (the default) means the build
+# stops on internal testing and waits for Om's "Publish update".
+CHAINED=""
+if [ "$TRACK" = "internal" ]; then
+  ch=$("$DEVCMD" rpc play_autochain "$(jq -nc --argjson id "$REL_ID" '{p_release_id:$id}')" 2>/dev/null)
+  if [ "$(jq -r '.chained // false' <<<"$ch")" = "true" ]; then
+    CHAINED=$(jq -r '.id' <<<"$ch")
+    log "auto-publish is ON — queued promote #$CHAINED for version code $PLAY_CODE"
+  else
+    log "auto-publish: $(jq -r '.reason // "off"' <<<"$ch") — staying on internal testing"
+  fi
+fi
+
+# ── 7. the report ───────────────────────────────────────────────────────────
 jq -nc --argjson id "$REL_ID" --arg n "$NAME" --arg c "$PLAY_CODE" --arg tr "$TRACK" \
-   --arg r "$REVIEW" --arg u "$APK_URL" --arg no "$NOTES" \
+   --arg r "$REVIEW" --arg u "$APK_URL" --arg no "$NOTES" --arg ch "$CHAINED" \
    '{ok:true,release_id:$id,version_name:$n,version_code:$c,track:$tr,
-     review_status:$r,apk_url:$u,release_notes:$no}'
+     review_status:$r,apk_url:$u,release_notes:$no}
+    + (if $ch=="" then {} else {auto_promote_id:$ch} end)'
 log "── done: $NAME ($PLAY_CODE) on $TRACK ──"

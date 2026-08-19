@@ -77,8 +77,14 @@ mkdir -p "$(dirname "$LOG")"
 log() { echo "[$(date -u +%FT%TZ)] $*" | tee -a "$LOG"; }
 tail_log() { tail -c 2000 "$LOG" 2>/dev/null; }
 
-SA=""; REL_ID=""
-cleanup() { [ -n "$SA" ] && { shred -u "$SA" 2>/dev/null || rm -f "$SA"; }; }
+SA=""; RAW=""; REL_ID=""
+# RAW briefly holds the RPC reply, which on the happy path IS the key — it is
+# shredded on every exit path exactly like SA (CHANGE #284).
+cleanup() {
+  [ -n "$SA" ]  && { shred -u "$SA"  2>/dev/null || rm -f "$SA"; }
+  [ -n "$RAW" ] && { shred -u "$RAW" 2>/dev/null || rm -f "$RAW"; }
+  return 0
+}
 trap cleanup EXIT
 
 # progress <status> <json-patch>
@@ -108,12 +114,44 @@ $body}" --arg t "$(tail_log)" \
 }
 
 # ── 0. the credential — every path below needs it, even a bare track read ───
+# CHANGE #284: this used to be one shot, and ANY reply that was not a JSON
+# string was reported as "PLAY_PUBLISHER_JSON is missing… store it with
+# secret_set and re-run". On 2026-08-19 that message fired five times between
+# 19:57 and 20:07 while the secret had been untouched since 18:52 — the box was
+# running four workers at load 3.5 and the RPC was simply not answering. The
+# advice was not just noise: it points Om at re-pasting a private key that is
+# perfectly fine, and it fails the run for a blip that clears in seconds.
+#
+# So: tell the two cases apart and only trust the answer that says so.
+#   * PostgREST P0001 "secret: … not found"  → genuinely absent. Say so, stop.
+#   * anything else (empty body, error object, unparseable) → transient. Retry.
+# Nothing here ever echoes the reply body — only the .code/.message of a parsed
+# ERROR object, which by definition carries no key material.
 umask 077
 SA=$(mktemp /dev/shm/play_sa.XXXX.json)
-"$DEVCMD" rpc secret_get_runner '{"p_name":"PLAY_PUBLISHER_JSON"}' \
-  | jq -r 'if type=="string" then . else empty end' > "$SA"
-python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["type"]=="service_account"' "$SA" 2>/dev/null \
-  || die "PLAY_PUBLISHER_JSON is missing or not a service-account key. Store it with secret_set and re-run."
+RAW=$(mktemp /dev/shm/play_sa_raw.XXXX)
+sa_ok() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["type"]=="service_account"' "$1" 2>/dev/null; }
+
+CRED_WHY=""
+for attempt in 1 2 3 4; do
+  "$DEVCMD" rpc secret_get_runner '{"p_name":"PLAY_PUBLISHER_JSON"}' > "$RAW" 2>/dev/null || true
+  jq -r 'if type=="string" then . else empty end' < "$RAW" > "$SA" 2>/dev/null || : > "$SA"
+  sa_ok "$SA" && { CRED_WHY=""; break; }
+
+  # A definitive "not found" is the one answer worth believing on the spot.
+  if jq -e 'type=="object" and .code=="P0001" and (.message|test("not found"))' "$RAW" >/dev/null 2>&1; then
+    shred -u "$RAW" 2>/dev/null || rm -f "$RAW"
+    die "PLAY_PUBLISHER_JSON is not in the Vault. Store it with secret_set and re-run."
+  fi
+  CRED_WHY=$(jq -r 'if type=="object" then "\(.code // "?"): \(.message // "no message")" else "the reply was not a JSON string" end' "$RAW" 2>/dev/null || echo "the reply could not be parsed")
+  # An empty body makes jq print nothing at all — say that rather than nothing.
+  [ -z "$CRED_WHY" ] && CRED_WHY="the RPC returned an empty body"
+  [ "$attempt" = 4 ] && break
+  log "could not read PLAY_PUBLISHER_JSON (attempt $attempt/4) — $CRED_WHY; retrying"
+  sleep $((attempt * 3))
+done
+shred -u "$RAW" 2>/dev/null || rm -f "$RAW"
+sa_ok "$SA" || die "could not read PLAY_PUBLISHER_JSON after 4 attempts — $CRED_WHY. The secret itself was not changed; this is the backend refusing the read (usually load). Nothing was sent to Google Play."
 
 # ── 0a. live track state (CHANGE #281) ──────────────────────────────────────
 # What the app's per-track panel renders comes from HERE and nowhere else: the

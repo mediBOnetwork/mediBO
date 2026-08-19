@@ -16,7 +16,8 @@
 # keystore. Without it the build REFUSES rather than debug-signing — see the
 # gradle.taskGraph guard in android/app/build.gradle.kts. ALLOW_DEBUG_SIGNING=1
 # overrides that for a local smoke build ONLY; such an APK can never be
-# published (publish_apk.sh checks the certificate DN).
+# published — scripts/verify_signing.sh asserts the signer's FINGERPRINT here
+# and again in publish_apk.sh, and a debug-signed artifact fails both (#283).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

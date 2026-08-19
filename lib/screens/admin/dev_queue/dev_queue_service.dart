@@ -379,6 +379,16 @@ class DevQueueService {
   Future<void> scheduleDelete(int id) async =>
       _c.rpc('gcp_schedule_delete', params: {'p_id': id});
 
+  // ── Play Store (CHANGE #280) ───────────────────────────────────────────
+  // Two calls, no client logic: the screen payload, and the button.
+  Future<Map<String, dynamic>> playState({int limit = 20}) async =>
+      _asMap(await _c.rpc('play_state', params: {'p_limit': limit}));
+
+  Future<Map<String, dynamic>> playPublishRequest(
+          {String track = 'production', String? notes}) async =>
+      _asMap(await _c.rpc('play_publish_request',
+          params: {'p_track': track, 'p_notes': notes}));
+
   List<Map<String, dynamic>> _asList(dynamic v) => (v as List?)
           ?.whereType<Map>()
           .map((e) => Map<String, dynamic>.from(e))

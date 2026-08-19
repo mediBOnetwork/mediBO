@@ -95,3 +95,8 @@ BEGIN
   RETURN jsonb_build_object('ok', true, 'notes', left(v_text,500),
                             'since', v_since, 'source', v_rows);
 END $$;
+
+-- The Dev Queue header entry point for the Play Store screen (#280 frontend).
+insert into ui_copy(key, value) values
+  ('dev_queue.play_nav_label', '"Play Store"'::jsonb)
+on conflict (key) do nothing;

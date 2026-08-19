@@ -15,6 +15,7 @@ import 'dev_queue_qa.dart';
 import 'dev_queue_questions.dart';
 import 'cron_health_screen.dart';
 import 'journey_library_screen.dart';
+import 'play_store_screen.dart';
 import 'signin_diag_screen.dart';
 import 'memory_screen.dart';
 import 'threads_screen.dart';
@@ -300,6 +301,16 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
               icon: const Icon(Icons.memory_outlined, color: kBrand),
               onPressed: () => Navigator.of(context).push(MaterialPageRoute(
                   builder: (_) => MemoryScreen(service: _svc))),
+            ),
+          ),
+          Semantics(
+            identifier: 'devq_play_store',
+            button: true,
+            child: IconButton(
+              tooltip: c('dev_queue.play_nav_label'),
+              icon: const Icon(Icons.shop_outlined, color: kBrand),
+              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => PlayStoreScreen(service: _svc))),
             ),
           ),
           Semantics(

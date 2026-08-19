@@ -42,7 +42,8 @@ import '../utils/render_log.dart';
 
 /// Injectable seams for the widget test: no network, no platform channel,
 /// no browser.
-typedef UpdateRpc = Future<Map<String, dynamic>?> Function(String? installSource);
+typedef UpdateRpc =
+    Future<Map<String, dynamic>?> Function(String? installSource);
 typedef UpdateUrlOpener = Future<void> Function(String url);
 
 /// The one shared-preferences key. It holds the backend's `dismiss_key`, so
@@ -69,8 +70,7 @@ Future<Map<String, dynamic>?> showAppUpdatePromptIfAny(
 
   Map<String, dynamic>? res;
   try {
-    final source =
-        installSourceOverride ?? await SignInDiag.installSource();
+    final source = installSourceOverride ?? await SignInDiag.installSource();
     res = rpcOverride != null
         ? await rpcOverride(source)
         : await _defaultRpc(source);
@@ -103,8 +103,10 @@ Future<Map<String, dynamic>?> showAppUpdatePromptIfAny(
   final actionUrl = (res['action_url'] as String?) ?? '';
 
   try {
-    RenderLog.write('c282_update_prompt',
-        'channel=${res['channel']};mandatory=$mandatory;apk_offered=${res['apk_url'] != null}');
+    RenderLog.write(
+      'c282_update_prompt',
+      'channel=${res['channel']};mandatory=$mandatory;apk_offered=${res['apk_url'] != null}',
+    );
   } catch (_) {}
 
   var dismissed = false;
@@ -162,7 +164,9 @@ Future<void> _defaultOpen(String url) async {
   if (url.isEmpty) return;
   try {
     await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-  } catch (_) {/* nothing more we can do */}
+  } catch (_) {
+    /* nothing more we can do */
+  }
 }
 
 /// The sheet itself. Public so the widget test can pump it directly with a
@@ -199,96 +203,127 @@ class AppUpdateSheet extends StatelessWidget {
       canPop: !mandatory,
       child: SafeArea(
         top: false,
-        child: Padding(
-          padding: EdgeInsets.fromLTRB(
-              Ds.space.x24, Ds.space.x12, Ds.space.x24, Ds.space.x24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: Ds.space.x48,
-                  height: Ds.space.x4,
-                  decoration: BoxDecoration(
-                    color: Ds.c.divider,
-                    borderRadius: BorderRadius.circular(Ds.space.x4),
-                  ),
-                ),
+        // A short screen (small phone in landscape, a large text scale) must
+        // scroll the sheet rather than overflow it — the sheet is
+        // isScrollControlled, so without this it would simply run off-screen
+        // and hide its own primary action.
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.9,
+          ),
+          child: SingleChildScrollView(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                Ds.space.x24,
+                Ds.space.x12,
+                Ds.space.x24,
+                Ds.space.x24,
               ),
-              SizedBox(height: Ds.space.x24),
-              Row(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    width: Ds.touch.minTarget,
-                    height: Ds.touch.minTarget,
-                    decoration: BoxDecoration(
-                      color: Ds.c.brandSoft,
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(Icons.system_update_alt_rounded,
-                        color: Ds.c.brand, size: Ds.t.subtitleSize),
-                  ),
-                  SizedBox(width: Ds.space.x16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (eyebrow.isNotEmpty)
-                          Text(eyebrow,
-                              style: Ds.t.caption.copyWith(color: Ds.c.brand)),
-                        if (eyebrow.isNotEmpty) SizedBox(height: Ds.space.x4),
-                        Text(title, style: Ds.t.title),
-                      ],
+                  Center(
+                    child: Container(
+                      width: Ds.space.x48,
+                      height: Ds.space.x4,
+                      decoration: BoxDecoration(
+                        color: Ds.c.divider,
+                        borderRadius: BorderRadius.circular(Ds.space.x4),
+                      ),
                     ),
                   ),
+                  SizedBox(height: Ds.space.x24),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: Ds.touch.minTarget,
+                        height: Ds.touch.minTarget,
+                        decoration: BoxDecoration(
+                          color: Ds.c.brandSoft,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          Icons.system_update_alt_rounded,
+                          color: Ds.c.brand,
+                          size: Ds.t.subtitleSize,
+                        ),
+                      ),
+                      SizedBox(width: Ds.space.x16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (eyebrow.isNotEmpty)
+                              Text(
+                                eyebrow,
+                                style: Ds.t.caption.copyWith(color: Ds.c.brand),
+                              ),
+                            if (eyebrow.isNotEmpty)
+                              SizedBox(height: Ds.space.x4),
+                            Text(title, style: Ds.t.title),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (message.isNotEmpty) ...[
+                    SizedBox(height: Ds.space.x16),
+                    Text(message, style: Ds.t.bodySecondary),
+                  ],
+                  if (versionLabel.isNotEmpty) ...[
+                    SizedBox(height: Ds.space.x16),
+                    Container(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: Ds.space.x12,
+                        vertical: Ds.space.x4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Ds.c.brandSoft,
+                        borderRadius: Ds.r.rChip,
+                      ),
+                      child: Text(
+                        versionLabel,
+                        style: Ds.t.caption.copyWith(color: Ds.c.brand),
+                      ),
+                    ),
+                  ],
+                  SizedBox(height: Ds.space.x24),
+                  FilledButton(
+                    onPressed: onAction,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: Ds.c.brand,
+                      foregroundColor: Ds.c.surface,
+                      minimumSize: Size.fromHeight(Ds.touch.minTarget),
+                      shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+                    ),
+                    child: Text(
+                      actionLabel,
+                      style: Ds.t.subtitle.copyWith(color: Ds.c.surface),
+                    ),
+                  ),
+                  // No dismiss control on a mandatory release, and none when the
+                  // backend sent no label — the payload decides, not this file.
+                  if (!mandatory &&
+                      dismissLabel != null &&
+                      dismissLabel.isNotEmpty) ...[
+                    SizedBox(height: Ds.space.x8),
+                    TextButton(
+                      onPressed: onDismiss,
+                      style: TextButton.styleFrom(
+                        minimumSize: Size.fromHeight(Ds.touch.minTarget),
+                        foregroundColor: Ds.c.textSecondary,
+                      ),
+                      child: Text(
+                        dismissLabel,
+                        style: Ds.t.body.copyWith(color: Ds.c.textSecondary),
+                      ),
+                    ),
+                  ],
                 ],
               ),
-              if (message.isNotEmpty) ...[
-                SizedBox(height: Ds.space.x16),
-                Text(message, style: Ds.t.bodySecondary),
-              ],
-              if (versionLabel.isNotEmpty) ...[
-                SizedBox(height: Ds.space.x16),
-                Container(
-                  padding: EdgeInsets.symmetric(
-                      horizontal: Ds.space.x12, vertical: Ds.space.x4),
-                  decoration: BoxDecoration(
-                    color: Ds.c.brandSoft,
-                    borderRadius: Ds.r.rChip,
-                  ),
-                  child: Text(versionLabel,
-                      style: Ds.t.caption.copyWith(color: Ds.c.brand)),
-                ),
-              ],
-              SizedBox(height: Ds.space.x24),
-              FilledButton(
-                onPressed: onAction,
-                style: FilledButton.styleFrom(
-                  backgroundColor: Ds.c.brand,
-                  foregroundColor: Ds.c.surface,
-                  minimumSize: Size.fromHeight(Ds.touch.minTarget),
-                  shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
-                ),
-                child: Text(actionLabel,
-                    style: Ds.t.subtitle.copyWith(color: Ds.c.surface)),
-              ),
-              // No dismiss control on a mandatory release, and none when the
-              // backend sent no label — the payload decides, not this file.
-              if (!mandatory && dismissLabel != null && dismissLabel.isNotEmpty) ...[
-                SizedBox(height: Ds.space.x8),
-                TextButton(
-                  onPressed: onDismiss,
-                  style: TextButton.styleFrom(
-                    minimumSize: Size.fromHeight(Ds.touch.minTarget),
-                    foregroundColor: Ds.c.textSecondary,
-                  ),
-                  child: Text(dismissLabel,
-                      style: Ds.t.body.copyWith(color: Ds.c.textSecondary)),
-                ),
-              ],
-            ],
+            ),
           ),
         ),
       ),

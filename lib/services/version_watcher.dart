@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
@@ -192,6 +193,11 @@ class VersionWatcher {
     } catch (_) {}
     reloadPage();
   }
+
+  /// Test/proof seam: renders the banner without waiting 45 s for a real
+  /// version transition, so the redesigned strip can be captured as evidence.
+  @visibleForTesting
+  void debugShowBanner() => _showBanner();
 
   /// CHANGE #282 — the web half of the redesigned update prompt.
   ///

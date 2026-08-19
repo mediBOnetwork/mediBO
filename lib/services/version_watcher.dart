@@ -5,9 +5,8 @@ import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
-import '../design_tokens.dart';
+import '../widgets/update_bar.dart';
 import 'page_reload.dart';
-import 'ui_copy.dart';
 import '../utils/render_log.dart';
 
 /// Polls /version.json every 45 s and, when a newer build is detected,
@@ -21,10 +20,17 @@ class VersionWatcher {
   VersionWatcher._();
   static final VersionWatcher instance = VersionWatcher._();
 
-  /// Attach to MaterialApp.scaffoldMessengerKey so the banner can be shown
-  /// from outside the widget tree.
+  /// Attach to MaterialApp.scaffoldMessengerKey. Still owned here because the
+  /// rest of the app (forced-logout snackbars) shows messages through it; the
+  /// update prompt itself no longer uses it — see [updateBar].
   final GlobalKey<ScaffoldMessengerState> messengerKey =
       GlobalKey<ScaffoldMessengerState>();
+
+  /// CHANGE #286 — the slim bottom bar's state. `UpdateBarHost` (installed in
+  /// MaterialApp.builder) watches this, so the prompt can be raised from a
+  /// plain service with no BuildContext and, crucially, WITHOUT reflowing the
+  /// page the way the old top MaterialBanner did.
+  final UpdateBarController updateBar = UpdateBarController();
 
   String? _bootCommit;
   bool _handled = false;
@@ -188,78 +194,39 @@ class VersionWatcher {
 
   void _reload() {
     _reloadTimer?.cancel();
+    // Swap the pill to the updating label and stop taking taps: one reload,
+    // whether it came from the button or the 6 s auto-reload.
+    updateBar.markUpdating();
     try {
       RenderLog.write('c241_vw_reload', 'reloading to new build');
     } catch (_) {}
     reloadPage();
   }
 
-  /// Test/proof seam: renders the banner without waiting 45 s for a real
-  /// version transition, so the redesigned strip can be captured as evidence.
+  /// Test/proof seam: raises the bar without waiting 45 s for a real version
+  /// transition, so the redesigned strip can be captured as evidence.
   @visibleForTesting
   void debugShowBanner() => _showBanner();
 
-  /// CHANGE #282 — the web half of the redesigned update prompt.
+  /// CHANGE #286 — the web half of the update prompt.
   ///
-  /// This used to be a bare MaterialBanner with three hardcoded colours and a
-  /// text button. It is now the same visual language as the Android update
-  /// sheet: brand-tinted circular badge, a title over a quiet sub-line, and one
-  /// filled brand action — painted entirely from the Ds token layer, so
-  /// `ui_design_set()` recolours it with the rest of the app and no literal
-  /// lives here. Both strings stay backend copy (ui_copy), so rewording is an
-  /// UPDATE, not a deploy.
+  /// It used to be a MaterialBanner. Flutter pins those to the TOP of the
+  /// scaffold and PUSHES the app down while they show, so a badge + heading +
+  /// sub-line + full-width button ate half a phone screen and shoved the logo
+  /// and the search bar off it. It is now one slim bar pinned just above the
+  /// bottom nav (see lib/widgets/update_bar.dart): round chip, one bold line,
+  /// one compact pill. It overlays — it reflows nothing and it blocks no tap.
+  ///
+  /// Nothing visual lives here any more. Both strings are ui_copy keys and
+  /// every token is read in the widget, so rewording or restyling the prompt
+  /// stays an UPDATE, not a deploy.
   void _showBanner() {
-    final m = messengerKey.currentState;
-    if (m == null) return;
-    m.clearMaterialBanners();
-    m.showMaterialBanner(
-      MaterialBanner(
-        backgroundColor: Ds.c.surface,
-        surfaceTintColor: Ds.c.surface,
-        dividerColor: Ds.c.divider,
-        padding: EdgeInsets.symmetric(
-            horizontal: Ds.space.x16, vertical: Ds.space.x12),
-        leadingPadding: EdgeInsets.only(right: Ds.space.x12),
-        leading: Container(
-          width: Ds.touch.minTarget,
-          height: Ds.touch.minTarget,
-          decoration: BoxDecoration(
-            color: Ds.c.brandSoft,
-            shape: BoxShape.circle,
-          ),
-          child: Icon(Icons.system_update_alt_rounded,
-              color: Ds.c.brand, size: Ds.t.subtitleSize),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(c('version_watcher.new_version_title'), style: Ds.t.subtitle),
-            SizedBox(height: Ds.space.x4),
-            Text(c('version_watcher.new_version_banner'),
-                style: Ds.t.caption),
-          ],
-        ),
-        actions: [
-          Padding(
-            padding: EdgeInsets.only(right: Ds.space.x8),
-            child: FilledButton(
-              onPressed: _reload,
-              style: FilledButton.styleFrom(
-                backgroundColor: Ds.c.brand,
-                foregroundColor: Ds.c.surface,
-                minimumSize: Size(Ds.touch.minTarget, Ds.touch.minTarget),
-                padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
-                shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
-              ),
-              child: Text(
-                c('version_watcher.update_now'),
-                style: Ds.t.body.copyWith(color: Ds.c.surface),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
+    // Belt and braces: a MaterialBanner left over from a previous build (or a
+    // hot reload across this change) must not linger at the top.
+    messengerKey.currentState?.clearMaterialBanners();
+    updateBar.show(onUpdate: _reload);
+    try {
+      RenderLog.write('c286_update_prompt_shown', 'surface=bottom_bar');
+    } catch (_) {}
   }
 }

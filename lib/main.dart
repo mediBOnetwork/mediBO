@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'boot_env.dart' as boot;
 import 'widgets/app_update_prompt.dart';
+import 'widgets/update_bar.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:flutter/material.dart';
@@ -430,7 +431,14 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
             // Belt-and-suspenders: clear any stray text decoration on Flutter web.
             builder: (context, child) => DefaultTextStyle.merge(
               style: const TextStyle(decoration: TextDecoration.none, decorationColor: Color(0x00000000)),
-              child: child!,
+              // CHANGE #286 — the slim update bar lives here, above every
+              // route, so it can sit over the bottom nav and the floating cart
+              // pill without any screen knowing about it. It overlays: it
+              // reflows nothing and it only takes taps inside its own bar.
+              child: UpdateBarHost(
+                controller: VersionWatcher.instance.updateBar,
+                child: child!,
+              ),
             ),
             home: _AppRoot(auth: _auth),
             // Public inquiry form — no auth required, handles /inquiry/<token>

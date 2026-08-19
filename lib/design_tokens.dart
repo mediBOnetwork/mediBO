@@ -239,6 +239,12 @@ class DsType {
   TextStyle get subtitle => _style(subtitleSize, subtitleWeight, Ds.c.text, tracking: -0.2);
   TextStyle get body => _style(bodySize, bodyWeight, Ds.c.text);
   TextStyle get bodySecondary => _style(bodySize, bodyWeight, Ds.c.textSecondary);
+
+  /// CHANGE #286 — body size at the subtitle weight. The slim update bar's
+  /// one line and its pill label are "15px semibold" in the spec; both numbers
+  /// stay backend tokens (type.body.size + type.subtitle.weight) instead of
+  /// becoming literals at the call site.
+  TextStyle get bodyStrong => _style(bodySize, subtitleWeight, Ds.c.text);
   TextStyle get caption => _style(captionSize, captionWeight, Ds.c.textSecondary);
 }
 
@@ -303,10 +309,22 @@ class DsMotion {
 /// Touch-target minimums.
 class DsTouch {
   final double minTarget, listRowMinHeight;
-  const DsTouch({required this.minTarget, required this.listRowMinHeight});
-  factory DsTouch._defaults() => const DsTouch(minTarget: 44, listRowMinHeight: 56);
+
+  /// CHANGE #286 — how far above the bottom of the screen a pinned bar floats,
+  /// so it clears the bottom nav (and any floating cart pill) instead of
+  /// covering it. Backend token, so the offset is retunable with zero deploy.
+  final double bottomBarGap;
+
+  const DsTouch({
+    required this.minTarget,
+    required this.listRowMinHeight,
+    required this.bottomBarGap,
+  });
+  factory DsTouch._defaults() =>
+      const DsTouch(minTarget: 44, listRowMinHeight: 56, bottomBarGap: 56);
   factory DsTouch._from(Map m, DsTouch f) => DsTouch(
         minTarget: Ds._num(m['minTarget'], f.minTarget),
         listRowMinHeight: Ds._num(m['listRowMinHeight'], f.listRowMinHeight),
+        bottomBarGap: Ds._num(m['bottomBarGap'], f.bottomBarGap),
       );
 }

@@ -3597,14 +3597,20 @@ class _DesktopSearchRowState extends State<_DesktopSearchRow> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      color: Colors.white,
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+      // CHANGE #274 — the desktop search sits on the SAME brand band as the
+      // mobile one and the chip row directly under it. Leaving it on white
+      // while the chips moved onto the band split the header into two
+      // unrelated strips, which is the exact "unfinished" look this command
+      // set out to remove.
+      color: Ds.c.brand,
+      padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x24, vertical: Ds.space.x12),
       child: Container(
         height: 46,
+        clipBehavior: Clip.antiAlias,
         decoration: BoxDecoration(
-          color: const Color(0xFFF9FAFB),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: const Color(0xFFD1D5DB)),
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(Ds.r.button),
         ),
         child: Row(
           children: [
@@ -3657,13 +3663,8 @@ class _DesktopSearchRowState extends State<_DesktopSearchRow> {
               child: Container(
                 height: double.infinity,
                 padding: const EdgeInsets.symmetric(horizontal: 22),
-                decoration: const BoxDecoration(
-                  color: Brand.green,
-                  borderRadius: BorderRadius.only(
-                    topRight: Radius.circular(9),
-                    bottomRight: Radius.circular(9),
-                  ),
-                ),
+                // The parent clips, so the button just fills its corner.
+                decoration: BoxDecoration(color: Ds.c.brand),
                 child: Center(
                   child: Text(
                     c('home_shell.search'),

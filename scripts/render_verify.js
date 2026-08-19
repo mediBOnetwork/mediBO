@@ -65,6 +65,15 @@ const requiredKeys = keysArg ? keysArg.split(',').map(k => k.trim()).filter(Bool
 const timeoutSec      = parseInt(argVal('--timeout') || '45', 10);
 const inquiryToken    = argVal('--inquiry-token');
 const supplierKeys    = argv.includes('--supplier-keys');
+// CHANGE #273 — reachability proof for an AUTHED screen.
+// The boot phase only ever loaded the site root, so a super-admin screen could
+// be deployed, correct and completely unproven: shot.sh cannot drive an authed
+// Flutter canvas, and "the string is in the bundle" is not evidence the widget
+// rendered. --admin-path drives the already-logged-in admin session to a route
+// and reads the render-log THERE; --shot saves that page's pixels, which is the
+// screenshot the completion gate asks for.
+const adminPath       = argVal('--admin-path');
+const shotPath        = argVal('--shot');
 
 // ── Phase selection (CHANGE #192) ─────────────────────────────────────────────
 // The verifier used to run EVERY phase on every invocation, so the mandated
@@ -306,8 +315,24 @@ async function phaseAdmin(browser, session, expectedHash) {
     try {
       await page.goto(TARGET, { waitUntil: 'domcontentloaded', timeout: 30000 });
       await waitForFlutter(page, 10, 'boot_status=painted');
+      // Boot first, THEN the deep link: the app resolves auth on the root, and
+      // landing straight on a guarded route races that and bounces to home.
+      if (adminPath) {
+        console.log(`  Deep link  : ${adminPath}`);
+        await page.goto(`${TARGET}${adminPath}`,
+          { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await waitForFlutter(page, 10, adminPath);
+      }
       const logText = await readRenderLog(page);
       lastLog = logText;
+      if (shotPath) {
+        try {
+          await page.screenshot({ path: shotPath, fullPage: false });
+          console.log(`  Screenshot : ${shotPath}`);
+        } catch (e) {
+          console.log(`  Screenshot : FAILED (${e.message})`);
+        }
+      }
 
       console.log('\n  ── Render log ─────────────────────────────────────────');
       console.log(logText || '  (empty)');

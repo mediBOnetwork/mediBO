@@ -389,6 +389,22 @@ class DevQueueService {
       _asMap(await _c.rpc('play_publish_request',
           params: {'p_track': track, 'p_notes': notes}));
 
+  // ── the three release buttons (CHANGE #281) ────────────────────────────
+  // One RPC each, no arguments the client invented. Whether a button may be
+  // tapped at all is `can_test` / `can_promote` inside playState() — never a
+  // rule computed here.
+  Future<Map<String, dynamic>> playTestRequest({String? notes}) async =>
+      _asMap(await _c.rpc('play_test_request', params: {'p_notes': notes}));
+
+  Future<Map<String, dynamic>> playPromoteRequest({String? notes}) async =>
+      _asMap(await _c.rpc('play_promote_request', params: {'p_notes': notes}));
+
+  Future<Map<String, dynamic>> playAutoPublishSet(bool on) async =>
+      _asMap(await _c.rpc('play_autopublish_set', params: {'p_on': on}));
+
+  Future<Map<String, dynamic>> playRefreshRequest() async =>
+      _asMap(await _c.rpc('play_refresh_request'));
+
   List<Map<String, dynamic>> _asList(dynamic v) => (v as List?)
           ?.whereType<Map>()
           .map((e) => Map<String, dynamic>.from(e))

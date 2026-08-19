@@ -221,15 +221,23 @@ void main() {
   });
 
   group('once PTR and GST arrive the card prints the engine output', () {
-    testWidgets('headline is the NET rate, struck number is the MRP',
+    testWidgets('headline is the PTR, struck number is the MRP',
         (tester) async {
+      // CHANGED BY #274 — the headline on a CARD is the PTR, not the net.
+      //
+      // Both numbers are still the engine's, computed in Postgres and printed
+      // verbatim; what moved is WHICH one a card leads with. Om's rule: the
+      // shelf label shows what a pack costs (PTR), because GST and discounts
+      // are applied on the BILL, not per product. The net rate did not go
+      // anywhere — the product page still prints it with its GST breakup,
+      // where there is room to say what it includes.
       await _pump(tester, _full());
 
-      expect(find.text('₹84.00'), findsOneWidget,
-          reason: 'price_display verbatim — the app never computes a net rate');
+      expect(find.text('₹82.50'), findsOneWidget,
+          reason: 'ptr_display verbatim — the app never computes a trade rate');
       expect(find.text('₹117.19'), findsOneWidget,
           reason: 'mrp_display verbatim, in the struck position');
-      expect(find.text('NET'), findsOneWidget,
+      expect(find.text('PTR'), findsOneWidget,
           reason: 'the caption is a backend word, never typed in Dart');
     });
 

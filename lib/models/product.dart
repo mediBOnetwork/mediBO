@@ -14,6 +14,12 @@ class Availability {
   /// Button text, e.g. "Add to cart" / "Unavailable". Print verbatim.
   final String ctaLabel;
 
+  /// CHANGE #274 — the SHORT form of [ctaLabel] ("ADD"), for the compact card's
+  /// 68px pill. A separate backend string rather than a truncation of the long
+  /// one, because "Add to cart" → "ADD" is a wording decision: shortening it in
+  /// Dart would put a display string back in the app.
+  final String ctaShort;
+
   /// Whether the row may be added to the cart. Drives enabled/disabled.
   final bool canAdd;
 
@@ -39,6 +45,7 @@ class Availability {
 
   const Availability({
     required this.ctaLabel,
+    this.ctaShort = '',
     required this.canAdd,
     required this.isAvailable,
     this.gated = false,
@@ -62,6 +69,7 @@ class Availability {
     final noteRaw = m['note']?.toString().trim();
     return Availability(
       ctaLabel: label,
+      ctaShort: (m['cta_short'] ?? '').toString(),
       canAdd: m['can_add'] == true,
       isAvailable: m['is_available'] == true,
       gated: m['gated'] == true,
@@ -85,6 +93,7 @@ class Availability {
 
   Map<String, dynamic> toJson() => {
         'cta_label': ctaLabel,
+        'cta_short': ctaShort,
         'can_add': canAdd,
         'is_available': isAvailable,
         'gated': gated,
@@ -182,6 +191,10 @@ class Pricing {
   /// `mrp_only` mode.
   final GstBreakup? gst;
 
+  /// CHANGE #274 — the compact card's MRP/PTR pair. Null only on a payload
+  /// that predates the block; every storefront RPC sends one.
+  final CardPrice? cardPrice;
+
   /// Raw numbers, for anything that must sort or compare. Never for display.
   final double salePrice;
   final double mrp;
@@ -211,6 +224,7 @@ class Pricing {
     this.schemeBadge,
     this.marginChip,
     this.gst,
+    this.cardPrice,
   });
 
   /// True when the backend has real trade pricing for this product.
@@ -252,6 +266,17 @@ class Pricing {
       schemeBadge: PricingChip.fromMap(m['scheme_badge']),
       marginChip: PricingChip.fromMap(m['margin_chip']),
       gst: GstBreakup.fromMap(m['gst']),
+      cardPrice: CardPrice.fromMap(m['card_price']) ??
+          CardPrice.fallbackFrom(
+            hasPrice: m['has_price'] == true,
+            priceDisplay: (m['price_display'] ?? '').toString(),
+            priceCaption: (m['price_caption'] ?? '').toString(),
+            mrpDisplay: (m['mrp_display'] ?? '').toString(),
+            hasStruckMrp: m['has_struck_mrp'] == true,
+            hasPtr: m['has_ptr'] == true,
+            ptrDisplay: (m['ptr_display'] ?? '').toString(),
+            ptrCaption: (m['ptr_caption'] ?? '').toString(),
+          ),
     );
   }
 
@@ -280,6 +305,7 @@ class Pricing {
         'scheme_badge': schemeBadge?.toJson(),
         'margin_chip': marginChip?.toJson(),
         'gst': gst?.toJson(),
+        'card_price': cardPrice?.toJson(),
       };
 }
 
@@ -369,6 +395,137 @@ class GstBreakup {
         'lines': [
           for (final l in lines) {'label': l.label, 'value': l.value},
         ],
+      };
+}
+
+
+/// CHANGE #274 — the card's own two-line B2B price block, rendered verbatim.
+///
+/// mediBO sells trade stock, so a product card carries two numbers with two
+/// meanings and the card must never blur them:
+///
+///  * **MRP** — the printed consumer ceiling. Reference information, struck
+///    through when there is a trade price under it. It is never what anyone is
+///    charged.
+///  * **PTR** — the price-to-retailer the pharmacy actually pays. Discounts
+///    and GST land on the BILL, not on the shelf label, so this is the trade
+///    rate as captured, not a computed net.
+///
+/// [hasPtr] is the backend's own answer to "may this viewer see a trade
+/// price". It is not a hint: an un-entitled viewer's payload carries no
+/// `ptr_display` key at all, so there is nothing here to hide in Flutter — see
+/// `viewer_sees_trade_price()` in Postgres and the `storefront_ptr_entitlement`
+/// regression guard. When PTR is withheld the backend sends [note] instead,
+/// telling the visitor how to become entitled.
+class CardPrice {
+  final bool hasMrp;
+  final String mrpLabel;
+  final String mrpDisplay;
+
+  /// Strike the MRP only when a trade price sits under it. A struck price with
+  /// nothing beneath reads as "unavailable", which is a different claim.
+  final bool strikeMrp;
+
+  final bool hasPtr;
+  final String ptrLabel;
+  final String ptrDisplay;
+
+  /// The filled box's colours, as ARGB ints parsed from the backend's
+  /// `#RRGGBB`. Null keeps the caller's own styling.
+  final int? ptrBg;
+  final int? ptrFg;
+
+  final bool hasNote;
+  final String note;
+
+  const CardPrice({
+    required this.hasMrp,
+    required this.mrpLabel,
+    required this.mrpDisplay,
+    required this.strikeMrp,
+    required this.hasPtr,
+    this.ptrLabel = '',
+    this.ptrDisplay = '',
+    this.ptrBg,
+    this.ptrFg,
+    this.hasNote = false,
+    this.note = '',
+  });
+
+  /// CHANGE #274 — the block for a payload that predates `card_price`.
+  ///
+  /// Not every feed goes through `storefront_pricing()`: the short-dated rail,
+  /// the back-in-stock strip and anything an older client cached send the
+  /// pre-#274 shape. Without this they would draw an EMPTY price block, which
+  /// is worse than the old single-line one.
+  ///
+  /// Nothing is computed or worded here — every value is a string the backend
+  /// already sent, and a label it did not send is simply omitted rather than
+  /// replaced with a Dart word. In particular the PTR half appears only when
+  /// `ptr_display` is in the payload, which is exactly the entitlement rule
+  /// `card_price` itself follows, so an old payload cannot leak a trade price
+  /// a new one would have withheld.
+  static CardPrice fallbackFrom({
+    required bool hasPrice,
+    required String priceDisplay,
+    required String priceCaption,
+    required String mrpDisplay,
+    required bool hasStruckMrp,
+    required bool hasPtr,
+    required String ptrDisplay,
+    required String ptrCaption,
+  }) {
+    // `mrp_only`: the headline IS the MRP, and price_caption is its word.
+    if (!hasStruckMrp) {
+      return CardPrice(
+        hasMrp: hasPrice && priceDisplay.isNotEmpty,
+        mrpLabel: priceCaption,
+        mrpDisplay: priceDisplay,
+        strikeMrp: false,
+        hasPtr: false,
+      );
+    }
+    // `full`: the MRP is the struck ceiling and the trade rate sits under it.
+    return CardPrice(
+      hasMrp: mrpDisplay.isNotEmpty,
+      mrpLabel: '',
+      mrpDisplay: mrpDisplay,
+      strikeMrp: hasPtr && ptrDisplay.isNotEmpty,
+      hasPtr: hasPtr && ptrDisplay.isNotEmpty,
+      ptrLabel: ptrCaption,
+      ptrDisplay: ptrDisplay,
+    );
+  }
+
+  static CardPrice? fromMap(Object? raw) {
+    if (raw is! Map) return null;
+    final m = Map<String, dynamic>.from(raw);
+    return CardPrice(
+      hasMrp: m['has_mrp'] == true,
+      mrpLabel: (m['mrp_label'] ?? '').toString(),
+      mrpDisplay: (m['mrp_display'] ?? '').toString(),
+      strikeMrp: m['strike_mrp'] == true,
+      // Absent key and false both mean "no trade price for this viewer".
+      hasPtr: m['has_ptr'] == true && (m['ptr_display'] ?? '').toString().isNotEmpty,
+      ptrLabel: (m['ptr_label'] ?? '').toString(),
+      ptrDisplay: (m['ptr_display'] ?? '').toString(),
+      ptrBg: Availability._argb(m['ptr_bg']),
+      ptrFg: Availability._argb(m['ptr_fg']),
+      hasNote: m['has_note'] == true && (m['note'] ?? '').toString().isNotEmpty,
+      note: (m['note'] ?? '').toString(),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'has_mrp': hasMrp,
+        'mrp_label': mrpLabel,
+        'mrp_display': mrpDisplay,
+        'strike_mrp': strikeMrp,
+        'has_ptr': hasPtr,
+        if (hasPtr) 'ptr_label': ptrLabel,
+        if (hasPtr) 'ptr_display': ptrDisplay,
+        'has_note': hasNote,
+        'note': note,
       };
 }
 

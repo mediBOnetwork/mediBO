@@ -446,3 +446,37 @@ class HomeSections {
     );
   }
 }
+
+/// CHANGE #274 — the feed's geometry rules, in one testable place.
+///
+/// A rail's card width is the one number that decides whether a category row
+/// READS as a scrolling row. Before #274 it was a fixed 156: on a 360pt phone
+/// almost exactly two cards fitted, the row ended flush with the screen edge,
+/// and nothing on screen said there was more to the right — Om saw a static
+/// two-column grid, because that is what it looked like.
+///
+/// Sizing to 2.2 cards guarantees a sliver of the third is always visible at
+/// every phone width, which is the entire affordance. The clamp stops the same
+/// rule inflating one card to a third of a desktop window; at those widths the
+/// fractional count keeps the peek anyway.
+///
+/// This is geometry, not business, which is why it lives in the app — but it
+/// is a rule rather than a magic number, so it is stated once and tested.
+class HomeSectionMetrics {
+  const HomeSectionMetrics._();
+
+  /// Gap between cards in a rail, and the rail's own left/right gutter.
+  static const double gap = 12;
+  static const double gutter = 16;
+
+  /// How many cards a phone-width rail should show, counting the peek.
+  static const double cardsPerScreen = 2.2;
+
+  static const double minCardWidth = 148;
+  static const double maxCardWidth = 190;
+
+  static double railCardWidth(double viewport) {
+    final raw = (viewport - gutter * 2) / cardsPerScreen - gap;
+    return raw.clamp(minCardWidth, maxCardWidth);
+  }
+}

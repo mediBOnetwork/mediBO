@@ -13,6 +13,7 @@ import '../services/ui_copy.dart';
 import '../theme.dart';
 import 'animations.dart';
 import 'compact_product_card.dart';
+import 'product_image.dart';
 
 /// CHANGE #637 — the sectioned customer home feed.
 ///
@@ -573,6 +574,14 @@ class _SectionBlock extends StatelessWidget {
               child: _SeeAllBar(
                 label: section.seeAllLabel,
                 accent: accent,
+                // CHANGE #274 — three product photos from THIS section, the
+                // way the reference storefront previews what is behind the
+                // button. They are the same cards already on screen, so the
+                // bar can never advertise something the section does not hold.
+                thumbs: [
+                  for (final p in section.cards.take(3))
+                    if (p.imageUrl.isNotEmpty) p.imageUrl,
+                ],
                 onTap: () => _navigate(context, seeAll),
               ),
             ),
@@ -749,8 +758,18 @@ class _Rail extends StatefulWidget {
 
   const _Rail({required this.section, required this.onNeedMore});
 
+  /// CHANGE #274 — the rail's card width is DERIVED from the viewport, so the
+  /// next card always peeks past the right edge. The rule and the reasoning
+  /// live in [HomeSectionMetrics], which is where the test can reach them.
+  static const double gap = HomeSectionMetrics.gap;
+  static const double gutter = HomeSectionMetrics.gutter;
+
+  /// Kept as the reference width for the skeleton and the back-in-stock strip,
+  /// which do not lay out under a LayoutBuilder.
   static const double cardW = 156;
-  static const double gap = 12;
+
+  static double cardWFor(double viewport) =>
+      HomeSectionMetrics.railCardWidth(viewport);
 
   @override
   State<_Rail> createState() => _RailState();
@@ -801,21 +820,27 @@ class _RailState extends State<_Rail> {
       // Fixed height derived from the card's own constant — the rail never
       // measures its children, so scrolling it costs no layout.
       height: CompactProductCard.extent,
-      child: ListView.builder(
-        controller: _c,
-        scrollDirection: Axis.horizontal,
-        physics: const ClampingScrollPhysics(),
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        itemExtent: _Rail.cardW + _Rail.gap,
-        itemCount: cards.length,
-        itemBuilder: (context, i) {
-          final p = cards[i];
-          return Padding(
-            padding: const EdgeInsets.only(right: _Rail.gap),
-            child: CompactProductCard(
-              product: p,
-              onTap: () => Navigator.of(context).pushNamed('/product/${p.id}'),
-            ),
+      child: LayoutBuilder(
+        builder: (context, c) {
+          final w = _Rail.cardWFor(c.maxWidth);
+          return ListView.builder(
+            controller: _c,
+            scrollDirection: Axis.horizontal,
+            physics: const ClampingScrollPhysics(),
+            padding: const EdgeInsets.symmetric(horizontal: _Rail.gutter),
+            itemExtent: w + _Rail.gap,
+            itemCount: cards.length,
+            itemBuilder: (context, i) {
+              final p = cards[i];
+              return Padding(
+                padding: const EdgeInsets.only(right: _Rail.gap),
+                child: CompactProductCard(
+                  product: p,
+                  onTap: () =>
+                      Navigator.of(context).pushNamed('/product/${p.id}'),
+                ),
+              );
+            },
           );
         },
       ),
@@ -897,12 +922,22 @@ class _ProductGrid extends StatelessWidget {
 class _SeeAllBar extends StatelessWidget {
   final String label;
   final Color accent;
+
+  /// Up to three product photos from the section this bar closes. Empty when
+  /// none of the cards carried an image — the bar then reads as a plain CTA
+  /// rather than showing placeholder art.
+  final List<String> thumbs;
   final VoidCallback onTap;
   const _SeeAllBar({
     required this.label,
     required this.accent,
     required this.onTap,
+    this.thumbs = const [],
   });
+
+  static const double _thumb = 30;
+  static const double _overlap = 20;
+  static const double _padV = 12;
 
   @override
   Widget build(BuildContext context) => Material(
@@ -912,15 +947,35 @@ class _SeeAllBar extends StatelessWidget {
       borderRadius: BorderRadius.circular(Rad.pill),
       onTap: onTap,
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 15),
+        padding: const EdgeInsets.symmetric(vertical: _padV),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text(
-              label,
-              style: AppType.l4.copyWith(
-                color: Colors.white,
-                fontWeight: FontWeight.w700,
+            if (thumbs.isNotEmpty) ...[
+              SizedBox(
+                height: _thumb,
+                width: _thumb + _overlap * (thumbs.length - 1),
+                child: Stack(
+                  children: [
+                    for (var i = 0; i < thumbs.length; i++)
+                      Positioned(
+                        left: i * _overlap,
+                        child: _ThumbDisc(url: thumbs[i]),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+            ],
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: AppType.l4.copyWith(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ),
             const SizedBox(width: 8),
@@ -934,6 +989,31 @@ class _SeeAllBar extends StatelessWidget {
       ),
     ),
   );
+}
+
+/// One circular product photo on the Show-all bar. White ring so overlapping
+/// discs stay separable against the accent fill.
+class _ThumbDisc extends StatelessWidget {
+  final String url;
+  const _ThumbDisc({required this.url});
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: _SeeAllBar._thumb,
+        height: _SeeAllBar._thumb,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.white, width: 2),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: ProductImage(
+          url: url,
+          width: _SeeAllBar._thumb,
+          height: _SeeAllBar._thumb,
+          radius: BorderRadius.circular(Rad.pill),
+        ),
+      );
 }
 
 // ── icon_grid / brand_grid ───────────────────────────────────────────────────

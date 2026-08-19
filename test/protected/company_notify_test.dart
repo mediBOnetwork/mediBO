@@ -153,7 +153,10 @@ void main() {
       );
 
       // Title appears in the app bar AND the body header, both from the payload.
-      expect(find.text('SUN PHARMACEUTICAL INDUSTRIES LTD'), findsNWidgets(2));
+      // CHANGED BY #274 — three, not two: the page title, the count line, and
+      // now the manufacturer line the rebuilt product card prints under the
+      // name. Same one backend string in all three places.
+      expect(find.text('SUN PHARMACEUTICAL INDUSTRIES LTD'), findsNWidgets(3));
       expect(find.text('2,510 products'), findsOneWidget);
       expect(find.text('Diprovate Plus G Cream'), findsOneWidget);
     });

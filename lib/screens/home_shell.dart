@@ -8,6 +8,7 @@ import '../app_state.dart';
 import '../data/medicine_repository.dart';
 import '../models/app_session.dart';
 import '../models/cart_model.dart';
+import '../design_tokens.dart';
 import '../theme.dart';
 import '../url_sync.dart';
 import '../user_state.dart';
@@ -1502,13 +1503,20 @@ class _MobileSearchBarState extends State<_MobileSearchBar> {
 
   @override
   Widget build(BuildContext context) {
+    // CHANGE #274 — the search field sits INSIDE the coloured header band.
+    //
+    // A white field on a white strip under a white app bar is three tones of
+    // nothing, and it is why the top of the page read as unfinished. The band
+    // is Ds.c.brand — a backend design token — so recolouring the whole header
+    // is `ui_design_set()`, not a deploy.
     return Container(
-      color: Colors.white,
-      padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
+      color: Ds.c.brand,
+      padding: EdgeInsets.fromLTRB(
+          Ds.space.x16, Ds.space.x12, Ds.space.x16, Ds.space.x12),
       child: Container(
         decoration: BoxDecoration(
-          color: const Color(0xFFF3F4F6),
-          borderRadius: BorderRadius.circular(28),
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(Ds.r.button),
         ),
         child: Row(
           children: [
@@ -1580,6 +1588,11 @@ class _MobileCategoryChips extends StatelessWidget {
     required this.onCategoryTap,
   });
 
+  /// The band's chip row. Tall enough for a 34px chip plus the band's own
+  /// bottom breathing room, so the rail below starts on the page ground.
+  static const double _rowH = 54;
+  static const double _chipH = 34;
+
   @override
   Widget build(BuildContext context) {
     final m = meta;
@@ -1588,22 +1601,23 @@ class _MobileCategoryChips extends StatelessWidget {
       // while categories are loading for the first time on this device —
       // repeat opens render instantly from cache and never hit this path.
       return Container(
-        color: Colors.white,
-        height: 50,
+        color: Ds.c.brand,
+        height: _rowH,
         child: ListView(
           scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.fromLTRB(12, 7, 12, 7),
+          padding: EdgeInsets.fromLTRB(
+              Ds.space.x12, Ds.space.x4, Ds.space.x12, Ds.space.x12),
           physics: const NeverScrollableScrollPhysics(),
           children: List.generate(6, (i) {
             final width = 56.0 + (i % 3) * 18;
             return Padding(
-              padding: const EdgeInsets.only(right: 8),
+              padding: EdgeInsets.only(right: Ds.space.x8),
               child: Container(
                 width: width,
-                height: 36,
+                height: _chipH,
                 decoration: BoxDecoration(
-                  color: const Color(0xFFE5E7EB),
-                  borderRadius: BorderRadius.circular(20),
+                  color: Colors.white.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(Ds.r.chip),
                 ),
               ),
             );
@@ -1616,47 +1630,58 @@ class _MobileCategoryChips extends StatelessWidget {
     final cats = List<CategoryCount>.from(m.categories)
       ..sort((a, b) => b.count.compareTo(a.count));
 
+    // CHANGE #274 — one shape, one colour, and only the SELECTED chip filled.
+    //
+    // Every chip used to wear its category's own tint, so the row was a
+    // rainbow of eight pastels and the selected chip had no way to stand out —
+    // it was just a ninth colour. Now every chip is the same white-on-brand
+    // outline and selection is the only thing that changes (filled white,
+    // brand text). The per-category tints still exist and still do their job
+    // where they mean something: the category TILES, where the colour
+    // identifies a class rather than competing with a selection state.
     return Container(
-      color: Colors.white,
-      height: 50,
+      color: Ds.c.brand,
+      height: _rowH,
       child: ListView.builder(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.fromLTRB(12, 7, 12, 7),
+        padding: EdgeInsets.fromLTRB(
+            Ds.space.x12, Ds.space.x4, Ds.space.x12, Ds.space.x12),
         itemCount: cats.length + 1, // +1 for "All"
         itemBuilder: (ctx, i) {
           final isAll = i == 0;
           final key = isAll ? 'All' : cats[i - 1].name;
           final label = isAll ? 'All' : prettyCategory(cats[i - 1].name);
-          final style = isAll
-              ? const CategoryStyle(Brand.mint, Brand.green, Icons.grid_view_rounded)
-              : categoryStyle(key);
+          final icon = isAll ? Icons.grid_view_rounded : categoryStyle(key).icon;
           final isSelected = selected == key;
+          final fg = isSelected ? Ds.c.brand : Colors.white;
 
           return Padding(
-            padding: EdgeInsets.only(right: i < cats.length ? 8 : 0),
+            padding: EdgeInsets.only(right: i < cats.length ? Ds.space.x8 : 0),
             child: GestureDetector(
               onTap: () => onCategoryTap(key),
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 5),
+                height: _chipH,
+                padding: EdgeInsets.symmetric(horizontal: Ds.space.x12),
                 decoration: BoxDecoration(
-                  color: isSelected ? style.fg : style.bg,
-                  borderRadius: BorderRadius.circular(20),
+                  color: isSelected
+                      ? Colors.white
+                      : Colors.white.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(Ds.r.chip),
+                  border: Border.all(
+                    color: Colors.white
+                        .withValues(alpha: isSelected ? 1 : 0.35),
+                  ),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(
-                      style.icon,
-                      size: 13,
-                      color: isSelected ? Colors.white : style.fg,
-                    ),
-                    const SizedBox(width: 5),
+                    Icon(icon, size: 14, color: fg),
+                    SizedBox(width: Ds.space.x4 + 2),
                     Text(
                       label,
-                      style: TextStyle(
-                        fontSize: 12,
+                      style: Ds.t.caption.copyWith(
                         fontWeight: FontWeight.w600,
-                        color: isSelected ? Colors.white : style.fg,
+                        color: fg,
                       ),
                     ),
                   ],

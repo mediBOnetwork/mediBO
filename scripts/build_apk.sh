@@ -55,28 +55,11 @@ flutter build apk --release --target-platform android-arm64
 echo "→ $APK ($(du -h "$APK" | cut -f1))"
 "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$APK" | grep -m1 'DN:'
 
-# 16 KB page-size report (Play warns on 64-bit libs aligned below 16384).
-python3 - "$APK" <<'PY'
-import struct, sys, zipfile
-bad = []
-with zipfile.ZipFile(sys.argv[1]) as z:
-    for n in z.namelist():
-        if not n.endswith('.so') or '/arm64-v8a/' not in n:
-            continue
-        d = z.read(n)
-        if d[:4] != b'\x7fELF':
-            continue
-        phoff = struct.unpack_from('<Q', d, 0x20)[0]
-        size = struct.unpack_from('<H', d, 0x36)[0]
-        num = struct.unpack_from('<H', d, 0x38)[0]
-        a = max((struct.unpack_from('<Q', d, phoff + i * size + 48)[0]
-                 for i in range(num)
-                 if struct.unpack_from('<I', d, phoff + i * size)[0] == 1), default=0)
-        if a < 16384:
-            bad.append((n, hex(a)))
-print('16 KB alignment: OK' if not bad
-      else '16 KB alignment: ' + ', '.join(f'{n} @ {a}' for n, a in bad))
-PY
+# 16 KB page-size + ABI gate (CHANGE #278). Play REFUSES an upload whose 64-bit
+# .so are aligned below 16384, and the direct-download APK ships arm64 only, so
+# that is the ABI set asserted here. This is a HARD gate, not a report: the
+# 1.3.9 upload was rejected by Play because the equivalent check was advisory.
+python3 scripts/check_16kb.py "$APK" --abis arm64-v8a
 
 if [ -n "$SECRET" ]; then
   bash scripts/publish_apk.sh "$VER" "$SECRET"

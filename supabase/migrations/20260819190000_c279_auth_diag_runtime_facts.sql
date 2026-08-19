@@ -29,6 +29,13 @@ as $function$
   select coalesce((select value #>> '{}' from public.ui_copy where key = p_key), '');
 $function$;
 
+-- ui_copy has RLS on with no policy: no client may read it directly. _c() is
+-- SECURITY DEFINER, so leaving EXECUTE with PUBLIC would hand anon a read of
+-- any ui_copy key by name — a wider door than the table itself allows. Its only
+-- callers are other SECURITY DEFINER functions, which run as the owner.
+revoke execute on function public._c(text) from public;
+revoke execute on function public._c(text) from anon, authenticated;
+
 insert into public.ui_copy (key, value) values
   ('auth_diag.fact_sha1',    '"This build''s certificate SHA-1: %s"'::jsonb),
   ('auth_diag.fact_client',  '"Client id sent: %s"'::jsonb),

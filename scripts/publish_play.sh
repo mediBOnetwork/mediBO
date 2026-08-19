@@ -134,7 +134,7 @@ log "upload key verified ($KS_SHA1)"
 
 # ── 2. version — never reuse a code ─────────────────────────────────────────
 progress building '{}'
-MAX=$(python3 scripts/play_publish.py maxcode --sa "$SA" 2>/dev/null | jq -r '.highest_version_code // empty')
+MAX=$(python3 scripts/play_publish.py maxcode --sa "$SA" 2>>"$LOG" | jq -r '.highest_version_code // empty')
 [ -n "$MAX" ] || die "could not read the published version codes from Play (see the log for the API error)"
 CODE=$((MAX + 1))
 
@@ -185,7 +185,19 @@ log "16 KB + ABI gate passed ($ABIS)"
 
 # The bundle is signed with the release config; prove it is THE upload key.
 AAB_SHA1=$(keytool -printcert -jarfile "$AAB" 2>/dev/null | sed -n 's/.*SHA1: //p' | head -1)
-[ -n "$AAB_SHA1" ] || die "the AAB is unsigned — refusing to upload"
+if [ -z "$AAB_SHA1" ]; then
+  # Older keytool builds cannot read an .aab as a jar; read the signature block
+  # out of META-INF directly rather than skipping the gate.
+  SIG=$(mktemp -d /dev/shm/aabsig.XXXX)
+  unzip -o -j "$AAB" 'META-INF/*.RSA' 'META-INF/*.DSA' 'META-INF/*.EC' -d "$SIG" >/dev/null 2>&1
+  for f in "$SIG"/*; do
+    [ -f "$f" ] || continue
+    AAB_SHA1=$(keytool -printcert -file "$f" 2>/dev/null | sed -n 's/.*SHA1: //p' | head -1)
+    [ -n "$AAB_SHA1" ] && break
+  done
+  rm -rf "$SIG"
+fi
+[ -n "$AAB_SHA1" ] || die "the AAB carries no readable signature — refusing to upload"
 [ "$AAB_SHA1" = "$EXPECT_SHA1" ] \
   || die "WRONG SIGNING KEY on the built AAB: $AAB_SHA1 (expected $EXPECT_SHA1). Play would reject this upload."
 log "AAB signature verified against the upload certificate"

@@ -56,6 +56,7 @@ Map<String, dynamic> _state({
       'notes_heading': 'Release notes (en-US)',
       'notes_hint': 'Written automatically from what changed.',
       'error_heading': 'Google Play said',
+      'retry': 'Retry',
       'empty_history': 'Nothing published from here yet.',
       'publish_button': 'Publish to Play',
       'publishing_button': 'Publishing…',

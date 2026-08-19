@@ -120,7 +120,7 @@ class _PlayStoreScreenState extends State<PlayStoreScreen> {
                 padding: EdgeInsets.all(Ds.space.x16),
                 children: [
                   if (_error != null) ...[
-                    _card(child: Text(_error!, style: Ds.t.body)),
+                    _errorCard(_error!),
                     SizedBox(height: Ds.space.x16),
                   ],
                   Text(_s2('subtitle'), style: Ds.t.caption),
@@ -155,6 +155,33 @@ class _PlayStoreScreenState extends State<PlayStoreScreen> {
 
   Widget _card({required Widget child, Color? accent}) =>
       DqCard(padding: EdgeInsets.all(Ds.space.x16), accent: accent, child: child);
+
+  /// An error state Om can act on: the backend's own heading, the failure text,
+  /// and a Retry — never a dead end that only a page reload escapes.
+  Widget _errorCard(String message) => _card(
+        accent: Ds.c.danger,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(_s2('error_heading'), style: Ds.t.caption),
+            SizedBox(height: Ds.space.x4),
+            Text(message, style: Ds.t.body),
+            SizedBox(height: Ds.space.x12),
+            SizedBox(
+              height: Ds.touch.minTarget,
+              child: OutlinedButton(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Ds.c.brand,
+                  side: BorderSide(color: Ds.c.brand),
+                  shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+                ),
+                onPressed: _load,
+                child: Text(_s2('retry')),
+              ),
+            ),
+          ],
+        ),
+      );
 
   Widget _skeleton() => ListView(
         padding: EdgeInsets.all(Ds.space.x16),

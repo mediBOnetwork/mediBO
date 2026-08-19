@@ -72,16 +72,31 @@ Future<void> _loadFonts() async {
   }
 }
 
-Future<void> _shoot(WidgetTester tester, String name) async {
-  final boundary =
-      tester.renderObject<RenderRepaintBoundary>(find.byType(RepaintBoundary).first);
-  final image = await boundary.toImage(pixelRatio: 3.0);
-  final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-  final out = File('$_outDir/$name.png')..createSync(recursive: true);
-  out.writeAsBytesSync(bytes!.buffer.asUint8List());
-  // ignore: avoid_print
-  print('WROTE ${out.path} (${out.lengthSync()} b)');
+/// PNG-encoding a RepaintBoundary needs the REAL event loop: `toImage` and
+/// `toByteData` complete off the raster thread, and inside a widget test the
+/// clock is fake, so awaiting them directly writes the file and then never
+/// hands control back — the run hangs until the timeout kills it and every
+/// later capture in the file is skipped. `tester.runAsync` lends the body the
+/// real loop, which is the documented way to await raster work from a test.
+Future<void> _shootBoundary(
+    WidgetTester tester, RenderRepaintBoundary boundary, String name) async {
+  await tester.runAsync(() async {
+    final image = await boundary.toImage(pixelRatio: 3.0);
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+    image.dispose(); // native handle; frees the isolate to shut down
+    final out = File('$_outDir/$name.png')..createSync(recursive: true);
+    out.writeAsBytesSync(bytes!.buffer.asUint8List());
+    // ignore: avoid_print
+    print('WROTE ${out.path} (${out.lengthSync()} b)');
+  });
 }
+
+Future<void> _shoot(WidgetTester tester, String name) => _shootBoundary(
+      tester,
+      tester.renderObject<RenderRepaintBoundary>(
+          find.byType(RepaintBoundary).first),
+      name,
+    );
 
 Widget _phone(Widget child) => MediaQuery(
       data: const MediaQueryData(size: Size(390, 844), devicePixelRatio: 3.0),
@@ -150,7 +165,9 @@ void main() {
   // same one filled brand action — proof that the two surfaces now speak one
   // visual language. Copy is the live ui_copy text, seeded verbatim.
   testWidgets('web update strip', (tester) async {
-    tester.view.physicalSize = const Size(390 * 3, 844 * 3);
+    // A short viewport on purpose: the strip is the subject, so the frame is
+    // sized to the strip rather than leaving 700px of empty page under it.
+    tester.view.physicalSize = const Size(390 * 3, 150 * 3);
     tester.view.devicePixelRatio = 3.0;
     addTearDown(tester.view.reset);
     UiCopy.debugSet(const {
@@ -161,7 +178,7 @@ void main() {
     });
     final w = VersionWatcher.instance;
     await tester.pumpWidget(MediaQuery(
-      data: const MediaQueryData(size: Size(390, 844), devicePixelRatio: 3.0),
+      data: const MediaQueryData(size: Size(390, 150), devicePixelRatio: 3.0),
       child: MaterialApp(
         scaffoldMessengerKey: w.messengerKey,
         theme: ThemeData(fontFamily: 'Roboto'),
@@ -175,18 +192,23 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('App update available'), findsOneWidget);
     expect(find.text('Update now'), findsOneWidget);
-    final boundary = tester.renderObject<RenderRepaintBoundary>(
-        find.byType(MaterialBanner).hitTestable().evaluate().isEmpty
-            ? find.byType(RepaintBoundary).first
-            : find.ancestor(
+    await _shootBoundary(
+      tester,
+      tester.renderObject<RenderRepaintBoundary>(find
+              .ancestor(
                 of: find.byType(MaterialBanner),
                 matching: find.byType(RepaintBoundary),
-              ).first);
-    final image = await boundary.toImage(pixelRatio: 3.0);
-    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-    final out = File('$_outDir/web_strip.png')..createSync(recursive: true);
-    out.writeAsBytesSync(bytes!.buffer.asUint8List());
-    // ignore: avoid_print
-    print('WROTE ${out.path} (${out.lengthSync()} b)');
+              )
+              .evaluate()
+              .isEmpty
+          ? find.byType(RepaintBoundary).first
+          : find
+              .ancestor(
+                of: find.byType(MaterialBanner),
+                matching: find.byType(RepaintBoundary),
+              )
+              .first),
+      'web_strip',
+    );
   });
 }

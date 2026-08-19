@@ -171,8 +171,8 @@ void main() {
     tester.view.devicePixelRatio = 3.0;
     addTearDown(tester.view.reset);
     UiCopy.debugSet(const {
-      'update_bar.title': 'App update available',
-      'update_bar.action': 'Update Now',
+      'update_bar.title': 'New update available',
+      'update_bar.action': 'Update',
       'update_bar.updating': 'Updating\u2026',
     });
     await tester.pumpWidget(_phone(SizedBox(
@@ -186,8 +186,8 @@ void main() {
       ),
     )));
     await tester.pumpAndSettle();
-    expect(find.text('App update available'), findsOneWidget);
-    expect(find.text('Update Now'), findsOneWidget);
+    expect(find.text('New update available'), findsOneWidget);
+    expect(find.text('Update'), findsOneWidget);
     expect(find.textContaining('newer version is loading'), findsNothing);
     await _shoot(tester, 'web_update_bar');
   });
@@ -211,5 +211,50 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Updating\u2026'), findsOneWidget);
     await _shoot(tester, 'web_update_bar_updating');
+  });
+
+  // MOBILE FIRST (Om, live on #282): 99% of pharmacies open mediBO on a phone,
+  // and the narrowest one in real use is 360 px. This is the shot that caught
+  // the bar reading "App u…" — real Roboto glyphs, real widget, no Ahem.
+  testWidgets('web update bar — 360 px phone', (tester) async {
+    tester.view.physicalSize = const Size(360 * 3, 120 * 3);
+    tester.view.devicePixelRatio = 3.0;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(_phone(SizedBox(
+      width: 360,
+      child: UpdateBar(
+        title: c('update_bar.title'),
+        actionLabel: c('update_bar.action'),
+        updatingLabel: c('update_bar.updating'),
+        updating: false,
+        onUpdate: () {},
+      ),
+    )));
+    await tester.pumpAndSettle();
+    // The whole sentence is on screen — an ellipsised line would fail here.
+    final line = tester.widget<Text>(find.text('New update available'));
+    expect(line.overflow, TextOverflow.ellipsis);
+    expect(tester.takeException(), isNull);
+    await _shoot(tester, 'web_update_bar_360');
+  });
+
+  // The Android sheet at the same narrow width — it is the surface 99% of
+  // pharmacies actually see, so it is judged at 360 px too.
+  testWidgets('play-install sheet — 360 px phone', (tester) async {
+    tester.view.physicalSize = const Size(360 * 3, 800 * 3);
+    tester.view.devicePixelRatio = 3.0;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(_phone(SizedBox(
+      width: 360,
+      child: AppUpdateSheet(
+        payload: kLivePlay,
+        onAction: () {},
+        onDismiss: () {},
+      ),
+    )));
+    await tester.pumpAndSettle();
+    expect(find.text('Update on Google Play'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await _shoot(tester, 'play_sheet_360');
   });
 }

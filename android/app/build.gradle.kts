@@ -45,7 +45,11 @@ android {
             create("release") {
                 keyAlias = keystoreProperties["keyAlias"] as String
                 keyPassword = keystoreProperties["keyPassword"] as String
-                storeFile = keystoreProperties["storeFile"]?.let { file(it) }
+                // rootProject = android/, so a bare basename in key.properties
+                // resolves to android/<file>.jks. Plain file() here resolved against
+                // android/app/ and broke a restored keystore (CHANGE #276). An
+                // absolute path still works — rootProject.file() returns it as-is.
+                storeFile = keystoreProperties["storeFile"]?.let { rootProject.file(it) }
                 storePassword = keystoreProperties["storePassword"] as String
             }
         }

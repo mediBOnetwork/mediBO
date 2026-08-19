@@ -57,7 +57,16 @@ export PATH="$JAVA_HOME/bin:$HOME/flutter/bin:$PATH"
 # The upload certificate Play expects for in.medibo.app. An artifact signed with
 # anything else CANNOT be published to this listing — CHANGE #276/#277 were the
 # rescue mission that recovered this exact key, so the check is a hard gate.
-EXPECT_SHA1="CB:88:BD:C5:2B:90:15:04:CD:58:3D:45:B0:69:7D:1E:58:40:60:55"
+#
+# CHANGE #285: the fingerprint is no longer pasted here. scripts/verify_signing.sh
+# owns it and prints it with --expected, so the keystore preflight below and the
+# artifact gate in section 3 both read ONE copy — a key rotation is a one-line
+# change in that script and nothing else in the lane silently goes stale.
+EXPECT_SHA1=$(bash scripts/verify_signing.sh --expected) || EXPECT_SHA1=""
+[ -n "$EXPECT_SHA1" ] || {
+  echo "publish_play: scripts/verify_signing.sh --expected did not answer — refusing to build" >&2
+  exit 1
+}
 ABIS="arm64-v8a,armeabi-v7a,x86_64"       # the full 3-ABI bundle from #278
 
 TRACK="production"; MODE="serve"; DRAFT=""
@@ -315,22 +324,13 @@ python3 scripts/check_16kb.py "$AAB" --abis "$ABIS" >>"$LOG" 2>&1 \
 log "16 KB + ABI gate passed ($ABIS)"
 
 # The bundle is signed with the release config; prove it is THE upload key.
-AAB_SHA1=$(keytool -printcert -jarfile "$AAB" 2>/dev/null | sed -n 's/.*SHA1: //p' | head -1)
-if [ -z "$AAB_SHA1" ]; then
-  # Older keytool builds cannot read an .aab as a jar; read the signature block
-  # out of META-INF directly rather than skipping the gate.
-  SIG=$(mktemp -d /dev/shm/aabsig.XXXX)
-  unzip -o -j "$AAB" 'META-INF/*.RSA' 'META-INF/*.DSA' 'META-INF/*.EC' -d "$SIG" >/dev/null 2>&1
-  for f in "$SIG"/*; do
-    [ -f "$f" ] || continue
-    AAB_SHA1=$(keytool -printcert -file "$f" 2>/dev/null | sed -n 's/.*SHA1: //p' | head -1)
-    [ -n "$AAB_SHA1" ] && break
-  done
-  rm -rf "$SIG"
-fi
-[ -n "$AAB_SHA1" ] || die "the AAB carries no readable signature — refusing to upload"
-[ "$AAB_SHA1" = "$EXPECT_SHA1" ] \
-  || die "WRONG SIGNING KEY on the built AAB: $AAB_SHA1 (expected $EXPECT_SHA1). Play would reject this upload."
+# CHANGE #285: one shared gate instead of a hand-rolled keytool read with a
+# META-INF fallback. verify_signing.sh reads the PRODUCED bundle, asserts a
+# single signer against the fingerprint above, and asks jarsigner whether that
+# signature actually COVERS the file — a certificate-only read happily passes a
+# bundle something was appended to after signing (#283).
+bash scripts/verify_signing.sh "$AAB" >>"$LOG" 2>&1 \
+  || die "the built AAB failed the signing gate — Play would reject this upload" "$(tail -c 1500 "$LOG")"
 log "AAB signature verified against the upload certificate"
 
 # ── 4. Play: upload → notes → full rollout → commit ─────────────────────────
@@ -354,13 +354,25 @@ cat "$OUT" >> "$LOG"; rm -f "$OUT" "$ERR"
 
 # ── 5. the APK channel + the app_releases row ───────────────────────────────
 # The direct-download APK is arm64-only (~38 MB); a fat APK is ~110 MB and these
-# are pharmacies on mobile data.
+# are pharmacies on mobile data. It passes the SAME two artifact gates as the
+# bundle — 16 KB alignment and the signing fingerprint — before it is uploaded.
 APK="build/app/outputs/flutter-apk/app-release.apk"
 APK_URL=""
 rm -f "$APK"
 log "flutter build apk --release --target-platform android-arm64 …"
 if flutter build apk --release --target-platform android-arm64 >>"$LOG" 2>&1 && [ -f "$APK" ]; then
-  if python3 scripts/check_16kb.py "$APK" --abis arm64-v8a >>"$LOG" 2>&1; then
+  if ! python3 scripts/check_16kb.py "$APK" --abis arm64-v8a >>"$LOG" 2>&1; then
+    log "WARNING: the APK failed the 16 KB gate; not publishing it"
+  elif ! bash scripts/verify_signing.sh "$APK" >>"$LOG" 2>&1; then
+    # CHANGE #285. Nothing used to stand between this build and the storage
+    # upsert: the AAB was fingerprint-checked in section 3, but the APK — the
+    # one people sideload, and the one that must install OVER the copy already
+    # on the phone — was only checked for 16 KB alignment. A release APK that
+    # fell back to the debug signingConfig installs for nobody who already has
+    # the app. Same treatment as the 16 KB failure: the APK is not published
+    # and the Play release still stands.
+    log "WARNING: the APK failed the signing gate; not publishing it"
+  else
     source "$RUNNER/runner.env"
     P="medibo-$NAME.apk"
     if curl -fsS -X POST "$SUPABASE_URL/storage/v1/object/app-releases/$P" \
@@ -372,8 +384,6 @@ if flutter build apk --release --target-platform android-arm64 >>"$LOG" 2>&1 && 
     else
       log "WARNING: APK upload failed; the Play release still stands"
     fi
-  else
-    log "WARNING: the APK failed the 16 KB gate; not publishing it"
   fi
 else
   log "WARNING: the APK build failed; the Play release still stands"

@@ -63,6 +63,10 @@ void main() {
   final buildApk = File('$root/scripts/build_apk.sh');
   final buildAab = File('$root/scripts/build_aab.sh');
   final publishApk = File('$root/scripts/publish_apk.sh');
+  // CHANGE #285 — publish_play.sh was leased by another command when #283 wired
+  // the rest of the lane, so the ONE path that actually reaches users kept its
+  // own pasted fingerprint and shipped its APK past nothing but check_16kb.py.
+  final publishPlay = File('$root/scripts/publish_play.sh');
 
   group('the signing gate exists and is the one source of the identity', () {
     test('scripts/verify_signing.sh is present and executable', () {
@@ -119,6 +123,7 @@ void main() {
       'scripts/build_apk.sh': buildApk,
       'scripts/build_aab.sh': buildAab,
       'scripts/publish_apk.sh': publishApk,
+      'scripts/publish_play.sh': publishPlay,
     }.entries) {
       test('${entry.key} invokes verify_signing.sh', () {
         expect(entry.value.existsSync(), isTrue);
@@ -131,7 +136,7 @@ void main() {
 
     test('no script re-introduces the advisory `apksigner | grep DN` print',
         () {
-      for (final f in [buildApk, buildAab, publishApk]) {
+      for (final f in [buildApk, buildAab, publishApk, publishPlay]) {
         final code = _code(f.readAsStringSync());
         expect(code, isNot(contains(RegExp(r'apksigner.*\|\s*grep'))),
             reason: '${f.path}: piping apksigner into grep discards the exit '
@@ -145,6 +150,42 @@ void main() {
       expect(code, isNot(contains(RegExp(r'case\s+"?\$CERT'))),
           reason: 'a DN string match accepts any self-minted "CN=mediBO" key; '
               'identity is the fingerprint');
+    });
+
+    test('publish_play.sh gates the APK it uploads, not only the bundle', () {
+      // The AAB gate has always been there; the APK channel further down
+      // (section 5, the app-releases upsert) ran only check_16kb.py, so a
+      // debug-signed APK could reach the direct-download link — and an APK
+      // signed with the wrong key installs for nobody who already has the app.
+      final code = _code(publishPlay.readAsStringSync());
+      expect(code, contains(RegExp(r'verify_signing\.sh "\$AAB"')),
+          reason: 'the bundle must still be verified before the Play upload');
+      expect(code, contains(RegExp(r'verify_signing\.sh "\$APK"')),
+          reason: 'the APK must be verified before it is upserted to '
+              'app-releases — the 16 KB gate says nothing about who signed it');
+      final apkBuild = code.indexOf('flutter build apk');
+      final apkGate = code.indexOf(RegExp(r'verify_signing\.sh "\$APK"'));
+      expect(apkBuild, greaterThan(-1));
+      expect(apkGate, greaterThan(apkBuild),
+          reason: 'the produced APK is what is verified, not the build config');
+      final upload = code.indexOf('app-releases/');
+      expect(upload, greaterThan(-1));
+      expect(apkGate, lessThan(upload),
+          reason: 'the gate must run BEFORE the upload, or it only reports on '
+              'an artifact users can already download');
+    });
+
+    test('publish_play.sh reads the expected fingerprint from the gate', () {
+      final code = _code(publishPlay.readAsStringSync());
+      expect(code, contains('verify_signing.sh --expected'),
+          reason: 'one source of the expected identity — a rotation must not '
+              'need the hex pasted into a second file');
+      expect(code, isNot(contains(kUploadKeySha1)),
+          reason: 'a second copy of the fingerprint is a second thing to '
+              'forget: read it from verify_signing.sh --expected');
+      expect(code, isNot(contains(kPlayAppSigningSha1)),
+          reason: 'the Play app-signing key is what a Play INSTALL reports; it '
+              'must never be accepted by a build or upload gate');
     });
 
     test('build_aab.sh checks the produced bundle, not only the keystore', () {

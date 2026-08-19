@@ -16,8 +16,8 @@ import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/widgets/update_bar.dart';
 
 const _copy = <String, String>{
-  'update_bar.title': 'App update available',
-  'update_bar.action': 'Update Now',
+  'update_bar.title': 'New update available',
+  'update_bar.action': 'Update',
   'update_bar.updating': 'Updating…',
 };
 
@@ -42,7 +42,7 @@ void main() {
 
     expect(find.text('page content'), findsOneWidget);
     expect(find.byType(UpdateBar), findsNothing);
-    expect(find.text('App update available'), findsNothing);
+    expect(find.text('New update available'), findsNothing);
   });
 
   testWidgets('shown: one backend line, one backend pill, no sub-line',
@@ -54,8 +54,8 @@ void main() {
     await t.pumpAndSettle();
 
     // The copy is the backend's, verbatim.
-    expect(find.text('App update available'), findsOneWidget);
-    expect(find.text('Update Now'), findsOneWidget);
+    expect(find.text('New update available'), findsOneWidget);
+    expect(find.text('Update'), findsOneWidget);
 
     // The old top card's sub-line is gone for good.
     expect(find.textContaining('newer version is loading'), findsNothing);
@@ -66,7 +66,7 @@ void main() {
     expect(texts, findsNWidgets(2));
 
     // One line, never wrapped into a paragraph.
-    final line = t.widget<Text>(find.text('App update available'));
+    final line = t.widget<Text>(find.text('New update available'));
     expect(line.maxLines, 1);
   });
 
@@ -100,12 +100,12 @@ void main() {
     });
     await t.pumpAndSettle();
 
-    await t.tap(find.text('Update Now'));
+    await t.tap(find.text('Update'));
     await t.pumpAndSettle();
 
     expect(taps, 1);
     expect(find.text('Updating…'), findsOneWidget);
-    expect(find.text('Update Now'), findsNothing);
+    expect(find.text('Update'), findsNothing);
 
     // Disabled: a second tap changes nothing.
     await t.tap(find.text('Updating…'));
@@ -135,6 +135,36 @@ void main() {
     expect(pill.width, greaterThanOrEqualTo(min));
   });
 
+  // MOBILE FIRST (Om, #282): 99% of pharmacies open mediBO on a phone, so the
+  // bar is judged at 360 px, not on a desktop. Before this, the chrome (44 px
+  // chip + two x12 gaps + an x16-padded pill) ate so much of the row that the
+  // sentence got a stub of the width and rendered as "App u…". The rule the bar
+  // must keep is: the CHROME gives way before the sentence does. Measured as a
+  // share of the bar, because the test font is fixed-width Ahem and its glyph
+  // widths say nothing about the real one.
+  for (final width in <double>[360, 390, 414]) {
+    testWidgets('phone $width px: the line gets the row, not the chrome',
+        (t) async {
+      t.view.physicalSize = Size(width, 800);
+      t.view.devicePixelRatio = 1.0;
+      addTearDown(t.view.reset);
+
+      final ctrl = UpdateBarController();
+      await t.pumpWidget(_host(ctrl));
+      ctrl.show(onUpdate: () {});
+      await t.pumpAndSettle();
+
+      final bar = t.getSize(find.byType(UpdateBar)).width;
+      final line = t.getSize(find.text('New update available')).width;
+      expect(line, greaterThan(bar * 0.4),
+          reason: 'the title slot collapsed — chrome is eating the sentence');
+
+      // And the bar still fits the phone exactly: no horizontal overflow.
+      expect(bar, width);
+      expect(tester_hasNoOverflow(t), isTrue);
+    });
+  }
+
   testWidgets('a missing copy key renders empty, never a Dart fallback',
       (t) async {
     UiCopy.debugSet(const {});
@@ -143,8 +173,8 @@ void main() {
     ctrl.show(onUpdate: () {});
     await t.pumpAndSettle();
 
-    expect(find.text('App update available'), findsNothing);
-    expect(find.text('Update Now'), findsNothing);
+    expect(find.text('New update available'), findsNothing);
+    expect(find.text('Update'), findsNothing);
     // No hardcoded English leaked in as a stand-in.
     final texts = find
         .descendant(of: find.byType(UpdateBar), matching: find.byType(Text))
@@ -156,3 +186,7 @@ void main() {
     UiCopy.debugSet(_copy);
   });
 }
+
+/// True when no RenderFlex overflow was reported while laying the bar out.
+/// `takeException` would swallow a real failure, so this only reads the flag.
+bool tester_hasNoOverflow(WidgetTester t) => t.takeException() == null;

@@ -175,10 +175,16 @@ class _UpdateBarState extends State<UpdateBar> with SingleTickerProviderStateMix
             child: Padding(
               padding: EdgeInsets.symmetric(
                   horizontal: Ds.space.x16, vertical: Ds.space.x12),
+              // MOBILE FIRST (Om, #282): 99% of pharmacies open mediBO on a
+              // phone. At 360 px the old x12/x12 gaps plus the x16 pill padding
+              // left the line ~77 px of slot for a ~145 px sentence, so the bar
+              // read "App u…" — the exact opposite of clean. The chrome now
+              // gives way before the sentence does: x8 gaps here, x12 inside
+              // the pill, and the copy itself is short phone copy from ui_copy.
               child: Row(
                 children: [
                   _chip(),
-                  SizedBox(width: Ds.space.x12),
+                  SizedBox(width: Ds.space.x8),
                   Expanded(
                     child: Text(
                       widget.title,
@@ -187,7 +193,7 @@ class _UpdateBarState extends State<UpdateBar> with SingleTickerProviderStateMix
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                  SizedBox(width: Ds.space.x12),
+                  SizedBox(width: Ds.space.x8),
                   _action(),
                 ],
               ),
@@ -215,7 +221,7 @@ class _UpdateBarState extends State<UpdateBar> with SingleTickerProviderStateMix
           disabledBackgroundColor: Ds.c.brandDark,
           disabledForegroundColor: Ds.c.surface,
           minimumSize: Size(Ds.touch.minTarget, Ds.touch.minTarget),
-          padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+          padding: EdgeInsets.symmetric(horizontal: Ds.space.x12),
           shape: const StadiumBorder(),
           visualDensity: VisualDensity.standard,
         ),

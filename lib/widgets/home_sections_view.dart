@@ -10,6 +10,7 @@ import '../design_tokens.dart';
 import '../models/home_sections.dart';
 import '../models/storefront_p3.dart';
 import '../services/ui_copy.dart';
+import '../utils/render_log.dart';
 import '../theme.dart';
 import 'animations.dart';
 import 'compact_product_card.dart';
@@ -164,6 +165,37 @@ class _HomeSectionsViewState extends State<HomeSectionsView> {
     }
 
     _reportSeen();
+    _reportRender();
+  }
+
+  /// CHANGE #274 — the card's own render-log line.
+  ///
+  /// The storefront is a canvas: no browser tool can read a Flutter widget, and
+  /// "the string is in the bundle" only proves the code compiled. So the feed
+  /// counts what it actually painted and posts it, which is the only evidence
+  /// a deploy of this screen can produce (see the VERIFICATION RULE in
+  /// CLAUDE.md).
+  ///
+  /// It counts, it never decides: `rails` is how many sections came back with
+  /// the rail layout, `cards` is how many product cards those sections carry,
+  /// and `ptr` is how many of them arrived with a trade price the viewer is
+  /// entitled to — 0 for an anonymous visitor, which is itself the entitlement
+  /// gate showing up in the log.
+  void _reportRender() {
+    final d = _data;
+    if (d == null || !d.ok) return;
+    var rails = 0;
+    var cards = 0;
+    var ptr = 0;
+    for (final s in d.sections) {
+      if (s.layout == HomeSectionLayout.rail) rails++;
+      for (final c in s.cards) {
+        cards++;
+        if (c.pricing?.cardPrice?.hasPtr == true) ptr++;
+      }
+    }
+    RenderLog.write('c274_home_cards',
+        'rails=$rails cards=$cards ptr=$ptr sections=${d.sections.length}');
   }
 
   /// Appends one page to [id]. Called by a rail that has been scrolled near

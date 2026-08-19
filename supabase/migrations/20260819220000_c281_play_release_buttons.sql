@@ -404,11 +404,14 @@ BEGIN
         'status',         t.status,
         'status_label',   _play_review_block(t.status)->>'label',
         'status_tone',    _play_review_block(t.status)->>'tone',
-        'rollout_label',  CASE WHEN t.user_fraction IS NULL
-                               THEN _play_c('play.rollout_full','Full rollout')
-                               ELSE format(_play_c('play.rollout_fmt','%s%% rollout'),
-                                           trim(trailing '.' from trim(trailing '0' from
-                                             to_char(t.user_fraction * 100,'FM990.99')))) END,
+        -- An empty track has no rollout at all; saying "Full rollout" there
+        -- would be the screen asserting something Play never said.
+        'rollout_label',  CASE
+            WHEN t.version_codes IS NULL OR array_length(t.version_codes,1) IS NULL THEN null
+            WHEN t.user_fraction IS NULL THEN _play_c('play.rollout_full','Full rollout')
+            ELSE format(_play_c('play.rollout_fmt','%s%% rollout'),
+                        trim(trailing '.' from trim(trailing '0' from
+                          to_char(t.user_fraction * 100,'FM990.99')))) END,
         'release_notes',  t.release_notes,
         'empty_label',    _play_c('play.track_empty','No release on this track.'),
         'error',          t.error

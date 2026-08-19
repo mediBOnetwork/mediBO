@@ -27,7 +27,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 AAB="build/app/outputs/bundle/release/app-release.aab"
-EXPECT_SHA1="CB:88:BD:C5:2B:90:15:04:CD:58:3D:45:B0:69:7D:1E:58:40:60:55"
+# One copy of the expected identity, owned by the gate (CHANGE #283).
+EXPECT_SHA1=$(bash scripts/verify_signing.sh --expected)
 
 # The Gradle daemon writes here and a reboot wipes it (cost a whole build once).
 mkdir -p /dev/shm/gtmp
@@ -73,4 +74,10 @@ flutter build appbundle --release
 
 echo "→ $AAB ($(du -h "$AAB" | cut -f1))"
 python3 scripts/check_16kb.py "$AAB" --abis armeabi-v7a,arm64-v8a,x86_64
+
+# The keystore check above proves the RIGHT KEY EXISTS; this proves the built
+# bundle actually CARRIES it (CHANGE #283). A signingConfig that silently failed
+# to apply is invisible until Play rejects the upload, so assert the artifact.
+bash scripts/verify_signing.sh "$AAB"
+
 echo "✅  bundle is Play-uploadable: $AAB"

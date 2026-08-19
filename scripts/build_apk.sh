@@ -53,7 +53,12 @@ echo "→ building mediBO $VER (code $CODE), arm64-v8a"
 flutter build apk --release --target-platform android-arm64
 
 echo "→ $APK ($(du -h "$APK" | cut -f1))"
-"$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$APK" | grep -m1 'DN:'
+
+# Signing gate (CHANGE #283). This used to be `apksigner … | grep DN:` — a
+# PRINT, whose exit code nothing checked, so a debug-signed or wrong-key APK
+# walked straight past it. verify_signing.sh asserts the FINGERPRINT of the
+# produced file and fails the build, exactly like the 16 KB gate below.
+bash scripts/verify_signing.sh "$APK"
 
 # 16 KB page-size + ABI gate (CHANGE #278). Play REFUSES an upload whose 64-bit
 # .so are aligned below 16384, and the direct-download APK ships arm64 only, so

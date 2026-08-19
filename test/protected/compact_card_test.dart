@@ -461,6 +461,25 @@ void main() {
       expect(CompactProductCard.tileH, 152);
     });
 
+    testWidgets('the chips sit hard LEFT, on the same edge as the name',
+        (tester) async {
+      // #274 shipped once with `Align(widthFactor: 1)` around the type chip and
+      // the PTR box. Align shrinks ITSELF to its child, and the fixed-height
+      // SizedBox that reserves the row then centres that shrunken box — so
+      // both rendered mid-card on the live site while every unit test passed.
+      // Pin the geometry, not the widget: everything in the text block starts
+      // on one edge.
+      await _pump(tester, _row());
+
+      final nameLeft = tester.getTopLeft(find.text('Alkacel 100mg Injection')).dx;
+      expect(tester.getTopLeft(find.text('Vial')).dx, lessThan(nameLeft + 12),
+          reason: 'the type chip is left-aligned, not centred');
+      expect(tester.getTopLeft(find.text('MRP')).dx, lessThan(nameLeft + 4),
+          reason: 'the MRP line starts on the same edge');
+      expect(tester.getTopLeft(find.text('PTR')).dx, lessThan(nameLeft + 12),
+          reason: 'and so does the filled trade-price box');
+    });
+
     testWidgets('the card never overflows the extent the grid reserves',
         (tester) async {
       await _pump(tester, _row());

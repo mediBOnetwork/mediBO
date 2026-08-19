@@ -103,7 +103,8 @@ class CompactProductCard extends StatelessWidget {
   /// The grid's mainAxisExtent and the rail's height. Summed from the parts
   /// above so a change to the card can never silently overflow its container
   /// the way a hardcoded number did.
-  static const double extent = tileH +
+  static const double extent =
+      tileH +
       _overhang + // the pill hangs into this
       _gapL +
       _chipH +
@@ -165,7 +166,9 @@ class CompactProductCard extends StatelessWidget {
                         ? SizedBox(
                             height: pillH,
                             child: Center(
-                                child: NotifyControl(productId: product.id)))
+                              child: NotifyControl(productId: product.id),
+                            ),
+                          )
                         : CompactCartControl(product: product),
                   ),
                 ],
@@ -186,7 +189,9 @@ class CompactProductCard extends StatelessWidget {
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: AppType.l5.copyWith(
-                    fontWeight: FontWeight.w700, height: 18 / 12),
+                  fontWeight: FontWeight.w700,
+                  height: 18 / 12,
+                ),
               ),
             ),
             const SizedBox(height: _gapS),
@@ -238,7 +243,8 @@ class _Plate extends StatelessWidget {
     // pricing has been captured. Either way an offer is a fact about the
     // product, never inferred from a string being non-empty.
     final badge = pricing?.schemeBadge;
-    final hasBadge = pricing?.hasSchemeBadge == true &&
+    final hasBadge =
+        pricing?.hasSchemeBadge == true &&
         badge != null &&
         badge.label.isNotEmpty;
     final offerText = (!hasBadge && product.hasOffer) ? product.offerChip : '';
@@ -267,10 +273,12 @@ class _Plate extends StatelessWidget {
                   tag: CompactProductCard.heroTag(product.id),
                   child: ProductImage(
                     url: product.imageUrl,
-                    width: CompactProductCard.tileH -
+                    width:
+                        CompactProductCard.tileH -
                         CompactProductCard._footerH -
                         CompactProductCard._gapL * 2,
-                    height: CompactProductCard.tileH -
+                    height:
+                        CompactProductCard.tileH -
                         CompactProductCard._footerH -
                         CompactProductCard._gapL * 2,
                     radius: BorderRadius.circular(Rad.tile),
@@ -355,32 +363,38 @@ class _Ribbon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => ClipPath(
-        clipper: const _RibbonClipper(),
-        child: Container(
-          width: w,
-          height: h,
-          color: bg == null ? Brand.deep : Color(bg!),
-          padding: const EdgeInsets.only(top: CompactProductCard._gapS),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(top,
-                  maxLines: 1,
-                  style: AppType.t3.copyWith(
-                      height: 14 / 9,
-                      letterSpacing: -0.3,
-                      color: fg == null ? null : Color(fg!))),
-              Text(bottom,
-                  maxLines: 1,
-                  overflow: TextOverflow.clip,
-                  style: AppType.t3.copyWith(
-                      height: 10 / 9,
-                      fontWeight: FontWeight.w600,
-                      color: fg == null ? null : Color(fg!))),
-            ],
+    clipper: const _RibbonClipper(),
+    child: Container(
+      width: w,
+      height: h,
+      color: bg == null ? Brand.deep : Color(bg!),
+      padding: const EdgeInsets.only(top: CompactProductCard._gapS),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            top,
+            maxLines: 1,
+            style: AppType.t3.copyWith(
+              height: 14 / 9,
+              letterSpacing: -0.3,
+              color: fg == null ? null : Color(fg!),
+            ),
           ),
-        ),
-      );
+          Text(
+            bottom,
+            maxLines: 1,
+            overflow: TextOverflow.clip,
+            style: AppType.t3.copyWith(
+              height: 10 / 9,
+              fontWeight: FontWeight.w600,
+              color: fg == null ? null : Color(fg!),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 class _RibbonClipper extends CustomClipper<Path> {
@@ -410,7 +424,7 @@ class _RibbonClipper extends CustomClipper<Path> {
 class CompactCartControl extends StatelessWidget {
   final Product product;
   CompactCartControl({required this.product})
-      : super(key: ValueKey('ccc-${product.id}'));
+    : super(key: ValueKey('ccc-${product.id}'));
 
   static const double w = 72;
 
@@ -487,7 +501,9 @@ class _AddPill extends StatelessWidget {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: AppType.l4.copyWith(
-                  color: Brand.accent, fontWeight: FontWeight.w800),
+                color: Brand.accent,
+                fontWeight: FontWeight.w800,
+              ),
             ),
           ),
         ),
@@ -516,9 +532,13 @@ class _Stepper extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           _StepIcon(icon: Icons.remove_rounded, onTap: onMinus),
-          Text('$qty',
-              style: AppType.l4.copyWith(
-                  color: Colors.white, fontWeight: FontWeight.w800)),
+          Text(
+            '$qty',
+            style: AppType.l4.copyWith(
+              color: Colors.white,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
           _StepIcon(icon: Icons.add_rounded, onTap: onPlus),
         ],
       ),
@@ -533,13 +553,13 @@ class _StepIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => InkWell(
-        onTap: onTap,
-        child: SizedBox(
-          width: 24,
-          height: CompactProductCard.pillH,
-          child: Icon(icon, size: 16, color: Colors.white),
-        ),
-      );
+    onTap: onTap,
+    child: SizedBox(
+      width: 24,
+      height: CompactProductCard.pillH,
+      child: Icon(icon, size: 16, color: Colors.white),
+    ),
+  );
 }
 
 /// The dosage-form chip under the plate ("Strip", "Vial", "Bottle").
@@ -554,26 +574,29 @@ class _TypeChip extends StatelessWidget {
 
   static const double _padH = 8;
 
+  // A Row, not an Align. `Align(widthFactor: 1)` shrinks the ALIGN to its
+  // child, and the fixed-height SizedBox above it then centres that shrunken
+  // box — which is why the chip rendered mid-card on the first deploy. A Row
+  // fills the width and starts its children at the left, and the Container
+  // (no `alignment` of its own — see the class doc) hugs its Text.
   @override
-  Widget build(BuildContext context) => Align(
-        alignment: Alignment.centerLeft,
-        widthFactor: 1,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: _padH),
-          decoration: BoxDecoration(
-            color: Brand.accentSoft,
-            borderRadius: BorderRadius.circular(Rad.chip),
-          ),
-          child: Center(
-            child: Text(
-              text,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: AppType.t2.copyWith(color: Brand.accentDark),
-            ),
-          ),
+  Widget build(BuildContext context) => Row(
+    children: [
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: _padH),
+        decoration: BoxDecoration(
+          color: Brand.accentSoft,
+          borderRadius: BorderRadius.circular(Rad.chip),
         ),
-      );
+        child: Text(
+          text,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: AppType.t2.copyWith(color: Brand.accentDark),
+        ),
+      ),
+    ],
+  );
 }
 
 /// A small tinted chip that hugs its label — the scheme badge on the plate and
@@ -594,25 +617,25 @@ class _MiniChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(
-            horizontal: _padH, vertical: _padV),
-        decoration: BoxDecoration(
-          color: bg != null
-              ? Color(bg!)
-              : (strong ? Brand.negativeBg : Brand.positiveBg),
-          borderRadius: BorderRadius.circular(Rad.chip),
-        ),
-        child: Text(
-          text,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: AppType.t2.copyWith(
-              color: fg != null
-                  ? Color(fg!)
-                  : (strong ? Brand.negativeFg : Brand.positiveFg),
-              fontWeight: FontWeight.w700),
-        ),
-      );
+    padding: const EdgeInsets.symmetric(horizontal: _padH, vertical: _padV),
+    decoration: BoxDecoration(
+      color: bg != null
+          ? Color(bg!)
+          : (strong ? Brand.negativeBg : Brand.positiveBg),
+      borderRadius: BorderRadius.circular(Rad.chip),
+    ),
+    child: Text(
+      text,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: AppType.t2.copyWith(
+        color: fg != null
+            ? Color(fg!)
+            : (strong ? Brand.negativeFg : Brand.positiveFg),
+        fontWeight: FontWeight.w700,
+      ),
+    ),
+  );
 }
 
 /// CHANGE #274 — the B2B price block: MRP struck on its own line, PTR under it
@@ -640,9 +663,11 @@ class _CardPriceBlock extends StatelessWidget {
     final p = price;
     if (p == null) {
       return const SizedBox(
-          height: CompactProductCard._mrpH +
-              CompactProductCard._gapS +
-              CompactProductCard._ptrH);
+        height:
+            CompactProductCard._mrpH +
+            CompactProductCard._gapS +
+            CompactProductCard._ptrH,
+      );
     }
 
     return Column(
@@ -657,9 +682,11 @@ class _CardPriceBlock extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     if (p.mrpLabel.isNotEmpty) ...[
-                      Text(p.mrpLabel,
-                          maxLines: 1,
-                          style: AppType.t2.copyWith(color: Brand.inkFaint)),
+                      Text(
+                        p.mrpLabel,
+                        maxLines: 1,
+                        style: AppType.t2.copyWith(color: Brand.inkFaint),
+                      ),
                       const SizedBox(width: CompactProductCard._gapS),
                     ],
                     Flexible(
@@ -685,14 +712,16 @@ class _CardPriceBlock extends StatelessWidget {
           child: p.hasPtr
               ? _PtrBox(price: p)
               : (p.hasNote
-                  ? Text(
-                      p.note,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppType.t2.copyWith(
-                          color: Brand.inkMuted, height: 11 / 10),
-                    )
-                  : const SizedBox.shrink()),
+                    ? Text(
+                        p.note,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppType.t2.copyWith(
+                          color: Brand.inkMuted,
+                          height: 11 / 10,
+                        ),
+                      )
+                    : const SizedBox.shrink()),
         ),
       ],
     );
@@ -708,10 +737,13 @@ class _PtrBox extends StatelessWidget {
 
   static const double _padH = 7;
 
+  // Same reason as _TypeChip: a Row so the box sits hard left in the card's
+  // full-width price column, rather than being centred by the SizedBox that
+  // reserves its height.
   @override
-  Widget build(BuildContext context) => Align(
-        alignment: Alignment.centerLeft,
-        widthFactor: 1,
+  Widget build(BuildContext context) => Row(
+    children: [
+      Flexible(
         child: Container(
           height: CompactProductCard._ptrH,
           padding: const EdgeInsets.symmetric(horizontal: _padH),
@@ -729,13 +761,16 @@ class _PtrBox extends StatelessWidget {
               // deploy. A copy edit is a data change; it may never overflow.
               if (price.ptrLabel.isNotEmpty) ...[
                 Flexible(
-                  child: Text(price.ptrLabel,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppType.t2.copyWith(
-                          color: price.ptrFg == null
-                              ? Colors.white
-                              : Color(price.ptrFg!))),
+                  child: Text(
+                    price.ptrLabel,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppType.t2.copyWith(
+                      color: price.ptrFg == null
+                          ? Colors.white
+                          : Color(price.ptrFg!),
+                    ),
+                  ),
                 ),
                 const SizedBox(width: CompactProductCard._gapS),
               ],
@@ -745,16 +780,19 @@ class _PtrBox extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: AppType.l5.copyWith(
-                      fontWeight: FontWeight.w800,
-                      color: price.ptrFg == null
-                          ? Colors.white
-                          : Color(price.ptrFg!)),
+                    fontWeight: FontWeight.w800,
+                    color: price.ptrFg == null
+                        ? Colors.white
+                        : Color(price.ptrFg!),
+                  ),
                 ),
               ),
             ],
           ),
         ),
-      );
+      ),
+    ],
+  );
 }
 
 /// Skeleton with the SAME fixed geometry as the real card, so the swap from
@@ -766,26 +804,25 @@ class CompactCardSkeleton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => const Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SkeletonBox(
-            width: double.infinity,
-            height: CompactProductCard.tileH,
-            radius: Rad.card,
-          ),
-          // Stands in for the pill overhang, so nothing shifts on load.
-          SizedBox(
-              height: CompactProductCard._overhang + CompactProductCard._gapL),
-          SkeletonBox(width: 44, height: CompactProductCard._chipH),
-          SizedBox(height: CompactProductCard._gapM),
-          SkeletonBox(width: double.infinity, height: CompactProductCard._nameH),
-          SizedBox(height: CompactProductCard._gapS),
-          SkeletonBox(width: 96, height: CompactProductCard._mfrH),
-          SizedBox(height: CompactProductCard._gapM),
-          SkeletonBox(width: 72, height: CompactProductCard._mrpH),
-          SizedBox(height: CompactProductCard._gapS),
-          SkeletonBox(width: 88, height: CompactProductCard._ptrH),
-        ],
-      );
+    crossAxisAlignment: CrossAxisAlignment.start,
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      SkeletonBox(
+        width: double.infinity,
+        height: CompactProductCard.tileH,
+        radius: Rad.card,
+      ),
+      // Stands in for the pill overhang, so nothing shifts on load.
+      SizedBox(height: CompactProductCard._overhang + CompactProductCard._gapL),
+      SkeletonBox(width: 44, height: CompactProductCard._chipH),
+      SizedBox(height: CompactProductCard._gapM),
+      SkeletonBox(width: double.infinity, height: CompactProductCard._nameH),
+      SizedBox(height: CompactProductCard._gapS),
+      SkeletonBox(width: 96, height: CompactProductCard._mfrH),
+      SizedBox(height: CompactProductCard._gapM),
+      SkeletonBox(width: 72, height: CompactProductCard._mrpH),
+      SizedBox(height: CompactProductCard._gapS),
+      SkeletonBox(width: 88, height: CompactProductCard._ptrH),
+    ],
+  );
 }

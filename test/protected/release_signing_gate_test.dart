@@ -89,6 +89,23 @@ void main() {
           reason: 'the gate must exit non-zero on a wrong key');
     });
 
+    test('a bundle is checked for integrity, not only for whose cert it holds',
+        () {
+      // An .aab is a plain zip. `zip bundle.aab payload.txt` appends an entry
+      // AFTER signing and META-INF still holds the upload certificate, so a
+      // cert-only read passes a bundle carrying content nobody signed. Proven
+      // against a real jar-signed bundle in #283 before this check existed.
+      final code = _code(gate.readAsStringSync());
+      expect(code, contains('jarsigner -verify'),
+          reason: 'the AAB path must ask jarsigner whether the signature '
+              'actually covers the bundle, not just read its certificate');
+      expect(code, contains(RegExp(r"grep\s+-qi\s+'unsigned entries'")),
+          reason: 'an entry added after signing must fail the gate');
+      expect(code, isNot(contains('jarsigner -verify -strict')),
+          reason: 'an upload key is self-signed by design; -strict fails every '
+              'legitimate bundle on chainNotValidated');
+    });
+
     test('it publishes the expected fingerprint so nothing pastes it twice',
         () {
       expect(_code(gate.readAsStringSync()), contains('--expected'),

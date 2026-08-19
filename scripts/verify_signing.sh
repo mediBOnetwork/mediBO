@@ -92,6 +92,31 @@ case "$ART" in
       echo "❌  $ART carries no META-INF signature block — the bundle is UNSIGNED." >&2
       exit 1
     fi
+    # Reading the certificate is not the same as checking it covers the file.
+    # An .aab is a zip: `zip bundle.aab payload.txt` appends an entry AFTER
+    # signing, and META-INF still holds the upload certificate — so a cert-only
+    # gate passes a bundle carrying content nobody signed. jarsigner is what
+    # notices; it prints "jar verified." and then warns about unsigned entries.
+    #
+    # Only that warning is fatal here. `-strict` is NOT used and the self-signed
+    # / chain-not-validated warnings are EXPECTED: an upload key is self-signed
+    # by design, so failing on those would reject every legitimate bundle.
+    JV=$(jarsigner -verify "$ART" 2>&1) || {
+      echo "$JV" >&2
+      echo "❌  jarsigner could not verify $ART — the bundle signature is broken." >&2
+      exit 1
+    }
+    if ! printf '%s\n' "$JV" | grep -q 'jar verified'; then
+      printf '%s\n' "$JV" >&2
+      echo "❌  $ART did not verify — refusing to ship it." >&2
+      exit 1
+    fi
+    if printf '%s\n' "$JV" | grep -qi 'unsigned entries'; then
+      echo "❌  $ART contains entries the signature does not cover." >&2
+      echo "    Something was added to the bundle AFTER it was signed." >&2
+      exit 1
+    fi
+
     SHAS=()
     DN='(none)'
     for c in "${CERTS[@]}"; do

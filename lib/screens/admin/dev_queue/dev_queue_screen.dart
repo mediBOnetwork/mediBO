@@ -15,6 +15,7 @@ import 'dev_queue_qa.dart';
 import 'dev_queue_questions.dart';
 import 'cron_health_screen.dart';
 import 'journey_library_screen.dart';
+import 'signin_diag_screen.dart';
 import 'memory_screen.dart';
 import 'threads_screen.dart';
 
@@ -269,6 +270,16 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
               icon: const Icon(Icons.schedule_outlined, color: kBrand),
               onPressed: () => Navigator.of(context).push(MaterialPageRoute(
                   builder: (_) => CronHealthScreen(service: _svc))),
+            ),
+          ),
+          Semantics(
+            identifier: 'devq_signin_diag',
+            button: true,
+            child: IconButton(
+              tooltip: c('dev_queue.signin_diag_nav_label'),
+              icon: const Icon(Icons.vpn_key_outlined, color: kBrand),
+              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => SignInDiagScreen(service: _svc))),
             ),
           ),
           Semantics(

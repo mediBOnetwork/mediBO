@@ -53,6 +53,11 @@ class DevQueueService {
   Future<Map<String, dynamic>> cronHealth() async =>
       _asMap(await _c.rpc('cron_health'));
 
+  /// CHANGE #275 — every Google sign-in failure recorded on a real device,
+  /// newest first, already rendered by the backend.
+  Future<Map<String, dynamic>> authDiagList({int limit = 50}) async =>
+      _asMap(await _c.rpc('auth_diag_list', params: {'p_limit': limit}));
+
   Future<List<Map<String, dynamic>>> areasGet() async =>
       _asList(await _c.rpc('dev_areas_get'));
 

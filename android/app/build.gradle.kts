@@ -36,8 +36,8 @@ android {
         applicationId = "in.medibo.app"
         minSdk = flutter.minSdkVersion
         targetSdk = 36
-        versionCode = 21
-        versionName = "1.3.8"
+        versionCode = 22
+        versionName = "1.3.9"
     }
 
     signingConfigs {

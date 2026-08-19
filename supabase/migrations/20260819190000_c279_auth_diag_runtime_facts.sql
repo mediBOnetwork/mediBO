@@ -48,6 +48,14 @@ update public.auth_diag_copy
               || 'means the phone is running a build nobody registered.'
  where code = 'canceled';
 
+-- One signature only. Leaving the #275 11-argument version beside the new
+-- 14-argument one makes PostgREST refuse both ("could not choose the best
+-- candidate function") for the app already installed on a phone, which sends
+-- the 11 old keys. The new signature defaults all three new parameters, so an
+-- old client keeps working through it — proved over REST with both payloads.
+drop function if exists public.auth_diag_note(
+  text, text, text, text, text, integer, text, integer, text, text, jsonb);
+
 create or replace function public.auth_diag_note(
   p_platform       text default 'unknown',
   p_stage          text default 'unknown',

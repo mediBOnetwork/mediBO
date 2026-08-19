@@ -49,6 +49,11 @@ scripts/*.json
 /app.apk
 build/web/app.apk
 android/key.properties
+# The upload keystore itself (CHANGE #276). key.properties was already ignored
+# but the .jks it points at was not — deploy.sh does `git add -A`, so a restored
+# keystore sitting in android/ would have been committed on the next deploy.
+*.jks
+*.keystore
 medibo-release.jks
 
 # Claude Code worktrees (per-change isolated checkouts) — never track these

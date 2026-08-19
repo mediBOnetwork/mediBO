@@ -263,6 +263,10 @@ class SupabaseLoginApi implements LoginApi {
   ///  * auth error -> suppressed, the backend's sentence for the code
   Future<GoogleResult> _googleSignInAndroid(String unavailableNote) async {
     _logNow('c668_native', 'android');
+    // CHANGE #279 — record the client id that is about to be sent, so every
+    // auth_diag row (and the sentence the user reads) names the id that was
+    // actually used instead of one assumed after the fact.
+    SignInDiag.clientId = kGoogleWebClientId;
     final sw = Stopwatch()..start();
     final NativeGoogleTokens? tokens;
     try {

@@ -29,6 +29,12 @@ class SignInDiag {
   static const MethodChannel _channel =
       MethodChannel('in.medibo.app/signin_diag');
 
+  /// CHANGE #279 — the OAuth client id the app actually sent, recorded with
+  /// every failure and printed in the backend's sentence. The login screen sets
+  /// it once before it calls the native flow, so the value on the row is the
+  /// value that went to Google — not one re-read from a constant afterwards.
+  static String? clientId;
+
   /// Cached device facts — one platform round-trip per app run.
   static Map<String, dynamic>? _facts;
 
@@ -47,6 +53,7 @@ class SignInDiag {
     rpcOverride = null;
     factsOverride = null;
     _facts = null;
+    clientId = null;
   }
 
   static Future<Map<String, dynamic>> _deviceFacts() async {
@@ -90,8 +97,20 @@ class SignInDiag {
         'p_version_code': facts['version_code'],
         'p_package_name': facts['package_name'],
         'p_signing_sha1': facts['signing_sha1'],
+        // CHANGE #279 — everything needed to settle a certificate argument in
+        // one row: the current signer's SHA-256, where Android says the APK was
+        // installed from, and the client id that was sent.
+        'p_signing_sha256': facts['signing_sha256'],
+        'p_install_source': facts['install_source'],
+        'p_client_id': clientId,
         'p_extra': <String, dynamic>{
           if (facts['android_sdk'] != null) 'android_sdk': facts['android_sdk'],
+          if (facts['signers_sha1'] != null)
+            'signers_sha1': facts['signers_sha1'],
+          if (facts['history_sha1'] != null)
+            'history_sha1': facts['history_sha1'],
+          if (facts['has_multiple_signers'] != null)
+            'has_multiple_signers': facts['has_multiple_signers'],
           if (facts['facts_error'] != null)
             'facts_error': facts['facts_error'],
         },

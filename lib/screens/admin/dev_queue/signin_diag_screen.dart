@@ -168,6 +168,9 @@ class _SignInDiagScreenState extends State<SignInDiagScreen> {
     final details = (r['details'] as String?) ?? '';
     final hint = (r['hint'] as String?) ?? '';
     final sha1 = (r['signing_label'] as String?) ?? '—';
+    final facts = ((r['facts'] as List?) ?? const [])
+        .map((e) => (e as Map).cast<String, dynamic>())
+        .toList();
     return DqCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -235,10 +238,47 @@ class _SignInDiagScreenState extends State<SignInDiagScreen> {
                   style: Ds.t.caption.copyWith(color: kTextHi)),
             ),
           ),
+          // CHANGE #279 — every other fact the device reported, in the order
+          // the backend sent them, each one tap-to-copy. Labels and values are
+          // the payload's own strings; absent facts are simply not in the list.
+          for (final f in facts) ...[
+            SizedBox(height: Ds.space.x8),
+            _factRow(
+              (f['label'] as String?) ?? '',
+              (f['value'] as String?) ?? '',
+            ),
+          ],
         ],
       ),
     );
   }
+
+  Widget _factRow(String label, String value) => InkWell(
+        borderRadius: Ds.r.rButton,
+        onTap: value.isEmpty
+            ? null
+            : () => Clipboard.setData(ClipboardData(text: value)),
+        child: Container(
+          width: double.infinity,
+          constraints: const BoxConstraints(minHeight: 44),
+          alignment: Alignment.centerLeft,
+          padding: EdgeInsets.symmetric(
+              horizontal: Ds.space.x12, vertical: Ds.space.x8),
+          decoration: BoxDecoration(
+            color: kPageBg,
+            borderRadius: Ds.r.rButton,
+            border: Border.all(color: kBorder),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: Ds.t.caption.copyWith(color: kTextLo)),
+              SizedBox(height: Ds.space.x4),
+              Text(value, style: Ds.t.caption.copyWith(color: kTextHi)),
+            ],
+          ),
+        ),
+      );
 
   Widget _fact(String v) => Container(
         constraints: const BoxConstraints(minHeight: 28),

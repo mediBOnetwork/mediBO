@@ -86,6 +86,24 @@ mkdir -p "$(dirname "$LOG")"
 log() { echo "[$(date -u +%FT%TZ)] $*" | tee -a "$LOG"; }
 tail_log() { tail -c 2000 "$LOG" 2>/dev/null; }
 
+# ── ONE PUBLISHER AT A TIME (CHANGE #287) ───────────────────────────────────
+# medibo-play.timer runs this script every ~90s, and EVERY run — including an
+# idle "nothing to do" tick — calls refresh_tracks, which opens a Play edit.
+# Opening an edit invalidates any other open edit for the package, so a tick
+# that fires while an upload is in flight kills that upload: Play answers the
+# commit with 400 "This edit has expired, please create a new Edit." A 97 MB
+# bundle takes about a minute to upload, so the timer beat the release every
+# time and the failure looked like a Play-side rejection of the artifact.
+#
+# The lock is held for the whole run through FD 9. A tick that cannot take it
+# exits 0 and says so — a skipped tick is correct behaviour, not an error.
+exec 9>"$RUNNER/.play.lock"
+if ! flock -n 9; then
+  log "another publish_play run holds the lock — skipping this tick"
+  echo '{"ok":true,"skipped":"locked"}'
+  exit 0
+fi
+
 SA=""; RAW=""; REL_ID=""
 # RAW briefly holds the RPC reply, which on the happy path IS the key — it is
 # shredded on every exit path exactly like SA (CHANGE #284).

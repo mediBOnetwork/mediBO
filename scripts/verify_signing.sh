@@ -106,12 +106,21 @@ case "$ART" in
       echo "❌  jarsigner could not verify $ART — the bundle signature is broken." >&2
       exit 1
     }
-    if ! printf '%s\n' "$JV" | grep -q 'jar verified'; then
+    # CHANGE #287 — read $JV with a here-string, NEVER `printf | grep -q`.
+    # `grep -q` exits the instant it matches; under `set -o pipefail` that
+    # SIGPIPEs the still-writing printf and the PIPELINE reports 141, so
+    # `! pipeline` was true on a bundle that verified perfectly. It only
+    # started failing when jarsigner's warning block outgrew the 64 KB pipe
+    # buffer (this AAB prints 63 KB of "signed in JarFile but not in
+    # JarInputStream" lines, one per BUNDLE-METADATA entry) — before that,
+    # printf finished before grep exited and the bug was invisible. It cost a
+    # whole release: "did not verify — refusing to ship it" on a good artifact.
+    if ! grep -q 'jar verified' <<<"$JV"; then
       printf '%s\n' "$JV" >&2
       echo "❌  $ART did not verify — refusing to ship it." >&2
       exit 1
     fi
-    if printf '%s\n' "$JV" | grep -qi 'unsigned entries'; then
+    if grep -qi 'unsigned entries' <<<"$JV"; then
       echo "❌  $ART contains entries the signature does not cover." >&2
       echo "    Something was added to the bundle AFTER it was signed." >&2
       exit 1

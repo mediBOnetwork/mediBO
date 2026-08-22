@@ -53,6 +53,16 @@
 //      It rides on the image plate, where it costs no height on the majority
 //      of cards that have no scheme. The gating rule is unchanged.
 //
+//   9. CHANGE #287 — THE TWO PACK STRINGS SWAPPED PLACES, and each is a
+//      SEPARATE backend key. `pack_type_label` (one word) is the only thing
+//      printed in the plate's footer strip, because that strip is the card
+//      minus the 72px add pill and the quantity sentence was ellipsised there
+//      on every card. `pack_qty_label` — MEDICINE.pack_qty VERBATIM, the long
+//      stored form, not the shortened badge — is the chip above the name, and
+//      an EMPTY one draws no chip at all rather than falling back to another
+//      column. The card must never choose between pack_qty / pack_size /
+//      pack_type again: that chain now lives only in the outage fallbacks.
+//
 // Fixtures mirror a real storefront_page() row. No network, no Supabase, no
 // camera.
 
@@ -89,6 +99,11 @@ Map<String, dynamic> _row({
       'pack_qty': '1 injection',
       'pack_size': 'Vial of 1 Injection',
       'pack_type': 'Vial',
+      // CHANGE #287 — the two decided labels every storefront card RPC sends.
+      // Deliberately NOT equal to any raw column above: a card that renders
+      // one of those instead of these fails.
+      'pack_qty_label': '1.0 Injection in 1 vial',
+      'pack_type_label': 'Vial',
       'image_url_1': '',
       'mrp': '2597',
       'has_offer': hasOffer,
@@ -165,13 +180,62 @@ void main() {
   tearDown(() => CartModel.rpcTransport = null);
 
   group('the card prints backend strings', () {
-    testWidgets('name, pack badge and type chip are verbatim', (tester) async {
+    testWidgets('name, pack type and pack quantity are verbatim', (tester) async {
       await _pump(tester, _row());
 
       expect(find.text('Alkacel 100mg Injection'), findsOneWidget);
-      expect(find.text('1 injection'), findsOneWidget,
-          reason: 'the pack badge on the plate is the backend pack quantity');
-      expect(find.text('Vial'), findsOneWidget, reason: 'type chip = pack_type');
+      // #287 — the footer strip beside the ADD pill takes pack_type_label…
+      expect(find.text('Vial'), findsOneWidget,
+          reason: 'the strip beside the add pill is pack_type_label');
+      // …and the chip above the name takes pack_qty_label, VERBATIM: the long
+      // stored sentence, not the shortened '1 injection' badge.
+      expect(find.text('1.0 Injection in 1 vial'), findsOneWidget,
+          reason: 'the chip above the name is pack_qty_label, stored verbatim');
+      expect(find.text('1 injection'), findsNothing,
+          reason: 'the shortened badge is not what #287 prints on the card');
+    });
+
+    testWidgets('the two pack strings are the LABELS, not the raw columns',
+        (tester) async {
+      // The catalogue's three pack columns disagree with each other and are
+      // re-keyed by two feed RPCs. The card reads neither: it prints what the
+      // backend decided. Give the labels values no raw column holds.
+      final r = _row();
+      r['pack_qty_label'] = 'ZZ qty label';
+      r['pack_type_label'] = 'ZZtype';
+      await _pump(tester, r);
+
+      expect(find.text('ZZ qty label'), findsOneWidget);
+      expect(find.text('ZZtype'), findsOneWidget);
+      expect(find.text('Vial of 1 Injection'), findsNothing);
+    });
+
+    testWidgets('an empty pack_qty_label draws no chip at all', (tester) async {
+      // Most `Piece` rows carry no pack_qty. Om's rule on #287: hide the chip —
+      // never fall back to pack_size, never print a placeholder.
+      final r = _row();
+      r['pack_qty_label'] = '';
+      await _pump(tester, r);
+
+      expect(find.byType(Chip), findsNothing);
+      expect(find.text('1.0 Injection in 1 vial'), findsNothing);
+      expect(find.text('Vial of 1 Injection'), findsNothing);
+      // the one-word type still prints beside the add pill
+      expect(find.text('Vial'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('an absent label falls back — a cached payload is never blank',
+        (tester) async {
+      // The offline cache and the outage fallbacks predate #287 and carry no
+      // label keys at all. ABSENT is not EMPTY: the old columns fill in.
+      final r = _row();
+      r.remove('pack_qty_label');
+      r.remove('pack_type_label');
+      final p = Product.fromMap(r);
+
+      expect(p.packQtyLabel, '1 injection', reason: 'falls back to pack_qty');
+      expect(p.packTypeLabel, 'Vial', reason: 'falls back to pack_type');
     });
 
     testWidgets('the manufacturer sits under the name', (tester) async {
@@ -472,8 +536,10 @@ void main() {
       await _pump(tester, _row());
 
       final nameLeft = tester.getTopLeft(find.text('Alkacel 100mg Injection')).dx;
-      expect(tester.getTopLeft(find.text('Vial')).dx, lessThan(nameLeft + 12),
-          reason: 'the type chip is left-aligned, not centred');
+      expect(
+          tester.getTopLeft(find.text('1.0 Injection in 1 vial')).dx,
+          lessThan(nameLeft + 12),
+          reason: 'the pack quantity chip is left-aligned, not centred');
       expect(tester.getTopLeft(find.text('MRP')).dx, lessThan(nameLeft + 4),
           reason: 'the MRP line starts on the same edge');
       expect(tester.getTopLeft(find.text('PTR')).dx, lessThan(nameLeft + 12),
@@ -500,7 +566,13 @@ void main() {
                 width: 148,
                 height: CompactProductCard.extent,
                 child: CompactProductCard(
-                  product: Product.fromMap(_row()),
+                  // #287 — the long stored pack sentence, at the narrowest
+                  // width the rail is ever laid out at. The chip is Flexible
+                  // for exactly this: a Row hands a non-flex child an unbounded
+                  // main-axis constraint, so this used to paint past the edge.
+                  product: Product.fromMap(_row()
+                    ..['pack_qty_label'] =
+                        '10.0 tablet er in 1 strip of 10 tablets'),
                   onTap: () {},
                 ),
               ),

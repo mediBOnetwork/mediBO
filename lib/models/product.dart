@@ -560,6 +560,19 @@ class Product {
   /// on the product page. Never derived from the name or the pack size.
   final String formChip;
 
+  /// CHANGE #287 — `pack_type_label`: the ONE word the storefront card prints
+  /// beside the ADD pill ("Strip", "Vial"). MEDICINE.pack_type verbatim.
+  /// Empty means the catalogue has no pack type for this row — the card prints
+  /// nothing there rather than falling back to a sentence, which is exactly
+  /// the truncation #287 removed.
+  final String packTypeLabel;
+
+  /// CHANGE #287 — `pack_qty_label`: the pack quantity chip ABOVE the product
+  /// name, MEDICINE.pack_qty verbatim ("10.0 tablets in 1 strip"). Om's call on
+  /// #287: the stored sentence, not the shortened badge. Empty means the column
+  /// is null (most `Piece` rows) and the card draws no chip at all.
+  final String packQtyLabel;
+
   /// Maximum Retail Price per pack (the printed consumer price).
   final double mrp;
 
@@ -624,6 +637,8 @@ class Product {
     this.imageUrls = const [],
     required this.packSize,
     this.formChip = '',
+    this.packTypeLabel = '',
+    this.packQtyLabel = '',
     required this.mrp,
     required this.b2bPrice,
     required this.moq,
@@ -656,6 +671,8 @@ class Product {
         imageUrls: imageUrls,
         packSize: packSize,
         formChip: formChip,
+        packTypeLabel: packTypeLabel,
+        packQtyLabel: packQtyLabel,
         mrp: mrp,
         b2bPrice: b2bPrice,
         gstPercent: gstPercent,
@@ -675,6 +692,20 @@ class Product {
         offerChip: offerChip,
       );
 
+  /// CHANGE #287 — read one backend label, honouring the difference between a
+  /// key that is ABSENT and one that is EMPTY.
+  ///
+  /// Absent = this payload predates the label (the offline cache written by an
+  /// older build, and the outage fallbacks that return raw MEDICINE rows): fall
+  /// back to the field the card used before, so a cached grid is never blank.
+  /// Empty = the backend looked and the catalogue has no such string: print
+  /// nothing. Inventing one here is the app deciding wording.
+  static String _packLabel(
+          Map<String, dynamic> map, String key, String fallback) =>
+      map.containsKey(key)
+          ? ((map[key] as String?) ?? '').trim()
+          : fallback;
+
   /// CHANGE #637 — one card from `storefront_home_v2()`.
   ///
   /// The home feed sends an already-narrowed card, NOT a raw MEDICINE row, so
@@ -693,6 +724,8 @@ class Product {
   /// carry them, and guessing them here would be the app deciding.
   factory Product.fromHomeCard(Map<String, dynamic> map) {
     final pricing = Pricing.fromMap(map['pricing']);
+    final packLabel = (map['pack_label'] as String?) ?? '';
+    final formChip = (map['form_chip'] as String?)?.trim() ?? '';
     return Product(
       id: map['id']?.toString() ?? '',
       name: (map['name'] as String?) ?? '',
@@ -701,8 +734,10 @@ class Product {
       category: 'Other',
       therapeuticClass: '',
       imageUrl: (map['image'] as String?)?.trim() ?? '',
-      packSize: (map['pack_label'] as String?) ?? '',
-      formChip: (map['form_chip'] as String?)?.trim() ?? '',
+      packSize: packLabel,
+      formChip: formChip,
+      packTypeLabel: _packLabel(map, 'pack_type_label', formChip),
+      packQtyLabel: _packLabel(map, 'pack_qty_label', packLabel),
       mrp: pricing?.mrp ?? 0,
       b2bPrice: pricing?.salePrice ?? 0,
       moq: 1,
@@ -752,13 +787,20 @@ class Product {
       therapeuticClass: tClass,
       imageUrl: allImages.isNotEmpty ? allImages[0] : '',
       imageUrls: allImages,
-      // pack_qty preferred; fall back to pack_size then pack_type (e.g. "Strip")
+      // Legacy chain, kept for the outage fallbacks that return a raw
+      // MEDICINE row: pack_qty preferred, then pack_size, then pack_type.
+      // CHANGE #287 — every storefront RPC now sends the two decided labels
+      // below, and the card reads only those.
       packSize: (map['pack_qty'] as String?)?.isNotEmpty == true
           ? map['pack_qty'] as String
           : (map['pack_size'] as String?)?.isNotEmpty == true
               ? map['pack_size'] as String
               : (map['pack_type'] as String?) ?? '',
       formChip: (map['pack_type'] as String?)?.trim() ?? '',
+      packTypeLabel: _packLabel(
+          map, 'pack_type_label', (map['pack_type'] as String?)?.trim() ?? ''),
+      packQtyLabel: _packLabel(
+          map, 'pack_qty_label', (map['pack_qty'] as String?)?.trim() ?? ''),
       mrp: mrp,
       b2bPrice: b2bPrice,
       gstPercent: (map['gst_percent'] as num?)?.toDouble() ?? 12.0,
@@ -794,6 +836,8 @@ class Product {
         'imageUrls': imageUrls,
         'packSize': packSize,
         'formChip': formChip,
+        'packTypeLabel': packTypeLabel,
+        'packQtyLabel': packQtyLabel,
         'mrp': mrp,
         'b2bPrice': b2bPrice,
         'gstPercent': gstPercent,
@@ -825,6 +869,10 @@ class Product {
           [],
       packSize: (map['packSize'] as String?) ?? '',
       formChip: (map['formChip'] as String?) ?? '',
+      packTypeLabel: _packLabel(
+          map, 'packTypeLabel', (map['formChip'] as String?) ?? ''),
+      packQtyLabel: _packLabel(
+          map, 'packQtyLabel', (map['packSize'] as String?) ?? ''),
       mrp: (map['mrp'] as num?)?.toDouble() ?? 0.0,
       b2bPrice: (map['b2bPrice'] as num?)?.toDouble() ?? 0.0,
       gstPercent: (map['gstPercent'] as num?)?.toDouble() ?? 12.0,

@@ -17,17 +17,20 @@ import 'product_image.dart';
 ///
 ///  1. **A square white image plate.** Pure white behind the pack shot — a
 ///     tinted plate makes every photo look like it was cut out badly.
-///  2. **The pack quantity sits bottom-LEFT ON the image** ("6 tablets"), in
-///     the plate's own footer strip. Om was explicit about the position. The
-///     words are [Product.packSize], which the backend now sends already
-///     shortened (`sf_pack_badge`) — the catalogue's own
-///     "6.0 tablets in 1 strip" is a sentence, not a badge.
+///  2. **The pack TYPE sits bottom-LEFT ON the image** ("Strip", "Vial"), in
+///     the plate's own footer strip. CHANGE #287 put it there: that strip is
+///     only as wide as the card minus the add pill, so the long quantity
+///     sentence that used to live here was ellipsised on every card
+///     ("10 tablet er…"). One word always fits. The string is
+///     [Product.packTypeLabel] — MEDICINE.pack_type, decided in the RPC.
 ///  3. **The add control is a compact pill, bottom-RIGHT, half over the plate's
 ///     edge.** One element crossing one boundary is what separates a card that
 ///     was laid out from a card that was designed. It becomes a −/qty/+ pill
 ///     the moment something is in the cart.
-///  4. **Below the plate**: the type chip ("Strip", "Vial"), the name at
-///     exactly two bold lines, the manufacturer small and grey, then the price.
+///  4. **Below the plate**: the pack QUANTITY chip ("10.0 tablets in 1 strip"
+///     — [Product.packQtyLabel], the stored value verbatim, and no chip at all
+///     when the catalogue has none), the name at exactly two bold lines, the
+///     manufacturer small and grey, then the price.
 ///
 /// What is deliberately GONE from #673's card:
 ///
@@ -48,7 +51,7 @@ import 'product_image.dart';
 ///
 /// Two rules the card keeps:
 ///
-///  * It invents nothing. Every string — pack badge, type chip, MRP, PTR, the
+///  * It invents nothing. Every string — pack type, pack quantity, MRP, PTR, the
 ///    locked-price note, the ADD word — arrives rendered. There is no number
 ///    formatted here and no verdict reached here.
 ///  * Every size is fixed. [extent] is the exact main-axis height the grid and
@@ -84,7 +87,7 @@ class CompactProductCard extends StatelessWidget {
   /// The plate's footer strip, holding the pack badge clear of the artwork.
   static const double _footerH = 30;
 
-  static const double _chipH = 18; // type chip ("Strip", "Vial")
+  static const double _chipH = 18; // pack quantity chip (#287)
   static const double _nameH = 36; // exactly two 18px lines
   static const double _mfrH = 15; // manufacturer, one line
   static const double _mrpH = 15; // "MRP ₹117.19", struck
@@ -175,11 +178,16 @@ class CompactProductCard extends StatelessWidget {
               ),
             ),
             const SizedBox(height: _gapL),
+            // CHANGE #287 — the pack QUANTITY chip. The two pack strings swapped
+            // places: the long sentence gets the full card width here, the one
+            // word gets the narrow gap beside the ADD pill. Empty label = no
+            // chip at all (most `Piece` rows carry no pack_qty); the row's
+            // height stays reserved so the grid's fixed extent still holds.
             SizedBox(
               height: _chipH,
-              child: product.formChip.isEmpty
+              child: product.packQtyLabel.isEmpty
                   ? const SizedBox.shrink()
-                  : _TypeChip(text: product.formChip),
+                  : _TypeChip(text: product.packQtyLabel),
             ),
             const SizedBox(height: _gapM),
             SizedBox(
@@ -326,8 +334,10 @@ class _Plate extends StatelessWidget {
               alignment: Alignment.centerLeft,
               child: (soldOut && soldOutLabel.isNotEmpty)
                   ? _MiniChip(text: soldOutLabel, strong: true)
+                  // CHANGE #287 — one word ("Strip", "Vial"), because this
+                  // strip is only as wide as the card minus the add pill.
                   : Text(
-                      product.packSize,
+                      product.packTypeLabel,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: AppType.t1.copyWith(color: Brand.inkSub),
@@ -582,17 +592,23 @@ class _TypeChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Row(
     children: [
-      Container(
-        padding: const EdgeInsets.symmetric(horizontal: _padH),
-        decoration: BoxDecoration(
-          color: Brand.accentSoft,
-          borderRadius: BorderRadius.circular(Rad.chip),
-        ),
-        child: Text(
-          text,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: AppType.t2.copyWith(color: Brand.accentDark),
+      // CHANGE #287 — Flexible, because the chip now prints the stored pack
+      // sentence. A Row lays a non-flex child out with an UNBOUNDED main-axis
+      // constraint, so a long label would paint past the card edge (and stripe
+      // in debug) instead of ellipsising inside it.
+      Flexible(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: _padH),
+          decoration: BoxDecoration(
+            color: Brand.accentSoft,
+            borderRadius: BorderRadius.circular(Rad.chip),
+          ),
+          child: Text(
+            text,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: AppType.t2.copyWith(color: Brand.accentDark),
+          ),
         ),
       ),
     ],

@@ -79,6 +79,13 @@ dependencies:
   # browser anchor-download on web. Reached ONLY through download_bytes_stub.dart.
   share_plus: ^10.1.4
   path_provider: ^2.1.5
+  # CHANGE #298 — push notifications. firebase_core is initialised at runtime
+  # with FirebaseOptions built from push_config_get(), NOT from a build-time
+  # google-services.json: the Gradle plugin hard-fails the Android build when
+  # that file is absent, and holding the values in the backend lets Om point
+  # the app at a Firebase project with no rebuild and no deploy.
+  firebase_core: ^3.8.0
+  firebase_messaging: ^15.1.5
 
 dev_dependencies:
   flutter_test:

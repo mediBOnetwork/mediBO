@@ -6,7 +6,7 @@
      Dev Queue → Memory screen, or via the MCP memory server. Do NOT hand-edit
      this block; it is rewritten on every session start. Target: cursor -->
 
-# Agent memory (cursor) — 39 rules
+# Agent memory (cursor) — 40 rules
 # Canonical fallback: see RULES.md in the repo root (git-committed).
 
 ## GLOBAL · style  (priority 10, v2)
@@ -374,6 +374,51 @@ Numbering state lives in `deploy_lock` / `deploy_registry` / `app_version_state`
 
 Backend-only command (zero frontend files touched) → skip the build entirely: no flutter build, deploy nothing, complete with `p_deploy_no NULL`, and say so in the summary.
 
+
+
+## PROJECT · db_lane  (priority 76, v1)
+
+## 15. DB WORK LANE (permanent — CHANGE #301)
+
+The 1 GB instance does not choke on one slow query — it chokes when several
+agents run HEAVY database work in the same moment (23 Aug 12:53–13:43 UTC: 40
+statement timeouts, cron reporting "job startup timeout", trivial SETs taking
+15 s, a manual restart). So CLASSIFY every DB step before you run it and take
+the matching lane. Ordinary reads and small writes take NO lock and stay fully
+parallel; coding, `flutter test`, `flutter build` and the deploy NEVER take one.
+
+- **exclusive (1 slot)** — DDL/migration, a bulk UPDATE/INSERT/DELETE over
+  ~20k rows, VACUUM, an index build. Excludes every other lane.
+- **heavy_read (2 slots)** — a scan or audit over a big table
+  (`whatsapp_messages` history, `"MEDICINE"`).
+- **no lock** — everything else. Do not take one "to be safe": that is exactly
+  how a parallel fleet becomes a queue.
+
+Protocol, the deploy lane's shape:
+1. `devcmd.sh dblock <agent> <exclusive|heavy_read> "<title>" [ttl] [cmd_id]`.
+   `ok:false reason=busy` → wait `retry_after_seconds` (45 s) and retry, and
+   keep coding/testing/building meanwhile — only this one step waits.
+2. Run ONLY the heavy step. Never hold the lock across a build, a deploy or a
+   think. Locks self-expire in 10 min and the expiry is alerted to `rg_alerts`.
+3. `devcmd.sh dbunlock <token>` the moment it is done.
+`devcmd.sh dbstatus` prints the lane (`db_lock_status()`).
+
+Session guardrails — `devcmd.sh dbguard`, or `select db_session_guard();` in a
+psql/management session, before any heavy DB work: statement_timeout 55 s,
+lock_timeout 5 s, idle_in_transaction_session_timeout 30 s. Bulk writes run in
+batches of at most 20 000 rows, each batch its own transaction — never one giant
+transaction. `call db_bulk_batch('<sql with one %s where the batch size goes>')`
+does the batching and the per-batch COMMIT for you.
+
+Heavy scheduled audits and any 30-day log scan belong in the 21:00–02:00 UTC
+window (02:30–07:30 IST) unless the row explicitly says urgent. Never add a cron
+job on a bare `* * * * *` or `*/N` schedule — register a row in `cron_task` and
+let the one dispatcher (CHANGE #273) run it.
+
+The watchdog `db_watchdog_tick()` rides that dispatcher every minute and raises
+`rg_alerts` when connections pass 45 of 60, a transaction stays open past 2 min,
+or more than 10 statement timeouts land inside 5 min. Om reads it at
+Dev Queue → Cron health → **Database lane**.
 
 
 ## PROJECT · deploy_traps  (priority 78, v1)

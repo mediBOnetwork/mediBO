@@ -20,6 +20,15 @@ import '../../design_tokens.dart';
 import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 
+/// The filter the summary chips drive. Pure so it can be tested without a
+/// widget tree: 'all' keeps the backend's own order, any other key keeps only
+/// the rows whose backend `verdict` equals it. The app never invents a verdict.
+List<Map<String, dynamic>> waDiagFilter(
+        List<Map<String, dynamic>> rows, String key) =>
+    key == 'all'
+        ? rows
+        : rows.where((r) => r['verdict']?.toString() == key).toList();
+
 /// The ONE place a backend tone becomes pixels on this screen.
 (Color, Color) _tone(String? tone) => switch (tone) {
       'success' => (Ds.c.successSoft, Ds.c.success),
@@ -78,8 +87,7 @@ class _WaDiagnosisScreenState extends State<WaDiagnosisScreen> {
     final all = ((_p?['rows'] as List?) ?? const [])
         .map((e) => (e as Map).cast<String, dynamic>())
         .toList();
-    if (_filter == 'all') return all;
-    return all.where((r) => r['verdict']?.toString() == _filter).toList();
+    return waDiagFilter(all, _filter);
   }
 
   @override
@@ -109,7 +117,7 @@ class _WaDiagnosisScreenState extends State<WaDiagnosisScreen> {
                       if ((p?['subtitle']?.toString() ?? '').isNotEmpty)
                         Text(p!['subtitle'].toString(), style: Ds.t.caption),
                       SizedBox(height: Ds.space.x16),
-                      _SummaryChips(
+                      WaDiagSummaryChips(
                         items: ((p?['summary'] as List?) ?? const [])
                             .map((e) => (e as Map).cast<String, dynamic>())
                             .toList(),
@@ -120,7 +128,7 @@ class _WaDiagnosisScreenState extends State<WaDiagnosisScreen> {
                       if (_rows.isEmpty)
                         _EmptyState(text: p?['empty_text']?.toString() ?? ''),
                       for (final r in _rows) ...[
-                        _EventCard(row: r),
+                        WaDiagEventCard(row: r),
                         SizedBox(height: Ds.space.x12),
                       ],
                       if ((p?['legend']?.toString() ?? '').isNotEmpty) ...[
@@ -134,12 +142,15 @@ class _WaDiagnosisScreenState extends State<WaDiagnosisScreen> {
   }
 }
 
-class _SummaryChips extends StatelessWidget {
+class WaDiagSummaryChips extends StatelessWidget {
   final List<Map<String, dynamic>> items;
   final String selected;
   final ValueChanged<String> onPick;
-  const _SummaryChips(
-      {required this.items, required this.selected, required this.onPick});
+  const WaDiagSummaryChips(
+      {super.key,
+      required this.items,
+      required this.selected,
+      required this.onPick});
 
   @override
   Widget build(BuildContext context) {
@@ -193,9 +204,9 @@ class _SummaryChips extends StatelessWidget {
   }
 }
 
-class _EventCard extends StatelessWidget {
+class WaDiagEventCard extends StatelessWidget {
   final Map<String, dynamic> row;
-  const _EventCard({required this.row});
+  const WaDiagEventCard({super.key, required this.row});
 
   @override
   Widget build(BuildContext context) {

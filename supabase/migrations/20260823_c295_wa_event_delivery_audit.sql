@@ -1203,3 +1203,7 @@ grant execute on function public.wa_event_diagnosis(integer) to authenticated, s
 insert into public.ui_copy(key, value)
 values ('wa_diagnosis.retry', '"Retry"'::jsonb)
 on conflict (key) do nothing;
+
+insert into public.ui_copy(key, value)
+values ('admin_nav.overflow_wa_diagnosis', '"WhatsApp delivery diagnosis"'::jsonb)
+on conflict (key) do nothing;

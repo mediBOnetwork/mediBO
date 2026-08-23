@@ -39,6 +39,7 @@ import 'admin/short_dated_admin_screen.dart'; // CHANGE #177
 import '../features/whatsapp/ui/wa_home_screen.dart';
 import '../features/whatsapp/ui/wa_templates_screen.dart';
 import 'admin/wa_campaigns_screen.dart';
+import 'admin/wa_diagnosis_screen.dart';
 import 'admin/wa_ops_screen.dart';
 import 'admin/wa_drips_screen.dart';
 import 'admin/wa_segments_screen.dart';
@@ -486,6 +487,12 @@ class _HomeShellState extends State<HomeShell> {
       case 'wa_ops':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const WaOpsScreen()));
+        break;
+      // CHANGE #295 — WhatsApp delivery diagnosis. wa_event_diagnosis() gates
+      // on get_my_role() and the screen renders its refusal, same as wa_ops.
+      case 'wa_diagnosis':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const WaDiagnosisScreen()));
         break;
       // Same gating as the ones above: both screens call RPCs that check the
       // caller's role and render the backend's own refusal.

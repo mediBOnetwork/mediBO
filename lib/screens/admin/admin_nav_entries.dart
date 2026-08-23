@@ -72,6 +72,12 @@ List<AdminNavEntry> get kAdminOverflowNav => <AdminNavEntry>[
       AdminNavEntry(
           c('admin_nav.overflow_wa_ops'), Icons.settings_suggest_outlined,
           route: 'wa_ops'),
+      // CHANGE #295 — the per-event delivery verdict table. Sits beside WA Ops
+      // because it answers the question WA Ops raises: the route is configured,
+      // but does a message actually reach anyone?
+      AdminNavEntry(
+          c('admin_nav.overflow_wa_diagnosis'), Icons.fact_check_outlined,
+          route: 'wa_diagnosis'),
       // Sibling of registration approvals: the customer account/data-deletion
       // queue (CHANGE #681). Badge count comes from
       // admin_deletion_request_count(), passed in as a plain int so this file

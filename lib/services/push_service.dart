@@ -6,10 +6,13 @@
 // backend (notif_push_send) and arrive on the message.
 //
 // Firebase is initialised from push_config_get(), NOT from a build-time
-// google-services.json. The com.google.gms.google-services Gradle plugin
-// hard-fails an Android build when that file is missing, which would block the
-// release; FirebaseOptions carries exactly the same values and lets the
-// backend repoint the app with no rebuild.
+// google-services.json. android/app/google-services.json exists (Om's file for
+// project medibo-23aee, verbatim) but the com.google.gms.google-services Gradle
+// plugin is deliberately NOT applied: that file's oauth_client array is empty
+// because no SHA-1 is registered on the Firebase Android app, and applying the
+// plugin would regenerate the Google sign-in resource values from it and break
+// sign-in on Play-signed builds. FirebaseOptions carries the same values, and
+// it also lets the backend repoint the app with no rebuild.
 import 'dart:async';
 
 import 'package:firebase_core/firebase_core.dart';
@@ -86,16 +89,20 @@ class PushService {
   Future<void> _ensureApp() async {
     if (_app != null) return;
     final c = config!;
-    final apiKey = kIsWeb
-        ? (c['web_api_key'] ?? c['api_key']) as String?
-        : c['api_key'] as String?;
-    final appId = kIsWeb
-        ? (c['web_app_id'] ?? c['app_id']) as String?
-        : c['app_id'] as String?;
+    // CHANGE #298 — the web keys are their OWN keys, never the Android ones.
+    // The Firebase project medibo-23aee has an Android app registered and no
+    // web app, so falling back to app_id here would hand the web SDK an
+    // Android application id and fail deep inside Firebase. An unregistered
+    // platform is an absence: say so, and leave Android working.
+    final apiKey = kIsWeb ? c['web_api_key'] as String? : c['api_key'] as String?;
+    final appId = kIsWeb ? c['web_app_id'] as String? : c['app_id'] as String?;
     final senderId = c['sender_id'] as String?;
     final projectId = c['project_id'] as String?;
-    if (apiKey == null || appId == null || senderId == null || projectId == null) {
-      throw StateError('push_config incomplete');
+    if (apiKey == null || apiKey.isEmpty || appId == null || appId.isEmpty ||
+        senderId == null || senderId.isEmpty ||
+        projectId == null || projectId.isEmpty) {
+      throw StateError(
+          'push_config has no ${kIsWeb ? "web" : "android"} app registered');
     }
     _app = Firebase.apps.isNotEmpty
         ? Firebase.apps.first

@@ -1,6 +1,12 @@
-// CHANGE #298 — push-send: FCM HTTP v1, authenticated with the existing
-// GCP_SA_KEY service account (same credential and the same JWT dance as
-// gemini-ocr — see the GEMINI RULE; only the scope and endpoint differ).
+// CHANGE #298 — push-send: FCM HTTP v1, authenticated with FIREBASE_SA_KEY.
+//
+// THE CREDENTIAL IS NOT GCP_SA_KEY. Same JWT dance as gemini-ocr (see the
+// GEMINI RULE — only the scope and endpoint differ), but a DIFFERENT service
+// account: medibo-fcm@medibo-23aee, which owns the Firebase project the app is
+// registered against. GCP_SA_KEY belongs to another Google account entirely
+// (project-b83d3f5f-25d0-45ef-a4e) and is Vertex AI only; using it here would
+// POST every push to a project that has never heard of in.medibo.app. Never
+// swap these two, and never overwrite GCP_SA_KEY with this one.
 //
 // Contract, called by notif_push_send() over pg_net:
 //   { log_id, tokens: [..], title, body, deep_link, event_key, order_id }
@@ -117,10 +123,11 @@ serve(async (req) => {
     })
   }
 
-  const saRaw = Deno.env.get('GCP_SA_KEY') ?? ''
+  // See the header: FIREBASE_SA_KEY, never GCP_SA_KEY.
+  const saRaw = Deno.env.get('FIREBASE_SA_KEY') ?? ''
   if (!saRaw) {
-    await report(false, null, 'gcp_sa_key_missing', [])
-    return json({ ok: false, error: 'gcp_sa_key_missing' })
+    await report(false, null, 'firebase_sa_key_missing', [])
+    return json({ ok: false, error: 'firebase_sa_key_missing' })
   }
   if (tokens.length === 0) {
     await report(false, null, 'no_tokens', [])

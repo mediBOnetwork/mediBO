@@ -29,12 +29,25 @@
 //      there is something to mark — the caption is not invented, and an empty
 //      inbox does not offer to mark nothing.
 //
+//   5. THE ORDER DEEP LINK IS PARSED IN ONE PLACE. A push, an inbox tap and a
+//      pasted URL all read `/my-order/<order_code>` through
+//      InboxItem.orderCodeFrom, so they cannot drift apart, and the code is
+//      taken verbatim — the app never checks what a valid order code looks
+//      like. This is spec item 5: the notification opens the EXACT order.
+//
+//   6. THE ADMIN PUSH SCREEN IS REACHABLE. #645/#646 shipped screens that
+//      existed and compiled but had no nav entry, so on a phone there was no
+//      way in at all — three deploys deep before anyone noticed. A screen the
+//      overflow nav does not name does not exist, so the entry is pinned here
+//      rather than trusted.
+//
 // Pure Dart: no network, no Supabase, no widgets, no goldens. The screen's
 // decisions live in InboxPage/InboxItem exactly so this suite stays on the VM.
 
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:pharma_b2b/models/notification_inbox.dart';
+import 'package:pharma_b2b/screens/admin/admin_nav_entries.dart';
 
 /// Mirrors a real notif_inbox_list() payload.
 Map<String, dynamic> _payload({
@@ -205,6 +218,55 @@ void main() {
       final p = InboxPage.fromJson(_payload(items: [_row(1)]));
       expect(p.showMarkAll, isTrue);
       expect(p.markAllLabel, 'Mark all read');
+    });
+  });
+
+  group('5. the order deep link is read in exactly one place', () {
+    test('the order code is taken verbatim, never validated or cased', () {
+      expect(InboxItem.orderCodeFrom('/my-order/CPO300726TOP012I1'),
+          'CPO300726TOP012I1');
+      expect(InboxItem.orderCodeFrom('/my-order/lower-case-99'),
+          'lower-case-99',
+          reason: 'order_code is the backend\'s string; the app has no pattern');
+    });
+
+    test('a query or fragment is dropped, the code is not', () {
+      expect(InboxItem.orderCodeFrom('/my-order/CPO1?from=push'), 'CPO1');
+      expect(InboxItem.orderCodeFrom('/my-order/CPO1#top'), 'CPO1');
+    });
+
+    test('any other route is not an order link', () {
+      for (final r in ['/', '', '/orders', '/my-order/', '/my-orders/CPO1']) {
+        expect(InboxItem.orderCodeFrom(r), isNull, reason: 'route: "$r"');
+      }
+      expect(InboxItem.orderCodeFrom(null), isNull);
+    });
+
+    test('an inbox row routes through the SAME parser as a push', () {
+      final row = InboxItem.fromJson(_row(1, deepLink: '/my-order/CPO9'));
+      expect(InboxItem.orderCodeFrom(row.route), 'CPO9');
+    });
+  });
+
+  group('6. the new admin surface is reachable, not merely built', () {
+    test('the overflow nav names the push screen exactly once', () {
+      final hits =
+          kAdminOverflowNav.where((e) => e.route == 'admin_push').toList();
+      expect(hits, hasLength(1),
+          reason: 'a screen the nav does not name cannot be opened at all');
+    });
+
+    test('it sits beside the Notification Centre, its sibling surface', () {
+      final routes = kAdminOverflowNav.map((e) => e.route).toList();
+      expect(routes.indexOf('admin_push'),
+          routes.indexOf('notify_center') + 1);
+    });
+
+    test('every overflow entry still carries a route', () {
+      for (final e in kAdminOverflowNav) {
+        expect(e.route, isNotNull, reason: 'entry "${e.label}" does nothing');
+        expect(e.route, isNotEmpty, reason: 'entry "${e.label}" does nothing');
+      }
     });
   });
 }

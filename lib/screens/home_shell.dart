@@ -4,10 +4,12 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart'; // CHANGE #298 — absolute deep links
 import '../app_state.dart';
 import '../data/medicine_repository.dart';
 import '../models/app_session.dart';
 import '../models/cart_model.dart';
+import '../models/notification_inbox.dart'; // CHANGE #298 — the deep-link parser
 import '../design_tokens.dart';
 import '../theme.dart';
 import '../url_sync.dart';
@@ -19,6 +21,9 @@ import '../utils/render_log.dart';
 import '../utils/responsive.dart';
 import '../widgets/animations.dart';
 import '../widgets/cart_pill.dart'; // C636
+import '../widgets/notification_bell.dart'; // CHANGE #298
+import '../services/push_service.dart'; // CHANGE #298
+import 'admin/admin_push_screen.dart'; // CHANGE #298
 import 'admin/admin_add_medicine_screen.dart';
 import 'admin/admin_manage_admins_screen.dart';
 import 'admin/admin_customer_screen.dart';
@@ -132,6 +137,22 @@ class _HomeShellState extends State<HomeShell> {
   // Desktop sidebar: populated once storefront loads its CatalogMeta
   CatalogMeta? _desktopMeta;
 
+  // ── CHANGE #298 — push + inbox ───────────────────────────────────────────
+  // One bell, two headers: whichever layout is on screen holds the key, so a
+  // foreground push refreshes the badge that is actually mounted.
+  final GlobalKey<NotificationBellState> _bellKey =
+      GlobalKey<NotificationBellState>();
+
+  /// The order a notification asked to open, taken verbatim from the backend's
+  /// own deep link (`/my-order/<order_code>`). The shell never parses further
+  /// than the prefix — it has no opinion about what an order code looks like.
+  String? _focusOrderCode;
+
+  /// The auth user this device's push token is currently bound to. Changing it
+  /// IS the login / account-switch / logout signal, all three in one place.
+  String? _pushBoundUid;
+  bool _pushStarted = false;
+
   @override
   void initState() {
     super.initState();
@@ -144,6 +165,10 @@ class _HomeShellState extends State<HomeShell> {
     });
     _initFromUrl();
     listenPopState(_applyPath);
+    // CHANGE #298 — FCM. Started after the first frame so a Firebase failure
+    // can never sit in front of the shell's own build (BOOT RESILIENCE RULE);
+    // PushService itself swallows every error for the same reason.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _startPush());
     // CHANGE #629: the delivery-role probe is fired by UserState (the one place
     // a session is fetched); this only listens so the shell repaints when it
     // answers.
@@ -232,6 +257,9 @@ class _HomeShellState extends State<HomeShell> {
       _checkAmISuper();
       _loadDeletionCount();
     }
+    // CHANGE #298 — login, account switch and logout all reach the shell as an
+    // auth rebuild, and all three mean the same thing to a device token.
+    _syncPushIdentity();
     final viewAs = ViewAsState.of(context);
     final key = viewAs.isActive
         ? '${viewAs.role!.name}:${viewAs.identity!.id}'
@@ -274,6 +302,9 @@ class _HomeShellState extends State<HomeShell> {
       _stripOAuthUrlWhenReady(cleaned);
       return;
     }
+    // CHANGE #298 — a push tapped from a cold start lands here as a URL, so
+    // the deep link must be read on FIRST load too, not only on back/forward.
+    if (_applyOrderDeepLink(path)) return;
     if (path.startsWith('/c/')) {
       _category = _slugToCat(path.substring(3));
     } else if (path == '/orders') {
@@ -313,10 +344,75 @@ class _HomeShellState extends State<HomeShell> {
     }
   }
 
+  // ── CHANGE #298 — push lifecycle + deep links ───────────────────────────
+
+  /// Boot the push channel once, and hand it the two callbacks it needs: where
+  /// a tapped notification goes, and what to refresh when one arrives while
+  /// the app is already open.
+  Future<void> _startPush() async {
+    if (_pushStarted || !mounted) return;
+    _pushStarted = true;
+    final push = PushService.instance;
+    push.onForeground = (_) => _bellKey.currentState?.refresh();
+    await push.start(onOpen: _openDeepLink);
+    if (!mounted) return;
+    _pushBoundUid = Supabase.instance.client.auth.currentUser?.id;
+    // A notification that launched the process arrived before this navigator
+    // existed; now that it does, take it.
+    push.drainPending();
+  }
+
+  /// The auth identity moved. One method covers login, account switch and
+  /// logout, because to a device token they are the same event: the row this
+  /// phone is registered under must change.
+  void _syncPushIdentity() {
+    if (!_pushStarted) return;
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    if (uid == _pushBoundUid) return;
+    _pushBoundUid = uid;
+    if (uid == null) {
+      PushService.instance.clearOnLogout();
+    } else {
+      PushService.instance.onAccountSwitched();
+    }
+  }
+
+  /// Open the destination a notification named. The link is the BACKEND's
+  /// (notif_deep_link) — the shell routes it, it does not invent it.
+  void _openDeepLink(String link) {
+    if (!mounted || link.isEmpty) return;
+    RenderLog.write('c298_deeplink_open', 1);
+    if (link.startsWith('http://') || link.startsWith('https://')) {
+      // An absolute link (a supplier form, for instance) is the browser's job.
+      final uri = Uri.tryParse(link);
+      if (uri != null) {
+        launchUrl(uri, mode: LaunchMode.externalApplication).catchError((_) => false);
+      }
+      return;
+    }
+    _applyPath(link);
+    pushUrl(link);
+  }
+
+  /// `/my-order/<order_code>` → the Orders tab, focused on that order. Returns
+  /// true when the path was one of ours.
+  bool _applyOrderDeepLink(String path) {
+    final code = InboxItem.orderCodeFrom(path);
+    if (code == null) return false;
+    _focusOrderCode = code;
+    _index = 1;
+    _cartOpen = false;
+    _ordersRefreshSignal++;
+    return true;
+  }
+
   // Respond to browser back / forward navigation.
   void _applyPath(String path) {
     if (!mounted) return;
     setState(() {
+      // CHANGE #298 — a notification's own destination is checked first: it is
+      // the only path that carries an argument the shell must keep.
+      if (_applyOrderDeepLink(path)) return;
       if (path.startsWith('/c/')) {
         _category = _slugToCat(path.substring(3));
         _index = 0;
@@ -500,6 +596,13 @@ class _HomeShellState extends State<HomeShell> {
       case 'notify_center':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const NotifyCenterScreen()));
+        break;
+      // CHANGE #298 — Push notifications (Firebase config + the per-event push
+      // toggle). push_admin_screen() gates on get_my_role() and the screen
+      // renders its refusal, same as notify_center above.
+      case 'admin_push':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const AdminPushScreen()));
         break;
       // Same gating as the ones above: both screens call RPCs that check the
       // caller's role and render the backend's own refusal.
@@ -834,6 +937,9 @@ class _HomeShellState extends State<HomeShell> {
           OrdersScreen(
             viewAsUserId: isCustomerViewAs ? viewAs.identity?.userId : null,
             refreshSignal: _ordersRefreshSignal,
+            // CHANGE #298 — the order a notification pointed at, passed through
+            // untouched so the card opens and scrolls itself into view.
+            focusOrderCode: _focusOrderCode,
           ),
           BulkUploadScreen(key: _bulkUploadKey),
           const OffersScreen(),
@@ -932,6 +1038,7 @@ class _HomeShellState extends State<HomeShell> {
                   onAdminNav: isAdmin ? _handleAdminNav : null,
                   isSuperAdmin: isAdmin ? _amISuper : false,
                   deletionCount: isAdmin ? _deletionCount : 0,
+                  bellKey: _bellKey, // CHANGE #298
                 ),
                 // CHANGE #455 B1 — the persistent order-hours banner that
                 // used to sit here (and in the desktop header below) is
@@ -1025,9 +1132,11 @@ class _HomeShellState extends State<HomeShell> {
                   onAdminNav: _handleAdminNav,
                   isSuperAdmin: _amISuper,
                   deletionCount: _deletionCount,
+                  bellKey: _bellKey, // CHANGE #298
                 )
               else
                 _DesktopHeader(
+                  bellKey: _bellKey, // CHANGE #298
                   scrolled: _desktopScrolled,
                   onHome: onLogoTap,
                   logoTooltip: '',
@@ -1117,6 +1226,9 @@ class _LocationHeader extends StatelessWidget {
   final ValueChanged<String>? onAdminNav;
   final bool isSuperAdmin;
   final int deletionCount;
+  /// CHANGE #298 — the shell owns the bell's state so a foreground push can
+  /// refresh the badge that is currently mounted.
+  final GlobalKey<NotificationBellState>? bellKey;
   const _LocationHeader({
     required this.isAdmin,
     required this.onCart,
@@ -1126,11 +1238,15 @@ class _LocationHeader extends StatelessWidget {
     this.onAdminNav,
     this.isSuperAdmin = false,
     this.deletionCount = 0,
+    this.bellKey,
   });
 
   @override
   Widget build(BuildContext context) {
     final cartItems = AppState.of(context).distinctItems;
+    // CHANGE #298 — the inbox belongs to a signed-in identity; there is nothing
+    // for it to count before one exists.
+    final signedIn = UserState.of(context).isAuthenticated;
     return SafeArea(
       bottom: false,
       child: Container(
@@ -1190,7 +1306,10 @@ class _LocationHeader extends StatelessWidget {
                 ),
               ),
             ),
-            // RIGHT: cart icon (customers only)
+            // RIGHT: the inbox bell (every signed-in role), then the cart
+            // (customers only). CHANGE #298 — the bell is what makes an event
+            // readable later whichever channel delivered it.
+            if (signedIn) NotificationBell(key: bellKey),
             if (!isAdmin) _MobileCartIcon(cartItems: cartItems, onCart: onCart),
           ],
         ),
@@ -3406,8 +3525,11 @@ class _DesktopHeader extends StatelessWidget {
   final VoidCallback onLogin;
   final int index;
   final bool cartOpen;
+  /// CHANGE #298 — see _LocationHeader.bellKey.
+  final GlobalKey<NotificationBellState>? bellKey;
 
   const _DesktopHeader({
+    this.bellKey,
     required this.onHome,
     required this.logoTooltip,
     required this.onBulk,
@@ -3533,6 +3655,11 @@ class _DesktopHeader extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 16),
+          // CHANGE #298 — the inbox bell, left of the profile button, for the
+          // same reason it sits left of the cart on mobile: it belongs to the
+          // signed-in identity, not to the storefront.
+          if (UserState.of(context).isAuthenticated)
+            NotificationBell(key: bellKey),
           // 6. Auth button (Login or profile dropdown) — far right
           _DesktopProfileButton(onLogin: onLogin),
           const SizedBox(width: 24),
@@ -4168,6 +4295,8 @@ class _AdminDesktopHeader extends StatelessWidget {
   final ValueChanged<String> onAdminNav;
   final bool isSuperAdmin;
   final int deletionCount;
+  /// CHANGE #298 — see _LocationHeader.bellKey.
+  final GlobalKey<NotificationBellState>? bellKey;
 
   const _AdminDesktopHeader({
     required this.onHome,
@@ -4176,6 +4305,7 @@ class _AdminDesktopHeader extends StatelessWidget {
     this.isSuperAdmin = false,
     this.scrolled = false,
     this.deletionCount = 0,
+    this.bellKey,
   });
 
   @override
@@ -4235,6 +4365,10 @@ class _AdminDesktopHeader extends StatelessWidget {
           // begins, the row has no room left.
           AdminMoreNavMenu(onNav: onAdminNav, deletionCount: deletionCount, isSuperAdmin: isSuperAdmin),
           const SizedBox(width: 8),
+          // CHANGE #298 — admins read the same inbox as everyone else; the
+          // events they are recipients of are events too.
+          if (UserState.of(context).isAuthenticated)
+            NotificationBell(key: bellKey),
           _DesktopProfileButton(onLogin: () {}, onAdminNav: onAdminNav, isSuperAdmin: isSuperAdmin),
           const SizedBox(width: 24),
         ],

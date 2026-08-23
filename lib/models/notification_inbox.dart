@@ -53,6 +53,22 @@ class InboxItem {
     return deepLink;
   }
 
+  /// CHANGE #298 — the ONE place a `/my-order/<order_code>` link is read.
+  ///
+  /// The shell and the inbox both route through this so a push, an inbox tap
+  /// and a pasted URL cannot drift apart. It extracts the code and nothing
+  /// else: no case-folding, no pattern check, no guess at what a valid order
+  /// code looks like — `notif_deep_link()` built the link and `order_code` is
+  /// the backend's own string. Anything that is not this route returns null,
+  /// which is how the caller knows to fall through to its other paths.
+  static String? orderCodeFrom(String? route) {
+    const prefix = '/my-order/';
+    final r = (route ?? '').trim();
+    if (!r.startsWith(prefix)) return null;
+    final code = r.substring(prefix.length).split('?').first.split('#').first;
+    return code.isEmpty ? null : code;
+  }
+
   static InboxItem fromJson(Map<String, dynamic> j) => InboxItem(
         id: (j['id'] as num?)?.toInt() ?? 0,
         eventKey: j['event_key'] as String? ?? '',

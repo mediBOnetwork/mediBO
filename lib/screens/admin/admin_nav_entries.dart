@@ -86,6 +86,14 @@ List<AdminNavEntry> get kAdminOverflowNav => <AdminNavEntry>[
       AdminNavEntry(
           c('admin_nav.overflow_notify_center'), Icons.notifications_active_outlined,
           route: 'notify_center'),
+      // CHANGE #298 — Push notifications. Sits beside the Notification Centre
+      // because it is the same dispatcher seen from the device side: the
+      // Firebase project that makes push possible at all, and the per-event
+      // push toggle that decides which events go out as a push before falling
+      // back to WhatsApp.
+      AdminNavEntry(
+          c('admin_nav.overflow_push'), Icons.phonelink_ring_outlined,
+          route: 'admin_push'),
       // Sibling of registration approvals: the customer account/data-deletion
       // queue (CHANGE #681). Badge count comes from
       // admin_deletion_request_count(), passed in as a plain int so this file

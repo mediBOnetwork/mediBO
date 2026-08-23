@@ -43,6 +43,8 @@ import 'screens/dispute_link_page.dart';
 import 'features/whatsapp/ui/wa_templates_screen.dart'; // admin WhatsApp templates
 import 'screens/admin/wa_diagnosis_screen.dart';
 import 'screens/admin/notify_center_screen.dart'; // CHANGE #297 — the notify() dispatcher's admin surface
+import 'screens/admin/admin_push_screen.dart'; // CHANGE #298 — Firebase config + per-event push toggle
+import 'screens/notifications_inbox_screen.dart'; // CHANGE #298 — the in-app inbox behind the bell
 import 'screens/admin/wa_ops_screen.dart'; // admin WhatsApp ops + template pipeline
 import 'screens/admin/admin_order_closure_screen.dart'; // CHANGE #229 — /admin/order-closure
 import 'screens/about_screen.dart';
@@ -697,6 +699,16 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
               // session can reach it directly, which is what proves the screen
               // actually renders.
               '/admin/notify-center': (_) => const NotifyCenterScreen(),
+              // CHANGE #298 — Push notifications at a real URL, for the same
+              // reason /admin/notify-center has one: push_admin_screen()
+              // refuses a non-admin caller itself, so the route guards
+              // nothing, and a headless admin session can reach the screen
+              // directly — which is what proves it renders.
+              '/admin/push': (_) => const AdminPushScreen(),
+              // CHANGE #298 — the in-app inbox. Every event is readable here
+              // later regardless of which channel delivered it, so it needs
+              // an address of its own, not only the bell.
+              '/notifications': (_) => const NotificationsInboxScreen(),
               // CHANGE #229 — Order closure at a real URL, same reason
               // /admin/wa-ops has one: this is the page you send someone to
               // when they ask "why is that order still open?". The screen's

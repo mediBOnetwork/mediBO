@@ -1100,11 +1100,15 @@ You will receive the delivery OTP when the rider reaches your counter.', 'ऑर
 आपका ऑर्डर {{order_code}} हमारे गोदाम से रवाना हो चुका है और आपके पास पहुँच रहा है।
 
 डिलीवरी के समय आपको OTP भेजा जाएगा।'),
-  ('order_placed', 'Order {{order_code}} received', 'We have received your order {{order_code}} placed on {{today_date}}.
+  ('order_placed', 'Order {{order_code}} received', 'Dear {{customer_name}},
+
+We have received your order {{order_code}}.
 
 Our team is now sourcing the items. You will get the confirmation and the payment link as soon as the order is accepted.
 
-You can track the order any time in the mediBO app.', 'ऑर्डर {{order_code}} मिल गया', '{{today_date}} को दिया गया आपका ऑर्डर {{order_code}} हमें मिल गया है।
+You can track the order any time in the mediBO app.', 'ऑर्डर {{order_code}} मिल गया', 'प्रिय {{customer_name}},
+
+आपका ऑर्डर {{order_code}} हमें मिल गया है।
 
 हमारी टीम अभी सामान की व्यवस्था कर रही है। ऑर्डर स्वीकार होते ही आपको पुष्टि और भुगतान लिंक भेज दिया जाएगा।
 

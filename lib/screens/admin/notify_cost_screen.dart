@@ -134,7 +134,7 @@ class _NotifyCostScreenState extends State<NotifyCostScreen> {
           _savingsCard(savings),
         ],
         SizedBox(height: Ds.space.x32),
-        Text((d?['rows_heading'] ?? '').toString(), style: Ds.t.subtitle),
+        Text((d?['rows_heading'] ?? '').toString(), style: Ds.t.bodyStrong),
         SizedBox(height: Ds.space.x12),
         if (rows.isEmpty)
           _emptyState((d?['empty_text'] ?? '').toString())
@@ -232,7 +232,7 @@ class _NotifyCostScreenState extends State<NotifyCostScreen> {
             Text((s['label'] ?? '').toString(), style: Ds.t.caption),
             SizedBox(height: Ds.space.x4),
             Text((s['value'] ?? '').toString(),
-                style: Ds.t.display.copyWith(color: Ds.c.success)),
+                style: Ds.t.title.copyWith(color: Ds.c.success)),
             SizedBox(height: Ds.space.x8),
             Text((s['note'] ?? '').toString(), style: Ds.t.caption),
           ],
@@ -302,7 +302,12 @@ class _NotifyCostScreenState extends State<NotifyCostScreen> {
               Text(c('notif_cost.error'),
                   textAlign: TextAlign.center, style: Ds.t.bodySecondary),
               SizedBox(height: Ds.space.x16),
-              FilledButton(onPressed: _load, child: Text(c('notif_cost.retry'))),
+              SizedBox(
+                width: double.infinity,
+                height: Ds.touch.minTarget,
+                child: FilledButton(
+                    onPressed: _load, child: Text(c('notif_cost.retry'))),
+              ),
             ],
           ),
         ),

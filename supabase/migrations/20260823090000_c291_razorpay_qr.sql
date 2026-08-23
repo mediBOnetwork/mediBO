@@ -386,3 +386,35 @@ $$;
 
 grant execute on function public.rzp_panel_block() to authenticated;
 grant execute on function public.customer_order_payment_panel_v2(uuid) to authenticated;
+
+-- ── 11. payment_method now admits 'razorpay_qr' ─────────────────────────────
+-- payment_claims_payment_method_check only allowed ('online','cash'), so the
+-- webhook's insert failed outright. Widening it is additive — no existing row
+-- changes, no value is removed.
+alter table public.payment_claims drop constraint if exists payment_claims_payment_method_check;
+alter table public.payment_claims add constraint payment_claims_payment_method_check
+  check (payment_method = any (array['online'::text, 'cash'::text, 'razorpay_qr'::text]));
+
+-- ...and the admin money split follows. admin_order_payment_view computed
+-- online_total as `payment_method = 'online'` EXACTLY, so a razorpay_qr claim
+-- would have been counted in neither cash_total nor online_total — money that
+-- exists in total_received but in no column. "Online" is now "not cash", which
+-- is what the column always meant.
+do $$
+declare d text; v_old text; v_new text;
+begin
+  v_old := 'coalesce(sum(amount) filter (where coalesce(payment_method,''online'')=''online''),0) as online_total';
+  v_new := 'coalesce(sum(amount) filter (where coalesce(payment_method,''online'') <> ''cash''),0) as online_total';
+
+  select pg_get_functiondef(oid) into d
+    from pg_proc where oid = 'public.admin_order_payment_view(uuid)'::regprocedure;
+
+  if position(v_new in d) > 0 then
+    return;                                  -- already patched; a resume is a no-op
+  end if;
+  if position(v_old in d) = 0 then
+    raise exception 'c291: online_total line not found in admin_order_payment_view — patch it by hand';
+  end if;
+
+  execute replace(d, v_old, v_new);
+end $$;

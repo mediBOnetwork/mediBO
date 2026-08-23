@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../design_tokens.dart';
+import '../utils/render_log.dart';
 import '../screens/notifications_inbox_screen.dart';
 
 class NotificationBell extends StatefulWidget {
@@ -32,7 +33,11 @@ class NotificationBellState extends State<NotificationBell> {
     try {
       final res = await Supabase.instance.client.rpc('notif_inbox_unread');
       if (!mounted || res is! Map) return;
-      setState(() => _state = Map<String, dynamic>.from(res));
+      final m = Map<String, dynamic>.from(res);
+      // Proof key: a bell that answered is a bell that rendered. The value is
+      // the backend's own count, so the render-log shows what it is showing.
+      RenderLog.write('c298_bell', (m['count'] as num?)?.toInt() ?? 0);
+      setState(() => _state = m);
     } catch (_) {
       // A bell that cannot count is still a bell — it must never throw into
       // the app bar.

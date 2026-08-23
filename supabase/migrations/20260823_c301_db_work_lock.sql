@@ -79,7 +79,7 @@ declare
   v_hr   int;
   v_exp  timestamptz;
 begin
-  perform public._dev_guard();
+  perform public._db_guard();
 
   if v_kind in ('exclusive','ddl','migration','write','vacuum') then
     v_kind := 'exclusive';
@@ -133,7 +133,7 @@ set search_path to 'public'
 as $$
 declare l public.db_work_lock%rowtype;
 begin
-  perform public._dev_guard();
+  perform public._db_guard();
   delete from public.db_work_lock where token = p_token returning * into l;
   if l.token is null then
     return jsonb_build_object('ok', false, 'error', 'not_lock_holder',
@@ -151,7 +151,7 @@ set search_path to 'public'
 as $$
 declare cfg public.db_work_lock_config%rowtype; v_ex int; v_hr int;
 begin
-  perform public._dev_guard();
+  perform public._db_guard();
   perform public._db_lock_reap();
   select * into cfg from public.db_work_lock_config where id;
   select count(*) filter (where kind = 'exclusive'),

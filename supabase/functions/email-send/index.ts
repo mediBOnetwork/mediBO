@@ -2,25 +2,26 @@
 //
 // The THIRD channel of notify(): push → WhatsApp → email. This function is a
 // dumb transport on purpose. Every display string (subject, body, from-name,
-// footer, language) is composed in Postgres by notify() and arrives here fully
+// language) is composed in Postgres by notify() and arrives here fully
 // rendered — nothing about the message is decided in TypeScript.
 //
-// Transport: Resend (https://resend.com). RESEND_API_KEY lives in edge secrets.
-// The domain medibo.in is verified in Resend (us-east-1) with the sending
-// subdomain send.medibo.in — DKIM at resend._domainkey, DMARC p=quarantine.
-// The From address MUST stay on send.medibo.in or DKIM alignment breaks.
-// This function never touches DNS and never invents a From domain: it falls
-// back to the DB's notification_email_config row, never to a literal here.
+// Transport: Resend. RESEND_API_KEY lives in edge secrets. medibo.in is the
+// domain verified in Resend (us-east-1) — DKIM at resend._domainkey, DMARC
+// p=quarantine. send.medibo.in is the subdomain Resend provisions for the
+// bounce/return path, NOT a From domain: Resend refuses a From on it with
+// "The send.medibo.in domain is not verified". This function never touches
+// DNS and never invents a From domain — it falls back to the DB's
+// notification_email_config row, never to a literal here.
 //
 // Auth: verify_jwt is ON (notify() calls it with the service-role bearer) AND
-// the shared secret x-notify-secret must match, the same double check
+// the shared secret x-notify-secret must match — the same double check
 // bill-render uses.
 //
 // Contract
 //   POST { to, subject, html, text?, from?, reply_to?, log_id?, event_key?,
 //          tags?, dry_run? }
 //   200  { ok:true,  id:"<resend id>", log_id }
-//   200  { ok:false, error:"<slug>", message:"<backend copy>", log_id }
+//   200  { ok:false, error:"<slug>", log_id }
 // Failure is reported as ok:false with a slug, never as a thrown 500 — the
 // caller logs the attempt either way, so a dead mailbox is evidence, not a gap.
 

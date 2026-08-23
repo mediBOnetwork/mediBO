@@ -19,13 +19,17 @@
 -- ═══════════════════════════════════════════════════════════════════════════
 
 -- ─────────────────────────────────────────────── 1. sending identity config ──
--- The From domain is send.medibo.in — the verified Resend sending subdomain
--- (DKIM resend._domainkey, DMARC p=quarantine). Moving off it breaks DKIM
--- alignment, so it lives in ONE editable row and never as a code literal.
+-- The From domain is medibo.in — that is the domain object verified in Resend
+-- (DKIM resend._domainkey, DMARC p=quarantine → medibonetwork@gmail.com).
+-- send.medibo.in is the sending subdomain Resend provisions for the bounce /
+-- return path (MAIL FROM); it is NOT a From domain of its own, and using it
+-- there is refused with "The send.medibo.in domain is not verified" — proven
+-- on this build, log row 30. Kept in ONE editable row, never a code literal,
+-- and no DNS was changed to make it work.
 create table if not exists public.notification_email_config (
   id             text primary key default 'singleton',
   enabled        boolean     not null default true,
-  from_display   text        not null default 'mediBO <notifications@send.medibo.in>',
+  from_display   text        not null default 'mediBO <notifications@medibo.in>',
   reply_to       text        not null default 'medibonetwork@gmail.com',
   brand_name     text        not null default 'mediBO',
   default_language text      not null default 'en',
@@ -37,10 +41,14 @@ create table if not exists public.notification_email_config (
 );
 insert into public.notification_email_config (id) values ('singleton')
   on conflict (id) do nothing;
+update public.notification_email_config
+   set from_display = 'mediBO <notifications@medibo.in>', updated_at = now()
+ where id = 'singleton' and from_display like '%@send.medibo.in%';
 
 comment on table public.notification_email_config is
   'cmd #299 — the ONE place the email sending identity and branded wrapper live. '
-  'from_display must stay on send.medibo.in (verified Resend domain, DKIM aligned).';
+  'from_display must stay on the medibo.in domain verified in Resend; the '
+  'send.medibo.in subdomain is the return path, not a From domain.';
 
 -- ───────────────────────────────────────── 2. route columns: email + costing ──
 alter table public.wa_event_routes

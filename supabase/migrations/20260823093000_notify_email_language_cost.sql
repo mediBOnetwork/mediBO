@@ -861,7 +861,7 @@ begin
     into v
     from notification_settings g
    where g.user_id is null and g.channel = 'all'
-     and g.audience = coalesce(nullif(p.role_hint,''), 'customer');
+     and g.audience = 'customer';
 
   return jsonb_build_object('ok', true,
     'user_id', p_user_id,

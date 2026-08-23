@@ -244,6 +244,18 @@ class _WaOpsScreenState extends State<WaOpsScreen> {
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 40),
         children: [
           _SectionHeading(
+            icon: Icons.mark_email_read_outlined,
+            // Status before configuration: this page is where you land when a
+            // pharmacy says "I never got it", so the delivery ledger is the
+            // first thing on it, not a section you scroll to.
+            text: 'Notification delivery',
+          ),
+          _SendHealthSection(
+            healthRpc: widget.sendHealthRpc,
+            retryRpc: widget.sendRetryRpc,
+          ),
+          SizedBox(height: Ds.space.x24),
+          _SectionHeading(
             icon: Icons.settings_suggest_outlined,
             // Section headings are the screen's own furniture, not data.
             text: 'Automatic messages',
@@ -258,15 +270,6 @@ class _WaOpsScreenState extends State<WaOpsScreen> {
             text: 'Template pipeline',
           ),
           _TemplatePipelineSection(pipelineRpc: widget.pipelineRpc),
-          SizedBox(height: Ds.space.x24),
-          _SectionHeading(
-            icon: Icons.mark_email_read_outlined,
-            text: 'Notification delivery',
-          ),
-          _SendHealthSection(
-            healthRpc: widget.sendHealthRpc,
-            retryRpc: widget.sendRetryRpc,
-          ),
           const SizedBox(height: 22),
           _SectionHeading(
             icon: Icons.verified_outlined,

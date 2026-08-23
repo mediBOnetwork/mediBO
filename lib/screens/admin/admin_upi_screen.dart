@@ -11,6 +11,7 @@ import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/utils/bill_mime.dart';
 import 'package:pharma_b2b/widgets/fullscreen_image.dart';
 import 'package:pharma_b2b/services/ui_copy.dart';
+import 'package:pharma_b2b/design_tokens.dart';
 
 class AdminUpiScreen extends StatefulWidget {
   // Injected RPCs — tests stub these; production leaves them null and hits
@@ -55,6 +56,13 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
   final Set<String> _partnerBusy = {};
   final Set<String> _docBusy = {};
 
+  // ── Payment mode (CHANGE #291) ───────────────────────────────────────────
+  // Razorpay auto-verified QR vs the manual shared-UPI flow. Every word in the
+  // card — title, helper, the two mode names — is payment_mode_get()'s, so
+  // rewording it is an UPDATE, not a deploy.
+  Map<String, dynamic>? _payMode;
+  bool _payModeBusy = false;
+
   // ── Platform state (CHANGE #611) ─────────────────────────────────────────
   // The whole platform block — rows, note and documents — is whatever
   // about_screen() returns. This screen never composes those strings.
@@ -70,6 +78,7 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
     RenderLog.write('c494_partner_screen_opened', 1);
     RenderLog.write('c611_platform_screen_opened', 1);
     _fetchList();
+    _fetchPayMode();
     _fetchPartnerData();
     _fetchPlatformData();
   }
@@ -633,6 +642,106 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
     });
   }
 
+  // ── Payment mode (CHANGE #291) ───────────────────────────────────────────
+
+  Future<void> _fetchPayMode() async {
+    try {
+      final res = await Supabase.instance.client.rpc('payment_mode_get');
+      if (!mounted) return;
+      setState(() => _payMode =
+          res is Map ? res.cast<String, dynamic>() : null);
+      RenderLog.write('c291_pay_mode_card',
+          'enabled=${_payMode?['enabled']}');
+    } catch (_) {
+      if (mounted) setState(() => _payMode = null);
+    }
+  }
+
+  Future<void> _setPayMode(bool enabled) async {
+    if (_payModeBusy) return;
+    setState(() => _payModeBusy = true);
+    try {
+      final res = await Supabase.instance.client
+          .rpc('payment_mode_set', params: {'p_enabled': enabled});
+      if (!mounted) return;
+      final next = res is Map ? res.cast<String, dynamic>() : null;
+      setState(() {
+        if (next != null) _payMode = next;
+        _payModeBusy = false;
+      });
+      RenderLog.write('c291_pay_mode_set', 'enabled=$enabled');
+      if (mounted && next != null) {
+        showToast(context, (next['saved_label'] ?? '').toString());
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _payModeBusy = false);
+      showToast(context, _mapError(e), isError: true);
+    }
+  }
+
+  /// The card. Renders nothing at all until the backend has answered — an
+  /// absent payload is an absence, not a default-off switch.
+  Widget _buildPayModeSection() {
+    final m = _payMode;
+    if (m == null) return const SizedBox.shrink();
+    final on = m['enabled'] == true;
+    final canEdit = m['can_edit'] == true;
+    final tone = (m['mode_tone'] ?? '').toString();
+    final toneBg = tone == 'ok' ? Ds.c.successSoft : Ds.c.warningSoft;
+
+    return Container(
+      padding: EdgeInsets.all(Ds.space.x16),
+      decoration: BoxDecoration(
+        color: Ds.c.surface,
+        borderRadius: Ds.r.rCard,
+        border: Border.all(color: Ds.c.divider),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(
+            child: Text((m['title'] ?? '').toString(), style: Ds.t.subtitle),
+          ),
+          Container(
+            padding: EdgeInsets.symmetric(
+                horizontal: Ds.space.x12, vertical: Ds.space.x4),
+            decoration:
+                BoxDecoration(color: toneBg, borderRadius: Ds.r.rChip),
+            child: Text((m['mode_label'] ?? '').toString(),
+                style: Ds.t.caption),
+          ),
+        ]),
+        SizedBox(height: Ds.space.x8),
+        Text((m['helper'] ?? '').toString(), style: Ds.t.caption),
+        SizedBox(height: Ds.space.x16),
+        SizedBox(
+          height: Ds.touch.minTarget,
+          child: Row(children: [
+            Expanded(
+              child: Text((m['toggle_label'] ?? '').toString(),
+                  style: Ds.t.body),
+            ),
+            if (_payModeBusy)
+              SizedBox(
+                width: Ds.space.x24,
+                height: Ds.space.x24,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: Ds.c.brand),
+              )
+            else
+              Switch(
+                value: on,
+                activeThumbColor: Ds.c.brand,
+                onChanged: canEdit ? _setPayMode : null,
+              ),
+          ]),
+        ),
+        SizedBox(height: Ds.space.x4),
+        Text((m['mode_helper'] ?? '').toString(), style: Ds.t.caption),
+      ]),
+    );
+  }
+
   // ── Desktop ──────────────────────────────────────────────────────────────
 
   Widget _buildDesktop(BuildContext ctx) {
@@ -654,6 +763,8 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
                 _config?['payment_helper'] as String? ?? '',
                 style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
               ),
+              const SizedBox(height: 24),
+              _buildPayModeSection(),
               const SizedBox(height: 24),
               _AddUpiCard(
                 paCtrl: _paCtrl,
@@ -718,6 +829,8 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
               style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
             ),
             const SizedBox(height: 16),
+            _buildPayModeSection(),
+            const SizedBox(height: 24),
             _AddUpiCard(
               paCtrl: _paCtrl,
               pnCtrl: _pnCtrl,

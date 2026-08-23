@@ -257,6 +257,14 @@ Current files and what they hold down:
   SERVER recomputed them, and CartOrderRefusal treats only
   error:'unavailable_in_cart' as that refusal, keeping its message verbatim.
 
+- `razorpay_qr_test.dart` — the money path: the Razorpay QR card prints
+  title/subtitle/amount/note VERBATIM from the payload (the amount exactly once,
+  never re-derived in Dart from the raw `amount` number), draws `qr_string`
+  locally and falls back to `image_url` only when there is none, treats a
+  missing note/amount-row/subtitle as an absence rather than a default word,
+  never draws a QR for `ok:false`, and lets the backend's own `message` outrank
+  the machine `error` slug in the status widget.
+
 The suite runs on the Dart VM in ~2s. Keep it that way: no network, no goldens,
 no Supabase, no camera — mock RPC payloads inline. If a widget resists mocking,
 extract its decisions into a pure class and test that.

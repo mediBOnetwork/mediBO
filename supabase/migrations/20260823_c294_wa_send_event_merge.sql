@@ -1,11 +1,8 @@
--- CHANGE #294 (part E4) — RE-APPLIED on top of CHANGE #295.
---
--- #295 landed its own `create or replace` of wa_send_event while #294 was in
--- flight and, being a whole-function replace, dropped #294's media-header block.
--- This file is #295's live definition with the header block merged back in, so
--- BOTH changes survive: #295's "an empty ARRAY token_map is authoritative", and
--- #294's "a media-header template is never sent without its media".
--- Two workers replacing the same function is the hazard here — merge, never clobber.
+-- CHANGE #294 (part E5) — RE-MERGED on top of CHANGE #295, second time.
+-- #295 replaced wa_send_event again while #294 was deploying. Same rule as E4:
+-- read the LIVE definition, merge #294's media-header block into it, never
+-- re-emit a remembered copy. See dev lesson "Two workers can silently clobber
+-- the same Postgres function".
 
 CREATE OR REPLACE FUNCTION public.wa_send_event(p_event_key text, p_customer_id uuid DEFAULT NULL::uuid, p_tokens jsonb DEFAULT '{}'::jsonb, p_phone text DEFAULT NULL::text, p_order_id uuid DEFAULT NULL::uuid)
  RETURNS jsonb

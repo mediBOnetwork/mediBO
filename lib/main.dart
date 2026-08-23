@@ -41,6 +41,7 @@ import 'screens/company_screen.dart'; // C638: /company/:key
 import 'screens/inquiry_link_page.dart';
 import 'screens/dispute_link_page.dart';
 import 'features/whatsapp/ui/wa_templates_screen.dart'; // admin WhatsApp templates
+import 'screens/admin/wa_diagnosis_screen.dart';
 import 'screens/admin/wa_ops_screen.dart'; // admin WhatsApp ops + template pipeline
 import 'screens/admin/admin_order_closure_screen.dart'; // CHANGE #229 — /admin/order-closure
 import 'screens/about_screen.dart';
@@ -680,6 +681,14 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
               // callers themselves and the screen renders that refusal, so the
               // route guards nothing.
               '/admin/wa-ops': (_) => const WaOpsScreen(),
+              // CHANGE #295 — the WhatsApp delivery diagnosis, at a real URL
+              // for the same reason /admin/wa-ops has one: it is the page you
+              // send someone to when they ask "did that message actually
+              // reach anyone?". wa_event_diagnosis() refuses a non-admin
+              // caller itself and the screen renders that refusal, so the
+              // route guards nothing — and a headless admin session can reach
+              // it directly, which is what proves the screen renders.
+              '/admin/wa-diagnosis': (_) => const WaDiagnosisScreen(),
               // CHANGE #229 — Order closure at a real URL, same reason
               // /admin/wa-ops has one: this is the page you send someone to
               // when they ask "why is that order still open?". The screen's

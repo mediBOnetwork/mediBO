@@ -88,12 +88,12 @@ const _kRed = Color(0xFFB91C1C);
 //   wa_waba_status()  wa_waba_refresh()
 //   wa_contact_ledger(p_days, p_phone)
 typedef WaEventRoutesRpc = Future<Map<String, dynamic>> Function();
-typedef WaEventRouteSaveRpc = Future<Map<String, dynamic>> Function(
-    Map<String, dynamic> params);
+typedef WaEventRouteSaveRpc =
+    Future<Map<String, dynamic>> Function(Map<String, dynamic> params);
 typedef WaWabaStatusRpc = Future<Map<String, dynamic>> Function();
 typedef WaWabaRefreshRpc = Future<Map<String, dynamic>> Function();
-typedef WaContactLedgerRpc = Future<Map<String, dynamic>> Function(
-    int days, String? phone);
+typedef WaContactLedgerRpc =
+    Future<Map<String, dynamic>> Function(int days, String? phone);
 // zones_contact_screen()  zone_contact_save(p_zone_id, p_phone, p_label)
 // p_label defaults to null; an empty p_phone clears the number and the zone
 // falls back to the default zone's. The save RPC validates the number itself
@@ -109,8 +109,8 @@ typedef WaTemplatePipelineRpc = Future<Map<String, dynamic>> Function();
 typedef WaSendHealthRpc = Future<Map<String, dynamic>> Function(int hours);
 typedef WaSendRetryRpc = Future<Map<String, dynamic>> Function(int attemptId);
 typedef ZonesContactScreenRpc = Future<Map<String, dynamic>> Function();
-typedef ZoneContactSaveRpc = Future<Map<String, dynamic>> Function(
-    Map<String, dynamic> params);
+typedef ZoneContactSaveRpc =
+    Future<Map<String, dynamic>> Function(Map<String, dynamic> params);
 
 Map<String, dynamic> _asMap(dynamic res) =>
     res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
@@ -121,8 +121,8 @@ Future<Map<String, dynamic>> waEventRoutesScreen() async =>
     _asMap(await _db.rpc('wa_event_routes_screen'));
 
 Future<Map<String, dynamic>> waEventRouteSave(
-        Map<String, dynamic> params) async =>
-    _asMap(await _db.rpc('wa_event_route_save', params: params));
+  Map<String, dynamic> params,
+) async => _asMap(await _db.rpc('wa_event_route_save', params: params));
 
 Future<Map<String, dynamic>> waWabaStatus() async =>
     _asMap(await _db.rpc('wa_waba_status'));
@@ -131,8 +131,12 @@ Future<Map<String, dynamic>> waWabaRefresh() async =>
     _asMap(await _db.rpc('wa_waba_refresh'));
 
 Future<Map<String, dynamic>> waContactLedger(int days, String? phone) async =>
-    _asMap(await _db
-        .rpc('wa_contact_ledger', params: {'p_days': days, 'p_phone': phone}));
+    _asMap(
+      await _db.rpc(
+        'wa_contact_ledger',
+        params: {'p_days': days, 'p_phone': phone},
+      ),
+    );
 
 Future<Map<String, dynamic>> waTemplatePipeline() async =>
     _asMap(await _db.rpc('wa_template_pipeline'));
@@ -147,19 +151,19 @@ Future<Map<String, dynamic>> zonesContactScreen() async =>
     _asMap(await _db.rpc('zones_contact_screen'));
 
 Future<Map<String, dynamic>> zoneContactSave(
-        Map<String, dynamic> params) async =>
-    _asMap(await _db.rpc('zone_contact_save', params: params));
+  Map<String, dynamic> params,
+) async => _asMap(await _db.rpc('zone_contact_save', params: params));
 
 /// Backend ops tone -> WaToneChip palette token.
 ///
 /// Token to token only. `muted` (and anything unknown) falls through to the
 /// chip's grey default, which never throws and never hides a label.
 String? _chipTone(String? tone) => switch (tone) {
-      'good' => 'green',
-      'warn' => 'yellow',
-      'bad' => 'red',
-      _ => null,
-    };
+  'good' => 'green',
+  'warn' => 'yellow',
+  'bad' => 'red',
+  _ => null,
+};
 
 /// The foreground colour of a tone, for the bars and the sentences that are not
 /// chips. Same lookup the chip uses, so a tone can never mean two colours.
@@ -231,8 +235,10 @@ class _WaOpsScreenState extends State<WaOpsScreen> {
         // Matches the nav entry's label. Nav labels are unavoidably Dart
         // literals (the nav list is const and renders before any RPC); the
         // title reuses that same word rather than inventing a second name.
-        title: Text(c('wa_ops_screen.whatsapp_ops'),
-            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+        title: Text(
+          c('wa_ops_screen.whatsapp_ops'),
+          style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+        ),
       ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 40),
@@ -299,15 +305,22 @@ class _SectionHeading extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(bottom: 10),
-        child: Row(children: [
-          Icon(icon, size: 18, color: _kGreen),
-          const SizedBox(width: 8),
-          Text(text,
-              style: const TextStyle(
-                  fontSize: 15.5, fontWeight: FontWeight.w700, color: _kText)),
-        ]),
-      );
+    padding: const EdgeInsets.only(bottom: 10),
+    child: Row(
+      children: [
+        Icon(icon, size: 18, color: _kGreen),
+        const SizedBox(width: 8),
+        Text(
+          text,
+          style: const TextStyle(
+            fontSize: 15.5,
+            fontWeight: FontWeight.w700,
+            color: _kText,
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 // ── SECTION A — automatic messages (event routes) ────────────────────────────
@@ -369,7 +382,9 @@ class _EventRoutesSectionState extends State<_EventRoutesSection> {
       });
       try {
         RenderLog.write(
-            'wa_ops_routes', 'rows=${(res['rows'] as List?)?.length ?? 0}');
+          'wa_ops_routes',
+          'rows=${(res['rows'] as List?)?.length ?? 0}',
+        );
       } catch (_) {}
     } catch (e) {
       if (!mounted) return;
@@ -420,9 +435,9 @@ class _EventRoutesSectionState extends State<_EventRoutesSection> {
 
   void _tell(String message) {
     if (message.isEmpty || !mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), backgroundColor: _kRed),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message), backgroundColor: _kRed));
   }
 
   @override
@@ -474,9 +489,10 @@ class _EventRoutesSectionState extends State<_EventRoutesSection> {
               child: Text(
                 labels[aud] ?? '',
                 style: const TextStyle(
-                    fontSize: 13.5,
-                    fontWeight: FontWeight.w700,
-                    color: _kText),
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.w700,
+                  color: _kText,
+                ),
               ),
             ),
             for (final r in grouped[aud]!)
@@ -485,18 +501,24 @@ class _EventRoutesSectionState extends State<_EventRoutesSection> {
                 child: _EventRouteCard(
                   row: r,
                   approved: _approved,
-                  overridden:
-                      _overridden.contains((r['event_key'] ?? '').toString()),
+                  overridden: _overridden.contains(
+                    (r['event_key'] ?? '').toString(),
+                  ),
                   busy: _saving.contains((r['event_key'] ?? '').toString()),
                   bypass: r['bypass_send_window'] == true,
-                  onOverride: () => setState(() =>
-                      _overridden.add((r['event_key'] ?? '').toString())),
+                  onOverride: () => setState(
+                    () => _overridden.add((r['event_key'] ?? '').toString()),
+                  ),
                   onPickTemplate: (id) => _save(
-                      (r['event_key'] ?? '').toString(), {'p_template_id': id}),
-                  onEnabled: (v) => _save(
-                      (r['event_key'] ?? '').toString(), {'p_enabled': v}),
-                  onBypass: (v) => _save(
-                      (r['event_key'] ?? '').toString(), {'p_bypass_window': v}),
+                    (r['event_key'] ?? '').toString(),
+                    {'p_template_id': id},
+                  ),
+                  onEnabled: (v) => _save((r['event_key'] ?? '').toString(), {
+                    'p_enabled': v,
+                  }),
+                  onBypass: (v) => _save((r['event_key'] ?? '').toString(), {
+                    'p_bypass_window': v,
+                  }),
                 ),
               ),
           ],
@@ -510,8 +532,7 @@ class _EventRoutesSectionState extends State<_EventRoutesSection> {
     final selected = _audienceFilter == aud;
     return GestureDetector(
       key: Key('wa_ops_aud_chip:$aud'),
-      onTap: () =>
-          setState(() => _audienceFilter = selected ? '' : aud),
+      onTap: () => setState(() => _audienceFilter = selected ? '' : aud),
       child: Container(
         margin: const EdgeInsets.only(right: 6, bottom: 6),
         padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 14),
@@ -581,7 +602,10 @@ class _EventRouteCard extends StatelessWidget {
           Text(
             _s('label'),
             style: const TextStyle(
-                fontSize: 15, fontWeight: FontWeight.w700, color: _kText),
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+              color: _kText,
+            ),
           ),
           const SizedBox(height: 6),
           // The primary chip is the STAGE, not the on/off status: the whole
@@ -593,24 +617,33 @@ class _EventRouteCard extends StatelessWidget {
           Align(
             alignment: Alignment.centerLeft,
             child: WaToneChip(
-                label: _s('stage_label'),
-                tone: _chipTone(row['stage_tone']?.toString())),
+              label: _s('stage_label'),
+              tone: _chipTone(row['stage_tone']?.toString()),
+            ),
           ),
           if (description.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 4),
-              child: Text(description,
-                  style: const TextStyle(
-                      fontSize: 12.5, height: 1.35, color: _kMuted)),
+              child: Text(
+                description,
+                style: const TextStyle(
+                  fontSize: 12.5,
+                  height: 1.35,
+                  color: _kMuted,
+                ),
+              ),
             ),
           if (pipelineNote.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 8),
-              child: Text(pipelineNote,
-                  style: TextStyle(
-                      fontSize: 12.5,
-                      height: 1.35,
-                      color: _toneInk(row['stage_tone']?.toString()))),
+              child: Text(
+                pipelineNote,
+                style: TextStyle(
+                  fontSize: 12.5,
+                  height: 1.35,
+                  color: _toneInk(row['stage_tone']?.toString()),
+                ),
+              ),
             ),
           const SizedBox(height: 10),
           Wrap(
@@ -625,27 +658,34 @@ class _EventRouteCard extends StatelessWidget {
               // the two to drift apart on screen.
               if (!showControls) WaPlainChip(label: _s('window_label')),
               WaToneChip(
-                  label: _s('status_label'),
-                  tone: _chipTone(row['status_tone']?.toString())),
+                label: _s('status_label'),
+                tone: _chipTone(row['status_tone']?.toString()),
+              ),
             ],
           ),
           const SizedBox(height: 8),
           // The only figures on this card the backend did not pre-word.
           // sent_30d is a bare count and updated_label is already a date
           // string; neither is recomputed here.
-          Row(children: [
-            const Icon(Icons.send_outlined, size: 13, color: _kMuted),
-            const SizedBox(width: 5),
-            Text(cf('wa_ops_screen.sent_in_30_days', {'a': sent}),
-                style: const TextStyle(fontSize: 11.5, color: _kMuted)),
-            const SizedBox(width: 12),
-            const Icon(Icons.schedule, size: 13, color: _kMuted),
-            const SizedBox(width: 5),
-            Flexible(
-              child: Text(_s('updated_label'),
-                  style: const TextStyle(fontSize: 11.5, color: _kMuted)),
-            ),
-          ]),
+          Row(
+            children: [
+              const Icon(Icons.send_outlined, size: 13, color: _kMuted),
+              const SizedBox(width: 5),
+              Text(
+                cf('wa_ops_screen.sent_in_30_days', {'a': sent}),
+                style: const TextStyle(fontSize: 11.5, color: _kMuted),
+              ),
+              const SizedBox(width: 12),
+              const Icon(Icons.schedule, size: 13, color: _kMuted),
+              const SizedBox(width: 5),
+              Flexible(
+                child: Text(
+                  _s('updated_label'),
+                  style: const TextStyle(fontSize: 11.5, color: _kMuted),
+                ),
+              ),
+            ],
+          ),
           if (autoManage && !overridden)
             Padding(
               padding: const EdgeInsets.only(top: 10),
@@ -656,15 +696,21 @@ class _EventRouteCard extends StatelessWidget {
                   style: OutlinedButton.styleFrom(
                     foregroundColor: _kGreen,
                     side: const BorderSide(color: _kBorder),
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 6,
+                    ),
                     minimumSize: const Size(0, 34),
                   ),
                   // pipeline_note already said what the system is doing; this
                   // button explains nothing, it only unlocks.
-                  child: Text(c('wa_ops_screen.override'),
-                      style: const TextStyle(
-                          fontSize: 13, fontWeight: FontWeight.w600)),
+                  child: Text(
+                    c('wa_ops_screen.override'),
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -722,8 +768,7 @@ class _RouteControls extends StatelessWidget {
           isExpanded: true,
           decoration: const InputDecoration(
             isDense: true,
-            contentPadding:
-                EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+            contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 10),
             border: OutlineInputBorder(),
           ),
           // The current template is already printed as a chip above; this
@@ -736,9 +781,11 @@ class _RouteControls extends StatelessWidget {
             for (final t in approved)
               DropdownMenuItem<String>(
                 value: (t['id'] ?? '').toString(),
-                child: Text((t['label'] ?? '').toString(),
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 13)),
+                child: Text(
+                  (t['label'] ?? '').toString(),
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 13),
+                ),
               ),
           ],
           onChanged: busy
@@ -754,41 +801,50 @@ class _RouteControls extends StatelessWidget {
         // A bare Switch, not a SwitchListTile: a ListTile paints its background
         // and ink on the nearest Material ancestor, and this card's own
         // DecoratedBox sits in between, so the framework asserts.
-        Row(children: [
-          Switch(
-            key: const Key('wa_ops_enabled_switch'),
-            value: enabled,
-            onChanged: busy ? null : onEnabled,
-            activeThumbColor: _kGreen,
-          ),
-          Expanded(
-            child: Text((row['status_label'] ?? '').toString(),
-                style: const TextStyle(fontSize: 13, color: _kText)),
-          ),
-        ]),
+        Row(
+          children: [
+            Switch(
+              key: const Key('wa_ops_enabled_switch'),
+              value: enabled,
+              onChanged: busy ? null : onEnabled,
+              activeThumbColor: _kGreen,
+            ),
+            Expanded(
+              child: Text(
+                (row['status_label'] ?? '').toString(),
+                style: const TextStyle(fontSize: 13, color: _kText),
+              ),
+            ),
+          ],
+        ),
         // Two-state, initialised from the payload's bypass_send_window — see
         // the file header. window_label is still only ever rendered, never
         // read back into this value.
-        Row(children: [
-          Switch(
-            key: const Key('wa_ops_bypass_switch'),
-            value: bypass,
-            onChanged: busy ? null : onBypass,
-            activeThumbColor: _kGreen,
-          ),
-          Expanded(
-            child: Text((row['window_label'] ?? '').toString(),
-                style: const TextStyle(fontSize: 13, color: _kText)),
-          ),
-        ]),
+        Row(
+          children: [
+            Switch(
+              key: const Key('wa_ops_bypass_switch'),
+              value: bypass,
+              onChanged: busy ? null : onBypass,
+              activeThumbColor: _kGreen,
+            ),
+            Expanded(
+              child: Text(
+                (row['window_label'] ?? '').toString(),
+                style: const TextStyle(fontSize: 13, color: _kText),
+              ),
+            ),
+          ],
+        ),
         // How long the route stands down after the legacy sender already
         // delivered. Read-only: there is no control for it, and the label is
         // the field's own name so no wording is invented here.
         Padding(
           padding: const EdgeInsets.only(top: 2, left: 4),
           child: Text(
-            cf('wa_ops_screen.dedupe_minutes',
-                {'a': '${row['dedupe_minutes'] ?? ''}'}),
+            cf('wa_ops_screen.dedupe_minutes', {
+              'a': '${row['dedupe_minutes'] ?? ''}',
+            }),
             key: const Key('wa_ops_dedupe_minutes'),
             style: const TextStyle(fontSize: 12, color: _kMuted),
           ),
@@ -900,17 +956,22 @@ class _AccountHealthSectionState extends State<_AccountHealthSection> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(children: [
-                Expanded(
-                  child: Text(s('waba_name'),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      s('waba_name'),
                       style: const TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w700,
-                          color: _kText)),
-                ),
-                const SizedBox(width: 8),
-                WaPlainChip(label: s('review_status')),
-              ]),
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: _kText,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  WaPlainChip(label: s('review_status')),
+                ],
+              ),
               const SizedBox(height: 12),
               if (metaError.isNotEmpty)
                 Container(
@@ -920,18 +981,24 @@ class _AccountHealthSectionState extends State<_AccountHealthSection> {
                     color: _toneWash('bad'),
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: Text(metaError,
-                      style: TextStyle(
-                          fontSize: 12.5,
-                          height: 1.35,
-                          color: _toneInk('bad'))),
+                  child: Text(
+                    metaError,
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      height: 1.35,
+                      color: _toneInk('bad'),
+                    ),
+                  ),
                 )
               else ...[
-                Text(s('templates_label'),
-                    style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: _kText)),
+                Text(
+                  s('templates_label'),
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: _kText,
+                  ),
+                ),
                 const SizedBox(height: 6),
                 ClipRRect(
                   borderRadius: BorderRadius.circular(4),
@@ -941,42 +1008,56 @@ class _AccountHealthSectionState extends State<_AccountHealthSection> {
                     minHeight: 7,
                     backgroundColor: const Color(0xFFF3F4F6),
                     valueColor: AlwaysStoppedAnimation<Color>(
-                        _toneInk(p['templates_tone']?.toString())),
+                      _toneInk(p['templates_tone']?.toString()),
+                    ),
                   ),
                 ),
                 const SizedBox(height: 12),
-                Text(s('tier_label'),
-                    style: const TextStyle(fontSize: 13, color: _kText)),
+                Text(
+                  s('tier_label'),
+                  style: const TextStyle(fontSize: 13, color: _kText),
+                ),
                 const SizedBox(height: 8),
                 Align(
                   alignment: Alignment.centerLeft,
                   child: WaToneChip(
-                      label: s('quality_label'),
-                      tone: _chipTone(p['quality_tone']?.toString()),
-                      fontSize: 12.5),
+                    label: s('quality_label'),
+                    tone: _chipTone(p['quality_tone']?.toString()),
+                    fontSize: 12.5,
+                  ),
                 ),
               ],
               const SizedBox(height: 14),
-              Row(children: [
-                Expanded(
-                  child: Text(s('checked_label'),
-                      style: const TextStyle(fontSize: 11.5, color: _kMuted)),
-                ),
-                const SizedBox(width: 8),
-                OutlinedButton(
-                  onPressed: _refreshing ? null : _refresh,
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: _kGreen,
-                    side: const BorderSide(color: _kBorder),
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                    minimumSize: const Size(0, 34),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      s('checked_label'),
+                      style: const TextStyle(fontSize: 11.5, color: _kMuted),
+                    ),
                   ),
-                  child: Text(c('wa_ops_screen.refresh'),
+                  const SizedBox(width: 8),
+                  OutlinedButton(
+                    onPressed: _refreshing ? null : _refresh,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: _kGreen,
+                      side: const BorderSide(color: _kBorder),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 6,
+                      ),
+                      minimumSize: const Size(0, 34),
+                    ),
+                    child: Text(
+                      c('wa_ops_screen.refresh'),
                       style: const TextStyle(
-                          fontSize: 13, fontWeight: FontWeight.w600)),
-                ),
-              ]),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ],
           ),
         ),
@@ -1037,8 +1118,7 @@ class _ContactLedgerSectionState extends State<_ContactLedgerSection> {
         _loading = false;
       });
       try {
-        RenderLog.write(
-            'wa_ops_ledger', 'contacts=${(res['contacts'] ?? 0)}');
+        RenderLog.write('wa_ops_ledger', 'contacts=${(res['contacts'] ?? 0)}');
       } catch (_) {}
     } catch (e) {
       if (!mounted) return;
@@ -1071,9 +1151,14 @@ class _ContactLedgerSectionState extends State<_ContactLedgerSection> {
         if (summary.isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(bottom: 10),
-            child: Text(summary,
-                style: const TextStyle(
-                    fontSize: 12.5, height: 1.35, color: _kMuted)),
+            child: Text(
+              summary,
+              style: const TextStyle(
+                fontSize: 12.5,
+                height: 1.35,
+                color: _kMuted,
+              ),
+            ),
           ),
         TextField(
           key: const Key('wa_ops_ledger_search'),
@@ -1086,8 +1171,10 @@ class _ContactLedgerSectionState extends State<_ContactLedgerSection> {
             hintText: c('wa_ops_screen.search_a_number'),
             hintStyle: const TextStyle(fontSize: 13, color: _kMuted),
             prefixIcon: const Icon(Icons.search, size: 18, color: _kMuted),
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 12,
+              vertical: 12,
+            ),
             border: const OutlineInputBorder(),
           ),
           style: const TextStyle(fontSize: 13),
@@ -1129,9 +1216,14 @@ class _LedgerRow extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(_s('phone'),
-              style: const TextStyle(
-                  fontSize: 14, fontWeight: FontWeight.w700, color: _kText)),
+          Text(
+            _s('phone'),
+            style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+              color: _kText,
+            ),
+          ),
           // The cap chip only exists while the cap is actually biting.
           //
           // On its own line, not beside the number: free_from_label is a full
@@ -1144,21 +1236,30 @@ class _LedgerRow extends StatelessWidget {
               child: Align(
                 alignment: Alignment.centerLeft,
                 child: WaToneChip(
-                    label: _s('free_from_label'),
-                    tone: _chipTone(row['tone']?.toString())),
+                  label: _s('free_from_label'),
+                  tone: _chipTone(row['tone']?.toString()),
+                ),
               ),
             ),
           const SizedBox(height: 8),
-          Wrap(spacing: 6, runSpacing: 6, children: [
-            WaPlainChip(label: (row['messages'] ?? 0).toString()),
-            WaPlainChip(label: (row['marketing'] ?? 0).toString()),
-            WaPlainChip(label: (row['campaigns'] ?? 0).toString()),
-          ]),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              WaPlainChip(label: (row['messages'] ?? 0).toString()),
+              WaPlainChip(label: (row['marketing'] ?? 0).toString()),
+              WaPlainChip(label: (row['campaigns'] ?? 0).toString()),
+            ],
+          ),
           const SizedBox(height: 8),
-          Text(_s('last_marketing_label'),
-              style: const TextStyle(fontSize: 11.5, color: _kMuted)),
-          Text(_s('last_any_label'),
-              style: const TextStyle(fontSize: 11.5, color: _kMuted)),
+          Text(
+            _s('last_marketing_label'),
+            style: const TextStyle(fontSize: 11.5, color: _kMuted),
+          ),
+          Text(
+            _s('last_any_label'),
+            style: const TextStyle(fontSize: 11.5, color: _kMuted),
+          ),
         ],
       ),
     );
@@ -1225,7 +1326,9 @@ class _ZoneContactSectionState extends State<_ZoneContactSection> {
       });
       try {
         RenderLog.write(
-            'wa_ops_zones', 'rows=${(res['rows'] as List?)?.length ?? 0}');
+          'wa_ops_zones',
+          'rows=${(res['rows'] as List?)?.length ?? 0}',
+        );
       } catch (_) {}
     } catch (e) {
       if (!mounted) return;
@@ -1268,8 +1371,9 @@ class _ZoneContactSectionState extends State<_ZoneContactSection> {
 
   void _tell(String message) {
     if (message.isEmpty || !mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -1292,8 +1396,8 @@ class _ZoneContactSectionState extends State<_ZoneContactSection> {
               key: ValueKey('wa_ops_zone:${r['zone_id']}'),
               row: r,
               busy: _saving.contains((r['zone_id'] as num?)?.toInt() ?? -1),
-              onSave: (phone, label) => _save(
-                  (r['zone_id'] as num?)?.toInt() ?? 0, phone, label),
+              onSave: (phone, label) =>
+                  _save((r['zone_id'] as num?)?.toInt() ?? 0, phone, label),
             ),
           ),
         if (defaultNote.isNotEmpty) _NoteBlock(defaultNote, topGap: 2),
@@ -1328,9 +1432,11 @@ class _ZoneContactCardState extends State<_ZoneContactCard> {
   void initState() {
     super.initState();
     _phone = TextEditingController(
-        text: (widget.row['contact_phone'] ?? '').toString());
+      text: (widget.row['contact_phone'] ?? '').toString(),
+    );
     _label = TextEditingController(
-        text: (widget.row['contact_label'] ?? '').toString());
+      text: (widget.row['contact_label'] ?? '').toString(),
+    );
   }
 
   @override
@@ -1359,45 +1465,57 @@ class _ZoneContactCardState extends State<_ZoneContactCard> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(children: [
-            Expanded(
-              child: Text(_s('name'),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  _s('name'),
                   style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                      color: _kText)),
-            ),
-            const SizedBox(width: 6),
-            WaPlainChip(label: _s('code')),
-            // The default marker is an icon, not a coined word — the app owns no
-            // "Default" label. status_label already narrates the fallback.
-            if (isDefault) ...[
-              const SizedBox(width: 6),
-              Container(
-                key: Key('wa_ops_zone_default:${row['zone_id']}'),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
-                decoration: BoxDecoration(
-                  color: _toneWash('blue'),
-                  borderRadius: BorderRadius.circular(14),
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: _kText,
+                  ),
                 ),
-                child: Icon(Icons.star, size: 13, color: _toneInk('blue')),
+              ),
+              const SizedBox(width: 6),
+              WaPlainChip(label: _s('code')),
+              // The default marker is an icon, not a coined word — the app owns no
+              // "Default" label. status_label already narrates the fallback.
+              if (isDefault) ...[
+                const SizedBox(width: 6),
+                Container(
+                  key: Key('wa_ops_zone_default:${row['zone_id']}'),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 7,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: _toneWash('blue'),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Icon(Icons.star, size: 13, color: _toneInk('blue')),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              const Icon(Icons.people_outline, size: 13, color: _kMuted),
+              const SizedBox(width: 5),
+              Text(
+                customers,
+                style: const TextStyle(fontSize: 11.5, color: _kMuted),
               ),
             ],
-          ]),
-          const SizedBox(height: 6),
-          Row(children: [
-            const Icon(Icons.people_outline, size: 13, color: _kMuted),
-            const SizedBox(width: 5),
-            Text(customers,
-                style: const TextStyle(fontSize: 11.5, color: _kMuted)),
-          ]),
+          ),
           const SizedBox(height: 8),
           Align(
             alignment: Alignment.centerLeft,
             child: WaToneChip(
-                label: _s('status_label'),
-                tone: _chipTone(row['tone']?.toString())),
+              label: _s('status_label'),
+              tone: _chipTone(row['tone']?.toString()),
+            ),
           ),
           const Divider(height: 22, color: _kBorder),
           TextField(
@@ -1408,8 +1526,10 @@ class _ZoneContactCardState extends State<_ZoneContactCard> {
               isDense: true,
               labelText: c('wa_ops_screen.number'),
               labelStyle: const TextStyle(fontSize: 13, color: _kMuted),
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 10,
+                vertical: 10,
+              ),
               border: const OutlineInputBorder(),
             ),
             style: const TextStyle(fontSize: 13, color: _kText),
@@ -1422,8 +1542,10 @@ class _ZoneContactCardState extends State<_ZoneContactCard> {
               isDense: true,
               labelText: c('wa_ops_screen.label'),
               labelStyle: const TextStyle(fontSize: 13, color: _kMuted),
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 10,
+                vertical: 10,
+              ),
               border: const OutlineInputBorder(),
             ),
             style: const TextStyle(fontSize: 13, color: _kText),
@@ -1435,8 +1557,9 @@ class _ZoneContactCardState extends State<_ZoneContactCard> {
             // affordance and the backend's returned message is the result.
             child: ElevatedButton(
               key: Key('wa_ops_zone_save:${row['zone_id']}'),
-              onPressed:
-                  widget.busy ? null : () => widget.onSave(_phone.text, _label.text),
+              onPressed: widget.busy
+                  ? null
+                  : () => widget.onSave(_phone.text, _label.text),
               style: ElevatedButton.styleFrom(
                 backgroundColor: _kGreen,
                 foregroundColor: Colors.white,
@@ -1465,25 +1588,29 @@ class _NoteBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: EdgeInsets.only(top: topGap, bottom: 10),
-        child: Container(
-          padding: const EdgeInsets.all(11),
-          decoration: BoxDecoration(
-            color: const Color(0xFFF9FAFB),
-            border: Border.all(color: _kBorder),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const Icon(Icons.info_outline, size: 14, color: _kMuted),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(note,
-                  style: const TextStyle(
-                      fontSize: 12, height: 1.4, color: _kMuted)),
+    padding: EdgeInsets.only(top: topGap, bottom: 10),
+    child: Container(
+      padding: const EdgeInsets.all(11),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF9FAFB),
+        border: Border.all(color: _kBorder),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.info_outline, size: 14, color: _kMuted),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              note,
+              style: const TextStyle(fontSize: 12, height: 1.4, color: _kMuted),
             ),
-          ]),
-        ),
-      );
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 class _Loading extends StatelessWidget {
@@ -1491,15 +1618,15 @@ class _Loading extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => const Padding(
-        padding: EdgeInsets.symmetric(vertical: 28),
-        child: Center(
-          child: SizedBox(
-            width: 20,
-            height: 20,
-            child: CircularProgressIndicator(strokeWidth: 2, color: _kGreen),
-          ),
-        ),
-      );
+    padding: EdgeInsets.symmetric(vertical: 28),
+    child: Center(
+      child: SizedBox(
+        width: 20,
+        height: 20,
+        child: CircularProgressIndicator(strokeWidth: 2, color: _kGreen),
+      ),
+    ),
+  );
 }
 
 /// Prints the backend's refusal or the transport's exception verbatim and
@@ -1511,26 +1638,34 @@ class _ErrorBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: _toneWash('bad'),
-          borderRadius: BorderRadius.circular(10),
+    padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(
+      color: _toneWash('bad'),
+      borderRadius: BorderRadius.circular(10),
+    ),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(Icons.error_outline, size: 16, color: _toneInk('bad')),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            message,
+            style: TextStyle(
+              fontSize: 12.5,
+              height: 1.35,
+              color: _toneInk('bad'),
+            ),
+          ),
         ),
-        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Icon(Icons.error_outline, size: 16, color: _toneInk('bad')),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(message,
-                style: TextStyle(
-                    fontSize: 12.5, height: 1.35, color: _toneInk('bad'))),
-          ),
-          IconButton(
-            onPressed: onRetry,
-            icon: Icon(Icons.refresh, size: 18, color: _toneInk('bad')),
-            visualDensity: VisualDensity.compact,
-          ),
-        ]),
-      );
+        IconButton(
+          onPressed: onRetry,
+          icon: Icon(Icons.refresh, size: 18, color: _toneInk('bad')),
+          visualDensity: VisualDensity.compact,
+        ),
+      ],
+    ),
+  );
 }
 
 // ── SECTION B — template pipeline ────────────────────────────────────────────
@@ -1627,11 +1762,14 @@ class _TemplatePipelineSectionState extends State<_TemplatePipelineSection> {
         if (summary.isNotEmpty)
           Padding(
             padding: EdgeInsets.only(bottom: Ds.space.x8),
-            child: Row(children: [
-              WaToneChip(
+            child: Row(
+              children: [
+                WaToneChip(
                   label: summary,
-                  tone: _chipTone((_payload?['summary_tone'] ?? '').toString())),
-            ]),
+                  tone: _chipTone((_payload?['summary_tone'] ?? '').toString()),
+                ),
+              ],
+            ),
           ),
         if (note.isNotEmpty) _NoteBlock(note),
         for (final r in rows) _PipelineRow(row: r),
@@ -1667,29 +1805,42 @@ class _PipelineRow extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(children: [
-            Expanded(
-              child: Text(message,
-                  style: Ds.t.body.copyWith(fontWeight: FontWeight.w700)),
-            ),
-            WaToneChip(
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  message,
+                  style: Ds.t.body.copyWith(fontWeight: FontWeight.w700),
+                ),
+              ),
+              WaToneChip(
                 label: status,
-                tone: _chipTone((row['status_tone'] ?? '').toString())),
-          ]),
+                tone: _chipTone((row['status_tone'] ?? '').toString()),
+              ),
+            ],
+          ),
           SizedBox(height: Ds.space.x4),
           Text(template, style: Ds.t.caption),
           SizedBox(height: Ds.space.x8),
-          Wrap(spacing: Ds.space.x8, runSpacing: Ds.space.x4, children: [
-            WaToneChip(
-                label: route,
-                tone: _chipTone((row['route_tone'] ?? '').toString())),
-            WaToneChip(
-                label: approved,
-                tone: _chipTone((row['approved_tone'] ?? '').toString())),
-            if (header.isNotEmpty)
+          Wrap(
+            spacing: Ds.space.x8,
+            runSpacing: Ds.space.x4,
+            children: [
               WaToneChip(
-                  label: header, tone: mediaReady ? null : _chipTone('warn')),
-          ]),
+                label: route,
+                tone: _chipTone((row['route_tone'] ?? '').toString()),
+              ),
+              WaToneChip(
+                label: approved,
+                tone: _chipTone((row['approved_tone'] ?? '').toString()),
+              ),
+              if (header.isNotEmpty)
+                WaToneChip(
+                  label: header,
+                  tone: mediaReady ? null : _chipTone('warn'),
+                ),
+            ],
+          ),
           if (note.isNotEmpty) ...[
             SizedBox(height: Ds.space.x8),
             Text(note, style: Ds.t.caption),
@@ -1697,6 +1848,236 @@ class _PipelineRow extends StatelessWidget {
           if (reason.isNotEmpty) ...[
             SizedBox(height: Ds.space.x4),
             Text(reason, style: Ds.t.caption.copyWith(color: _kRed)),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+// ── SECTION B2 — notification delivery (CHANGE #294) ─────────────────────────
+//
+// The incident this section exists for: order CPO230826CHAO1 was placed and the
+// pharmacy was never told. The order-placed message had ALWAYS gone out as a
+// free-form document, which Meta only delivers inside the 24-hour window after
+// the customer writes to us. When that window was shut the send failed with
+// "Re-engagement message" and died in a log nobody reads.
+//
+// So the failure now has a face. Every attempt — approved template, free-form
+// inside an open window, or a deliberate skip and its reason — is a row here,
+// and a row that did not reach the customer offers Resend.
+//
+// Nothing is decided in Dart. path_label / status_label / tone / reason /
+// phone_label / when_label / retry_label / summary_label all arrive finished;
+// `can_retry` is the backend's boolean, never a condition this file evaluates.
+class _SendHealthSection extends StatefulWidget {
+  final WaSendHealthRpc? healthRpc;
+  final WaSendRetryRpc? retryRpc;
+  const _SendHealthSection({this.healthRpc, this.retryRpc});
+
+  @override
+  State<_SendHealthSection> createState() => _SendHealthSectionState();
+}
+
+class _SendHealthSectionState extends State<_SendHealthSection> {
+  Map<String, dynamic>? _payload;
+  bool _loading = true;
+  String? _error;
+  int? _busyId;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final res = await (widget.healthRpc ?? waSendHealth)(48);
+      if (!mounted) return;
+      if (_isError(res)) {
+        setState(() {
+          _loading = false;
+          _error = _errorText(res);
+        });
+        return;
+      }
+      setState(() {
+        _payload = res;
+        _loading = false;
+      });
+      try {
+        RenderLog.write('wa_send_health', 'rows=${_rows.length}');
+      } catch (_) {}
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = e.toString();
+      });
+    }
+  }
+
+  Future<void> _retry(int id) async {
+    setState(() => _busyId = id);
+    Map<String, dynamic> res;
+    try {
+      res = await (widget.retryRpc ?? waSendRetry)(id);
+    } catch (e) {
+      res = <String, dynamic>{'message': e.toString()};
+    }
+    if (!mounted) return;
+    setState(() => _busyId = null);
+    // The backend writes the sentence for both outcomes; we only show it.
+    final msg = (res['message'] ?? _errorText(res)).toString();
+    if (msg.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    }
+    await _load();
+  }
+
+  List<Map<String, dynamic>> get _rows =>
+      ((_payload?['rows'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const _Loading();
+    if (_error != null) return _ErrorBlock(message: _error!, onRetry: _load);
+
+    final rows = _rows;
+    final summary = (_payload?['summary_label'] ?? '').toString();
+    final range = (_payload?['range_label'] ?? '').toString();
+    final note = (_payload?['window_note'] ?? '').toString();
+    final retryLabel = (_payload?['retry_label'] ?? '').toString();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (summary.isNotEmpty)
+          Padding(
+            padding: EdgeInsets.only(bottom: Ds.space.x8),
+            child: Wrap(
+              spacing: Ds.space.x8,
+              runSpacing: Ds.space.x4,
+              children: [
+                WaToneChip(
+                  label: summary,
+                  tone: _chipTone((_payload?['summary_tone'] ?? '').toString()),
+                ),
+                if (range.isNotEmpty) WaToneChip(label: range),
+              ],
+            ),
+          ),
+        if (note.isNotEmpty) _NoteBlock(note),
+        if (rows.isEmpty)
+          _NoteBlock((_payload?['empty_label'] ?? '').toString())
+        else
+          for (final r in rows)
+            _SendHealthRow(
+              row: r,
+              retryLabel: retryLabel,
+              busy:
+                  _busyId != null &&
+                  _busyId == (r['id'] is num ? (r['id'] as num).toInt() : null),
+              onRetry: () {
+                final id = r['id'];
+                if (id is num) _retry(id.toInt());
+              },
+            ),
+      ],
+    );
+  }
+}
+
+class _SendHealthRow extends StatelessWidget {
+  final Map<String, dynamic> row;
+  final String retryLabel;
+  final bool busy;
+  final VoidCallback onRetry;
+  const _SendHealthRow({
+    required this.row,
+    required this.retryLabel,
+    required this.busy,
+    required this.onRetry,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final title = (row['title'] ?? '').toString();
+    final code = (row['order_code'] ?? '').toString();
+    final phone = (row['phone_label'] ?? '').toString();
+    final when = (row['when_label'] ?? '').toString();
+    final path = (row['path_label'] ?? '').toString();
+    final status = (row['status_label'] ?? '').toString();
+    final reason = (row['reason'] ?? '').toString();
+    final tone = (row['tone'] ?? '').toString();
+    final canRetry = row['can_retry'] == true && retryLabel.isNotEmpty;
+
+    return Container(
+      margin: EdgeInsets.only(bottom: Ds.space.x8),
+      padding: EdgeInsets.all(Ds.space.x12),
+      decoration: BoxDecoration(
+        color: _kCard,
+        borderRadius: Ds.r.rCard,
+        border: Border.all(color: _kBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  title,
+                  style: Ds.t.body.copyWith(fontWeight: FontWeight.w700),
+                ),
+              ),
+              WaToneChip(label: status, tone: _chipTone(tone)),
+            ],
+          ),
+          SizedBox(height: Ds.space.x4),
+          Text(
+            [if (code.isNotEmpty) code, phone, when].join(' · '),
+            style: Ds.t.caption,
+          ),
+          SizedBox(height: Ds.space.x8),
+          Row(
+            children: [
+              Expanded(
+                child: Wrap(
+                  spacing: Ds.space.x8,
+                  runSpacing: Ds.space.x4,
+                  children: [WaToneChip(label: path)],
+                ),
+              ),
+              if (canRetry)
+                TextButton(
+                  onPressed: busy ? null : onRetry,
+                  child: Text(
+                    retryLabel,
+                    style: Ds.t.caption.copyWith(
+                      color: _kGreen,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          if (reason.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(
+              reason,
+              style: Ds.t.caption.copyWith(
+                color: tone == 'bad' ? _kRed : _kMuted,
+              ),
+            ),
           ],
         ],
       ),

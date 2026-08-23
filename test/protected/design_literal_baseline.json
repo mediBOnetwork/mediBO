@@ -50,7 +50,7 @@
   "lib/screens/admin/wa_campaign_builder_screen.dart": 67,
   "lib/screens/admin/wa_campaigns_screen.dart": 105,
   "lib/screens/admin/wa_drips_screen.dart": 57,
-  "lib/screens/admin/wa_ops_screen.dart": 87,
+  "lib/screens/admin/wa_ops_screen.dart": 81,
   "lib/screens/admin/wa_segments_screen.dart": 50,
   "lib/screens/auth/business_details_screen.dart": 47,
   "lib/screens/auth/login_screen.dart": 1,

@@ -31,25 +31,7 @@
 -- An anonymous caller could therefore make the database do that, repeatedly.
 -- Both journey entry points are now guarded and revoked.
 
--- ── 1. probe entry points: guarded, and not reachable by anon ────────────────
-revoke execute on function public.dev_journey_probe(text) from public, anon, authenticated;
-revoke execute on function public.dev_journeys_run(bigint, text) from public, anon, authenticated;
-
-do $guard$
-declare v_src text;
-begin
-  select prosrc into v_src from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-   where n.nspname = 'public' and p.proname = 'dev_journey_probe';
-  if v_src is null then raise exception 'dev_journey_probe missing'; end if;
-  -- idempotent: only inject the guard once
-  if position('_dev_guard()' in v_src) = 0 then
-    execute replace(pg_get_functiondef('public.dev_journey_probe(text)'::regprocedure),
-                    E'v_a6 boolean;\n        c_target constant text := ''my_orders_chandra_slice'';\nbegin\n',
-                    E'v_a6 boolean;\n        c_target constant text := ''my_orders_chandra_slice'';\nbegin\n  perform public._dev_guard();\n');
-  end if;
-end $guard$;
-
--- ── 2. source mutation helper ────────────────────────────────────────────────
+-- ── 1. source mutation helper ────────────────────────────────────────────────
 create or replace function public._mut_src(p_fn regprocedure, p_pattern text, p_repl text)
 returns void
 language plpgsql
@@ -68,6 +50,24 @@ begin
   execute v_new;
 end $$;
 revoke execute on function public._mut_src(regprocedure, text, text) from public, anon, authenticated;
+
+-- ── 2. probe entry points: guarded, and not reachable by anon ────────────────
+revoke execute on function public.dev_journey_probe(text) from public, anon, authenticated;
+revoke execute on function public.dev_journeys_run(bigint, text) from public, anon, authenticated;
+
+do $guard$
+begin
+  -- idempotent: inject the guard only once, and RAISE if the anchor moved
+  -- (a silent no-op here would leave the anon door open while looking applied).
+  if not exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+                  where n.nspname='public' and p.proname='dev_journey_probe'
+                    and p.prosrc like '%_dev_guard()%') then
+    perform public._mut_src(
+      'public.dev_journey_probe(text)'::regprocedure,
+      'c_target constant text := ''my_orders_chandra_slice'';\s*\nbegin\n',
+      E'c_target constant text := ''my_orders_chandra_slice'';\nbegin\n  perform public._dev_guard();\n');
+  end if;
+end $guard$;
 
 -- ── 3. the recipe book ───────────────────────────────────────────────────────
 -- Returns {mutation, sql, kind}. kind='dml' means "must affect >0 rows or the

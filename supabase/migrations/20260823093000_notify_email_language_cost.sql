@@ -1327,3 +1327,23 @@ update public.wa_event_routes r
 update public.wa_event_routes
    set email_enabled = true, email_mode = 'always'
  where audience = 'admin' and email_enabled is false;
+
+-- ────────────────────────────────────────── 13. ui_copy for the new surfaces ──
+-- The two screens this change adds print nothing of their own. Everything that
+-- is not already in a payload lives here, so wording changes are an UPDATE.
+insert into public.ui_copy (key, value) values
+  ('notif_cost.retry',            '"Retry"'::jsonb),
+  ('notif_cost.error',            '"Could not load the notification costs."'::jsonb),
+  ('notif_email.cost_link',       '"Cost & savings"'::jsonb),
+  ('notif_email.optouts_link',    '"Per-user opt-outs"'::jsonb),
+  ('notif_email.section_title',   '"Email channel"'::jsonb),
+  ('notif_email.preview',         '"Preview"'::jsonb),
+  ('notif_email.save',            '"Save"'::jsonb),
+  ('notif_email.close',           '"Close"'::jsonb),
+  ('notif_email.subject_hint',    '"Subject"'::jsonb),
+  ('notif_email.body_hint',       '"Message"'::jsonb),
+  ('notif_email.variables_hint',  '"Variables you can use"'::jsonb),
+  ('notif_email.search_hint',     '"Search by name, phone or email"'::jsonb),
+  ('notif_email.update_failed',   '"Could not save that change."'::jsonb),
+  ('notif_email.edit',            '"Edit template"'::jsonb)
+on conflict (key) do nothing;

@@ -40,6 +40,7 @@ import '../features/whatsapp/ui/wa_home_screen.dart';
 import '../features/whatsapp/ui/wa_templates_screen.dart';
 import 'admin/wa_campaigns_screen.dart';
 import 'admin/wa_diagnosis_screen.dart';
+import 'admin/notify_center_screen.dart';
 import 'admin/wa_ops_screen.dart';
 import 'admin/wa_drips_screen.dart';
 import 'admin/wa_segments_screen.dart';
@@ -493,6 +494,12 @@ class _HomeShellState extends State<HomeShell> {
       case 'wa_diagnosis':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const WaDiagnosisScreen()));
+        break;
+      // CHANGE #297 — Notification Centre. notify_center() gates on
+      // get_my_role() and the screen renders its refusal, same as wa_ops.
+      case 'notify_center':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const NotifyCenterScreen()));
         break;
       // Same gating as the ones above: both screens call RPCs that check the
       // caller's role and render the backend's own refusal.

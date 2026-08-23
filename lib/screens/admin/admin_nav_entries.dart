@@ -78,6 +78,14 @@ List<AdminNavEntry> get kAdminOverflowNav => <AdminNavEntry>[
       AdminNavEntry(
           c('admin_nav.overflow_wa_diagnosis'), Icons.fact_check_outlined,
           route: 'wa_diagnosis'),
+      // CHANGE #297 — the Notification Centre. Sits beside WA Diagnosis
+      // because it answers the question one step earlier: every message now
+      // leaves through ONE dispatcher, and this is where an admin sees that
+      // dispatcher's queue, its health alerts, and can preview or test-send
+      // any event before switching it on live.
+      AdminNavEntry(
+          c('admin_nav.overflow_notify_center'), Icons.notifications_active_outlined,
+          route: 'notify_center'),
       // Sibling of registration approvals: the customer account/data-deletion
       // queue (CHANGE #681). Badge count comes from
       // admin_deletion_request_count(), passed in as a plain int so this file

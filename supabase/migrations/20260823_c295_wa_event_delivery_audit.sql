@@ -665,7 +665,8 @@ as $function$
 declare v_days int := greatest(coalesce(p_days,30), 1);
         v_rows jsonb; v_broken int; v_never int; v_working int;
 begin
-  if not (public.am_i_super() or public.get_my_role() in ('admin','super_admin')) then
+  if not (public.get_my_role() in ('admin','super_admin')
+          or coalesce(current_setting('request.jwt.claims', true)::jsonb->>'role','') = 'service_role') then
     return jsonb_build_object('ok', false, 'error','forbidden',
       'message','Only an admin can read the WhatsApp delivery diagnosis.');
   end if;
@@ -793,6 +794,351 @@ begin
            'emitting_tone',  case when v.routed then 'success'
                                   when v.has_emitter then 'danger' else 'warning' end,
            'emitters',       case when v.fns = '' then '—' else v.fns end,
+           'sent_30d',       v.n30,
+           'delivered_30d',  v.ok30,
+           'failed_30d',     v.bad30,
+           'window_label',   v.n30::text || ' sent · ' || v.ok30::text || ' delivered · '
+                             || v.bad30::text || ' failed',
+           'fail_reason',    coalesce(v.top_fail, '—'),
+           'ever_fired',     (v.total_all > 0),
+           'last_fired',     case when v.last_at > 'epoch'::timestamptz
+                                  then to_char(v.last_at at time zone 'Asia/Kolkata', 'DD Mon YYYY, HH12:MI AM')
+                                  else 'Never' end,
+           'verdict',        v.verdict,
+           'verdict_tone',   case v.verdict when 'WORKING' then 'success'
+                                            when 'BROKEN' then 'danger' else 'warning' end,
+           'note',           coalesce(nullif(btrim(coalesce(v.pipeline_note,'')),''), '—')
+         ) order by
+           case v.verdict when 'BROKEN' then 0 when 'NEVER FIRED' then 1 else 2 end,
+           v.audience, v.event_key)
+    into v_rows
+    from verdicted v;
+
+  v_rows   := coalesce(v_rows, '[]'::jsonb);
+  select count(*) filter (where x->>'verdict' = 'BROKEN'),
+         count(*) filter (where x->>'verdict' = 'NEVER FIRED'),
+         count(*) filter (where x->>'verdict' = 'WORKING')
+    into v_broken, v_never, v_working
+    from jsonb_array_elements(v_rows) x;
+
+  return jsonb_build_object(
+    'ok', true,
+    'title', 'WhatsApp delivery diagnosis',
+    'subtitle', 'Every event route except the supplier audience · last '
+                || v_days::text || ' days · times IST',
+    'window_days', v_days,
+    'summary', jsonb_build_array(
+      jsonb_build_object('label','Working',     'value', v_working::text, 'tone','success'),
+      jsonb_build_object('label','Broken',      'value', v_broken::text,  'tone','danger'),
+      jsonb_build_object('label','Never fired', 'value', v_never::text,   'tone','warning')),
+    'columns', jsonb_build_array('Event','Audience','Template','Emitting',
+                                 'Last ' || v_days::text || ' days','Verdict'),
+    'legend', 'WORKING = an approved template, an emitter that uses the route, and more '
+              || 'delivered than failed. BROKEN = disabled, no approved template, a variable '
+              || 'mismatch, or an emitter still sending free-form. NEVER FIRED = the route has '
+              || 'never produced a single message.',
+    'empty_text', 'No event routes outside the supplier audience.',
+    'rows', v_rows);
+end $function$;
+
+revoke all on function public.wa_event_diagnosis(integer) from public, anon;
+grant execute on function public.wa_event_diagnosis(integer) to authenticated, service_role;
+
+-- ───────────────────────────────────── 9. emitters the source scan cannot see ──
+-- Some events are fired with a key built at runtime ('customer_' || ev) or from
+-- outside Postgres (a VM timer). The scan in wa_event_diagnosis() only sees
+-- literals, so the route itself records who fires it.
+
+alter table public.wa_event_routes add column if not exists emitter_hint text;
+
+update public.wa_event_routes set emitter_hint =
+  'tg_notify_profile_event (customer branch — key built as customer_<event>)'
+ where event_key in ('customer_approved','customer_registration');
+
+update public.wa_event_routes set emitter_hint =
+  'wa_trigger_resolve / wa_campaign_tick — campaign trigger, not a code path'
+ where event_key = 'payment_due';
+
+update public.wa_event_routes set emitter_hint =
+  'gcp_status.sh on the builder VM (systemd timer) -> wa_send_event'
+ where event_key = 'gcp_quota_alert';
+
+-- ───────────────────────────────── 10. login alerts for the dead audiences ──
+-- admin / company / worker login alerts were enabled, correctly pointed at the
+-- approved login_alert template, and had NO branch that could ever fire them.
+-- login_identities already binds those logins to an owner; use it.
+
+create or replace function public._wa_login_alert()
+returns trigger
+language plpgsql
+security definer
+set search_path to 'public'
+as $function$
+declare v_email text; v_uphone text; v_ph text; v_name text; v_key text; v_cust uuid;
+begin
+  select lower(btrim(u.email)), u.phone into v_email, v_uphone from auth.users u where u.id = new.user_id;
+
+  select p.id, wa_normalize_phone(coalesce(p.whatsapp_no, p.phone)),
+         coalesce(nullif(btrim(p.customer_name),''), nullif(btrim(p.owner_name),''), p.pharmacy_name)
+    into v_cust, v_ph, v_name
+  from pharmacy_profiles p
+  where p.approved and coalesce(p.is_deleted,false) = false
+    and (lower(p.email) = v_email
+      or right(wa_normalize_phone(coalesce(p.whatsapp_no,p.phone)),10) = right(coalesce(v_uphone,''),10))
+  limit 1;
+  if v_ph is not null then v_key := 'login_alert'; end if;
+
+  if v_ph is null then
+    select wa_normalize_phone(coalesce(s.whatsapp_no, s.contact_no, s.phone)),
+           coalesce(nullif(btrim(s.contact_name),''), s.supplier_name)
+      into v_ph, v_name
+    from supplier_profiles s
+    where s.approved and coalesce(s.is_deleted,false) = false
+      and (lower(s.email) = v_email
+        or right(wa_normalize_phone(coalesce(s.whatsapp_no,s.contact_no,s.phone)),10) = right(coalesce(v_uphone,''),10))
+    limit 1;
+    if v_ph is not null then v_key := 'supplier_login_alert'; end if;
+  end if;
+
+  if v_ph is null then
+    select wa_normalize_phone(d.phone), d.full_name into v_ph, v_name
+    from delivery_partner_registrations d
+    where right(wa_normalize_phone(d.phone),10) = right(coalesce(v_uphone,''),10) limit 1;
+    if v_ph is not null then v_key := 'delivery_login_alert'; end if;
+  end if;
+
+  if v_ph is null then
+    select wa_normalize_phone(m.phone), m.full_name into v_ph, v_name
+    from mr_registrations m
+    where right(wa_normalize_phone(m.phone),10) = right(coalesce(v_uphone,''),10) limit 1;
+    if v_ph is not null then v_key := 'mr_login_alert'; end if;
+  end if;
+
+  -- last resort: the identity table that binds a login to an owner
+  if v_ph is null then
+    declare li record; v_owner_ph text;
+    begin
+      select * into li from login_identities
+       where lower(identity) = v_email
+          or right(regexp_replace(identity,'[^0-9]','','g'),10) = right(coalesce(v_uphone,''),10)
+       order by created_at desc limit 1;
+
+      if li.owner_type = 'customer' then
+        select p.id, wa_normalize_phone(coalesce(p.whatsapp_no,p.phone)),
+               coalesce(nullif(btrim(p.customer_name),''), p.pharmacy_name)
+          into v_cust, v_ph, v_name from pharmacy_profiles p where p.id = li.owner_id;
+        v_key := 'login_alert';
+      elsif li.owner_type = 'supplier' then
+        select wa_normalize_phone(coalesce(s.whatsapp_no,s.contact_no,s.phone)),
+               coalesce(nullif(btrim(s.contact_name),''), s.supplier_name)
+          into v_ph, v_name from supplier_profiles s where s.id = li.owner_id;
+        v_key := 'supplier_login_alert';
+
+      -- CHANGE #295: admin / company / mr / delivery / worker were dead routes.
+      -- Their own phone identity is the number; admin falls back to the single
+      -- admin_wa_phone that wa_send_event already uses for the admin audience.
+      elsif li.owner_type in ('admin','company','mr','delivery','worker') then
+        select wa_normalize_phone(l2.identity) into v_owner_ph
+          from login_identities l2
+         where l2.owner_type = li.owner_type and l2.owner_id = li.owner_id
+           and l2.kind = 'phone'
+         order by l2.created_at desc limit 1;
+        if v_owner_ph is null and li.owner_type = 'admin' then
+          v_owner_ph := wa_normalize_phone(
+            nullif(btrim((select value #>> '{}' from app_settings where key='admin_wa_phone')),''));
+        end if;
+        if v_owner_ph is not null then
+          v_ph   := v_owner_ph;
+          v_name := coalesce(nullif(btrim(split_part(coalesce(v_email,''),'@',1)),''), 'there');
+          v_key  := case when li.owner_type = 'admin' then 'admin_login_alert'
+                         else li.owner_type || '_login_alert' end;
+        end if;
+      end if;
+    exception when others then null;
+    end;
+  end if;
+
+  if v_ph is null or v_key is null then return new; end if;
+
+  if exists (select 1 from wa_campaign_recipients r
+              where r.phone = v_ph and r.is_event
+                and r.created_at > now() - interval '2 minutes'
+                and r.campaign_id in (select campaign_id from wa_event_routes
+                                       where event_key like '%login_alert%' and campaign_id is not null))
+  then return new; end if;
+
+  perform public.wa_send_event_now(v_key, v_cust,
+            jsonb_build_object('customer_name', coalesce(nullif(btrim(v_name),''), 'there')), v_ph, null);
+  return new;
+exception when others then
+  return new;
+end $function$;
+
+update public.wa_event_routes set
+  emitter_hint = '_wa_login_alert (auth.sessions trigger, key built as <audience>_login_alert)',
+  pipeline_note = 'Fires on login. Shares the approved login_alert template; the phone comes from login_identities.'
+ where event_key in ('admin_login_alert','company_login_alert','worker_login_alert',
+                     'delivery_login_alert','mr_login_alert','login_alert');
+
+-- ────────────────────────────────────── 11. routes with no possible emitter ──
+-- gcp_billing_daily needs billing telemetry the current builder VM cannot read
+-- (the AWS key has no billing role). An enabled route that can never fire is a
+-- lie on the ops screen — switch it off and say why.
+
+update public.wa_event_routes
+   set enabled = false,
+       pipeline_note = 'Off: no billing telemetry on the current builder VM, so nothing can fire this. '
+                    || 'Re-enable together with a billing-capable key.'
+ where event_key = 'gcp_billing_daily';
+
+-- Historical context for the three the window-gate fixes landed on today.
+update public.wa_event_routes
+   set pipeline_note = 'Free-form bypass fixed in CHANGE #294 (window gate + template retry). '
+                    || 'The 30-day failure count is history from before that fix.'
+ where event_key in ('order_placed','order_accepted','payment_qr');
+
+-- ─────────────────────────── 12. diagnosis: honour the recorded emitter hint ──
+
+create or replace function public.wa_event_diagnosis(p_days integer default 30)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path to 'public'
+as $function$
+declare v_days int := greatest(coalesce(p_days,30), 1);
+        v_rows jsonb; v_broken int; v_never int; v_working int;
+begin
+  if not (public.get_my_role() in ('admin','super_admin')
+          or coalesce(current_setting('request.jwt.claims', true)::jsonb->>'role','') = 'service_role') then
+    return jsonb_build_object('ok', false, 'error','forbidden',
+      'message','Only an admin can read the WhatsApp delivery diagnosis.');
+  end if;
+
+  with emitters as (
+    select p.proname, pg_get_functiondef(p.oid) src
+      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public' and p.prokind in ('f','p')
+       and p.proname not in ('wa_event_diagnosis','wa_event_routes_screen','wa_event_route_save',
+                             'wa_event_autopilot_run','notification_matrix','wa_template_pipeline',
+                             'wa_send_health','wa_template_starters','wa_trigger_resolve',
+                             'wa_campaigns_screen','get_stock_update_form')
+       and (pg_get_functiondef(p.oid) ilike '%wa_send_event%'
+         or pg_get_functiondef(p.oid) ilike '%wa_notify_%'
+         or pg_get_functiondef(p.oid) ilike '%functions/v1/%notify%')
+  ),
+  r as (
+    select rt.*, t.name tpl_name, upper(coalesce(t.status,'')) tpl_status,
+           t.category tpl_cat, t.header_format,
+           case when jsonb_typeof(t.token_map)='array'
+                then coalesce((select jsonb_agg('{{'||k||'}}')
+                                 from jsonb_array_elements_text(t.token_map) k),'[]'::jsonb)
+           end tpl_varmap
+      from wa_event_routes rt
+      left join wa_templates t on t.id = rt.template_id
+     where coalesce(rt.audience,'') <> 'supplier'
+  ),
+  emit as (
+    select r.event_key,
+           coalesce(string_agg(distinct e.proname, ', ' order by e.proname), '') fns,
+           bool_or(e.src ilike '%wa_send_event%' or e.src ilike '%wa_notify_event%'
+                   or e.src ilike '%wa_notify_customer_event%') routed
+      from r left join emitters e
+        on e.src like '%''' || r.event_key || '''%'
+     group by r.event_key
+  ),
+  tpl as (
+    select c.audience_params->>'event_key' ev,
+           count(*) filter (where rc.created_at > now() - make_interval(days => v_days)) n30,
+           count(*) filter (where rc.created_at > now() - make_interval(days => v_days)
+                              and rc.status in ('delivered','read')) ok30,
+           count(*) filter (where rc.created_at > now() - make_interval(days => v_days)
+                              and rc.status = 'failed') bad30,
+           count(*) total_all, max(rc.created_at) last_at
+      from wa_campaign_recipients rc join wa_campaigns c on c.id = rc.campaign_id
+     where c.audience_kind = 'event_route'
+     group by 1
+  ),
+  legacy as (
+    select r.event_key,
+           count(*) filter (where m.created_at > now() - make_interval(days => v_days)) n30,
+           count(*) filter (where m.created_at > now() - make_interval(days => v_days)
+                              and coalesce(m.wa_status,'') in ('delivered','read')) ok30,
+           count(*) filter (where m.created_at > now() - make_interval(days => v_days)
+                              and coalesce(m.wa_status,'') = 'failed') bad30,
+           count(*) total_all, max(m.created_at) last_at,
+           (array_agg(m.wa_fail_reason order by m.created_at desc)
+              filter (where m.wa_status='failed' and m.wa_fail_reason is not null))[1] top_fail
+      from r join whatsapp_messages m
+        on m.direction = 'out'
+       and regexp_replace(coalesce(m.routed_to,''), '_error$', '') = any(r.legacy_routed_to)
+     group by r.event_key
+  ),
+  j as (
+    select r.event_key, r.audience, r.enabled, r.label, r.tpl_name, r.tpl_status,
+           r.tpl_cat, r.header_format, r.pipeline_note, r.variable_map, r.tpl_varmap,
+           r.emitter_hint,
+           coalesce(e.fns,'') fns, coalesce(e.routed,false) routed,
+           coalesce(tp.n30,0) + coalesce(lg.n30,0)  n30,
+           coalesce(tp.ok30,0) + coalesce(lg.ok30,0) ok30,
+           coalesce(tp.bad30,0) + coalesce(lg.bad30,0) bad30,
+           coalesce(tp.total_all,0) + coalesce(lg.total_all,0) total_all,
+           greatest(coalesce(tp.last_at,'epoch'::timestamptz),
+                    coalesce(lg.last_at,'epoch'::timestamptz)) last_at,
+           lg.top_fail
+      from r
+      left join emit e  on e.event_key = r.event_key
+      left join tpl tp  on tp.ev = r.event_key
+      left join legacy lg on lg.event_key = r.event_key
+  ),
+  scored as (
+    select j.*,
+      (j.tpl_name is not null and j.tpl_status = 'APPROVED') tpl_ok,
+      (j.tpl_varmap is null or j.variable_map = j.tpl_varmap) var_ok,
+      (j.fns <> '' or nullif(btrim(coalesce(j.emitter_hint,'')),'') is not null) has_emitter,
+      (j.routed or nullif(btrim(coalesce(j.emitter_hint,'')),'') is not null) routed_ok
+    from j
+  ),
+  verdicted as (
+    select s.*,
+      case
+        when s.total_all = 0 then 'NEVER FIRED'
+        when not s.enabled then 'BROKEN'
+        when not s.tpl_ok then 'BROKEN'
+        when not s.var_ok then 'BROKEN'
+        when not s.routed_ok then 'BROKEN'
+        when s.bad30 > s.ok30 and s.bad30 > 0 then 'BROKEN'
+        else 'WORKING'
+      end verdict
+    from scored s
+  )
+  select jsonb_agg(jsonb_build_object(
+           'event_key',      v.event_key,
+           'label',          coalesce(v.label, v.event_key),
+           'audience',       coalesce(v.audience,'—'),
+           'enabled',        v.enabled,
+           'enabled_label',  case when v.enabled then 'On' else 'Off' end,
+           'template',       coalesce(v.tpl_name, '— none —'),
+           'template_status',case when v.tpl_name is null then 'No template'
+                                  when v.tpl_status = 'APPROVED' then 'Approved'
+                                  else initcap(lower(v.tpl_status)) end,
+           'template_tone',  case when v.tpl_ok then 'success'
+                                  when v.tpl_name is null then 'danger' else 'warning' end,
+           'variables_label',case when v.tpl_varmap is null then 'n/a'
+                                  when v.var_ok then 'Matches template'
+                                  else 'Mismatch — route sends '
+                                       || jsonb_array_length(coalesce(v.variable_map,'[]'::jsonb))::text
+                                       || ', template wants '
+                                       || jsonb_array_length(v.tpl_varmap)::text end,
+           'variables_tone', case when v.tpl_varmap is null or v.var_ok then 'neutral' else 'danger' end,
+           'emitting',       v.routed_ok,
+           'emitting_label', case when not v.has_emitter then 'No emitter'
+                                  when v.routed_ok then 'Yes — through the route'
+                                  else 'No — free-form bypass' end,
+           'emitting_tone',  case when v.routed_ok then 'success'
+                                  when v.has_emitter then 'danger' else 'warning' end,
+           'emitters',       coalesce(nullif(v.fns,''),
+                                      nullif(btrim(coalesce(v.emitter_hint,'')),''), '—'),
            'sent_30d',       v.n30,
            'delivered_30d',  v.ok30,
            'failed_30d',     v.bad30,

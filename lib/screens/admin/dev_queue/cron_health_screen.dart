@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../design_tokens.dart';
 import '../../../services/ui_copy.dart';
 import '../../../utils/render_log.dart';
+import 'db_lane_section.dart';
 import 'dev_queue_common.dart';
 import 'dev_queue_service.dart';
 
@@ -28,6 +29,10 @@ class CronHealthScreen extends StatefulWidget {
 class _CronHealthScreenState extends State<CronHealthScreen> {
   late final DevQueueService _svc = widget.service ?? DevQueueService();
   Map<String, dynamic> _data = const {};
+  // CHANGE #301 — the database lane sits beside cron because it is the same
+  // failure: too much heavy work landing at once on a 1 GB instance. Its own
+  // RPC, so a slow or refused read of one never blanks the other.
+  Map<String, dynamic> _db = const {};
   bool _loading = true;
   String? _error;
 
@@ -41,8 +46,16 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
     setState(() => _loading = true);
     try {
       final d = await _svc.cronHealth();
+      Map<String, dynamic> db = const {};
+      try {
+        db = await _svc.dbHealth();
+      } catch (_) {
+        // The DB lane is a panel, not the page. If it cannot be read the cron
+        // health above it still renders; the panel simply omits itself.
+      }
       if (!mounted) return;
       setState(() {
+        _db = db;
         _data = d;
         _loading = false;
         // ok:false is the BACKEND refusing (not a crash) and it ships its own
@@ -55,6 +68,12 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
       // the screen rendered, it just renders the backend's refusal.
       try {
         RenderLog.write('c273_cron_health', 'tasks=${tasks.length}');
+        // Painted-proof for the DB lane: 'ok' only when the backend answered
+        // and the section drew its payload.
+        RenderLog.write(
+          'c301_db_lane',
+          _db['ok'] == true ? 'ok' : (_db.isEmpty ? 'absent' : 'refused'),
+        );
         RenderLog.write('c273_cron_tasks', '${tasks.length}');
         // The before/after report is the command's deliverable, so it gets its
         // own painted-proof key rather than hiding inside the screen's.
@@ -92,7 +111,10 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
         iconTheme: const IconThemeData(color: kBrand),
         title: Text(
           (_data['title'] as String?) ?? c('dev_queue.cron_health_nav_label'),
-          style: Ds.t.subtitle.copyWith(fontWeight: FontWeight.w700, color: kTextHi),
+          style: Ds.t.subtitle.copyWith(
+            fontWeight: FontWeight.w700,
+            color: kTextHi,
+          ),
         ),
         actions: [
           IconButton(
@@ -118,8 +140,10 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(_error!,
-                              style: Ds.t.body.copyWith(color: Ds.c.danger)),
+                          Text(
+                            _error!,
+                            style: Ds.t.body.copyWith(color: Ds.c.danger),
+                          ),
                           SizedBox(height: Ds.space.x12),
                           OutlinedButton(
                             onPressed: _load,
@@ -130,6 +154,10 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
                     ),
                   ] else ...[
                     _headline(),
+                    if (_db.isNotEmpty) ...[
+                      SizedBox(height: Ds.space.x24),
+                      DbLaneSection(data: _db),
+                    ],
                     SizedBox(height: Ds.space.x16),
                     _tickCard(tick),
                     if (((ba['rows'] as List?) ?? const []).isNotEmpty) ...[
@@ -153,80 +181,106 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
     );
   }
 
-  Widget _sectionTitle(String s) => Text(s,
-      style: Ds.t.subtitle.copyWith(fontWeight: FontWeight.w700, color: kTextHi));
+  Widget _sectionTitle(String s) => Text(
+    s,
+    style: Ds.t.subtitle.copyWith(fontWeight: FontWeight.w700, color: kTextHi),
+  );
 
   Widget _headline() => DqCard(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          (_data['headline'] as String?) ?? '',
+          style: Ds.t.body.copyWith(
+            fontWeight: FontWeight.w600,
+            color: kTextHi,
+          ),
+        ),
+        SizedBox(height: Ds.space.x12),
+        Wrap(
+          spacing: Ds.space.x8,
+          runSpacing: Ds.space.x8,
           children: [
-            Text((_data['headline'] as String?) ?? '',
-                style: Ds.t.body.copyWith(
-                    fontWeight: FontWeight.w600, color: kTextHi)),
-            SizedBox(height: Ds.space.x12),
-            Wrap(
-              spacing: Ds.space.x8,
-              runSpacing: Ds.space.x8,
-              children: [
-                _stat(c('dev_queue.cron_health_runs_hour'),
-                    '${_data['runs_last_hour'] ?? 0}'),
-                _stat(c('dev_queue.cron_health_db_seconds'),
-                    '${_data['db_seconds_last_hour'] ?? 0}'),
-                _stat(c('dev_queue.cron_health_peak'),
-                    '${_data['peak_concurrent'] ?? 0}'),
-              ],
+            _stat(
+              c('dev_queue.cron_health_runs_hour'),
+              '${_data['runs_last_hour'] ?? 0}',
+            ),
+            _stat(
+              c('dev_queue.cron_health_db_seconds'),
+              '${_data['db_seconds_last_hour'] ?? 0}',
+            ),
+            _stat(
+              c('dev_queue.cron_health_peak'),
+              '${_data['peak_concurrent'] ?? 0}',
             ),
           ],
         ),
-      );
+      ],
+    ),
+  );
 
   Widget _stat(String label, String value) => Container(
-        padding: EdgeInsets.symmetric(
-            horizontal: Ds.space.x12, vertical: Ds.space.x8),
-        decoration: BoxDecoration(
-          color: kPageBg,
-          borderRadius: Ds.r.rButton,
-          border: Border.all(color: kBorder),
+    padding: EdgeInsets.symmetric(
+      horizontal: Ds.space.x12,
+      vertical: Ds.space.x8,
+    ),
+    decoration: BoxDecoration(
+      color: kPageBg,
+      borderRadius: Ds.r.rButton,
+      border: Border.all(color: kBorder),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(label, style: Ds.t.caption.copyWith(color: kTextLo)),
+        SizedBox(height: Ds.space.x4),
+        Text(
+          value,
+          style: Ds.t.body.copyWith(
+            fontWeight: FontWeight.w600,
+            color: kTextHi,
+          ),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(label, style: Ds.t.caption.copyWith(color: kTextLo)),
-            SizedBox(height: Ds.space.x4),
-            Text(value,
-                style: Ds.t.body.copyWith(
-                    fontWeight: FontWeight.w600, color: kTextHi)),
-          ],
-        ),
-      );
+      ],
+    ),
+  );
 
   Widget _tickCard(Map<String, dynamic> tick) => DqCard(
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text((tick['label'] as String?) ?? '',
-                      style: Ds.t.caption.copyWith(color: kTextLo)),
-                  SizedBox(height: Ds.space.x4),
-                  Text((tick['value_label'] as String?) ?? '',
-                      style: Ds.t.body.copyWith(
-                          fontWeight: FontWeight.w600, color: kTextHi)),
-                  SizedBox(height: Ds.space.x4),
-                  Text((tick['at_label'] as String?) ?? '',
-                      style: Ds.t.caption.copyWith(color: kTextLo)),
-                ],
+    child: Row(
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                (tick['label'] as String?) ?? '',
+                style: Ds.t.caption.copyWith(color: kTextLo),
               ),
-            ),
-            ToneChip(
-              label: (tick['at_label'] as String?) ?? '',
-              tone: toneByName((tick['tone'] as String?) ?? 'neutral'),
-            ),
-          ],
+              SizedBox(height: Ds.space.x4),
+              Text(
+                (tick['value_label'] as String?) ?? '',
+                style: Ds.t.body.copyWith(
+                  fontWeight: FontWeight.w600,
+                  color: kTextHi,
+                ),
+              ),
+              SizedBox(height: Ds.space.x4),
+              Text(
+                (tick['at_label'] as String?) ?? '',
+                style: Ds.t.caption.copyWith(color: kTextLo),
+              ),
+            ],
+          ),
         ),
-      );
+        ToneChip(
+          label: (tick['at_label'] as String?) ?? '',
+          tone: toneByName((tick['tone'] as String?) ?? 'neutral'),
+        ),
+      ],
+    ),
+  );
 
   /// The command's actual answer: what the per-minute storm cost, and what it
   /// costs now. Every number, label and caption arrives in `before_after` —
@@ -238,36 +292,52 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text((ba['label'] as String?) ?? '',
-              style: Ds.t.subtitle
-                  .copyWith(fontWeight: FontWeight.w700, color: kTextHi)),
+          Text(
+            (ba['label'] as String?) ?? '',
+            style: Ds.t.subtitle.copyWith(
+              fontWeight: FontWeight.w700,
+              color: kTextHi,
+            ),
+          ),
           SizedBox(height: Ds.space.x4),
-          Text((ba['note'] as String?) ?? '',
-              style: Ds.t.caption.copyWith(color: kTextLo)),
+          Text(
+            (ba['note'] as String?) ?? '',
+            style: Ds.t.caption.copyWith(color: kTextLo),
+          ),
           for (final r in rows) ...[
             SizedBox(height: Ds.space.x16),
-            Text(((r as Map)['metric'] as String?) ?? '',
-                style: Ds.t.body
-                    .copyWith(fontWeight: FontWeight.w600, color: kTextHi)),
+            Text(
+              ((r as Map)['metric'] as String?) ?? '',
+              style: Ds.t.body.copyWith(
+                fontWeight: FontWeight.w600,
+                color: kTextHi,
+              ),
+            ),
             SizedBox(height: Ds.space.x8),
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Expanded(
-                  child: _stat((ba['before_head'] as String?) ?? '',
-                      '${r['before'] ?? ''}'),
+                  child: _stat(
+                    (ba['before_head'] as String?) ?? '',
+                    '${r['before'] ?? ''}',
+                  ),
                 ),
                 SizedBox(width: Ds.space.x8),
                 Expanded(
-                  child: _stat((ba['after_head'] as String?) ?? '',
-                      '${r['after'] ?? ''}'),
+                  child: _stat(
+                    (ba['after_head'] as String?) ?? '',
+                    '${r['after'] ?? ''}',
+                  ),
                 ),
               ],
             ),
             if ((r['note'] as String?)?.isNotEmpty ?? false) ...[
               SizedBox(height: Ds.space.x8),
-              Text(r['note'] as String,
-                  style: Ds.t.caption.copyWith(color: kTextLo)),
+              Text(
+                r['note'] as String,
+                style: Ds.t.caption.copyWith(color: kTextLo),
+              ),
             ],
           ],
         ],
@@ -276,41 +346,53 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
   }
 
   Widget _taskCard(Map<String, dynamic> t) => DqCard(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
           children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text((t['name'] as String?) ?? '',
-                      style: Ds.t.body.copyWith(
-                          fontWeight: FontWeight.w600, color: kTextHi)),
+            Expanded(
+              child: Text(
+                (t['name'] as String?) ?? '',
+                style: Ds.t.body.copyWith(
+                  fontWeight: FontWeight.w600,
+                  color: kTextHi,
                 ),
-                ToneChip(
-                  label: (t['mode_label'] as String?) ?? '',
-                  tone: toneByName((t['tone'] as String?) ?? 'neutral'),
-                ),
-              ],
+              ),
             ),
-            SizedBox(height: Ds.space.x8),
-            Text((t['state_label'] as String?) ?? '',
-                style: Ds.t.body.copyWith(color: kTextHi)),
-            SizedBox(height: Ds.space.x4),
-            Text((t['counts_label'] as String?) ?? '',
-                style: Ds.t.caption.copyWith(color: kTextLo)),
-            if ((t['note'] as String?)?.isNotEmpty ?? false) ...[
-              SizedBox(height: Ds.space.x8),
-              Text(t['note'] as String,
-                  style: Ds.t.caption.copyWith(color: kTextLo)),
-            ],
-            if ((t['error'] as String?)?.isNotEmpty ?? false) ...[
-              SizedBox(height: Ds.space.x8),
-              Text(t['error'] as String,
-                  style: Ds.t.caption.copyWith(color: Ds.c.danger)),
-            ],
+            ToneChip(
+              label: (t['mode_label'] as String?) ?? '',
+              tone: toneByName((t['tone'] as String?) ?? 'neutral'),
+            ),
           ],
         ),
-      );
+        SizedBox(height: Ds.space.x8),
+        Text(
+          (t['state_label'] as String?) ?? '',
+          style: Ds.t.body.copyWith(color: kTextHi),
+        ),
+        SizedBox(height: Ds.space.x4),
+        Text(
+          (t['counts_label'] as String?) ?? '',
+          style: Ds.t.caption.copyWith(color: kTextLo),
+        ),
+        if ((t['note'] as String?)?.isNotEmpty ?? false) ...[
+          SizedBox(height: Ds.space.x8),
+          Text(
+            t['note'] as String,
+            style: Ds.t.caption.copyWith(color: kTextLo),
+          ),
+        ],
+        if ((t['error'] as String?)?.isNotEmpty ?? false) ...[
+          SizedBox(height: Ds.space.x8),
+          Text(
+            t['error'] as String,
+            style: Ds.t.caption.copyWith(color: Ds.c.danger),
+          ),
+        ],
+      ],
+    ),
+  );
 
   Widget _guardCard(Map<String, dynamic> guard) {
     final recent = (guard['recent'] as List?) ?? const [];
@@ -318,26 +400,39 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text((guard['label'] as String?) ?? '',
-              style: Ds.t.subtitle
-                  .copyWith(fontWeight: FontWeight.w700, color: kTextHi)),
+          Text(
+            (guard['label'] as String?) ?? '',
+            style: Ds.t.subtitle.copyWith(
+              fontWeight: FontWeight.w700,
+              color: kTextHi,
+            ),
+          ),
           SizedBox(height: Ds.space.x8),
-          Text((guard['value_label'] as String?) ?? '',
-              style: Ds.t.body.copyWith(color: kTextHi)),
+          Text(
+            (guard['value_label'] as String?) ?? '',
+            style: Ds.t.body.copyWith(color: kTextHi),
+          ),
           if (recent.isEmpty) ...[
             SizedBox(height: Ds.space.x8),
-            Text(c('dev_queue.cron_health_guard_quiet'),
-                style: Ds.t.caption.copyWith(color: kTextLo)),
+            Text(
+              c('dev_queue.cron_health_guard_quiet'),
+              style: Ds.t.caption.copyWith(color: kTextLo),
+            ),
           ],
           for (final e in recent) ...[
             SizedBox(height: Ds.space.x12),
             Text(
-                '${((e as Map)['at_label'] ?? '')} · ${e['kind'] ?? ''} · ${e['job'] ?? ''}',
-                style: Ds.t.caption
-                    .copyWith(fontWeight: FontWeight.w600, color: kTextHi)),
+              '${((e as Map)['at_label'] ?? '')} · ${e['kind'] ?? ''} · ${e['job'] ?? ''}',
+              style: Ds.t.caption.copyWith(
+                fontWeight: FontWeight.w600,
+                color: kTextHi,
+              ),
+            ),
             SizedBox(height: Ds.space.x4),
-            Text('${e['detail'] ?? ''}',
-                style: Ds.t.caption.copyWith(color: kTextLo)),
+            Text(
+              '${e['detail'] ?? ''}',
+              style: Ds.t.caption.copyWith(color: kTextLo),
+            ),
           ],
         ],
       ),
@@ -345,19 +440,19 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
   }
 
   Widget _skeleton() => ListView(
-        padding: EdgeInsets.all(Ds.space.x16),
-        children: [
-          for (var i = 0; i < 5; i++) ...[
-            Container(
-              height: 88,
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: Ds.r.rCard,
-                border: Border.all(color: kBorder),
-              ),
-            ),
-            SizedBox(height: Ds.space.x12),
-          ],
-        ],
-      );
+    padding: EdgeInsets.all(Ds.space.x16),
+    children: [
+      for (var i = 0; i < 5; i++) ...[
+        Container(
+          height: 88,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: Ds.r.rCard,
+            border: Border.all(color: kBorder),
+          ),
+        ),
+        SizedBox(height: Ds.space.x12),
+      ],
+    ],
+  );
 }

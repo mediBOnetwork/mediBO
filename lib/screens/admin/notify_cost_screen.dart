@@ -89,21 +89,6 @@ class _NotifyCostScreenState extends State<NotifyCostScreen> {
     }
   }
 
-  Color _toneSoft(String tone) {
-    switch (tone) {
-      case 'success':
-        return Ds.c.successSoft;
-      case 'warning':
-        return Ds.c.warningSoft;
-      case 'danger':
-        return Ds.c.dangerSoft;
-      case 'info':
-        return Ds.c.infoSoft;
-      default:
-        return Ds.c.bg;
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final d = _data;

@@ -5,6 +5,8 @@ import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/widgets/animations.dart';
 import 'package:pharma_b2b/features/whatsapp/data/wa_template_api.dart';
 import 'package:pharma_b2b/features/whatsapp/ui/wa_template_editor_screen.dart';
+import 'package:pharma_b2b/design_tokens.dart';
+import 'package:pharma_b2b/screens/admin/notify_cost_screen.dart';
 
 // CHANGE #498: Dashboard "Notifications" box — per-action WhatsApp toggles.
 // CHANGE #499: collapsible (default collapsed) + fully dynamic row rendering.
@@ -72,6 +74,7 @@ List<_NotifRow>? _cachedRows;
 List<Map<String, dynamic>>? _cachedAudiences;
 String? _cachedNote;
 List<_AllowlistEntry>? _cachedAllowlist;
+Map<String, dynamic>? _cachedEmail;
 
 class NotificationsCard extends StatefulWidget {
   const NotificationsCard({super.key});
@@ -97,6 +100,7 @@ class NotificationsCard extends StatefulWidget {
     _cachedAudiences = null;
     _cachedNote = null;
     _cachedAllowlist = null;
+    _cachedEmail = null;
   }
 
   @override
@@ -114,6 +118,13 @@ class _NotificationsCardState extends State<NotificationsCard> {
   String _audience = '';
   final Set<String> _busyKeys = {};
   bool _expanded = false;
+
+  // cmd #299: email-channel state. One payload (notif_email_admin) carries the
+  // config line, the mode options and one row per event; this card only draws
+  // it and posts the toggle back.
+  Map<String, dynamic>? _email;
+  bool _emailLoading = true;
+  final Set<String> _emailBusy = {};
 
   // CHANGE #506: allow-list state.
   List<_AllowlistEntry>? _allowlist;
@@ -143,6 +154,12 @@ class _NotificationsCardState extends State<NotificationsCard> {
       _allowlistLoading = false;
     } else {
       _loadAllowlist();
+    }
+    if (_cachedEmail != null) {
+      _email = _cachedEmail;
+      _emailLoading = false;
+    } else {
+      _loadEmail();
     }
   }
 
@@ -580,6 +597,7 @@ class _NotificationsCardState extends State<NotificationsCard> {
         else
           Column(children: visible.map(_row).toList()),
         _buildAllowlistSection(),
+        _buildEmailSection(),
       ],
     );
   }
@@ -714,6 +732,223 @@ class _NotificationsCardState extends State<NotificationsCard> {
                 style: const TextStyle(fontSize: 11.5, color: Color(0xFFDC2626), fontWeight: FontWeight.w600)),
           ),
       ],
+    );
+  }
+
+
+
+  // ─────────────────────────────── cmd #299: the email channel ──────────────
+  // Email is the third channel: push, then WhatsApp, then email as the fallback
+  // and the permanent record. Every word below — the section copy, the mode
+  // names, the per-event status chip — arrives in notif_email_admin(); this
+  // card decides nothing except which audience tab is showing.
+
+  Future<void> _loadEmail() async {
+    try {
+      final res = await _rpc('notif_email_admin');
+      final m = res is Map
+          ? Map<String, dynamic>.from(res)
+          : const <String, dynamic>{};
+      _cachedEmail = m;
+      if (!mounted) return;
+      setState(() {
+        _email = m;
+        _emailLoading = false;
+      });
+      RenderLog.write(
+          'c299_email_rows', '${(m['rows'] as List?)?.length ?? 0}');
+    } catch (_) {
+      if (mounted) setState(() => _emailLoading = false);
+    }
+  }
+
+  List<Map<String, dynamic>> _emailRowsForAudience() {
+    final all = (_email?['rows'] as List?) ?? const [];
+    return [
+      for (final r in all)
+        if (r is Map && (r['audience'] ?? '').toString() == _audience)
+          Map<String, dynamic>.from(r),
+    ];
+  }
+
+  Future<void> _setEmailRoute(
+      Map<String, dynamic> row, {bool? enabled, String? mode}) async {
+    final key = (row['event_key'] ?? '').toString();
+    setState(() => _emailBusy.add(key));
+    try {
+      final res = await _rpc('notif_email_route_set', {
+        'p_event_key': key,
+        if (enabled != null) 'p_enabled': enabled,
+        if (mode != null) 'p_mode': mode,
+      });
+      final m = res is Map
+          ? Map<String, dynamic>.from(res)
+          : const <String, dynamic>{};
+      if (m['ok'] != true) throw Exception((m['message'] ?? '').toString());
+      RenderLog.write('c299_email_toggle', '$key:${enabled ?? mode}');
+      await _loadEmail();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+            SnackBar(content: Text(c('notif_email.update_failed'))));
+      }
+    } finally {
+      if (mounted) setState(() => _emailBusy.remove(key));
+    }
+  }
+
+  Widget _buildEmailSection() {
+    final cfg = _email?['config'] is Map
+        ? Map<String, dynamic>.from(_email!['config'] as Map)
+        : const <String, dynamic>{};
+    final rows = _emailRowsForAudience();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Padding(
+          padding: EdgeInsets.symmetric(vertical: Ds.space.x12),
+          child: Divider(height: 1, color: Ds.c.divider),
+        ),
+        Text(
+          (_email?['title'] ?? c('notif_email.section_title')).toString(),
+          style: Ds.t.bodyStrong,
+        ),
+        SizedBox(height: Ds.space.x4),
+        Text((_email?['subtitle'] ?? '').toString(), style: Ds.t.caption),
+        if (cfg.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x8),
+          Text(
+            '${cfg['from_label'] ?? ''}: ${cfg['from_display'] ?? ''}',
+            style: Ds.t.caption,
+          ),
+        ],
+        SizedBox(height: Ds.space.x12),
+        // Two doors out of this card: the money view, and the person view.
+        Wrap(
+          spacing: Ds.space.x8,
+          runSpacing: Ds.space.x8,
+          children: [
+            _linkChip(Icons.currency_rupee, c('notif_email.cost_link'), () {
+              RenderLog.write('c299_cost_opened', 'true');
+              Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => const NotifyCostScreen()));
+            }),
+            _linkChip(Icons.person_off_outlined, c('notif_email.optouts_link'),
+                _openOptOuts),
+          ],
+        ),
+        SizedBox(height: Ds.space.x12),
+        if (_emailLoading)
+          _skeleton()
+        else if (rows.isEmpty)
+          Text((_email?['empty_text'] ?? '').toString(), style: Ds.t.caption)
+        else
+          Column(children: rows.map(_emailRow).toList()),
+      ],
+    );
+  }
+
+  Widget _linkChip(IconData icon, String label, VoidCallback onTap) =>
+      InkWell(
+        onTap: onTap,
+        borderRadius: Ds.r.rChip,
+        child: Container(
+          constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+          padding: EdgeInsets.symmetric(
+              horizontal: Ds.space.x12, vertical: Ds.space.x8),
+          decoration: BoxDecoration(
+            color: Ds.c.brandSoft,
+            borderRadius: Ds.r.rChip,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: Ds.space.x16, color: Ds.c.brand),
+              SizedBox(width: Ds.space.x8),
+              Text(label, style: Ds.t.caption.copyWith(color: Ds.c.brand)),
+            ],
+          ),
+        ),
+      );
+
+  Widget _emailRow(Map<String, dynamic> row) {
+    final key = (row['event_key'] ?? '').toString();
+    final busy = _emailBusy.contains(key);
+    final on = row['email_enabled'] == true;
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: Ds.space.x4),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text((row['label'] ?? '').toString(), style: Ds.t.caption),
+                Text(
+                  on
+                      ? '${row['mode_label'] ?? ''} · ${row['status_label'] ?? ''}'
+                      : (row['status_label'] ?? '').toString(),
+                  style: Ds.t.caption
+                      .copyWith(color: _toneColor((row['status_tone'] ?? '').toString())),
+                ),
+              ],
+            ),
+          ),
+          SizedBox(width: Ds.space.x8),
+          _miniIcon(Icons.mail_outline, c('notif_email.edit'),
+              () => _openEmailTemplate(row)),
+          if (busy)
+            SizedBox(
+              width: Ds.space.x32,
+              height: Ds.space.x24,
+              child: const Center(
+                child: SizedBox(
+                    width: 14, height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2)),
+              ),
+            )
+          else
+            Switch(
+              value: on,
+              activeColor: _green,
+              onChanged: (v) => _setEmailRoute(row, enabled: v),
+            ),
+        ],
+      ),
+    );
+  }
+
+
+  void _openEmailTemplate(Map<String, dynamic> row) {
+    RenderLog.write('c299_email_editor', (row['event_key'] ?? '').toString());
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+      builder: (_) => _EmailTemplateSheet(
+        row: row,
+        languages: [
+          for (final l in (_email?['language_options'] as List?) ?? const [])
+            if (l is Map) Map<String, dynamic>.from(l),
+        ],
+        rpc: _rpc,
+        onSaved: _loadEmail,
+      ),
+    );
+  }
+
+  void _openOptOuts() {
+    RenderLog.write('c299_optouts_opened', 'true');
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+      builder: (_) => _OptOutSheet(rpc: _rpc),
     );
   }
 
@@ -1211,6 +1446,427 @@ class _BubbleButtons extends StatelessWidget {
           ],
         ],
       ),
+    );
+  }
+}
+
+
+/// cmd #299 — edit one event's email template in one language at a time.
+/// Subject and body are stored on the SAME row the WhatsApp template uses, and
+/// the tokens offered are that route's own variable_map, so the two channels can
+/// never drift apart.
+class _EmailTemplateSheet extends StatefulWidget {
+  const _EmailTemplateSheet({
+    required this.row,
+    required this.languages,
+    required this.rpc,
+    required this.onSaved,
+  });
+
+  final Map<String, dynamic> row;
+  final List<Map<String, dynamic>> languages;
+  final Future<dynamic> Function(String fn, [Map<String, dynamic>? params]) rpc;
+  final Future<void> Function() onSaved;
+
+  @override
+  State<_EmailTemplateSheet> createState() => _EmailTemplateSheetState();
+}
+
+class _EmailTemplateSheetState extends State<_EmailTemplateSheet> {
+  late final TextEditingController _subject;
+  late final TextEditingController _body;
+  String _lang = 'en';
+  bool _saving = false;
+  String _previewSubject = '';
+  String _previewBody = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _subject = TextEditingController();
+    _body = TextEditingController();
+    _fill();
+  }
+
+  void _fill() {
+    final r = widget.row;
+    _subject.text =
+        (_lang == 'hi' ? r['subject_hi'] : r['subject'] ?? '').toString();
+    _body.text = (_lang == 'hi' ? r['body_hi'] : r['body'] ?? '').toString();
+  }
+
+  @override
+  void dispose() {
+    _subject.dispose();
+    _body.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    setState(() => _saving = true);
+    try {
+      await widget.rpc('notif_email_template_save', {
+        'p_event_key': (widget.row['event_key'] ?? '').toString(),
+        'p_lang': _lang,
+        'p_subject': _subject.text,
+        'p_body': _body.text,
+      });
+      await widget.onSaved();
+      if (mounted) Navigator.of(context).pop();
+    } catch (_) {
+      if (mounted) {
+        setState(() => _saving = false);
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+            SnackBar(content: Text(c('notif_email.update_failed'))));
+      }
+    }
+  }
+
+  Future<void> _preview() async {
+    try {
+      final res = await widget.rpc('notif_email_preview', {
+        'p_event_key': (widget.row['event_key'] ?? '').toString(),
+        'p_lang': _lang,
+      });
+      final m = res is Map
+          ? Map<String, dynamic>.from(res)
+          : const <String, dynamic>{};
+      if (!mounted) return;
+      setState(() {
+        _previewSubject = (m['subject'] ?? m['message'] ?? '').toString();
+        _previewBody = (m['body'] ?? '').toString();
+      });
+    } catch (_) {/* the preview is a courtesy; a failure must not block Save */}
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final vars = (widget.row['variables'] as List?) ?? const [];
+    return Padding(
+      padding: EdgeInsets.only(
+        left: Ds.space.x16,
+        right: Ds.space.x16,
+        top: Ds.space.x16,
+        bottom: MediaQuery.of(context).viewInsets.bottom + Ds.space.x16,
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text((widget.row['label'] ?? '').toString(), style: Ds.t.subtitle),
+            SizedBox(height: Ds.space.x12),
+            Wrap(
+              spacing: Ds.space.x8,
+              children: [
+                for (final l in widget.languages)
+                  ChoiceChip(
+                    label: Text((l['label'] ?? '').toString(),
+                        style: Ds.t.caption),
+                    selected: _lang == (l['key'] ?? '').toString(),
+                    onSelected: (_) {
+                      setState(() {
+                        _lang = (l['key'] ?? '').toString();
+                        _previewSubject = '';
+                        _previewBody = '';
+                        _fill();
+                      });
+                    },
+                  ),
+              ],
+            ),
+            SizedBox(height: Ds.space.x16),
+            TextField(
+              controller: _subject,
+              style: Ds.t.body,
+              decoration: InputDecoration(labelText: c('notif_email.subject_hint')),
+            ),
+            SizedBox(height: Ds.space.x12),
+            TextField(
+              controller: _body,
+              style: Ds.t.body,
+              minLines: 5,
+              maxLines: 12,
+              decoration: InputDecoration(labelText: c('notif_email.body_hint')),
+            ),
+            if (vars.isNotEmpty) ...[
+              SizedBox(height: Ds.space.x12),
+              Text(c('notif_email.variables_hint'), style: Ds.t.caption),
+              SizedBox(height: Ds.space.x4),
+              Wrap(
+                spacing: Ds.space.x8,
+                runSpacing: Ds.space.x4,
+                children: [
+                  for (final v in vars)
+                    Text(v.toString(), style: Ds.t.caption),
+                ],
+              ),
+            ],
+            if (_previewSubject.isNotEmpty) ...[
+              SizedBox(height: Ds.space.x16),
+              Container(
+                width: double.infinity,
+                padding: EdgeInsets.all(Ds.space.x12),
+                decoration: BoxDecoration(
+                    color: Ds.c.bg, borderRadius: Ds.r.rCard),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(_previewSubject, style: Ds.t.bodyStrong),
+                    SizedBox(height: Ds.space.x4),
+                    Text(_previewBody, style: Ds.t.caption),
+                  ],
+                ),
+              ),
+            ],
+            SizedBox(height: Ds.space.x16),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: _saving ? null : _preview,
+                    child: Text(c('notif_email.preview')),
+                  ),
+                ),
+                SizedBox(width: Ds.space.x12),
+                Expanded(
+                  child: FilledButton(
+                    onPressed: _saving ? null : _save,
+                    child: Text(c('notif_email.save')),
+                  ),
+                ),
+              ],
+            ),
+            SizedBox(height: Ds.space.x8),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// cmd #299 — per-user opt-outs. A person can silence any event on any single
+/// channel; their language rides along, because one resolver feeds push,
+/// WhatsApp and email alike.
+class _OptOutSheet extends StatefulWidget {
+  const _OptOutSheet({required this.rpc});
+
+  final Future<dynamic> Function(String fn, [Map<String, dynamic>? params]) rpc;
+
+  @override
+  State<_OptOutSheet> createState() => _OptOutSheetState();
+}
+
+class _OptOutSheetState extends State<_OptOutSheet> {
+  final TextEditingController _search = TextEditingController();
+  Map<String, dynamic>? _list;
+  Map<String, dynamic>? _detail;
+  bool _loading = true;
+  final Set<String> _busy = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    try {
+      final res = await widget.rpc(
+          'notif_optout_users', {'p_search': _search.text});
+      if (!mounted) return;
+      setState(() {
+        _list = res is Map ? Map<String, dynamic>.from(res) : null;
+        _loading = false;
+      });
+      RenderLog.write(
+          'c299_optout_users', '${(_list?['users'] as List?)?.length ?? 0}');
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _open(String userId) async {
+    setState(() => _loading = true);
+    try {
+      final res = await widget.rpc('notif_optout_detail', {'p_user_id': userId});
+      if (!mounted) return;
+      setState(() {
+        _detail = res is Map ? Map<String, dynamic>.from(res) : null;
+        _loading = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _set(String actionKey, String channel, bool enabled) async {
+    final id = '$actionKey:$channel';
+    setState(() => _busy.add(id));
+    try {
+      await widget.rpc('notif_optout_set', {
+        'p_user_id': (_detail?['user_id'] ?? '').toString(),
+        'p_action_key': actionKey,
+        'p_channel': channel,
+        'p_enabled': enabled,
+      });
+      RenderLog.write('c299_optout_set', '$id:$enabled');
+      await _open((_detail?['user_id'] ?? '').toString());
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+            SnackBar(content: Text(c('notif_email.update_failed'))));
+      }
+    } finally {
+      if (mounted) setState(() => _busy.remove(id));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: EdgeInsets.only(
+          left: Ds.space.x16,
+          right: Ds.space.x16,
+          top: Ds.space.x16,
+          bottom: MediaQuery.of(context).viewInsets.bottom + Ds.space.x16,
+        ),
+        child: SizedBox(
+          height: MediaQuery.of(context).size.height * 0.7,
+          child: _detail != null ? _detailView() : _listView(),
+        ),
+      );
+
+  Widget _listView() {
+    final users = (_list?['users'] as List?) ?? const [];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text((_list?['title'] ?? '').toString(), style: Ds.t.subtitle),
+        SizedBox(height: Ds.space.x4),
+        Text((_list?['subtitle'] ?? '').toString(), style: Ds.t.caption),
+        SizedBox(height: Ds.space.x12),
+        TextField(
+          controller: _search,
+          style: Ds.t.body,
+          onSubmitted: (_) => _load(),
+          decoration: InputDecoration(
+            labelText: c('notif_email.search_hint'),
+            suffixIcon: IconButton(
+                icon: const Icon(Icons.search), onPressed: _load),
+          ),
+        ),
+        SizedBox(height: Ds.space.x12),
+        Expanded(
+          child: _loading
+              ? const Center(child: CircularProgressIndicator())
+              : users.isEmpty
+                  ? Text((_list?['empty_text'] ?? '').toString(),
+                      style: Ds.t.caption)
+                  : ListView.builder(
+                      itemCount: users.length,
+                      itemBuilder: (_, i) {
+                        final u = Map<String, dynamic>.from(users[i] as Map);
+                        return ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: Text((u['name'] ?? '').toString(),
+                              style: Ds.t.body),
+                          subtitle: Text(
+                            [
+                              (u['contact'] ?? '').toString(),
+                              (u['language_label'] ?? '').toString(),
+                              (u['optout_label'] ?? '').toString(),
+                            ].where((t) => t.isNotEmpty).join('  ·  '),
+                            style: Ds.t.caption,
+                          ),
+                          onTap: () => _open((u['user_id'] ?? '').toString()),
+                        );
+                      },
+                    ),
+        ),
+      ],
+    );
+  }
+
+  Widget _detailView() {
+    final events = (_detail?['events'] as List?) ?? const [];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            IconButton(
+              icon: const Icon(Icons.arrow_back),
+              onPressed: () => setState(() => _detail = null),
+            ),
+            Expanded(
+              child: Text((_detail?['name'] ?? '').toString(),
+                  style: Ds.t.subtitle, overflow: TextOverflow.ellipsis),
+            ),
+          ],
+        ),
+        Text(
+          '${_detail?['language_heading'] ?? ''}: ${_detail?['language_label'] ?? ''}',
+          style: Ds.t.caption,
+        ),
+        SizedBox(height: Ds.space.x12),
+        Text((_detail?['events_heading'] ?? '').toString(), style: Ds.t.caption),
+        Expanded(
+          child: _loading
+              ? const Center(child: CircularProgressIndicator())
+              : events.isEmpty
+                  ? Text((_detail?['empty_text'] ?? '').toString(),
+                      style: Ds.t.caption)
+                  : ListView.builder(
+                      itemCount: events.length,
+                      itemBuilder: (_, i) {
+                        final e = Map<String, dynamic>.from(events[i] as Map);
+                        final channels =
+                            (e['channels'] as List?) ?? const [];
+                        return Padding(
+                          padding:
+                              EdgeInsets.symmetric(vertical: Ds.space.x8),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text((e['label'] ?? '').toString(),
+                                  style: Ds.t.body),
+                              Wrap(
+                                spacing: Ds.space.x8,
+                                children: [
+                                  for (final ch in channels)
+                                    if (ch is Map)
+                                      _channelChip(
+                                          (e['action_key'] ?? '').toString(),
+                                          Map<String, dynamic>.from(ch)),
+                                ],
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+        ),
+      ],
+    );
+  }
+
+  Widget _channelChip(String actionKey, Map<String, dynamic> ch) {
+    final key = (ch['key'] ?? '').toString();
+    final on = ch['enabled'] == true;
+    final busy = _busy.contains('$actionKey:$key');
+    return FilterChip(
+      label: Text((ch['label'] ?? '').toString(), style: Ds.t.caption),
+      selected: on,
+      onSelected: busy ? null : (v) => _set(actionKey, key, v),
     );
   }
 }

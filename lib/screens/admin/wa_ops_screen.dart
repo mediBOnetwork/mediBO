@@ -101,6 +101,13 @@ typedef WaContactLedgerRpc = Future<Map<String, dynamic>> Function(
 // wa_template_pipeline() — the message -> template -> Meta status -> route table.
 // Read-only; every label, tone and sentence in it is written by the backend.
 typedef WaTemplatePipelineRpc = Future<Map<String, dynamic>> Function();
+// CHANGE #294 — wa_send_health(p_hours) / wa_send_retry(p_attempt_id).
+// The delivery ledger: every customer-facing notification attempt, whether it
+// went as an approved template or as a free-form message inside the 24h window,
+// and the reason when it was skipped. Every label, tone and sentence in it is
+// written by the backend; this file prints them and sends the id back.
+typedef WaSendHealthRpc = Future<Map<String, dynamic>> Function(int hours);
+typedef WaSendRetryRpc = Future<Map<String, dynamic>> Function(int attemptId);
 typedef ZonesContactScreenRpc = Future<Map<String, dynamic>> Function();
 typedef ZoneContactSaveRpc = Future<Map<String, dynamic>> Function(
     Map<String, dynamic> params);
@@ -129,6 +136,12 @@ Future<Map<String, dynamic>> waContactLedger(int days, String? phone) async =>
 
 Future<Map<String, dynamic>> waTemplatePipeline() async =>
     _asMap(await _db.rpc('wa_template_pipeline'));
+
+Future<Map<String, dynamic>> waSendHealth(int hours) async =>
+    _asMap(await _db.rpc('wa_send_health', params: {'p_hours': hours}));
+
+Future<Map<String, dynamic>> waSendRetry(int attemptId) async =>
+    _asMap(await _db.rpc('wa_send_retry', params: {'p_attempt_id': attemptId}));
 
 Future<Map<String, dynamic>> zonesContactScreen() async =>
     _asMap(await _db.rpc('zones_contact_screen'));
@@ -176,6 +189,8 @@ class WaOpsScreen extends StatefulWidget {
   final WaWabaRefreshRpc? wabaRefreshRpc;
   final WaContactLedgerRpc? ledgerRpc;
   final WaTemplatePipelineRpc? pipelineRpc;
+  final WaSendHealthRpc? sendHealthRpc;
+  final WaSendRetryRpc? sendRetryRpc;
   final ZonesContactScreenRpc? zonesRpc;
   final ZoneContactSaveRpc? zoneSaveRpc;
 
@@ -192,6 +207,8 @@ class WaOpsScreen extends StatefulWidget {
     this.wabaRefreshRpc,
     this.ledgerRpc,
     this.pipelineRpc,
+    this.sendHealthRpc,
+    this.sendRetryRpc,
     this.zonesRpc,
     this.zoneSaveRpc,
     this.refreshDelay = const Duration(seconds: 3),
@@ -235,6 +252,15 @@ class _WaOpsScreenState extends State<WaOpsScreen> {
             text: 'Template pipeline',
           ),
           _TemplatePipelineSection(pipelineRpc: widget.pipelineRpc),
+          SizedBox(height: Ds.space.x24),
+          _SectionHeading(
+            icon: Icons.mark_email_read_outlined,
+            text: 'Notification delivery',
+          ),
+          _SendHealthSection(
+            healthRpc: widget.sendHealthRpc,
+            retryRpc: widget.sendRetryRpc,
+          ),
           const SizedBox(height: 22),
           _SectionHeading(
             icon: Icons.verified_outlined,

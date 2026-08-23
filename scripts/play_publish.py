@@ -194,10 +194,11 @@ def _emit(obj: dict) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["probe", "maxcode", "publish"])
+    ap.add_argument("cmd", choices=["probe", "maxcode", "publish", "notes"])
     ap.add_argument("--sa", required=True, help="path to the service-account JSON")
     ap.add_argument("--aab")
     ap.add_argument("--notes-file")
+    ap.add_argument("--code", help="versionCode to patch (notes)")
     ap.add_argument("--track", default="production")
     ap.add_argument("--draft", action="store_true",
                     help="stage the release without sending it for review")
@@ -232,6 +233,30 @@ def main() -> int:
                    "known_version_codes": codes,
                    "next_version_code": (max(codes) if codes else 0) + 1})
             play.delete_edit()
+            return 0
+
+        if a.cmd == "notes":
+            # CHANGE #293 — rewrite the release notes of a versionCode Play
+            # ALREADY has, without rebuilding or re-uploading anything. `publish`
+            # takes its notes from the queued row, so a release that shipped with
+            # the generic default can be given the real ones afterwards instead
+            # of burning a version code to fix a sentence.
+            if not a.notes_file or not a.code:
+                raise SystemExit("notes needs --notes-file and --code")
+            notes = open(a.notes_file).read().strip()
+            if not notes:
+                raise SystemExit("release notes are empty — refusing to patch")
+            if len(notes) > 500:
+                raise SystemExit(f"release notes are {len(notes)} chars; Play's limit is 500")
+            play.open_edit()
+            play.set_track(a.track, int(a.code), notes)
+            committed = play.commit()
+            play.open_edit()
+            tr = play.track(a.track)
+            play.delete_edit()
+            _emit({"ok": True, "package": PKG, "track": a.track,
+                   "version_code": int(a.code), "committed_edit": committed.get("id"),
+                   "release_notes": notes, "track_state": tr})
             return 0
 
         # publish

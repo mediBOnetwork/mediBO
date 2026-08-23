@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../design_tokens.dart';
+import '../models/notification_inbox.dart';
 import '../services/ui_copy.dart';
 import '../utils/render_log.dart';
 
@@ -24,8 +25,8 @@ class NotificationsInboxScreen extends StatefulWidget {
 class _NotificationsInboxScreenState extends State<NotificationsInboxScreen> {
   static const _pageSize = 30;
 
-  Map<String, dynamic>? _page;
-  final List<Map<String, dynamic>> _items = [];
+  InboxPage? _page;
+  List<InboxItem> _items = const [];
   bool _loading = true;
   bool _loadingMore = false;
   String? _error;
@@ -49,14 +50,12 @@ class _NotificationsInboxScreenState extends State<NotificationsInboxScreen> {
       final res = await Supabase.instance.client.rpc('notif_inbox_list',
           params: {'p_limit': _pageSize, 'p_offset': reset ? 0 : _items.length});
       if (!mounted) return;
-      final map = Map<String, dynamic>.from(res as Map);
-      final rows = (map['items'] as List? ?? const [])
-          .map((e) => Map<String, dynamic>.from(e as Map))
-          .toList();
+      final page = InboxPage.fromJson(Map<String, dynamic>.from(res as Map));
       setState(() {
-        _page = map;
-        if (reset) _items.clear();
-        _items.addAll(rows);
+        _page = page;
+        // InboxPage.append dedupes by id: a shifting sort near an offset
+        // boundary must never paint the same notification twice.
+        _items = reset ? page.items : InboxPage.append(_items, page.items);
         _loading = false;
         _loadingMore = false;
       });
@@ -79,29 +78,21 @@ class _NotificationsInboxScreenState extends State<NotificationsInboxScreen> {
     } catch (_) {/* the list still stands; the next open re-reads */}
   }
 
-  Future<void> _openRow(Map<String, dynamic> row) async {
-    final id = row['id'];
+  Future<void> _openRow(InboxItem row) async {
     try {
       await Supabase.instance.client.rpc('notif_inbox_mark_read',
-          params: {'p_ids': [id], 'p_all': false});
+          params: {'p_ids': [row.id], 'p_all': false});
     } catch (_) {/* opening matters more than the read receipt */}
 
-    final link = (row['deep_link'] as String? ?? '').trim();
     if (!mounted) return;
-    if (link.isEmpty || link == '/') {
+    final route = row.route;
+    if (route == null) {
+      // The backend gave this event nowhere to go — stay put and just clear
+      // the unread dot. Never fall back to the app home (spec item 5).
       await _load(reset: true);
       return;
     }
-    if (link.startsWith('http')) {
-      // An absolute backend link (a supplier form) — hand it to the router as
-      // its path; the app never rewrites a link the backend produced.
-      final uri = Uri.tryParse(link);
-      if (uri != null) {
-        Navigator.of(context).pushNamed(uri.path);
-        return;
-      }
-    }
-    Navigator.of(context).pushNamed(link);
+    Navigator.of(context).pushNamed(route);
   }
 
   @override
@@ -110,20 +101,17 @@ class _NotificationsInboxScreenState extends State<NotificationsInboxScreen> {
     return Scaffold(
       backgroundColor: Ds.c.bg,
       appBar: AppBar(
-        title: Text(p?['title'] as String? ?? ''),
+        title: Text(p?.title ?? ''),
         actions: [
-          if ((p?['mark_all'] as String? ?? '').isNotEmpty && _items.isNotEmpty)
-            TextButton(
-              onPressed: _markAllRead,
-              child: Text(p!['mark_all'] as String),
-            ),
+          if (p?.showMarkAll ?? false)
+            TextButton(onPressed: _markAllRead, child: Text(p!.markAllLabel)),
         ],
       ),
       body: _buildBody(p),
     );
   }
 
-  Widget _buildBody(Map<String, dynamic>? p) {
+  Widget _buildBody(InboxPage? p) {
     if (_loading) return const _InboxSkeleton();
 
     if (_error != null) {
@@ -141,12 +129,12 @@ class _NotificationsInboxScreenState extends State<NotificationsInboxScreen> {
 
     if (_items.isEmpty) {
       return _Centered(
-        title: p?['empty_title'] as String? ?? '',
-        hint: p?['empty_hint'] as String? ?? '',
+        title: p?.emptyTitle ?? '',
+        hint: p?.emptyHint ?? '',
       );
     }
 
-    final hasMore = (p?['has_more'] as bool?) ?? false;
+    final hasMore = p?.hasMore ?? false;
     return RefreshIndicator(
       onRefresh: () => _load(reset: true),
       child: ListView.separated(
@@ -163,7 +151,7 @@ class _NotificationsInboxScreenState extends State<NotificationsInboxScreen> {
                     ? const CircularProgressIndicator()
                     : TextButton(
                         onPressed: () => _load(),
-                        child: Text(p?['load_more'] as String? ?? ''),
+                        child: Text(p?.loadMoreLabel ?? ''),
                       ),
               ),
             );
@@ -178,16 +166,16 @@ class _NotificationsInboxScreenState extends State<NotificationsInboxScreen> {
 class _InboxCard extends StatelessWidget {
   const _InboxCard({required this.row, required this.onTap});
 
-  final Map<String, dynamic> row;
+  final InboxItem row;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final unread = (row['unread'] as bool?) ?? false;
-    final title = row['title'] as String? ?? '';
-    final body = row['body'] as String? ?? '';
-    final when = row['when_label'] as String? ?? '';
-    final channel = row['channel_label'] as String? ?? '';
+    final unread = row.unread;
+    final title = row.title;
+    final body = row.body;
+    final when = row.whenLabel;
+    final channel = row.channelLabel;
 
     return Material(
       color: Ds.c.surface,
@@ -224,14 +212,14 @@ class _InboxCard extends StatelessWidget {
                         fontWeight: unread ? FontWeight.w600 : FontWeight.w500,
                       ),
                     ),
-                    if (body.isNotEmpty) ...[
+                    if (row.hasBody) ...[
                       SizedBox(height: Ds.space.x4),
                       Text(body, style: Ds.t.caption),
                     ],
                     SizedBox(height: Ds.space.x8),
                     Row(
                       children: [
-                        if (channel.isNotEmpty) ...[
+                        if (row.hasChannel) ...[
                           Container(
                             padding: EdgeInsets.symmetric(
                                 horizontal: Ds.space.x8),

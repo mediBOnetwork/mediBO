@@ -188,13 +188,31 @@ class OrdersScreen extends StatefulWidget {
   final String? viewAsUserId;
   // Increment to force a re-fetch (used after write-as order placement).
   final int refreshSignal;
-  const OrdersScreen({super.key, this.viewAsUserId, this.refreshSignal = 0});
+
+  /// CHANGE #298 — the order a notification pointed at. The deep link
+  /// `/my-order/<order_code>` lands here, and this is what makes a push open the
+  /// EXACT order rather than the app home. The code is the backend's own
+  /// order_code, passed through untouched: the app has no opinion about what a
+  /// valid one looks like.
+  final String? focusOrderCode;
+
+  const OrdersScreen({
+    super.key,
+    this.viewAsUserId,
+    this.refreshSignal = 0,
+    this.focusOrderCode,
+  });
 
   @override
   State<OrdersScreen> createState() => _OrdersScreenState();
 }
 
 class _OrdersScreenState extends State<OrdersScreen> {
+  /// CHANGE #298 — deep-link focus. Cleared once the card has been scrolled
+  /// to, so a later refresh does not yank the list back.
+  String? _focusCode;
+  final GlobalKey _focusKey = GlobalKey();
+
   List<_DbOrder> _orders = [];
   bool _loading = true;
   /// #572 — empty-state copy comes from the payload, not from Dart literals.
@@ -244,6 +262,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
   @override
   void initState() {
     super.initState();
+    _focusCode = widget.focusOrderCode;
     _authedUid = Supabase.instance.client.auth.currentUser?.id;
     // CHANGE #614 — refetch whenever the ACCOUNT changes, not when a
     // particular event constant arrives. setSession(refreshToken) — the
@@ -262,6 +281,19 @@ class _OrdersScreenState extends State<OrdersScreen> {
     // #572 — subscribe only AFTER the fetch has resolved the account id; the
     // channel filter needs the account, which only the backend can tell us.
     _fetch();
+  }
+
+  /// CHANGE #298 — scroll the deep-linked order into view after first paint.
+  void _revealFocusedOrder() {
+    if (_focusCode == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = _focusKey.currentContext;
+      if (ctx == null || !mounted) return;
+      Scrollable.ensureVisible(ctx,
+          duration: const Duration(milliseconds: 260), alignment: 0.1);
+      RenderLog.write('c298_order_deeplink', 1);
+      _focusCode = null;
+    });
   }
 
   void _onAuthState(AuthState _) {
@@ -405,6 +437,10 @@ class _OrdersScreenState extends State<OrdersScreen> {
         _loading = false;
         _loadFailed = false; // the server answered; whatever it said stands
       });
+      // CHANGE #298 — a push/inbox tap named an order; bring it into view once
+      // the list it lives in exists. Cleared afterwards so a later refresh does
+      // not yank the user back here.
+      _revealFocusedOrder();
       if (_channel == null) _subscribeRealtime();
     } catch (e) {
       // CHANGE #622 — record WHAT was thrown, not merely that something was.
@@ -547,9 +583,18 @@ class _OrdersScreenState extends State<OrdersScreen> {
         // CHANGE #173 — first row is the reorder entry: it opens the predictive
         // "Due for reorder" screen (cadence computed server-side from history).
         itemCount: _orders.length + 1,
-        itemBuilder: (context, i) => i == 0
-            ? const _ReorderEntry()
-            : _OrderCard(order: _orders[i - 1]),
+        itemBuilder: (context, i) {
+          if (i == 0) return const _ReorderEntry();
+          final o = _orders[i - 1];
+          // CHANGE #298 — the deep-linked order opens itself and is scrolled
+          // into view; every other card is untouched.
+          final focused = _focusCode != null && o.number == _focusCode;
+          return _OrderCard(
+            key: focused ? _focusKey : null,
+            order: o,
+            autoOpen: focused,
+          );
+        },
       ),
     );
   }
@@ -612,7 +657,12 @@ class _ReorderEntry extends StatelessWidget {
 
 class _OrderCard extends StatefulWidget {
   final _DbOrder order;
-  const _OrderCard({required this.order});
+
+  /// CHANGE #298 — a deep-linked order arrives with its Items section already
+  /// open, so the tap lands on the content, not on a collapsed row.
+  final bool autoOpen;
+
+  const _OrderCard({super.key, required this.order, this.autoOpen = false});
 
   @override
   State<_OrderCard> createState() => _OrderCardState();
@@ -623,6 +673,14 @@ class _OrderCardState extends State<_OrderCard> {
   // A single int? enforces "only one section open at once" by construction — never
   // independent per-section booleans that could disagree.
   int? _tab;
+
+  @override
+  void initState() {
+    super.initState();
+    // CHANGE #298 — the ONLY card that auto-expands is the one a notification
+    // named. #458's "no auto-expand" rule still holds for every other card.
+    if (widget.autoOpen) _tab = 0;
+  }
 
   // CHANGE #458 B3: tapping the open button again closes it; tapping a different
   // button switches to it (closing whatever was open) — never two sections at once.

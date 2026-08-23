@@ -828,9 +828,14 @@ begin
                 || v_days::text || ' days · times IST',
     'window_days', v_days,
     'summary', jsonb_build_array(
-      jsonb_build_object('label','Working',     'value', v_working::text, 'tone','success'),
-      jsonb_build_object('label','Broken',      'value', v_broken::text,  'tone','danger'),
-      jsonb_build_object('label','Never fired', 'value', v_never::text,   'tone','warning')),
+      jsonb_build_object('key','all',         'label','All routes',
+                         'value',(v_working+v_broken+v_never)::text, 'tone','neutral'),
+      jsonb_build_object('key','BROKEN',      'label','Broken',
+                         'value', v_broken::text,  'tone','danger'),
+      jsonb_build_object('key','NEVER FIRED', 'label','Never fired',
+                         'value', v_never::text,   'tone','warning'),
+      jsonb_build_object('key','WORKING',     'label','Working',
+                         'value', v_working::text, 'tone','success')),
     'columns', jsonb_build_array('Event','Audience','Template','Emitting',
                                  'Last ' || v_days::text || ' days','Verdict'),
     'legend', 'WORKING = an approved template, an emitter that uses the route, and more '
@@ -1173,9 +1178,14 @@ begin
                 || v_days::text || ' days · times IST',
     'window_days', v_days,
     'summary', jsonb_build_array(
-      jsonb_build_object('label','Working',     'value', v_working::text, 'tone','success'),
-      jsonb_build_object('label','Broken',      'value', v_broken::text,  'tone','danger'),
-      jsonb_build_object('label','Never fired', 'value', v_never::text,   'tone','warning')),
+      jsonb_build_object('key','all',         'label','All routes',
+                         'value',(v_working+v_broken+v_never)::text, 'tone','neutral'),
+      jsonb_build_object('key','BROKEN',      'label','Broken',
+                         'value', v_broken::text,  'tone','danger'),
+      jsonb_build_object('key','NEVER FIRED', 'label','Never fired',
+                         'value', v_never::text,   'tone','warning'),
+      jsonb_build_object('key','WORKING',     'label','Working',
+                         'value', v_working::text, 'tone','success')),
     'columns', jsonb_build_array('Event','Audience','Template','Emitting',
                                  'Last ' || v_days::text || ' days','Verdict'),
     'legend', 'WORKING = an approved template, an emitter that uses the route, and more '
@@ -1188,3 +1198,8 @@ end $function$;
 
 revoke all on function public.wa_event_diagnosis(integer) from public, anon;
 grant execute on function public.wa_event_diagnosis(integer) to authenticated, service_role;
+
+-- ───────────────────────────────────────────────── 13. screen copy (ui_copy) ──
+insert into public.ui_copy(key, value)
+values ('wa_diagnosis.retry', '"Retry"'::jsonb)
+on conflict (key) do nothing;

@@ -184,7 +184,10 @@ begin
     -- Meta bills a conversation that actually went out. A send we refused
     -- (opt-out, no window, suppressed) and a send that failed are both free,
     -- so only a delivered-or-in-flight attempt is charged.
-    if coalesce(new.status,'') in ('skipped','blocked','suppressed')
+    -- 'queued' is part 1's status for a send that was REFUSED and parked on
+    -- the retry queue (window shut, no approved template). Nothing left the
+    -- building, so it is free — same as skipped/blocked/suppressed.
+    if coalesce(new.status,'') in ('skipped','blocked','suppressed','queued')
        or new.ok is false then
       new.cost := 0;
     else
@@ -914,3 +917,405 @@ grant execute on function public.notif_optout_set(uuid,text,text,boolean)       
 grant execute on function public.notif_set_language(uuid,text)                  to authenticated;
 grant execute on function public.notif_set_my_language(text)                    to authenticated;
 grant execute on function public.notif_norm_lang(text)                          to authenticated, anon;
+
+-- ─────────────────────────────── 12. an email template for EVERY event route ──
+-- Subject + body in both languages for all 55 routes, using ONLY the {{tokens}}
+-- already in that route's variable_map — the email and the WhatsApp template
+-- read the same variables, so one payload feeds all three channels.
+-- Ops alerts (admin audience) carry the same English text in both slots on
+-- purpose: a machine reason string must not be paraphrased into Hindi.
+with t(event_key, subj_en, body_en, subj_hi, body_hi) as (values
+  ('admin_login_alert', 'New sign-in to your mediBO admin account', 'Dear {{customer_name}},
+
+Your mediBO admin account was just signed in to on a new device.
+
+If this was not you, change your password and tell us immediately.', 'आपके mediBO admin खाते में नया साइन-इन', 'प्रिय {{customer_name}},
+
+आपके mediBO admin खाते में अभी एक नए डिवाइस से साइन-इन हुआ है।
+
+यदि यह आप नहीं थे तो तुरंत पासवर्ड बदलें और हमें बताएं।'),
+  ('back_in_stock', '{{product}} is back in stock', 'Dear {{customer_name}},
+
+{{product}} is available again.
+
+Open the mediBO app to add it to your order before the stock moves.', '{{product}} फिर उपलब्ध', 'प्रिय {{customer_name}},
+
+{{product}} दोबारा उपलब्ध है।
+
+स्टॉक खत्म होने से पहले mediBO ऐप में ऑर्डर में जोड़ें।'),
+  ('bill_to_customer', 'Bill for order {{order_code}}', 'Dear {{customer_name}},
+
+The bill for order {{order_code}} is ready. You can download it any time from Bills in the mediBO app.
+
+Please check it and tell us the same day if anything does not match.', 'ऑर्डर {{order_code}} का बिल', 'प्रिय {{customer_name}},
+
+ऑर्डर {{order_code}} का बिल तैयार है। इसे आप mediBO ऐप में Bills से कभी भी डाउनलोड कर सकते हैं।
+
+कृपया जाँच लें और कोई अंतर हो तो उसी दिन बताएं।'),
+  ('company_login_alert', 'New sign-in to your mediBO company account', 'Dear {{customer_name}},
+
+Your mediBO company account was just signed in to on a new device.
+
+If this was not you, change your password and tell us immediately.', 'आपके mediBO company खाते में नया साइन-इन', 'प्रिय {{customer_name}},
+
+आपके mediBO company खाते में अभी एक नए डिवाइस से साइन-इन हुआ है।
+
+यदि यह आप नहीं थे तो तुरंत पासवर्ड बदलें और हमें बताएं।'),
+  ('customer_approved', 'Your mediBO account is approved', 'Dear {{customer_name}},
+
+Your mediBO account is approved. You can now order trade stock at your rates.
+
+Sign in to the mediBO app to start ordering.', 'आपका mediBO खाता स्वीकृत', 'प्रिय {{customer_name}},
+
+आपका mediBO खाता स्वीकृत हो गया है। अब आप अपनी दरों पर स्टॉक ऑर्डर कर सकते हैं।
+
+ऑर्डर शुरू करने के लिए mediBO ऐप में साइन इन करें।'),
+  ('customer_registration', 'We have received your mediBO registration', 'Dear {{customer_name}},
+
+Thank you for registering with mediBO. Our team is verifying your drug licence and GST details.
+
+You will be able to place orders as soon as the account is approved.', 'आपका mediBO पंजीकरण मिल गया', 'प्रिय {{customer_name}},
+
+mediBO पर पंजीकरण के लिए धन्यवाद। हमारी टीम आपका ड्रग लाइसेंस और GST विवरण जाँच रही है।
+
+खाता स्वीकृत होते ही आप ऑर्डर दे सकेंगे।'),
+  ('delivery_delivered', 'Delivery confirmed', 'Dear {{customer_name}},
+
+Your delivery has been confirmed at your counter. Thank you.
+
+The signed proof of delivery is stored against the order in the mediBO app.', 'डिलीवरी की पुष्टि', 'प्रिय {{customer_name}},
+
+आपकी डिलीवरी की पुष्टि हो गई है। धन्यवाद।
+
+डिलीवरी का प्रमाण mediBO ऐप में ऑर्डर के साथ सुरक्षित है।'),
+  ('delivery_login_alert', 'New sign-in to your mediBO delivery account', 'Dear {{customer_name}},
+
+Your mediBO delivery account was just signed in to on a new device.
+
+If this was not you, change your password and tell us immediately.', 'आपके mediBO delivery खाते में नया साइन-इन', 'प्रिय {{customer_name}},
+
+आपके mediBO delivery खाते में अभी एक नए डिवाइस से साइन-इन हुआ है।
+
+यदि यह आप नहीं थे तो तुरंत पासवर्ड बदलें और हमें बताएं।'),
+  ('delivery_otp', 'Your delivery OTP', 'Your delivery OTP is in the mediBO app. Share it with the rider only after you have checked the goods.
+
+mediBO staff will never ask for this OTP over a call.', 'आपका डिलीवरी OTP', 'आपका डिलीवरी OTP mediBO ऐप में है। सामान जाँचने के बाद ही राइडर को बताएं।
+
+mediBO का कोई कर्मचारी कॉल पर यह OTP कभी नहीं माँगेगा।'),
+  ('delivery_out', 'Out for delivery — order {{order_code}}', 'Dear {{customer_name}},
+
+Order {{order_code}} is out for delivery with {{rider_name}}.
+
+Track it here: {{delivery_tracking_link}}', 'डिलीवरी के लिए रवाना — ऑर्डर {{order_code}}', 'प्रिय {{customer_name}},
+
+ऑर्डर {{order_code}} {{rider_name}} के साथ डिलीवरी के लिए निकल चुका है।
+
+यहाँ देखें: {{delivery_tracking_link}}'),
+  ('dev_cmd_daily_digest', 'Dev queue — {{done}} done, {{failed}} failed, {{pending}} pending', 'Yesterday on the dev queue: {{done}} completed, {{failed}} failed, {{pending}} still pending.
+
+{{titles}}', 'Dev queue — {{done}} done, {{failed}} failed, {{pending}} pending', 'Yesterday on the dev queue: {{done}} completed, {{failed}} failed, {{pending}} still pending.
+
+{{titles}}'),
+  ('dev_cmd_failed', 'Dev command #{{command_id}} failed', 'Command #{{command_id}} failed.
+
+{{error}}', 'Dev command #{{command_id}} failed', 'Command #{{command_id}} failed.
+
+{{error}}'),
+  ('dev_cmd_needs_input', 'Dev command #{{command_id}} needs your answer', 'Command #{{command_id}} is waiting on you.
+
+{{question}}', 'Dev command #{{command_id}} needs your answer', 'Command #{{command_id}} is waiting on you.
+
+{{question}}'),
+  ('dev_cmd_weekly_changelog', 'Dev queue — this week''s changelog', '{{summary}}', 'Dev queue — this week''s changelog', '{{summary}}'),
+  ('draft_questions_ready', 'Draft questions are ready', 'A new set of draft questions is ready for you to review in the mediBO app.', 'Draft questions are ready', 'A new set of draft questions is ready for you to review in the mediBO app.'),
+  ('gcp_billing_daily', 'Cloud spend — ₹{{today}} today, ₹{{month}} this month', 'Yesterday''s cloud spend was ₹{{today}}. Month to date: ₹{{month}}.', 'Cloud spend — ₹{{today}} today, ₹{{month}} this month', 'Yesterday''s cloud spend was ₹{{today}}. Month to date: ₹{{month}}.'),
+  ('gcp_disk_alert', 'Builder VM disk at {{pct}}%', 'Disk {{disk}} on the builder VM is {{pct}}% full. Builds fail when it fills.', 'Builder VM disk at {{pct}}%', 'Disk {{disk}} on the builder VM is {{pct}}% full. Builds fail when it fills.'),
+  ('gcp_quota_alert', 'Quota {{name}} at {{pct}}%', 'Quota {{name}} is at {{pct}}% of its limit.', 'Quota {{name}} at {{pct}}%', 'Quota {{name}} is at {{pct}}% of its limit.'),
+  ('gcp_uptime_down', 'Site down — {{url}}', '{{url}} has failed {{fails}} consecutive checks.', 'Site down — {{url}}', '{{url}} has failed {{fails}} consecutive checks.'),
+  ('gcp_uptime_recovered', 'Site recovered — {{url}}', '{{url}} is answering normally again.', 'Site recovered — {{url}}', '{{url}} is answering normally again.'),
+  ('login_alert', 'New sign-in to your mediBO account', 'Dear {{customer_name}},
+
+Your mediBO account was just signed in to on a new device.
+
+If this was not you, change your password and contact us immediately.', 'आपके mediBO खाते में नया साइन-इन', 'प्रिय {{customer_name}},
+
+आपके mediBO खाते में अभी एक नए डिवाइस से साइन-इन हुआ है।
+
+यदि यह आप नहीं थे तो तुरंत पासवर्ड बदलें और हमसे संपर्क करें।'),
+  ('mr_login_alert', 'New sign-in to your mediBO MR account', 'Dear {{customer_name}},
+
+Your mediBO MR account was just signed in to on a new device.
+
+If this was not you, change your password and tell us immediately.', 'आपके mediBO MR खाते में नया साइन-इन', 'प्रिय {{customer_name}},
+
+आपके mediBO MR खाते में अभी एक नए डिवाइस से साइन-इन हुआ है।
+
+यदि यह आप नहीं थे तो तुरंत पासवर्ड बदलें और हमें बताएं।'),
+  ('offer_back_in_stock', 'Offer stock available again — {{product}}', 'Dear {{customer_name}},
+
+{{product}} is available again on offer.
+
+Offer stock is limited — open the mediBO app to order.', 'ऑफ़र स्टॉक फिर उपलब्ध — {{product}}', 'प्रिय {{customer_name}},
+
+{{product}} ऑफ़र पर दोबारा उपलब्ध है।
+
+ऑफ़र स्टॉक सीमित है — ऑर्डर के लिए mediBO ऐप खोलें।'),
+  ('offer_match', '{{discount_pct}}% off on {{product_name}}', '{{product_name}} is on offer at {{discount_pct}}% off. {{qty_left}} left.
+
+Open the mediBO app to add it to your next order.', '{{product_name}} पर {{discount_pct}}% छूट', '{{product_name}} पर {{discount_pct}}% छूट चल रही है। {{qty_left}} बचे हैं।
+
+अगले ऑर्डर में जोड़ने के लिए mediBO ऐप खोलें।'),
+  ('order_accepted', 'Order {{order_code}} accepted — ₹{{amount}}', 'Dear {{customer_name}},
+
+Your order {{order_code}} has been accepted. Order value: ₹{{amount}}.
+
+We are packing it now and will let you know the moment it is dispatched.', 'ऑर्डर {{order_code}} स्वीकार — ₹{{amount}}', 'प्रिय {{customer_name}},
+
+आपका ऑर्डर {{order_code}} स्वीकार कर लिया गया है। ऑर्डर राशि: ₹{{amount}}।
+
+हम इसे पैक कर रहे हैं और रवाना होते ही आपको सूचित करेंगे।'),
+  ('order_delivered', 'Order {{order_code}} delivered', 'Dear {{customer_name}},
+
+Order {{order_code}} has been delivered. Thank you for your business.
+
+If anything is short or damaged, raise it in the mediBO app the same day so we can settle it quickly.', 'ऑर्डर {{order_code}} डिलीवर', 'प्रिय {{customer_name}},
+
+ऑर्डर {{order_code}} डिलीवर हो गया है। आपके व्यापार के लिए धन्यवाद।
+
+यदि कोई सामान कम या खराब मिला हो तो उसी दिन mediBO ऐप में दर्ज करें ताकि हम तुरंत निपटा सकें।'),
+  ('order_dispatched', 'Order {{order_code}} dispatched', 'Dear {{customer_name}},
+
+Your order {{order_code}} has left our warehouse and is on its way to you.
+
+You will receive the delivery OTP when the rider reaches your counter.', 'ऑर्डर {{order_code}} रवाना', 'प्रिय {{customer_name}},
+
+आपका ऑर्डर {{order_code}} हमारे गोदाम से रवाना हो चुका है और आपके पास पहुँच रहा है।
+
+डिलीवरी के समय आपको OTP भेजा जाएगा।'),
+  ('order_placed', 'Order {{order_code}} received', 'We have received your order {{order_code}} placed on {{today_date}}.
+
+Our team is now sourcing the items. You will get the confirmation and the payment link as soon as the order is accepted.
+
+You can track the order any time in the mediBO app.', 'ऑर्डर {{order_code}} मिल गया', '{{today_date}} को दिया गया आपका ऑर्डर {{order_code}} हमें मिल गया है।
+
+हमारी टीम अभी सामान की व्यवस्था कर रही है। ऑर्डर स्वीकार होते ही आपको पुष्टि और भुगतान लिंक भेज दिया जाएगा।
+
+आप ऑर्डर की स्थिति कभी भी mediBO ऐप में देख सकते हैं।'),
+  ('order_rejected', 'Your order could not be processed', 'Dear {{customer_name}},
+
+We are sorry — your order could not be processed and has been cancelled. No payment has been taken.
+
+Please place the order again, or contact us if you would like help with an alternative.', 'आपका ऑर्डर पूरा नहीं हो सका', 'प्रिय {{customer_name}},
+
+खेद है — आपका ऑर्डर पूरा नहीं हो सका और रद्द कर दिया गया है। कोई भुगतान नहीं लिया गया है।
+
+कृपया ऑर्डर दोबारा दें, या विकल्प के लिए हमसे संपर्क करें।'),
+  ('order_unfulfilled', '{{unfulfilled_count}} item(s) we could not supply — {{order_code}}', 'Dear {{customer_name}},
+
+We could not source {{unfulfilled_count}} item(s) on order {{order_code}}. Those lines have been removed and are not billed.
+
+Revised order total: ₹{{new_order_total}}.
+
+We will notify you when the missing items are available again.', '{{unfulfilled_count}} आइटम उपलब्ध नहीं — {{order_code}}', 'प्रिय {{customer_name}},
+
+ऑर्डर {{order_code}} के {{unfulfilled_count}} आइटम हम उपलब्ध नहीं करा सके। वे लाइनें हटा दी गई हैं और उनका बिल नहीं बनेगा।
+
+संशोधित ऑर्डर राशि: ₹{{new_order_total}}।
+
+सामान दोबारा उपलब्ध होते ही हम आपको सूचित करेंगे।'),
+  ('order_updated', 'Order {{order_code}} updated — ₹{{amount}}', 'Your order {{order_code}} was updated on {{today_date}}. The revised order value is ₹{{amount}}.
+
+Open the order in the mediBO app to see the changed items.', 'ऑर्डर {{order_code}} अपडेट — ₹{{amount}}', '{{today_date}} को आपका ऑर्डर {{order_code}} अपडेट किया गया। नई ऑर्डर राशि ₹{{amount}} है।
+
+बदले हुए आइटम देखने के लिए mediBO ऐप में ऑर्डर खोलें।'),
+  ('payment_due', 'Payment due on order {{order_code}} — ₹{{amount}}', 'Dear {{customer_name}},
+
+This is a reminder that ₹{{amount}} is still due on order {{order_code}}.
+
+You can settle it by UPI in the mediBO app. Please ignore this if you have already paid today.', 'ऑर्डर {{order_code}} पर भुगतान बाकी — ₹{{amount}}', 'प्रिय {{customer_name}},
+
+याद दिलाना है कि ऑर्डर {{order_code}} पर ₹{{amount}} अब भी बकाया है।
+
+आप mediBO ऐप में UPI से भुगतान कर सकते हैं। यदि आज ही भुगतान कर चुके हैं तो इसे अनदेखा करें।'),
+  ('payment_qr', 'Payment link for order {{order_code}} — ₹{{amount}}', 'Dear {{customer_name}},
+
+Amount due on order {{order_code}} is ₹{{amount}}.
+
+Open the mediBO app to pay by UPI. The payment is verified automatically — you do not need to send a screenshot.', 'ऑर्डर {{order_code}} का भुगतान — ₹{{amount}}', 'प्रिय {{customer_name}},
+
+ऑर्डर {{order_code}} पर देय राशि ₹{{amount}} है।
+
+UPI से भुगतान के लिए mediBO ऐप खोलें। भुगतान अपने आप सत्यापित हो जाता है — स्क्रीनशॉट भेजने की ज़रूरत नहीं।'),
+  ('payment_received_cash', 'Payment received — ₹{{payment_amount}} against {{order_code}}', 'We have recorded ₹{{payment_amount}} received by {{payment_mode}} on {{today_date}}, collected by {{received_by}}, against order {{order_code}}.
+
+Total received: ₹{{total_received}}
+Balance due: ₹{{balance_due}}', 'भुगतान प्राप्त — {{order_code}} पर ₹{{payment_amount}}', '{{today_date}} को {{received_by}} द्वारा {{payment_mode}} से प्राप्त ₹{{payment_amount}} ऑर्डर {{order_code}} पर दर्ज कर लिया गया है।
+
+कुल प्राप्त: ₹{{total_received}}
+शेष देय: ₹{{balance_due}}'),
+  ('payment_received_online', 'Payment received — thank you', 'Dear {{customer_name}},
+
+We have received your online payment and your account has been credited.
+
+The updated ledger is in the mediBO app under Bills.', 'भुगतान प्राप्त — धन्यवाद', 'प्रिय {{customer_name}},
+
+आपका ऑनलाइन भुगतान हमें मिल गया है और आपके खाते में जमा कर दिया गया है।
+
+अपडेटेड हिसाब mediBO ऐप में Bills में देखें।'),
+  ('payment_rejected', 'Payment of ₹{{payment_amount}} could not be verified', 'Dear {{customer_name}},
+
+The payment of ₹{{payment_amount}} against order {{order_code}} could not be verified and has not been credited.
+
+Please retry the payment in the mediBO app, or contact us with the UTR so we can trace it.', '₹{{payment_amount}} का भुगतान सत्यापित नहीं हुआ', 'प्रिय {{customer_name}},
+
+ऑर्डर {{order_code}} पर ₹{{payment_amount}} का भुगतान सत्यापित नहीं हो सका और जमा नहीं किया गया है।
+
+कृपया mediBO ऐप में दोबारा भुगतान करें, या UTR के साथ हमसे संपर्क करें।'),
+  ('reorder_confirmed', 'Reorder confirmed — ₹{{reorder_amount}}', 'Dear {{customer_name}},
+
+Your reorder is confirmed:
+{{reorder_items}}
+
+Order value: ₹{{reorder_amount}}. We will update you as it moves.', 'री-ऑर्डर पुष्ट — ₹{{reorder_amount}}', 'प्रिय {{customer_name}},
+
+आपका री-ऑर्डर पुष्ट हो गया है:
+{{reorder_items}}
+
+ऑर्डर राशि: ₹{{reorder_amount}}। आगे की जानकारी हम देते रहेंगे।'),
+  ('reorder_due', 'Time to reorder — ₹{{reorder_amount}}', 'Dear {{customer_name}},
+
+Based on your buying pattern these items look due for a reorder:
+{{reorder_items}}
+
+Indicative value: ₹{{reorder_amount}}. Open the mediBO app to review and order.', 'फिर से ऑर्डर का समय — ₹{{reorder_amount}}', 'प्रिय {{customer_name}},
+
+आपकी खरीद के आधार पर इन सामानों का दोबारा ऑर्डर बनता है:
+{{reorder_items}}
+
+अनुमानित राशि: ₹{{reorder_amount}}। देखने और ऑर्डर करने के लिए mediBO ऐप खोलें।'),
+  ('sec_backup_missed', 'Backup missed — last good backup {{last}}', 'No backup has completed since {{last}}. The database and repo bundle are not current.', 'Backup missed — last good backup {{last}}', 'No backup has completed since {{last}}. The database and repo bundle are not current.'),
+  ('sec_budget_pause', 'Budget cap hit — ₹{{spent}} of ₹{{cap}}', 'Spend has reached ₹{{spent}} against the cap of ₹{{cap}}. Work is paused until the cap is raised.', 'Budget cap hit — ₹{{spent}} of ₹{{cap}}', 'Spend has reached ₹{{spent}} against the cap of ₹{{cap}}. Work is paused until the cap is raised.'),
+  ('sec_freeze', 'Break-glass freeze by {{by}}', 'The dev queue has been frozen by {{by}}. No command will be claimed until it is unlocked.', 'Break-glass freeze by {{by}}', 'The dev queue has been frozen by {{by}}. No command will be claimed until it is unlocked.'),
+  ('sec_intrusion_attempt', 'Intrusion attempt from {{source}}', '{{count}} failed attempt(s) from {{source}} were blocked.', 'Intrusion attempt from {{source}}', '{{count}} failed attempt(s) from {{source}} were blocked.'),
+  ('sec_rotation_due', 'Key rotation due — {{names}}', 'These credentials are due for rotation: {{names}}.', 'Key rotation due — {{names}}', 'These credentials are due for rotation: {{names}}.'),
+  ('sec_zombie_killed', 'Zombie build killed — command #{{command_id}}', 'Command #{{command_id}} was killed: {{reason}}. Tokens spent: {{tokens}}.', 'Zombie build killed — command #{{command_id}}', 'Command #{{command_id}} was killed: {{reason}}. Tokens spent: {{tokens}}.'),
+  ('short_dated_offer', 'Short-dated offer — {{product_name}} at {{discount_pct}}% off', '{{product_name}} is available at {{discount_pct}}% off. Batch expiry {{batch_expiry}}, {{remaining_qty}} remaining.
+
+Check the expiry against your own stock rotation before ordering.', 'शॉर्ट-डेटेड ऑफ़र — {{product_name}} पर {{discount_pct}}% छूट', '{{product_name}} {{discount_pct}}% छूट पर उपलब्ध है। बैच एक्सपायरी {{batch_expiry}}, {{remaining_qty}} शेष।
+
+ऑर्डर से पहले अपनी स्टॉक रोटेशन के हिसाब से एक्सपायरी जाँच लें।'),
+  ('supplier_approved', 'Your mediBO supplier account is approved', 'Dear {{supplier_name}},
+
+Your mediBO supplier account is approved. You will start receiving stock inquiries and orders.
+
+Sign in to the mediBO app to see them.', 'आपका mediBO सप्लायर खाता स्वीकृत', 'प्रिय {{supplier_name}},
+
+आपका mediBO सप्लायर खाता स्वीकृत हो गया है। अब आपको स्टॉक पूछताछ और ऑर्डर मिलने लगेंगे।
+
+देखने के लिए mediBO ऐप में साइन इन करें।'),
+  ('supplier_bill_pending', 'Bill still pending for order {{order_code}}', 'Dear {{supplier_name}},
+
+We are still waiting for the bill against order {{order_code}} — {{days_waiting}} day(s) now.
+
+Please upload or send it so we can clear your payment.', 'ऑर्डर {{order_code}} का बिल अब भी बाकी', 'प्रिय {{supplier_name}},
+
+ऑर्डर {{order_code}} का बिल अब तक नहीं मिला है — {{days_waiting}} दिन हो गए।
+
+कृपया भेजें ताकि हम आपका भुगतान कर सकें।'),
+  ('supplier_dispute', 'Return / dispute on order {{order_code}}', 'Dear {{supplier_name}},
+
+There is a return or dispute raised on order {{order_code}}.
+
+Please open the order in the mediBO app and respond so we can settle it.', 'ऑर्डर {{order_code}} पर रिटर्न / विवाद', 'प्रिय {{supplier_name}},
+
+ऑर्डर {{order_code}} पर रिटर्न या विवाद दर्ज हुआ है।
+
+कृपया mediBO ऐप में ऑर्डर खोलकर जवाब दें ताकि हम इसे निपटा सकें।'),
+  ('supplier_inquiry_sent', 'Stock inquiry — {{inquiry_item_count}} item(s)', 'Dear {{supplier_name}},
+
+We have a stock inquiry for {{inquiry_item_count}} item(s).
+
+Please mark availability here: {{inquiry_link}}
+
+The link is open for {{inquiry_expiry_mins}} minutes; after that the inquiry moves to the next supplier.', 'स्टॉक पूछताछ — {{inquiry_item_count}} आइटम', 'प्रिय {{supplier_name}},
+
+{{inquiry_item_count}} आइटम के लिए स्टॉक पूछताछ है।
+
+उपलब्धता यहाँ दर्ज करें: {{inquiry_link}}
+
+यह लिंक {{inquiry_expiry_mins}} मिनट तक खुला है; उसके बाद पूछताछ अगले सप्लायर के पास चली जाएगी।'),
+  ('supplier_login_alert', 'New sign-in to your mediBO supplier account', 'Dear {{customer_name}},
+
+Your mediBO supplier account was just signed in to on a new device.
+
+If this was not you, change your password and tell us immediately.', 'आपके mediBO supplier खाते में नया साइन-इन', 'प्रिय {{customer_name}},
+
+आपके mediBO supplier खाते में अभी एक नए डिवाइस से साइन-इन हुआ है।
+
+यदि यह आप नहीं थे तो तुरंत पासवर्ड बदलें और हमें बताएं।'),
+  ('supplier_order_sent', 'New order {{order_code}}', 'Dear {{supplier_name}},
+
+Order {{order_code}} has been placed with you.
+
+Open it here: {{supplier_order_link}}', 'नया ऑर्डर {{order_code}}', 'प्रिय {{supplier_name}},
+
+ऑर्डर {{order_code}} आपके पास भेजा गया है।
+
+यहाँ खोलें: {{supplier_order_link}}'),
+  ('supplier_registration', 'We have received your mediBO supplier registration', 'Dear {{supplier_name}},
+
+Thank you for registering as a mediBO supplier. We are verifying your business details.
+
+We will write again as soon as the account is approved.', 'आपका mediBO सप्लायर पंजीकरण मिल गया', 'प्रिय {{supplier_name}},
+
+mediBO सप्लायर के रूप में पंजीकरण के लिए धन्यवाद। हम आपके व्यापार विवरण की जाँच कर रहे हैं।
+
+खाता स्वीकृत होते ही हम आपको सूचित करेंगे।'),
+  ('supplier_stock_update', 'Stock update needed — {{stock_item_count}} item(s)', 'Dear {{supplier_name}},
+
+Please confirm whether {{stock_item_count}} item(s) are back in stock.
+
+Update here: {{stock_update_link}}', 'स्टॉक अपडेट चाहिए — {{stock_item_count}} आइटम', 'प्रिय {{supplier_name}},
+
+कृपया बताएं कि {{stock_item_count}} आइटम दोबारा स्टॉक में आए या नहीं।
+
+यहाँ अपडेट करें: {{stock_update_link}}'),
+  ('wa_send_failed', 'A message did not reach {{failed_to}}', 'This message did not reach {{failed_to}}:
+
+{{failed_message}}
+
+Reason: {{failed_reason}}', 'A message did not reach {{failed_to}}', 'This message did not reach {{failed_to}}:
+
+{{failed_message}}
+
+Reason: {{failed_reason}}'),
+  ('worker_login_alert', 'New sign-in to your mediBO worker account', 'Dear {{customer_name}},
+
+Your mediBO worker account was just signed in to on a new device.
+
+If this was not you, change your password and tell us immediately.', 'आपके mediBO worker खाते में नया साइन-इन', 'प्रिय {{customer_name}},
+
+आपके mediBO worker खाते में अभी एक नए डिवाइस से साइन-इन हुआ है।
+
+यदि यह आप नहीं थे तो तुरंत पासवर्ड बदलें और हमें बताएं।')
+)
+update public.wa_event_routes r
+   set email_subject    = t.subj_en,
+       email_body       = t.body_en,
+       email_subject_hi = t.subj_hi,
+       email_body_hi    = t.body_hi,
+       updated_at       = now()
+  from t
+ where r.event_key = t.event_key
+   and (r.email_subject is distinct from t.subj_en
+     or r.email_body    is distinct from t.body_en
+     or r.email_subject_hi is distinct from t.subj_hi
+     or r.email_body_hi    is distinct from t.body_hi);
+
+-- Default posture: the operator's own alerts email themselves as the permanent
+-- record; everything customer- or supplier-facing ships with a finished
+-- template but STAYS OFF until an admin turns it on from the Notifications
+-- screen. Nobody's inbox changes because a migration ran.
+update public.wa_event_routes
+   set email_enabled = true, email_mode = 'always'
+ where audience = 'admin' and email_enabled is false;

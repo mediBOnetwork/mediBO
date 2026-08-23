@@ -72,6 +72,13 @@ class _CustPayPanelState extends State<CustPayPanel> {
       final payments = (panel['payments'] as List?) ?? [];
       // CHANGE #480 — totals now come verbatim from backend display.* (which
       // already carry the "Awaiting bill" pending text); no client-side literal.
+      // #291 — which payment provider the backend chose for THIS load. This is
+      // the live reachability signal: the moment anyone opens a Payment tab the
+      // render-log says whether the Razorpay QR path or the manual UPI path is
+      // the one being drawn.
+      RenderLog.write(
+          'c291_pay_provider',
+          ((panel['upi'] as Map?)?['provider'] ?? 'upi_manual').toString());
       RenderLog.write('c468_total', display['total']?.toString() ?? '');
       RenderLog.write('c468_due', display['due']?.toString() ?? '');
       RenderLog.write('c468_paid', display['paid']?.toString() ?? totals['paid_label']?.toString() ?? '');

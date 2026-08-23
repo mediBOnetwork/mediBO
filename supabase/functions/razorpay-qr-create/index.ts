@@ -51,6 +51,16 @@ function reply(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });
 }
 
+/// An INFRASTRUCTURE failure (keys missing, Razorpay down, Razorpay refusing)
+/// must not leave the customer with a dead sheet. Answering `provider:
+/// 'upi_manual'` is the same answer the toggle-off path gives, so both the app
+/// sheet and send-payment-qr drop back to the shared-UPI QR they drew before
+/// this change. `nothing_due` is NOT one of these — that is a real answer with
+/// its own message, and falling back would show a QR for money not owed.
+function fallbackToManual(error: string, detail: unknown = null) {
+  return reply({ ok: false, provider: 'upi_manual', fallback: true, error, detail });
+}
+
 /** Basic auth against the Razorpay REST API. */
 function rzpAuth(): string {
   return 'Basic ' + btoa(`${RZP_KEY_ID}:${RZP_KEY_SECRET}`);
@@ -80,14 +90,14 @@ Deno.serve(async (req: Request) => {
     p_order_id: orderId,
     p_kind: kind,
   });
-  if (prepErr) return reply({ ok: false, error: 'prepare_failed', detail: prepErr.message });
+  if (prepErr) return fallbackToManual('prepare_failed', prepErr.message);
   if (!prep?.ok) return reply(prep ?? { ok: false, error: 'prepare_empty' });
 
   // Already have an open QR for this exact amount — hand back the same one.
   if (prep.reused) return reply({ ok: true, reused: true, ...prep.view });
 
   if (!RZP_KEY_ID || !RZP_KEY_SECRET) {
-    return reply({ ok: false, error: 'razorpay_not_configured' });
+    return fallbackToManual('razorpay_not_configured');
   }
 
   // 2. Create the dynamic QR on Razorpay.
@@ -109,15 +119,13 @@ Deno.serve(async (req: Request) => {
     });
     rzp = await r.json();
     if (!r.ok) {
-      return reply({
-        ok: false,
-        error: 'razorpay_error',
-        status: r.status,
-        detail: (rzp as any)?.error?.description ?? null,
-      });
+      // Includes the QR Codes feature not being enabled on the account yet:
+      // the customer keeps the manual QR until it is.
+      return fallbackToManual('razorpay_error',
+        (rzp as any)?.error?.description ?? r.status);
     }
   } catch (e) {
-    return reply({ ok: false, error: 'razorpay_unreachable', detail: String(e) });
+    return fallbackToManual('razorpay_unreachable', String(e));
   }
 
   // 3. Store it and return the backend's own render-ready view.
@@ -129,8 +137,8 @@ Deno.serve(async (req: Request) => {
     p_qr_string: (rzp as any)?.qr_string ?? null,
     p_amount: prep.amount,
   });
-  if (storeErr) return reply({ ok: false, error: 'store_failed', detail: storeErr.message });
-  if (!stored?.ok) return reply(stored ?? { ok: false, error: 'store_empty' });
+  if (storeErr) return fallbackToManual('store_failed', storeErr.message);
+  if (!stored?.ok) return fallbackToManual('store_empty', stored?.error ?? null);
 
   return reply({ ok: true, reused: false, ...stored.view });
 });

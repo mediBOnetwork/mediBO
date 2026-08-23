@@ -45,6 +45,7 @@
 // decisions live in InboxPage/InboxItem exactly so this suite stays on the VM.
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:pharma_b2b/services/push_service.dart';
 
 import 'package:pharma_b2b/models/notification_inbox.dart';
 import 'package:pharma_b2b/screens/admin/admin_nav_entries.dart';
@@ -269,4 +270,48 @@ void main() {
       }
     });
   });
+
+  // 7. AN UNREGISTERED PLATFORM IS AN ABSENCE (CHANGE #298).
+  //    push_config_get() returns web_ready / android_ready; the app asks the
+  //    backend which platforms can receive rather than inferring it from a key
+  //    that may belong to another platform, or discovering it when Firebase
+  //    throws. `enabled` alone is never enough.
+  group('push readiness is the backend\'s answer, not an inference', () {
+    tearDown(() => PushService.instance.config = null);
+
+    test('enabled but this platform unregistered reads as not configured', () {
+      PushService.instance.config = <String, dynamic>{
+        'enabled': true,
+        'web_ready': false,
+        'android_ready': true,
+      };
+      // The suite runs on the Dart VM, so kIsWeb is false: android_ready wins.
+      expect(PushService.instance.configured, isTrue);
+
+      PushService.instance.config = <String, dynamic>{
+        'enabled': true,
+        'web_ready': true,
+        'android_ready': false,
+      };
+      expect(PushService.instance.configured, isFalse,
+          reason: 'another platform being ready says nothing about this one');
+    });
+
+    test('the master switch still outranks readiness', () {
+      PushService.instance.config = <String, dynamic>{
+        'enabled': false,
+        'web_ready': true,
+        'android_ready': true,
+      };
+      expect(PushService.instance.configured, isFalse);
+    });
+
+    test('a payload without the flags is an absence, never a default yes', () {
+      PushService.instance.config = <String, dynamic>{'enabled': true};
+      expect(PushService.instance.configured, isFalse);
+      PushService.instance.config = null;
+      expect(PushService.instance.configured, isFalse);
+    });
+  });
+
 }

@@ -41,7 +41,17 @@ class PushService {
   /// The backend's own config row. Null until [start] has read it.
   Map<String, dynamic>? config;
 
-  bool get configured => (config?['enabled'] as bool?) ?? false;
+  /// CHANGE #298 — the BACKEND decides which platforms can receive a push.
+  /// `enabled` is the switch; `web_ready` / `android_ready` say whether THIS
+  /// platform has an app registered in the Firebase project. An unregistered
+  /// platform is an absence, so it reads as not-configured here rather than
+  /// being discovered by Firebase throwing inside `_ensureApp`.
+  bool get configured {
+    final c = config;
+    if (c == null) return false;
+    if ((c['enabled'] as bool?) != true) return false;
+    return (kIsWeb ? c['web_ready'] : c['android_ready']) == true;
+  }
 
   FirebaseApp? _app;
   String? _token;

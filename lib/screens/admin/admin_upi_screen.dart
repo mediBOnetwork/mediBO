@@ -64,6 +64,10 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
   Map<String, dynamic>? _payMode;
   bool _payModeBusy = false;
 
+  /// CHANGE #300 — rzp_webhook_log_recent(): the deliveries Razorpay has made
+  /// to this project, and whether we acted on each. Rendered verbatim.
+  Map<String, dynamic>? _webhookLog;
+
   // ── Platform state (CHANGE #611) ─────────────────────────────────────────
   // The whole platform block — rows, note and documents — is whatever
   // about_screen() returns. This screen never composes those strings.
@@ -80,6 +84,7 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
     RenderLog.write('c611_platform_screen_opened', 1);
     _fetchList();
     _fetchPayMode();
+    _fetchWebhookLog();
     _fetchPartnerData();
     _fetchPlatformData();
   }
@@ -772,6 +777,113 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
     }
   }
 
+  // ── Razorpay webhook deliveries (CHANGE #300) ────────────────────────────
+
+  /// #293 wrote every Razorpay delivery to razorpay_webhook_log and #300 fixed
+  /// the handled flag, but nothing in the app ever read it. This is the read.
+  Future<void> _fetchWebhookLog() async {
+    try {
+      final res = await Supabase.instance.client
+          .rpc('rzp_webhook_log_recent', params: {'p_limit': 20});
+      if (!mounted) return;
+      setState(() =>
+          _webhookLog = res is Map ? res.cast<String, dynamic>() : null);
+      RenderLog.write('c300_webhook_log_loaded',
+          '${(_webhookLog?['rows'] as List?)?.length ?? 0}');
+    } catch (_) {
+      if (mounted) setState(() => _webhookLog = null);
+    }
+  }
+
+  /// Every word and every tone below arrives in the payload. The card decides
+  /// nothing: it does not turn `handled` into a label, does not pluralise, and
+  /// does not pick a colour — it prints status_label in the tone the backend
+  /// named. An absent payload is an absence, so the section disappears.
+  Widget _buildWebhookLogSection() {
+    final w = _webhookLog;
+    if (w == null || w['ok'] != true) return const SizedBox.shrink();
+    final rows = (w['rows'] as List?) ?? const [];
+    RenderLog.write('c300_webhook_log_card', '${rows.length}');
+
+    Color toneBg(String tone) => switch (tone) {
+          'success' => Ds.c.successSoft,
+          'warning' => Ds.c.warningSoft,
+          'danger' => Ds.c.dangerSoft,
+          _ => Ds.c.bg,
+        };
+    Color toneFg(String tone) => switch (tone) {
+          'success' => Ds.c.success,
+          'warning' => Ds.c.warning,
+          'danger' => Ds.c.danger,
+          _ => Ds.c.textSecondary,
+        };
+
+    return Container(
+      width: double.infinity,
+      margin: EdgeInsets.only(top: Ds.space.x24),
+      padding: EdgeInsets.all(Ds.space.x16),
+      decoration: BoxDecoration(
+        color: Ds.c.surface,
+        borderRadius: Ds.r.rCard,
+        boxShadow: Ds.elevation.e1,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Expanded(
+              child: Text('${w['title'] ?? ''}', style: Ds.t.subtitle),
+            ),
+            Text('${w['count_label'] ?? ''}', style: Ds.t.caption),
+          ]),
+          SizedBox(height: Ds.space.x4),
+          Text('${w['subtitle'] ?? ''}', style: Ds.t.caption),
+          SizedBox(height: Ds.space.x16),
+          if (w['has'] != true)
+            Text('${w['empty'] ?? ''}', style: Ds.t.body)
+          else
+            ...rows.map((r) {
+              final row = (r as Map).cast<String, dynamic>();
+              final tone = '${row['status_tone'] ?? ''}';
+              return Padding(
+                padding: EdgeInsets.only(bottom: Ds.space.x12),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('${row['event'] ?? ''}', style: Ds.t.body),
+                          SizedBox(height: Ds.space.x4),
+                          Text(
+                            '${row['at_label'] ?? ''}'
+                            '${'${row['payload_id'] ?? ''}'.isEmpty ? '' : ' · ${row['payload_id']}'}',
+                            style: Ds.t.caption,
+                          ),
+                        ],
+                      ),
+                    ),
+                    SizedBox(width: Ds.space.x12),
+                    Container(
+                      padding: EdgeInsets.symmetric(
+                          horizontal: Ds.space.x12, vertical: Ds.space.x4),
+                      decoration: BoxDecoration(
+                        color: toneBg(tone),
+                        borderRadius: Ds.r.rChip,
+                      ),
+                      child: Text('${row['status_label'] ?? ''}',
+                          style: Ds.t.caption.copyWith(color: toneFg(tone))),
+                    ),
+                  ],
+                ),
+              );
+            }),
+        ],
+      ),
+    );
+  }
+
   /// The card. Renders nothing at all until the backend has answered — an
   /// absent payload is an absence, not a default-off switch.
   ///
@@ -813,6 +925,7 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
               ),
               const SizedBox(height: 24),
               _buildPayModeSection(),
+              _buildWebhookLogSection(),
               const SizedBox(height: 24),
               _AddUpiCard(
                 paCtrl: _paCtrl,
@@ -878,6 +991,7 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
             ),
             const SizedBox(height: 16),
             _buildPayModeSection(),
+            _buildWebhookLogSection(),
             const SizedBox(height: 24),
             _AddUpiCard(
               paCtrl: _paCtrl,

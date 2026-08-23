@@ -17,6 +17,7 @@ import '../util.dart';
 import '../services/ui_copy.dart';
 import '../view_as_state.dart';
 import '../widgets/animations.dart';
+import '../widgets/checkout_pay_sheet.dart';
 import 'auth/login_screen.dart';
 import 'profile_screen.dart';
 
@@ -164,6 +165,8 @@ class _CartScreenState extends State<CartScreen> {
     // CHANGE #456 D1 — call inquiry_lock_state() alongside order_hours_state()
     // on the cart/checkout screen.
     InquiryLockState.read(context).refresh();
+    // CHANGE #293 — the button word and the pay-at-checkout decision.
+    _fetchCheckoutAction();
   }
 
   // CHANGE #324/#435: ViewAs checkbox state — admin-added items checked, customer
@@ -236,6 +239,79 @@ class _CartScreenState extends State<CartScreen> {
         _refreshSelectedTotal();
       }
     });
+  }
+
+  // ── CHANGE #293 — which of the three placement paths am I on? ──────────
+  // checkout_action() answers it server-side: the collection mode, whether
+  // this session is an admin acting as a customer (never a client flag), and
+  // the button word itself. Empty until the backend has spoken — the old
+  // ui_copy label stands in until then, so a slow RPC never blanks the button.
+  Map<String, dynamic> _checkout = const <String, dynamic>{};
+
+  String get _placeOrderLabel =>
+      (_checkout['button_label'] ?? '').toString();
+
+  Future<void> _fetchCheckoutAction() async {
+    try {
+      final raw = await Supabase.instance.client.rpc('checkout_action');
+      if (!mounted) return;
+      if (raw is Map) {
+        setState(() => _checkout = raw.cast<String, dynamic>());
+        RenderLog.write('c293_checkout_action',
+            'mode=${_checkout['collection_mode']};pay=${_checkout['pay_now']}');
+      }
+    } catch (_) {
+      // An absent payload is an absence: the button keeps its ui_copy label.
+    }
+  }
+
+  /// The gateway QR for an order the CUSTOMER just placed for themselves.
+  /// razorpay-qr-create reuses an open QR, so reopening this never mints a
+  /// second one for the same order.
+  Future<void> _showCheckoutQr(String orderId, String code, String amount) async {
+    final rzpCopy = await _fetchRazorpayCopy(orderId);
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+      builder: (sheetCtx) => CheckoutPaySheet(
+        orderId: orderId,
+        checkout: _checkout,
+        razorpayCopy: rzpCopy,
+        orderCode: code,
+        amountDisplay: amount,
+        createQr: (id) async {
+          final res = await Supabase.instance.client.functions
+              .invoke('razorpay-qr-create', body: {'order_id': id, 'kind': 'advance'});
+          final d = res.data;
+          return d is Map ? d.cast<String, dynamic>() : <String, dynamic>{};
+        },
+        checkPaid: (id) async {
+          final d = await Supabase.instance.client
+              .rpc('rzp_order_paid', params: {'p_order_id': id});
+          return d is Map ? d.cast<String, dynamic>() : <String, dynamic>{};
+        },
+        onDone: () => Navigator.of(sheetCtx).pop(),
+      ),
+    );
+  }
+
+  /// The sheet's loading / error / retry words, from the same block the My
+  /// Orders payment panel reads — one source, so the two sheets cannot drift.
+  Future<Map<String, dynamic>> _fetchRazorpayCopy(String orderId) async {
+    try {
+      final d = await Supabase.instance.client
+          .rpc('customer_order_payment_panel_v2', params: {'p_order_id': orderId});
+      if (d is Map) {
+        final upi = d['upi'];
+        if (upi is Map && upi['razorpay'] is Map) {
+          return (upi['razorpay'] as Map).cast<String, dynamic>();
+        }
+      }
+    } catch (_) {/* absence, not a default */}
+    return const <String, dynamic>{};
   }
 
   Future<void> _placeOrder() async {
@@ -495,6 +571,24 @@ class _CartScreenState extends State<CartScreen> {
       cart.refresh();
       cart.fetchOrders(); // refresh order list from Supabase (fire and forget)
 
+      // CHANGE #293 — "Pay & Place Order": in Payment Gateway mode a customer
+      // paying for their OWN order sees the QR immediately and the sheet flips
+      // itself when the webhook confirms. The decision is the backend's
+      // (checkout_action().pay_now), never a client guess about roles.
+      final orderId = (placed['id'] ?? '').toString();
+      if (_checkout['pay_now'] == true && orderId.isNotEmpty) {
+        RenderLog.write('c293_checkout_pay_now', 1);
+        await _showCheckoutQr(orderId, displayCode, amountDisplay);
+        if (!mounted) return;
+        widget.onOrderPlaced?.call();
+        return;
+      }
+
+      // Acting-as in gateway mode: the server already pushed the QR to the
+      // customer on WhatsApp. Its sentence, printed verbatim.
+      final actingNote = (_checkout['actingas_note'] ?? '').toString();
+      if (actingNote.isNotEmpty) showToast(context, actingNote);
+
       showDialog(
         context: context,
         barrierDismissible: false,
@@ -695,6 +789,7 @@ class _CartScreenState extends State<CartScreen> {
                             child: _OrderSummaryPanel(
                               cart: cart,
                               onPlaceOrder: _placeOrder,
+                              placeOrderLabel: _placeOrderLabel,
                               selectedTotal: selectedTotal,
                               selectedSubtotalLine: _selectedSubtotalLine,
                               availabilityBlocked: blocked,
@@ -739,6 +834,7 @@ class _CartScreenState extends State<CartScreen> {
             _CheckoutBar(
               cart: cart,
               onPlaceOrder: _placeOrder,
+              placeOrderLabel: _placeOrderLabel,
               selectedTotal: selectedTotal,
               selectedSubtotalLine: _selectedSubtotalLine,
               availabilityBlocked: blocked,
@@ -1977,6 +2073,10 @@ String? _orderGateMessage(AuthNotifier auth, [ViewAsNotifier? viewAs, String? or
 class _CheckoutBar extends StatelessWidget {
   final CartModel cart;
   final VoidCallback onPlaceOrder;
+
+  /// CHANGE #293 — checkout_action().button_label. Empty until the backend has
+  /// answered, in which case the ui_copy label stands in.
+  final String placeOrderLabel;
   // CHANGE #324: when ViewAs, show selected-items total instead of full cart total.
   final String? selectedTotal;
 
@@ -1989,6 +2089,7 @@ class _CheckoutBar extends StatelessWidget {
   const _CheckoutBar({
     required this.cart,
     required this.onPlaceOrder,
+    this.placeOrderLabel = '',
     this.selectedTotal,
     this.selectedSubtotalLine = '',
     this.availabilityBlocked = false,
@@ -2150,7 +2251,9 @@ class _CheckoutBar extends StatelessWidget {
                                           : (orderHoursClosed
                                               ? (orderHours.buttonLabel ?? '')
                                               : (auth.isAuthenticated
-                                                  ? c('cart.btn_place_order')
+                                                  ? (placeOrderLabel.isNotEmpty
+                                                      ? placeOrderLabel
+                                                      : c('cart.btn_place_order'))
                                                   : c('cart.btn_login_to_order'))),
                                       style: const TextStyle(
                                         color: Colors.white,
@@ -2184,6 +2287,9 @@ class _CheckoutBar extends StatelessWidget {
 class _OrderSummaryPanel extends StatelessWidget {
   final CartModel cart;
   final VoidCallback onPlaceOrder;
+
+  /// CHANGE #293 — checkout_action().button_label, rendered verbatim.
+  final String placeOrderLabel;
   // CHANGE #324: when ViewAs, show selected-items total instead of full cart total.
   final String? selectedTotal;
 
@@ -2196,6 +2302,7 @@ class _OrderSummaryPanel extends StatelessWidget {
   const _OrderSummaryPanel({
     required this.cart,
     required this.onPlaceOrder,
+    this.placeOrderLabel = '',
     this.selectedTotal,
     this.selectedSubtotalLine = '',
     this.availabilityBlocked = false,
@@ -2286,7 +2393,9 @@ class _OrderSummaryPanel extends StatelessWidget {
                               : (orderHoursClosed
                                   ? (orderHours.buttonLabel ?? '')
                                   : (auth.isAuthenticated
-                                      ? c('cart.btn_place_order')
+                                      ? (placeOrderLabel.isNotEmpty
+                                          ? placeOrderLabel
+                                          : c('cart.btn_place_order'))
                                       : c('cart.btn_login_to_order'))),
                           style: const TextStyle(
                             color: Colors.white,

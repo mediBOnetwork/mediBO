@@ -226,3 +226,19 @@ begin
 
   return public._send_payment_qr_wa_auto(p_order_id, v_ph, v_due, 'advance');
 end $function$;
+
+-- The admin order payment panel reads the SAME switch as the customer sheet, so
+-- an admin can never be looking at a mode the platform is not in.
+create or replace function public.admin_order_payment_view_v2(p_order_id uuid)
+returns jsonb
+language sql
+stable
+security definer
+set search_path to 'public'
+as $function$
+  select d || public.money_display_block(d, array[
+           'total','due','paid','amount','balance','order_total','net_payable',
+           'advance_required','claimed_amount','ocr_amount','app_amount'])
+           || jsonb_build_object('collection', public.rzp_panel_block())
+  from (select public.admin_order_payment_view(p_order_id) d) z;
+$function$;

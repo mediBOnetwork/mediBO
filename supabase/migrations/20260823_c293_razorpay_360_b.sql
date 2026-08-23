@@ -113,6 +113,18 @@ begin
       'caption', public._rzp_copy('lands_gateway_caption'),
       'rows',    v_rows,
       'note',    '',
+      'edit_label',  public._rzp_copy('lands_edit_label'),
+      'edit_title',  public._rzp_copy('lands_edit_title'),
+      'save_label',  public._rzp_copy('lands_save_label'),
+      'cancel_label',public._rzp_copy('lands_cancel_label'),
+      'cycle_hint',  public._rzp_copy('lands_cycle_hint'),
+      'account_label', public._rzp_copy('lands_account_label'),
+      'bank_label',    public._rzp_copy('lands_bank_label'),
+      'cycle_label',   public._rzp_copy('lands_cycle_label'),
+      'account_value', coalesce(cfg.rzp_account_name,''),
+      'bank_value',    coalesce(cfg.rzp_settlement_bank,''),
+      'last4_value',   coalesce(cfg.rzp_settlement_last4,''),
+      'cycle_value',   coalesce(cfg.rzp_settlement_cycle,''),
       'can_edit', (public.get_my_role() = 'super_admin'));
   end if;
 
@@ -133,6 +145,7 @@ begin
     'caption', public._rzp_copy('lands_manual_caption'),
     'rows',    v_rows,
     'note',    v_note,
+    'edit_label','',
     'can_edit', false);
 end $function$;
 
@@ -325,7 +338,8 @@ begin
     'pay_title',       public._rzp_copy('checkout_pay_title'),
     'actingas_note',   case when v_act is not null and v_mode = 'gateway'
                             then public._rzp_copy('checkout_actingas_note') else '' end,
-    'paid_toast',      public._rzp_copy('checkout_paid_toast'));
+    'paid_toast',      public._rzp_copy('checkout_paid_toast'),
+    'done_label',      public._rzp_copy('checkout_done_label'));
 end $function$;
 
 -- The customer sheet polls this: "has the webhook confirmed my order yet?".

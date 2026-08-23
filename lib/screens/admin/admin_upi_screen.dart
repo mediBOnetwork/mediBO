@@ -12,6 +12,7 @@ import 'package:pharma_b2b/utils/bill_mime.dart';
 import 'package:pharma_b2b/widgets/fullscreen_image.dart';
 import 'package:pharma_b2b/services/ui_copy.dart';
 import 'package:pharma_b2b/design_tokens.dart';
+import 'package:pharma_b2b/widgets/payment_mode_card.dart';
 
 class AdminUpiScreen extends StatefulWidget {
   // Injected RPCs — tests stub these; production leaves them null and hits
@@ -657,19 +658,19 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
     }
   }
 
-  Future<void> _setPayMode(bool enabled) async {
-    if (_payModeBusy) return;
+  Future<void> _setPayMode(String modeKey) async {
+    if (_payModeBusy || modeKey.isEmpty) return;
     setState(() => _payModeBusy = true);
     try {
       final res = await Supabase.instance.client
-          .rpc('payment_mode_set', params: {'p_enabled': enabled});
+          .rpc('payment_mode_set', params: {'p_mode': modeKey});
       if (!mounted) return;
       final next = res is Map ? res.cast<String, dynamic>() : null;
       setState(() {
         if (next != null) _payMode = next;
         _payModeBusy = false;
       });
-      RenderLog.write('c291_pay_mode_set', 'enabled=$enabled');
+      RenderLog.write('c293_pay_mode_set', 'mode=$modeKey');
       if (mounted && next != null) {
         showToast(context, (next['saved_label'] ?? '').toString());
       }
@@ -680,65 +681,112 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
     }
   }
 
+  /// CHANGE #293 — the gateway settlement details. Razorpay's merchant API
+  /// answers /v1/account with an empty body for a non-partner key, so the
+  /// account name, bank and cycle are the super-admin's own entry; the backend
+  /// still owns every label and the final display string.
+  Future<void> _editGatewayDetails() async {
+    final lands = (_payMode?['money_lands'] as Map?)?.cast<String, dynamic>();
+    if (lands == null) return;
+    String s(String k) => (lands[k] ?? '').toString();
+
+    final acc = TextEditingController(text: s('account_value'));
+    final bank = TextEditingController(text: s('bank_value'));
+    final last4 = TextEditingController(text: s('last4_value'));
+    final cycle = TextEditingController(text: s('cycle_value'));
+
+    final saved = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+      builder: (sheetCtx) => Padding(
+        padding: EdgeInsets.only(
+          left: Ds.space.x16,
+          right: Ds.space.x16,
+          top: Ds.space.x16,
+          bottom: MediaQuery.of(sheetCtx).viewInsets.bottom + Ds.space.x16,
+        ),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text(s('edit_title'), style: Ds.t.subtitle),
+          SizedBox(height: Ds.space.x16),
+          TextField(
+            controller: acc,
+            decoration: InputDecoration(labelText: s('account_label')),
+          ),
+          SizedBox(height: Ds.space.x12),
+          TextField(
+            controller: bank,
+            decoration: InputDecoration(labelText: s('bank_label')),
+          ),
+          SizedBox(height: Ds.space.x12),
+          TextField(
+            controller: last4,
+            keyboardType: TextInputType.number,
+            inputFormatters: [
+              FilteringTextInputFormatter.digitsOnly,
+              LengthLimitingTextInputFormatter(4),
+            ],
+            decoration: const InputDecoration(labelText: '••••'),
+          ),
+          SizedBox(height: Ds.space.x12),
+          TextField(
+            controller: cycle,
+            decoration: InputDecoration(
+                labelText: s('cycle_label'), hintText: s('cycle_hint')),
+          ),
+          SizedBox(height: Ds.space.x24),
+          SizedBox(
+            width: double.infinity,
+            height: Ds.touch.minTarget,
+            child: FilledButton(
+              onPressed: () => Navigator.of(sheetCtx).pop(true),
+              child: Text(s('save_label')),
+            ),
+          ),
+          SizedBox(height: Ds.space.x8),
+          SizedBox(
+            width: double.infinity,
+            height: Ds.touch.minTarget,
+            child: TextButton(
+              onPressed: () => Navigator.of(sheetCtx).pop(false),
+              child: Text(s('cancel_label')),
+            ),
+          ),
+        ]),
+      ),
+    );
+    if (saved != true || !mounted) return;
+
+    try {
+      await Supabase.instance.client.rpc('payment_gateway_details_set', params: {
+        'p_account_name': acc.text,
+        'p_bank': bank.text,
+        'p_last4': last4.text,
+        'p_cycle': cycle.text,
+      });
+      await _fetchPayMode();
+      RenderLog.write('c293_gateway_details_saved', 1);
+    } catch (e) {
+      if (mounted) showToast(context, _mapError(e), isError: true);
+    }
+  }
+
   /// The card. Renders nothing at all until the backend has answered — an
   /// absent payload is an absence, not a default-off switch.
+  ///
+  /// CHANGE #293 — a two-option SELECTOR (payment_config.collection_mode), not
+  /// a boolean switch, plus the backend's "where the money lands" block and the
+  /// zone + date collection summary. Every word is payment_mode_get()'s.
   Widget _buildPayModeSection() {
     final m = _payMode;
     if (m == null) return const SizedBox.shrink();
-    final on = m['enabled'] == true;
-    final canEdit = m['can_edit'] == true;
-    final tone = (m['mode_tone'] ?? '').toString();
-    final toneBg = tone == 'ok' ? Ds.c.successSoft : Ds.c.warningSoft;
-
-    return Container(
-      padding: EdgeInsets.all(Ds.space.x16),
-      decoration: BoxDecoration(
-        color: Ds.c.surface,
-        borderRadius: Ds.r.rCard,
-        border: Border.all(color: Ds.c.divider),
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Expanded(
-            child: Text((m['title'] ?? '').toString(), style: Ds.t.subtitle),
-          ),
-          Container(
-            padding: EdgeInsets.symmetric(
-                horizontal: Ds.space.x12, vertical: Ds.space.x4),
-            decoration:
-                BoxDecoration(color: toneBg, borderRadius: Ds.r.rChip),
-            child: Text((m['mode_label'] ?? '').toString(),
-                style: Ds.t.caption),
-          ),
-        ]),
-        SizedBox(height: Ds.space.x8),
-        Text((m['helper'] ?? '').toString(), style: Ds.t.caption),
-        SizedBox(height: Ds.space.x16),
-        SizedBox(
-          height: Ds.touch.minTarget,
-          child: Row(children: [
-            Expanded(
-              child: Text((m['toggle_label'] ?? '').toString(),
-                  style: Ds.t.body),
-            ),
-            if (_payModeBusy)
-              SizedBox(
-                width: Ds.space.x24,
-                height: Ds.space.x24,
-                child: CircularProgressIndicator(
-                    strokeWidth: 2, color: Ds.c.brand),
-              )
-            else
-              Switch(
-                value: on,
-                activeThumbColor: Ds.c.brand,
-                onChanged: canEdit ? _setPayMode : null,
-              ),
-          ]),
-        ),
-        SizedBox(height: Ds.space.x4),
-        Text((m['mode_helper'] ?? '').toString(), style: Ds.t.caption),
-      ]),
+    RenderLog.write('c293_pay_mode_card', 'mode=${m['selected']}');
+    return PaymentModeCard(
+      payload: m,
+      busy: _payModeBusy,
+      onPick: _setPayMode,
+      onEditGateway: _editGatewayDetails,
     );
   }
 

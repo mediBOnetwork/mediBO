@@ -1,4 +1,4 @@
-// razorpay-webhook — CHANGE #291
+// razorpay-webhook — CHANGE #291, hardened by #293
 //
 // Razorpay calls this when a QR is credited. This function does exactly two
 // things: prove the delivery is genuine (HMAC-SHA256 over the RAW body with
@@ -56,7 +56,10 @@ Deno.serve(async (req: Request) => {
   if (!WEBHOOK_SECRET) {
     return reply({ ok: false, error: 'webhook_secret_not_configured' }, 503);
   }
-  if (!sig) return reply({ ok: false, error: 'missing_signature' }, 401);
+  // #293 — the spec's contract: an unverifiable delivery is a BAD REQUEST.
+  // 400 (not 401) is also what keeps Razorpay from treating this as an auth
+  // challenge it should retry against.
+  if (!sig) return reply({ ok: false, error: 'missing_signature' }, 400);
 
   let expected: string;
   try {
@@ -65,7 +68,7 @@ Deno.serve(async (req: Request) => {
     return reply({ ok: false, error: 'hmac_failed', detail: String(e) }, 500);
   }
   if (!timingSafeEqual(expected, sig.toLowerCase())) {
-    return reply({ ok: false, error: 'bad_signature' }, 401);
+    return reply({ ok: false, error: 'bad_signature' }, 400);
   }
 
   let event: unknown;

@@ -228,6 +228,7 @@ class CheckoutPaySheetState extends State<CheckoutPaySheet> {
         waiting: _handedOff && !_paid,
         waitingLabel: _copy('sdk_waiting_label'),
         waitingHint: _copy('sdk_waiting_hint'),
+        openFailedLabel: _handedOff ? '' : _error,
       );
     }
     final qr = _qrView;

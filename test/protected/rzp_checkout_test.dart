@@ -269,7 +269,13 @@ void main() {
       await tester.pump();
       await tester.tap(find.text('Pay now'));
       await tester.pump();
+      // Not "waiting" — nothing was handed off. The customer is told, in the
+      // BACKEND's words, and the link stays on screen as the way out.
       expect(find.text('Waiting for your payment to be confirmed'), findsNothing);
+      expect(find.text('Could not open the payment page.'), findsOneWidget);
+      expect(find.text('https://rzp.io/rzp/TESTLINK'), findsOneWidget);
+      // and the button is still tappable for a second try
+      expect(find.text('Pay now'), findsOneWidget);
     });
   });
 

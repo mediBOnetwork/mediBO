@@ -137,6 +137,10 @@ class RzpCheckoutCard extends StatelessWidget {
   final String waitingLabel;
   final String waitingHint;
 
+  /// A launch the device refused (a pop-up blocker, no browser). Its words are
+  /// the payload's too. Shown beside the link, which is the way out.
+  final String openFailedLabel;
+
   const RzpCheckoutCard({
     super.key,
     required this.view,
@@ -146,6 +150,7 @@ class RzpCheckoutCard extends StatelessWidget {
     this.waiting = false,
     this.waitingLabel = '',
     this.waitingHint = '',
+    this.openFailedLabel = '',
   });
 
   @override
@@ -169,6 +174,18 @@ class RzpCheckoutCard extends StatelessWidget {
               ],
             ),
           ),
+        if (openFailedLabel.isNotEmpty) ...[
+          Container(
+            width: double.infinity,
+            padding: EdgeInsets.all(Ds.space.x12),
+            decoration: BoxDecoration(
+              color: Ds.c.warningSoft,
+              borderRadius: Ds.r.rCard,
+            ),
+            child: Text(openFailedLabel, style: Ds.t.caption),
+          ),
+          SizedBox(height: Ds.space.x12),
+        ],
         if (view.failureLabel.isNotEmpty) ...[
           Container(
             width: double.infinity,

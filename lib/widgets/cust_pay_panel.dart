@@ -1015,6 +1015,7 @@ class _CustPaySheetState extends State<CustPaySheet> {
         waiting: _rzpHandedOff && !pay.paid,
         waitingLabel: _rzpCopy('sdk_waiting_label'),
         waitingHint: _rzpCopy('sdk_waiting_hint'),
+        openFailedLabel: _rzpHandedOff ? '' : _rzpError,
       );
     }
     if (_rzp != null) {

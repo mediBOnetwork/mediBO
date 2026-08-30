@@ -21,6 +21,7 @@ import 'models/cart_model.dart';
 import 'models/order_hours_model.dart';
 import 'models/inquiry_lock_model.dart';
 import 'screens/auth/login_screen.dart';
+import 'screens/partner/partner_home_screen.dart';
 import 'screens/home_shell.dart';
 import 'screens/public/inquiry_form_screen.dart';
 import 'screens/public/stock_update_form_screen.dart'; // C639: /stock-update/<token>
@@ -666,6 +667,12 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
             ),
             routes: {
               '/login':        (_) => const LoginScreen(),
+              // CHANGE #307 — the fulfilment partner's home, at a real URL for
+              // the same reason /admin/cron-health has one: a headless session
+              // can open it and PROVE it painted. Authorisation stays in the
+              // backend — partner_home() answers `is_partner:false` with its
+              // own copy for anyone else, so this route guards nothing.
+              '/partner':      (_) => const PartnerHomeScreen(),
               '/register':     (_) => const LoginScreen(),
               // CHANGE #631 (PART A) — the delivery-partner registration form.
               // delivery_partner_register() stamps auth.uid() itself, so the
@@ -833,6 +840,11 @@ class _AppRootState extends State<_AppRoot> {
         // guard debounces so this collapses with the app-start restore check.
         if (widget.auth.isAuthenticated) {
           widget.auth.checkForcedLogout();
+        }
+        // CHANGE #307 — the BACKEND names the surface. A zone-locked fulfilment
+        // partner is sent to their own home; every other surface is unchanged.
+        if (widget.auth.session.surfaceName == 'partner') {
+          return const PartnerHomeScreen();
         }
         return HomeShell();
       },

@@ -2,6 +2,7 @@
 // CHANGE #494 — renamed to "Payment and Partner"; added Partner section
 // CHANGE #611 — added Platform Details + Platform Documents; PDF uploads
 import 'package:flutter/material.dart';
+import 'admin_partner_console_screen.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -1077,6 +1078,13 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
                   onUploadDoc: (doc) => _uploadDoc(area, doc),
                   onViewDoc: (doc) => _viewDoc(area, doc),
                   onDeleteDoc: (doc) => _confirmDeleteDoc(area, doc),
+                  onManageAccess: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => AdminPartnerConsoleScreen(
+                        partnerId: int.tryParse('${p['id'] ?? ''}') ?? 0,
+                      ),
+                    ),
+                  ),
                 ),
               );
             }).toList(),
@@ -1548,6 +1556,9 @@ class _PartnerCard extends StatelessWidget {
   final void Function(Map<String, dynamic> doc) onViewDoc;
   final void Function(Map<String, dynamic> doc) onDeleteDoc;
 
+  /// CHANGE #307 — opens this partner's logins + per-feature access matrix.
+  final VoidCallback onManageAccess;
+
   const _PartnerCard({
     required this.partner,
     required this.busy,
@@ -1558,6 +1569,7 @@ class _PartnerCard extends StatelessWidget {
     required this.onUploadDoc,
     required this.onViewDoc,
     required this.onDeleteDoc,
+    required this.onManageAccess,
   });
 
   @override
@@ -1621,6 +1633,21 @@ class _PartnerCard extends StatelessWidget {
                       onPressed: onEdit,
                       padding: EdgeInsets.zero,
                       constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                    ),
+                    // CHANGE #307 — partner logins + the per-feature access
+                    // matrix. Adding a login is done from HERE, exactly as the
+                    // spec asks; the person then signs in with the ordinary
+                    // WhatsApp OTP / Google login.
+                    IconButton(
+                      icon: Icon(Icons.manage_accounts_outlined,
+                          size: Ds.space.x16 + Ds.space.x4,
+                          color: Ds.c.textSecondary),
+                      tooltip: c('admin_upi_screen.tooltip_partner_access'),
+                      onPressed: onManageAccess,
+                      padding: EdgeInsets.zero,
+                      constraints: BoxConstraints(
+                          minWidth: Ds.touch.minTarget,
+                          minHeight: Ds.touch.minTarget),
                     ),
                     if (canMakeActive)
                       TextButton(

@@ -8504,7 +8504,14 @@ class _ArrivalsScreenState extends State<_ArrivalsScreen>
 
 class AdminFulfillmentScreen extends StatefulWidget {
   static final _key = GlobalKey<_AdminFulfillmentScreenState>();
-  AdminFulfillmentScreen() : super(key: _key);
+
+  /// CHANGE #307 — a partner opens ONE tab of this screen from their home
+  /// (Collect / Count / Bag / Pack / Assign to delivery), so the tab it starts
+  /// on is a construction parameter rather than a second copy of the screen.
+  /// Default 0 keeps every existing call site byte-identical.
+  final int initialTab;
+
+  AdminFulfillmentScreen({this.initialTab = 0}) : super(key: _key);
   static void triggerFocus() => _key.currentState?._onFocus();
 
   @override
@@ -8654,6 +8661,7 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
   @override
   void initState() {
     super.initState();
+    _tab = widget.initialTab;           // CHANGE #307
     WidgetsBinding.instance.addObserver(this);
     AdminDateScope.instance.addListener(_onDateScopeChanged);
     // CHANGE #531: one fetch per session for fw_error_messages()+fw_issue_options(),

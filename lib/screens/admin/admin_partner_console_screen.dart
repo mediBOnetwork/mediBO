@@ -210,6 +210,7 @@ class PartnerConsoleView extends StatelessWidget {
     return ListView(
       padding: EdgeInsets.all(Ds.space.x16),
       children: [
+        _Measure(children: [
         _Card(
           title: _s('users_title'),
           subtitle: _s('users_subtitle'),
@@ -268,7 +269,28 @@ class PartnerConsoleView extends StatelessWidget {
           ],
         ),
         SizedBox(height: Ds.space.x32),
+        ]),
       ],
+    );
+  }
+}
+
+/// A readable measure: full width on a phone, centred and capped on a desktop
+/// so a settings form does not stretch to 1200 px of empty row.
+class _Measure extends StatelessWidget {
+  const _Measure({required this.children});
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: Ds.space.x48 * 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: children,
+        ),
+      ),
     );
   }
 }
@@ -367,6 +389,8 @@ class _FeatureRow extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          if ((feature['group_label'] ?? '').toString().isNotEmpty)
+            Text((feature['group_label'] ?? '').toString(), style: Ds.t.caption),
           Text((feature['label'] ?? '').toString(), style: Ds.t.bodyStrong),
           SizedBox(height: Ds.space.x8),
           Wrap(
@@ -401,11 +425,13 @@ class _AccessChip extends StatelessWidget {
     return InkWell(
       borderRadius: Ds.r.rChip,
       onTap: onTap,
+      // No `alignment:` here — a Container with one set expands to fill the
+      // loose constraints a Wrap hands it, which stacked the three choices as
+      // three full-width bars instead of a row.
       child: Container(
         constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
-        alignment: Alignment.center,
         padding: EdgeInsets.symmetric(
-            horizontal: Ds.space.x16, vertical: Ds.space.x8),
+            horizontal: Ds.space.x16, vertical: Ds.space.x12),
         decoration: BoxDecoration(
           color: selected ? Ds.c.brandSoft : Ds.c.bg,
           borderRadius: Ds.r.rChip,

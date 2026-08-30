@@ -217,7 +217,11 @@ class _Shell extends StatelessWidget {
       body: SafeArea(
         child: SingleChildScrollView(
           padding: EdgeInsets.all(Ds.space.x16),
-          child: Column(
+          // Full width on a phone, centred and capped on a desktop.
+          child: Center(
+              child: ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: Ds.space.x48 * 16),
+            child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(title, style: Ds.t.title),
@@ -236,8 +240,10 @@ class _Shell extends StatelessWidget {
               SizedBox(height: Ds.space.x24),
               child,
               SizedBox(height: Ds.space.x32),
+              // (the whole column is capped to a readable measure below)
             ],
           ),
+          )),
         ),
       ),
     );

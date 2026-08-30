@@ -1974,3 +1974,78 @@ grant execute on function public.my_session(), public.my_session_core(),
   public._session_partner_overlay(jsonb) to authenticated, anon, service_role;
 revoke all on function public.c307_partner_zone_proof() from public, anon, authenticated;
 grant execute on function public.c307_partner_zone_proof() to service_role;
+
+-- ── #307 design-QA follow-up ────────────────────────────────────────────────
+-- The two refusal payloads carry the page title too, so the screen has a
+-- heading instead of one floating sentence.
+CREATE OR REPLACE FUNCTION public.partner_home()
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_pid bigint := public.my_partner_id();
+  v_copy jsonb := coalesce((select value from app_settings where key='partner_home_copy'),'{}'::jsonb);
+  rp record; v_groups jsonb; v_zone_label text; v_n int;
+begin
+  if auth.uid() is null then
+    return jsonb_build_object('ok',false,'is_partner',false,
+      'title', coalesce(v_copy->>'title',''),
+      'message', coalesce(v_copy->>'signed_out_message',''));
+  end if;
+  if v_pid is null then
+    return jsonb_build_object('ok',false,'is_partner',false,
+      'title', coalesce(v_copy->>'title',''),
+      'message', coalesce(v_copy->>'not_partner_message',''));
+  end if;
+
+  select * into rp from region_partners where id = v_pid;
+  select z.name into v_zone_label from zones z where z.id = rp.zone_id;
+
+  select jsonb_agg(g order by g->>'sort'), sum((g->>'count')::int)
+    into v_groups, v_n
+  from (
+    select jsonb_build_object(
+             'label', fr.group_label,
+             'sort',  lpad(min(fr.sort_order)::text, 6, '0'),
+             'count', count(*),
+             'features', jsonb_agg(jsonb_build_object(
+                 'feature_key', fr.feature_key,
+                 'label',       fr.label,
+                 'icon_key',    fr.icon_key,
+                 'route_key',   fr.route_key,
+                 'access',      public.partner_access(fr.feature_key, v_pid),
+                 'can_write',   (public.partner_access(fr.feature_key, v_pid) = 'write'),
+                 'access_label',
+                   case public.partner_access(fr.feature_key, v_pid)
+                     when 'write' then coalesce(v_copy->>'access_write_label','')
+                     else coalesce(v_copy->>'access_read_label','') end)
+               order by fr.sort_order)) as g
+      from feature_registry fr
+     where fr.is_active and fr.owner = 'partner' and fr.partner_eligible
+       and public.partner_access(fr.feature_key, v_pid) <> 'none'
+     group by fr.group_label
+  ) s;
+
+  return jsonb_build_object(
+    'ok', true,
+    'is_partner', true,
+    'partner_id', v_pid,
+    'partner_name', coalesce(rp.partner_name,''),
+    'title',    coalesce(v_copy->>'title',''),
+    'subtitle', coalesce(v_copy->>'subtitle',''),
+    'zone_id', rp.zone_id,
+    'zone_label', coalesce(v_zone_label,''),
+    'zone_chip', case when coalesce(v_zone_label,'') = '' then ''
+                      else coalesce(v_copy->>'zone_prefix','') || ' · ' || v_zone_label end,
+    'show_zone_picker', false,
+    'district', coalesce(rp.district,''),
+    'groups', coalesce(v_groups,'[]'::jsonb),
+    'feature_count', coalesce(v_n,0),
+    'has_features', coalesce(v_n,0) > 0,
+    'empty_title',   coalesce(v_copy->>'empty_title',''),
+    'empty_message', coalesce(v_copy->>'empty_message',''));
+end $function$
+;
+

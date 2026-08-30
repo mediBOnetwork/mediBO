@@ -1031,6 +1031,7 @@ class _HomeShellState extends State<HomeShell> {
       bottomNavigationBar: isAdmin
           ? _AdminMobileBottomBar(
               index: _index,
+              alertCount: _alertCount,
               onSection: (i) => _handleAdminNav(const [
                 'dashboard', 'whatsapp', 'customers', 'suppliers', 'fulfillment'
               ][i]),
@@ -4417,7 +4418,17 @@ class _AdminMobileBottomBar extends StatelessWidget {
   final int index; // current _index from HomeShellState
   final ValueChanged<int> onSection; // 0=Dashboard,1=AddMedicine,2=Suppliers,3=Customers,4=Bills,5=Fulfillment
 
-  const _AdminMobileBottomBar({required this.index, required this.onSection});
+  /// CHANGE #306 — unactioned unpaid orders, from order_alert_feed().count.
+  /// It rides the Fulfill tab because that is where an accepted order goes
+  /// next, so nothing is silently lost behind a menu. The number is the
+  /// backend's; this bar never counts anything.
+  final int alertCount;
+
+  const _AdminMobileBottomBar({
+    required this.index,
+    required this.onSection,
+    this.alertCount = 0,
+  });
 
   // Maps HomeShell _index to admin section index for the #206 nav order:
   // 0=Dashboard, 1=WhatsApp(pushed route, never highlighted),
@@ -4459,6 +4470,10 @@ class _AdminMobileBottomBar extends StatelessWidget {
                   icon: kAdminBottomNav[i].icon,
                   label: kAdminBottomNav[i].label,
                   selected: _activeSection == i,
+                  // Fulfill is the last tab and the one an accepted order
+                  // flows into, so it carries the waiting count.
+                  badgeCount:
+                      i == kAdminBottomNav.length - 1 ? alertCount : 0,
                   onTap: () => onSection(i),
                 ),
             ],
@@ -4474,7 +4489,12 @@ class _AdminNavItem extends StatelessWidget {
   final String label;
   final bool selected;
   final VoidCallback onTap;
-  const _AdminNavItem({required this.icon, required this.label, required this.onTap, this.selected = false});
+
+  /// CHANGE #306 — a live count from the backend. 0 draws no badge at all,
+  /// because an absence is an absence.
+  final int badgeCount;
+
+  const _AdminNavItem({required this.icon, required this.label, required this.onTap, this.selected = false, this.badgeCount = 0});
 
   @override
   Widget build(BuildContext context) {
@@ -4485,7 +4505,11 @@ class _AdminNavItem extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 19, color: color),
+            badgeCount > 0
+                ? Badge(
+                    label: Text('$badgeCount'),
+                    child: Icon(icon, size: 19, color: color))
+                : Icon(icon, size: 19, color: color),
             const SizedBox(height: 2),
             FittedBox(
               fit: BoxFit.scaleDown,

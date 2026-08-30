@@ -114,6 +114,18 @@ dependencies {
     // compiles against GmsDocumentScanning directly.
     implementation("com.google.android.gms:play-services-base:18.5.0")
     implementation("com.google.android.gms:play-services-mlkit-document-scanner:16.0.0")
+    // CHANGE #306 — MediboMessagingService extends FirebaseMessagingService in
+    // THIS module, so the symbol has to be on the app's own compile classpath.
+    // The firebase_messaging plugin already puts the artifact in the APK, but a
+    // plugin's `implementation` dependency is not visible to the app module —
+    // the release build failed with "Unresolved reference
+    // 'FirebaseMessagingService'" until this line existed. The BoM version is
+    // the one firebase_core pins (FirebaseSDKVersion=33.16.0 in its
+    // gradle.properties), so this resolves to the SAME firebase-messaging the
+    // plugin resolves and adds no second copy. Bump it with the plugin, never
+    // on its own.
+    implementation(platform("com.google.firebase:firebase-bom:33.16.0"))
+    implementation("com.google.firebase:firebase-messaging")
 }
 
 flutter {

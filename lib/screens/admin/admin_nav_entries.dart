@@ -334,12 +334,21 @@ class AdminProfileMenuTiles extends StatelessWidget {
         // that gate on get_my_role() and renders the backend's not_authorized
         // answer itself.
         for (final e in kAdminOverflowNav)
-          AdminSheetTile(
-            icon: e.icon,
-            label: e.label,
-            badgeCount: _badgeFor(e.route, deletionCount, alertCount),
-            onTap: () { Navigator.pop(context); nav(e.route ?? ''); },
-          ),
+          Builder(builder: (_) {
+            // CHANGE #312 — a route proves the SCREEN painted; this proves the
+            // tappable way IN painted. A destination reachable only by typing
+            // its URL is not reachable (rule 11), and the render-log is the
+            // only honest evidence of that on a canvas app.
+            if (e.route == 'feature_gaps') {
+              RenderLog.write('c312_feature_gaps_entry', 1);
+            }
+            return AdminSheetTile(
+              icon: e.icon,
+              label: e.label,
+              badgeCount: _badgeFor(e.route, deletionCount, alertCount),
+              onTap: () { Navigator.pop(context); nav(e.route ?? ''); },
+            );
+          }),
       ],
     );
   }

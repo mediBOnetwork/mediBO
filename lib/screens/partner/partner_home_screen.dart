@@ -37,6 +37,10 @@ IconData partnerIcon(String key) {
 /// Backend `route_key` -> the screen it opens. Navigation is the one decision
 /// that cannot live in SQL; everything the screen then shows is still the
 /// backend's, and every one of these surfaces is already zone-clamped.
+///
+/// These screens are TAB BODIES: inside the admin shell they are handed a
+/// bounded box and bring no Scaffold of their own, so a partner pushes them
+/// inside [PartnerFeaturePage] rather than as a bare route.
 Widget? partnerDestination(String routeKey) {
   switch (routeKey) {
     case 'inquiry':
@@ -108,7 +112,13 @@ class _PartnerHomeScreenState extends State<PartnerHomeScreen> {
     }
     final dest = partnerDestination((r['route_key'] ?? '').toString());
     if (dest == null) return;
-    Navigator.of(context).push(MaterialPageRoute(builder: (_) => dest));
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => PartnerFeaturePage(
+        // The page title is the backend's own label for the feature.
+        title: (r['label'] ?? '').toString(),
+        child: dest,
+      ),
+    ));
   }
 
   @override
@@ -353,6 +363,28 @@ class _Empty extends StatelessWidget {
           ],
         ],
       ),
+    );
+  }
+}
+
+
+/// The frame a partner's feature screen is pushed inside.
+///
+/// The admin fulfilment and supplier screens are tab bodies — they expect a
+/// bounded box and no Scaffold of their own — so this supplies the route's
+/// Scaffold, its title (the backend's word for the feature) and a back button.
+class PartnerFeaturePage extends StatelessWidget {
+  const PartnerFeaturePage({super.key, required this.title, required this.child});
+
+  final String title;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Ds.c.bg,
+      appBar: AppBar(title: Text(title, style: Ds.t.subtitle)),
+      body: SafeArea(child: child),
     );
   }
 }

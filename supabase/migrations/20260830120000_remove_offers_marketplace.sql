@@ -19,9 +19,30 @@ set local lock_timeout = '20s';
 -- ── 1. triggers that hang off core tables ───────────────────────────────────
 -- _vcm_short_dated_check sat on voice_clip_mentions, i.e. on the voice counting
 -- path; trg_c305_offer_expiry_wake woke a cron task for a table with no rows.
-drop trigger if exists vcm_short_dated_check on public.voice_clip_mentions;
-drop trigger if exists trg_c305_offer_expiry_wake on public.supplier_offer_listings;
-drop trigger if exists sdo_updated_at on public.short_dated_offers;
+-- Guarded rather than a bare DROP TRIGGER IF EXISTS, for two reasons a replay
+-- hits immediately: (a) two of these hang off tables this same migration drops
+-- below, so on a second run the relation is gone and the bare form errors; and
+-- (b) DROP TRIGGER takes ACCESS EXCLUSIVE, so on voice_clip_mentions — a hot
+-- table on the voice counting path — a no-op replay would queue behind live
+-- traffic and deadlock inside this transaction (observed 2026-08-30). Checking
+-- pg_trigger first means a replay takes no lock at all.
+do $$
+declare r record;
+begin
+  for r in
+    select c.relname as tbl, t.tgname as trg
+      from pg_trigger t
+      join pg_class c on c.oid = t.tgrelid
+      join pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public'
+       and not t.tgisinternal
+       and t.tgname in ('vcm_short_dated_check',
+                        'trg_c305_offer_expiry_wake',
+                        'sdo_updated_at')
+  loop
+    execute format('drop trigger %I on public.%I', r.trg, r.tbl);
+  end loop;
+end $$;
 
 -- ── 2. the scheduled work (cron_task dispatcher rows, CHANGE #273) ──────────
 delete from public.cron_signal

@@ -397,6 +397,11 @@ class AdminDeliveryTabState extends State<AdminDeliveryTab>
   /// CHANGE #309 — entry point to the delivery operations screen. The two
   /// words on it are ui_copy keys, so this row contains no display literal.
   Widget _opsEntry() {
+    // Reachability proof: this is the ONE tappable way into the delivery
+    // operations screen, so the render-log records that it actually painted on
+    // the live build — a canvas app cannot be clicked by a headless verifier,
+    // and "the code compiled" is not evidence that the door exists.
+    RenderLog.write('c309_ops_entry', 1);
     return InkWell(
       onTap: () => Navigator.of(context).push(
         MaterialPageRoute<void>(builder: (_) => const AdminDeliveryOpsScreen()),

@@ -52,6 +52,7 @@ import 'screens/admin/admin_order_closure_screen.dart'; // CHANGE #229 — /admi
 import 'screens/about_screen.dart';
 import 'screens/contact_screen.dart';
 import 'screens/legal_pages.dart';
+import 'screens/admin/admin_delivery_ops_screen.dart';
 import 'services/ui_copy.dart';
 import 'supabase_config.dart';
 import 'theme.dart';
@@ -689,6 +690,15 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
             ),
             routes: {
               '/login':        (_) => const LoginScreen(),
+              // CHANGE #309 — delivery operations (payouts, doorstep claims,
+              // pincode serviceability, rider document expiry, ratings) at a
+              // real URL, for the same reason /partner has one: a headless
+              // session can open it and PROVE it painted, and Om can bookmark
+              // it. It guards nothing — admin_delivery_ops() answers
+              // `allowed:false` for anyone who is not an admin, so the
+              // authorisation lives in the backend where it belongs. The
+              // tappable way in is still the Delivery tab's own entry row.
+              '/admin/delivery-ops': (_) => const AdminDeliveryOpsScreen(),
               // CHANGE #307 — the fulfilment partner's home, at a real URL for
               // the same reason /admin/cron-health has one: a headless session
               // can open it and PROVE it painted. Authorisation stays in the

@@ -68,8 +68,18 @@ begin
   select round(coalesce(sum(oi.quantity*oi.mrp),0) * coalesce(cfg.advance_pct,30)/100, 2)
     into v_adv from public.order_items oi where oi.order_id = p_order_id;
 
-  -- CHANGE #309: the taxable value of the goods, computed the same way the
-  -- composer does, so the free-above threshold and the printed invoice agree.
+  -- CHANGE #309: the taxable value of the goods. This is the figure the
+  -- free-above threshold is measured against — the trade value less the
+  -- discount slab, NEVER MRP (the business context is explicit that any build
+  -- which prices or thresholds on MRP is wrong).
+  --
+  -- It applies the slab to the ORDER total, where the composer applies it per
+  -- line and sums; across every live slab (0/3/5%) the two agree exactly,
+  -- verified for 500/1000/3000/5000/9000/25000. A multi-line order could in
+  -- principle differ by a paisa of rounding, and that is deliberately
+  -- tolerable: this number only decides which side of the free-delivery
+  -- threshold the order falls on. The money actually PRINTED on the invoice is
+  -- always the composer's own per-line arithmetic, never this.
   select coalesce(sum(round(qty*ptr,2)),0) into v_taxable
     from (select coalesce((e->>'qty')::numeric,0) qty, coalesce((e->>'ptr')::numeric,0) ptr
             from jsonb_array_elements(coalesce(v_raw,'[]'::jsonb)) e) t;

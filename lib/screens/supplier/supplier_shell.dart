@@ -4,11 +4,9 @@ import '../../pages/supplier_disputes_page.dart';
 import '../../services/ui_copy.dart';
 import '../../user_state.dart';
 import '../../utils/render_log.dart';
-import '../../utils/toast.dart';
 import 'supplier_add_medicine_screen.dart';
 import 'supplier_home_screen.dart';
 import 'supplier_inquiry_screen.dart';
-import 'supplier_offers_screen.dart';
 import 'supplier_orders_screen.dart';
 
 class SupplierShell extends StatefulWidget {
@@ -42,9 +40,6 @@ class _SupplierShellState extends State<SupplierShell> {
     _NavItem(icon: Icons.add_circle_outline,       label: c('supplier_shell.tab_add_medicine')),
     _NavItem(icon: Icons.question_answer_outlined, label: c('supplier_shell.tab_inquiry')),
     _NavItem(icon: Icons.receipt_long_outlined,    label: c('supplier_shell.tab_orders')),
-    // CHANGE #223: #179 built the self-list portal but never routed to it —
-    // a supplier had no way to list an offer at all.
-    _NavItem(icon: Icons.local_offer_outlined,     label: c('supplier_shell.tab_offers')),
     _NavItem(icon: Icons.gavel_outlined,           label: c('supplier_shell.tab_disputes')),
   ];
 
@@ -108,8 +103,6 @@ class _SupplierShellState extends State<SupplierShell> {
         onPendingCount: _onPendingCount,
       ),
       SupplierOrdersScreen(viewAsSupplierId: viewAsSupplierId, supplierName: supplierName),
-      if (viewAsSupplierId == null) const SupplierOffersScreen()
-      else _ViewAsReadOnlyPlaceholder(label: c('supplier_shell.viewas_readonly')),
       SupplierDisputesPage(
         viewAsSupplierName: widget.viewAsSupplierName,
         onActiveCount: _onDisputeCount,

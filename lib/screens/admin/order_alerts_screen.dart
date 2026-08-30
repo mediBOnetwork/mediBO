@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../design_tokens.dart';
+import '../../models/order_alert_fsi.dart';
 import '../../services/order_alert_service.dart';
 import '../../utils/render_log.dart';
 import '../../utils/toast.dart';
@@ -53,6 +54,21 @@ class _OrderAlertsScreenState extends State<OrderAlertsScreen> {
     return m is Map ? Map<String, dynamic>.from(m) : null;
   }
 
+  /// CHANGE #307 — Android's own answer about the full-screen-intent grant.
+  /// Unknown until the channel replies, and re-read every time the admin
+  /// comes back from Settings.
+  FsiDeviceState _fsi = FsiDeviceState.unknown;
+
+  FsiCopy get _fsiCopy =>
+      FsiCopy(((_data?['fsi'] as Map?) ?? const {}).cast<String, dynamic>());
+
+  Future<void> _readFsi() async {
+    final d = await OrderAlertService.instance.fullScreenState();
+    if (!mounted) return;
+    setState(() => _fsi = d);
+    RenderLog.write('c307_fsi', d.known ? (d.granted ? 'granted' : 'denied') : 'unknown');
+  }
+
   Future<void> _load() async {
     setState(() {
       _loading = true;
@@ -75,6 +91,7 @@ class _OrderAlertsScreenState extends State<OrderAlertsScreen> {
         _loading = false;
       });
       RenderLog.write('c306_alert_screen', '${(s?['open'] as List?)?.length ?? 0}');
+      await _readFsi();
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -212,6 +229,9 @@ class _OrderAlertsScreenState extends State<OrderAlertsScreen> {
                       SizedBox(height: Ds.space.x16),
                       ..._creditRows(),
                       SizedBox(height: Ds.space.x32),
+                      _section(_sectionLabel('device')),
+                      ..._fsiRows(),
+                      SizedBox(height: Ds.space.x32),
                       _section(_sectionLabel('log')),
                       ..._logRows(),
                       SizedBox(height: Ds.space.x48),
@@ -254,6 +274,140 @@ class _OrderAlertsScreenState extends State<OrderAlertsScreen> {
     }).toList();
   }
 
+  /// CHANGE #307 — whether lock-screen alerts are actually live on THIS
+  /// device, in the backend's own words, with the one button that can change
+  /// it. The card decides nothing: FsiCopy picks which sentences to print.
+  List<Widget> _fsiRows() {
+    final copy = _fsiCopy;
+    final card = copy.card(_fsi);
+    if (card.title.isEmpty && card.body.isEmpty) return const [];
+
+    final tone = switch (card.tone) {
+      FsiTone.granted => Ds.c.success,
+      FsiTone.denied => Ds.c.warning,
+      _ => Ds.c.info,
+    };
+
+    return [
+      Container(
+        width: double.infinity,
+        padding: EdgeInsets.all(Ds.space.x16),
+        decoration: BoxDecoration(
+          color: Ds.c.surface,
+          borderRadius: Ds.r.rCard,
+          boxShadow: Ds.elevation.e1,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: Ds.space.x8,
+                  height: Ds.space.x8,
+                  margin: EdgeInsets.only(top: Ds.space.x8, right: Ds.space.x12),
+                  decoration: BoxDecoration(color: tone, shape: BoxShape.circle),
+                ),
+                Expanded(child: Text(card.title, style: Ds.t.bodyStrong)),
+              ],
+            ),
+            if (card.body.isNotEmpty) ...[
+              SizedBox(height: Ds.space.x8),
+              Text(card.body, style: Ds.t.bodySecondary),
+            ],
+            if (card.note.isNotEmpty) ...[
+              SizedBox(height: Ds.space.x12),
+              _Note(text: card.note, tone: tone),
+            ],
+            if (card.hasAction) ...[
+              SizedBox(height: Ds.space.x16),
+              Row(children: [
+                Expanded(
+                  child: SizedBox(
+                    height: Ds.touch.minTarget,
+                    child: FilledButton(
+                      onPressed: _busy ? null : _openFsiSettings,
+                      child: Text(card.actionLabel),
+                    ),
+                  ),
+                ),
+                if (card.recheckLabel.isNotEmpty) ...[
+                  SizedBox(width: Ds.space.x8),
+                  SizedBox(
+                    height: Ds.touch.minTarget,
+                    child: OutlinedButton(
+                      onPressed: _busy ? null : _readFsi,
+                      child: Text(card.recheckLabel),
+                    ),
+                  ),
+                ],
+              ]),
+            ],
+          ],
+        ),
+      ),
+    ];
+  }
+
+  /// Sends the admin to Android's own screen, then re-reads the grant when
+  /// they come back — the answer is the device's, never remembered here.
+  Future<void> _openFsiSettings() async {
+    await OrderAlertService.instance.openFullScreenSettings();
+    await _readFsi();
+  }
+
+  /// The point-of-use ask. A sheet, not a dialog, and only when the grant is
+  /// both askable and missing — every word from order_alert_fsi().
+  Future<void> _maybePromptFsi() async {
+    await _readFsi();
+    final copy = _fsiCopy;
+    if (!copy.shouldPrompt(_fsi)) return;
+    if (!mounted) return;
+    final p = copy.prompt;
+    if (p.title.isEmpty && p.body.isEmpty) return;
+
+    final go = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: EdgeInsets.all(Ds.space.x24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(p.title, style: Ds.t.title),
+              SizedBox(height: Ds.space.x12),
+              Text(p.body, style: Ds.t.bodySecondary),
+              SizedBox(height: Ds.space.x24),
+              SizedBox(
+                width: double.infinity,
+                height: Ds.touch.minTarget,
+                child: FilledButton(
+                  onPressed: () => Navigator.of(ctx).pop(true),
+                  child: Text(p.ctaLabel),
+                ),
+              ),
+              SizedBox(height: Ds.space.x8),
+              SizedBox(
+                width: double.infinity,
+                height: Ds.touch.minTarget,
+                child: TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(false),
+                  child: Text(p.skipLabel),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (go == true) await _openFsiSettings();
+  }
+
   List<Widget> _fieldRows(List<String> keys) {
     final fields = (_data?['fields'] as List?) ?? const [];
     final byKey = <String, Map<String, dynamic>>{};
@@ -270,7 +424,14 @@ class _OrderAlertsScreenState extends State<OrderAlertsScreen> {
           contentPadding: EdgeInsets.zero,
           title: Text(label, style: Ds.t.body),
           value: f['value'] == true,
-          onChanged: _busy ? null : (v) => _save({k: v}),
+          // CHANGE #307 — the ask lands at the point it matters: the moment
+          // alerts are switched ON, and only where the grant is missing.
+          onChanged: _busy
+              ? null
+              : (v) async {
+                  await _save({k: v});
+                  if (k == 'enabled' && v == true) await _maybePromptFsi();
+                },
         ));
       } else {
         final ctrl = _fields[k] ??= TextEditingController(text: '${f['value'] ?? ''}');

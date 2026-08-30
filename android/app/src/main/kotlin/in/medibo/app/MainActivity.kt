@@ -41,6 +41,22 @@ class MainActivity : FlutterActivity() {
                         OrderAlert.stopRinging(applicationContext)
                         result.success(true)
                     }
+                    // CHANGE #307 — the device's own answer about the
+                    // full-screen-intent grant, and the one Settings screen
+                    // that can change it. No wording here: Dart wraps these
+                    // facts in the sentences order_alert_fsi() returned.
+                    "fullScreenState" -> {
+                        result.success(
+                            mapOf(
+                                "supported" to OrderAlert.fullScreenIsAskable(),
+                                "granted" to OrderAlert.canFullScreen(applicationContext),
+                                "sdk" to android.os.Build.VERSION.SDK_INT,
+                            ),
+                        )
+                    }
+                    "openFullScreenSettings" -> {
+                        result.success(openFullScreenSettings())
+                    }
                     "ongoing" -> {
                         // The sticky count is the BACKEND's number, handed
                         // straight through — never counted in Dart.
@@ -54,5 +70,44 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    /**
+     * CHANGE #307 — Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT is the
+     * only place this grant can be given (API 34+). If the OEM has no such
+     * screen, fall back to the app's notification settings rather than
+     * throwing an activity-not-found at an admin who tapped a button.
+     */
+    private fun openFullScreenSettings(): Boolean {
+        val pkg = applicationContext.packageName
+        val candidates = mutableListOf<android.content.Intent>()
+        if (android.os.Build.VERSION.SDK_INT >= 34) {
+            candidates.add(
+                android.content.Intent(
+                    android.provider.Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
+                    android.net.Uri.parse("package:$pkg"),
+                ),
+            )
+        }
+        candidates.add(
+            android.content.Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, pkg),
+        )
+        candidates.add(
+            android.content.Intent(
+                android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                android.net.Uri.parse("package:$pkg"),
+            ),
+        )
+        for (i in candidates) {
+            try {
+                i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(i)
+                return true
+            } catch (_: Throwable) {
+                // try the next one
+            }
+        }
+        return false
     }
 }

@@ -15,6 +15,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../models/order_alert_fsi.dart';
 import '../utils/render_log.dart';
 
 class OrderAlertService extends ChangeNotifier {
@@ -141,6 +142,33 @@ class OrderAlertService extends ChangeNotifier {
       });
     } catch (_) {
       // A device without the channel is not an error — it just has no tray.
+    }
+  }
+
+  /// CHANGE #307 — what Android says about the full-screen-intent grant on
+  /// THIS device. No wording is decided here: the caller pairs this fact with
+  /// order_alert_fsi()'s sentences. A device without the channel is not an
+  /// error — it simply has no lock screen to take over.
+  Future<FsiDeviceState> fullScreenState() async {
+    if (!_nativeAlerts) return FsiDeviceState.notAndroid;
+    try {
+      final raw = await _native.invokeMethod('fullScreenState');
+      if (raw is Map) return FsiDeviceState.fromChannel(raw);
+    } catch (e) {
+      debugPrint('[order_alert] fullScreenState failed: $e');
+    }
+    return FsiDeviceState.unknown;
+  }
+
+  /// Opens Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT — the only place
+  /// the grant can be given. Returns false when no settings screen took it.
+  Future<bool> openFullScreenSettings() async {
+    if (!_nativeAlerts) return false;
+    try {
+      return await _native.invokeMethod('openFullScreenSettings') == true;
+    } catch (e) {
+      debugPrint('[order_alert] openFullScreenSettings failed: $e');
+      return false;
     }
   }
 

@@ -54,6 +54,29 @@ object OrderAlert {
 
     fun notificationId(alertId: Long): Int = (306_100 + (alertId % 800)).toInt()
 
+    /**
+     * CHANGE #307 — can this device actually raise a full-screen intent?
+     *
+     * Play Console → App content → Full-screen intent was answered OTHER,
+     * because mediBO is neither an alarm clock nor a calling app. Google's
+     * 22 Jan 2025 rule follows from that answer: on Android 14+ (API 34) the
+     * permission is NOT granted at install, the user grants it in Settings,
+     * and `canUseFullScreenIntent()` is the only truthful answer. Below 34 the
+     * manifest permission is the grant, so the answer is yes.
+     */
+    fun canFullScreen(ctx: Context): Boolean {
+        if (Build.VERSION.SDK_INT < 34) return true
+        val nm = ctx.getSystemService(NotificationManager::class.java) ?: return false
+        return try {
+            nm.canUseFullScreenIntent()
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    /** True only where the runtime grant is a thing the admin can change. */
+    fun fullScreenIsAskable(): Boolean = Build.VERSION.SDK_INT >= 34
+
     /** Channels are created early and idempotently: at boot and on every alert. */
     fun ensureChannels(ctx: Context, name: String?, description: String?) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -171,10 +194,19 @@ object OrderAlert {
         // degrades this to a heads-up notification with the same buttons
         // rather than dropping it — so the alert is never lost, it is at worst
         // less loud.
-        if (a.optBoolean("full_screen", true)) {
+        if (a.optBoolean("full_screen", true) && canFullScreen(ctx)) {
             val km = ctx.getSystemService(KeyguardManager::class.java)
             b.setFullScreenIntent(openPi, true)
             if (km?.isKeyguardLocked == true) b.setPriority(Notification.PRIORITY_MAX)
+        } else {
+            // CHANGE #307 — the permission is not granted (or the backend did
+            // not ask for a takeover). The alert MUST NOT get quieter for it:
+            // the channel is IMPORTANCE_HIGH with an alarm sound, the Accept /
+            // Reject actions are already attached above, and the ringing below
+            // is unconditional — so what the admin loses is the lock-screen
+            // takeover, never the alert. Asking Android for a full-screen
+            // intent we may not raise would only get it dropped silently.
+            b.setPriority(Notification.PRIORITY_HIGH)
         }
 
         nm.notify(id, b.build())

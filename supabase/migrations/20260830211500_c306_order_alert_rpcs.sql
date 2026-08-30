@@ -121,6 +121,10 @@ begin
     v_alert := jsonb_build_object(
       'kind',                'order_alert',
       'alert_id',            a.id,
+      -- A data-only message has no notification block, so the rendered words
+      -- travel INSIDE the alert. Kotlin reads them from here.
+      'push_title',          v_title,
+      'push_body',           v_body,
       'order_id',            a.order_id,
       'order_code',          coalesce(a.order_code,''),
       'customer',            coalesce(a.customer_name,''),

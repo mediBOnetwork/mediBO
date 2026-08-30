@@ -3,6 +3,14 @@ import 'package:flutter/material.dart';
 import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 
+/// The live count a nav entry wears, if it wears one. One place, so a new
+/// badged destination never grows a second branch in two widgets.
+int _badgeFor(String? route, int deletionCount, int alertCount) {
+  if (route == 'deletion_requests') return deletionCount;
+  if (route == 'order_alerts') return alertCount;
+  return 0;
+}
+
 /// One item in an admin nav surface.
 class AdminNavEntry {
   final String label;
@@ -124,6 +132,11 @@ List<AdminNavEntry> get kAdminOverflowNav => <AdminNavEntry>[
       // is still waiting on, what already closed, and the reasoned override.
       AdminNavEntry('Order closure', Icons.task_alt_outlined,
           route: 'order_closure'),
+      // CHANGE #306 — New-order alerts. Sits after Order closure because it is
+      // the same order seen at the other end: what is still waiting for a
+      // decision, and whether buying its stock is authorised yet.
+      AdminNavEntry('New-order alerts', Icons.notifications_active_outlined,
+          route: 'order_alerts'),
     ];
 
 /// The wide shell's "More" popup, sitting after Fulfillment in the top row.
@@ -136,6 +149,10 @@ class AdminMoreNavMenu extends StatelessWidget {
   /// Live count for the Deletion Requests entry (admin_deletion_request_count).
   final int deletionCount;
 
+  /// CHANGE #306 — unactioned unpaid orders (order_alert_feed().count), passed
+  /// in as a plain int so this file keeps its Supabase-free isolation.
+  final int alertCount;
+
   /// Dev Queue is the only super-admin-only overflow destination, so it is not
   /// in [kAdminOverflowNav] (which is shown to every admin) — it is rendered
   /// here conditionally instead.
@@ -145,6 +162,7 @@ class AdminMoreNavMenu extends StatelessWidget {
     super.key,
     required this.onNav,
     this.deletionCount = 0,
+    this.alertCount = 0,
     this.isSuperAdmin = false,
   });
 
@@ -174,12 +192,14 @@ class AdminMoreNavMenu extends StatelessWidget {
             // min + Flexible: the popup constrains its items, and these two
             // labels are long enough to clip against a narrow one.
             child: Row(mainAxisSize: MainAxisSize.min, children: [
-              (e.route == 'deletion_requests' && deletionCount > 0)
-                  ? Badge(
-                      label: Text('$deletionCount'),
-                      child: Icon(e.icon,
-                          size: 16, color: const Color(0xFF374151)))
-                  : Icon(e.icon, size: 16, color: const Color(0xFF374151)),
+              // One badge rule for every entry that has a count, so a new
+              // destination with a badge adds no new colour and no new branch.
+              Builder(builder: (_) {
+                final n = _badgeFor(e.route, deletionCount, alertCount);
+                final icon =
+                    Icon(e.icon, size: 16, color: const Color(0xFF374151));
+                return n > 0 ? Badge(label: Text('$n'), child: icon) : icon;
+              }),
               const SizedBox(width: 10),
               Flexible(
                 child: Text(e.label,
@@ -232,11 +252,15 @@ class AdminProfileMenuTiles extends StatelessWidget {
   /// Live count for the Deletion Requests tile (admin_deletion_request_count).
   final int deletionCount;
 
+  /// CHANGE #306 — unactioned unpaid orders (order_alert_feed().count).
+  final int alertCount;
+
   const AdminProfileMenuTiles({
     super.key,
     required this.isSuperAdmin,
     required this.nav,
     this.deletionCount = 0,
+    this.alertCount = 0,
   });
 
   @override
@@ -314,8 +338,7 @@ class AdminProfileMenuTiles extends StatelessWidget {
           AdminSheetTile(
             icon: e.icon,
             label: e.label,
-            badgeCount:
-                e.route == 'deletion_requests' ? deletionCount : 0,
+            badgeCount: _badgeFor(e.route, deletionCount, alertCount),
             onTap: () { Navigator.pop(context); nav(e.route ?? ''); },
           ),
       ],

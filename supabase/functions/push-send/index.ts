@@ -102,6 +102,12 @@ serve(async (req) => {
     event_key?: string
     order_id?: string
     dry_run?: boolean
+    // CHANGE #306 — the full-screen order alert. Present = this is a ringing
+    // alert, not an ordinary notification, and the message must be DATA-ONLY
+    // so our own Android service builds it with a full-screen intent, a
+    // looping alert sound and Accept / Reject buttons. Every string inside is
+    // already rendered by order_alert_push(); this function words nothing.
+    alert?: Record<string, unknown>
   }
   try {
     payload = await req.json()
@@ -154,21 +160,58 @@ serve(async (req) => {
   for (const token of tokens) {
     // data-only payload keys are strings by FCM contract; deep_link is what the
     // app navigates to so a tap opens the exact screen, never the home shell.
+    const alert = payload.alert ?? null
+    const ringSeconds = Number((alert?.ring_seconds as number) ?? 120)
+
+    const data: Record<string, string> = {
+      deep_link: payload.deep_link ?? '',
+      event_key: payload.event_key ?? '',
+      order_id: payload.order_id ?? '',
+      log_id: String(logId ?? ''),
+    }
+    // FCM data values are strings by contract, so the whole alert travels as
+    // one JSON string and Kotlin parses it back.
+    if (alert) {
+      data.type = 'order_alert'
+      data.alert = JSON.stringify(alert)
+    }
+
     const message = {
       message: {
         token,
-        notification: { title: payload.title ?? '', body: payload.body ?? '' },
-        data: {
-          deep_link: payload.deep_link ?? '',
-          event_key: payload.event_key ?? '',
-          order_id: payload.order_id ?? '',
-          log_id: String(logId ?? ''),
-        },
+        // A data-only message is what reaches onMessageReceived even when the
+        // app is backgrounded or dead — which is the only way a full-screen
+        // intent can be raised. An ordinary notification keeps its tray block.
+        ...(alert ? {} : { notification: { title: payload.title ?? '', body: payload.body ?? '' } }),
+        data,
         android: {
           priority: 'HIGH',
-          notification: { channel_id: 'medibo_default', click_action: 'FLUTTER_NOTIFICATION_CLICK' },
+          ...(alert
+            ? {
+                // One live ring per alert: a re-ring replaces the last one
+                // rather than stacking, and it expires with the ringing.
+                collapse_key: `oa_${alert.alert_id ?? '0'}`,
+                ttl: `${Math.max(ringSeconds * 4, 120)}s`,
+                direct_boot_ok: true,
+              }
+            : {
+                notification: { channel_id: 'medibo_default', click_action: 'FLUTTER_NOTIFICATION_CLICK' },
+              }),
         },
         webpush: {
+          // The browser cannot raise a full-screen intent, so a web admin gets
+          // an ordinary notification carrying the same rendered words.
+          ...(alert
+            ? {
+                headers: { Urgency: 'high' },
+                notification: {
+                  title: payload.title ?? '',
+                  body: payload.body ?? '',
+                  requireInteraction: true,
+                  tag: `oa_${alert.alert_id ?? '0'}`,
+                },
+              }
+            : {}),
           fcm_options: { link: payload.deep_link ?? '/' },
         },
       },

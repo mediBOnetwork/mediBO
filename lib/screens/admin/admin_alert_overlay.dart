@@ -8,7 +8,10 @@ import 'package:pharma_b2b/services/date_labels.dart';
 import 'package:pharma_b2b/services/ui_copy.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 
+import '../../design_tokens.dart';
+import '../../services/order_alert_service.dart';
 import 'alert_audio.dart';
+import 'order_alerts_screen.dart';
 
 // ── Column skip / label helpers (matches admin_customer_screen) ──────────────
 
@@ -282,6 +285,53 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
     }
   }
 
+  // CHANGE #306 — the order popup is no longer a dump of the orders row.
+  // order_alert_card() decides whether this order is a risk at all, what the
+  // banner says, whether Accept is even offered, and what the buttons are
+  // called. Keyed by order id so a queued alert keeps its own card.
+  final Map<String, Map<String, dynamic>> _orderCards = {};
+
+  Future<void> _loadOrderCard(String orderId) async {
+    if (orderId.isEmpty) return;
+    final card = await OrderAlertService.instance.card(orderId);
+    if (card == null || !mounted) return;
+    setState(() => _orderCards[orderId] = card);
+    // A paid order never rings: the backend says so, not a client guess.
+    final item = card['item'];
+    final ring = item is Map && item['ring'] == true && card['show'] == true;
+    if (!ring) {
+      orderAudioStop();
+      OrderAlertService.instance.stopRinging();
+    }
+  }
+
+  Future<void> _orderAction(String orderId, String action) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    final res = await OrderAlertService.instance.act(orderId, action);
+    final card = _orderCards[orderId];
+    final item = card?['item'];
+    if (item is Map) {
+      final alertId = (item['alert_id'] as num?)?.toInt();
+      if (alertId != null) {
+        await OrderAlertService.instance.clearNotification(alertId);
+      }
+    }
+    if (!mounted) return;
+    final msg = (res['message'] as String?) ?? '';
+    if (msg.isNotEmpty) {
+      showToast(context, msg, isError: res['ok'] != true);
+    }
+    if (res['ok'] == true) {
+      _advance();
+    } else {
+      // A refusal is the credit block speaking — keep the card up, refreshed,
+      // so the reason stays on screen.
+      await _loadOrderCard(orderId);
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   void _enqueueOrder(Map<String, dynamic> rec, String id) {
     if (id.isNotEmpty && _orderSeenIds.contains(id)) return;
     if (id.isNotEmpty) _orderSeenIds.add(id);
@@ -292,6 +342,7 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
         _detailsOpen = false;
       });
       if (_queue.length == 1) _onFirstAlert();
+      _loadOrderCard(id);
     }
   }
 
@@ -744,6 +795,39 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
   }
 
   Widget _buildOrderCard(Map<String, dynamic> rec) {
+    // CHANGE #306 — when the backend has an alert for this order, THAT is the
+    // card: the banner, the risk chips, the credit-block sentence and both
+    // button captions are its words, and Accept is offered only when it says
+    // the order may be accepted. The legacy row-dump below is the fallback for
+    // an order the alert engine has no row for (alerts switched off).
+    final orderRowId = rec['id'] as String? ?? '';
+    final card = _orderCards[orderRowId];
+    final item = card?['item'];
+    if (card != null && card['show'] == true && item is Map) {
+      final queueLabel = (card['queue_label'] as String?) ?? '';
+      return Container(
+        margin: EdgeInsets.symmetric(
+            horizontal: Ds.space.x16, vertical: Ds.space.x24),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          if (queueLabel.isNotEmpty)
+            Padding(
+              padding: EdgeInsets.only(bottom: Ds.space.x8),
+              child: FadeTransition(
+                opacity: _flashAnim,
+                child: Text(queueLabel, style: Ds.t.caption),
+              ),
+            ),
+          OrderAlertCard(
+            item: Map<String, dynamic>.from(item),
+            busy: _busy,
+            onAccept: () => _orderAction(orderRowId, 'accept'),
+            onReject: () => _orderAction(orderRowId, 'reject'),
+            onDismiss: _dismiss,
+          ),
+        ]),
+      );
+    }
+
     // payment_id is the human-readable order number (e.g. PO-260605-0861)
     final orderId      = rec['payment_id']    as String?
                       ?? rec['order_id']      as String?

@@ -46,6 +46,8 @@ import '../features/whatsapp/ui/wa_templates_screen.dart';
 import 'admin/wa_campaigns_screen.dart';
 import 'admin/wa_diagnosis_screen.dart';
 import 'admin/notify_center_screen.dart';
+import 'admin/order_alerts_screen.dart'; // CHANGE #306
+import '../services/order_alert_service.dart'; // CHANGE #306
 import 'admin/wa_ops_screen.dart';
 import 'admin/wa_drips_screen.dart';
 import 'admin/wa_segments_screen.dart';
@@ -133,6 +135,12 @@ class _HomeShellState extends State<HomeShell> {
   // Deletion-request queue badge — the count is the server's
   // (admin_deletion_request_count); the shell only renders it.
   int _deletionCount = 0;
+
+  // CHANGE #306 — unactioned unpaid orders. The count is the BACKEND's
+  // (order_alert_feed().count); the shell only renders the badge and keeps the
+  // service alive so the popup, the sticky tray line and this number stay in
+  // step on every surface.
+  int _alertCount = 0;
 
   // Desktop sidebar: populated once storefront loads its CatalogMeta
   CatalogMeta? _desktopMeta;
@@ -240,11 +248,27 @@ class _HomeShellState extends State<HomeShell> {
 
   /// The deletion-request queue badge. Returns 0 for non-admins (the RPC gates
   /// on role), so calling it unconditionally on an admin session is safe.
+  /// Starts the unpaid-order alert feed for an admin session. Every string it
+  /// carries is the backend's; this only keeps the badge fresh.
+  Future<void> _startOrderAlerts() async {
+    try {
+      OrderAlertService.instance.addListener(_onAlertFeed);
+      await OrderAlertService.instance.start();
+      _onAlertFeed();
+    } catch (_) {}
+  }
+
+  void _onAlertFeed() {
+    final n = OrderAlertService.instance.count;
+    if (mounted && n != _alertCount) setState(() => _alertCount = n);
+  }
+
   Future<void> _loadDeletionCount() async {
     try {
       final r = await Supabase.instance.client.rpc('admin_deletion_request_count');
       final n = (r is num) ? r.toInt() : int.tryParse('$r') ?? 0;
       if (mounted) setState(() => _deletionCount = n);
+      if (mounted) await _startOrderAlerts();
     } catch (_) {}
   }
 
@@ -632,6 +656,14 @@ class _HomeShellState extends State<HomeShell> {
           Navigator.push(context,
               MaterialPageRoute(builder: (_) => const DevQueueScreen()));
         }
+        break;
+      // CHANGE #306 — New-order alerts: what is waiting for a decision, the
+      // escalation config, per-customer credit limits and the purchase gate.
+      // order_alert_settings() gates on get_my_role() and the screen renders
+      // its refusal, same story as notify_center and admin_push above.
+      case 'order_alerts':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const OrderAlertsScreen()));
         break;
       case 'deletion_requests':
         Navigator.push(
@@ -1038,6 +1070,7 @@ class _HomeShellState extends State<HomeShell> {
                   onAdminNav: isAdmin ? _handleAdminNav : null,
                   isSuperAdmin: isAdmin ? _amISuper : false,
                   deletionCount: isAdmin ? _deletionCount : 0,
+                  alertCount: isAdmin ? _alertCount : 0,
                   bellKey: _bellKey, // CHANGE #298
                 ),
                 // CHANGE #455 B1 — the persistent order-hours banner that
@@ -1132,6 +1165,7 @@ class _HomeShellState extends State<HomeShell> {
                   onAdminNav: _handleAdminNav,
                   isSuperAdmin: _amISuper,
                   deletionCount: _deletionCount,
+                  alertCount: _alertCount,
                   bellKey: _bellKey, // CHANGE #298
                 )
               else
@@ -1226,6 +1260,8 @@ class _LocationHeader extends StatelessWidget {
   final ValueChanged<String>? onAdminNav;
   final bool isSuperAdmin;
   final int deletionCount;
+  /// CHANGE #306 — unactioned unpaid orders, for the nav badge.
+  final int alertCount;
   /// CHANGE #298 — the shell owns the bell's state so a foreground push can
   /// refresh the badge that is currently mounted.
   final GlobalKey<NotificationBellState>? bellKey;
@@ -1238,6 +1274,7 @@ class _LocationHeader extends StatelessWidget {
     this.onAdminNav,
     this.isSuperAdmin = false,
     this.deletionCount = 0,
+    this.alertCount = 0,
     this.bellKey,
   });
 
@@ -1260,7 +1297,7 @@ class _LocationHeader extends StatelessWidget {
         child: Row(
           children: [
             // LEFT: profile avatar
-            _MobileProfileAvatar(onAdminNav: onAdminNav, isSuperAdmin: isSuperAdmin, deletionCount: deletionCount),
+            _MobileProfileAvatar(onAdminNav: onAdminNav, isSuperAdmin: isSuperAdmin, deletionCount: deletionCount, alertCount: alertCount),
             // CENTER: logo — context-aware navigation
             Expanded(
               child: Center(
@@ -1324,7 +1361,9 @@ class _MobileProfileAvatar extends StatelessWidget {
   final ValueChanged<String>? onAdminNav;
   final bool isSuperAdmin;
   final int deletionCount;
-  const _MobileProfileAvatar({this.onAdminNav, this.isSuperAdmin = false, this.deletionCount = 0});
+  /// CHANGE #306 — unactioned unpaid orders, for the nav badge.
+  final int alertCount;
+  const _MobileProfileAvatar({this.onAdminNav, this.isSuperAdmin = false, this.deletionCount = 0, this.alertCount = 0});
 
   @override
   Widget build(BuildContext context) {
@@ -1432,7 +1471,7 @@ class _MobileProfileAvatar extends StatelessWidget {
               Navigator.pop(context);
               Navigator.push(context, MaterialPageRoute(builder: (_) => const ProfileScreen()));
             }),
-            AdminProfileMenuTiles(isSuperAdmin: isSuperAdmin, nav: nav, deletionCount: deletionCount),
+            AdminProfileMenuTiles(isSuperAdmin: isSuperAdmin, nav: nav, deletionCount: deletionCount, alertCount: alertCount),
             AdminSheetTile(
               icon: Icons.qr_code_2,
               label: c('home_shell.bags'),
@@ -4295,6 +4334,8 @@ class _AdminDesktopHeader extends StatelessWidget {
   final ValueChanged<String> onAdminNav;
   final bool isSuperAdmin;
   final int deletionCount;
+  /// CHANGE #306 — unactioned unpaid orders, for the nav badge.
+  final int alertCount;
   /// CHANGE #298 — see _LocationHeader.bellKey.
   final GlobalKey<NotificationBellState>? bellKey;
 
@@ -4305,6 +4346,7 @@ class _AdminDesktopHeader extends StatelessWidget {
     this.isSuperAdmin = false,
     this.scrolled = false,
     this.deletionCount = 0,
+    this.alertCount = 0,
     this.bellKey,
   });
 
@@ -4363,7 +4405,7 @@ class _AdminDesktopHeader extends StatelessWidget {
           ],
           // Overflow rather than two more links: at the 900 px where this shell
           // begins, the row has no room left.
-          AdminMoreNavMenu(onNav: onAdminNav, deletionCount: deletionCount, isSuperAdmin: isSuperAdmin),
+          AdminMoreNavMenu(onNav: onAdminNav, deletionCount: deletionCount, alertCount: alertCount, isSuperAdmin: isSuperAdmin),
           const SizedBox(width: 8),
           // CHANGE #298 — admins read the same inbox as everyone else; the
           // events they are recipients of are events too.

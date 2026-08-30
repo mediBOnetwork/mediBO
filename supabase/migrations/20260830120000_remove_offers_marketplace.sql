@@ -89,4 +89,28 @@ delete from public.ui_copy
 delete from public.storefront_ui_label
  where (key ~* 'offer|short_dated') and key <> 'offer_chip_label';
 
+
+-- ── 8. re-assert the offers-free _oa_release_and_cancel (idempotent) ────────
+-- Guard against a concurrent worker CREATE OR REPLACEing the offer branch back
+-- in: on 2026-08-30 another command re-added it wrapped in a to_regclass check.
+-- The table is gone for good, so the branch is dead code either way.
+create or replace function public._oa_release_and_cancel(p_order_id uuid, p_reason text, p_by text)
+ returns void
+ language plpgsql
+ security definer
+ set search_path to 'public'
+as $function$
+begin
+  -- #308: the reservation-release step that used to sit here died with the
+  -- Offers marketplace. Do not re-add it, guarded or otherwise — the table it
+  -- touched no longer exists and cancelling an order is a pure orders write.
+  update public.orders
+     set status        = 'cancelled',
+         closed_at     = coalesce(closed_at, now()),
+         closed_by     = coalesce(closed_by, p_by),
+         closed_reason = coalesce(closed_reason, p_reason),
+         close_mode    = coalesce(close_mode, 'order_alert')
+   where id = p_order_id;
+end $function$;
+
 commit;

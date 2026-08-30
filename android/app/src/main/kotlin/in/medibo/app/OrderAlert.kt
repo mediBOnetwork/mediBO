@@ -151,13 +151,17 @@ object OrderAlert {
             if (!a.optBoolean("credit_blocked", false)) {
                 b.addAction(
                     Notification.Action.Builder(
-                        null, a.optString("accept_label", "Accept"), actionPi("ACCEPT", id * 2),
+                        null as android.graphics.drawable.Icon?,
+                        a.optString("accept_label", "Accept"),
+                        actionPi("ACCEPT", id * 2),
                     ).build(),
                 )
             }
             b.addAction(
                 Notification.Action.Builder(
-                    null, a.optString("reject_label", "Reject"), actionPi("REJECT", id * 2 + 1),
+                    null as android.graphics.drawable.Icon?,
+                    a.optString("reject_label", "Reject"),
+                    actionPi("REJECT", id * 2 + 1),
                 ).build(),
             )
         }

@@ -388,9 +388,17 @@ class _AdminDeliveryOpsScreenState extends State<AdminDeliveryOpsScreen> {
         _chip(r['mode_label']?.toString() ?? '', _colors(r, 'mode_colors')),
       ]);
 
+  List<Map<String, dynamic>> get _serviceModes {
+    final raw = _data['service_modes'];
+    if (raw is! List) return const [];
+    return raw.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+  }
+
   Future<void> _addPincode() async {
+    final modes = _serviceModes;
+    if (modes.isEmpty) return;
     final pin = TextEditingController();
-    String mode = 'serviceable';
+    String mode = modes.first['key']?.toString() ?? '';
     final ok = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
@@ -409,13 +417,15 @@ class _AdminDeliveryOpsScreenState extends State<AdminDeliveryOpsScreen> {
               decoration: const InputDecoration(labelText: 'PIN'),
             ),
             SizedBox(height: Ds.space.x16),
-            // The three modes are the backend's own enum values.
+            // The choices AND their words come from the payload: the key is
+            // the table's enum, the label is copy. Nothing here names a mode.
             Wrap(spacing: Ds.space.x8, children: [
-              for (final m in const ['serviceable', 'warn', 'blocked'])
+              for (final m in _serviceModes)
                 ChoiceChip(
-                  label: Text(m),
-                  selected: mode == m,
-                  onSelected: (_) => setSheet(() => mode = m),
+                  label: Text(m['label']?.toString() ?? ''),
+                  selected: mode == m['key']?.toString(),
+                  onSelected: (_) =>
+                      setSheet(() => mode = m['key']?.toString() ?? mode),
                 ),
             ]),
             SizedBox(height: Ds.space.x16),

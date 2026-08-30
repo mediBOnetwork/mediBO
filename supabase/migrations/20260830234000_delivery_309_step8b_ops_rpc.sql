@@ -136,6 +136,15 @@ begin
         'empty', public._c('admin.delivery.docs_empty'), 'rows', v_docs),
       jsonb_build_object('key','ratings', 'title', public._c('admin.delivery.rating_col'),
         'empty', public._c('admin.delivery.rating_none'), 'rows', v_ratings)),
+    -- The serviceability picker's three choices, WORDED here. The keys are the
+    -- table's enum; the labels are copy. Without this the picker would print
+    -- the raw enum ('serviceable'/'warn'/'blocked') as its button text, which
+    -- is a display string decided in Dart — the one thing the frontend may
+    -- never do.
+    'service_modes', jsonb_build_array(
+      jsonb_build_object('key','serviceable','label','Serviceable'),
+      jsonb_build_object('key','warn',       'label','Warn'),
+      jsonb_build_object('key','blocked',    'label','Blocked')),
     'error_label', public._c('admin.delivery.ops_error'),
     'retry_label', public._c('admin.delivery.ops_retry'),
     -- the partner list the "open a payout period" picker needs

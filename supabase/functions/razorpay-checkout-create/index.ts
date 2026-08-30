@@ -122,7 +122,26 @@ Deno.serve(async (req: Request) => {
   // one; an ordinary customer cannot talk itself into somebody else's flow.
   const mode = (caller.privileged && wantMode) ? wantMode : caller.mode;
 
-  // 1. Ask the backend what (if anything) to create.
+  // 1. Mode 'qr' means the payer is on a DIFFERENT phone (an admin acting as
+  //    a customer, showing the code on screen). That is exactly what #291
+  //    built and #300 proved on 53 real events, so this call PROXIES to it
+  //    rather than re-implementing it — one entry point for the app, one
+  //    unchanged QR path underneath.
+  if (mode === 'qr') {
+    const r = await fetch(`${SUPABASE_URL}/functions/v1/razorpay-qr-create`, {
+      method: 'POST',
+      headers: {
+        Authorization: req.headers.get('Authorization') ?? '',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ order_id: orderId, kind }),
+    });
+    const j = await r.json().catch(() => null);
+    return reply({ ...(j ?? { ok: false, error: 'qr_proxy_failed' }), pay_mode: 'qr' },
+                 r.status);
+  }
+
+  // 2. Ask the backend what (if anything) to create.
   const { data: prep, error: prepErr } = await admin.rpc('rzp_checkout_prepare', {
     p_order_id: orderId,
     p_kind: kind,
@@ -131,7 +150,7 @@ Deno.serve(async (req: Request) => {
   if (prepErr) return fallbackToManual('prepare_failed', prepErr.message);
   if (!prep?.ok) return reply(prep ?? { ok: false, error: 'prepare_empty' });
 
-  // 2. RESUME. An attempt already open for this exact order+kind+amount comes
+  // 3. RESUME. An attempt already open for this exact order+kind+amount comes
   //    back with the SAME Razorpay link — a second tap never mints a second
   //    payable object, which is what "Resume payment" means.
   if (prep.reused) {
@@ -140,7 +159,7 @@ Deno.serve(async (req: Request) => {
 
   if (!RZP_KEY_ID || !RZP_KEY_SECRET) return fallbackToManual('razorpay_not_configured');
 
-  // 3. Create the payment link. `reference_id` is unique per link on Razorpay's
+  // 4. Create the payment link. `reference_id` is unique per link on Razorpay's
   //    side too, so even a duplicated request cannot produce two links.
   let rzp: Record<string, unknown>;
   try {
@@ -170,7 +189,7 @@ Deno.serve(async (req: Request) => {
     return fallbackToManual('razorpay_unreachable', String(e));
   }
 
-  // 4. Store it and hand back the backend's own view.
+  // 5. Store it and hand back the backend's own view.
   const { data: stored, error: storeErr } = await admin.rpc('rzp_checkout_store', {
     p_attempt_id: prep.attempt_id,
     p_link_id: (rzp as any)?.id ?? null,

@@ -94,6 +94,35 @@ async function sendRazorpayImage(to,view){
   }catch(e){return {ok:false,id:null,err:String(e),via:'razorpay_image'};}
 }
 
+// CHANGE #304 — a payment LINK, not a picture.
+// A QR image in a WhatsApp thread cannot open the customer's UPI app: they
+// would have to scan it with a SECOND device. A Razorpay payment link opens
+// PhonePe/GPay straight from the chat, and the SAME webhook confirms it.
+// The link is minted (or RESUMED) by razorpay-checkout-create, so a re-send
+// never creates a second payable object for one order.
+async function razorpayLink(orderId,kind){
+  if(!orderId)return null;
+  try{
+    const r=await fetch(`${SUPABASE_URL}/functions/v1/razorpay-checkout-create`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':`Bearer ${SUPABASE_KEY}`,'apikey':SUPABASE_KEY},
+      body:JSON.stringify({order_id:orderId,kind,mode:'link'}),
+    });
+    const j=await r.json();
+    if(!r.ok||!j?.ok||!j?.pay_url)return null;
+    return j;
+  }catch(_){return null;}
+}
+
+// The intro sentence and the amount row are the BACKEND's words (razorpay_copy
+// via _rzp_attempt_view). Nothing is composed here beyond joining them.
+async function sendRazorpayLink(to,view){
+  const lines=[view.title,view.subtitle,'',view.link_wa_intro,view.pay_url]
+    .filter((x)=>typeof x==='string'&&x.length>0);
+  const t=await sendText(to,lines.join('\n'));
+  return {...t,via:'razorpay_link'};
+}
+
 Deno.serve(async(req)=>{
   if(req.method!=='POST')return new Response('Method not allowed',{status:405});
   if((req.headers.get('x-notify-secret')||'')!==NOTIFY_SECRET)return new Response('Forbidden',{status:403});
@@ -110,6 +139,21 @@ Deno.serve(async(req)=>{
   const to='91'+ph10;
 
   // #291 — the auto-verified path first. Falls through on anything but success.
+  // #304 — the payable LINK first: it is the only one of the three that opens
+  // the customer's UPI app from the chat. The QR image below stays as the
+  // fallback, and the manual UPI card below that as the fallback's fallback.
+  const linkView=await razorpayLink(orderId,kind);
+  if(linkView){
+    const sentLink=await sendRazorpayLink(to,linkView);
+    if(sentLink.ok){
+      await logOut(to,linkView.pay_url,{...sentLink,via:'text'},null,null,null);
+      return new Response(JSON.stringify({ok:true,to,amount:linkView.amount,kind,order_no:pon||null,
+        via:'razorpay_link',pay_url:linkView.pay_url,rzp_link_id:linkView.rzp_link_id,
+        reused:!!linkView.reused}),
+        {status:200,headers:{'Content-Type':'application/json'}});
+    }
+  }
+
   const rzpView=await razorpayQr(orderId,kind);
   if(rzpView){
     const sentRzp=await sendRazorpayImage(to,rzpView);

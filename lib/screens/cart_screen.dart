@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 
 import '../app_state.dart';
@@ -265,9 +266,15 @@ class _CartScreenState extends State<CartScreen> {
     }
   }
 
-  /// The gateway QR for an order the CUSTOMER just placed for themselves.
-  /// razorpay-qr-create reuses an open QR, so reopening this never mints a
-  /// second one for the same order.
+  /// The gateway payment sheet for an order the CUSTOMER just placed for
+  /// themselves.
+  ///
+  /// CHANGE #304 — `razorpay-checkout-create` decides the branch server-side
+  /// (`rzp_pay_mode()`): a real customer paying on the phone in their hand gets
+  /// Razorpay Checkout, which opens PhonePe/GPay; a payer who is on a DIFFERENT
+  /// phone still gets the QR. Either way the call REUSES an open attempt, so
+  /// reopening this sheet never mints a second payable object for one order —
+  /// that is what "Resume payment" is.
   Future<void> _showCheckoutQr(String orderId, String code, String amount) async {
     final rzpCopy = await _fetchRazorpayCopy(orderId);
     if (!mounted) return;
@@ -282,16 +289,28 @@ class _CartScreenState extends State<CartScreen> {
         razorpayCopy: rzpCopy,
         orderCode: code,
         amountDisplay: amount,
-        createQr: (id) async {
-          final res = await Supabase.instance.client.functions
-              .invoke('razorpay-qr-create', body: {'order_id': id, 'kind': 'advance'});
+        createPayment: (id) async {
+          final res = await Supabase.instance.client.functions.invoke(
+              'razorpay-checkout-create',
+              body: {'order_id': id, 'kind': 'advance'});
           final d = res.data;
-          return d is Map ? d.cast<String, dynamic>() : <String, dynamic>{};
+          final m = d is Map ? d.cast<String, dynamic>() : <String, dynamic>{};
+          RenderLog.write('c304_checkout_create',
+              'mode=${m['pay_mode']};ok=${m['ok']};reused=${m['reused']}');
+          return m;
         },
         checkPaid: (id) async {
-          final d = await Supabase.instance.client
-              .rpc('rzp_order_paid', params: {'p_order_id': id});
+          final d = await Supabase.instance.client.rpc('rzp_checkout_state',
+              params: {'p_order_id': id, 'p_kind': 'advance'});
           return d is Map ? d.cast<String, dynamic>() : <String, dynamic>{};
+        },
+        openUrl: (url) async {
+          // externalApplication is what makes Android hand the UPI intent to
+          // PhonePe/GPay instead of burying checkout in a webview; on web it is
+          // a new tab. Never launched from inside the widget — see the sheet.
+          RenderLog.write('c304_checkout_open', 'launched');
+          return launchUrl(Uri.parse(url),
+              mode: LaunchMode.externalApplication, webOnlyWindowName: '_blank');
         },
         onDone: () => Navigator.of(sheetCtx).pop(),
       ),

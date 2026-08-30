@@ -206,6 +206,15 @@ begin
                               'message', public.fg_label('ui.not_authorized'));
   end if;
 
+  -- The view's size is counted over the WHOLE filtered set, never over the
+  -- page: a capped page must not make the header under-report.
+  select count(*)::int into _total
+    from public.feature_gaps g
+   where (p_surface  = 'all' or g.surface  = p_surface)
+     and (p_type     = 'all' or g.type     = p_type)
+     and (p_severity = 'all' or g.severity = p_severity)
+     and (p_status   = 'all' or g.status   = p_status);
+
   with scoped as (
     select g.*
       from public.feature_gaps g
@@ -242,9 +251,8 @@ begin
            'found_label',     public.fg_when(p.found_at),
            'actions',         public.fg_actions(p.status)
          ) order by case when _sort = 'severity' then public.fg_severity_rank(p.severity) end asc nulls last,
-                    p.found_at desc), '[]'::jsonb),
-         count(*)::int
-    into _rows, _total
+                    p.found_at desc), '[]'::jsonb)
+    into _rows
     from page p;
 
   select count(*)::int into _all from public.feature_gaps;
@@ -255,7 +263,7 @@ begin
     'subtitle',    public.fg_label('ui.subtitle'),
     'refresh',     public.fg_label('ui.refresh'),
     'rows',        _rows,
-    'has_rows',    _total > 0,
+    'has_rows',    jsonb_array_length(_rows) > 0,
     'empty_title', public.fg_label('ui.empty_title'),
     'empty_body',  public.fg_label('ui.empty_body'),
     'field_labels', jsonb_build_object(

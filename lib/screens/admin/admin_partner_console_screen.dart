@@ -190,19 +190,22 @@ class PartnerConsoleView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final users = (payload['users'] as List?) ?? const [];
+    final features = (payload['features'] as List?) ?? const [];
+    final audit = (payload['audit'] as List?) ?? const [];
+    // Written BEFORE the refusal branch on purpose: the render-log has to prove
+    // the screen painted even when the backend said no, otherwise a headless
+    // non-super session can never verify the route exists at all.
+    try {
+      RenderLog.write('c307_partner_console',
+          'ok=${payload['ok'] == true},users=${users.length},features=${features.length}');
+    } catch (_) {}
     if (payload['ok'] != true) {
       return Padding(
         padding: EdgeInsets.all(Ds.space.x16),
         child: Text((payload['error'] ?? '').toString(), style: Ds.t.body),
       );
     }
-    final users = (payload['users'] as List?) ?? const [];
-    final features = (payload['features'] as List?) ?? const [];
-    final audit = (payload['audit'] as List?) ?? const [];
-    try {
-      RenderLog.write('c307_partner_console',
-          'users=${users.length},features=${features.length}');
-    } catch (_) {}
 
     return ListView(
       padding: EdgeInsets.all(Ds.space.x16),

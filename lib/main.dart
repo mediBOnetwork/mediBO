@@ -22,6 +22,7 @@ import 'models/order_hours_model.dart';
 import 'models/inquiry_lock_model.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/partner/partner_home_screen.dart';
+import 'screens/admin/admin_partner_console_screen.dart';
 import 'screens/home_shell.dart';
 import 'screens/public/inquiry_form_screen.dart';
 import 'screens/public/stock_update_form_screen.dart'; // C639: /stock-update/<token>
@@ -597,6 +598,27 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
                 return MaterialPageRoute(
                   settings: settings,
                   builder: (_) => const CronHealthScreen(),
+                );
+              }
+              // CHANGE #307 — one partner's logins + access matrix, at a real
+              // URL for the same reason /admin/cron-health has one: Flutter
+              // canvas cannot be clicked headlessly, so without a URL the
+              // post-deploy verifier can never prove the screen painted.
+              // Authorisation stays in the backend — admin_partner_console()
+              // answers not_authorized itself and the screen renders that
+              // refusal. Still reachable from Payment and Partner -> the
+              // people icon on a partner card.
+              if (name.startsWith('/admin/partner-access')) {
+                final tail = name
+                    .substring('/admin/partner-access'.length)
+                    .split('?')
+                    .first
+                    .replaceAll('/', '');
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => AdminPartnerConsoleScreen(
+                    partnerId: int.tryParse(tail) ?? 1,
+                  ),
                 );
               }
               if (name.startsWith('/inquiry/')) {

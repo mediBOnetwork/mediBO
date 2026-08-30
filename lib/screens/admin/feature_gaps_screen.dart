@@ -403,7 +403,11 @@ class FeatureGapCard extends StatelessWidget {
         boxShadow: Ds.elevation.e1,
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text('${row['title'] ?? ''}', style: Ds.t.subtitle),
+        // bodyStrong, not subtitle: the design contract allows three type
+        // sizes on a screen and the focal one is already spent on the counts
+        // headline. A finding's title earns its emphasis from WEIGHT at body
+        // size, which is what DESIGN.md asks for anyway.
+        Text('${row['title'] ?? ''}', style: Ds.t.bodyStrong),
         SizedBox(height: Ds.space.x8),
         Wrap(spacing: Ds.space.x8, runSpacing: Ds.space.x8, children: [
           _Tag(label: '${row['severity_label'] ?? ''}', tone: row['severity_tone']),
@@ -499,7 +503,7 @@ class _EmptyState extends StatelessWidget {
         boxShadow: Ds.elevation.e1,
       ),
       child: Column(children: [
-        Text(title, style: Ds.t.subtitle, textAlign: TextAlign.center),
+        Text(title, style: Ds.t.bodyStrong, textAlign: TextAlign.center),
         SizedBox(height: Ds.space.x8),
         Text(body, style: Ds.t.caption, textAlign: TextAlign.center),
       ]),

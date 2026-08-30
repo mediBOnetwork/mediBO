@@ -110,6 +110,55 @@ async function webhookTest() {
   return out;
 }
 
+/// CHANGE #304 — the events this integration NEEDS Razorpay to deliver.
+/// qr_code.* is #291's path; payment_link.* / payment.* is the checkout path.
+/// A webhook subscribed to the QR events alone would drop every checkout
+/// payment SILENTLY, which is exactly the failure this command exists to end.
+const REQUIRED_EVENTS = [
+  'qr_code.credited', 'qr_code.closed',
+  'payment_link.paid', 'payment_link.expired', 'payment_link.cancelled',
+  'payment.captured', 'payment.failed',
+];
+
+async function webhookList() {
+  const r = await get('/v1/webhooks');
+  const items = (r.body?.items as Array<Record<string, unknown>> | undefined) ?? [];
+  const mine = items.filter((w) =>
+    String(w.url ?? '').includes('/functions/v1/razorpay-webhook'));
+  return { ok: r.ok, status: r.status, count: items.length, hooks: mine, all: items };
+}
+
+/// Bring the endpoint's subscription up to REQUIRED_EVENTS without ever
+/// REMOVING an event somebody else turned on: the new set is the union.
+async function webhookSubscribe() {
+  const url = `${SUPABASE_URL}/functions/v1/razorpay-webhook`;
+  const listed = await webhookList();
+  if (!listed.ok) {
+    return { ok: false, error: 'webhook_api_unavailable', status: listed.status,
+             required: REQUIRED_EVENTS, url };
+  }
+  const existing = listed.hooks[0] as Record<string, unknown> | undefined;
+  const had = Object.keys((existing?.events as Record<string, boolean>) ?? {})
+    .filter((k) => ((existing?.events as Record<string, boolean>) ?? {})[k]);
+  const want = Array.from(new Set([...had, ...REQUIRED_EVENTS]));
+  const events: Record<string, boolean> = {};
+  for (const e of want) events[e] = true;
+
+  const path = existing?.id ? `/v1/webhooks/${existing.id}` : '/v1/webhooks';
+  try {
+    const r = await fetch(`https://api.razorpay.com${path}`, {
+      method: existing?.id ? 'PATCH' : 'POST',
+      headers: { Authorization: rzpAuth(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(existing?.id ? { url, events } : { url, events, secret: WEBHOOK_SECRET }),
+    });
+    const body = await r.json().catch(() => null);
+    return { ok: r.ok, status: r.status, had, applied: want, created: !existing?.id, body };
+  } catch (e) {
+    return { ok: false, error: 'webhook_api_unreachable', detail: String(e),
+             required: REQUIRED_EVENTS, url };
+  }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
   const bearer = (req.headers.get('Authorization') ?? '').replace(/^Bearer\s+/i, '').trim();
@@ -122,6 +171,8 @@ Deno.serve(async (req: Request) => {
   } catch (_e) { /* empty body means sync */ }
 
   if (action === 'webhook_test') return reply(await webhookTest());
+  if (action === 'webhook_events') return reply(await webhookList());
+  if (action === 'webhook_subscribe') return reply(await webhookSubscribe());
 
   if (!RZP_KEY_ID || !RZP_KEY_SECRET) {
     return reply({ ok: false, error: 'razorpay_not_configured' });

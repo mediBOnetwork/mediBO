@@ -329,6 +329,17 @@ class _HomeShellState extends State<HomeShell> {
     // CHANGE #298 — a push tapped from a cold start lands here as a URL, so
     // the deep link must be read on FIRST load too, not only on back/forward.
     if (_applyOrderDeepLink(path)) return;
+    // CHANGE #306 — /admin/order-alerts on a cold start. main.dart's route map
+    // is another worker's file this command must not touch, and it does not
+    // need to: an unknown path already falls through to this shell, which
+    // reads the URL here. The screen is pushed after the first frame because
+    // the navigator does not exist yet inside initState.
+    if (path == '/admin/order-alerts') {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _handleAdminNav('order_alerts');
+      });
+      return;
+    }
     if (path.startsWith('/c/')) {
       _category = _slugToCat(path.substring(3));
     } else if (path == '/orders') {

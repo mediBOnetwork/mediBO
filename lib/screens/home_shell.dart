@@ -414,6 +414,15 @@ class _HomeShellState extends State<HomeShell> {
       }
       return;
     }
+    // CHANGE #306 — the unpaid-order alert's own destination. A tap on the
+    // lock-screen notification (or on the sticky "N orders awaiting" line)
+    // must land on the screen that can action it, not on the storefront.
+    if (link == '/admin/order-alerts') {
+      RenderLog.write('c306_deeplink', 1);
+      _handleAdminNav('order_alerts');
+      pushUrl(link);
+      return;
+    }
     _applyPath(link);
     pushUrl(link);
   }

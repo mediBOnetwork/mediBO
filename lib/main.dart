@@ -53,6 +53,7 @@ import 'screens/about_screen.dart';
 import 'screens/contact_screen.dart';
 import 'screens/legal_pages.dart';
 import 'screens/admin/admin_delivery_ops_screen.dart';
+import 'services/feature_gaps_service.dart'; // CHANGE #312
 import 'services/ui_copy.dart';
 import 'supabase_config.dart';
 import 'theme.dart';
@@ -699,6 +700,13 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
               // authorisation lives in the backend where it belongs. The
               // tappable way in is still the Delivery tab's own entry row.
               '/admin/delivery-ops': (_) => const AdminDeliveryOpsScreen(),
+              // CHANGE #312 — the feature_gaps register, at a real URL for the
+              // same reason /admin/delivery-ops has one: a headless admin
+              // session can open it and PROVE it painted. It guards nothing —
+              // feature_gaps_list() answers not_authorized with its own copy
+              // for anyone who is not an admin. The tappable way in is still
+              // Admin ▸ More ▸ Feature gaps.
+              '/admin/feature-gaps': (_) => buildFeatureGapsScreen(),
               // CHANGE #307 — the fulfilment partner's home, at a real URL for
               // the same reason /admin/cron-health has one: a headless session
               // can open it and PROVE it painted. Authorisation stays in the

@@ -131,6 +131,11 @@ List<AdminNavEntry> get kAdminOverflowNav => <AdminNavEntry>[
       // decision, and whether buying its stock is authorised yet.
       AdminNavEntry('New-order alerts', Icons.notifications_active_outlined,
           route: 'order_alerts'),
+      // CHANGE #312 — Feature gaps: the register the per-role journey audits
+      // file into. Sits last because it is the meta surface — what the app is
+      // still missing, rather than what it is doing right now.
+      AdminNavEntry(c('admin_nav.overflow_feature_gaps'), Icons.rule_folder_outlined,
+          route: 'feature_gaps'),
     ];
 
 /// The wide shell's "More" popup, sitting after Fulfillment in the top row.

@@ -470,3 +470,11 @@ begin
     end if;
   end loop;
 end $$;
+
+-- ── The nav label (kAdminOverflowNav reads it through c()) ──────────────────
+-- A key with no row renders an EMPTY label — a perfectly drawn, invisible menu
+-- entry. Seeded here so the "More" popup and the mobile profile sheet, which
+-- generate from the same list, both name it.
+insert into public.ui_copy (key, value)
+values ('admin_nav.overflow_feature_gaps', to_jsonb('Feature gaps'::text))
+on conflict (key) do nothing;

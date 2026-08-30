@@ -45,6 +45,7 @@ import 'admin/wa_campaigns_screen.dart';
 import 'admin/wa_diagnosis_screen.dart';
 import 'admin/notify_center_screen.dart';
 import 'admin/order_alerts_screen.dart'; // CHANGE #306
+import 'admin/feature_gaps_screen.dart'; // CHANGE #312
 import '../services/order_alert_service.dart'; // CHANGE #306
 import 'admin/wa_ops_screen.dart';
 import 'admin/wa_drips_screen.dart';
@@ -664,6 +665,32 @@ class _HomeShellState extends State<HomeShell> {
       case 'order_alerts':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const OrderAlertsScreen()));
+        break;
+      // CHANGE #312 — Feature gaps register. Both RPCs are injected here so the
+      // screen itself stays Supabase-free and pumps on the Dart VM;
+      // feature_gaps_list() gates on is_admin() and the screen renders its
+      // not_authorized answer, same story as the screens above.
+      case 'feature_gaps':
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => FeatureGapsScreen(
+              listRpc: (params) async {
+                final raw = await Supabase.instance.client
+                    .rpc('feature_gaps_list', params: params);
+                return Map<String, dynamic>.from(
+                    (raw is List ? raw.first : raw) as Map);
+              },
+              statusRpc: (id, status) async {
+                final raw = await Supabase.instance.client.rpc(
+                    'feature_gap_set_status',
+                    params: {'p_id': id, 'p_status': status});
+                return Map<String, dynamic>.from(
+                    (raw is List ? raw.first : raw) as Map);
+              },
+            ),
+          ),
+        );
         break;
       case 'deletion_requests':
         Navigator.push(

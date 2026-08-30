@@ -61,3 +61,18 @@ medibo-release.jks
 build/native_assets/
 build/test_cache/
 build/unit_test_assets/
+
+# CHANGE #304 — Gradle/AAB build outputs. Only build/web is tracked (deploy.sh
+# commits the fingerprinted bundle); everything else under build/ is a rebuildable
+# artifact, and one `git add -A` after an Android release swept 17,222 of them —
+# including a 26 MB libapp.so and the 98 MB AAB — into a single commit.
+build/app/
+build/app_links/
+build/audioplayers_android/
+build/file_picker/
+build/firebase_core/
+build/*/intermediates/
+build/*/outputs/
+build/*/tmp/
+build/reports/
+build/kotlin/

@@ -79,6 +79,17 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
         // own painted-proof key rather than hiding inside the screen's.
         final ba = ((d['before_after'] as Map?)?['rows'] as List?) ?? const [];
         RenderLog.write('c273_cron_before_after', '${ba.length}');
+        // CHANGE #305 — painted-proof for the execution baseline section:
+        // how many metric rows and how many per-task rows actually drew.
+        final bl = (d['baseline'] as Map?) ?? const {};
+        RenderLog.write(
+          'c305_cron_baseline',
+          '${((bl['rows'] as List?) ?? const []).length}',
+        );
+        RenderLog.write(
+          'c305_cron_task_stats',
+          '${((bl['tasks'] as List?) ?? const []).length}',
+        );
       } catch (_) {}
     } catch (_) {
       // Never print e.toString(): a Dart-formatted exception is a display
@@ -102,6 +113,10 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
     final guard = (_data['guard'] as Map?)?.cast<String, dynamic>() ?? const {};
     final ba =
         (_data['before_after'] as Map?)?.cast<String, dynamic>() ?? const {};
+    // CHANGE #305 — the execution baseline. Absent payload = absent section;
+    // the screen never invents a "0 per hour" it was not told.
+    final base =
+        (_data['baseline'] as Map?)?.cast<String, dynamic>() ?? const {};
 
     return Scaffold(
       backgroundColor: kPageBg,
@@ -160,6 +175,10 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
                     ],
                     SizedBox(height: Ds.space.x16),
                     _tickCard(tick),
+                    if (((base['rows'] as List?) ?? const []).isNotEmpty) ...[
+                      SizedBox(height: Ds.space.x24),
+                      _baselineCard(base),
+                    ],
                     if (((ba['rows'] as List?) ?? const []).isNotEmpty) ...[
                       SizedBox(height: Ds.space.x24),
                       _beforeAfterCard(ba),
@@ -281,6 +300,153 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
       ],
     ),
   );
+
+  /// A sentence, not a pill: the creep alarm's copy is a full line of backend
+  /// prose, so it wears the tone's tint as a banner rather than being squeezed
+  /// into a chip built for two words.
+  Widget _alertBanner(String text, Tone tone) => Container(
+    width: double.infinity,
+    padding: EdgeInsets.all(Ds.space.x12),
+    decoration: BoxDecoration(
+      color: tone.bg,
+      borderRadius: Ds.r.rButton,
+    ),
+    child: Text(
+      text,
+      style: Ds.t.caption.copyWith(fontWeight: FontWeight.w600, color: tone.fg),
+    ),
+  );
+
+  /// CHANGE #305 — the execution baseline: the frozen before-measurement beside
+  /// what the scheduler is doing now, the creep alarm's own sentence, and the
+  /// per-task run/idle/duration breakdown from cron_job_stats. Every number and
+  /// every word arrives in `baseline`; nothing here is computed or worded.
+  Widget _baselineCard(Map<String, dynamic> b) {
+    final rows = (b['rows'] as List?) ?? const [];
+    final tasks = (b['tasks'] as List?) ?? const [];
+    final alert = (b['alert'] as Map?)?.cast<String, dynamic>() ?? const {};
+    return DqCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            (b['label'] as String?) ?? '',
+            style: Ds.t.subtitle.copyWith(
+              fontWeight: FontWeight.w700,
+              color: kTextHi,
+            ),
+          ),
+          SizedBox(height: Ds.space.x4),
+          Text(
+            (b['note'] as String?) ?? '',
+            style: Ds.t.caption.copyWith(color: kTextLo),
+          ),
+          if ((alert['text'] as String?)?.isNotEmpty ?? false) ...[
+            SizedBox(height: Ds.space.x12),
+            _alertBanner(
+              alert['text'] as String,
+              toneByName((alert['tone'] as String?) ?? 'neutral'),
+            ),
+          ],
+          for (final r in rows) ...[
+            SizedBox(height: Ds.space.x16),
+            Text(
+              ((r as Map)['metric'] as String?) ?? '',
+              style: Ds.t.body.copyWith(
+                fontWeight: FontWeight.w600,
+                color: kTextHi,
+              ),
+            ),
+            SizedBox(height: Ds.space.x8),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: _stat(
+                    (b['before_head'] as String?) ?? '',
+                    '${r['before'] ?? ''}',
+                  ),
+                ),
+                SizedBox(width: Ds.space.x8),
+                Expanded(
+                  child: _stat(
+                    (b['after_head'] as String?) ?? '',
+                    '${r['after'] ?? ''}',
+                  ),
+                ),
+              ],
+            ),
+            if ((r['note'] as String?)?.isNotEmpty ?? false) ...[
+              SizedBox(height: Ds.space.x8),
+              Text(
+                r['note'] as String,
+                style: Ds.t.caption.copyWith(color: kTextLo),
+              ),
+            ],
+          ],
+          if (tasks.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x24),
+            Text(
+              (b['tasks_head'] as String?) ?? '',
+              style: Ds.t.body.copyWith(
+                fontWeight: FontWeight.w600,
+                color: kTextHi,
+              ),
+            ),
+            SizedBox(height: Ds.space.x4),
+            Text(
+              (b['tasks_note'] as String?) ?? '',
+              style: Ds.t.caption.copyWith(color: kTextLo),
+            ),
+            for (final t in tasks) ...[
+              SizedBox(height: Ds.space.x12),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          ((t as Map)['name'] as String?) ?? '',
+                          style: Ds.t.body.copyWith(
+                            fontWeight: FontWeight.w600,
+                            color: kTextHi,
+                          ),
+                        ),
+                        SizedBox(height: Ds.space.x4),
+                        Text(
+                          '${t['per_day_label'] ?? ''} · ${t['idle_label'] ?? ''}',
+                          style: Ds.t.caption.copyWith(color: kTextLo),
+                        ),
+                        SizedBox(height: Ds.space.x4),
+                        Text(
+                          '${t['interval_label'] ?? ''} · ${t['avg_ms_label'] ?? ''}',
+                          style: Ds.t.caption.copyWith(color: kTextLo),
+                        ),
+                        if ((t['error'] as String?)?.isNotEmpty ?? false) ...[
+                          SizedBox(height: Ds.space.x4),
+                          Text(
+                            t['error'] as String,
+                            style: Ds.t.caption.copyWith(color: Ds.c.danger),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  SizedBox(width: Ds.space.x8),
+                  ToneChip(
+                    label: '${t['idle_label'] ?? ''}',
+                    tone: toneByName((t['tone'] as String?) ?? 'neutral'),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ],
+      ),
+    );
+  }
 
   /// The command's actual answer: what the per-minute storm cost, and what it
   /// costs now. Every number, label and caption arrives in `before_after` —

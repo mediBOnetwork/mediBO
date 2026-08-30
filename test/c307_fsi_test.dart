@@ -5,7 +5,7 @@
 // grants it. What must never happen is the alert going quiet, or Dart
 // inventing a sentence when the backend sent none. Both are pinned here.
 import 'package:flutter_test/flutter_test.dart';
-import 'package:medibo/models/order_alert_fsi.dart';
+import 'package:pharma_b2b/models/order_alert_fsi.dart';
 
 /// The payload order_alert_fsi() returns, deliberately full of words that
 /// exist nowhere in the Dart source — so a hardcoded fallback cannot pass.

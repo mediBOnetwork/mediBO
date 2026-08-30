@@ -336,6 +336,21 @@ class _CartScreenState extends State<CartScreen> {
   Future<void> _placeOrder() async {
     if (_orderInProgress) return;
 
+    // CHANGE #309 (5) — the backend already said this address is outside the
+    // delivery area. Refused here with the backend's own words, before the
+    // order exists, so nothing has to be cancelled afterwards.
+    if (_checkout['can_order'] == false) {
+      final srv = _checkout['serviceability'] is Map
+          ? Map<String, dynamic>.from(_checkout['serviceability'] as Map)
+          : const <String, dynamic>{};
+      RenderLog.write('c309_checkout_blocked', srv['pincode']?.toString() ?? '');
+      _showOrderGate(
+        title: srv['title']?.toString() ?? '',
+        message: srv['message']?.toString() ?? '',
+      );
+      return;
+    }
+
     final cart = AppState.of(context);
     final viewAs = ViewAsState.of(context);
 
@@ -758,7 +773,30 @@ class _CartScreenState extends State<CartScreen> {
           );
     final unresolvedNote =
         _unresolvedNote == null ? null : _UnresolvedNote(note: _unresolvedNote!);
-    final blocked = blocking != null;
+
+    // CHANGE #309 (5) — pincode serviceability, answered by checkout_action()
+    // before an order exists. Three states, and the app distinguishes none of
+    // them itself: it prints the backend's title/message/tone and blocks only
+    // when the backend says can_order is false. A pincode we simply have not
+    // listed yet warns and still lets a licensed pharmacy order — refusing them
+    // outright would lose a real customer over a missing row.
+    final srv = _checkout['serviceability'] is Map
+        ? Map<String, dynamic>.from(_checkout['serviceability'] as Map)
+        : const <String, dynamic>{};
+    final srvMode = srv['mode']?.toString() ?? 'serviceable';
+    final srvBanner = (srv['checked'] == true && srvMode != 'serviceable')
+        ? _ServiceabilityBanner(
+            title: srv['title']?.toString() ?? '',
+            message: srv['message']?.toString() ?? '',
+            tone: srv['tone'] is Map
+                ? Map<String, dynamic>.from(srv['tone'] as Map)
+                : const <String, dynamic>{},
+          )
+        : null;
+
+    // A blocked pincode blocks placement exactly the way an unavailable line
+    // does, so there is ONE disabled-button rule rather than two.
+    final blocked = blocking != null || _checkout['can_order'] == false;
 
     // CHANGE #639 — the chip cart_render() worded for its flagged lines. It
     // appears only while the BACKEND reports a non-zero count, and its text is
@@ -780,6 +818,8 @@ class _CartScreenState extends State<CartScreen> {
             children: [
               if (banner != null) banner,
               ?availBanner,
+            ?srvBanner,
+              ?srvBanner,
               ?unresolvedNote,
               ?unavailableChip,
               Expanded(
@@ -870,6 +910,57 @@ class _CartScreenState extends State<CartScreen> {
 /// Shows `cart_availability().blocking_label` verbatim and offers the one
 /// action that clears it: `cart_strip_unavailable()`. While this is on screen
 /// Place Order is blocked. The wording is the backend's, not ours.
+// CHANGE #309 (5) — the serviceability notice. Colours arrive as the backend's
+// own tone pair, so 'warn' is amber and 'blocked' is red without this file
+// knowing which is which.
+class _ServiceabilityBanner extends StatelessWidget {
+  final String title;
+  final String message;
+  final Map<String, dynamic> tone;
+  const _ServiceabilityBanner({
+    required this.title,
+    required this.message,
+    required this.tone,
+  });
+
+  static Color? _hex(String? h) {
+    final v = (h ?? '').trim().replaceFirst('#', '');
+    if (v.length != 6) return null;
+    final n = int.tryParse('FF$v', radix: 16);
+    return n == null ? null : Color(n);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    RenderLog.write('c309_serviceability_banner', title);
+    // The tone pair is the BACKEND's; the token layer supplies the fallback,
+    // so an older payload with no tone still paints inside the design system.
+    final fg = _hex(tone['fg']?.toString()) ?? Ds.c.warning;
+    return Container(
+      width: double.infinity,
+      color: _hex(tone['bg']?.toString()) ?? Ds.c.warningSoft,
+      padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x16, vertical: Ds.space.x12),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Icon(Icons.local_shipping_outlined, size: 18, color: fg),
+        SizedBox(width: Ds.space.x8),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            if (title.isNotEmpty)
+              Text(title,
+                  style: Ds.t.body.copyWith(
+                      fontWeight: FontWeight.w700, color: fg)),
+            if (message.isNotEmpty) ...[
+              if (title.isNotEmpty) SizedBox(height: Ds.space.x4),
+              Text(message, style: Ds.t.caption.copyWith(color: fg)),
+            ],
+          ]),
+        ),
+      ]),
+    );
+  }
+}
+
 class _AvailabilityBanner extends StatelessWidget {
   final String label;
   final bool busy;

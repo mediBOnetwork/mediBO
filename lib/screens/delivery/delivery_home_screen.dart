@@ -36,6 +36,8 @@ import 'delivery_google_route.dart';
 import 'delivery_home_panel.dart'; // C630: PART B + C
 import 'delivery_proof_sheet.dart';
 import 'delivery_run_map_panel.dart';
+import '../../services/ui_copy.dart';
+import '../../design_tokens.dart';
 
 Color get _kGreen => FulfillLookups.instance.color('c_ff1b7a43', const Color(0xFF1B7A43));
 Color get _kBorder => FulfillLookups.instance.color('c_ffe5e7eb', const Color(0xFFE5E7EB));
@@ -388,6 +390,76 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
     } catch (_) {}
   }
 
+  // ── CHANGE #309 (1): warehouse -> rider handover ──────────────────────────
+  //
+  // The rider takes custody by scanning the parcel's QR, or by typing the code
+  // printed under it when the camera will not focus in a dark loading bay.
+  // Every string in this sheet comes from ui_copy: the title, the hint, the
+  // field label and the button. Nothing here decides anything — the backend
+  // answers whether the scan was accepted and what to say about it.
+  Future<void> _handover(Map<String, dynamic> stop) async {
+    final token = stop['qr_token']?.toString() ?? '';
+    final ctrl = TextEditingController(text: token);
+
+    final go = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(
+          left: Ds.space.x16, right: Ds.space.x16, top: Ds.space.x16,
+          bottom: Ds.space.x16 + MediaQuery.of(ctx).viewInsets.bottom,
+        ),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(c('delivery.handover_section_title'), style: Ds.t.subtitle),
+          SizedBox(height: Ds.space.x8),
+          Text(c('delivery.handover_scan_hint'), style: Ds.t.caption),
+          SizedBox(height: Ds.space.x16),
+          TextField(
+            controller: ctrl,
+            decoration: InputDecoration(
+              labelText: c('delivery.handover_manual_label'),
+              filled: true,
+              fillColor: Ds.c.bg,
+              border: OutlineInputBorder(
+                borderRadius: Ds.r.rButton,
+                borderSide: BorderSide(color: _kBorder),
+              ),
+            ),
+          ),
+          SizedBox(height: Ds.space.x16),
+          SizedBox(
+            width: double.infinity,
+            height: 48,
+            child: ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _kGreen, foregroundColor: Ds.c.surface),
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: Text(c('delivery.handover_submit'),
+                  style: const TextStyle(fontWeight: FontWeight.w700)),
+            ),
+          ),
+        ]),
+      ),
+    );
+
+    if (go != true) return;
+
+    try {
+      final res = await Supabase.instance.client.rpc('delivery_handover_scan', params: {
+        'p_token': ctrl.text.trim(),
+        'p_lat': _meLat,
+        'p_lng': _meLng,
+        'p_method': 'qr',
+      });
+      if (!mounted) return;
+      if (res is Map) _toast(res['message']?.toString() ?? '');
+      RenderLog.write('c309_handover_scan', 1);
+      await _load();
+    } catch (_) {}
+  }
+
   // ── B4: row actions ───────────────────────────────────────────────────────
 
   Future<void> _open(String url) async {
@@ -635,6 +707,39 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
         : const <String, dynamic>{};
     final statusLabel = s['status_label']?.toString() ?? '';
 
+    // CHANGE #309 — every chip below is (text, colours) straight from the
+    // payload. A chip whose text is empty is not rendered at all, which is how
+    // the backend switches one off: absence, never a placeholder dash.
+    final handover = s['handover'] is Map
+        ? Map<String, dynamic>.from(s['handover'] as Map)
+        : const <String, dynamic>{};
+    final sla = s['sla'] is Map
+        ? Map<String, dynamic>.from(s['sla'] as Map)
+        : const <String, dynamic>{};
+    final cold = s['cold_chain'] is Map
+        ? Map<String, dynamic>.from(s['cold_chain'] as Map)
+        : const <String, dynamic>{};
+    final needsHandover = s['needs_handover'] == true;
+    final coldNote = cold['is_cold_chain'] == true ? (cold['note']?.toString() ?? '') : '';
+
+    final chips = <(String, Map<String, dynamic>)>[
+      if (statusLabel.isNotEmpty) (statusLabel, colors),
+      if ((handover['chip']?.toString() ?? '').isNotEmpty)
+        (handover['chip'].toString(), handover['colors'] is Map
+            ? Map<String, dynamic>.from(handover['colors'] as Map)
+            : const <String, dynamic>{}),
+      if (cold['is_cold_chain'] == true && (cold['badge']?.toString() ?? '').isNotEmpty)
+        (cold['badge'].toString(), cold['colors'] is Map
+            ? Map<String, dynamic>.from(cold['colors'] as Map)
+            : const <String, dynamic>{}),
+      if ((sla['chip']?.toString() ?? '').isNotEmpty)
+        (sla['chip'].toString(), sla['chip_colors'] is Map
+            ? Map<String, dynamic>.from(sla['chip_colors'] as Map)
+            : const <String, dynamic>{}),
+      if ((s['arrived_chip']?.toString() ?? '').isNotEmpty)
+        (s['arrived_chip'].toString(), const {'bg': '#D1FAE5', 'fg': '#065F46'}),
+    ];
+
     final call = actions['call_number']?.toString() ?? '';
     final wa = actions['whatsapp_number']?.toString() ?? '';
     final dir = actions['directions_url']?.toString() ?? '';
@@ -695,23 +800,19 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
           ]),
         ]),
 
-        if (statusLabel.isNotEmpty) ...[
-          const SizedBox(height: 8),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: _hex(colors['bg']?.toString()) ?? Colors.transparent,
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Text(statusLabel,
-                  style: TextStyle(
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w700,
-                      color: _hex(colors['fg']?.toString()) ?? _kText)),
-            ),
-          ),
+        // CHANGE #309 — the status chip is joined by three more, all of them
+        // backend strings with backend colours: custody, the promise, and the
+        // cold-chain badge. They wrap rather than overflow on a 360 px phone.
+        if (chips.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x8),
+          Wrap(spacing: Ds.space.x8, runSpacing: Ds.space.x8, children: [
+            for (final c in chips) _chip(c.$1, c.$2),
+          ]),
+        ],
+
+        if (coldNote.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x4),
+          Text(coldNote, style: Ds.t.caption),
         ],
 
         // B5 — prominent, and also reachable from the row itself.
@@ -763,6 +864,38 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
             _actionBtn(Icons.directions_outlined, _ui('dlv_directions'), () => _open(dir)),
         ]),
 
+        // CHANGE #309 (2) — the promise, printed as the backend formatted it.
+        if (sla['has'] == true && (sla['promised_label']?.toString() ?? '').isNotEmpty) ...[
+          SizedBox(height: Ds.space.x8),
+          Text(
+            '${sla['promise_label'] ?? ''} ${sla['promised_label']}',
+            style: Ds.t.caption,
+          ),
+        ],
+
+        // CHANGE #309 (1) — custody first. While this shows, canDeliver is
+        // false, so this button REPLACES Deliver rather than sitting beside it:
+        // there is only ever one next action on a stop.
+        if (needsHandover) ...[
+          SizedBox(height: Ds.space.x12),
+          SizedBox(
+            width: double.infinity,
+            height: 48,
+            child: OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: _kGreen,
+                side: BorderSide(color: _kGreen),
+              ),
+              onPressed: () => _handover(s),
+              icon: const Icon(Icons.qr_code_scanner_outlined, size: 18),
+              label: Text(
+                (handover['button_label']?.toString() ?? ''),
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+          ),
+        ],
+
         // B4 — only when the backend says so.
         if (canDeliver) ...[
           const SizedBox(height: 10),
@@ -781,6 +914,21 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
           ),
         ],
       ]),
+    );
+  }
+
+  // One chip, drawn from a backend (text, colours) pair. Never decides a colour.
+  Widget _chip(String text, Map<String, dynamic> colors) {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: Ds.space.x8, vertical: Ds.space.x4),
+      decoration: BoxDecoration(
+        color: _hex(colors['bg']?.toString()) ?? Colors.transparent,
+        borderRadius: Ds.r.rChip,
+      ),
+      child: Text(text,
+          style: Ds.t.caption.copyWith(
+              fontWeight: FontWeight.w700,
+              color: _hex(colors['fg']?.toString()) ?? _kText)),
     );
   }
 

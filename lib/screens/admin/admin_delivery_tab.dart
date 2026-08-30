@@ -37,6 +37,9 @@ import '../../fulfill/fulfill_lookups.dart';
 import '../../services/admin_date_scope.dart';
 import '../../services/admin_zone_scope.dart';
 import '../../utils/render_log.dart';
+import 'admin_delivery_ops_screen.dart';
+import '../../services/ui_copy.dart';
+import '../../design_tokens.dart';
 
 Color get _kGreen => FulfillLookups.instance.color('c_ff1b7a43', const Color(0xFF1B7A43));
 Color get _kBorder => FulfillLookups.instance.color('c_ffe5e7eb', const Color(0xFFE5E7EB));
@@ -364,6 +367,12 @@ class AdminDeliveryTabState extends State<AdminDeliveryTab>
           children: [
             _zoneHeader(),
             const SizedBox(height: 16),
+            // CHANGE #309 — the way in to payouts, claims, serviceability,
+            // rider documents and ratings. It lives here rather than in the
+            // admin nav because this tab is already "delivery", and an admin
+            // looking for a payout is looking at deliveries.
+            _opsEntry(),
+            const SizedBox(height: 16),
             if (_orders.isEmpty)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 32),
@@ -383,6 +392,37 @@ class AdminDeliveryTabState extends State<AdminDeliveryTab>
           child: _assignBar(),
         ),
     ]);
+  }
+
+  /// CHANGE #309 — entry point to the delivery operations screen. The two
+  /// words on it are ui_copy keys, so this row contains no display literal.
+  Widget _opsEntry() {
+    return InkWell(
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => const AdminDeliveryOpsScreen()),
+      ),
+      child: Container(
+        padding: EdgeInsets.all(Ds.space.x16),
+        decoration: BoxDecoration(
+          color: Ds.c.surface,
+          border: Border.all(color: _kBorder),
+          borderRadius: Ds.r.rCard,
+        ),
+        child: Row(children: [
+          Icon(Icons.local_shipping_outlined, size: 20, color: _kGreen),
+          SizedBox(width: Ds.space.x12),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(c('admin.delivery.ops_entry'),
+                  style: Ds.t.body.copyWith(fontWeight: FontWeight.w700)),
+              SizedBox(height: Ds.space.x4),
+              Text(c('admin.delivery.ops_subtitle'), style: Ds.t.caption),
+            ]),
+          ),
+          Icon(Icons.chevron_right, size: 20, color: _kSub),
+        ]),
+      ),
+    );
   }
 
   /// A3 — the zone is never ambiguous.

@@ -1,5 +1,12 @@
 // PROTECTED — CHANGE #293.
 //
+// #304 renamed the sheet's injected creator `createQr` -> `createPayment`:
+// the sheet now mints whatever payable object the BACKEND's pay_mode names (a
+// Razorpay Checkout link for a customer paying on the phone in hand, the #291
+// QR when the payer is on another device). Only the parameter name moved —
+// every assertion below is the one #293 wrote, and a payload with no pay_mode
+// is still the QR contract, which is why they all still hold.
+//
 // See CLAUDE.md: runs before EVERY deploy; editable only by a CHANGE that
 // deliberately changes payment collection, never to make an unrelated change
 // go green.
@@ -328,7 +335,7 @@ void main() {
         razorpayCopy: rzpCopy(),
         orderCode: 'MB-1042',
         amountDisplay: '₹500.00',
-        createQr: (_) async {
+        createPayment: (_) async {
           mints++;
           return qrPayload();
         },
@@ -353,7 +360,7 @@ void main() {
         orderId: 'o1',
         checkout: checkout(),
         razorpayCopy: rzpCopy(),
-        createQr: (_) async => qrPayload(),
+        createPayment: (_) async => qrPayload(),
         checkPaid: (_) async => <String, dynamic>{
           'paid': paid,
           if (paid) 'view': {...qrPayload(), 'paid': true, 'title': 'Payment received ✓'},
@@ -381,7 +388,7 @@ void main() {
         orderId: 'o1',
         checkout: checkout(),
         razorpayCopy: rzpCopy(),
-        createQr: (_) async => <String, dynamic>{
+        createPayment: (_) async => <String, dynamic>{
           'ok': false,
           'error': 'nothing_due',
           'message': 'Nothing due right now.',
@@ -398,7 +405,7 @@ void main() {
     testWidgets('an empty payload renders no invented copy', (tester) async {
       await _pump(tester, CheckoutPaySheet(
         orderId: 'o1',
-        createQr: (_) async => qrPayload(),
+        createPayment: (_) async => qrPayload(),
         checkPaid: (_) async => <String, dynamic>{'paid': false},
       ));
       await tester.pumpAndSettle();

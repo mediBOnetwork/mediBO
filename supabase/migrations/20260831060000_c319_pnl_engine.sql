@@ -1185,3 +1185,12 @@ drop trigger if exists trg_pnl_on_bill_job on public.bill_jobs;
 create trigger trg_pnl_on_bill_job
   after insert on public.bill_jobs
   for each row execute function public._trg_pnl_bill_job();
+
+-- ── 19. The two strings a screen needs BEFORE its first payload arrives ─────
+-- Everything else on the P&L screen comes down in the payload. These two are
+-- what it says when the payload never came, so they live in ui_copy, which the
+-- app already has cached at boot.
+insert into public.ui_copy (key, value) values
+  ('pnl.error', '"Could not load the profit & loss figures."'::jsonb),
+  ('pnl.retry', '"Retry"'::jsonb)
+on conflict (key) do nothing;

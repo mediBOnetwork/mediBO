@@ -269,6 +269,26 @@ class _PnlScreenState extends State<PnlScreen> {
               emptyText: (o['empty_text'] ?? '').toString(),
             ),
             SizedBox(height: Ds.space.x24),
+            SizedBox(
+              width: double.infinity,
+              height: Ds.touch.minTarget,
+              child: OutlinedButton(
+                onPressed: () async {
+                  final r = _asMap(
+                      await _rpc('pnl_rescan_order', {'p_order_id': orderId}));
+                  if (!sheetCtx.mounted) return;
+                  Navigator.of(sheetCtx).pop();
+                  final msg = (r['message'] ?? '').toString();
+                  if (msg.isNotEmpty && mounted) {
+                    ScaffoldMessenger.of(context)
+                        .showSnackBar(SnackBar(content: Text(msg)));
+                  }
+                  await _load();
+                },
+                child: Text((o['rescan_label'] ?? '').toString()),
+              ),
+            ),
+            SizedBox(height: Ds.space.x24),
           ],
         ),
       ),

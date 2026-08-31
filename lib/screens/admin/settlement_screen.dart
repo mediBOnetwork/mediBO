@@ -870,13 +870,17 @@ Widget settlementChip(String label, String tone) {
 Widget settlementTiles(List<dynamic> tiles) => LayoutBuilder(
       builder: (ctx, box) {
         final cols = box.maxWidth >= 900 ? 4 : (box.maxWidth >= 560 ? 3 : 2);
+        // A tile holds a caption and one number. Wider columns therefore need a
+        // WIDER ratio, not a taller card — a fixed ratio turns a desktop grid
+        // into eleven half-empty boxes.
+        final ratio = cols == 4 ? 2.8 : (cols == 3 ? 2.4 : 2.0);
         return GridView.count(
           crossAxisCount: cols,
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
           crossAxisSpacing: Ds.space.x12,
           mainAxisSpacing: Ds.space.x12,
-          childAspectRatio: 1.9,
+          childAspectRatio: ratio,
           children: [
             for (final t in tiles)
               if (t is Map) settlementTile(Map<String, dynamic>.from(t)),
@@ -897,8 +901,14 @@ Widget settlementTile(Map<String, dynamic> t) => Container(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text((t['label'] ?? '').toString(),
-              style: Ds.t.caption, maxLines: 2, overflow: TextOverflow.ellipsis),
+          // Flexible, so a two-line label on a narrow column gives way to one
+          // line instead of overflowing the card it lives in.
+          Flexible(
+            child: Text((t['label'] ?? '').toString(),
+                style: Ds.t.caption,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis),
+          ),
           SizedBox(height: Ds.space.x8),
           FittedBox(
             fit: BoxFit.scaleDown,

@@ -85,10 +85,12 @@ void main() {
       () {
     // The two lists that grew the dropdown to thirty items. Neither may come
     // back: if a feature needs a home, the home is the registry.
-    expect(navSrc, isNot(contains('kAdminOverflowNav')),
+    // Declaration, not mention: the history comments may name these, but
+    // neither may be declared again.
+    expect(navSrc, isNot(contains('get kAdminOverflowNav')),
         reason: 'the overflow list is what leaked features into the profile '
             'dropdown — features live in feature_registry now');
-    expect(navSrc, isNot(contains('AdminMoreNavMenu')),
+    expect(navSrc, isNot(contains('class AdminMoreNavMenu')),
         reason: 'the More popup was the second copy of that same list');
 
     // AdminProfileMenuTiles must render the BACKEND rows, not hand-written
@@ -136,7 +138,7 @@ void main() {
     expect(shellSrc, contains("import 'admin/admin_order_closure_screen.dart'"));
   });
 
-  test('CHANGE #325 — the seven screens that had no entry point now do', () {
+  test('CHANGE #325 — the nine screens that had no entry point now do', () {
     // Every one of these existed, worked, and was reachable only by typing its
     // URL (or not at all). Rule 11: a feature Om cannot tap does not exist.
     for (final route in const [

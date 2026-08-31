@@ -20,8 +20,13 @@ class AdminNavEntry {
 ///
 /// The wide shell starts at 900 px, and at that width this row plus the logo
 /// and the profile chip already needs nearly all of it. Anything added here
-/// clips rather than wraps — which is why the WhatsApp screens live in
-/// [kAdminOverflowNav] behind a "More" popup instead of as two more links.
+/// clips rather than wraps.
+///
+/// CHANGE #325 — that ceiling used to push the overflow into a "More" popup
+/// sharing one list with the profile dropdown, which is how ~20 features ended
+/// up in a dropdown. The overflow is gone: a destination that does not fit
+/// these five tabs belongs to a dashboard category, and the command palette
+/// reaches it in two keystrokes.
 List<AdminNavEntry> get kAdminTopNav => <AdminNavEntry>[
       AdminNavEntry(c('admin_nav.top_dashboard'), Icons.dashboard_outlined),
       AdminNavEntry(c('admin_nav.top_whatsapp'), Icons.forum_outlined),

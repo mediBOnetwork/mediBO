@@ -34,7 +34,7 @@ values
    't.product_name',
    $$coalesce(t.marketer,'') || ' · ' || coalesce(nullif(t.status,''),'No status') || case when t.buyable then ' · In stock' else '' end$$,
    'true', 't.product_name', '',
-   true, true, 10, true),
+   true, true, 50, true),
 
   ('product_pricing',
    'Product pricing',
@@ -45,7 +45,7 @@ values
    'true',
    $$coalesce((select m.product_name from public."MEDICINE" m where m.id = t.product_id), '')$$,
    'pricing_updated_at = now()',
-   false, true, 20, true),
+   false, true, 30, true),
 
   ('customer_records',
    'Customers',
@@ -56,7 +56,7 @@ values
    'coalesce(t.is_deleted, false) = false',
    $$coalesce(t.pharmacy_name,'') || ' ' || coalesce(t.customer_name,'') || ' ' || coalesce(t.phone,'')$$,
    '',
-   false, true, 30, true),
+   false, true, 10, true),
 
   ('supplier_records',
    'Suppliers',
@@ -67,7 +67,7 @@ values
    'coalesce(t.is_deleted, false) = false',
    $$coalesce(t.supplier_name,'') || ' ' || coalesce(t.contact_name,'') || ' ' || coalesce(t.phone,'')$$,
    '',
-   false, true, 40, true),
+   false, true, 20, true),
 
   ('order_status',
    'Order status',
@@ -78,7 +78,7 @@ values
    $$lower(coalesce(t.status,'')) in ('pending','accepted','confirmed','processing')$$,
    $$t.id::text$$,
    '',
-   false, true, 50, true)
+   false, true, 40, true)
 on conflict (key) do update set
   label = excluded.label, hint = excluded.hint, table_name = excluded.table_name,
   pk_col = excluded.pk_col, entity_type = excluded.entity_type,

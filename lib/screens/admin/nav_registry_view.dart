@@ -17,58 +17,151 @@ import '../../design_tokens.dart';
 import '../../utils/render_log.dart';
 
 /// The backend's `icon_key` → a glyph. This is the ONE thing that cannot live
-/// in Postgres: an IconData is a font codepoint, not a string. Everything else
-/// about a tile — its label, its category, its order, its count and its phrase
-/// — comes down in the payload. An unknown key falls back to a neutral tile
-/// rather than throwing, so the backend can register a screen with a brand-new
-/// icon_key and it still renders (forward compatibility, same rule the home
-/// feed follows for unknown layouts).
-IconData navIcon(String? key) {
-  switch (key) {
-    case 'truck':            return Icons.local_shipping_outlined;
-    case 'alert':            return Icons.notifications_active_outlined;
-    case 'task':             return Icons.task_alt_outlined;
-    case 'qr':               return Icons.qr_code_2;
-    case 'autorenew':        return Icons.autorenew;
-    case 'people':           return Icons.people_outline;
-    case 'inventory':        return Icons.inventory_2_outlined;
-    case 'person_add':       return Icons.person_add_outlined;
-    case 'add_business':     return Icons.add_business_outlined;
-    case 'badge':            return Icons.badge_outlined;
-    case 'business':         return Icons.business_outlined;
-    case 'link_off':         return Icons.link_off;
-    case 'person_remove':    return Icons.person_remove_outlined;
-    case 'medication':       return Icons.medication_outlined;
-    case 'rupee':            return Icons.currency_rupee;
-    case 'percent':          return Icons.percent;
-    case 'stars':            return Icons.stars_outlined;
-    case 'moped':            return Icons.delivery_dining_outlined;
-    case 'route':            return Icons.alt_route;
-    case 'forum':            return Icons.forum_outlined;
-    case 'description':      return Icons.description_outlined;
-    case 'campaign':         return Icons.campaign_outlined;
-    case 'filter':           return Icons.filter_alt_outlined;
-    case 'timeline':         return Icons.timeline_outlined;
-    case 'settings_suggest': return Icons.settings_suggest_outlined;
-    case 'fact_check':       return Icons.fact_check_outlined;
-    case 'notifications':    return Icons.notifications_outlined;
-    case 'phonelink_ring':   return Icons.phonelink_ring_outlined;
-    case 'payments':         return Icons.payments_outlined;
-    case 'receipt':          return Icons.receipt_long_outlined;
-    case 'account_balance':  return Icons.account_balance_outlined;
-    case 'trending_up':      return Icons.trending_up;
-    case 'handshake':        return Icons.handshake_outlined;
-    case 'admin_panel':      return Icons.admin_panel_settings_outlined;
-    case 'terminal':         return Icons.terminal;
-    case 'rule':             return Icons.rule_outlined;
-    case 'rule_folder':      return Icons.rule_folder_outlined;
-    case 'schedule':         return Icons.schedule_outlined;
-    case 'person':           return Icons.person_outline;
-    case 'logout':           return Icons.logout;
-    case 'book':             return Icons.menu_book_outlined;
-    case 'settings':         return Icons.settings_outlined;
-    case 'search':           return Icons.search;
-    default:                 return Icons.widgets_outlined;
+/// in Postgres: an IconData is a font codepoint, not a string.
+///
+/// CHANGE #349 — it is a MAP now, not a switch, because the switch had no way
+/// to answer the only question that mattered: *does this key resolve?* It
+/// always returned something, so a registry row naming a key nobody had
+/// implemented drew `Icons.widgets_outlined` on a pale tinted square — which
+/// is exactly what Om reported as "an empty pale square" across most of the
+/// dashboard. A map can be asked, and [navIconResolves] asks it.
+///
+/// The keys here are mirrored by the `ui_icon` table. `nav_icon_audit()` +
+/// the `nav_icons_resolve` regression-guard behaviour fail the BUILD if the
+/// registry names a key the catalogue does not hold, and
+/// `test/protected/nav_icon_resolve_test.dart` fails if this map and the
+/// catalogue drift apart. Neither side can move alone.
+const Map<String, IconData> kNavIcons = <String, IconData>{
+  'truck':            Icons.local_shipping_outlined,
+  'alert':            Icons.notifications_active_outlined,
+  'task':             Icons.task_alt_outlined,
+  'qr':               Icons.qr_code_2,
+  'autorenew':        Icons.autorenew,
+  'people':           Icons.people_outline,
+  'inventory':        Icons.inventory_2_outlined,
+  'person_add':       Icons.person_add_outlined,
+  'add_business':     Icons.add_business_outlined,
+  'badge':            Icons.badge_outlined,
+  'business':         Icons.business_outlined,
+  'link_off':         Icons.link_off,
+  'person_remove':    Icons.person_remove_outlined,
+  'medication':       Icons.medication_outlined,
+  'rupee':            Icons.currency_rupee,
+  'percent':          Icons.percent,
+  'stars':            Icons.stars_outlined,
+  'moped':            Icons.delivery_dining_outlined,
+  'route':            Icons.alt_route,
+  'forum':            Icons.forum_outlined,
+  'description':      Icons.description_outlined,
+  'campaign':         Icons.campaign_outlined,
+  'filter':           Icons.filter_alt_outlined,
+  'timeline':         Icons.timeline_outlined,
+  'settings_suggest': Icons.settings_suggest_outlined,
+  'fact_check':       Icons.fact_check_outlined,
+  'notifications':    Icons.notifications_outlined,
+  'phonelink_ring':   Icons.phonelink_ring_outlined,
+  'payments':         Icons.payments_outlined,
+  'receipt':          Icons.receipt_long_outlined,
+  'account_balance':  Icons.account_balance_outlined,
+  'trending_up':      Icons.trending_up,
+  'handshake':        Icons.handshake_outlined,
+  'admin_panel':      Icons.admin_panel_settings_outlined,
+  'terminal':         Icons.terminal,
+  'rule':             Icons.rule_outlined,
+  'rule_folder':      Icons.rule_folder_outlined,
+  'schedule':         Icons.schedule_outlined,
+  'person':           Icons.person_outline,
+  'logout':           Icons.logout,
+  'book':             Icons.menu_book_outlined,
+  'settings':         Icons.settings_outlined,
+  'search':           Icons.search,
+  'wallet':           Icons.account_balance_wallet_outlined,
+  'store':            Icons.storefront_outlined,
+  'bag':              Icons.shopping_bag_outlined,
+  'package':          Icons.inventory_outlined,
+  // CHANGE #349 — the Dev Queue tools, now registry rows like everything else.
+  'bug':              Icons.bug_report_outlined,
+  'map':              Icons.map_outlined,
+  'key':              Icons.vpn_key_outlined,
+  'cloud':            Icons.cloud_outlined,
+  'memory':           Icons.memory_outlined,
+  'shop':             Icons.shop_outlined,
+  'drafts':           Icons.drafts_outlined,
+  'build':            Icons.build_outlined,
+  'science':          Icons.science_outlined,
+  'history':          Icons.history,
+  'dashboard':        Icons.dashboard_outlined,
+  'tools':            Icons.handyman_outlined,
+};
+
+/// Does the backend's key name a glyph this build can actually draw?
+bool navIconResolves(String? key) =>
+    key != null && key.isNotEmpty && kNavIcons.containsKey(key);
+
+/// The glyph for [key]. Unknown keys still return something so nothing throws
+/// — but prefer [NavGlyph], which shows the feature's own initial instead of a
+/// meaningless generic square when the key does not resolve.
+IconData navIcon(String? key) =>
+    kNavIcons[key ?? ''] ?? Icons.widgets_outlined;
+
+/// The fallback initial for a payload row.
+///
+/// The backend composes `icon_letter` (it is a display string, so it is SQL's
+/// job). This only slices the row's own `label` when an older payload has no
+/// icon_letter — it never invents a word.
+String navIconLetter(Map<String, dynamic> row) {
+  final given = (row['icon_letter'] ?? '').toString().trim();
+  if (given.isNotEmpty) return given.characters.first.toUpperCase();
+  final label = (row['label'] ?? row['title'] ?? '').toString().trim();
+  if (label.isEmpty) return '?';
+  return label.characters.first.toUpperCase();
+}
+
+/// CHANGE #349 — the ONE place a nav glyph is drawn.
+///
+/// It exists because a tinted square with nothing in it is the worst possible
+/// answer to "which feature is this?", and it was the answer most of the
+/// dashboard gave. Now: a resolvable key draws its icon; anything else draws
+/// the feature's own initial, at the same size, in the same square. Both are
+/// legible; neither is blank. The box is explicitly `Alignment.center`, so the
+/// glyph is laid out loose and centred rather than squeezed by the box's own
+/// tight constraints.
+class NavGlyph extends StatelessWidget {
+  final Map<String, dynamic> row;
+  final double box;
+  final double glyph;
+  final Color? color;
+  final Color? background;
+
+  const NavGlyph({
+    super.key,
+    required this.row,
+    required this.box,
+    required this.glyph,
+    this.color,
+    this.background,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final key = (row['icon_key'] ?? '').toString();
+    final fg = color ?? Ds.c.brand;
+    final resolved = navIconResolves(key);
+    return Container(
+      width: box,
+      height: box,
+      alignment: Alignment.center,
+      decoration: background == null
+          ? null
+          : BoxDecoration(
+              color: background,
+              borderRadius: BorderRadius.circular(Ds.r.button),
+            ),
+      child: resolved
+          ? Icon(kNavIcons[key], size: glyph, color: fg)
+          : Text(navIconLetter(row),
+              style: Ds.t.bodyStrong.copyWith(fontSize: glyph, color: fg)),
+    );
   }
 }
 
@@ -106,6 +199,34 @@ class NavProfileMenu {
     // backend admitted exactly N rows onto the profile surface. Two is the
     // number the CHECK constraint permits; anything else means the gate moved.
     RenderLog.write('c325_profile_menu_loaded', items.value.length);
+    _writeIconProof(payload);
+  }
+
+  /// CHANGE #349 — boot-time proof for the dashboard defect.
+  ///
+  /// The tiles themselves paint on a canvas a headless verifier cannot read,
+  /// and their paint-time keys only fire once someone has the dashboard open.
+  /// This runs on the SAME payload at boot and asserts the honest thing: how
+  /// many tiles arrived, and how many of them name an icon this build cannot
+  /// draw. `unresolved=0` is the fix; anything else is the bug still live.
+  static void _writeIconProof(Map payload) {
+    var tiles = 0;
+    var unresolved = 0;
+    void count(Object? rows) {
+      if (rows is! List) return;
+      for (final r in rows.whereType<Map>()) {
+        tiles++;
+        if (!navIconResolves((r['icon_key'] ?? '').toString())) unresolved++;
+      }
+    }
+
+    for (final section in (payload['sections'] as List? ?? const [])
+        .whereType<Map>()) {
+      count(section['items']);
+    }
+    count(payload['action_tiles']);
+    count(payload['pinned']);
+    RenderLog.write('c349_nav_icons', 'tiles=$tiles unresolved=$unresolved');
   }
 }
 
@@ -206,15 +327,11 @@ class _ActionTile extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                width: Ds.space.x32 + Ds.space.x4,
-                height: Ds.space.x32 + Ds.space.x4,
-                decoration: BoxDecoration(
-                  color: Ds.c.brandSoft,
-                  borderRadius: BorderRadius.circular(Ds.r.button),
-                ),
-                child: Icon(navIcon(_s(tile, 'icon_key')),
-                    size: Ds.space.x16 + Ds.space.x4, color: Ds.c.brand),
+              NavGlyph(
+                row: tile,
+                box: Ds.space.x32 + Ds.space.x4,
+                glyph: Ds.space.x16 + Ds.space.x4,
+                background: Ds.c.brandSoft,
               ),
               SizedBox(height: Ds.space.x12),
               Text('$count',
@@ -274,7 +391,7 @@ class _NavSectionsState extends State<NavSections> {
         if (widget.pinned.isNotEmpty) ...[
           _SectionHeader(
             label: widget.pinnedLabel,
-            icon: Icons.push_pin_outlined,
+            row: const <String, dynamic>{'icon_key': 'task', 'label': 'Pinned'},
             collapsed: false,
             onTap: null,
           ),
@@ -302,7 +419,7 @@ class _NavSectionsState extends State<NavSections> {
               children: [
                 _SectionHeader(
                   label: _s(section, 'label'),
-                  icon: navIcon(_s(section, 'icon_key')),
+                  row: section,
                   collapsed: isCollapsed,
                   onTap: () => setState(() {
                     if (!_collapsed.remove(key)) _collapsed.add(key);
@@ -328,13 +445,13 @@ class _NavSectionsState extends State<NavSections> {
 
 class _SectionHeader extends StatelessWidget {
   final String label;
-  final IconData icon;
+  final Map<String, dynamic> row;
   final bool collapsed;
   final VoidCallback? onTap;
 
   const _SectionHeader({
     required this.label,
-    required this.icon,
+    required this.row,
     required this.collapsed,
     required this.onTap,
   });
@@ -348,7 +465,11 @@ class _SectionHeader extends StatelessWidget {
         height: Ds.space.x48,
         alignment: Alignment.centerLeft,
         child: Row(children: [
-          Icon(icon, size: Ds.space.x16 + Ds.space.x4, color: Ds.c.textSecondary),
+          NavGlyph(
+              row: row,
+              box: Ds.space.x16 + Ds.space.x4,
+              glyph: Ds.space.x16 + Ds.space.x4,
+              color: Ds.c.textSecondary),
           SizedBox(width: Ds.space.x8),
           Expanded(child: Text(label, style: Ds.t.subtitle)),
           if (onTap != null)
@@ -494,8 +615,10 @@ class _NavTileState extends State<NavTile> {
     final tile = widget.tile;
     final count = (tile['badge_count'] as num?)?.toInt() ?? 0;
     final pinned = tile['pinned'] == true;
-    final icon = Icon(navIcon(_s(tile, 'icon_key')),
-        size: Ds.space.x16 + Ds.space.x4, color: Ds.c.brand);
+    final icon = NavGlyph(
+        row: tile,
+        box: Ds.space.x16 + Ds.space.x4,
+        glyph: Ds.space.x16 + Ds.space.x4);
     return InkWell(
       onTap: () => widget.onOpen(tile),
       onLongPress: _pin,
@@ -514,6 +637,7 @@ class _NavTileState extends State<NavTile> {
           Container(
             width: Ds.space.x32,
             height: Ds.space.x32,
+            alignment: Alignment.center,
             decoration: BoxDecoration(
               color: Ds.c.brandSoft,
               borderRadius: BorderRadius.circular(Ds.r.button),

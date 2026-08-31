@@ -393,6 +393,7 @@ insert into public.settlement_label (key, label, tone, sort_order) values
   ('ui.empty',            'Nothing to settle in this window yet. A period appears once an order in a partner zone has been billed.', null, 0),
   ('ui.footnote',         'Distributable profit is gross margin (GST excluded on both sides) minus every cost line on the order. The split is the one snapshotted on the order at bill time, so changing the deal never rewrites a past settlement.', null, 0),
   ('ui.refresh',          'Refresh',                                    null, 0),
+  ('ui.range_days',       'Last %s days',                               null, 0),
   ('ui.recalculate',      'Recalculate',                                null, 0),
   ('ui.recalculated',     'Costs and settlements recalculated.',        'success', 0),
   ('ui.saved',            'Saved.',                                     'success', 0),

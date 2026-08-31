@@ -9,7 +9,7 @@
      Dev Queue → Memory screen, or via the MCP memory server. Do NOT hand-edit
      this block; it is rewritten on every session start. Target: generic -->
 
-# Agent memory (generic) — 40 rules
+# Agent memory (generic) — 41 rules
 # Canonical fallback: see RULES.md in the repo root (git-committed).
 
 ## GLOBAL · style  (priority 10, v2)
@@ -457,6 +457,65 @@ The watchdog `db_watchdog_tick()` rides that dispatcher every minute and raises
 `rg_alerts` when connections pass 45 of 60, a transaction stays open past 2 min,
 or more than 10 statement timeouts land inside 5 min. Om reads it at
 Dev Queue → Cron health → **Database lane**.
+
+
+## PROJECT · build_lane  (priority 77, v1)
+
+## 16. BUILD LANE — NOTHING WAITS ON A FILE (CHANGE #327)
+
+The third contention lane, and the same failure as the other two in a third
+resource. The DB lane was heavy queries fighting for one instance; the deploy
+lane was finished builds fighting for one mutex (#324); this one is BUILDS
+fighting for one FILE. #325 claimed, loaded its whole context, planned its
+files and only then found #326 holding `lib/screens/home_shell.dart` — then sat
+parked, polling that lease 97 times in six minutes while holding everything it
+had loaded.
+
+Three layers, and file leases are KEPT underneath all of them as the
+last-resort correctness guard: two writers must never share a file.
+
+**LAYER 1 — the hot files are sharded.** `home_shell.dart` was 5,139 lines
+holding nine concerns. It is now the shell (boot, routing, the two layouts)
+plus `lib/screens/shell/*.dart` parts — one per concern, each with its own
+leasable path, so a cart command and a login command never meet.
+`dart run tool/god_files.dart` (and `scripts/god_files.sh`, which runs on every
+post-deploy rg pass) flags any Dart file over the line threshold or owning more
+than one concern into `god_file_debt` and warn-level `rg_alerts`. It is a
+REPORT, deliberately not a gate — the biggest files here are 13–15k-line admin
+screens and failing the build on them would block every deploy tomorrow.
+
+**LAYER 2 — the collision is decided in SQL, before any tokens burn.** Every
+command gets `predicted_files` at ADD time from `file_predict_rule` (data: a
+new hot spot is one INSERT). Two queued commands whose footprints intersect are
+auto-chained through `depends_on` by `dev_cmd_autochain()`, which
+`dev_cmd_claim` already honours — the second stays PENDING. It never claims,
+never loads a context, never parks. The card says why: "Queued after #326 —
+same files". A command that is already BUILDING is judged on its ACTUAL leases
+(`dev_cmd_footprint`), not on a guess made from its spec text, so a long spec
+stops blocking work it was never going to touch. Only `pending`/`building` rows
+can block — chaining behind a `needs_input` row is starvation, not scheduling —
+and `autochain_sweep` on the cron dispatcher releases a chain the moment its
+blocker moves.
+
+**LAYER 3 — split execution.** Most specs are majority SQL + edge functions,
+which never collide with Dart. So plan with
+`devcmd.sh lease_split <ID> <worker> <path...>`: it grants every FREE path and
+NAMES the contended ones instead of refusing the whole set. Build the backend
+and the granted files NOW; come back for the deferred path with
+`devcmd.sh lease_free`, a cheap read, and write it when it frees. Record it as
+its own step. If it never frees inside the command, land everything else, say
+exactly which patch is outstanding, and file the follow-up — that is a
+completed command, not a parked one. Finish with
+`devcmd.sh lease_learn <ID> <path...>` so your actuals REPLACE the prediction
+and re-chain whatever is queued behind you.
+`devcmd.sh lease_plan` (all-or-nothing) is still the guard for a genuine
+same-file write.
+
+Proof: `bash scripts/build_lane_proof.sh` adds two same-file and two
+cross-area commands, shows the chain, claims with two runners and asserts the
+chained one is never handed out. Om reads the lane at Dev Queue → Cron health →
+**Build lane** (`build_contention_status()`), and `lease_event` is the
+permanent conflict history the before/after count is measured from.
 
 
 ## PROJECT · deploy_traps  (priority 78, v1)

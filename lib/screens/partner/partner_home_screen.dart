@@ -16,8 +16,10 @@ import '../../services/partner_state.dart';
 import '../../services/ui_copy.dart';
 import '../../user_state.dart';
 import '../../utils/render_log.dart';
+import '../../services/order_alert_service.dart';
 import '../admin/admin_fulfillment_screen_web.dart';
 import '../admin/admin_supplier_screen_web.dart';
+import '../admin/order_alerts_screen.dart' show OrderAlertCard;
 import 'partner_statement_screen.dart';
 
 /// Backend `icon_key` -> a glyph. The KEY is the backend's; only the glyph is
@@ -91,10 +93,57 @@ class _PartnerHomeScreenState extends State<PartnerHomeScreen> {
 
   PartnerRpc get _rpc => widget.rpc ?? PartnerApi.call;
 
+  /// CHANGE #398 — the ring, on the phone that has to answer it.
+  ///
+  /// #306 addressed the new-order alert to admin devices. The partner is the
+  /// one who sources, collects, counts and packs the order, so order_alert_push
+  /// now rings the partner's own staff devices first and escalates to admin
+  /// only when nobody accepts inside the window. That is the push half; this is
+  /// the in-app half — the same OrderAlertService the admin shell runs, feeding
+  /// the same OrderAlertCard, with order_alert_feed() zone-clamped so a partner
+  /// only ever sees their own zone's alerts.
+  bool _ringBusy = false;
+
   @override
   void initState() {
     super.initState();
     _load();
+    _startRing();
+  }
+
+  Future<void> _startRing() async {
+    try {
+      OrderAlertService.instance.addListener(_onRing);
+      await OrderAlertService.instance.start();
+      _onRing();
+    } catch (_) {}
+  }
+
+  void _onRing() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _ringAct(String orderId, String action) async {
+    if (_ringBusy) return;
+    setState(() => _ringBusy = true);
+    try {
+      final r = await OrderAlertService.instance.act(orderId, action);
+      final msg = (r['message'] ?? '').toString();
+      if (mounted && msg.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      }
+      // The queue this partner is working on just changed shape.
+      await _load();
+    } catch (_) {
+    } finally {
+      if (mounted) setState(() => _ringBusy = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    OrderAlertService.instance.removeListener(_onRing);
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -159,6 +208,9 @@ class _PartnerHomeScreenState extends State<PartnerHomeScreen> {
     return PartnerHomeView(
       payload: _payload ?? const {},
       queue: _queue,
+      ring: OrderAlertService.instance.items,
+      ringBusy: _ringBusy,
+      onRingAct: _ringAct,
       onOpen: _open,
       failed: _failed,
       onRetry: _load,
@@ -201,6 +253,9 @@ class PartnerHomeView extends StatelessWidget {
     required this.payload,
     required this.onOpen,
     this.queue,
+    this.ring = const [],
+    this.ringBusy = false,
+    this.onRingAct,
     this.failed = false,
     this.onRetry,
     this.onSignOut,
@@ -212,6 +267,13 @@ class PartnerHomeView extends StatelessWidget {
   /// not answer. Null draws nothing: absence is explicit, never an empty board
   /// that reads as "no work".
   final Map<String, dynamic>? queue;
+
+  /// CHANGE #398 — order_alert_feed()'s ringing items for THIS partner's zone.
+  /// Empty is the normal state; every word on the card, including whether
+  /// Accept may be offered at all, is the backend's.
+  final List<Map<String, dynamic>> ring;
+  final bool ringBusy;
+  final void Function(String orderId, String action)? onRingAct;
   final void Function(String featureKey) onOpen;
 
   /// CHANGE #326 — the partner_home() call itself threw. Distinct from a clean
@@ -266,6 +328,12 @@ class PartnerHomeView extends StatelessWidget {
           ? Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                if (ring.isNotEmpty)
+                  PartnerRing(
+                    items: ring,
+                    busy: ringBusy,
+                    onAct: onRingAct,
+                  ),
                 if (queue != null && queue!['ok'] == true)
                   PartnerWorkQueue(payload: queue!, onOpen: onOpen),
                 for (final g in groups)
@@ -694,6 +762,67 @@ class _OrderRow extends StatelessWidget {
               Text(_s('age_label'), style: Ds.t.caption),
             ],
           ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── CHANGE #398 — THE RING, ON THE PARTNER'S OWN PHONE ──────────────────────
+//
+// #306 built the full-screen new-order alert and addressed it to admin devices.
+// The admin does not fulfil the order; the zone partner does. order_alert_push
+// now rings the partner's own staff devices first (resolved through
+// partner_users, never through push_tokens.role — get_my_role() deliberately
+// calls a partner 'admin', so the token's word cannot tell them apart) and
+// escalates to admin only when nobody accepts inside the escalation window.
+//
+// This is the in-app half of that ring: the SAME OrderAlertCard the admin
+// screen draws, fed by the SAME order_alert_feed() — which is now zone-clamped,
+// so a partner is shown their own zone's alerts and nothing else. The prepaid
+// rule is unchanged and lives where it always did: a paid order never rings.
+class PartnerRing extends StatelessWidget {
+  const PartnerRing({
+    super.key,
+    required this.items,
+    this.busy = false,
+    this.onAct,
+  });
+
+  final List<Map<String, dynamic>> items;
+  final bool busy;
+  final void Function(String orderId, String action)? onAct;
+
+  @override
+  Widget build(BuildContext context) {
+    if (items.isEmpty) return const SizedBox.shrink();
+    try {
+      RenderLog.write('c398_partner_ring', '${items.length}');
+    } catch (_) {}
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: Ds.space.x24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final raw in items)
+            Padding(
+              padding: EdgeInsets.only(bottom: Ds.space.x12),
+              child: Builder(builder: (_) {
+                final item = Map<String, dynamic>.from(raw);
+                final orderId = (item['order_id'] ?? '').toString();
+                return OrderAlertCard(
+                  item: item,
+                  busy: busy,
+                  onAccept: item['can_accept'] == true && onAct != null
+                      ? () => onAct!(orderId, 'accept')
+                      : null,
+                  onReject: item['can_reject'] == true && onAct != null
+                      ? () => onAct!(orderId, 'reject')
+                      : null,
+                );
+              }),
+            ),
         ],
       ),
     );

@@ -20,6 +20,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:pharma_b2b/screens/admin/order_alerts_screen.dart' show OrderAlertCard;
 import 'package:pharma_b2b/screens/partner/partner_home_screen.dart';
 import 'package:pharma_b2b/services/ui_copy.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
@@ -301,6 +302,111 @@ void main() {
           .map((t) => t.data ?? '')
           .toList();
       expect(labels.indexOf("Today's work"), lessThan(labels.indexOf('Sourcing')));
+    });
+  });
+
+  // ── CHANGE #398 — the ring, on the partner's phone ────────────────────────
+  //
+  // #306 rang admin devices for an order the PARTNER has to fulfil. The push
+  // half of the fix lives in order_alert_push(); this is the in-app half, and
+  // these are the properties that must not rot: the card is the backend's item
+  // (never re-decided here), Accept exists only when the backend says it may,
+  // and no ringing item means no banner at all.
+  group('the ring reaches the partner and prints the backend', () {
+    const ringingItem = {
+      'alert_id': 12,
+      'order_id': 'o-ring',
+      'order_code': 'CPO310826CHAO1',
+      'customer': 'Chandra Medical',
+      'amount_display': '₹2,410',
+      'age_label': '2 min',
+      'state': 'ringing',
+      'state_label': 'Ringing',
+      'stage': 'new',
+      'stage_label': 'New',
+      'risk': 'unpaid',
+      'risk_label': 'Unpaid',
+      'paid': false,
+      'ring': true,
+      'critical': false,
+      'banner': 'Unpaid order waiting for a decision',
+      'credit_blocked': false,
+      'credit_note': '',
+      'can_accept': true,
+      'can_reject': true,
+      'accept_label': 'Accept',
+      'reject_label': 'Reject',
+      'dismiss_label': 'Dismiss',
+      'view_label': 'View',
+      'accept_note': 'Accepting starts the inquiry.',
+      'reject_note': 'Rejecting cancels the order.',
+      'push_count': 1,
+    };
+
+    testWidgets('a ringing alert draws the backend card with both buttons',
+        (tester) async {
+      final acts = <String>[];
+      await tester.pumpWidget(_boardHost(PartnerRing(
+        items: const [ringingItem],
+        onAct: (id, action) => acts.add('$id:$action'),
+      )));
+      await tester.pump();
+
+      expect(find.text('Unpaid order waiting for a decision'), findsOneWidget);
+      expect(find.text('CPO310826CHAO1'), findsOneWidget);
+      expect(find.text('Accept'), findsOneWidget);
+      expect(find.text('Reject'), findsOneWidget);
+
+      await tester.tap(find.text('Accept'));
+      expect(acts, ['o-ring:accept']);
+    });
+
+    testWidgets('can_accept:false offers no Accept — the backend decides, not the widget',
+        (tester) async {
+      final blocked = Map<String, dynamic>.from(ringingItem)
+        ..['can_accept'] = false
+        ..['credit_blocked'] = true
+        ..['credit_note'] = 'Credit limit reached. Collect payment first.';
+      await tester.pumpWidget(_boardHost(PartnerRing(
+        items: [blocked],
+        onAct: (_, __) {},
+      )));
+      await tester.pump();
+
+      expect(find.text('Credit limit reached. Collect payment first.'),
+          findsOneWidget);
+      // The card still SHOWS Accept — with its own words — but the backend's
+      // can_accept:false is what disables it. The widget never re-decides.
+      final accept = tester.widget<FilledButton>(
+          find.widgetWithText(FilledButton, 'Accept'));
+      expect(accept.onPressed, isNull);
+    });
+
+    testWidgets('no ringing alert means no banner at all', (tester) async {
+      await tester.pumpWidget(_boardHost(
+          const PartnerRing(items: [])));
+      await tester.pump();
+      expect(find.byType(OrderAlertCard), findsNothing);
+    });
+
+    testWidgets('the ring sits ABOVE the work queue on the home', (tester) async {
+      await tester.pumpWidget(_host(PartnerHomeView(
+        payload: homeJson,
+        queue: queueJson,
+        ring: const [ringingItem],
+        onOpen: (_) {},
+        onRingAct: (_, __) {},
+      )));
+      await tester.pump();
+
+      expect(find.byType(PartnerRing), findsOneWidget);
+      final labels = tester
+          .widgetList<Text>(find.byType(Text))
+          .map((t) => t.data ?? '')
+          .toList();
+      expect(labels.indexOf('Unpaid order waiting for a decision'),
+          lessThan(labels.indexOf("Today's work")),
+          reason: 'a ringing order outranks the board it will join');
     });
   });
 }

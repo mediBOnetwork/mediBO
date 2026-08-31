@@ -47,8 +47,11 @@ comment on table dev_step_fact_rule is
 insert into dev_step_fact_rule (fact, pattern, note, ord) values
   ('migration', '(migration|schema|column|table|backend|rpc|sql|trigger|function|policy)', 'auto: migration applied', 10),
   ('rgcheck',   '(rg_?check|regression guard|baseline|guard green)',                        'auto: rg_check green',    20),
-  ('frontend',  '(flutter|dart|screen|widget|frontend|wire|chip|card|ui\b)',                'auto: Dart change committed', 30),
-  ('tests',     '(test|suite|green|qa\b)',                                                  'auto: tests green',       40),
+  -- \y is a Postgres word boundary and it is load-bearing: without it 'test'
+  -- matches "latest" and 'ui' matches "guided", ticking a step the observed
+  -- fact says nothing about.
+  ('frontend',  '(flutter|dart|screen|widget|frontend|wire|chip|card|\yui\y)',              'auto: Dart change committed', 30),
+  ('tests',     '(\ytests?\y|\ysuite\y|\ygreen\y|\yqa\y)',                              'auto: tests green',       40),
   ('queue_push','(queue|deploy|push|merge|ship|release|promote)',                           'auto: branch queued for deploy', 50),
   ('deployed',  '(deploy|verify|live|promote|ship|release)',                                'auto: change deployed live',     60)
 on conflict (fact, pattern) do update

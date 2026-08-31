@@ -98,6 +98,14 @@ class NavProfileMenu {
         .whereType<Map>()
         .map((e) => Map<String, dynamic>.from(e))
         .toList(growable: false);
+    // CHANGE #325 — live proof for the ONE surface whose claim would otherwise
+    // rest on source-reading alone. The paint-time key (c325_profile_menu_rows)
+    // only fires when someone opens the sheet, and a headless verifier cannot
+    // tap a canvas app — so it never appears in the render-log. This fires at
+    // BOOT and asserts a different, honest thing: the payload arrived and the
+    // backend admitted exactly N rows onto the profile surface. Two is the
+    // number the CHECK constraint permits; anything else means the gate moved.
+    RenderLog.write('c325_profile_menu_loaded', items.value.length);
   }
 }
 

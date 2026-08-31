@@ -219,3 +219,21 @@ grant execute on function public.customer_360_for_order(uuid) to authenticated;
 insert into public.ui_copy (key, value) values
   ('c360.open_from_order', to_jsonb('Customer 360'::text))
 on conflict (key) do nothing;
+
+-- A new admin feature is invisible to a NON-super admin until it is granted:
+-- admin_access() falls back to feature_registry.default_access, which is 'none'
+-- for every medibo-owned row. Every admin who already holds the neighbouring
+-- feature (Customers for the 360, Bags for the warehouse position) gets the new
+-- one at the same access level, so the screen is reachable for the people whose
+-- job it already is — and nobody else silently gains a surface.
+insert into public.admin_permissions (admin_id, feature_key, access)
+select ap.admin_id, 'admin.customer_360', ap.access
+  from public.admin_permissions ap
+ where ap.feature_key = 'admin.customers'
+on conflict (admin_id, feature_key) do nothing;
+
+insert into public.admin_permissions (admin_id, feature_key, access)
+select ap.admin_id, 'admin.stock_on_hand', ap.access
+  from public.admin_permissions ap
+ where ap.feature_key = 'admin.bags'
+on conflict (admin_id, feature_key) do nothing;

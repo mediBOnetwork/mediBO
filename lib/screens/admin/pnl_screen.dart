@@ -195,7 +195,7 @@ class _PnlScreenState extends State<PnlScreen> {
           : _error.isNotEmpty
               ? _errorState()
               : refused
-                  ? _message((d?['message'] ?? '').toString(), 'danger')
+                  ? _message((d['message'] ?? '').toString(), 'danger')
                   : RefreshIndicator(onRefresh: _load, child: _body(d)),
     );
   }

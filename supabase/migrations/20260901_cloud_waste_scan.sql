@@ -126,6 +126,31 @@ as $$
          end;
 $$;
 
+-- One group, assembled in one place — because the denied case is the one every
+-- renderer would otherwise get wrong. A group we were NOT ALLOWED TO READ has
+-- no rows, and a generic "no unattached disks" empty state would then assert,
+-- in the app and in the scan's own message, that we looked and found nothing.
+-- We did not look. So when a group is blocked the refusal IS the empty state,
+-- and `blocked` lets the card tone it as a gap rather than a clean bill.
+create or replace function public._waste_group(
+  p_key text, p_title text, p_rows jsonb, p_blocked_note text,
+  p_note text, p_empty text, p_subtotal numeric)
+returns jsonb
+language sql
+stable
+security definer
+set search_path to 'public'
+as $$
+  select jsonb_build_object(
+    'key', p_key,
+    'title', p_title,
+    'rows', coalesce(p_rows, '[]'::jsonb),
+    'blocked', p_blocked_note is not null,
+    'note', p_note,
+    'empty_label', coalesce(p_blocked_note, p_empty),
+    'subtotal_display', public._waste_inr(p_subtotal));
+$$;
+
 -- ── compose: raw AWS facts + storage + rates -> the rendered payload ────────
 -- p_aws is exactly what the edge function saw, and nothing more:
 --   {ok, region, cloud, key_present, volumes[], addresses[], snapshots[],
@@ -180,11 +205,8 @@ begin
     end loop;
   end if;
   v_total := v_total + v_sub;
-  v_groups := v_groups || jsonb_build_object(
-    'key','disks', 'title', _c('dev_queue.waste_disks'),
-    'rows', v_rows, 'note', v_note,
-    'empty_label', _c('dev_queue.waste_disks_none'),
-    'subtotal_display', _waste_inr(v_sub));
+  v_groups := v_groups || _waste_group('disks', _c('dev_queue.waste_disks'),
+                 v_rows, v_note, null, _c('dev_queue.waste_disks_none'), v_sub);
 
   ---------------------------------------------------------------- static IPs
   v_rows := '[]'::jsonb; v_sub := 0; v_note := null;
@@ -203,11 +225,8 @@ begin
     end loop;
   end if;
   v_total := v_total + v_sub;
-  v_groups := v_groups || jsonb_build_object(
-    'key','ips', 'title', _c('dev_queue.waste_ips'),
-    'rows', v_rows, 'note', v_note,
-    'empty_label', _c('dev_queue.waste_ips_none'),
-    'subtotal_display', _waste_inr(v_sub));
+  v_groups := v_groups || _waste_group('ips', _c('dev_queue.waste_ips'),
+                 v_rows, v_note, null, _c('dev_queue.waste_ips_none'), v_sub);
 
   ---------------------------------------------------------------- snapshots
   -- The edge function returns every snapshot it owns, newest first. The keep
@@ -236,12 +255,11 @@ begin
     end loop;
   end if;
   v_total := v_total + v_sub;
-  v_groups := v_groups || jsonb_build_object(
-    'key','snapshots', 'title', _c('dev_queue.waste_snaps'),
-    'rows', v_rows, 'note', v_note,
-    'empty_label', _cf('dev_queue.waste_snaps_none',
-                       jsonb_build_object('keep', v_keep::text, 'days', v_maxage::text)),
-    'subtotal_display', _waste_inr(v_sub));
+  v_groups := v_groups || _waste_group('snapshots', _c('dev_queue.waste_snaps'),
+                 v_rows, v_note, null,
+                 _cf('dev_queue.waste_snaps_none',
+                     jsonb_build_object('keep', v_keep::text, 'days', v_maxage::text)),
+                 v_sub);
 
   ---------------------------------------------------------------- buckets
   -- Empty and long-stale buckets. An empty bucket costs nothing, so its amount
@@ -283,11 +301,8 @@ begin
     end if;
   end loop;
   v_total := v_total + v_sub;
-  v_groups := v_groups || jsonb_build_object(
-    'key','buckets', 'title', _c('dev_queue.waste_buckets'),
-    'rows', v_rows, 'note', v_note,
-    'empty_label', _c('dev_queue.waste_buckets_none'),
-    'subtotal_display', _waste_inr(v_sub));
+  v_groups := v_groups || _waste_group('buckets', _c('dev_queue.waste_buckets'),
+                 v_rows, null, v_note, _c('dev_queue.waste_buckets_none'), v_sub);
 
   ---------------------------------------------------------------- assemble
   v_state := jsonb_build_object(
@@ -381,6 +396,7 @@ begin
     'screen_title','GCP Control');
 end $$;
 
+grant execute on function public._waste_group(text,text,jsonb,text,text,text,numeric) to service_role;
 grant execute on function public.cloud_waste_storage() to service_role;
 grant execute on function public.cloud_waste_compose(jsonb) to service_role;
 grant execute on function public.dev_cloud_waste_get() to authenticated, service_role;

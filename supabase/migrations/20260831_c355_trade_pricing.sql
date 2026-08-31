@@ -1067,3 +1067,9 @@ values ('pricing_coverage_refresh', 720, 'poll',
         'select public.pricing_coverage_refresh()', true, true, '03:47',
         'CHANGE #355 - nightly trade-price / GST coverage measurement, off-peak IST')
 on conflict (name) do nothing;
+
+-- The nav label for the new admin screen. A key with no row renders blank, so
+-- the entry ships with its copy (CHANGE #645/#646's lesson, one step earlier).
+insert into public.ui_copy (key, value)
+values ('admin_nav.overflow_pricing', '"Trade Pricing"'::jsonb)
+on conflict (key) do nothing;

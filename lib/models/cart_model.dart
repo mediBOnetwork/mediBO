@@ -879,6 +879,16 @@ class CartModel extends ChangeNotifier {
   // Nothing here computes: the amounts, the labels, the GST split and the
   // "N items not priced yet" sentence all arrive formatted.
 
+  /// The cart lines exactly as cart_render() sent them, including the per-line
+  /// trade fields (`has_trade_rate`, `price_display`, `rate_note`, `qty_label`)
+  /// the row widgets print verbatim. Read-only passthrough — the model does not
+  /// reinterpret a line's money.
+  List<Map<String, dynamic>> get rawItems =>
+      ((_cart['items'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => e.cast<String, dynamic>())
+          .toList(growable: false);
+
   /// The pricing block from cart_render(): totals, the GST breakup and the
   /// unpriced-line copy.
   Map<String, dynamic> get pricing =>

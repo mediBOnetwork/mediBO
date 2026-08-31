@@ -41,6 +41,21 @@ enum AccountSurface {
 
   /// The route/worker surface.
   worker,
+
+  /// CHANGE #326 — the zone-locked fulfilment partner's own home.
+  ///
+  /// A partner AUTHORISES as an admin (`get_my_role()` deliberately returns
+  /// 'admin' so the existing zone-scoped fulfilment RPCs keep working), so the
+  /// role word cannot separate the two surfaces. `my_session()` does: it ships
+  /// `surface:'partner'` and `is_partner:true` with `is_admin:false`.
+  ///
+  /// Before this word existed, `surfaceFromName('partner')` fell to
+  /// [unresolved] — and the shell's unresolved path is the CUSTOMER storefront.
+  /// That is exactly what a real partner login landed on: Best Sellers, a
+  /// customer bottom nav, and a profile screen asking her to "Complete
+  /// Registration" for a pharmacy she does not have. A partner is not a
+  /// customer and must never be asked to register one.
+  partner,
 }
 
 /// The backend's decision about whether this account may place an order, and
@@ -169,6 +184,11 @@ class AppSession {
     this.isCustomer = false,
     this.isRegisteredCustomerFlag = false,
     this.isWorker = false,
+    this.isPartner = false,
+    this.partnerId = '',
+    this.partnerName = '',
+    this.partnerZoneId = '',
+    this.partnerZoneLabel = '',
     this.surfaceName = '',
     this.headerTitle = '',
     this.statusLabel = '',
@@ -232,6 +252,23 @@ class AppSession {
   /// reach the checkout.
   final bool isRegisteredCustomerFlag;
   final bool isWorker;
+
+  /// CHANGE #326 — the backend's own `is_partner`. THE test that separates a
+  /// zone-locked fulfilment partner from a real admin: `get_my_role()` returns
+  /// 'admin' for both so that the fulfilment RPCs authorise, and `my_partner_id()`
+  /// being non-null is what `my_session()` turns into this boolean. Anything
+  /// admin-only (mediBO margin, customer payment method, another zone, the admin
+  /// shell itself) is hidden while this is true.
+  final bool isPartner;
+
+  /// region_partners.id, as text. Empty when [isPartner] is false.
+  final String partnerId;
+  final String partnerName;
+
+  /// The ONE zone this login may ever see. There is no zone picker for a
+  /// partner: the backend clamps every zone-aware RPC to this id.
+  final String partnerZoneId;
+  final String partnerZoneLabel;
 
   final String ownerType;
   final String ownerId;
@@ -337,6 +374,11 @@ class AppSession {
       isCustomer: b('is_customer'),
       isRegisteredCustomerFlag: b('is_registered_customer'),
       isWorker: b('is_worker'),
+      isPartner: b('is_partner'),
+      partnerId: s('partner_id'),
+      partnerName: s('partner_name'),
+      partnerZoneId: s('partner_zone_id'),
+      partnerZoneLabel: s('partner_zone_label'),
       ownerType: s('owner_type'),
       ownerId: s('owner_id'),
       displayName: s('display_name'),
@@ -380,6 +422,12 @@ class AppSession {
   /// user renders nothing at all.
   AccountSurface surface({required bool matchesAuthUser}) {
     if (!matchesAuthUser) return AccountSurface.unresolved;
+    // CHANGE #326 — a partner login can never resolve to the customer
+    // storefront. `is_partner` is the BACKEND's own boolean, so honouring it
+    // here is reading the payload, not guessing a surface: if the `surface`
+    // word ever drifted, the fallthrough below would send a partner to the
+    // storefront again, and that is the bug this change exists to retire.
+    if (isPartner) return AccountSurface.partner;
     return surfaceFromName(surfaceName);
   }
 
@@ -396,6 +444,8 @@ class AppSession {
         return AccountSurface.pendingSupplier;
       case 'worker':
         return AccountSurface.worker;
+      case 'partner':
+        return AccountSurface.partner;
       case 'customer':
       case 'public':
         return AccountSurface.customer;

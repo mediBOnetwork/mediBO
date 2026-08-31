@@ -54,6 +54,14 @@ class AuthNotifier extends ChangeNotifier {
   bool get isAdmin => _session.isAdmin;
   bool get isSuperAdmin => _session.isSuperAdmin;
   bool get isSupplier => _session.isSupplier;
+
+  /// CHANGE #326 — a zone-locked fulfilment partner. `get_my_role()` says
+  /// 'admin' for a partner (so the fulfilment RPCs authorise); `my_partner_id()`
+  /// being non-null is what my_session() turns into this boolean, and it is the
+  /// ONLY thing that separates a partner from a real admin in the UI.
+  bool get isPartner => _session.isPartner;
+  String get partnerId => _session.partnerId;
+  String get partnerZoneLabel => _session.partnerZoneLabel;
   String get supplierName => _session.supplierName;
   String get supplierId => _session.supplierId;
   String get supplierStatus => _session.supplierStatus;
@@ -550,6 +558,34 @@ class AuthNotifier extends ChangeNotifier {
   /// stuck showing "couldn't load" with no way forward.
   Future<void> retryLoadProfile() async {
     await _loadSession();
+    notifyListeners();
+  }
+
+  /// CHANGE #326 — re-ask the ONE question on foreground resume.
+  ///
+  /// my_session() was fetched exactly once per auth event, so a role granted or
+  /// revoked server-side while the app was open never reached the device: an
+  /// account made a partner mid-session kept rendering the customer storefront
+  /// until it was reinstalled. The realtime refetch next to this one is keyed to
+  /// `pharmacy_profiles` by ACCOUNT id, and a partner has no account row — so it
+  /// never fires for exactly the login that needs it most.
+  ///
+  /// Debounced to one cheap call per 20 s, the same budget [checkForcedLogout]
+  /// runs on, and it never blocks paint: on failure `_loadSession` keeps the
+  /// session it already had.
+  DateTime _lastSessionRefresh = DateTime.fromMillisecondsSinceEpoch(0);
+  Future<void> refreshSessionIfStale() async {
+    if (!isAuthenticated) return;
+    final now = DateTime.now();
+    if (now.difference(_lastSessionRefresh) < const Duration(seconds: 20)) {
+      return;
+    }
+    _lastSessionRefresh = now;
+    final before = _session.surfaceName;
+    await _loadSession();
+    if (_session.surfaceName != before) {
+      RenderLog.write('c326_surface_changed', '$before>${_session.surfaceName}');
+    }
     notifyListeners();
   }
 

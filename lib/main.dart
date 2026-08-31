@@ -21,6 +21,7 @@ import 'models/cart_model.dart';
 import 'models/order_hours_model.dart';
 import 'models/inquiry_lock_model.dart';
 import 'screens/auth/login_screen.dart';
+import 'models/app_session.dart';
 import 'screens/partner/partner_home_screen.dart';
 import 'screens/admin/admin_partner_console_screen.dart';
 import 'screens/admin/settlement_screen.dart'; // /admin/settlement
@@ -292,6 +293,11 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _auth.checkForcedLogout();
+      // CHANGE #326 — resume is also the moment a role CHANGE must land. A
+      // login promoted to (or demoted from) a zone partner while the app was
+      // open otherwise kept the surface it booted with. Debounced to 20 s
+      // inside the notifier and never awaited.
+      _auth.refreshSessionIfStale();
     }
   }
 
@@ -896,9 +902,16 @@ class _AppRootState extends State<_AppRoot> {
         if (widget.auth.isAuthenticated) {
           widget.auth.checkForcedLogout();
         }
-        // CHANGE #307 — the BACKEND names the surface. A zone-locked fulfilment
-        // partner is sent to their own home; every other surface is unchanged.
-        if (widget.auth.session.surfaceName == 'partner') {
+        // CHANGE #307 / #326 — the BACKEND names the surface. A zone-locked
+        // fulfilment partner is sent to their own home; every other surface is
+        // unchanged.
+        //
+        // #326: this used to compare the raw `surface` word here and nowhere
+        // else, so HomeShell — reachable by a route push, an unknown route or
+        // the 5 s boot-timeout fallback — had no idea what a partner was and
+        // dropped one on the customer storefront. Both call sites now read the
+        // SAME typed answer, which also applies the RULE 4 mismatch guard.
+        if (widget.auth.surface == AccountSurface.partner) {
           return const PartnerHomeScreen();
         }
         return HomeShell();

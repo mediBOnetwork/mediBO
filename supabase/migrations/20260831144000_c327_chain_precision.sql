@@ -269,3 +269,30 @@ BEGIN
 END $function$;
 
 select dev_cmd_autochain(null);
+-- CHANGE #327 — LAYER 1 and LAYER 2 have to agree, or the sharding buys
+-- nothing. The App-shell rule predicted the blanket glob 'lib/screens/shell/%',
+-- which would have made every shard collide with every other shard: a cart
+-- command and a login command would still have chained even though they now
+-- touch different files. Each concern points at ITS OWN shard instead, and the
+-- shell rule keeps only what is genuinely shared — the shell file and main.dart.
+update file_predict_rule set paths = array['lib/screens/home_shell.dart','lib/main.dart']
+ where label = 'App shell / boot / routing';
+update file_predict_rule set paths = array['lib/screens/cart_screen.dart','lib/screens/shell/shell_cart_panel.dart','lib/widgets/cust_pay_panel.dart']
+ where label = 'Cart';
+update file_predict_rule set paths = array['lib/screens/shell/shell_login_panel.dart','lib/screens/admin/dev_queue/signin_diag_screen.dart']
+ where label = 'Login / auth surface';
+update file_predict_rule set paths = paths || array['lib/screens/shell/shell_admin_chrome.dart']
+ where label = 'Admin nav / dashboard / registry';
+update file_predict_rule set paths = paths || array['lib/screens/shell/shell_sidebar.dart','lib/screens/shell/shell_mobile_chrome.dart']
+ where label = 'Storefront';
+
+insert into file_predict_rule (label, pattern, area, paths, note) values
+  ('Shell chrome — headers and bars', '(\mheader\M|\mbottom bar\M|\mnav bar\M|\msidebar\M|\mtop nav\M)', null,
+   array['lib/screens/shell/shell_header_chrome.dart','lib/screens/shell/shell_bottom_bars.dart','lib/screens/shell/shell_mobile_chrome.dart'],
+   'The chrome shards — separate from the shell itself so a header tweak never blocks a routing fix.'),
+  ('View-as / impersonation', '(\mview as\M|\mview-as\M|\bimpersonat)', null,
+   array['lib/screens/shell/shell_view_as.dart','lib/view_as_state.dart'], null)
+on conflict (label) do update set pattern = excluded.pattern, paths = excluded.paths, note = excluded.note, active = true;
+
+update dev_commands set predicted_files = dev_cmd_predict_files(title, spec, area) where status = 'pending';
+select dev_cmd_autochain(null);

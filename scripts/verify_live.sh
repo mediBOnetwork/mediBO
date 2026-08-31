@@ -7,6 +7,12 @@
 #   1 = BROKEN: HTTP check failed (deploy did not land or app is broken)
 #   2 = DEPLOYED BUT UNCONFIRMED: HTTP passed but render-log not yet updated
 #       (no browser has loaded the new build yet — not a failure)
+#   3 = NOT THIS TREE: the site is healthy and fully live, but on a DIFFERENT
+#       commit than this checkout. Since CHANGE #324 the merge worker deploys
+#       from its OWN worktree (~/medibo-merge), so a runner's local HEAD is
+#       almost never the deployed commit — that is normal, not a broken site.
+#       Still non-zero, so the merge worker (whose tree MUST be the live one)
+#       keeps refusing to stamp deployed_at on a mismatch.
 
 set -euo pipefail
 
@@ -53,6 +59,35 @@ done
 if [ "$HTTP_CODE" != "200" ] || [ "${SIZE:-0}" -lt 1000000 ]; then
   echo "   FAIL: main.dart.js http=${HTTP_CODE} size=${SIZE}b (need 200 + >1 MB) after 6 tries"
   echo ""
+  # CHANGE #324 — tell "the site is broken" apart from "this is not the tree
+  # that shipped". The merge worker deploys from its own worktree, so a runner
+  # running this by hand in ~/mediBO asks the edge for a fingerprint that was
+  # never uploaded and gets the SPA shell (71 kB) six times — which read as
+  # BROKEN on a perfectly healthy site, and a verifier that cries wolf is a
+  # verifier people stop reading. Only after the propagation retries are
+  # exhausted do we ask what IS live, and only a bundle that is genuinely
+  # healthy on another commit downgrades the verdict.
+  LIVE_OTHER=$(curl -s -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+                 "${BASE_URL}/version.json?cb=${RANDOM}" 2>/dev/null \
+               | python3 -c "import json,sys; print(json.load(sys.stdin).get('commit',''))" \
+               2>/dev/null || true)
+  if [ -n "$LIVE_OTHER" ] && [ "$LIVE_OTHER" != "$COMMIT" ]; then
+    OTHER=$(curl -s -H 'Cache-Control: no-cache' -o /dev/null \
+              -w "%{http_code} %{size_download}" \
+              "${BASE_URL}/main.${LIVE_OTHER}.dart.js?cb=${RANDOM}" || echo "000 0")
+    OTHER_CODE=$(echo "$OTHER" | cut -d' ' -f1)
+    OTHER_SIZE=$(echo "$OTHER" | cut -d' ' -f2)
+    if [ "$OTHER_CODE" = "200" ] && [ "${OTHER_SIZE:-0}" -ge 1000000 ]; then
+      echo "   live commit is ${LIVE_OTHER} and ITS bundle is healthy"
+      echo "     (http=${OTHER_CODE} size=${OTHER_SIZE}b)"
+      echo ""
+      echo "=== RESULT: NOT THIS TREE (site healthy on ${LIVE_OTHER}, this checkout is ${COMMIT}) ==="
+      echo "    The site is fine. This checkout simply is not what shipped —"
+      echo "    since #324 the merge worker deploys from ~/medibo-merge."
+      echo "    To verify the LIVE build: bash scripts/verify_live.sh ${LIVE_OTHER}"
+      exit 3
+    fi
+  fi
   echo "=== RESULT: BROKEN (HTTP check failed) ==="
   exit 1
 fi

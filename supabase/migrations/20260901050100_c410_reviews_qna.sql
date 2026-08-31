@@ -691,3 +691,36 @@ on conflict (feature_key) do update
   set label = excluded.label, route_key = excluded.route_key, deep_link = excluded.deep_link,
       roles_allowed = excluded.roles_allowed, description = excluded.description,
       search_terms = excluded.search_terms, is_active = true;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- THE PRODUCT PAGE READS THE AGGREGATE. One extra key on the SAME wrapper
+-- #366 used, for the same reason it used one: product_detail() itself is
+-- pinned byte-for-byte by test/protected/product_detail_test.dart, and a
+-- rating block bolted into it would break a protected contract to add a
+-- feature. v2 is where the page's extensions live.
+-- ═══════════════════════════════════════════════════════════════════════════
+create or replace function public.product_detail_v2(p_product_id bigint, p_pincode text default null)
+returns jsonb
+language plpgsql stable security definer set search_path to 'public'
+as $function$
+declare v jsonb;
+begin
+  v := public.product_detail(p_product_id);
+  if coalesce((v->>'ok')::boolean, false) = false then
+    return v;
+  end if;
+  return v || jsonb_build_object(
+    'substitutes',      public.same_composition_options(p_product_id, 10),
+    'delivery_promise', public.delivery_promise(p_pincode),
+    -- has:false below the review floor, so the header shows nothing at all
+    -- rather than a 5.0 that one customer wrote.
+    'rating',           public.product_rating_summary(p_product_id),
+    -- The compare checkbox on a same-salt row needs a label, and the label is
+    -- the backend's. The tray's contents are the only thing the app owns.
+    'compare',          jsonb_build_object(
+      'add_label', coalesce((select value from storefront_ui_label where key='cmp_add'), ''),
+      'cta_label', coalesce((select value from storefront_ui_label where key='cmp_cta'), ''),
+      'max',       3));
+end $function$;
+
+grant execute on function public.product_detail_v2(bigint, text) to anon, authenticated, service_role;

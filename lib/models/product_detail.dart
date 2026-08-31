@@ -1,4 +1,5 @@
 import 'product.dart' show Availability, Pricing;
+import 'product_reviews.dart' show RatingSummary;
 
 /// CHANGE #636 — the `product_detail(p_product_id)` payload, parsed and nothing
 /// more.
@@ -83,6 +84,18 @@ class ProductDetail {
   final bool showWishlist;
   final bool isWishlisted;
 
+  /// CMD #410 — the reviews aggregate, from product_rating_summary() via
+  /// product_detail_v2. `has` is false below the review floor, and then the
+  /// header shows NOTHING: a 5.0 written by one customer is an anecdote, not
+  /// a rating, and this is a buying screen.
+  final RatingSummary rating;
+
+  /// CMD #410 — the compare checkbox's caption and the tray's cap, both the
+  /// backend's. The app owns only WHICH products are in the tray.
+  final String compareAddLabel;
+  final String compareCtaLabel;
+  final int compareMax;
+
   const ProductDetail({
     required this.ok,
     required this.id,
@@ -113,6 +126,10 @@ class ProductDetail {
     required this.historyLabel,
     required this.showWishlist,
     required this.isWishlisted,
+    this.rating = RatingSummary.absent,
+    this.compareAddLabel = '',
+    this.compareCtaLabel = '',
+    this.compareMax = 3,
   });
 
   /// One backend label, e.g. `pdp_overview_title`. Missing reads as '' — never
@@ -191,6 +208,12 @@ class ProductDetail {
       historyLabel: _s(hist['label']),
       showWishlist: m['show_wishlist'] == true,
       isWishlisted: m['is_wishlisted'] == true,
+      rating: RatingSummary.fromMap(m['rating']),
+      compareAddLabel: _s((m['compare'] as Map?)?['add_label']),
+      compareCtaLabel: _s((m['compare'] as Map?)?['cta_label']),
+      compareMax: ((m['compare'] as Map?)?['max'] is int)
+          ? (m['compare'] as Map)['max'] as int
+          : int.tryParse(_s((m['compare'] as Map?)?['max'])) ?? 3,
     );
   }
 

@@ -81,3 +81,9 @@ insert into public.ui_copy (key, value) values
   ('dev_tools.empty',       to_jsonb('No tool is registered for your role.'::text)),
   ('dev_tools.not_registered', to_jsonb('That tool is not in the feature registry.'::text))
 on conflict (key) do update set value = excluded.value;
+
+-- the tools sheet's two failure-state strings (backend copy, not Dart)
+insert into public.ui_copy (key, value) values
+  ('dev_tools.load_failed', to_jsonb('Could not load the tools list.'::text)),
+  ('dev_tools.retry',       to_jsonb('Retry'::text))
+on conflict (key) do update set value = excluded.value;

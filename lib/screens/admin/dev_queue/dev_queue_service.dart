@@ -327,6 +327,18 @@ class DevQueueService {
   Future<Map<String, dynamic>> gcpGet() async =>
       _asMap(await _c.rpc('dev_gcp_get'));
 
+  /// Run the monthly cloud waste scan NOW via the `cloud-waste-scan` edge
+  /// function (carries the user's JWT; the function re-checks super_admin and
+  /// holds the AWS key, which is deliberately nowhere on the builder VM). It is
+  /// READ-ONLY — it lists, prices and deletes nothing. Returns the same
+  /// rendered payload `dev_gcp_get().waste` serves.
+  Future<Map<String, dynamic>> wasteScan() async {
+    final res = await _c.functions
+        .invoke('cloud-waste-scan', body: {'action': 'run'});
+    final d = res.data;
+    return d is Map ? Map<String, dynamic>.from(d) : <String, dynamic>{};
+  }
+
   /// One-tap GCP action (enable_api|restart_vm|resize_disk|quotas|billing_now).
   /// restart_vm carries the PIN. Enqueues an urgent gcp command; returns {id,...}.
   Future<Map<String, dynamic>> gcpAction(String action, {String? pin}) async =>

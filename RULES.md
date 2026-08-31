@@ -9,7 +9,7 @@
      Dev Queue → Memory screen, or via the MCP memory server. Do NOT hand-edit
      this block; it is rewritten on every session start. Target: generic -->
 
-# Agent memory (generic) — 41 rules
+# Agent memory (generic) — 42 rules
 # Canonical fallback: see RULES.md in the repo root (git-committed).
 
 ## GLOBAL · style  (priority 10, v2)
@@ -130,6 +130,18 @@ mediBO Dev Queue runner loop: check switch → claim → build → deploy → ve
 7. Mid-build steering: `medibo-bridge.service` injects Om's replies live as `[Om — live reply on building #<id>]`. Act on it now, same command.
 
 All guarded RPCs (dev_cmd_*, deploy_*, rg_*, dev_ctl_*) go through `~/mediBO-runner/devcmd.sh` — it carries the service_role key. Never use MCP for these; MCP has no JWT and the guard rejects it.
+
+
+## PROJECT · step_progress  (priority 61, v1)
+
+## 17. STEP PROGRESS MUST TICK ITSELF (permanent — CHANGE #350)
+
+The card's checklist is Om's only live answer to "where is this build?". #340 sat at "Step 0 of 7" with 550K tokens spent and a change already promoted: the agent worked the whole time and never called the step RPC, so the one thing Om could see was a lie.
+
+1. **Mark it the moment it lands.** `devcmd.sh steps_set <ID> '["…","…"]' <branch>` before you code; `devcmd.sh step_done <ID> <n> <commit> "<what landed>"` the instant each step is on the branch — never a catch-up pass before `complete`.
+2. **Re-planning REWRITES the list.** A hostile-QA round, a bigger spec, a dropped approach — call `steps_set` again with the plan you are ACTUALLY following. Same title at the same number keeps its done mark. Abandoning the plan at 0 while you work a different one is the failure this change ends.
+3. **Derived ticks.** Every heartbeat `step_autotick.sh` reports the facts it can observe by itself (a commit touching `supabase/migrations/`, a commit touching `lib/**.dart`, a green test run, `queue_push`, the change going live) and `dev_cmd_step_autotick()` ticks whichever pending step each fact satisfies. The fact-to-step mapping is DATA in `dev_step_fact_rule` — a new detectable fact is one INSERT, not a deploy. It covers mechanical steps only; a decision or a QA fix is still yours to mark.
+4. **Backstop.** `dev_cmd_watchdog()` compares tokens spent against steps reported. Checklist frozen past `worker_pool.steps_watchdog.stale_min` while at least `min_tokens` were spent => it writes a STEP SYNC nudge into the live session (the same channel Om replies ride, injected by `build_bridge.sh`) and sets `steps_stale_flagged`, which the card renders as "Steps not being reported — checklist may be stale ({age})". Any real tick — agent or derived — clears the flag immediately. Getting a nudge means the card has been lying for at least 12 minutes: sync it now.
 
 
 ## PROJECT · runner_status  (priority 62, v2)

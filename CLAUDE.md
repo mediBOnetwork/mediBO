@@ -555,6 +555,39 @@ chained one is never handed out. Om reads the lane at Dev Queue → Cron health 
 **Build lane** (`build_contention_status()`), and `lease_event` is the
 permanent conflict history the before/after count is measured from.
 
+## 17. STEP PROGRESS MUST TICK ITSELF (permanent — CHANGE #350)
+
+The card's checklist is Om's only live answer to "where is this build?". #340
+sat at "Step 0 of 7" with 550K tokens spent and a change already promoted: the
+agent worked the whole time and never called the step RPC, so the one thing Om
+could see was a lie. Three layers, so progress never depends on memory alone:
+
+1. **PROTOCOL — mark it the moment it lands.** `devcmd.sh steps_set <ID>
+   '["…","…"]' <branch>` before you code; `devcmd.sh step_done <ID> <n>
+   <commit> "<what landed>"` the instant each step is on the branch — never a
+   catch-up pass before `complete`. A checklist that only becomes truthful
+   after the build is over told Om nothing while it mattered.
+2. **RE-PLANNING REWRITES THE LIST.** A hostile-QA round, a bigger spec, a
+   dropped approach — call `steps_set` AGAIN with the plan you are actually
+   following. Same title at the same number keeps its done mark, so a rewrite
+   is cheap. Abandoning the plan at 0 while you work a different one is the
+   failure this change exists to end.
+3. **DERIVED TICKS.** Every heartbeat the harness (`step_autotick.sh`) reports
+   the facts it can observe for itself — a commit touching
+   `supabase/migrations/`, a commit touching `lib/**.dart`, a green test run,
+   `queue_push`, the change going live — and `dev_cmd_step_autotick()` ticks
+   whichever pending step each fact satisfies. The mapping is DATA
+   (`dev_step_fact_rule`): a new detectable fact is one INSERT, not a deploy.
+   It covers the mechanical steps only; a decision or a QA fix is still yours.
+4. **BACKSTOP.** `dev_cmd_watchdog()` compares tokens spent against steps
+   reported. Checklist frozen past `worker_pool.steps_watchdog.stale_min` while
+   at least `min_tokens` were spent => it writes a `⚠ STEP SYNC` nudge into the
+   live session (the same channel Om's replies ride, injected by
+   `build_bridge.sh`) and sets `steps_stale_flagged`, which the card renders as
+   "Steps not being reported — checklist may be stale ({age})". A stale
+   checklist is VISIBLY untrusted instead of silently wrong. Any real tick —
+   agent or derived — clears the flag immediately.
+
 ## 13. PARALLEL WORKERS (permanent — CHANGE #74)
 
 The VM runs a WORKER POOL, not a single builder. The supervisor

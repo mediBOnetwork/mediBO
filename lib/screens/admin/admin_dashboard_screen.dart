@@ -7,6 +7,7 @@ import 'package:pharma_b2b/widgets/order_hours_card.dart';
 import 'package:pharma_b2b/widgets/notifications_card.dart';
 import '../../design_tokens.dart';
 import '../../services/ui_copy.dart';
+import 'admin_ops_board_screen.dart';
 import 'command_palette.dart';   // CHANGE #325
 import 'nav_registry_view.dart'; // CHANGE #325
 import 'dev_queue/dev_queue_screen.dart'; // CHANGE #349 — openDevTool
@@ -28,11 +29,17 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   // renders them and nothing else.
   Map<String, dynamic> _nav = const {};
 
+  // #58 — the stuck board's headline, read straight from admin_ops_board().
+  // Six counts with no age could never get worse by being ignored; this one
+  // does, so it sits FIRST on the admin home and carries its own wording.
+  Map<String, dynamic> _ops = const {};
+
   @override
   void initState() {
     super.initState();
     _loadStats();
     _loadNav();
+    _loadOpsBoard();
   }
 
   Future<void> _loadStats() async {
@@ -162,6 +169,22 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   /// under each number ("10 bills to review") are all `nav_registry()`'s
   /// `action_tiles`; there is no hand-written card here any more, and a tile
   /// only exists while its badge_source has something to answer.
+  /// The board is a separate read so a slow scan never delays the counts, and
+  /// a failure leaves the rest of the home intact — the card simply does not
+  /// appear. Nothing here is computed: the RPC hands over every string.
+  Future<void> _loadOpsBoard() async {
+    try {
+      final raw = await Supabase.instance.client
+          .rpc('admin_ops_board', params: {'p_top': 0});
+      final m = (raw is List ? raw.first : raw);
+      if (mounted && m is Map && m['ok'] == true) {
+        setState(() => _ops = Map<String, dynamic>.from(m));
+      }
+    } catch (_) {
+      // No card rather than a broken one.
+    }
+  }
+
   Widget _buildActionRequired() {
     return NavActionTiles(
       tiles: _list('action_tiles'),
@@ -263,6 +286,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   _PaletteButton(
                       label: _label('search_button'), onTap: _openPalette),
                   SizedBox(height: Ds.space.x16),
+                  // #58 — "what is stuck right now", first thing on the
+                  // admin home and one tap from the full board.
+                  if (_ops.isNotEmpty) _OpsBoardCard(payload: _ops),
                   const OrderHoursCard(),
                   const NotificationsCard(),
                   _sectionLabel(_label('action_required')),
@@ -295,6 +321,99 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         ),
       );
     });
+  }
+}
+
+// ── #58 — the stuck-work card ────────────────────────────────────────────────
+//
+// The register row asked for a worst-first board of every stuck object to BE
+// the admin home. This is its head: the backend's own headline, the worst
+// queue named, and one tap into AdminOpsBoardScreen for the full list. It reads
+// admin_ops_board() with p_top: 0 — the counts, none of the example rows —
+// because the home only needs the verdict, and the board screen is where the
+// objects live.
+//
+// Every string is the payload's. There is no count assembled here, no age
+// computed here and no ranking decided here.
+class _OpsBoardCard extends StatelessWidget {
+  final Map<String, dynamic> payload;
+  const _OpsBoardCard({required this.payload});
+
+  @override
+  Widget build(BuildContext context) {
+    String s(String k) => (payload[k] ?? '').toString();
+    final tone = s('headline_tone');
+    final ink = switch (tone) {
+      'good' => Ds.c.success,
+      'warn' => Ds.c.warning,
+      'bad' => Ds.c.danger,
+      _ => Ds.c.info,
+    };
+    final wash = switch (tone) {
+      'good' => Ds.c.successSoft,
+      'warn' => Ds.c.warningSoft,
+      'bad' => Ds.c.dangerSoft,
+      _ => Ds.c.infoSoft,
+    };
+
+    // Boot-time proof (same pattern as #325's profile surface): a string in the
+    // bundle only proves the code compiled. This key is written when the card
+    // actually paints on the admin home, so render_verify.js can assert the
+    // entry point exists on the live build rather than in the source.
+    try {
+      RenderLog.write('c356_ops_board',
+          'headline=${s('headline_label')};classes=${payload['items'] is List ? (payload['items'] as List).length : 0}');
+    } catch (_) {}
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: Ds.space.x16),
+      child: InkWell(
+        key: const Key('admin_home_ops_board'),
+        borderRadius: Ds.r.rCard,
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => AdminOpsBoardScreen(
+              onNavigate: (route) =>
+                  QuickLinkNavigator.of(context)?.navigate(route),
+            ),
+          ),
+        ),
+        child: Container(
+          width: double.infinity,
+          padding: EdgeInsets.all(Ds.space.x16),
+          decoration: BoxDecoration(
+            color: wash,
+            borderRadius: Ds.r.rCard,
+            border: Border.all(color: ink.withValues(alpha: 0.30)),
+          ),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(s('title'), style: Ds.t.subtitle),
+                  SizedBox(height: Ds.space.x4),
+                  Text(s('headline_label'),
+                      key: const Key('admin_home_ops_headline'),
+                      style: Ds.t.display.copyWith(color: ink)),
+                  SizedBox(height: Ds.space.x4),
+                  Text(s('subtitle'), style: Ds.t.caption),
+                  if (s('worst_label').isNotEmpty) ...[
+                    SizedBox(height: Ds.space.x8),
+                    Text(s('worst_label'),
+                        style: Ds.t.caption
+                            .copyWith(color: ink, fontWeight: FontWeight.w600)),
+                  ],
+                ],
+              ),
+            ),
+            Icon(Icons.chevron_right, color: ink),
+          ]),
+        ),
+      ),
+    );
   }
 }
 

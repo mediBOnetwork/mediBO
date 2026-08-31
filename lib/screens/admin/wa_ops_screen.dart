@@ -59,8 +59,8 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../features/whatsapp/ui/wa_campaign_chips.dart';
-import '../../services/ui_copy.dart';
 import '../../design_tokens.dart';
+import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 
 const _kGreen = Color(0xFF1B7A43);
@@ -946,9 +946,18 @@ class _AccountHealthSectionState extends State<_AccountHealthSection> {
     final note = s('note');
     final pct = ((p['templates_pct'] as num?) ?? 0).toDouble().clamp(0, 100);
 
+    // #42 — the send-fault banner sits ABOVE the Meta card, because the two
+    // blocks answer different questions and the register row exists precisely
+    // because the green one was read as an answer to the red one's question.
+    // Everything in it is a backend string; `show` is the backend's decision.
+    final health = p['send_health'] is Map
+        ? Map<String, dynamic>.from(p['send_health'] as Map)
+        : const <String, dynamic>{};
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (health['show'] == true) _SendFaultBanner(health: health),
         Container(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
@@ -1066,6 +1075,118 @@ class _AccountHealthSectionState extends State<_AccountHealthSection> {
         ),
         if (note.isNotEmpty) _NoteBlock(note, topGap: 10),
       ],
+    );
+  }
+}
+
+/// #42 — "a WABA billing block stopped a real login OTP and no screen said so".
+///
+/// The Meta card below this one reports the ACCOUNT REVIEW: on 2026-08-30 it
+/// read APPROVED / GREEN / TIER_250 while Meta was refusing our sends for
+/// billing, and two of the refused sends were login OTPs — a customer could not
+/// sign in and no screen in the app said a word about it.
+///
+/// So this banner is not a second opinion on the same figure; it is the OTHER
+/// question, asked of our own send log. It computes NOTHING: `show`, `tone`,
+/// the title, the sentence, the counts, the sign-in line and the contradiction
+/// line are all backend strings, and `meta_reason` is Meta's wording carried
+/// through untouched — the one string here that must never be rephrased,
+/// because it is what an admin pastes into Meta support.
+///
+/// Styling comes from `Ds` rather than this file's legacy `_k*` constants:
+/// new work does not add to the literal baseline (DESIGN.md, CHANGE #66).
+class _SendFaultBanner extends StatelessWidget {
+  final Map<String, dynamic> health;
+  const _SendFaultBanner({required this.health});
+
+  @override
+  Widget build(BuildContext context) {
+    String s(String k) => (health[k] ?? '').toString();
+    final tone = s('tone');
+    final ink = _toneInk(tone);
+    final reason = s('meta_reason');
+    final auth = s('auth_label');
+    final contradiction = s('contradiction_label');
+    final action = s('action_label');
+    final counts = [s('count_label'), s('last_label')]
+        .where((t) => t.isNotEmpty)
+        .join(' \u00b7 ');
+
+    try {
+      RenderLog.write('wa_ops_send_fault', tone);
+    } catch (_) {}
+
+    return Container(
+      key: const Key('wa_ops_send_fault'),
+      margin: EdgeInsets.only(bottom: Ds.space.x12),
+      padding: EdgeInsets.all(Ds.space.x16),
+      decoration: BoxDecoration(
+        color: _toneWash(tone),
+        border: Border.all(color: ink.withValues(alpha: 0.35)),
+        borderRadius: Ds.r.rCard,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Icon(Icons.error_outline, size: Ds.space.x16 + Ds.space.x4, color: ink),
+            SizedBox(width: Ds.space.x8),
+            Expanded(
+              child: Text(s('title'),
+                  style: Ds.t.subtitle.copyWith(color: ink)),
+            ),
+          ]),
+          if (reason.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x12),
+            Container(
+              key: const Key('wa_ops_send_fault_reason'),
+              width: double.infinity,
+              padding: EdgeInsets.symmetric(
+                  horizontal: Ds.space.x12, vertical: Ds.space.x8),
+              decoration: BoxDecoration(
+                color: Ds.c.surface,
+                borderRadius: Ds.r.rChip,
+                border: Border.all(color: Ds.c.divider),
+              ),
+              child: Text(reason,
+                  style: Ds.t.body.copyWith(fontWeight: FontWeight.w600)),
+            ),
+          ],
+          if (s('detail').isNotEmpty) ...[
+            SizedBox(height: Ds.space.x12),
+            Text(s('detail'), style: Ds.t.caption.copyWith(color: ink)),
+          ],
+          if (auth.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x8),
+            Text(auth,
+                key: const Key('wa_ops_send_fault_auth'),
+                style: Ds.t.caption
+                    .copyWith(color: ink, fontWeight: FontWeight.w700)),
+          ],
+          if (contradiction.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x8),
+            Text(contradiction,
+                key: const Key('wa_ops_send_fault_contradiction'),
+                style: Ds.t.caption),
+          ],
+          if (counts.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x12),
+            Text(counts, style: Ds.t.caption),
+          ],
+          if (action.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x12),
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Icon(Icons.arrow_forward, size: Ds.space.x16, color: ink),
+              SizedBox(width: Ds.space.x8),
+              Expanded(
+                child: Text(action,
+                    style: Ds.t.caption
+                        .copyWith(color: ink, fontWeight: FontWeight.w600)),
+              ),
+            ]),
+          ],
+        ],
+      ),
     );
   }
 }

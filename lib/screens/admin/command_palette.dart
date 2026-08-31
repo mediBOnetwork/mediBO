@@ -215,8 +215,13 @@ class _ResultRow extends StatelessWidget {
         padding: EdgeInsets.symmetric(
             horizontal: Ds.space.x16, vertical: Ds.space.x8),
         child: Row(children: [
-          Icon(navIcon((item['icon_key'] ?? '').toString()),
-              size: Ds.space.x24, color: Ds.c.textSecondary),
+          // CHANGE #349 — the same glyph rule the dashboard uses: a key that
+          // does not resolve draws the result's own initial, never a blank.
+          NavGlyph(
+              row: item,
+              box: Ds.space.x24,
+              glyph: Ds.space.x24,
+              color: Ds.c.textSecondary),
           SizedBox(width: Ds.space.x12),
           Expanded(
             child: Column(

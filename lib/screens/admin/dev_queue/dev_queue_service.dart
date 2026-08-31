@@ -180,6 +180,12 @@ class DevQueueService {
   Future<Map<String, dynamic>> draftsInbox() async =>
       _asMap(await _c.rpc('drafts_inbox'));
 
+  /// CHANGE #349 — the labelled tools surface. One payload: the groups, the
+  /// labels, the descriptions, the icon keys and the drafts badge. A tool the
+  /// registry does not list is not in it, which is the whole gate.
+  Future<Map<String, dynamic>> devTools() async =>
+      _asMap(await _c.rpc('dev_tools'));
+
   Future<void> draftCancel(int id) async =>
       _c.rpc('draft_cancel', params: {'p_id': id});
 

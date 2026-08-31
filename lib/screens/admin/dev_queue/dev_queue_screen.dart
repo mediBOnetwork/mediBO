@@ -19,6 +19,7 @@ import 'play_store_screen.dart';
 import 'signin_diag_screen.dart';
 import 'memory_screen.dart';
 import 'threads_screen.dart';
+import 'dev_tools_sheet.dart';
 
 /// The Dev Queue registry — the permanent development record, rendered from
 /// `dev_cmd_list` verbatim. Om pastes specs here; the VM runner claims and
@@ -211,116 +212,33 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
             style: const TextStyle(
                 fontSize: 18, fontWeight: FontWeight.w700, color: kTextHi)),
         actions: [
-          if (_draftBadge > 0)
-            Semantics(
-              identifier: 'devq_drafts_inbox',
+          // CHANGE #349 — ONE entry point, not nine bare glyphs.
+          //
+          // This row used to hold nine IconButtons. `actions:` is a Row: it
+          // does not wrap and it does not scroll, so on a phone the last tools
+          // were rendered past the right edge and could not be reached at all,
+          // and the ones that fitted carried no label. Every tool now lives in
+          // the registry and opens from the labelled sheet below, where the
+          // list scrolls and each row is the full width of the sheet.
+          Padding(
+            padding: EdgeInsets.only(right: Ds.space.x8),
+            child: Semantics(
+              identifier: 'devq_tools',
               button: true,
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  IconButton(
-                    tooltip: c('dev_queue.drafts_inbox_title'),
-                    icon: const Icon(Icons.drafts_outlined, color: kBrand),
-                    onPressed: () => _showDraftsInbox(context),
-                  ),
-                  Positioned(
-                    top: Ds.space.x8,
-                    right: Ds.space.x8,
-                    child: Container(
-                      padding: EdgeInsets.all(Ds.space.x4 - 1),
-                      decoration: BoxDecoration(
-                        color: Ds.c.danger,
-                        shape: BoxShape.circle,
-                      ),
-                      constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
-                      child: Text('$_draftBadge',
-                          textAlign: TextAlign.center,
-                          style: Ds.t.caption.copyWith(
-                              fontSize: Ds.t.caption.fontSize! - 4,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.white)),
-                    ),
-                  ),
-                ],
+              child: SizedBox(
+                height: Ds.space.x48,
+                child: TextButton.icon(
+                  onPressed: _openTools,
+                  icon: _draftBadge > 0
+                      ? Badge(
+                          label: Text('$_draftBadge'),
+                          child: const Icon(Icons.handyman_outlined,
+                              color: kBrand))
+                      : const Icon(Icons.handyman_outlined, color: kBrand),
+                  label: Text(c('dev_tools.button'),
+                      style: Ds.t.bodyStrong.copyWith(color: kBrand)),
+                ),
               ),
-            ),
-          Semantics(
-            identifier: 'devq_report_bug',
-            button: true,
-            child: IconButton(
-              tooltip: c('dev_queue.bug_report_tooltip'),
-              icon: const Icon(Icons.bug_report_outlined, color: kBrand),
-              onPressed: () => showBugReportSheet(context, _svc),
-            ),
-          ),
-          Semantics(
-            identifier: 'devq_journey_library',
-            button: true,
-            child: IconButton(
-              tooltip: c('dev_queue.journey_nav_label'),
-              icon: const Icon(Icons.map_outlined, color: kBrand),
-              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => JourneyLibraryScreen(service: _svc))),
-            ),
-          ),
-          Semantics(
-            identifier: 'devq_cron_health',
-            button: true,
-            child: IconButton(
-              tooltip: c('dev_queue.cron_health_nav_label'),
-              icon: const Icon(Icons.schedule_outlined, color: kBrand),
-              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => CronHealthScreen(service: _svc))),
-            ),
-          ),
-          Semantics(
-            identifier: 'devq_signin_diag',
-            button: true,
-            child: IconButton(
-              tooltip: c('dev_queue.signin_diag_nav_label'),
-              icon: const Icon(Icons.vpn_key_outlined, color: kBrand),
-              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => SignInDiagScreen(service: _svc))),
-            ),
-          ),
-          Semantics(
-            identifier: 'devq_gcp_open',
-            button: true,
-            child: IconButton(
-              tooltip: c('dev_queue.gcp_open'),
-              icon: const Icon(Icons.cloud_outlined, color: kBrand),
-              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => GcpControlScreen(service: _svc))),
-            ),
-          ),
-          Semantics(
-            identifier: 'devq_memory_open',
-            button: true,
-            child: IconButton(
-              tooltip: c('dev_queue.memory_nav_label'),
-              icon: const Icon(Icons.memory_outlined, color: kBrand),
-              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => MemoryScreen(service: _svc))),
-            ),
-          ),
-          Semantics(
-            identifier: 'devq_play_store',
-            button: true,
-            child: IconButton(
-              tooltip: c('dev_queue.play_nav_label'),
-              icon: const Icon(Icons.shop_outlined, color: kBrand),
-              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => PlayStoreScreen(service: _svc))),
-            ),
-          ),
-          Semantics(
-            identifier: 'devq_threads_open',
-            button: true,
-            child: IconButton(
-              tooltip: c('dev_queue.threads_nav_label'),
-              icon: const Icon(Icons.forum_outlined, color: kBrand),
-              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => ThreadsScreen(service: _svc))),
             ),
           ),
         ],
@@ -403,6 +321,23 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  /// CHANGE #349 — the labelled tools sheet. `dev_tools()` decides what may
+  /// appear; [kDevToolKeys] decides what this build can open. A tool that
+  /// fails either gate simply is not on the sheet.
+  void _openTools() {
+    showDevToolsSheet(
+      context,
+      load: _svc.devTools,
+      available: kDevToolKeys,
+      onOpen: (tool) => openDevTool(
+        context,
+        (tool['tool_key'] ?? '').toString(),
+        service: _svc,
+        onDraftsQueued: _load,
       ),
     );
   }
@@ -1054,4 +989,104 @@ class _DraftsInboxSheetState extends State<_DraftsInboxSheet> {
           ),
         ),
       );
+}
+
+
+/// CHANGE #349 — every Dev Queue tool this build can open, by the registry's
+/// own `route_key`.
+///
+/// It is the SECOND half of the gate. `dev_tools()` says which tools the
+/// registry admits; this set says which of those the running app actually has
+/// a screen for. A key in neither place cannot be reached, and a labelled row
+/// that would do nothing is never drawn.
+const Set<String> kDevToolKeys = <String>{
+  'journey_library',
+  'bug_report',
+  'drafts_inbox',
+  'cron_health',
+  'signin_diag',
+  'gcp_control',
+  'memory',
+  'threads',
+  'play_store',
+};
+
+/// Open one registered tool. Returns false for a key this build does not know,
+/// so a caller can render the backend's `dev_tools.not_registered` copy rather
+/// than doing nothing silently.
+bool openDevTool(
+  BuildContext context,
+  String toolKey, {
+  DevQueueService? service,
+  VoidCallback? onDraftsQueued,
+}) {
+  final svc = service ?? DevQueueService();
+  void push(Widget screen) {
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => screen));
+  }
+
+  switch (toolKey) {
+    case 'journey_library':
+      push(JourneyLibraryScreen(service: svc));
+      return true;
+    case 'bug_report':
+      showBugReportSheet(context, svc);
+      return true;
+    case 'drafts_inbox':
+      showDraftsInboxSheet(context, svc, onQueued: onDraftsQueued);
+      return true;
+    case 'cron_health':
+      push(CronHealthScreen(service: svc));
+      return true;
+    case 'signin_diag':
+      push(SignInDiagScreen(service: svc));
+      return true;
+    case 'gcp_control':
+      push(GcpControlScreen(service: svc));
+      return true;
+    case 'memory':
+      push(MemoryScreen(service: svc));
+      return true;
+    case 'threads':
+      push(ThreadsScreen(service: svc));
+      return true;
+    case 'play_store':
+      push(PlayStoreScreen(service: svc));
+      return true;
+  }
+  return false;
+}
+
+/// The drafts inbox, opened from anywhere (the tools sheet, the command
+/// palette) rather than only from inside the Dev Queue screen's own state.
+Future<void> showDraftsInboxSheet(
+  BuildContext context,
+  DevQueueService svc, {
+  VoidCallback? onQueued,
+}) async {
+  Map<String, dynamic> p = const <String, dynamic>{};
+  try {
+    p = await svc.draftsInbox();
+  } catch (_) {}
+  if (!context.mounted) return;
+  List<Map<String, dynamic>> l(String k) => ((p[k] as List?) ?? const [])
+      .whereType<Map>()
+      .map((e) => Map<String, dynamic>.from(e))
+      .toList();
+  await showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    builder: (sheetCtx) => _DraftsInboxSheet(
+      service: svc,
+      generating: l('generating'),
+      ready: l('ready'),
+      failed: l('failed'),
+      onRefresh: () {},
+      onQueued: () {
+        Navigator.of(sheetCtx).pop();
+        onQueued?.call();
+      },
+    ),
+  );
 }

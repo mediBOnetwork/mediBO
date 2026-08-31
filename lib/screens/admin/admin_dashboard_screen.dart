@@ -9,6 +9,7 @@ import '../../design_tokens.dart';
 import '../../services/ui_copy.dart';
 import 'command_palette.dart';   // CHANGE #325
 import 'nav_registry_view.dart'; // CHANGE #325
+import 'dev_queue/dev_queue_screen.dart'; // CHANGE #349 — openDevTool
 
 class AdminDashboardScreen extends StatefulWidget {
   const AdminDashboardScreen({super.key});
@@ -85,6 +86,21 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       Supabase.instance.client
           .rpc('nav_open', params: {'p_feature_key': featureKey})
           .catchError((_) => null);
+    }
+    // CHANGE #349 — a Dev Queue tool is a registry row now, so the palette
+    // finds it by name like any screen. It does not go through the shell's
+    // route table: these tools are pushed directly, which is also why the
+    // palette can reach them without the Dev Queue screen being open.
+    final toolKey = (tile['tool_key'] ?? '').toString();
+    if (toolKey.isNotEmpty) {
+      if (!openDevTool(context, toolKey)) {
+        final message = c('dev_tools.not_registered');
+        if (message.isNotEmpty) {
+          ScaffoldMessenger.maybeOf(context)
+              ?.showSnackBar(SnackBar(content: Text(message)));
+        }
+      }
+      return;
     }
     final route = (tile['route_key'] ?? '').toString();
     if (route.isEmpty) return;

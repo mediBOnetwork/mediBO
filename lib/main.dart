@@ -28,6 +28,7 @@ import 'screens/admin/settlement_screen.dart'; // /admin/settlement
 import 'screens/home_shell.dart';
 import 'screens/public/inquiry_form_screen.dart';
 import 'screens/public/stock_update_form_screen.dart'; // C639: /stock-update/<token>
+import 'screens/public/substitute_token_screen.dart'; // #366: /substitute/<token>
 import 'pages/dispute_token_page.dart';
 import 'screens/public/dispute_form_screen.dart';
 import 'screens/public/public_order_page.dart';
@@ -549,6 +550,16 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
               // CHANGE #639 — the stock-update link the 5pm sweep sends over
               // WhatsApp. Public, exactly like /inquiry/<token>: the token IS
               // the authorisation. Declared above the trailing /:code guard.
+              // CMD #366 row 176 — the substitute link a no-app customer
+              // gets over WhatsApp. Same shape as the stock-update link: the
+              // token in the URL is the authorisation.
+              if (name.startsWith('/substitute/')) {
+                final token =
+                    name.substring('/substitute/'.length).split('?').first;
+                return MaterialPageRoute(
+                  builder: (_) => SubstituteTokenScreen(token: token),
+                );
+              }
               if (name.startsWith('/stock-update/')) {
                 final token =
                     name.substring('/stock-update/'.length).split('?').first;

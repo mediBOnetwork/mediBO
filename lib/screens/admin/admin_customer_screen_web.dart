@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart'; // CHANGE #464
 import 'package:flutter/material.dart';
+import '../../widgets/substitute_choice.dart'; // #366 row 176
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -3398,6 +3399,13 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
               }),
             ],
           ],
+          // CMD #366 row 176 — the substitution panel. Om's rule is the whole
+          // design: never auto-substitute. This asks the customer and shows
+          // their answer; Apply is enabled only once the BACKEND says the
+          // customer approved, and the backend refuses it otherwise even if
+          // this button were somehow tapped.
+          if (row.isOrder && row.orderId != null)
+            _SubstitutePanel(orderId: row.orderId!),
           if (row.removedItems.isNotEmpty) ...[
             const SizedBox(height: 12),
             const Divider(height: 1, color: Color(0xFFE5E7EB)),
@@ -14688,6 +14696,139 @@ class _AssignRouteDialogState extends State<_AssignRouteDialog> {
                   child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
               : const Text('Assign'),
         ),
+      ],
+    );
+  }
+}
+
+/// CMD #366 row 176 — the admin side of substitution.
+///
+/// It offers exactly two verbs: ASK the customer, and APPLY what the customer
+/// already approved. There is deliberately no third verb that swaps a line on
+/// the customer's behalf — the backend's sub_offer_apply refuses anything that
+/// is not status='approved' with a chosen product the customer picked from the
+/// list they were shown, so this panel cannot become one either.
+class _SubstitutePanel extends StatefulWidget {
+  final String orderId;
+  const _SubstitutePanel({required this.orderId});
+
+  @override
+  State<_SubstitutePanel> createState() => _SubstitutePanelState();
+}
+
+class _SubstitutePanelState extends State<_SubstitutePanel> {
+  List<Map<String, dynamic>> _offers = const [];
+  bool _busy = false;
+  bool _loaded = false;
+  String _error = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final res = await SubstituteChoice.rpc(
+          'sub_offers_for_order', {'p_order_id': widget.orderId});
+      if (!mounted) return;
+      final rows = (res is Map ? (res['offers'] as List?) : null) ?? const [];
+      setState(() {
+        _offers = rows
+            .whereType<Map>()
+            .map((e) => e.cast<String, dynamic>())
+            .toList();
+        _loaded = true;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _loaded = true);
+    }
+  }
+
+  Future<void> _run(String fn, Map<String, dynamic> params) async {
+    setState(() {
+      _busy = true;
+      _error = '';
+    });
+    try {
+      final res = await SubstituteChoice.rpc(fn, params);
+      if (res is Map && res['ok'] == false) {
+        // The refusal ships its own sentence — "The customer has not approved
+        // a substitute for this line yet." Print that, never a local one.
+        if (mounted) {
+          setState(() =>
+              _error = (res['message'] ?? res['error'] ?? '').toString());
+        }
+      }
+      await _load();
+    } catch (e) {
+      if (mounted) setState(() => _error = e.toString());
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_loaded) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(height: Ds.space.x12),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                c('admin_customer.substitute_title'),
+                style: Ds.t.caption.copyWith(
+                    fontWeight: FontWeight.w700, color: Ds.c.textSecondary),
+              ),
+            ),
+            TextButton(
+              onPressed: _busy
+                  ? null
+                  : () => _run('sub_offer_open_for_order',
+                      {'p_order_id': widget.orderId}),
+              child: Text(c('admin_customer.substitute_ask')),
+            ),
+          ],
+        ),
+        if (_error.isNotEmpty)
+          Text(_error, style: Ds.t.caption.copyWith(color: Ds.c.danger)),
+        for (final o in _offers) ...[
+          SizedBox(height: Ds.space.x8),
+          Container(
+            padding: EdgeInsets.all(Ds.space.x12),
+            decoration: BoxDecoration(
+              color: Ds.c.surface,
+              borderRadius: Ds.r.rButton,
+              border: Border.all(color: Ds.c.divider),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // readOnly: the admin sees the customer's options and their
+                // answer, and cannot answer for them.
+                SubstituteChoice(offer: o, readOnly: true),
+                if ((o['status'] ?? '') == 'approved') ...[
+                  SizedBox(height: Ds.space.x8),
+                  SizedBox(
+                    width: double.infinity,
+                    height: Ds.space.x48,
+                    child: FilledButton(
+                      onPressed: _busy
+                          ? null
+                          : () => _run(
+                              'sub_offer_apply', {'p_offer_id': o['offer_id']}),
+                      child: Text(c('admin_customer.substitute_apply')),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
       ],
     );
   }

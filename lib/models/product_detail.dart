@@ -60,6 +60,22 @@ class ProductDetail {
   final List<PdSection> sections;
   final List<PdSimilar> similar;
 
+  /// CMD #366 (row 171) — the PRICED substitute block. `similar` above is the
+  /// original salt rail and keeps its exact shape (a protected test pins it);
+  /// this is the same mechanism extended, as Om asked, rather than a second
+  /// rail alongside it: normalised salt+strength+form, a real price, and a
+  /// saving computed net-rate against net-rate. It is deliberately possible
+  /// for an item here to carry NO price, NO margin and NO saving — MRP is the
+  /// legal ceiling, not a rate we sell at, so a saving derived from it would
+  /// be a number we invented.
+  final PdSubstitutes substitutes;
+
+  /// CMD #366 (row 175) — "usually delivered in ...", the rolling average of
+  /// our OWN past deliveries to this area. `has` is false until enough real
+  /// deliveries exist, and then the page shows nothing at all rather than a
+  /// promise we never measured.
+  final PdPromise deliveryPromise;
+
   final bool hasHistory;
   final String historyLabel;
 
@@ -91,6 +107,8 @@ class ProductDetail {
     required this.overview,
     required this.sections,
     required this.similar,
+    required this.substitutes,
+    required this.deliveryPromise,
     required this.hasHistory,
     required this.historyLabel,
     required this.showWishlist,
@@ -167,6 +185,8 @@ class ProductDetail {
                 mrpLabel: _s(r['mrp_label']),
               ))
           .toList(growable: false),
+      substitutes: PdSubstitutes.fromMap(m['substitutes']),
+      deliveryPromise: PdPromise.fromMap(m['delivery_promise']),
       hasHistory: hist['has'] == true,
       historyLabel: _s(hist['label']),
       showWishlist: m['show_wishlist'] == true,
@@ -200,11 +220,132 @@ class ProductDetail {
         overview: const [],
         sections: const [],
         similar: const [],
+        substitutes: const PdSubstitutes.empty(),
+        deliveryPromise: const PdPromise.empty(),
         hasHistory: false,
         historyLabel: '',
         showWishlist: false,
         isWishlisted: false,
       );
+}
+
+/// CMD #366 row 171. Every string here is `same_composition_options()`'s —
+/// heading, note, empty state, the match label and the saving sentence. The
+/// widget prints them in payload order and computes nothing, least of all a
+/// price comparison.
+class PdSubstitutes {
+  final bool has;
+  final String heading;
+  final String note;
+  final String empty;
+  final List<PdSubstitute> items;
+  const PdSubstitutes({
+    required this.has,
+    required this.heading,
+    required this.note,
+    required this.empty,
+    required this.items,
+  });
+  const PdSubstitutes.empty()
+      : has = false,
+        heading = '',
+        note = '',
+        empty = '',
+        items = const [];
+
+  factory PdSubstitutes.fromMap(Object? raw) {
+    if (raw is! Map) return const PdSubstitutes.empty();
+    final m = raw.cast<String, dynamic>();
+    return PdSubstitutes(
+      has: m['has'] == true,
+      heading: ProductDetail._s(m['heading']),
+      note: ProductDetail._s(m['note']),
+      empty: ProductDetail._s(m['empty']),
+      items: ((m['items'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((r) => PdSubstitute.fromMap(r.cast<String, dynamic>()))
+          .toList(growable: false),
+    );
+  }
+}
+
+class PdSubstitute {
+  final String id;
+  final String name;
+  final String company;
+  final String packLabel;
+  final String image;
+  final String matchLabel;
+
+  /// The same pricing block every card reads — so the substitute's price and
+  /// the catalogue's price can never disagree.
+  final Pricing? pricing;
+
+  /// Present only when BOTH this item and the one being viewed have a real
+  /// trade rate. No rate on either side => hasSaving is false and there is no
+  /// line, never a "saves 0%".
+  final bool hasSaving;
+  final String savingLabel;
+
+  /// Present only when the backend emitted has_margin, which needs
+  /// pricing_ready AND an entitled viewer.
+  final bool hasMargin;
+  final String marginLabel;
+
+  const PdSubstitute({
+    required this.id,
+    required this.name,
+    required this.company,
+    required this.packLabel,
+    required this.image,
+    required this.matchLabel,
+    required this.pricing,
+    required this.hasSaving,
+    required this.savingLabel,
+    required this.hasMargin,
+    required this.marginLabel,
+  });
+
+  factory PdSubstitute.fromMap(Map<String, dynamic> m) {
+    final saving = (m['saving'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final margin = (m['margin'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final chip = (margin['chip'] as Map?)?.cast<String, dynamic>() ?? const {};
+    return PdSubstitute(
+      id: ProductDetail._s(m['id']),
+      name: ProductDetail._s(m['name']),
+      company: ProductDetail._s(m['company']),
+      packLabel: ProductDetail._s(m['pack_label']),
+      image: ProductDetail._s(m['image']),
+      matchLabel: ProductDetail._s(m['match_label']),
+      pricing: m['pricing'] is Map
+          ? Pricing.fromMap((m['pricing'] as Map).cast<String, dynamic>())
+          : null,
+      hasSaving: saving['has'] == true,
+      savingLabel: ProductDetail._s(saving['label']),
+      hasMargin: margin['has'] == true,
+      marginLabel: ProductDetail._s(chip['label']),
+    );
+  }
+}
+
+/// CMD #366 row 175. `has` is the backend's answer to "have we delivered here
+/// enough times to promise anything", never a client-side sample count.
+class PdPromise {
+  final bool has;
+  final String label;
+  final String note;
+  const PdPromise({required this.has, required this.label, required this.note});
+  const PdPromise.empty() : has = false, label = '', note = '';
+
+  factory PdPromise.fromMap(Object? raw) {
+    if (raw is! Map) return const PdPromise.empty();
+    final m = raw.cast<String, dynamic>();
+    return PdPromise(
+      has: m['has'] == true,
+      label: ProductDetail._s(m['label']),
+      note: ProductDetail._s(m['note']),
+    );
+  }
 }
 
 class PdOverviewRow {

@@ -44,6 +44,7 @@ import 'admin/notify_cost_screen.dart';         // CHANGE #325
 import 'admin/settlement_screen.dart';          // CHANGE #325
 import 'admin/dev_queue/cron_health_screen.dart'; // CHANGE #325
 import '../services/discount_slabs_service.dart'; // CHANGE #325
+import 'admin/admin_pricing_screen.dart';
 import 'admin/admin_shell.dart';
 import 'admin/pricing_backfill_screen.dart';
 import 'admin/admin_bill_pipeline_screen.dart'; // CHANGE #226
@@ -635,6 +636,14 @@ class _HomeShellState extends State<HomeShell> {
       case 'order_closure':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const AdminOrderClosureScreen()));
+        break;
+      // CHANGE #355 — trade price COVERAGE + the sellability policy. Sibling
+      // of pricing_backfill (#174), which is where a rate is entered; this is
+      // the measurement of how many products have one at all (feature_gaps
+      // #80). pricing_coverage_report() gates on get_my_role() itself.
+      case 'pricing':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const AdminPricingScreen()));
         break;
       // CHANGE #320 — GST (input credit, monthly position, GSTR exports).
       case 'gst':

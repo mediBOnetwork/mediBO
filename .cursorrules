@@ -345,35 +345,70 @@ Built-in guards you should not fight: a pull-first guard (never build/commit/pus
 
 
 
-## PROJECT · deploy_lane  (priority 75, v3)
+## PROJECT · deploy_lane  (priority 75, v4)
 
-## 3. DEPLOY LANE — EXACT SEQUENCE, NO SHORTCUTS
-deploy_lock_try → if busy wait 60s retry (NEVER merge to main while another
-agent holds the lock) → git fetch + rebase onto origin/main → flutter test
-test/protected/ (MUST pass) → build → deploy_claim_number → stamp version.json
-with THAT number (never reuse, never go backwards) → deploy → verify live
-(site 200 + version.json shows new number + one smoke RPC) → rg_check() MUST
-be green → deploy_lock_release. Skipping ANY step = failed command.
+## 3. DEPLOY LANE — IT IS A MERGE QUEUE (CHANGE #324)
 
----
-_Retained from previous agent_memory (extra runner-learned detail not present in CLAUDE.md):_
+You do NOT take the deploy lock. You push a branch and leave; ONE merge worker
+(`medibo-merge.service`, `~/mediBO-runner/merge_worker.sh`) batches everything
+waiting, runs the FULL protected suite ONCE on the merged tree and deploys ONCE.
+Ten commands become one test run and one deploy.
 
-Deploy lane — exact order, no shortcuts. Skipping ANY step = failed command.
+Why it changed: the lane was a mutex held across test + build + deploy + verify
+with a 25-minute TTL, and each command claimed it two or three times (#309 took
+changes 820/821/823; #312 took 822/824; #307 took 819/825; #319 took 827/828).
+Five runners generated fifteen queue slots, so a 20-minute build took over an
+hour — of queueing, not building.
 
-1. `devcmd.sh rpc deploy_lock_try '{"p_agent":"runner-N","p_title":"<title>","p_ttl_minutes":25}'`. Busy → wait 60s and retry; NEVER merge to main while another agent holds the lock. Keep the returned token.
-2. `git fetch origin && git rebase origin/main` — inside the lane, not before it.
-3. `flutter test test/protected/` — MUST pass.
-4. Schema changed? `devcmd.sh rebaseline` then confirm `devcmd.sh rgcheck` prints `true`.
-5. `devcmd.sh rpc deploy_claim_number '{"p_token":"<token>","p_title":"<title>","p_branch":"main","p_commit":"pending"}'` → use `change_no` as N. Never reuse a number, never go backwards.
-6. Stamp N into `web/version.json`.
-7. `bash ~/deploy.sh <N>`.
-8. `bash ~/mediBO/scripts/verify_live.sh` (exit 2 → `node ~/render_verify.js --keys boot_status`, then re-run).
-9. `devcmd.sh rpc deploy_lock_release '{"p_token":"<token>","p_change_no":<N>,"p_commit":"<commit>","p_status":"success"}'`.
+Your whole interaction with the lane:
+1. `~/mediBO-runner/spec_rebase.sh <branch> &` the moment you start coding —
+   speculative rebase onto origin/main WHILE you work, never inside a lock.
+   `spec_rebase.sh --stop` before you push.
+2. `bash scripts/affected_tests.sh` — only the tests your change can break (its
+   own `*_test.dart` plus the protected tests that reference the files you
+   changed). The full 573 run once, on the batch. It falls back to the whole
+   protected suite when it cannot tell what a change touches.
+3. Schema changed? `devcmd.sh rebaseline` then `devcmd.sh rgcheck` = `true`,
+   BEFORE you push. The merge worker will not fix a red guard for you.
+4. `git push origin HEAD:<branch>`
+5. `devcmd.sh queue_push <cmd-id> <agent> "<title>" <branch> <commit>` →
+   `entry_id`. Then go straight back to building.
+6. `devcmd.sh queue_wait <entry_id> 1800` only when you need the change number
+   for `dev_cmd_complete`. `evicted` means your branch broke the batch: fix it,
+   push, `queue_push` again.
+7. `devcmd.sh queue_status` shows the lane any time — the same payload the app
+   draws at Dev Queue → Cron health → Deploy lane.
 
-Numbering state lives in `deploy_lock` / `deploy_registry` / `app_version_state`. Batching: when the lane frees and ≥2 workers hold ready branches, merge them in ONE lane pass → one CHANGE #, and each completed row names the shared number.
+ONE CLAIM PER COMMAND (enforced by a partial unique index on `deploy_queue`).
+A design-QA fix, a route marker and a promote go on the SAME branch and re-use
+the SAME queue slot — `queue_push` updates the entry the command already holds
+instead of taking a second one.
 
-Backend-only command (zero frontend files touched) → skip the build entirely: no flutter build, deploy nothing, complete with `p_deploy_no NULL`, and say so in the summary.
+The lane is held only for merge + deploy: 5-minute TTL, target hold under 60s,
+never across a test or a build. The merge worker works in its OWN git worktree
+(`~/medibo-merge`, `MEDIBO_REPO`), never in the `~/mediBO` checkout five runners
+are editing. A red suite is BISECTED — the offending branch is evicted and the
+rest of the batch still ships. Nothing deploys unverified: full protected suite
++ `verify_live.sh` before `deployed_at` is ever stamped.
 
+Instrumentation: `deploy_lock_release` and `merge_batch_finish` stamp
+`deployed_at` (the old code only stamped it when `p_status='deployed'` while
+every caller passed `'success'`, so all 177 rows read NULL and hold time was
+unmeasurable). Every claim records `wait_s` (queued → batched) vs `hold_s` (lock
+held), so you can see whether time goes to queueing or building.
+`deploy_lane_sweep()` rides the cron dispatcher, auto-expires any claim silent
+past its TTL, frees an orphaned lock, requeues a dead batch and raises an
+`rg_alerts` row.
+
+Persistent build cache: `~/mediBO-runner/cache.env` pins `PUB_CACHE`,
+`GRADLE_USER_HOME`, `FLUTTER_ROOT` and the Dart cache outside the repo, so the
+mandatory `flutter clean` cannot cold-start them. `scripts/warm_cache.sh` warms
+them after a VM restart.
+
+Legacy fallback ONLY when `queue_status` reports `mode_label: "MUTEX (legacy)"`
+(merge_queue.enabled = false): deploy_lock_try → rebase → protected suite →
+deploy_claim_number → stamp version.json → `bash ~/deploy.sh <N>` →
+`verify_live.sh` → deploy_lock_release, with a short TTL.
 
 
 ## PROJECT · db_lane  (priority 76, v1)

@@ -304,13 +304,36 @@ You NEVER stop, NEVER wait for a human, NEVER leave a row half-updated.
 - Finish EVERY command with exactly one of: dev_cmd_complete / dev_cmd_fail /
   dev_cmd_ask. A row left in 'building' is a bug you caused.
 
-## 3. DEPLOY LANE — EXACT SEQUENCE, NO SHORTCUTS
-deploy_lock_try → if busy wait 60s retry (NEVER merge to main while another
-agent holds the lock) → git fetch + rebase onto origin/main → flutter test
-test/protected/ (MUST pass) → build → deploy_claim_number → stamp version.json
-with THAT number (never reuse, never go backwards) → deploy → verify live
-(site 200 + version.json shows new number + one smoke RPC) → rg_check() MUST
-be green → deploy_lock_release. Skipping ANY step = failed command.
+## 3. DEPLOY LANE — IT IS A MERGE QUEUE (CHANGE #324)
+You do NOT take the deploy lock. You push a branch and leave; ONE merge worker
+(`medibo-merge.service`) batches everything waiting, runs the full protected
+suite ONCE on the merged tree and deploys ONCE.
+
+  spec_rebase.sh <branch> &      # rebase onto origin/main WHILE you work
+  scripts/affected_tests.sh      # only the tests your change can break
+  devcmd.sh rebaseline && rgcheck  # if you changed the schema — before pushing
+  git push origin HEAD:<branch>
+  devcmd.sh queue_push <cmd-id> <agent> "<title>" <branch> <commit>
+  devcmd.sh queue_wait <entry_id>  # → the change_no for dev_cmd_complete
+
+ONE CLAIM PER COMMAND. A design-QA fix, a route marker and a promote go on the
+SAME branch and re-use the SAME queue slot — `queue_push` updates the entry the
+command already holds. Claiming the lane two or three times per command is what
+turned five runners into fifteen queue slots and a 20-minute build into an hour.
+
+The lane is held only for merge + deploy (target under 60s, 5-minute TTL), never
+across a test or a build. `deployed_at` is stamped on release, any claim silent
+past its TTL is auto-expired by `deploy_lane_sweep` and alerted, and every claim
+records `wait_s` vs `hold_s` so queueing is visible. Watch it with
+`devcmd.sh queue_status` or Dev Queue → Cron health → Deploy lane.
+
+Nothing deploys unverified: the batch still runs the whole protected suite,
+still runs `verify_live.sh`, and a red suite is bisected (only the offending
+branch is evicted; the rest still ships). rg_check() MUST be green.
+
+Legacy fallback ONLY when `queue_status` says `MUTEX (legacy)`: deploy_lock_try
+→ rebase → protected suite → deploy_claim_number → stamp version.json → deploy
+→ verify live → deploy_lock_release, with a short TTL.
 
 ## 4. BUILD RULES
 - Max-backend: logic, strings, labels, formatting live in Supabase.

@@ -120,16 +120,81 @@ void main() {
         reason: 'the scan must be posted somewhere Om can read it');
   });
 
-  test('home_shell.dart is still on the list until it is actually sharded', () {
-    // #327 LAYER 1 deferred the home_shell shard to #340 because the file was
-    // leased for the whole command. This test is the receipt: when #340 lands,
-    // this expectation flips and whoever does it must come here and say so —
-    // which is exactly the moment to check the shards are real.
-    final shell = files.where((f) => f['path'] == 'lib/screens/home_shell.dart');
-    expect(shell, hasLength(1),
-        reason: 'home_shell.dart left the god-file list — if it was sharded, '
-            'update this test to assert the shards instead');
-    expect((shell.first['concerns'] as List).length, greaterThan(1),
-        reason: 'it is the multi-concern case the whole layer exists for');
+  test('CHANGE #340 — the shell stopped mixing concerns', () {
+    // #327 wrote a tripwire here: "home_shell.dart left the god-file list — if
+    // it was sharded, update this test to assert the shards instead". #340
+    // sharded it and the tripwire fired; this is that update.
+    //
+    // The spec predicted the file would leave the list entirely at ~1,300
+    // lines. It does not, and that prediction was simply arithmetic against
+    // the wrong number: the oversize threshold is 900, so 1,396 is still over
+    // it. Raising the threshold to make this green would be gaming the guard,
+    // so the assertion is the thing that actually mattered instead.
+    //
+    // What the shard fixed is CONCERN COUNT, not size. 5,120 lines carrying
+    // nine concerns (boot/routing, navigation, auth, cart, search, profile,
+    // catalog, admin, orders) became 1,396 lines carrying ONE: boot/routing.
+    // Nine concerns in one file is why a partner-routing command and a
+    // dashboard command collided on it; one concern is why they no longer can.
+    //
+    // Nothing here is conditional on the shell APPEARING in the report: an
+    // `if (present)` wrapper turns this into a test that passes by asserting
+    // nothing the day a path rename or a scanner regression drops the file off
+    // the list — which is exactly the day it needs to fail.
+    final shell =
+        files.where((f) => f['path'] == 'lib/screens/home_shell.dart').toList();
+    final shellLines =
+        File('lib/screens/home_shell.dart').readAsLinesSync().length;
+    expect(shellLines, lessThan(2000),
+        reason: 'the shell is growing back towards the 5,120 lines it was');
+    if (shell.isEmpty) {
+      // Leaving the register is legitimate ONLY by getting small enough to be
+      // under both rules. Missing while still oversize means the scanner
+      // stopped seeing it, and every assertion below would be vacuous.
+      expect(shellLines, lessThanOrEqualTo(900),
+          reason: 'home_shell.dart is absent from the god-file report while '
+              'still $shellLines lines — the scanner stopped seeing it');
+    } else {
+      final f = shell.single;
+      expect(f['multi_concern'], isFalse,
+          reason: 'the shell has started mixing concerns again — that is the '
+              'property that made it a collision point, not its size');
+      expect((f['concerns'] as List), equals(['boot/routing']),
+          reason: 'the shell keeps exactly one job: boot and routing');
+    }
+  });
+
+  test('CHANGE #340 — the eight shards exist, and none is oversize', () {
+    // The failure mode of any shard is trading one 5k-line file for one 4k-line
+    // file and seven stubs. Every part must be a bounded piece of work.
+    const parts = [
+      'shell_mobile_chrome', 'shell_cart_panel', 'shell_login_panel',
+      'shell_bottom_bars', 'shell_header_chrome', 'shell_admin_chrome',
+      'shell_sidebar', 'shell_view_as',
+    ];
+    final byPath = {for (final f in files) f['path'] as String: f};
+    final shellSrc = File('lib/screens/home_shell.dart').readAsStringSync();
+
+    for (final part in parts) {
+      final path = 'lib/screens/shell/$part.dart';
+      expect(File(path).existsSync(), isTrue, reason: '$path is missing');
+      // Wired into the library, or its private widgets vanish from the shell.
+      expect(shellSrc, contains("part 'shell/$part.dart';"),
+          reason: '$part is not wired into home_shell.dart');
+      // Three parts still carry more than one concern and are legitimately
+      // flagged for it; none of them may be OVERSIZE, which would mean the
+      // shard merely moved the bulk somewhere else.
+      // Asserted from the FILE, not from the report, so a part that is absent
+      // from the register is still checked rather than silently skipped.
+      final partLines = File(path).readAsLinesSync().length;
+      expect(partLines, lessThanOrEqualTo(900),
+          reason: '$path is $partLines lines — the shard moved the debt '
+              'instead of paying it');
+      final f = byPath[path];
+      if (f != null) {
+        expect(f['oversize'], isFalse,
+            reason: '$path is flagged oversize by the scanner');
+      }
+    }
   });
 }

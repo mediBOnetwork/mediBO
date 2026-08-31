@@ -37,10 +37,15 @@ List<Map<String, dynamic>> _list(Object? v) =>
 String _s(Object? v) => v?.toString() ?? '';
 
 class AdminBulkScreen extends StatefulWidget {
-  const AdminBulkScreen({super.key, this.rpc, this.saveFile});
+  const AdminBulkScreen({super.key, this.rpc, this.saveFile, this.initialTab = 0});
 
   final BulkRpc? rpc;
   final BulkSaveFile? saveFile;
+
+  /// Which tab opens first: 0 Bulk edit, 1 Exports, 2 History. The registry
+  /// ships two features (Bulk actions, Exports) that share this screen, so the
+  /// router says which one the tile meant.
+  final int initialTab;
 
   @override
   State<AdminBulkScreen> createState() => _AdminBulkScreenState();
@@ -234,6 +239,7 @@ class _AdminBulkScreenState extends State<AdminBulkScreen> {
     final blocked = d != null && d['ok'] != true;
     return DefaultTabController(
       length: 3,
+      initialIndex: widget.initialTab,
       child: Scaffold(
         backgroundColor: Ds.c.bg,
         appBar: AppBar(

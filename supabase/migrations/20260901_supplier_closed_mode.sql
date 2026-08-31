@@ -109,60 +109,149 @@ end $$;
 -- When a supplier closes while an inquiry is sitting on him, move that inquiry
 -- on NOW and write NOTHING into his answer slot. Waiting for the ten-minute
 -- timeout would cost the customer ten minutes AND cost him a 'No response'.
+-- WHERE THE SKIP ACTUALLY LIVES.
+--
+-- `inquiry.current_supplier` is not a column you set — it is DERIVED. The
+-- BEFORE INSERT OR UPDATE trigger `t2_current_supplier_trg` recomputes it from
+-- the PS/AS slots on every single write, so the first version of this change
+-- (which computed a new current_supplier and UPDATEd it) reported "46 inquiries
+-- moved" while all 46 rows still pointed at the shop that had just closed: the
+-- trigger recomputed the same answer straight back over it.
+--
+-- So the skip goes in the trigger, next to the `status ILIKE 'active'` check
+-- that is already there for exactly this purpose — one authority deciding who
+-- is next, not two disagreeing. Everything else follows for free: any write to
+-- the row re-derives the right supplier, and reopening needs no restore logic
+-- because the AS slots were never written.
+create or replace function public.compute_current_supplier_fx()
+returns trigger
+language plpgsql
+security definer
+set search_path to 'public'
+as $function$
+DECLARE
+  i int; ps_val text; as_val text; v_canon text; found int := 0; v_mode text;
+BEGIN
+  IF NEW.inquiry_phase = 'sent' THEN RETURN NEW; END IF;
+
+  SELECT value #>> '{}' INTO v_mode FROM app_settings WHERE key = 'allocation_mode';
+  v_mode := COALESCE(v_mode, 'first_available');
+
+  IF v_mode = 'fewest_baskets' AND NEW.manual_supplier IS NOT NULL AND btrim(NEW.manual_supplier) <> '' THEN
+    SELECT sp.supplier_name INTO v_canon
+    FROM supplier_profiles sp
+    WHERE lower(btrim(sp.supplier_name)) = lower(btrim(NEW.manual_supplier))
+      AND sp.status ILIKE 'active'
+    ORDER BY sp."SPN" DESC NULLS LAST LIMIT 1;
+    IF v_canon IS NOT NULL THEN
+      NEW.current_supplier := v_canon;
+      NEW.next_supplier := NULL;
+      RETURN NEW;
+    END IF;
+  END IF;
+
+  IF v_mode = 'fewest_baskets' AND TG_OP = 'UPDATE' THEN
+    RETURN NEW;
+  END IF;
+
+  NEW.current_supplier := NULL;
+  NEW.next_supplier    := NULL;
+  FOR i IN 1..30 LOOP
+    EXECUTE format('SELECT ($1).%I, ($1).%I','PS'||i,'AS'||i) INTO ps_val, as_val USING NEW;
+    IF ps_val IS NULL OR btrim(ps_val) = '' THEN EXIT; END IF;
+
+    SELECT sp.supplier_name INTO v_canon
+    FROM supplier_profiles sp
+    WHERE lower(btrim(sp.supplier_name)) = lower(btrim(ps_val))
+      AND sp.status ILIKE 'active'
+    ORDER BY sp."SPN" DESC NULLS LAST LIMIT 1;
+
+    IF v_canon IS NULL THEN CONTINUE; END IF;
+    -- cmd #401: a shut shop is passed over exactly like an inactive one. His
+    -- slot and his (empty) answer are left alone, so when the closure ends the
+    -- next write to this row puts him back in the same position.
+    IF public.supplier_closed_now(v_canon) THEN CONTINUE; END IF;
+
+    IF as_val IS NULL OR btrim(as_val) = '' OR as_val = 'Available' THEN
+      found := found + 1;
+      IF found = 1 THEN
+        NEW.current_supplier := v_canon;
+      ELSIF found = 2 THEN
+        NEW.next_supplier := v_canon;
+        EXIT;
+      END IF;
+    END IF;
+  END LOOP;
+
+  RETURN NEW;
+END;
+$function$;
+
+-- The nudge. The trigger only fires on a write, so a closure (or a reopening)
+-- has to touch the rows whose answer it changes. Rows frozen at
+-- inquiry_phase='sent' are the one case the trigger opts out of, so those go
+-- back to 'draft' first: a shop that is shut is not a shop we are still waiting
+-- on, and leaving the row 'sent' is exactly what would earn him the
+-- 'No response' this feature exists to prevent.
 create or replace function public._inquiry_advance_past_closed(p_supplier text)
 returns integer
 language plpgsql
 security definer
 set search_path to 'public'
-as $$
-declare v_id bigint; r inquiry%rowtype; i int; v_ps text; v_as text;
-        new_current text; new_next text; found_ct int; v_moved int := 0;
+as $fn$
+declare v_moved int := 0;
 begin
   if coalesce(btrim(p_supplier),'') = '' then return 0; end if;
 
-  for v_id in
-    select id from inquiry
-     where lower(btrim(coalesce(current_supplier,''))) = lower(btrim(p_supplier))
-  loop
-    select * into r from inquiry where id = v_id;
-    new_current := null; new_next := null; found_ct := 0;
-    for i in 1..30 loop
-      execute format('select ($1).%I, ($1).%I','PS'||i,'AS'||i) into v_ps, v_as using r;
-      exit when v_ps is null or btrim(v_ps) = '';
-      -- The same eligibility test the sweep uses, plus the closed check. An
-      -- unanswered slot stays unanswered: that is what makes reopening free.
-      if (v_as is null or btrim(v_as) = '' or v_as = 'Available')
-         and not public.supplier_closed_now(v_ps) then
-        found_ct := found_ct + 1;
-        if found_ct = 1 then new_current := v_ps;
-        elsif found_ct = 2 then new_next := v_ps; exit; end if;
-      end if;
-    end loop;
+  update inquiry
+     set inquiry_phase = 'draft', asked_at = null
+   where lower(btrim(coalesce(current_supplier,''))) = lower(btrim(p_supplier))
+     and coalesce(inquiry_phase,'draft') = 'sent';
 
-    update inquiry
-       set current_supplier = new_current,
-           next_supplier    = new_next,
-           asked_at         = case when new_current is not null then now() else null end,
-           inquiry_phase    = case when new_current is not null then inquiry_phase else 'draft' end
-     where id = v_id;
-    v_moved := v_moved + 1;
+  -- Writing the column back to itself is what makes the trigger re-derive it,
+  -- and the trigger now knows he is closed.
+  update inquiry
+     set current_supplier = current_supplier
+   where lower(btrim(coalesce(current_supplier,''))) = lower(btrim(p_supplier));
+  get diagnostics v_moved = row_count;
 
-    if new_current is not null then
-      insert into inquiry_forms (supplier_name, last_sent_at, expires_at, status)
-      values (new_current, now(), now() + interval '10 minutes','pending')
-      on conflict on constraint inquiry_forms_supplier_name_key do update set
-        last_sent_at = now(), expires_at = now() + interval '10 minutes', status = 'pending';
-    end if;
-  end loop;
-
-  -- His own pending form is dead the moment he closes; a responded form is a
-  -- receipt and is never touched.
   delete from inquiry_forms
    where lower(btrim(supplier_name)) = lower(btrim(p_supplier))
      and status not in ('responded','partially_responded');
 
   return v_moved;
-end $$;
+end $fn$;
+
+-- Reopening is the same nudge in reverse: touch every row where he still holds
+-- a slot the trigger would accept, and it puts him back at his own rank.
+--
+-- The eligibility test here MUST be the trigger's, not a stricter one. The
+-- first version matched only an EMPTY answer slot and restored 14 of 46
+-- inquiries: 31 of his slots read 'Available', which the trigger treats as
+-- eligible and this function did not, so those rows stayed parked on the
+-- supplier they had been handed to. Two definitions of "eligible" in two places
+-- is the same class of bug as two definitions of "current supplier".
+create or replace function public._inquiry_readmit_supplier(p_supplier text)
+returns integer
+language plpgsql
+security definer
+set search_path to 'public'
+as $fn$
+declare v_n int := 0; i int;
+begin
+  if coalesce(btrim(p_supplier),'') = '' then return 0; end if;
+  for i in 1..30 loop
+    execute format(
+      'update inquiry set current_supplier = current_supplier
+         where lower(btrim(coalesce(%1$I,''''))) = lower(btrim($1))
+           and (%2$I is null or btrim(%2$I) = '''' or %2$I = ''Available'')
+           and coalesce(inquiry_phase,''draft'') <> ''sent''',
+      'PS'||i, 'AS'||i) using p_supplier;
+  end loop;
+  select count(*) into v_n from inquiry
+   where lower(btrim(coalesce(current_supplier,''))) = lower(btrim(p_supplier));
+  return v_n;
+end $fn$;
 
 -- ── write side ──────────────────────────────────────────────────────────────
 create or replace function public._supplier_close(p_supplier text, p_until timestamptz,
@@ -206,8 +295,10 @@ begin
   update supplier_closure set reopened_at = now()
    where lower(btrim(supplier_name)) = lower(btrim(coalesce(p_supplier,'')))
      and reopened_at is null and (ends_at is null or ends_at > now());
-  -- Nothing to restore: his PS slots never moved and his AS slots were never
-  -- written, so he is back in the waterfall exactly where he was.
+  -- Nothing to UNDO: his PS slots never moved and his AS slots were never
+  -- written. All that is needed is a write on those rows so the trigger
+  -- re-derives with him eligible again.
+  perform public._inquiry_readmit_supplier(p_supplier);
   return jsonb_build_object('ok', true,
                             'state', public.supplier_closure_state(p_supplier),
                             'message', _c('supplier.reopen_toast'));
@@ -470,6 +561,7 @@ on conflict (key) do nothing;
 revoke execute on function public.supplier_closed_now(text) from public, anon;
 revoke execute on function public.supplier_closure_state(text) from public, anon;
 revoke execute on function public._inquiry_advance_past_closed(text) from public, anon;
+revoke execute on function public._inquiry_readmit_supplier(text) from public, anon;
 revoke execute on function public._supplier_close(text, timestamptz, text, text) from public, anon;
 revoke execute on function public._supplier_reopen(text) from public, anon;
 revoke execute on function public.supplier_close_shop(timestamptz, text) from public, anon;

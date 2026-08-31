@@ -340,6 +340,15 @@ class _OpsBoardCard extends StatelessWidget {
       _ => Ds.c.infoSoft,
     };
 
+    // Boot-time proof (same pattern as #325's profile surface): a string in the
+    // bundle only proves the code compiled. This key is written when the card
+    // actually paints on the admin home, so render_verify.js can assert the
+    // entry point exists on the live build rather than in the source.
+    try {
+      RenderLog.write('c356_ops_board',
+          'headline=${s('headline_label')};classes=${payload['items'] is List ? (payload['items'] as List).length : 0}');
+    } catch (_) {}
+
     return Padding(
       padding: EdgeInsets.only(bottom: Ds.space.x16),
       child: InkWell(

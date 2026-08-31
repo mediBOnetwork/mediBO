@@ -23,3 +23,11 @@ grant all on table public.supplier_coverage to service_role;
 -- both authenticated.
 revoke execute on function public.supplier_set_packed(text, boolean, text, timestamptz, integer) from public, anon;
 grant  execute on function public.supplier_set_packed(text, boolean, text, timestamptz, integer) to authenticated, service_role;
+
+-- Design QA (live capture): the home tile reused the full-screen empty sentence
+-- and truncated mid-word at tile width. supplier_coverage_get() now returns its
+-- own short tile_sub, pluralised in SQL like every other count string.
+insert into ui_copy(key, value) values
+  ('supplier.cov_tile_none', to_jsonb('None declared yet'::text)),
+  ('supplier.cov_tile_n',    to_jsonb('{n} declared'::text))
+on conflict (key) do update set value = excluded.value;

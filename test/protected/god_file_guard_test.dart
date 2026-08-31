@@ -136,11 +136,26 @@ void main() {
     // catalog, admin, orders) became 1,396 lines carrying ONE: boot/routing.
     // Nine concerns in one file is why a partner-routing command and a
     // dashboard command collided on it; one concern is why they no longer can.
-    final shell = files.where((f) => f['path'] == 'lib/screens/home_shell.dart');
-    if (shell.isNotEmpty) {
-      final f = shell.first;
-      expect((f['lines'] as num).toInt(), lessThan(2000),
-          reason: 'the shell is growing back towards the 5,120 lines it was');
+    //
+    // Nothing here is conditional on the shell APPEARING in the report: an
+    // `if (present)` wrapper turns this into a test that passes by asserting
+    // nothing the day a path rename or a scanner regression drops the file off
+    // the list — which is exactly the day it needs to fail.
+    final shell =
+        files.where((f) => f['path'] == 'lib/screens/home_shell.dart').toList();
+    final shellLines =
+        File('lib/screens/home_shell.dart').readAsLinesSync().length;
+    expect(shellLines, lessThan(2000),
+        reason: 'the shell is growing back towards the 5,120 lines it was');
+    if (shell.isEmpty) {
+      // Leaving the register is legitimate ONLY by getting small enough to be
+      // under both rules. Missing while still oversize means the scanner
+      // stopped seeing it, and every assertion below would be vacuous.
+      expect(shellLines, lessThanOrEqualTo(900),
+          reason: 'home_shell.dart is absent from the god-file report while '
+              'still $shellLines lines — the scanner stopped seeing it');
+    } else {
+      final f = shell.single;
       expect(f['multi_concern'], isFalse,
           reason: 'the shell has started mixing concerns again — that is the '
               'property that made it a collision point, not its size');
@@ -169,11 +184,16 @@ void main() {
       // Three parts still carry more than one concern and are legitimately
       // flagged for it; none of them may be OVERSIZE, which would mean the
       // shard merely moved the bulk somewhere else.
+      // Asserted from the FILE, not from the report, so a part that is absent
+      // from the register is still checked rather than silently skipped.
+      final partLines = File(path).readAsLinesSync().length;
+      expect(partLines, lessThanOrEqualTo(900),
+          reason: '$path is $partLines lines — the shard moved the debt '
+              'instead of paying it');
       final f = byPath[path];
       if (f != null) {
         expect(f['oversize'], isFalse,
-            reason: '$path is over 900 lines — the shard moved the debt '
-                'instead of paying it');
+            reason: '$path is flagged oversize by the scanner');
       }
     }
   });

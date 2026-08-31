@@ -83,6 +83,46 @@ class RowLiveness {
   }
 }
 
+/// CHANGE #369 — the finish gate, as the card reads it.
+///
+/// #355 finished its work — 12/12 steps, CHANGE #855 live, QA green — and then
+/// kept running for fifteen minutes while its card still said `building`. The
+/// gate that ends that lives entirely in the backend: it observes every
+/// completion condition, completes the row itself, and interrupts the agent's
+/// turn. This class is the card's HALF of that contract, and its whole job is
+/// to make one thing impossible — Dart deciding for itself that a build looks
+/// finished.
+///
+/// So there is deliberately no `stepsDone == stepsTotal` here. Readiness is a
+/// backend verdict (`finish_ready_at` stamped, rendered as `finish_chip`), and
+/// a payload that sends no chip means "not ready" — never "work it out".
+class RowFinish {
+  final Map<String, dynamic> row;
+  const RowFinish(this.row);
+
+  /// The sentence, composed by dev_cmd_list from ui_copy. Empty = no chip.
+  String get label => (row['finish_chip'] ?? '').toString();
+
+  /// The tone NAME the backend chose; the screen resolves it via toneByName.
+  String get tone => (row['finish_tone'] ?? 'neutral').toString();
+
+  /// Was this row closed by the harness rather than by the model? The backend
+  /// stamps it at completion; absent degrades to false.
+  bool get autoFinished => row['auto_finished'] == true;
+
+  /// 'harness' (the heartbeat detector) or 'watchdog' (the server-side
+  /// backstop) — printed verbatim wherever the source matters.
+  String get source => (row['auto_finish_source'] ?? '').toString();
+
+  /// What is still holding the row open, in the backend's own words. Used by
+  /// the detail screen; the card only needs [label].
+  List<String> get blockers => (row['finish_blockers'] is List)
+      ? (row['finish_blockers'] as List).map((e) => e.toString()).toList()
+      : const <String>[];
+
+  bool get show => label.isNotEmpty;
+}
+
 /// The live-view badge. Honest in BOTH directions: the backend measures whether
 /// the bridge is genuinely reachable and sends the label and the tone, so "off"
 /// is a visible state rather than a missing chip.

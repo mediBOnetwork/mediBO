@@ -383,3 +383,142 @@ grant execute on function dev_cmd_autofinish(bigint, text)  to service_role, aut
 grant execute on function dev_cmd_autofinish_sweep()        to service_role, authenticated;
 grant execute on function _dev_finish_proofs(bigint)        to service_role, authenticated;
 grant execute on function _c_or(text, text)                 to service_role, authenticated, anon;
+
+-- ── 8. THE CARD SAYS IT ─────────────────────────────────────────────────────
+-- A gate Om cannot see is a gate he cannot trust. Two chips, both composed
+-- here and rendered verbatim: "closing automatically" while a building row sits
+-- green, and "auto-completed by the harness" on the finished row afterwards.
+-- Both are cheap column reads — the full evaluation is never run per row.
+create or replace function dev_cmd_list(p_status text default null, p_search text default null,
+                                        p_batch text default null, p_limit integer default 100)
+returns jsonb language plpgsql security definer set search_path to 'public' as $function$
+declare v_rows jsonb; v_counts jsonb; v_tat numeric; v_stale numeric;
+        t_steps text; t_live text; t_stall text; t_resume text; t_ssteps text; t_shint text;
+        t_fready text; t_fauto text;
+begin
+  perform _dev_guard();
+  v_tat := _dev_cmd_base_tat();
+  select coalesce((value->>'eta_stale_s')::numeric, 180) into v_stale
+    from dev_runner_config where key='worker_pool';
+  v_stale := coalesce(v_stale, 180);
+  select value#>>'{}' into t_steps  from ui_copy where key='dev_queue.steps_chip';
+  select value#>>'{}' into t_live   from ui_copy where key='dev_queue.live_stale';
+  select value#>>'{}' into t_stall  from ui_copy where key='dev_queue.stall_chip';
+  select value#>>'{}' into t_resume from ui_copy where key='dev_queue.resume_chip';
+  select value#>>'{}' into t_ssteps from ui_copy where key='dev_queue.steps_stale_chip';
+  select value#>>'{}' into t_shint  from ui_copy where key='dev_queue.steps_stale_hint';
+  t_fready := _c_or('dev_queue.finish_ready_chip', '✅ All conditions met — closing automatically');
+  t_fauto  := _c_or('dev_queue.finish_auto_chip',  '🤖 Auto-completed by the harness');
+
+  select coalesce(jsonb_agg(to_jsonb(t) order by t.created_at desc, t.id desc), '[]') into v_rows from (
+    select dc.id, _dev_title(dc.title, dc.build_log) as title, dc.status, dc.priority, dc.urgent, dc.depends_on, dc.batch_label,
+           dc.route, dc.area,
+           _route_label(dc.route) as route_label, _route_tone(dc.route) as route_tone,
+           _area_label(dc.area) as area_label,
+           (dc.enriched_spec is not null and length(coalesce(dc.enriched_spec,'')) > 0) as has_enriched,
+           case when dc.route='fast' and dc.status='completed' then 'Instant · 0 tokens' else '' end as speed_display,
+           coalesce(dc.kind,'dev') as kind, coalesce(dc.is_danger,false) as is_danger,
+           coalesce(dc.plain_summary,'') as plain_summary,
+           dc.targets_web, dc.targets_android, dc.targets_ios,
+           dc.web_deploy_no, dc.web_deployed_at, dc.android_status, dc.android_artifact_url, dc.android_built_at, dc.ios_status,
+           dc.android_build_type, dc.debug_requested, dc.debug_status,
+           dc.result_summary, dc.decisions, dc.screenshots, dc.error_log, dc.retry_count,
+           dc.cost_input_tokens, dc.cost_output_tokens, dc.cost_inr, dc.claimed_by, dc.heartbeat_at,
+           coalesce(dc.model,'') as model, coalesce(dc.effort,'') as effort, coalesce(dc.price_mode,'') as price_mode,
+           _dev_model_chip(dc.model, dc.effort, dc.price_mode) as model_chip,
+           case when (dc.cost_input_tokens > 0 or dc.cost_output_tokens > 0)
+                then ('₹' || to_char(round(dc.cost_inr), 'FM9,99,99,990')) || ' — API-equivalent (included in your Max plan · ₹0 extra)'
+                else '' end as cost_note,
+           (dc.cost_input_tokens + dc.cost_output_tokens) as tokens_total,
+           _fmt_tokens(dc.cost_input_tokens + dc.cost_output_tokens) as tokens_display,
+           '₹' || to_char(round(dc.cost_inr), 'FM9,99,99,990') as cost_display,
+           (dc.cost_input_tokens > 0 or dc.cost_output_tokens > 0) as has_tokens,
+           _ist_age(coalesce(dc.finished_at, dc.started_at, dc.created_at)) as age_display,
+           dc.needs_input_question, dc.rolled_back, dc.created_at, dc.started_at, dc.finished_at,
+           left(dc.build_log, 4000) as build_log_tail,
+           tm.tat_seconds, tm.tat_display, tm.eta_at, tm.elapsed_seconds, tm.elapsed_display,
+           tm.remaining_seconds, tm.remaining_display, tm.is_overrun, tm.has_eta, tm.eta_note,
+           dc.eta_total_s, dc.eta_left_s,
+           case when dc.status in ('completed','failed') then tm.ttt_display else '' end as ttt_display,
+           -- ── CHANGE #233: checkpoint + liveness ──────────────────────────
+           coalesce(dc.steps, '[]'::jsonb) as steps,
+           dc.steps_done, dc.steps_total, dc.resume_count,
+           coalesce(dc.resume_branch,'') as resume_branch,
+           coalesce(dc.release_reason,'') as release_reason,
+           case when coalesce(dc.steps_total,0) > 0
+                then replace(replace(coalesce(t_steps,'Step {done} of {total}'),
+                       '{done}', coalesce(dc.steps_done,0)::text), '{total}', dc.steps_total::text)
+                else '' end as steps_chip,
+           (dc.status='building' and dc.heartbeat_at is not null
+              and dc.heartbeat_at > now() - (v_stale || ' seconds')::interval) as is_live,
+           case when dc.status='building'
+                 and (dc.heartbeat_at is null
+                      or dc.heartbeat_at <= now() - (v_stale || ' seconds')::interval)
+                then replace(coalesce(t_live,'Worker offline — no heartbeat for {age}'), '{age}',
+                       _fmt_dur(coalesce(extract(epoch from now()-dc.heartbeat_at), 0)))
+                else '' end as live_chip,
+           case when dc.status='building' and coalesce(dc.token_stall_flagged,false)
+                then replace(coalesce(t_stall,'Tokens frozen {age} — build may be stuck'), '{age}',
+                       _fmt_dur(coalesce(extract(epoch from now()-dc.token_stall_at), 0)))
+                else '' end as stall_chip,
+           -- CHANGE #350 — a checklist that stopped moving while the build
+           -- kept spending is visibly UNTRUSTED, never silently wrong.
+           case when dc.status='building' and coalesce(dc.steps_stale_flagged,false)
+                then replace(coalesce(t_ssteps,'Steps not being reported — checklist may be stale ({age})'), '{age}',
+                       _fmt_dur(coalesce(extract(epoch from now()-dc.steps_stale_at), 0)))
+                else '' end as steps_stale_chip,
+           case when dc.status='building' and coalesce(dc.steps_stale_flagged,false)
+                then coalesce(t_shint,'') else '' end as steps_stale_hint,
+           coalesce(dc.steps_auto_count,0) as steps_auto_count,
+           coalesce(dc.steps_nudge_count,0) as steps_nudge_count,
+           case when coalesce(dc.resume_count,0) > 0
+                then replace(coalesce(t_resume,'Resumed {n}×'), '{n}', dc.resume_count::text)
+                else '' end as resume_chip,
+           -- ── CHANGE #369: the finish gate, on the card ───────────────────
+           -- Om's answer to "is this thing actually done?" without opening it.
+           case when dc.status='completed' and coalesce(dc.auto_finished,false) then t_fauto
+                when dc.status='building' and dc.finish_ready_at is not null then t_fready
+                else '' end as finish_chip,
+           case when dc.status='completed' and coalesce(dc.auto_finished,false) then 'success'
+                when dc.status='building' and dc.finish_ready_at is not null then 'info'
+                else 'neutral' end as finish_tone,
+           coalesce(dc.auto_finished,false) as auto_finished,
+           coalesce(dc.auto_finish_source,'') as auto_finish_source,
+           coalesce(dc.finish_blockers,'[]'::jsonb) as finish_blockers,
+           dc.finish_ready_at,
+           -- ────────────────────────────────────────────────────────────────
+           dc.qa_status, dc.qa_required, dc.preview_status, dc.journey_pass_count,
+           (select count(*) from qa_findings qf where qf.command_id=dc.id and qf.status='open') as qa_open_findings,
+           case when not dc.qa_required or dc.qa_status='waived' then ''
+                when dc.qa_status='pending' then ''
+                when dc.qa_status='running' then '🔍 QA testing'
+                when dc.qa_status='passed' then '✅ QA passed'
+                when dc.qa_status='failed' then '❌ QA: '||(select count(*) from qa_findings qf where qf.command_id=dc.id and qf.status='open')||' finding(s)'
+                else '' end as qa_chip,
+           case when dc.qa_status='waived' then 'neutral'
+                when dc.qa_status='running' then 'info'
+                when dc.qa_status='passed' then 'success'
+                when dc.qa_status='failed' then 'error' else 'neutral' end as qa_tone,
+           case coalesce(dc.preview_status,'')
+                when 'deployed' then '🔎 On preview'
+                when 'promoted' then '🚀 Promoted' else '' end as preview_chip,
+           case coalesce(dc.preview_status,'')
+                when 'deployed' then 'info' when 'promoted' then 'success' else 'neutral' end as preview_tone,
+           _dev_chain_chip(dc.status, dc.chain_reason) as chain_chip,
+           'info'::text as chain_tone,
+           coalesce(dc.predicted_files,'{}') as predicted_files,
+           case when dc.journey_pass_count > 0
+                then '🧭 '||dc.journey_pass_count||' journey'||case when dc.journey_pass_count=1 then '' else 's' end||' green'
+                else '' end as journey_chip,
+           (select count(*) from dev_command_messages m where m.command_id = dc.id) as msg_count
+    from dev_commands dc,
+         lateral _dev_cmd_timing(dc.started_at, dc.finished_at, dc.status, v_tat,
+                                 dc.eta_total_s, dc.eta_left_s, dc.heartbeat_at, dc.eta_note) tm
+    where (p_status is null or dc.status = p_status)
+      and (p_batch is null or dc.batch_label = p_batch)
+      and (p_search is null or dc.title ilike '%'||p_search||'%' or dc.spec ilike '%'||p_search||'%' or coalesce(dc.result_summary,'') ilike '%'||p_search||'%')
+    order by dc.created_at desc, dc.id desc limit p_limit
+  ) t;
+  select coalesce(jsonb_object_agg(status, n), '{}') into v_counts from (select status, count(*) n from dev_commands group by status) c;
+  return jsonb_build_object('rows', v_rows, 'counts', v_counts, 'screen_title', 'Dev Queue');
+end $function$;

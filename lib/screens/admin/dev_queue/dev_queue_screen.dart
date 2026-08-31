@@ -582,6 +582,7 @@ class _Row extends StatelessWidget {
 
     final claimedBy = (row['claimed_by'] ?? '').toString();
     final live = RowLiveness(row);
+    final finish = RowFinish(row);
     final timing = _timingChip(status);
     final footer = <Widget>[
       // A worker name next to a dead heartbeat is the exact lie #229/#230 told
@@ -662,6 +663,15 @@ class _Row extends StatelessWidget {
         ToneChip(
             label: (row['journey_chip']).toString(),
             tone: statusTone('completed')),
+      // CHANGE #369 — the finish gate. While a build sits with every condition
+      // observed the card says it is closing itself; afterwards it says the
+      // harness, not the model, closed it. Both sentences are composed by
+      // dev_cmd_list from ui_copy — Dart adds only the glyph.
+      if (finish.show)
+        ToneChip(
+            label: finish.label,
+            tone: toneByName(finish.tone),
+            icon: Icons.task_alt),
       // CHANGE #327 — the auto-chain. A pending command whose predicted files
       // collide with something in flight says so on its own card: it is queued
       // behind that command, not parked mid-build against a lease. The sentence

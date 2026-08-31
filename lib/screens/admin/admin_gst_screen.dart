@@ -17,8 +17,16 @@ import '../../utils/render_log.dart';
 /// backend, every heading comes from `ui_copy`, every column header and its
 /// alignment arrive in the payload, and the only thing mapped here is a
 /// backend `tone` onto a design token.
+typedef GstRpc = Future<Map<String, dynamic>> Function(
+    String fn, Map<String, dynamic> params);
+
 class AdminGstScreen extends StatefulWidget {
-  const AdminGstScreen({super.key});
+  /// Test seam. Null in production → the real RPCs. The protected test pumps
+  /// this screen against a fixture payload, which is the only way to prove a
+  /// canvas app renders the backend's own strings and not its own.
+  final GstRpc? rpc;
+
+  const AdminGstScreen({super.key, this.rpc});
 
   @override
   State<AdminGstScreen> createState() => _AdminGstScreenState();
@@ -77,17 +85,23 @@ class _AdminGstScreenState extends State<AdminGstScreen> {
     _load();
   }
 
+  Future<Map<String, dynamic>> _rpc(String fn, Map<String, dynamic> params) async {
+    final seam = widget.rpc;
+    if (seam != null) return seam(fn, params);
+    final res = await Supabase.instance.client.rpc(fn, params: params);
+    return Map<String, dynamic>.from(res as Map);
+  }
+
   Future<void> _load() async {
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
-      final res = await Supabase.instance.client.rpc('admin_gst_screen',
-          params: {'p_period': _period});
+      final res = await _rpc('admin_gst_screen', {'p_period': _period});
       if (!mounted) return;
       setState(() {
-        _data = Map<String, dynamic>.from(res as Map);
+        _data = res;
         _period = '${_data?['period_key'] ?? ''}';
         _loading = false;
       });
@@ -104,9 +118,7 @@ class _AdminGstScreenState extends State<AdminGstScreen> {
   Future<void> _rebuild() async {
     setState(() => _busy = true);
     try {
-      final res = await Supabase.instance.client
-          .rpc('gst_ledger_rebuild', params: {'p_months': 24});
-      final m = Map<String, dynamic>.from(res as Map);
+      final m = await _rpc('gst_ledger_rebuild', {'p_months': 24});
       if (!mounted) return;
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text('${m['message'] ?? ''}')));
@@ -160,9 +172,7 @@ class _AdminGstScreenState extends State<AdminGstScreen> {
     );
     if (text == null || text.trim().isEmpty) return;
     try {
-      final res = await Supabase.instance.client.rpc('gst_2b_import',
-          params: {'p_period': _period, 'p_text': text});
-      final m = Map<String, dynamic>.from(res as Map);
+      final m = await _rpc('gst_2b_import', {'p_period': _period, 'p_text': text});
       if (!mounted) return;
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text('${m['message'] ?? ''}')));

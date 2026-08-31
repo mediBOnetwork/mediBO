@@ -14,7 +14,7 @@ import '../../design_tokens.dart';
 import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 import '../../utils/toast.dart';
-import 'partner_console_screen.dart';
+import 'partner_ui.dart';
 
 class PartnerStaffScreen extends StatefulWidget {
   const PartnerStaffScreen({super.key});
@@ -134,23 +134,13 @@ class _PartnerStaffScreenState extends State<PartnerStaffScreen> {
   @override
   Widget build(BuildContext context) {
     final d = _d;
-    return Scaffold(
-      backgroundColor: Ds.c.bg,
-      appBar: AppBar(
-        backgroundColor: Ds.c.surface,
-        foregroundColor: Ds.c.text,
-        elevation: 0,
-        title: Text((d?['title'] as String?) ?? '', style: Ds.t.title),
-      ),
-      floatingActionButton: (d != null && d['can_write'] == true)
-          ? FloatingActionButton.extended(
-              backgroundColor: Ds.c.brand,
-              onPressed: _addSheet,
-              icon: const Icon(Icons.person_add_alt),
-              label: Text((d['add_label'] as String?) ?? ''),
-            )
-          : null,
-      body: _loading
+    // No Scaffold and no AppBar: PartnerFeaturePage owns both and titles the
+    // page with the BACKEND's own label for the feature. Add is a full-width
+    // primary button at the top of the list rather than a FAB, which would need
+    // a Scaffold of its own and would sit on top of the last staff card.
+    return ColoredBox(
+      color: Ds.c.bg,
+      child: _loading
           ? const PartnerSkeleton()
           : (d == null || d['ok'] != true)
               ? PartnerNotice(
@@ -162,10 +152,11 @@ class _PartnerStaffScreenState extends State<PartnerStaffScreen> {
                   onRetry: _load,
                   retryLabel: c('partner.retry_label'),
                 )
-              : RefreshIndicator(
+          : RefreshIndicator(
                   onRefresh: _load,
                   child: PartnerStaffView(
                     payload: d,
+                    onAdd: d['can_write'] == true ? _addSheet : null,
                     onRemove: (id) =>
                         _call('partner_staff_remove', {'p_id': id}),
                     onAccessSet: (uid, featureKey, access) =>
@@ -192,7 +183,12 @@ class PartnerStaffView extends StatelessWidget {
     required this.payload,
     required this.onRemove,
     required this.onAccessSet,
+    this.onAdd,
   });
+
+  /// Null when the backend said can_write:false — the button is then absent,
+  /// not merely disabled.
+  final VoidCallback? onAdd;
 
   final Map<String, dynamic> payload;
   final void Function(Object id) onRemove;
@@ -209,6 +205,17 @@ class PartnerStaffView extends StatelessWidget {
         if (((d['readonly_text'] as String?) ?? '').isNotEmpty) ...[
           SizedBox(height: Ds.space.x12),
           PartnerChip(text: d['readonly_text'] as String, tone: 'warning'),
+        ],
+        if (onAdd != null) ...[
+          SizedBox(height: Ds.space.x16),
+          SizedBox(
+            height: Ds.touch.minTarget,
+            child: FilledButton.icon(
+              onPressed: onAdd,
+              icon: const Icon(Icons.person_add_alt),
+              label: Text((d['add_label'] as String?) ?? ''),
+            ),
+          ),
         ],
         SizedBox(height: Ds.space.x24),
         if (users.isEmpty)

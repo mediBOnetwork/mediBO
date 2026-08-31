@@ -19,6 +19,9 @@ import '../../utils/render_log.dart';
 import '../admin/admin_fulfillment_screen_web.dart';
 import '../admin/admin_supplier_screen_web.dart';
 import 'partner_statement_screen.dart';
+import 'partner_expense_screen.dart';
+import 'partner_staff_screen.dart';
+import 'partner_supplier_payment_screen.dart';
 
 /// Backend `icon_key` -> a glyph. The KEY is the backend's; only the glyph is
 /// local, because an IconData cannot travel in JSON. An unknown key renders the
@@ -49,8 +52,17 @@ Widget? partnerDestination(String routeKey) {
   switch (routeKey) {
     case 'inquiry':
     case 'supplier_orders':
-    case 'supplier_payment':
       return AdminSupplierScreen();
+    // CHANGE #399 — supplier payment gets its OWN partner surface. It used to
+    // land on AdminSupplierScreen, whose pay panel calls sup_record_payment,
+    // which raises for anyone but a super_admin: a partner could open the
+    // screen and never record anything. partner_sup_record_payment is the
+    // partner's door onto the same writer, zone-clamped, so the row it writes
+    // is the row the office's own path writes.
+    case 'supplier_payment': return const PartnerSupplierPaymentScreen();
+    // CHANGE #399 — the partner's own staff, and its own expenses.
+    case 'partner_staff':    return const PartnerStaffScreen();
+    case 'partner_expenses': return const PartnerExpenseScreen();
     case 'collect':         return AdminFulfillmentScreen(initialTab: 0);
     case 'count':           return AdminFulfillmentScreen(initialTab: 1);
     case 'bag_mapping':     return AdminFulfillmentScreen(initialTab: 2);

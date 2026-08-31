@@ -38,7 +38,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:pharma_b2b/screens/partner/partner_console_screen.dart';
+import 'package:pharma_b2b/screens/partner/partner_home_screen.dart';
 import 'package:pharma_b2b/screens/partner/partner_expense_screen.dart';
 import 'package:pharma_b2b/screens/partner/partner_staff_screen.dart';
 import 'package:pharma_b2b/screens/partner/partner_supplier_payment_screen.dart';
@@ -384,16 +384,38 @@ void main() {
     });
   });
 
-  group('console routing — an unknown feature opens nothing', () {
-    test('only the route keys this build can open resolve to a screen', () {
-      expect(partnerRouteScreen('partner_staff'), isNotNull);
-      expect(partnerRouteScreen('partner_expenses'), isNotNull);
-      expect(partnerRouteScreen('supplier_payment'), isNotNull);
-      // Forward compatibility: the office may register a partner feature this
-      // build has never heard of. It must resolve to nothing, so the console
-      // skips it in silence rather than drawing a dead tile.
-      expect(partnerRouteScreen('partner_something_new'), isNull);
-      expect(partnerRouteScreen(''), isNull);
+  group('routing — the backend names the destination, and an unknown one opens nothing', () {
+    test('the three self-service route keys resolve to their own screens', () {
+      expect(partnerDestination('partner_staff'), isA<PartnerStaffScreen>());
+      expect(partnerDestination('partner_expenses'), isA<PartnerExpenseScreen>());
+      // #326 pointed supplier_payment at AdminSupplierScreen, whose pay panel
+      // calls sup_record_payment — super_admin only, so a partner could open
+      // the screen and never record anything. It is the partner's own surface
+      // now.
+      expect(partnerDestination('supplier_payment'),
+          isA<PartnerSupplierPaymentScreen>());
+    });
+
+    test('a route key this build has never heard of resolves to nothing', () {
+      // Forward compatibility: the office may register a partner feature before
+      // the app can open it. partner_home must skip it in silence rather than
+      // draw a tile that does nothing on tap.
+      expect(partnerDestination('partner_something_new'), isNull);
+      expect(partnerDestination(''), isNull);
+    });
+
+    test('a self-service screen brings no Scaffold of its own', () {
+      // Every destination is pushed inside PartnerFeaturePage, which owns the
+      // Scaffold and prints the BACKEND's label as the page title. A screen
+      // that carried its own would show two app bars, one of them titled by
+      // Dart.
+      for (final w in [
+        partnerDestination('partner_staff'),
+        partnerDestination('partner_expenses'),
+        partnerDestination('supplier_payment'),
+      ]) {
+        expect(w, isNot(isA<Scaffold>()));
+      }
     });
   });
 }

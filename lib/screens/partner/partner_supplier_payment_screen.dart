@@ -17,7 +17,7 @@ import '../../design_tokens.dart';
 import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 import '../../utils/toast.dart';
-import 'partner_console_screen.dart';
+import 'partner_ui.dart';
 
 class PartnerSupplierPaymentScreen extends StatefulWidget {
   const PartnerSupplierPaymentScreen({super.key});
@@ -61,15 +61,11 @@ class _PartnerSupplierPaymentScreenState
   @override
   Widget build(BuildContext context) {
     final d = _d;
-    return Scaffold(
-      backgroundColor: Ds.c.bg,
-      appBar: AppBar(
-        backgroundColor: Ds.c.surface,
-        foregroundColor: Ds.c.text,
-        elevation: 0,
-        title: Text((d?['title'] as String?) ?? '', style: Ds.t.title),
-      ),
-      body: _loading
+    // No Scaffold and no AppBar: PartnerFeaturePage owns both and titles the
+    // page with the BACKEND's own label for the feature.
+    return ColoredBox(
+      color: Ds.c.bg,
+      child: _loading
           ? const PartnerSkeleton()
           : (d == null || d['ok'] != true)
               ? PartnerNotice(

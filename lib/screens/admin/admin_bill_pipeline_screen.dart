@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../design_tokens.dart';
+import '../../services/discount_slabs_service.dart';
+import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 
 /// CHANGE #226 — the admin surface over the automatic customer-billing chain.
@@ -98,6 +100,19 @@ class _AdminBillPipelineScreenState extends State<AdminBillPipelineScreen> {
         elevation: 0,
         title: Text('${d?['title'] ?? ''}',
             style: Ds.t.title.copyWith(color: Ds.c.text)),
+        // CHANGE #318 — the discount ladder every bill on this screen is
+        // priced at. It lives one tap from the pipeline because that is the
+        // question the pipeline raises: this order billed at 6% — why 6?
+        actions: [
+          IconButton(
+            tooltip: c('slabs.title'),
+            icon: const Icon(Icons.percent),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => buildDiscountSlabsScreen()),
+            ),
+          ),
+        ],
       ),
       body: RefreshIndicator(
         onRefresh: _load,

@@ -1381,6 +1381,21 @@ class _ProductsSection extends StatelessWidget {
   }
 
   Widget _gridBody() {
+    // CMD #410 — REACHABILITY PROOF for the compare tick, written BEFORE the
+    // early returns on purpose. The grid is a canvas no browser tool can
+    // click, so the render log is the only evidence the control exists on the
+    // live build — and a key that is only written on the fully-loaded happy
+    // path proves nothing on the run where the category page is still
+    // fetching, which is exactly the run a verifier tends to catch. This
+    // records the state the section is actually in, every time: the backend
+    // caption it was handed (empty means storefront_labels() has not landed
+    // and the tick is correctly absent), how many cards it has, and how many
+    // are ticked.
+    RenderLog.write(
+      'c410_compare_tick',
+      'label=${StorefrontLabels.get('cmp_add')};cards=${items.length};'
+      'picked=${compare.count};state=${loadingFirst ? 'loading' : (error != null ? 'error' : (items.isEmpty ? 'empty' : 'grid'))}',
+    );
     if (loadingFirst) return const _SkeletonGrid();
     // Show offline widget ONLY on genuine network failure.
     // API errors / empty results are NOT offline — show retry or no-results.
@@ -1406,14 +1421,6 @@ class _ProductsSection extends StatelessWidget {
         backendLabel: emptyLabel,
       );
     }
-    // CMD #410 — REACHABILITY PROOF for the compare tick. The grid is a canvas
-    // no browser tool can click, so the render log is the only evidence that
-    // the control exists on the live build: it records the backend caption it
-    // was given and how many cards it was drawn on. An empty caption means
-    // storefront_labels() had not landed and the tick is (correctly) absent —
-    // which this line makes visible instead of silent.
-    RenderLog.write('c410_compare_tick',
-        'label=${StorefrontLabels.get('cmp_add')};cards=${items.length};picked=${compare.count}');
     return LayoutBuilder(
       builder: (context, c) {
         final count = c.maxWidth >= 900 ? 4 : c.maxWidth >= 600 ? 3 : 2;

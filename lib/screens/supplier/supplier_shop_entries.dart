@@ -33,8 +33,6 @@ class _SupplierShopEntriesState extends State<SupplierShopEntries> {
     _load();
   }
 
-  String _s(Object? v) => v == null ? '' : v.toString();
-
   Future<void> _load() async {
     try {
       final a = await Supabase.instance.client.rpc('supplier_availability_get');
@@ -49,46 +47,79 @@ class _SupplierShopEntriesState extends State<SupplierShopEntries> {
   }
 
   @override
+  Widget build(BuildContext context) => SupplierShopEntriesView(
+        avail: _avail,
+        cov: _cov,
+        onOpenAvailability: () => Navigator.of(context)
+            .push(MaterialPageRoute(
+                builder: (_) => const SupplierAvailabilityPage()))
+            .then((_) => _load()),
+        onOpenCompanies: () => Navigator.of(context)
+            .push(MaterialPageRoute(
+                builder: (_) => const SupplierCompaniesPage()))
+            .then((_) => _load()),
+      );
+}
+
+/// The pure layout half, split out so it can be widget-tested without Supabase.
+///
+/// It renders two payloads and nothing else — every string here comes from
+/// `supplier_availability_get` / `supplier_coverage_get`.
+class SupplierShopEntriesView extends StatelessWidget {
+  const SupplierShopEntriesView({
+    super.key,
+    required this.avail,
+    required this.cov,
+    required this.onOpenAvailability,
+    required this.onOpenCompanies,
+  });
+
+  final Map<String, dynamic> avail;
+  final Map<String, dynamic> cov;
+  final VoidCallback onOpenAvailability;
+  final VoidCallback onOpenCompanies;
+
+  String _s(Object? v) => v == null ? '' : v.toString();
+
+  @override
   Widget build(BuildContext context) {
-    if (_s(_avail['screen_title']).isEmpty && _s(_cov['screen_title']).isEmpty) {
+    if (_s(avail['screen_title']).isEmpty && _s(cov['screen_title']).isEmpty) {
       return const SizedBox.shrink();
     }
     return Padding(
       padding: EdgeInsets.fromLTRB(
           Ds.space.x16, Ds.space.x12, Ds.space.x16, Ds.space.x4),
-      // Both tiles share the tallest height so their tops and bottoms sit on
-      // the same lines — without stretch each Expanded self-sizes and the two
-      // cards visibly misalign.
-      child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Expanded(
-          child: _tile(
-            icon: Icons.storefront_outlined,
-            title: _s(_avail['screen_title']),
-            // The backend's own status sentence, tone included.
-            sub: _s(_avail['status_label']),
-            tone: _s(_avail['status_tone']),
-            onTap: () => Navigator.of(context)
-                .push(MaterialPageRoute(
-                    builder: (_) => const SupplierAvailabilityPage()))
-                .then((_) => _load()),
+      // IntrinsicHeight, not CrossAxisAlignment.stretch: this widget is a direct
+      // child of an unbounded Column, so stretch has no height to stretch to and
+      // takes the whole supplier Home down with it. IntrinsicHeight measures the
+      // taller tile and gives the Row that bounded height, so both cards share
+      // one top and one bottom line.
+      child: IntrinsicHeight(
+        child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Expanded(
+            child: _tile(
+              icon: Icons.storefront_outlined,
+              title: _s(avail['screen_title']),
+              // The backend's own status sentence, tone included.
+              sub: _s(avail['status_label']),
+              tone: _s(avail['status_tone']),
+              onTap: onOpenAvailability,
+            ),
           ),
-        ),
-        SizedBox(width: Ds.space.x12),
-        Expanded(
-          child: _tile(
-            icon: Icons.business_outlined,
-            title: _s(_cov['screen_title']),
-            // The backend's own short tile line ('None declared yet' / 'N
-            // declared'); the full-screen empty sentence truncated mid-word here.
-            sub: _s(_cov['tile_sub']),
-            tone: '',
-            onTap: () => Navigator.of(context)
-                .push(MaterialPageRoute(
-                    builder: (_) => const SupplierCompaniesPage()))
-                .then((_) => _load()),
+          SizedBox(width: Ds.space.x12),
+          Expanded(
+            child: _tile(
+              icon: Icons.business_outlined,
+              title: _s(cov['screen_title']),
+              // The backend's own short tile line ('None declared yet' / 'N
+              // declared'); the full-screen empty sentence truncated mid-word.
+              sub: _s(cov['tile_sub']),
+              tone: '',
+              onTap: onOpenCompanies,
+            ),
           ),
-        ),
-      ]),
+        ]),
+      ),
     );
   }
 

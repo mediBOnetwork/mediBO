@@ -73,11 +73,32 @@ class _AdminPartnerConsoleScreenState extends State<AdminPartnerConsoleScreen> {
     });
   }
 
+  /// CHANGE #321 — the reply is SHOWN, always. Every one of these RPCs now
+  /// answers with a `message` (and a `tone`) whether it worked or not, so a
+  /// refusal reaches the admin as words instead of a button that looks inert.
+  /// The words and the tone are the backend's; only the colour is a token.
   void _toast(Map<String, dynamic> r) {
+    if (!mounted) return;
     final msg = (r['message'] ?? '').toString();
-    if (msg.isNotEmpty && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-    }
+    if (msg.isEmpty) return;
+    final tone = (r['tone'] ?? '').toString();
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg),
+      backgroundColor: tone == 'danger'
+          ? Ds.c.danger
+          : tone == 'success'
+              ? Ds.c.success
+              : null,
+    ));
+  }
+
+  /// The RPC never answered at all (offline, 500, dropped socket). The words
+  /// still come from the backend — `failed_message` rides the console payload.
+  void _toastFailure() {
+    _toast(<String, dynamic>{
+      'tone': 'danger',
+      'message': (_payload?['failed_message'] ?? '').toString(),
+    });
   }
 
   Future<void> _setAccess(String featureKey, String access) async {
@@ -89,7 +110,9 @@ class _AdminPartnerConsoleScreenState extends State<AdminPartnerConsoleScreen> {
         'p_feature_key': featureKey,
         'p_access': access,
       }));
-    } catch (_) {}
+    } catch (_) {
+      _toastFailure();
+    }
     if (!mounted) return;
     setState(() => _busy = false);
     await _load();
@@ -98,16 +121,25 @@ class _AdminPartnerConsoleScreenState extends State<AdminPartnerConsoleScreen> {
   Future<void> _addUser() async {
     if (_busy) return;
     setState(() => _busy = true);
+    var added = false;
     try {
-      _toast(await _rpc('admin_partner_user_add', {
+      final r = await _rpc('admin_partner_user_add', {
         'p_partner_id': widget.partnerId,
         'p_identity': _identity.text,
         'p_name': _name.text,
-      }));
-    } catch (_) {}
+      });
+      added = r['ok'] == true;
+      _toast(r);
+    } catch (_) {
+      _toastFailure();
+    }
     if (!mounted) return;
-    _identity.clear();
-    _name.clear();
+    // A rejected number stays in the field — the admin fixes it and taps again
+    // instead of retyping it from memory.
+    if (added) {
+      _identity.clear();
+      _name.clear();
+    }
     setState(() => _busy = false);
     await _load();
   }
@@ -117,7 +149,9 @@ class _AdminPartnerConsoleScreenState extends State<AdminPartnerConsoleScreen> {
     setState(() => _busy = true);
     try {
       _toast(await _rpc('admin_partner_user_remove', {'p_id': id}));
-    } catch (_) {}
+    } catch (_) {
+      _toastFailure();
+    }
     if (!mounted) return;
     setState(() => _busy = false);
     await _load();
@@ -201,9 +235,15 @@ class PartnerConsoleView extends StatelessWidget {
           'ok=${payload['ok'] == true},users=${users.length},features=${features.length}');
     } catch (_) {}
     if (payload['ok'] != true) {
+      // CHANGE #321: the refusal prints the backend's SENTENCE when it sent
+      // one; the machine slug is only the last resort.
+      final msg = (payload['message'] ?? '').toString();
       return Padding(
         padding: EdgeInsets.all(Ds.space.x16),
-        child: Text((payload['error'] ?? '').toString(), style: Ds.t.body),
+        child: Text(
+          msg.isNotEmpty ? msg : (payload['error'] ?? '').toString(),
+          style: Ds.t.body,
+        ),
       );
     }
 

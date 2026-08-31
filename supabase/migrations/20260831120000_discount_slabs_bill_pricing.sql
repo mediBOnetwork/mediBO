@@ -915,3 +915,90 @@ begin
     'rows',          v_rows,
     'today',         to_char(v_today,'YYYY-MM-DD'));
 end $function$;
+
+-- CHANGE #318 part G — QA round 1: an admin types money the way money looks.
+--
+-- "2,999" / "₹2,999" / "3%" all cast-failed with a raw Postgres error instead
+-- of the backend's own sentence, because the save read the field with a bare
+-- ::numeric. The ladder is edited by a person, not a machine, so the parser
+-- tolerates the symbols a person types and the VALIDATION message is still the
+-- only thing that ever reaches the screen.
+create or replace function public._slab_num(p_text text)
+returns numeric
+language plpgsql
+immutable
+as $function$
+declare v text;
+begin
+  v := nullif(btrim(regexp_replace(coalesce(p_text,''), '[^0-9.\-]', '', 'g')), '');
+  if v is null then return null; end if;
+  return v::numeric;
+exception when others then
+  return null;
+end $function$;
+
+create or replace function public.admin_discount_slab_save(p jsonb)
+returns jsonb
+language plpgsql
+security definer
+set search_path to 'public'
+as $function$
+declare v_min numeric; v_pct numeric; v_from date; v_note text; v_id bigint;
+begin
+  if not public._slab_can_admin() then
+    return jsonb_build_object('ok', false, 'error', 'not_authorized',
+                              'message', public._c('slabs.not_authorized'));
+  end if;
+
+  v_min := public._slab_num(p->>'min_amount');
+  v_pct := public._slab_num(p->>'discount_pct');
+  v_id  := public._slab_num(p->>'id')::bigint;
+
+  -- An unreadable date is not a silent "today": it is the date field's own
+  -- error, so the admin sees which box was wrong.
+  begin
+    v_from := coalesce(nullif(btrim(coalesce(p->>'effective_from','')),'')::date,
+                       (now() at time zone 'Asia/Kolkata')::date);
+  exception when others then
+    return jsonb_build_object('ok', false, 'error','bad_effective_from',
+                              'message', public._c('slabs.err_effective_from'));
+  end;
+
+  v_note := nullif(btrim(coalesce(p->>'note','')),'');
+
+  if v_min is null or v_min < 0 then
+    return jsonb_build_object('ok', false, 'error','bad_min_amount',
+                              'message', public._c('slabs.err_min_amount'));
+  end if;
+  if v_pct is null or v_pct < 0 or v_pct > 100 then
+    return jsonb_build_object('ok', false, 'error','bad_discount_pct',
+                              'message', public._c('slabs.err_discount_pct'));
+  end if;
+
+  if exists (select 1 from public.discount_slabs s
+              where s.min_amount = v_min and s.effective_from = v_from
+                and (v_id is null or s.id <> v_id)) then
+    return jsonb_build_object('ok', false, 'error','duplicate',
+                              'message', public._c('slabs.err_duplicate'));
+  end if;
+
+  if v_id is not null then
+    update public.discount_slabs
+       set min_amount = v_min, discount_pct = v_pct, effective_from = v_from,
+           note = v_note,
+           active = coalesce((p->>'active')::boolean, active),
+           updated_at = now()
+     where id = v_id;
+  else
+    insert into public.discount_slabs (min_amount, discount_pct, effective_from, note, active)
+    values (v_min, v_pct, v_from, v_note, coalesce((p->>'active')::boolean, true))
+    returning id into v_id;
+  end if;
+
+  return public.admin_discount_slabs()
+         || jsonb_build_object('toast', public._c('slabs.saved_toast'), 'saved_id', v_id);
+end $function$;
+
+insert into public.ui_copy (key, value) values
+  ('slabs.err_effective_from', to_jsonb('Enter the date as YYYY-MM-DD.'::text))
+on conflict (key) do update set value = excluded.value, updated_at = now();

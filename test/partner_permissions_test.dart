@@ -19,6 +19,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:pharma_b2b/screens/admin/admin_partner_console_screen.dart';
 import 'package:pharma_b2b/screens/partner/partner_home_screen.dart';
+import 'package:pharma_b2b/services/partner_state.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 
 Map<String, dynamic> _home() => <String, dynamic>{
@@ -94,6 +95,7 @@ Map<String, dynamic> _console() => <String, dynamic>{
       'perm_subtitle': 'Takes effect on their next screen load.',
       'audit_title': 'Partner activity',
       'empty_audit': 'No partner activity recorded yet.',
+      'failed_message': 'Could not reach the server. Nothing was changed.',
       'users': [
         {
           'id': 7,
@@ -317,6 +319,112 @@ void main() {
       );
       expect(find.text('not_authorized'), findsOneWidget);
       expect(find.text('No access'), findsNothing);
+    });
+  });
+
+  // ── CHANGE #321 ──────────────────────────────────────────────────────────
+  // The bug: adding a login died on a backend CHECK constraint, the screen
+  // swallowed the exception, and the button looked inert. These pin the rule
+  // that came out of it — the reply is always SHOWN, and its words are always
+  // the backend's.
+  group('c321 — Add login always reports what the backend said', () {
+    Future<void> pumpConsole(WidgetTester t, PartnerRpc rpc) async {
+      t.view.physicalSize = const Size(1200, 3000);
+      t.view.devicePixelRatio = 1.0;
+      addTearDown(t.view.reset);
+      await t.pumpWidget(MaterialApp(
+        home: AdminPartnerConsoleScreen(partnerId: 1, rpc: rpc),
+      ));
+      await t.pumpAndSettle();
+    }
+
+    testWidgets('a refusal is shown verbatim and the typed number is kept',
+        (t) async {
+      final identity = find.byType(TextField).first;
+      await pumpConsole(t, (fn, _) async {
+        if (fn == 'admin_partner_console') return _console();
+        return <String, dynamic>{
+          'ok': false,
+          'error': 'identity_taken',
+          'tone': 'danger',
+          'message': 'Already attached to a supplier account.',
+        };
+      });
+
+      await t.enterText(identity, '9329252090');
+      await t.tap(find.text('Add login'));
+      await t.pump();
+      await t.pump(const Duration(milliseconds: 100));
+
+      expect(find.text('Already attached to a supplier account.'),
+          findsOneWidget);
+      // Not cleared: the admin edits what they typed instead of retyping it.
+      expect(
+          (t.widget<TextField>(identity)).controller!.text, '9329252090');
+    });
+
+    testWidgets('a success shows its message and clears the fields', (t) async {
+      final identity = find.byType(TextField).first;
+      final sent = <Map<String, dynamic>>[];
+      await pumpConsole(t, (fn, p) async {
+        if (fn == 'admin_partner_console') return _console();
+        sent.add(p);
+        return <String, dynamic>{
+          'ok': true,
+          'id': 44,
+          'tone': 'success',
+          'message': 'Login added. Ask them to sign in with that number.',
+        };
+      });
+
+      await t.enterText(identity, '9329252090');
+      await t.tap(find.text('Add login'));
+      await t.pump();
+      await t.pump(const Duration(milliseconds: 100));
+
+      expect(sent.single['p_identity'], '9329252090');
+      expect(find.text('Login added. Ask them to sign in with that number.'),
+          findsOneWidget);
+      expect((t.widget<TextField>(identity)).controller!.text, '');
+    });
+
+    testWidgets('an RPC that throws still speaks — in the backend\'s words',
+        (t) async {
+      await pumpConsole(t, (fn, _) async {
+        if (fn == 'admin_partner_console') return _console();
+        throw StateError('23514 check constraint');
+      });
+
+      await t.enterText(find.byType(TextField).first, '9329252090');
+      await t.tap(find.text('Add login'));
+      await t.pump();
+      await t.pump(const Duration(milliseconds: 100));
+
+      // The sentence came from the console payload, not from Dart.
+      expect(find.text('Could not reach the server. Nothing was changed.'),
+          findsOneWidget);
+    });
+
+    testWidgets('a refusal payload prints its sentence, not the slug',
+        (t) async {
+      await _pump(
+        t,
+        PartnerConsoleView(
+          payload: const {
+            'ok': false,
+            'error': 'not_authorized',
+            'message': 'Only a mediBO admin can change partner logins.',
+          },
+          identity: TextEditingController(),
+          name: TextEditingController(),
+          onAdd: () {},
+          onRemove: (_) {},
+          onAccess: (_, __) {},
+        ),
+      );
+      expect(find.text('Only a mediBO admin can change partner logins.'),
+          findsOneWidget);
+      expect(find.text('not_authorized'), findsNothing);
     });
   });
 }

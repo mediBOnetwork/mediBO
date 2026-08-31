@@ -38,7 +38,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:pharma_b2b/screens/admin/admin_nav_entries.dart';
+import 'registered_routes.dart'; // CHANGE #325 — the registry, mirrored offline
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 

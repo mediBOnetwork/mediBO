@@ -48,7 +48,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pharma_b2b/services/push_service.dart';
 
 import 'package:pharma_b2b/models/notification_inbox.dart';
-import 'package:pharma_b2b/screens/admin/admin_nav_entries.dart';
+import 'registered_routes.dart'; // CHANGE #325 — the registry, mirrored offline
 
 /// Mirrors a real notif_inbox_list() payload.
 Map<String, dynamic> _payload({

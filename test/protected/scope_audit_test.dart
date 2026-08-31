@@ -18,6 +18,8 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
+import 'registered_routes.dart';
+
 String _read(String path) {
   final f = File(path);
   if (!f.existsSync()) {
@@ -40,13 +42,19 @@ String _code(String src) {
 void main() {
   final screen = _read('lib/screens/admin/admin_scope_audit_screen.dart');
   final screenCode = _code(screen);
+  // ignore: unused_local_variable — kept so a future assertion can read it
+  // ignore: unused_local_variable
   final nav = _read('lib/screens/admin/admin_nav_entries.dart');
   final shell = _read('lib/screens/home_shell.dart');
 
   group('the Scope Audit screen is reachable', () {
+    // CHANGE #325 — the nav surface is feature_registry now, not a Dart list
+    // in admin_nav_entries.dart. registered_routes.dart is that table mirrored
+    // for the VM. The property is untouched: a screen no surface names is a
+    // screen no admin can open.
     test('an admin nav surface offers the route', () {
-      expect(nav.contains("route: 'scope_audit'"), isTrue,
-          reason: 'no nav entry offers scope_audit — the screen would exist '
+      expect(kRegisteredAdminRoutes, contains('scope_audit'),
+          reason: 'scope_audit is not registered — the screen would exist '
               'but no admin could ever open it');
     });
 

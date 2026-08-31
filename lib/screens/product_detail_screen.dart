@@ -238,6 +238,17 @@ class _Body extends StatelessWidget {
         ],
         const SizedBox(height: 12),
         _StockRow(data: data),
+        // CMD #367 (row 177) — the supply trust strip. `has` is the backend's
+        // verdict, so a product with no supply history shows nothing at all
+        // rather than a flattering default. No expiry claim is rendered here
+        // or anywhere else on this page: we do not know a batch's expiry
+        // before we buy it.
+        if (data.trust.has) ...[
+          SizedBox(height: Ds.space.x16),
+          _SectionTitle(text: data.trust.title),
+          SizedBox(height: Ds.space.x8),
+          _TrustStrip(trust: data.trust),
+        ],
         if (data.overview.isNotEmpty) ...[
           const SizedBox(height: 24),
           _SectionTitle(text: data.label('pdp_overview_title')),
@@ -1149,6 +1160,86 @@ class _RxBanner extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// The trust strip: chips printed in payload order, each with the backend's
+/// own label, note and tone. The only mapping done here is tone-name → design
+/// token, which is styling, not a decision.
+class _TrustStrip extends StatelessWidget {
+  final PdTrust trust;
+  const _TrustStrip({required this.trust});
+
+  Color _toneColor(String tone) {
+    switch (tone) {
+      case 'success':
+        return Ds.c.success;
+      case 'warning':
+        return Ds.c.warning;
+      case 'danger':
+        return Ds.c.danger;
+      case 'info':
+        return Ds.c.info;
+      default:
+        return Ds.c.textSecondary;
+    }
+  }
+
+  Color _toneBg(String tone) {
+    switch (tone) {
+      case 'success':
+        return Ds.c.successSoft;
+      case 'warning':
+        return Ds.c.warningSoft;
+      case 'danger':
+        return Ds.c.dangerSoft;
+      case 'info':
+        return Ds.c.infoSoft;
+      default:
+        return Ds.c.bg;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (final chip in trust.chips)
+          Padding(
+            padding: EdgeInsets.only(bottom: Ds.space.x8),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Container(
+                  padding: EdgeInsets.symmetric(
+                      horizontal: Ds.space.x12, vertical: Ds.space.x4),
+                  decoration: BoxDecoration(
+                    color: _toneBg(chip.tone),
+                    borderRadius: Ds.r.rChip,
+                  ),
+                  child: Text(
+                    chip.label,
+                    style: Ds.t.caption.copyWith(
+                      color: _toneColor(chip.tone),
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                SizedBox(width: Ds.space.x8),
+                Expanded(
+                  child: Text(
+                    chip.note,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Ds.t.caption,
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
     );
   }
 }

@@ -377,9 +377,12 @@ class _Filters extends StatelessWidget {
                       child: Text(o['label']?.toString() ?? '', style: Ds.t.body),
                     ))
                 .toList(),
+            // No `alignment:` here on purpose — a Container with an alignment
+            // EXPANDS to its constraints, which turned every filter chip into
+            // a full-width bar inside the Wrap. Shrink-wrapping the Row is
+            // what makes them read as chips.
             child: Container(
               padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
-              alignment: Alignment.center,
               decoration: BoxDecoration(
                 color: Ds.c.surface,
                 borderRadius: Ds.r.rChip,

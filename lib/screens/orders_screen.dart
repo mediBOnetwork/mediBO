@@ -22,6 +22,8 @@ import '../widgets/customer_order_item_card.dart'; // #641: the Items-tab card
 import '../services/ui_copy.dart';
 import '../design_tokens.dart'; // #173: Ds tokens for the reorder entry points
 import 'reorder_screen.dart'; // #173: reorder suite (suggestions + smart diff)
+import 'purchases_screen.dart'; // #367 row 174: purchase analytics + register
+import 'order_lists_screen.dart'; // #367 row 178: named saved order lists
 
 // ─── Data models ─────────────────────────────────────────────────────────────
 
@@ -582,10 +584,14 @@ class _OrdersScreenState extends State<OrdersScreen> {
         physics: platformScrollPhysics(),
         // CHANGE #173 — first row is the reorder entry: it opens the predictive
         // "Due for reorder" screen (cadence computed server-side from history).
-        itemCount: _orders.length + 1,
+        // CMD #367 — two more entry points ride the same header rows:
+        // Purchases (row 174) and Saved lists (row 178), both reachable for
+        // every signed-in customer straight from Orders.
+        itemCount: _orders.length + 2,
         itemBuilder: (context, i) {
           if (i == 0) return const _ReorderEntry();
-          final o = _orders[i - 1];
+          if (i == 1) return const _PurchasesAndListsEntry();
+          final o = _orders[i - 2];
           // CHANGE #298 — the deep-linked order opens itself and is scrolled
           // into view; every other card is untouched.
           final focused = _focusCode != null && o.number == _focusCode;
@@ -644,6 +650,98 @@ class _ReorderEntry extends StatelessWidget {
             ),
             Icon(Icons.chevron_right, color: Ds.c.brandDark),
           ]),
+        ),
+      ),
+    );
+  }
+}
+
+/// CMD #367 — the customer's two new surfaces, side by side under the reorder
+/// entry: **Purchases** (row 174 — spend by month, top products and companies,
+/// savings vs MRP and the downloadable purchase register) and **Saved lists**
+/// (row 178 — named, editable, schedulable lists with one-tap reorder).
+/// The chrome words come from ui_copy; both screens render backend payloads.
+class _PurchasesAndListsEntry extends StatelessWidget {
+  const _PurchasesAndListsEntry();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: Ds.space.x12),
+      child: Row(
+        children: [
+          Expanded(
+            child: _EntryTile(
+              icon: Icons.insights_outlined,
+              title: c('purchases.entry_title').isEmpty
+                  ? 'Purchases'
+                  : c('purchases.entry_title'),
+              subtitle: c('purchases.entry_sub').isEmpty
+                  ? 'Spend, register, savings'
+                  : c('purchases.entry_sub'),
+              onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const PurchasesScreen())),
+            ),
+          ),
+          SizedBox(width: Ds.space.x12),
+          Expanded(
+            child: _EntryTile(
+              icon: Icons.playlist_add_check_outlined,
+              title: c('order_lists.entry_title').isEmpty
+                  ? 'Saved lists'
+                  : c('order_lists.entry_title'),
+              subtitle: c('order_lists.entry_sub').isEmpty
+                  ? 'Reorder in one tap'
+                  : c('order_lists.entry_sub'),
+              onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const OrderListsScreen())),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EntryTile extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+  const _EntryTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: Ds.r.rCard,
+      onTap: onTap,
+      child: Container(
+        constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+        padding: EdgeInsets.all(Ds.space.x12),
+        decoration: BoxDecoration(
+          color: Ds.c.surface,
+          borderRadius: Ds.r.rCard,
+          boxShadow: Ds.elevation.e1,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(icon, color: Ds.c.brand),
+            SizedBox(height: Ds.space.x8),
+            Text(title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Ds.t.body.copyWith(fontWeight: FontWeight.w600)),
+            Text(subtitle,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: Ds.t.caption),
+          ],
         ),
       ),
     );

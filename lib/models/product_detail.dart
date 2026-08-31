@@ -50,6 +50,12 @@ class ProductDetail {
   final bool hasSupplierLabel;
   final String supplierLabel;
 
+  /// CMD #367 (row 177) — the supply trust strip. Fill rate + cold chain,
+  /// computed and worded by `product_trust_strip()`. There is deliberately NO
+  /// expiry field: expiry and batch change with every purchase, so a
+  /// minimum-expiry promise made before the stock is bought would be false.
+  final PdTrust trust;
+
   final List<PdOverviewRow> overview;
   final List<PdSection> sections;
   final List<PdSimilar> similar;
@@ -81,6 +87,7 @@ class ProductDetail {
     required this.buyable,
     required this.hasSupplierLabel,
     required this.supplierLabel,
+    required this.trust,
     required this.overview,
     required this.sections,
     required this.similar,
@@ -138,6 +145,7 @@ class ProductDetail {
       buyable: stock['buyable'] == true,
       hasSupplierLabel: stock['has_supplier_label'] == true,
       supplierLabel: _s(stock['supplier_label']),
+      trust: PdTrust.fromMap(m['trust']),
       overview: ((m['overview'] as List?) ?? const [])
           .whereType<Map>()
           .map((r) => PdOverviewRow(
@@ -188,6 +196,7 @@ class ProductDetail {
         buyable: false,
         hasSupplierLabel: false,
         supplierLabel: '',
+        trust: const PdTrust.empty(),
         overview: const [],
         sections: const [],
         similar: const [],
@@ -227,4 +236,52 @@ class PdSimilar {
     required this.image,
     required this.mrpLabel,
   });
+}
+
+
+/// One chip on the PDP trust strip. Every field is a backend string — the app
+/// picks no words and computes no percentage.
+class PdTrustChip {
+  final String key;
+  final String label;
+  final String note;
+  final String tone;
+  const PdTrustChip({
+    required this.key,
+    required this.label,
+    required this.note,
+    required this.tone,
+  });
+}
+
+/// The trust strip. `has` is the backend's own verdict on whether there is
+/// anything worth showing — the page never re-derives it from chips.length,
+/// and a product nobody has asked for yet shows nothing rather than an
+/// invented 100%.
+class PdTrust {
+  final bool has;
+  final String title;
+  final List<PdTrustChip> chips;
+  const PdTrust({required this.has, required this.title, required this.chips});
+  const PdTrust.empty()
+      : has = false,
+        title = '',
+        chips = const [];
+
+  factory PdTrust.fromMap(Object? raw) {
+    if (raw is! Map) return const PdTrust.empty();
+    return PdTrust(
+      has: raw['has'] == true,
+      title: raw['title']?.toString() ?? '',
+      chips: ((raw['chips'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((c) => PdTrustChip(
+                key: c['key']?.toString() ?? '',
+                label: c['label']?.toString() ?? '',
+                note: c['note']?.toString() ?? '',
+                tone: c['tone']?.toString() ?? '',
+              ))
+          .toList(growable: false),
+    );
+  }
 }

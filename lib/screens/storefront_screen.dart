@@ -12,6 +12,7 @@ import '../data/medicine_repository.dart';
 import '../data/storefront_labels.dart';
 import '../design_tokens.dart';
 import '../models/product.dart';
+import '../models/product_compare.dart';
 import '../services/ui_copy.dart';
 import '../theme.dart';
 import '../util.dart';

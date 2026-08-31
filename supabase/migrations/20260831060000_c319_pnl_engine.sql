@@ -955,3 +955,215 @@ revoke all on function public.pnl_config_get() from public, anon;
 revoke all on function public.pnl_config_set(jsonb) from public, anon;
 grant execute on function public.pnl_config_get() to authenticated, service_role;
 grant execute on function public.pnl_config_set(jsonb) to authenticated, service_role;
+
+-- ── 16. Which slab a proposed table would have picked ───────────────────────
+-- Mirrors ptr_discount_pct exactly, including its `>` (not `>=`) boundary, so
+-- a simulation of the CURRENT table reproduces the current bills to the paisa.
+create or replace function public._pnl_slab_pct(p_slabs jsonb, p_total numeric)
+returns numeric language sql immutable as $$
+  select coalesce((
+    select coalesce((e->>'pct')::numeric, 0)
+      from jsonb_array_elements(coalesce(p_slabs, '[]'::jsonb)) e
+     where coalesce(p_total,0) > coalesce((e->>'min_ptr')::numeric, 0)
+     order by coalesce((e->>'min_ptr')::numeric, 0) desc
+     limit 1), 0);
+$$;
+
+-- ── 17. The simulator ───────────────────────────────────────────────────────
+-- Replays a PROPOSED slab table against the orders already billed in the
+-- window, at the prices those orders actually carried. Nothing is written and
+-- nothing is saved: this answers "what would this have cost me" before the
+-- slab table is changed, which is the only moment the answer is still useful.
+create or replace function public.pnl_slab_simulate(p_slabs jsonb default null,
+                                                    p_days int default 30)
+returns jsonb language plpgsql stable security definer set search_path to 'public' as $$
+declare
+  v_from date := ((now() at time zone 'Asia/Kolkata')::date - (greatest(coalesce(p_days,30),1) - 1));
+  v_current jsonb;
+  v_rev_old numeric := 0; v_rev_new numeric := 0;
+  v_mar_old numeric := 0; v_mar_new numeric := 0;
+  v_orders int := 0; v_pushed int := 0;
+  v_rows jsonb := '[]'::jsonb;
+begin
+  if not public.is_admin() then
+    return jsonb_build_object('ok', false, 'error','not_authorized',
+                              'message', public._pnl_c('ui.not_authorized'));
+  end if;
+
+  select coalesce(jsonb_agg(jsonb_build_object('min_ptr', min_ptr, 'pct', pct)
+                            order by min_ptr), '[]'::jsonb)
+    into v_current
+  from public.discount_slabs where active;
+
+  if p_slabs is null or jsonb_typeof(p_slabs) <> 'array' then
+    return jsonb_build_object('ok', true, 'ran', false,
+      'title', public._pnl_c('sim.title'),
+      'subtitle', public._pnl_c('sim.subtitle'),
+      'current_label', public._pnl_c('sim.current'),
+      'proposed_label', public._pnl_c('sim.proposed'),
+      'min_ptr_label', public._pnl_c('sim.min_ptr'),
+      'pct_label', public._pnl_c('sim.pct'),
+      'run_label', public._pnl_c('sim.run'),
+      'note', public._pnl_c('sim.note'),
+      'empty_text', public._pnl_c('sim.empty'),
+      'range_label', replace(public._pnl_c('ui.range_days'), '%s', greatest(coalesce(p_days,30),1)::text),
+      'current', v_current);
+  end if;
+
+  with ord as (
+    select order_id, sum(qty * ptr) as ptr_total
+      from public.pnl_line_v where order_date >= v_from group by order_id),
+  l as (
+    select v.*, public._pnl_slab_pct(p_slabs, o.ptr_total) as new_pct
+      from public.pnl_line_v v join ord o on o.order_id = v.order_id
+     where v.order_date >= v_from),
+  c as (
+    select l.*,
+           l.line_value - round(l.line_value * l.new_pct / 100, 2) as new_cust_taxable,
+           (l.line_value - round(l.line_value * l.new_pct / 100, 2)) - l.sup_taxable as new_margin
+      from l)
+  select
+    coalesce(sum(cust_taxable),0), coalesce(sum(new_cust_taxable),0),
+    coalesce(sum(margin),0),       coalesce(sum(new_margin),0),
+    count(distinct order_id)::int,
+    count(*) filter (where new_margin < 0 and margin >= 0)::int
+    into v_rev_old, v_rev_new, v_mar_old, v_mar_new, v_orders, v_pushed
+  from c;
+
+  with ord as (
+    select order_id, sum(qty * ptr) as ptr_total
+      from public.pnl_line_v where order_date >= v_from group by order_id),
+  l as (
+    select v.*, public._pnl_slab_pct(p_slabs, o.ptr_total) as new_pct
+      from public.pnl_line_v v join ord o on o.order_id = v.order_id
+     where v.order_date >= v_from),
+  c as (
+    select l.customer_key, l.customer_name, l.margin,
+           (l.line_value - round(l.line_value * l.new_pct / 100, 2)) - l.sup_taxable as new_margin
+      from l)
+  select coalesce(jsonb_agg(r order by (r->>'sort')::numeric), '[]'::jsonb) into v_rows
+    from (select jsonb_build_object(
+            'key', customer_key,
+            'label', coalesce(customer_name,'—'),
+            'sub', public.inr_money(sum(margin)) || ' → ' || public.inr_money(sum(new_margin)),
+            'value', public.inr_money(sum(new_margin) - sum(margin)),
+            'value_tone', case when sum(new_margin) - sum(margin) < 0 then 'danger' else 'success' end,
+            'sort', sum(new_margin) - sum(margin)) r
+            from c group by customer_key, customer_name
+           order by sum(new_margin) - sum(margin)
+           limit 20) q;
+
+  return jsonb_build_object('ok', true, 'ran', true,
+    'title', public._pnl_c('sim.title'),
+    'subtitle', public._pnl_c('sim.subtitle'),
+    'current_label', public._pnl_c('sim.current'),
+    'proposed_label', public._pnl_c('sim.proposed'),
+    'min_ptr_label', public._pnl_c('sim.min_ptr'),
+    'pct_label', public._pnl_c('sim.pct'),
+    'run_label', public._pnl_c('sim.run'),
+    'note', public._pnl_c('sim.note'),
+    'empty_text', public._pnl_c('sim.empty'),
+    'range_label', replace(public._pnl_c('ui.range_days'), '%s', greatest(coalesce(p_days,30),1)::text),
+    'current', v_current,
+    'proposed', p_slabs,
+    'result_heading', public._pnl_c('sim.result'),
+    'has_data', (v_orders > 0),
+    'tiles', jsonb_build_array(
+      jsonb_build_object('key','delta_margin', 'label', public._pnl_c('sim.delta_margin'),
+        'value', public.inr_money(round(v_mar_new - v_mar_old, 2)),
+        'tone', case when v_mar_new < v_mar_old then 'danger' else 'success' end),
+      jsonb_build_object('key','delta_revenue','label', public._pnl_c('sim.delta_revenue'),
+        'value', public.inr_money(round(v_rev_new - v_rev_old, 2)),
+        'tone', case when v_rev_new < v_rev_old then 'danger' else 'success' end),
+      jsonb_build_object('key','pushed','label', public._pnl_c('sim.delta_negative'),
+        'value', v_pushed::text,
+        'tone', case when v_pushed > 0 then 'danger' else 'neutral' end),
+      jsonb_build_object('key','orders','label', public._pnl_c('sim.orders_replayed'),
+        'value', v_orders::text, 'tone','neutral')),
+    'rows', v_rows);
+end $$;
+
+revoke all on function public.pnl_slab_simulate(jsonb, int) from public, anon;
+grant execute on function public.pnl_slab_simulate(jsonb, int) to authenticated, service_role;
+
+-- ── 18. The below-cost report, raised at bill generation ────────────────────
+-- Visibility ONLY. It freezes the slab, records every line that sells below
+-- cost, and best-effort pings the dispatcher. It reduces no discount, holds no
+-- bill and returns no veto — there is nothing here a caller could act on to
+-- stop a bill even if it wanted to.
+create or replace function public.pnl_bill_generated(p_order_id uuid)
+returns jsonb language plpgsql security definer set search_path to 'public' as $$
+declare v_pct numeric; v_n int := 0; cfg public.pnl_cost_config%rowtype;
+begin
+  v_pct := public.pnl_slab_capture(p_order_id);
+  select * into cfg from public.pnl_cost_config where id = 1;
+
+  insert into public.pnl_alert (order_id, order_code, bill_line_id, product, qty,
+                                cust_taxable, sup_taxable, margin, detail)
+  select v.order_id, v.order_code, v.bill_line_id, v.product, v.qty,
+         v.cust_taxable, v.sup_taxable, v.margin,
+         jsonb_build_object('slab_pct', v.slab_pct, 'ptr', v.ptr,
+                            'disc_pct', v.disc_pct, 'free_qty', v.free_qty,
+                            'supplier', v.supplier_name)
+    from public.pnl_line_v v
+   where v.order_id = p_order_id and v.margin < 0
+  on conflict (order_id, bill_line_id) do update
+    set margin       = excluded.margin,
+        cust_taxable = excluded.cust_taxable,
+        sup_taxable  = excluded.sup_taxable,
+        detail       = excluded.detail,
+        created_at   = now(),
+        seen_at      = null;
+
+  get diagnostics v_n = row_count;
+
+  if v_n > 0 and coalesce(cfg.negative_alert_enabled, true) then
+    begin
+      perform public.notify('pnl_negative_margin', cfg.negative_alert_phone,
+        jsonb_build_object(
+          'order_id', p_order_id::text,
+          'audience', 'admin',
+          'count',    v_n::text,
+          'order',    coalesce((select order_code from public.orders where id = p_order_id), '')));
+    exception when others then
+      null;  -- a notification that cannot go out never becomes a billing fault
+    end;
+  end if;
+
+  return jsonb_build_object('ok', true, 'slab_pct', v_pct, 'below_cost', v_n);
+end $$;
+
+revoke all on function public.pnl_bill_generated(uuid) from public, anon, authenticated;
+grant execute on function public.pnl_bill_generated(uuid) to service_role;
+
+-- The admin's manual re-scan of one order (same work, guarded).
+create or replace function public.pnl_rescan_order(p_order_id uuid)
+returns jsonb language plpgsql security definer set search_path to 'public' as $$
+begin
+  if not public.is_admin() then
+    return jsonb_build_object('ok', false, 'error','not_authorized',
+                              'message', public._pnl_c('ui.not_authorized'));
+  end if;
+  return public.pnl_bill_generated(p_order_id);
+end $$;
+revoke all on function public.pnl_rescan_order(uuid) from public, anon;
+grant execute on function public.pnl_rescan_order(uuid) to authenticated, service_role;
+
+-- The hook: a bill_jobs row IS bill generation. Hooking here rather than
+-- inside customer_bill() keeps this file out of the invoice path entirely —
+-- the composer cannot be slowed, broken or blocked by anything below.
+create or replace function public._trg_pnl_bill_job()
+returns trigger language plpgsql security definer set search_path to 'public' as $$
+begin
+  begin
+    perform public.pnl_bill_generated(new.order_id);
+  exception when others then
+    null;  -- reporting is never allowed to stop a bill
+  end;
+  return new;
+end $$;
+
+drop trigger if exists trg_pnl_on_bill_job on public.bill_jobs;
+create trigger trg_pnl_on_bill_job
+  after insert on public.bill_jobs
+  for each row execute function public._trg_pnl_bill_job();

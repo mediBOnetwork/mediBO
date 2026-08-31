@@ -16,13 +16,19 @@ select (select id from admins where is_super order by email limit 1)      as sup
        (select id from admins where not coalesce(is_super,false)
           and email = 'test.admin@medibo.in' limit 1)                     as plain_id;
 
+-- Become that admin the way a real login does: admins.id is NOT the auth user
+-- id (they are separate rows), so the session claims must carry the AUTH id —
+-- exactly what a browser session carries — or get_my_role() resolves nothing
+-- and the proof would be measuring its own harness.
 create or replace function pg_temp.be(p uuid) returns void
 language plpgsql as $$
-declare v_email text;
+declare v_email text; v_uid uuid;
 begin
-  select lower(btrim(email)) into v_email from public.admins where id = p;
+  select lower(btrim(a.email)) into v_email from public.admins a where a.id = p;
+  select u.id into v_uid from auth.users u where lower(btrim(u.email)) = v_email;
   perform set_config('request.jwt.claims',
-    json_build_object('sub', p::text, 'email', v_email, 'role','authenticated')::text, true);
+    json_build_object('sub', coalesce(v_uid, p)::text, 'email', v_email,
+                      'role','authenticated')::text, true);
   perform set_config('role', 'authenticated', true);
 end $$;
 

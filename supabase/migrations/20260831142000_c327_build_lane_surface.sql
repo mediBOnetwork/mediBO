@@ -145,3 +145,98 @@ BEGIN
         'rows', v_debt_rows)),
     'window_label', 'Last ' || p_days || ' days');
 END $$;
+-- CHANGE #327 — the live render-log caught this one.
+--
+-- After #839 shipped, /admin/cron-health showed c301_db_lane=refused,
+-- c324_deploy_lane=refused and c327_build_lane=ABSENT. The two older lanes RETURN
+-- their own refusal sentence for a non-super-admin; this one called _dev_guard(),
+-- which RAISES — so the section got nothing to draw and printed nothing at all.
+-- The contract in this codebase is that ok:false is the backend REFUSING and it
+-- ships its own words. Match the siblings exactly.
+create or replace function public.build_contention_status(p_days int default 7)
+returns jsonb language plpgsql security definer set search_path to 'public' as $$
+DECLARE
+  v_conf int; v_def int; v_grant int; v_chained int; v_debt int; v_debt_lines bigint;
+  v_since timestamptz; v_hot jsonb; v_chains jsonb; v_debt_rows jsonb; v_live jsonb;
+BEGIN
+  IF NOT public.deploy_lane_guarded_ok() THEN
+    RETURN jsonb_build_object('ok', false,
+      'error', 'Build lane is visible to super-admins only.');
+  END IF;
+  v_since := now() - make_interval(days => greatest(coalesce(p_days,7),1));
+
+  SELECT count(*) FILTER (WHERE kind='conflict'),
+         count(*) FILTER (WHERE kind='deferred'),
+         count(*) FILTER (WHERE kind='granted')
+    INTO v_conf, v_def, v_grant
+  FROM lease_event WHERE at >= v_since;
+
+  SELECT count(*) INTO v_chained
+    FROM dev_commands WHERE status='pending' AND coalesce(chain_reason,'') <> '';
+
+  SELECT count(*), coalesce(sum(lines),0) INTO v_debt, v_debt_lines FROM god_file_debt;
+
+  SELECT coalesce(jsonb_agg(jsonb_build_object(
+           'label', path,
+           'detail', 'last hit ' || _ist_age(mx),
+           'value_label', n || ' conflict' || CASE WHEN n=1 THEN '' ELSE 's' END,
+           'tone', CASE WHEN n >= 3 THEN 'error' WHEN n >= 1 THEN 'warning' ELSE 'neutral' END)
+         ORDER BY n DESC), '[]')
+    INTO v_hot
+  FROM (SELECT path, count(*) n, max(at) mx FROM lease_event
+         WHERE kind IN ('conflict','deferred') AND at >= v_since
+         GROUP BY path ORDER BY count(*) DESC LIMIT 8) h;
+
+  SELECT coalesce(jsonb_agg(jsonb_build_object(
+           'label', '#' || id || ' · ' || left(_dev_title(title, build_log), 48),
+           'detail', chain_reason,
+           'value_label', 'waiting, not building',
+           'tone', 'info') ORDER BY id), '[]')
+    INTO v_chains
+  FROM dev_commands WHERE status='pending' AND coalesce(chain_reason,'') <> '';
+
+  SELECT coalesce(jsonb_agg(jsonb_build_object(
+           'label', path,
+           'detail', reason,
+           'value_label', to_char(lines, 'FM9,99,990') || ' lines',
+           'tone', CASE WHEN lines >= 5000 THEN 'error' WHEN lines >= 2000 THEN 'warning' ELSE 'neutral' END)
+         ORDER BY lines DESC), '[]')
+    INTO v_debt_rows
+  FROM (SELECT * FROM god_file_debt ORDER BY lines DESC LIMIT 8) g;
+
+  SELECT coalesce(jsonb_agg(jsonb_build_object(
+           'label', fl.path,
+           'detail', 'held by #' || fl.command_id || ' · ' || coalesce(fl.worker,'—'),
+           'value_label', _ist_age(fl.leased_at),
+           'tone', 'neutral') ORDER BY fl.leased_at), '[]')
+    INTO v_live
+  FROM file_leases fl;
+
+  RETURN jsonb_build_object(
+    'ok', true,
+    'title', 'Build lane',
+    'subtitle', 'Collisions are decided in SQL before a worker boots. A command whose files are already spoken for stays pending — it never claims, never loads a context, never parks mid-build.',
+    'mode_label', CASE WHEN v_conf = 0 THEN 'NO COLLISIONS' ELSE 'COLLISIONS: ' || v_conf END,
+    'mode_tone',  CASE WHEN v_conf = 0 THEN 'success' WHEN v_conf <= 2 THEN 'warning' ELSE 'error' END,
+    'headline', jsonb_build_object(
+      'label', CASE WHEN v_conf = 0
+                 THEN 'No build waited on another build.'
+                 ELSE v_conf || ' lease refusal' || CASE WHEN v_conf=1 THEN '' ELSE 's' END || ' in the last ' || p_days || ' days.' END,
+      'detail', v_grant || ' files leased · ' || v_def || ' deferred and picked up later · '
+                || v_chained || ' command' || CASE WHEN v_chained=1 THEN '' ELSE 's' END || ' auto-chained before claim',
+      'tone', CASE WHEN v_conf = 0 THEN 'success' ELSE 'warning' END),
+    'sections', jsonb_build_array(
+      jsonb_build_object('heading', 'Auto-chained — queued, not parked',
+        'empty_hint', 'Nothing is queued behind another command right now.',
+        'rows', v_chains),
+      jsonb_build_object('heading', 'Files held right now',
+        'empty_hint', 'No worker is holding a file.',
+        'rows', v_live),
+      jsonb_build_object('heading', 'Most contended files',
+        'empty_hint', 'No file has been fought over in this window.',
+        'rows', v_hot),
+      jsonb_build_object('heading', 'God-file debt — ' || v_debt || ' files, ' || to_char(v_debt_lines,'FM9,99,99,990') || ' lines',
+        'empty_hint', 'No Dart file is over the threshold. Run scripts/god_files.sh to refresh.',
+        'rows', v_debt_rows)),
+    'window_label', 'Last ' || p_days || ' days');
+END $$;

@@ -262,20 +262,27 @@ $$;
 -- ── 7. Freezing the slab ────────────────────────────────────────────────────
 create or replace function public.pnl_slab_capture(p_order_id uuid)
 returns numeric language plpgsql security definer set search_path to 'public' as $$
-declare v_total numeric; v_pct numeric;
+declare v_total numeric; v_pct numeric; v_snap jsonb;
 begin
-  select coalesce(sum(a.qty * b.ptr), 0) into v_total
-    from public.bill_line_allocations a
-    join public.bill_lines b on b.id = a.bill_line_id
-   where a.order_id = p_order_id and b.verified;
+  -- CHANGE #318 owns the bill-time slab: order_slab_snapshot() freezes it onto
+  -- the order itself and every reprint reads it back. P&L does NOT keep a
+  -- second opinion — it asks for that snapshot and mirrors it here so the
+  -- margin history has its own dated copy to audit against.
+  begin
+    v_snap := public.order_slab_snapshot(p_order_id);
+  exception when others then
+    v_snap := null;
+  end;
 
-  v_pct := coalesce(public.ptr_discount_pct(v_total), 0);
+  v_total := coalesce((v_snap->>'base')::numeric, public._order_taxable_base(p_order_id));
+  v_pct   := coalesce((v_snap->>'discount_pct')::numeric,
+                      public.ptr_discount_pct(v_total), 0);
 
   insert into public.order_pnl_slab (order_id, slab_pct, ptr_total)
   values (p_order_id, v_pct, v_total)
   on conflict (order_id) do nothing;
 
-  return (select slab_pct from public.order_pnl_slab where order_id = p_order_id);
+  return v_pct;
 end $$;
 
 -- ── 8. THE ENGINE — one row per allocated bill line ─────────────────────────
@@ -327,15 +334,21 @@ with base as (
      limit 1) pp on true
 ),
 tot as (
-  select order_id, sum(qty * ptr) as ptr_total from base group by order_id
+  -- the same base _order_taxable_base() uses: each line rounded, then summed
+  select order_id, sum(round(qty * ptr, 2)) as ptr_total from base group by order_id
 ),
 slab as (
-  -- The FROZEN slab wins. Only an order that was never billed falls through to
-  -- today's table, and then only so an unbilled order still shows a figure.
+  -- The FROZEN slab wins, and the order carries it: CHANGE #318 stamps
+  -- bill_discount_pct at bill time and every reprint reads it back, so P&L
+  -- reads the same number rather than re-deriving one. order_pnl_slab is the
+  -- P&L-side mirror for orders billed before that stamp existed; only an order
+  -- that was never billed at all falls through to today's ladder.
   select t.order_id,
-         coalesce(s.slab_pct, public.ptr_discount_pct(t.ptr_total), 0) as slab_pct,
-         (s.order_id is not null)                                      as slab_frozen
+         coalesce(o.bill_discount_pct, s.slab_pct,
+                  public.ptr_discount_pct(t.ptr_total), 0)                  as slab_pct,
+         (o.bill_discount_pct is not null or s.order_id is not null)        as slab_frozen
     from tot t
+    join public.orders o on o.id = t.order_id
     left join public.order_pnl_slab s on s.order_id = t.order_id
 )
 select
@@ -957,15 +970,19 @@ grant execute on function public.pnl_config_get() to authenticated, service_role
 grant execute on function public.pnl_config_set(jsonb) to authenticated, service_role;
 
 -- ── 16. Which slab a proposed table would have picked ───────────────────────
--- Mirrors ptr_discount_pct exactly, including its `>` (not `>=`) boundary, so
--- a simulation of the CURRENT table reproduces the current bills to the paisa.
+-- Mirrors discount_slab_pick exactly, including its `>` (not `>=`) boundary and
+-- its highest-band-wins ordering, so a simulation of the CURRENT table
+-- reproduces the current bills to the paisa. Both the CHANGE #318 column names
+-- (min_amount / discount_pct) and the older ones are accepted, so a proposal
+-- typed against either vocabulary still prices.
 create or replace function public._pnl_slab_pct(p_slabs jsonb, p_total numeric)
 returns numeric language sql immutable as $$
   select coalesce((
-    select coalesce((e->>'pct')::numeric, 0)
+    select coalesce((e->>'discount_pct')::numeric, (e->>'pct')::numeric, 0)
       from jsonb_array_elements(coalesce(p_slabs, '[]'::jsonb)) e
-     where coalesce(p_total,0) > coalesce((e->>'min_ptr')::numeric, 0)
-     order by coalesce((e->>'min_ptr')::numeric, 0) desc
+     where coalesce(p_total,0) >
+           coalesce((e->>'min_amount')::numeric, (e->>'min_ptr')::numeric, 0)
+     order by coalesce((e->>'min_amount')::numeric, (e->>'min_ptr')::numeric, 0) desc
      limit 1), 0);
 $$;
 
@@ -990,8 +1007,9 @@ begin
                               'message', public._pnl_c('ui.not_authorized'));
   end if;
 
-  select coalesce(jsonb_agg(jsonb_build_object('min_ptr', min_ptr, 'pct', pct)
-                            order by min_ptr), '[]'::jsonb)
+  select coalesce(jsonb_agg(jsonb_build_object(
+                    'slab_id', id, 'min_amount', min_amount, 'discount_pct', discount_pct)
+                  order by min_amount), '[]'::jsonb)
     into v_current
   from public.discount_slabs where active;
 
@@ -1011,7 +1029,7 @@ begin
   end if;
 
   with ord as (
-    select order_id, sum(qty * ptr) as ptr_total
+    select order_id, sum(line_value) as ptr_total
       from public.pnl_line_v where order_date >= v_from group by order_id),
   l as (
     select v.*, public._pnl_slab_pct(p_slabs, o.ptr_total) as new_pct
@@ -1031,7 +1049,7 @@ begin
   from c;
 
   with ord as (
-    select order_id, sum(qty * ptr) as ptr_total
+    select order_id, sum(line_value) as ptr_total
       from public.pnl_line_v where order_date >= v_from group by order_id),
   l as (
     select v.*, public._pnl_slab_pct(p_slabs, o.ptr_total) as new_pct

@@ -39,6 +39,7 @@ import 'admin/pricing_backfill_screen.dart';
 import 'admin/admin_bill_pipeline_screen.dart'; // CHANGE #226
 import 'admin/admin_scope_audit_screen.dart'; // CHANGE #227
 import 'admin/admin_order_closure_screen.dart'; // CHANGE #229
+import 'admin/admin_gst_screen.dart'; // CHANGE #320
 import '../features/whatsapp/ui/wa_home_screen.dart';
 import '../features/whatsapp/ui/wa_templates_screen.dart';
 import 'admin/wa_campaigns_screen.dart';
@@ -577,6 +578,11 @@ class _HomeShellState extends State<HomeShell> {
       case 'order_closure':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const AdminOrderClosureScreen()));
+        break;
+      // CHANGE #320 — GST (input credit, monthly position, GSTR exports).
+      case 'gst':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const AdminGstScreen()));
         break;
       case 'mr': setState(() { _index = 7; _cartOpen = false; }); break;
       case 'companies': setState(() { _index = 8; _cartOpen = false; }); break;

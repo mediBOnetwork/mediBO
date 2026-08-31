@@ -131,6 +131,11 @@ List<AdminNavEntry> get kAdminOverflowNav => <AdminNavEntry>[
       // decision, and whether buying its stock is authorised yet.
       AdminNavEntry('New-order alerts', Icons.notifications_active_outlined,
           route: 'order_alerts'),
+      // CHANGE #320 — GST: input credit, the monthly position and the GSTR
+      // exports. Sits next to Bill pipeline because it reads the same two
+      // documents from the other end — what tax the purchases carry and what
+      // tax the sales owe.
+      AdminNavEntry('GST', Icons.account_balance_outlined, route: 'gst'),
       // CHANGE #312 — Feature gaps: the register the per-role journey audits
       // file into. Sits last because it is the meta surface — what the app is
       // still missing, rather than what it is doing right now.

@@ -198,6 +198,8 @@ insert into public.pnl_label (key, label, tone, sort_order) values
   ('sec.by_day',            'Margin per day',                                  null, 4),
   ('sec.alerts',            'Sold below cost',                                 'danger', 5),
   ('sec.lines',             'Lines',                                           null, 6),
+  ('ui.rescan',             'Re-check this bill for below-cost lines',         null, 0),
+  ('ui.rescanned',          'Re-checked.',                                     'success', 0),
 
   ('col.margin',            'Margin',                                          null, 0),
   ('col.revenue',           'Revenue',                                         null, 0),
@@ -884,6 +886,8 @@ begin
       jsonb_build_object('label', public._pnl_c('cost.credit_rev'),   'value', '- ' || public.inr_money(o.credit_revenue)),
       jsonb_build_object('label', public._pnl_c('cost.credit_cost'),  'value', '+ ' || public.inr_money(o.credit_cost)))),
     'lines_heading', public._pnl_c('sec.lines'),
+    'empty_text',    public._pnl_c('ui.empty'),
+    'rescan_label',  public._pnl_c('ui.rescan'),
     'lines', v_lines);
 end $$;
 
@@ -1177,7 +1181,8 @@ begin
     return jsonb_build_object('ok', false, 'error','not_authorized',
                               'message', public._pnl_c('ui.not_authorized'));
   end if;
-  return public.pnl_bill_generated(p_order_id);
+  return public.pnl_bill_generated(p_order_id)
+         || jsonb_build_object('message', public._pnl_c('ui.rescanned'));
 end $$;
 revoke all on function public.pnl_rescan_order(uuid) from public, anon;
 grant execute on function public.pnl_rescan_order(uuid) to authenticated, service_role;

@@ -72,6 +72,35 @@ IconData navIcon(String? key) {
   }
 }
 
+/// CHANGE #325 — the two identity rows the profile dropdown may hold, cached
+/// for the whole app.
+///
+/// The dropdown is drawn in four places across two viewports, none of which
+/// own a Supabase call. Rather than plumb the payload down four widget layers,
+/// the shell loads `nav_registry().profile_menu` once at boot and parks it
+/// here. It is a RENDER CACHE, never an authority: the backend decides what
+/// may appear on that surface (a CHECK constraint rejects surface='profile'
+/// for anything but identity), and an empty list simply draws no rows.
+class NavProfileMenu {
+  NavProfileMenu._();
+
+  static final ValueNotifier<List<Map<String, dynamic>>> items =
+      ValueNotifier<List<Map<String, dynamic>>>(
+          const <Map<String, dynamic>>[]);
+
+  /// Adopt the rows from a `nav_registry()` payload. Anything unparseable
+  /// leaves the previous rows alone rather than blanking the menu.
+  static void adopt(Object? payload) {
+    if (payload is! Map) return;
+    final raw = payload['profile_menu'];
+    if (raw is! List) return;
+    items.value = raw
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList(growable: false);
+  }
+}
+
 /// A tap on a registry tile. [tile] is the backend's own map, handed back
 /// untouched so the caller reads `route_key` / `deep_link` / `feature_key`
 /// from the payload rather than from anything this file inferred.

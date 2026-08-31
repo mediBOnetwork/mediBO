@@ -4,6 +4,7 @@ import '../../../design_tokens.dart';
 import '../../../services/ui_copy.dart';
 import '../../../utils/render_log.dart';
 import 'db_lane_section.dart';
+import 'deploy_lane_section.dart';
 import 'dev_queue_common.dart';
 import 'dev_queue_service.dart';
 
@@ -33,6 +34,10 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
   // failure: too much heavy work landing at once on a 1 GB instance. Its own
   // RPC, so a slow or refused read of one never blanks the other.
   Map<String, dynamic> _db = const {};
+  // CHANGE #324 — the deploy lane is the same failure as the DB lane in a
+  // different resource: parallel work forced into a single file. Its own RPC,
+  // so a slow or refused read of one never blanks the other.
+  Map<String, dynamic> _lane = const {};
   bool _loading = true;
   String? _error;
 
@@ -53,9 +58,16 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
         // The DB lane is a panel, not the page. If it cannot be read the cron
         // health above it still renders; the panel simply omits itself.
       }
+      Map<String, dynamic> lane = const {};
+      try {
+        lane = await _svc.deployLane();
+      } catch (_) {
+        // Same contract as the DB lane: a panel, never the page.
+      }
       if (!mounted) return;
       setState(() {
         _db = db;
+        _lane = lane;
         _data = d;
         _loading = false;
         // ok:false is the BACKEND refusing (not a crash) and it ships its own
@@ -73,6 +85,12 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
         RenderLog.write(
           'c301_db_lane',
           _db['ok'] == true ? 'ok' : (_db.isEmpty ? 'absent' : 'refused'),
+        );
+        // CHANGE #324 — painted-proof for the deploy lane: 'ok' only when the
+        // backend answered AND the section drew its payload.
+        RenderLog.write(
+          'c324_deploy_lane',
+          _lane['ok'] == true ? 'ok' : (_lane.isEmpty ? 'absent' : 'refused'),
         );
         RenderLog.write('c273_cron_tasks', '${tasks.length}');
         // The before/after report is the command's deliverable, so it gets its
@@ -172,6 +190,12 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
                     if (_db.isNotEmpty) ...[
                       SizedBox(height: Ds.space.x24),
                       DbLaneSection(data: _db),
+                    ],
+                    // Its own condition, deliberately: a refused DB-lane read
+                    // must not take the deploy lane down with it.
+                    if (_lane.isNotEmpty) ...[
+                      SizedBox(height: Ds.space.x24),
+                      DeployLaneSection(data: _lane),
                     ],
                     SizedBox(height: Ds.space.x16),
                     _tickCard(tick),

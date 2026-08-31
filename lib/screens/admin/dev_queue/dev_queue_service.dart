@@ -63,6 +63,15 @@ class DevQueueService {
   Future<Map<String, dynamic>> dbHealth() async =>
       _asMap(await _c.rpc('db_health_status'));
 
+  /// CHANGE #324 — the deploy lane, now a merge queue: who holds the lane and
+  /// for how long, what is waiting to be batched, the batch in flight, wait
+  /// time vs hold time over the last seven days, any claim still holding a
+  /// slot past its TTL, and the recent deploys. Every word and every duration
+  /// string is built in `deploy_lane_status()`; the section renders it in
+  /// payload order.
+  Future<Map<String, dynamic>> deployLane({int limit = 12}) async =>
+      _asMap(await _c.rpc('deploy_lane_status', params: {'p_limit': limit}));
+
   /// CHANGE #275 — every Google sign-in failure recorded on a real device,
   /// newest first, already rendered by the backend.
   Future<Map<String, dynamic>> authDiagList({int limit = 50}) async =>

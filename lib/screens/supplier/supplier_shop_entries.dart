@@ -53,11 +53,13 @@ class _SupplierShopEntriesState extends State<SupplierShopEntries> {
     if (_s(_avail['screen_title']).isEmpty && _s(_cov['screen_title']).isEmpty) {
       return const SizedBox.shrink();
     }
-    final declared = (_cov['declared'] as List?)?.length ?? 0;
     return Padding(
       padding: EdgeInsets.fromLTRB(
           Ds.space.x16, Ds.space.x12, Ds.space.x16, Ds.space.x4),
-      child: Row(children: [
+      // Both tiles share the tallest height so their tops and bottoms sit on
+      // the same lines — without stretch each Expanded self-sizes and the two
+      // cards visibly misalign.
+      child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Expanded(
           child: _tile(
             icon: Icons.storefront_outlined,
@@ -76,9 +78,9 @@ class _SupplierShopEntriesState extends State<SupplierShopEntries> {
           child: _tile(
             icon: Icons.business_outlined,
             title: _s(_cov['screen_title']),
-            sub: declared == 0
-                ? _s(_cov['declared_empty'])
-                : _s(_cov['declared_title']),
+            // The backend's own short tile line ('None declared yet' / 'N
+            // declared'); the full-screen empty sentence truncated mid-word here.
+            sub: _s(_cov['tile_sub']),
             tone: '',
             onTap: () => Navigator.of(context)
                 .push(MaterialPageRoute(

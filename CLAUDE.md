@@ -312,7 +312,7 @@ suite ONCE on the merged tree and deploys ONCE.
   spec_rebase.sh <branch> &      # rebase onto origin/main WHILE you work
   scripts/affected_tests.sh      # only the tests your change can break
   devcmd.sh rebaseline && rgcheck  # if you changed the schema — before pushing
-  git push origin HEAD:<branch>
+  git branch -f <branch> HEAD   # shared .git — nothing to push
   devcmd.sh queue_push <cmd-id> <agent> "<title>" <branch> <commit>
   devcmd.sh queue_wait <entry_id>  # → the change_no for dev_cmd_complete
 

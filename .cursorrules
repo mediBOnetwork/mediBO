@@ -345,7 +345,7 @@ Built-in guards you should not fight: a pull-first guard (never build/commit/pus
 
 
 
-## PROJECT · deploy_lane  (priority 75, v4)
+## PROJECT · deploy_lane  (priority 75, v5)
 
 ## 3. DEPLOY LANE — IT IS A MERGE QUEUE (CHANGE #324)
 
@@ -370,7 +370,7 @@ Your whole interaction with the lane:
    protected suite when it cannot tell what a change touches.
 3. Schema changed? `devcmd.sh rebaseline` then `devcmd.sh rgcheck` = `true`,
    BEFORE you push. The merge worker will not fix a red guard for you.
-4. `git push origin HEAD:<branch>`
+4. `git branch -f <branch> HEAD` — every runner shares ONE checkout and the merge worker's worktree is cut from the same .git, so a local branch is already visible to it. Nothing to push: GitHub's key is not authorised on this box and `origin` is history only.
 5. `devcmd.sh queue_push <cmd-id> <agent> "<title>" <branch> <commit>` →
    `entry_id`. Then go straight back to building.
 6. `devcmd.sh queue_wait <entry_id> 1800` only when you need the change number

@@ -72,6 +72,13 @@ class DevQueueService {
   Future<Map<String, dynamic>> deployLane({int limit = 12}) async =>
       _asMap(await _c.rpc('deploy_lane_status', params: {'p_limit': limit}));
 
+  /// CHANGE #327 — the Build lane: what waited on a FILE.
+  /// Its own RPC beside the other two lanes, so a refused read of one never
+  /// blanks the others. Every label, count sentence and empty hint is built in
+  /// `build_contention_status()`; the section renders it in payload order.
+  Future<Map<String, dynamic>> buildLane({int days = 7}) async =>
+      _asMap(await _c.rpc('build_contention_status', params: {'p_days': days}));
+
   /// CHANGE #275 — every Google sign-in failure recorded on a real device,
   /// newest first, already rendered by the backend.
   Future<Map<String, dynamic>> authDiagList({int limit = 50}) async =>

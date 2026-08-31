@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../design_tokens.dart';
 import '../../../services/ui_copy.dart';
 import '../../../utils/render_log.dart';
+import 'build_lane_section.dart';
 import 'db_lane_section.dart';
 import 'deploy_lane_section.dart';
 import 'dev_queue_common.dart';
@@ -38,6 +39,9 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
   // different resource: parallel work forced into a single file. Its own RPC,
   // so a slow or refused read of one never blanks the other.
   Map<String, dynamic> _lane = const {};
+  // CHANGE #327 — and the same failure a third time, in a third resource:
+  // builds fighting for one FILE. Its own RPC, same reason as the other two.
+  Map<String, dynamic> _build = const {};
   bool _loading = true;
   String? _error;
 
@@ -64,10 +68,17 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
       } catch (_) {
         // Same contract as the DB lane: a panel, never the page.
       }
+      Map<String, dynamic> bl = const {};
+      try {
+        bl = await _svc.buildLane();
+      } catch (_) {
+        // Same contract again: a panel, never the page.
+      }
       if (!mounted) return;
       setState(() {
         _db = db;
         _lane = lane;
+        _build = bl;
         _data = d;
         _loading = false;
         // ok:false is the BACKEND refusing (not a crash) and it ships its own
@@ -196,6 +207,12 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
                     if (_lane.isNotEmpty) ...[
                       SizedBox(height: Ds.space.x24),
                       DeployLaneSection(data: _lane),
+                    ],
+                    // And again its own condition: the build lane is the one
+                    // that proves nothing waited on a file.
+                    if (_build.isNotEmpty) ...[
+                      SizedBox(height: Ds.space.x24),
+                      BuildLaneSection(data: _build),
                     ],
                     SizedBox(height: Ds.space.x16),
                     _tickCard(tick),

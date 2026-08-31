@@ -724,6 +724,16 @@ class _Row extends StatelessWidget {
         ToneChip(
             label: (row['journey_chip']).toString(),
             tone: statusTone('completed')),
+      // CHANGE #327 — the auto-chain. A pending command whose predicted files
+      // collide with something in flight says so on its own card: it is queued
+      // behind that command, not parked mid-build against a lease. The sentence
+      // (and the id list inside it) is composed by dev_cmd_autochain from
+      // ui_copy; Dart adds only the glyph.
+      if ((row['chain_chip'] ?? '').toString().isNotEmpty)
+        ToneChip(
+            label: (row['chain_chip']).toString(),
+            tone: toneByName((row['chain_tone'] ?? 'info').toString()),
+            icon: Icons.link),
     ];
 
     return DqCard(

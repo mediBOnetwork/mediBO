@@ -39,6 +39,7 @@ class AdminPartnerConsoleScreen extends StatefulWidget {
 
 class _AdminPartnerConsoleScreenState extends State<AdminPartnerConsoleScreen> {
   Map<String, dynamic>? _payload;
+  Map<String, dynamic>? _fence;
   bool _loading = true;
   bool _busy = false;
 
@@ -146,6 +147,24 @@ class _AdminPartnerConsoleScreenState extends State<AdminPartnerConsoleScreen> {
     await _load();
   }
 
+  /// CHANGE #352 — the live fence check. It reproduces each of the eight
+  /// approved critical findings AS the partner and reports what the backend
+  /// did; every write it makes is rolled back inside the RPC.
+  Future<void> _verifyFence() async {
+    setState(() => _busy = true);
+    Map<String, dynamic>? r;
+    try {
+      r = await _rpc('partner_fence_verify', const {});
+    } catch (_) {
+      r = null;
+    }
+    if (!mounted) return;
+    setState(() {
+      _fence = r;
+      _busy = false;
+    });
+  }
+
   Future<void> _removeUser(int id) async {
     if (_busy) return;
     setState(() => _busy = true);
@@ -190,6 +209,8 @@ class _AdminPartnerConsoleScreenState extends State<AdminPartnerConsoleScreen> {
               onAdd: _addUser,
               onRemove: _removeUser,
               onAccess: _setAccess,
+              fenceResult: _fence,
+              onVerifyFence: _verifyFence,
             ),
     );
   }
@@ -227,6 +248,8 @@ class PartnerConsoleView extends StatelessWidget {
     required this.onRemove,
     required this.onAccess,
     this.busy = false,
+    this.fenceResult,
+    this.onVerifyFence,
   });
 
   final Map<String, dynamic> payload;
@@ -237,6 +260,11 @@ class PartnerConsoleView extends StatelessWidget {
   final void Function(int id) onRemove;
   final void Function(String featureKey, String access) onAccess;
 
+  /// The payload of the last `partner_fence_verify()` run, or null when the
+  /// check has not been run in this session. Never computed here.
+  final Map<String, dynamic>? fenceResult;
+  final VoidCallback? onVerifyFence;
+
   String _s(String k) => (payload[k] ?? '').toString();
 
   @override
@@ -244,12 +272,20 @@ class PartnerConsoleView extends StatelessWidget {
     final users = (payload['users'] as List?) ?? const [];
     final features = (payload['features'] as List?) ?? const [];
     final audit = (payload['audit'] as List?) ?? const [];
+    final fence = (payload['fence'] as Map?) == null
+        ? const <String, dynamic>{}
+        : Map<String, dynamic>.from(payload['fence'] as Map);
     // Written BEFORE the refusal branch on purpose: the render-log has to prove
     // the screen painted even when the backend said no, otherwise a headless
     // non-super session can never verify the route exists at all.
     try {
       RenderLog.write('c307_partner_console',
           'ok=${payload['ok'] == true},users=${users.length},features=${features.length}');
+      // CHANGE #352 — the fence card is its own render key, so "the backend
+      // fenced it" and "a super-admin can see that it did" are separate proofs.
+      RenderLog.write('c352_partner_fence',
+          'card=${fence.isNotEmpty},rows=${(fence['rows'] as List?)?.length ?? 0},'
+          'status=${(fence['status_label'] ?? '').toString()}');
     } catch (_) {}
     if (payload['ok'] != true) {
       // CHANGE #321: the refusal prints the backend's SENTENCE when it sent
@@ -315,6 +351,15 @@ class PartnerConsoleView extends StatelessWidget {
               ),
           ],
         ),
+        if (fence.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x24),
+          _FenceCard(
+            fence: fence,
+            result: fenceResult,
+            busy: busy,
+            onVerify: onVerifyFence,
+          ),
+        ],
         SizedBox(height: Ds.space.x24),
         _Card(
           title: _s('audit_title'),
@@ -520,6 +565,133 @@ class _AuditRow extends StatelessWidget {
           Text((row['at_label'] ?? '').toString(), style: Ds.t.caption),
         ],
       ),
+    );
+  }
+}
+
+/// CHANGE #352 — the Partner fence card. Every string, every number and every
+/// tone arrives in `fence`; this widget picks a colour for a tone name and
+/// nothing else.
+class _FenceCard extends StatelessWidget {
+  const _FenceCard({
+    required this.fence,
+    required this.busy,
+    this.result,
+    this.onVerify,
+  });
+
+  final Map<String, dynamic> fence;
+  final Map<String, dynamic>? result;
+  final bool busy;
+  final VoidCallback? onVerify;
+
+  static Color toneColor(String tone) => switch (tone) {
+        'success' => Ds.c.success,
+        'danger' => Ds.c.danger,
+        'warning' => Ds.c.warning,
+        'info' => Ds.c.info,
+        _ => Ds.c.textSecondary,
+      };
+
+  static Color toneSoft(String tone) => switch (tone) {
+        'success' => Ds.c.successSoft,
+        'danger' => Ds.c.dangerSoft,
+        'warning' => Ds.c.warningSoft,
+        'info' => Ds.c.infoSoft,
+        _ => Ds.c.bg,
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    final rows = (fence['rows'] as List?) ?? const [];
+    final r = result;
+    final checks = (r?['rows'] as List?) ?? const [];
+    return _Card(
+      title: (fence['title'] ?? '').toString(),
+      subtitle: (fence['subtitle'] ?? '').toString(),
+      children: [
+        _TonePill(
+          label: (fence['status_label'] ?? '').toString(),
+          tone: (fence['status_tone'] ?? '').toString(),
+        ),
+        SizedBox(height: Ds.space.x16),
+        for (final row in rows) _FenceRow(row: Map<String, dynamic>.from(row as Map)),
+        SizedBox(height: Ds.space.x16),
+        SizedBox(
+          width: double.infinity,
+          height: Ds.touch.minTarget,
+          child: OutlinedButton(
+            key: const ValueKey('partner_fence_verify'),
+            onPressed: busy ? null : onVerify,
+            child: Text((fence['verify_label'] ?? '').toString()),
+          ),
+        ),
+        if (r == null) ...[
+          SizedBox(height: Ds.space.x12),
+          Text((fence['never_run'] ?? '').toString(), style: Ds.t.caption),
+        ] else ...[
+          SizedBox(height: Ds.space.x16),
+          Row(
+            children: [
+              Expanded(
+                child: Text((r['title'] ?? '').toString(), style: Ds.t.body),
+              ),
+              _TonePill(
+                label: (r['summary'] ?? '').toString(),
+                tone: (r['tone'] ?? '').toString(),
+              ),
+            ],
+          ),
+          SizedBox(height: Ds.space.x12),
+          for (final c in checks) _FenceRow(row: Map<String, dynamic>.from(c as Map)),
+        ],
+      ],
+    );
+  }
+}
+
+class _FenceRow extends StatelessWidget {
+  const _FenceRow({required this.row});
+  final Map<String, dynamic> row;
+
+  @override
+  Widget build(BuildContext context) {
+    final tone = (row['tone'] ?? '').toString();
+    return Padding(
+      padding: EdgeInsets.only(bottom: Ds.space.x12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Text((row['label'] ?? '').toString(), style: Ds.t.caption),
+          ),
+          SizedBox(width: Ds.space.x12),
+          Text(
+            (row['value'] ?? '').toString(),
+            textAlign: TextAlign.right,
+            style: Ds.t.body.copyWith(color: _FenceCard.toneColor(tone)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TonePill extends StatelessWidget {
+  const _TonePill({required this.label, required this.tone});
+  final String label, tone;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x12, vertical: Ds.space.x4),
+      decoration: BoxDecoration(
+        color: _FenceCard.toneSoft(tone),
+        borderRadius: Ds.r.rChip,
+      ),
+      child: Text(label,
+          style: Ds.t.caption.copyWith(color: _FenceCard.toneColor(tone))),
     );
   }
 }

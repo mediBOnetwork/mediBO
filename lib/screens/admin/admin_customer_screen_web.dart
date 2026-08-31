@@ -39,6 +39,7 @@ import '../../widgets/native_signed_image.dart'; // CHANGE #550
 import '../../widgets/cash_payment_sheet.dart';
 import '../../widgets/fullscreen_image.dart';
 import '../../utils/bill_mime.dart'; // CHANGE #465
+import 'admin_customer_360_screen.dart'; // CHANGE #396
 
 // CHANGE #242: payment-image sharing now goes through the platform-conditional
 // download_bytes wrapper (Web Share API on web / share_plus on Android), so no
@@ -6725,6 +6726,36 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
     openFullscreenImage(ctx, url);
   }
 
+  /// CHANGE #396 — "reachable from any order". The order does not know which
+  /// pharmacy it belongs to; `customer_360_for_order` answers that (and its own
+  /// button label), and the 360 view opens on that pharmacy.
+  Future<void> _openCustomer360() async {
+    try {
+      final raw = await Supabase.instance.client
+          .rpc('customer_360_for_order', params: {'p_order_id': widget.orderId});
+      final m = raw is Map
+          ? Map<String, dynamic>.from(raw)
+          : const <String, dynamic>{};
+      final id = (m['customer_id'] ?? '').toString();
+      if (!mounted) return;
+      if (m['ok'] != true || id.isEmpty) {
+        final msg = (m['message'] ?? '').toString();
+        if (msg.isNotEmpty) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text(msg)));
+        }
+        return;
+      }
+      RenderLog.write('c396_c360_from_order', 1);
+      await Navigator.push(
+          context,
+          MaterialPageRoute(
+              builder: (_) => AdminCustomer360Screen(customerId: id)));
+    } catch (_) {
+      // a failed lookup leaves the order panel exactly as it was
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     RenderLog.write('c217_paydash_built', 1);
@@ -6782,6 +6813,12 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
               style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
                   color: Color(0xFF6B7280), letterSpacing: 0.3)),
           const Spacer(),
+          // CHANGE #396 — every order is a door into the pharmacy behind it.
+          TextButton.icon(
+            onPressed: _openCustomer360,
+            icon: Icon(Icons.person_search, size: Ds.space.x16),
+            label: Text(c('c360.open_from_order'), style: Ds.t.caption),
+          ),
           if (_loading)
             const SizedBox(width: 13, height: 13,
                 child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF9CA3AF))),

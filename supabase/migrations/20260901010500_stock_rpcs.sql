@@ -246,6 +246,7 @@ begin
     'subtitle', public._stk_copy('stock.subtitle',''),
     'empty_label', public._stk_copy('stock.empty',''),
     'refresh_label', public._stk_copy('stock.refresh','Re-scan warehouse'),
+    'retry_label', public._stk_copy('stock.retry','Retry'),
     'writeoff_label', public._stk_copy('stock.writeoff','Write off'),
     'aged_days', v_aged,
     'tiles', jsonb_build_array(

@@ -63,7 +63,13 @@ insert into public.c360_label (key,label) values
   ('not_found','No such customer.'), ('admins_only','Admins only.'),
   ('slab_none','No slab captured yet.'),
   ('slab_basis','From the most recent bill'),
-  ('slab_expected','Expected at their average order size')
+  ('slab_expected','Expected at their average order size'),
+  ('sec_months','Month by month'),
+  ('lbl_owner','Owner'), ('lbl_phone','Phone'), ('lbl_whatsapp','WhatsApp'),
+  ('lbl_city','City'), ('lbl_address','Address'),
+  ('lbl_first_order','First order'), ('lbl_last_order','Last order'),
+  ('lbl_outstanding','Outstanding'), ('lbl_orders_col','Orders'),
+  ('lbl_retry','Retry')
 on conflict (key) do nothing;
 
 create or replace function public._c360(p_key text)
@@ -298,9 +304,39 @@ begin
       'first_order_label', case when v_tot.first_at is null then ''
                                 else to_char(v_tot.first_at at time zone 'Asia/Kolkata','DD Mon YYYY') end,
       'last_order_label',  case when v_tot.last_at is null then ''
-                                else to_char(v_tot.last_at at time zone 'Asia/Kolkata','DD Mon YYYY') end),
+                                else to_char(v_tot.last_at at time zone 'Asia/Kolkata','DD Mon YYYY') end,
+      'fields', (select coalesce(jsonb_agg(f.x order by f.n),'[]'::jsonb) from (
+          select 1 n, jsonb_build_object('label', public._c360('lbl_owner'),
+                 'value', coalesce(v_p.owner_name, v_p.customer_name, '')) x
+          union all select 2, jsonb_build_object('label', public._c360('lbl_phone'),
+                 'value', coalesce(v_p.phone,''))
+          union all select 3, jsonb_build_object('label', public._c360('lbl_whatsapp'),
+                 'value', coalesce(v_p.whatsapp_no,''))
+          union all select 4, jsonb_build_object('label', public._c360('lbl_zone'),
+                 'value', coalesce(v_zone,''))
+          union all select 5, jsonb_build_object('label', public._c360('lbl_city'),
+                 'value', coalesce(v_p.city,''))
+          union all select 6, jsonb_build_object('label', public._c360('lbl_address'),
+                 'value', coalesce(nullif(btrim(v_p.address),''), v_p.address_local, ''))
+          union all select 7, jsonb_build_object('label', public._c360('lbl_code'),
+                 'value', coalesce(v_p.customer_code,''))
+          union all select 8, jsonb_build_object('label', public._c360('lbl_gstin'),
+                 'value', coalesce(nullif(v_p.gstin,''), v_p.gst_no, ''))
+          union all select 9, jsonb_build_object('label', public._c360('lbl_dl'),
+                 'value', coalesce(nullif(v_p.drug_license,''), v_p.dl_20b, ''))
+          union all select 10, jsonb_build_object('label', public._c360('lbl_term'),
+                 'value', coalesce(v_p.payment_term,''))
+          union all select 11, jsonb_build_object('label', public._c360('lbl_first_order'),
+                 'value', case when v_tot.first_at is null then ''
+                               else to_char(v_tot.first_at at time zone 'Asia/Kolkata','DD Mon YYYY') end)
+          union all select 12, jsonb_build_object('label', public._c360('lbl_last_order'),
+                 'value', case when v_tot.last_at is null then ''
+                               else to_char(v_tot.last_at at time zone 'Asia/Kolkata','DD Mon YYYY') end)
+        ) f where f.x->>'value' <> '')),
     'credit', jsonb_build_object(
       'has', v_credit.customer_id is not null,
+      'limit_label', public._c360('lbl_credit'),
+      'prepaid_label', public._c360('lbl_prepaid'),
       'limit_display', public._c360_money(coalesce(v_credit.credit_limit,0)),
       'prepaid_only', coalesce(v_credit.prepaid_only,false),
       'note', coalesce(v_credit.note,'')),
@@ -315,6 +351,9 @@ begin
         'value', public._c360_money(greatest(v_tot.lifetime - v_tot.paid,0)),
         'tone', case when (v_tot.lifetime - v_tot.paid) > 0.009 then 'danger' else 'success' end)),
     'slab', v_slab,
+    'months_label', public._c360('sec_months'),
+    'orders_column_label', public._c360('lbl_orders_col'),
+    'retry_label', public._c360('lbl_retry'),
     'months', coalesce(v_months,'[]'::jsonb),
     'orders', jsonb_build_object('label', public._c360('sec_orders'),
        'empty', public._c360('empty_orders'), 'rows', coalesce(v_orders,'[]'::jsonb)),
@@ -323,6 +362,8 @@ begin
        'billed_label', public._c360('lbl_billed'),
        'note', public._c360('note_outstanding'),
        'billed_display', public._c360_money(v_tot.lifetime),
+       'paid_label', public._c360('lbl_paid'),
+       'outstanding_label', public._c360('lbl_outstanding'),
        'paid_display', public._c360_money(v_tot.paid),
        'outstanding_display', public._c360_money(greatest(v_tot.lifetime - v_tot.paid,0)),
        'rows', coalesce(v_pay,'[]'::jsonb)),
@@ -333,6 +374,9 @@ begin
     'margin', jsonb_build_object('label', public._c360('sec_margin'),
        'has', coalesce(v_marg.n,0) > 0,
        'empty', public._c360('empty_margin'),
+       'revenue_label', public._c360('lbl_revenue'),
+       'gross_margin_label', public._c360('lbl_gross_margin'),
+       'contribution_label', public._c360('lbl_contribution'),
        'revenue_display', public._c360_money(v_marg.revenue),
        'gross_margin_display', public._c360_money(v_marg.gm),
        'contribution_display', public._c360_money(v_marg.contrib),
@@ -343,6 +387,9 @@ begin
     'delivery', jsonb_build_object('label', public._c360('sec_delivery'),
        'has', coalesce(v_del.attempts,0) > 0,
        'empty', public._c360('empty_delivery'),
+       'attempts_label', public._c360('lbl_attempted'),
+       'delivered_label', public._c360('lbl_delivered'),
+       'failed_label', public._c360('lbl_failed'),
        'attempts', coalesce(v_del.attempts,0),
        'delivered', coalesce(v_del.delivered,0),
        'failed', coalesce(v_del.failed,0),

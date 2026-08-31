@@ -14,3 +14,12 @@ revoke all on table public.supplier_coverage from public, anon, authenticated;
 
 grant all on table public.supplier_closure  to service_role;
 grant all on table public.supplier_coverage to service_role;
+
+-- supplier_set_packed was recreated with two new args in this change (the 3-arg
+-- overload was dropped), and the new signature inherited the default PUBLIC
+-- EXECUTE grant. The body already refuses an unauthenticated caller
+-- ('not_authorized', verified writing nothing), so this is defence in depth on
+-- the layer above: the only callers are the supplier orders screen and admin,
+-- both authenticated.
+revoke execute on function public.supplier_set_packed(text, boolean, text, timestamptz, integer) from public, anon;
+grant  execute on function public.supplier_set_packed(text, boolean, text, timestamptz, integer) to authenticated, service_role;

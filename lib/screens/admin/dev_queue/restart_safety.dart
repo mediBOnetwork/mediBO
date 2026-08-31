@@ -16,7 +16,7 @@
 library;
 
 /// What kind of restart-safety chip a label is — the screen picks the glyph.
-enum SafetyChipKind { offline, stall, steps, resumed }
+enum SafetyChipKind { offline, stall, stepsStale, steps, resumed }
 
 class SafetyChip {
   final SafetyChipKind kind;
@@ -48,6 +48,14 @@ class RowLiveness {
   bool get showCountdown =>
       status == 'building' && row['has_eta'] == true && isLive;
 
+  /// The backend's verdict that the checklist has stopped being reported.
+  /// Absent is false: an older payload degrades to "trusted", never to a
+  /// warning Dart invented.
+  bool get stepsStale => (row['steps_stale_chip'] ?? '').toString().isNotEmpty;
+
+  /// One line of guidance, worded by the backend, for the detail screen.
+  String get stepsStaleHint => (row['steps_stale_hint'] ?? '').toString();
+
   int get stepsDone => (row['steps_done'] as num?)?.toInt() ?? 0;
   int get stepsTotal => (row['steps_total'] as num?)?.toInt() ?? 0;
   bool get hasPlan => stepsTotal > 0;
@@ -64,6 +72,11 @@ class RowLiveness {
 
     add(SafetyChipKind.offline, 'live_chip', 'error');
     add(SafetyChipKind.stall, 'stall_chip', 'warning');
+    // CHANGE #350 — sits IMMEDIATELY before the progress chip on purpose: it is
+    // the warning that the very next chip cannot be trusted. The backend sets
+    // it when tokens climbed while the checklist stood still, and clears it the
+    // moment any step is reported, so Dart neither measures it nor guesses it.
+    add(SafetyChipKind.stepsStale, 'steps_stale_chip', 'warning');
     add(SafetyChipKind.steps, 'steps_chip', 'info');
     add(SafetyChipKind.resumed, 'resume_chip', 'neutral');
     return out;

@@ -848,9 +848,8 @@ class CartModel extends ChangeNotifier {
       ((_cart['unit_count'] as num?)?.toInt() ?? 0) +
       _sampleLines.values.fold(0, (s, l) => s + l.quantity);
 
-  /// Cart value as the server computed it — the MRP subtotal, which is now the
-  /// only number the cart has. #615: cart_state() returns `subtotal`, not
-  /// `total`; the old key would have read 0 forever.
+  /// Cart value as the server computed it. #355: `subtotal` is the TAXABLE
+  /// trade value (ex-GST); it was the MRP subtotal until this change.
   double get total => (_cart['subtotal'] as num?)?.toDouble() ?? 0.0;
 
   double get subtotal =>
@@ -868,6 +867,52 @@ class CartModel extends ChangeNotifier {
   /// A label from the backend's own label set (Net Total, Delivery, GST, …).
   String label(String key) =>
       ((render['labels'] as Map?)?[key] ?? '').toString();
+
+  // ── CHANGE #355 — the cart's money is the TRADE rate, never the MRP ───────
+  //
+  // feature_gaps #79: every order in history was billed at MRP because
+  // cart_state() priced each line at its printed ceiling and every total
+  // multiplied that up. cart_pricing_block() now resolves PTR -> discount ->
+  // scheme -> GST server-side and returns the whole block; a line with no
+  // trade rate contributes zero and says so in the backend's own words.
+  //
+  // Nothing here computes: the amounts, the labels, the GST split and the
+  // "N items not priced yet" sentence all arrive formatted.
+
+  /// The pricing block from cart_render(): totals, the GST breakup and the
+  /// unpriced-line copy.
+  Map<String, dynamic> get pricing =>
+      (render['pricing'] as Map?)?.cast<String, dynamic>() ?? const {};
+
+  /// True when at least one line has a trade rate, so there is tax to show.
+  bool get hasTax => render['has_tax'] == true;
+
+  /// Taxable value / CGST / SGST / GST total, in payload order. Each entry is
+  /// {label, value} and both halves are printed verbatim.
+  List<Map<String, dynamic>> get taxLines =>
+      ((render['tax_lines'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => e.cast<String, dynamic>())
+          .toList(growable: false);
+
+  /// "3 items not priced yet — rate comes with the supplier quote", or ''.
+  /// Pluralised by the backend; never assembled here.
+  String get unpricedNote => (pricing['unpriced_note'] ?? '').toString();
+
+  /// Set when a shown GST rate came from the class rules rather than a
+  /// confirmed per-product rate.
+  String get gstNote => (pricing['gst_note'] ?? '').toString();
+
+  /// The payable, formatted. With no line priced yet this is the backend's
+  /// "Awaiting supplier rates", NOT a rupee amount — because there is no
+  /// amount owed until the suppliers quote.
+  String get netPayableDisplay => rs('net_payable_display');
+
+  /// What the basket is worth at the printed ceiling. Reference only: it is
+  /// never the payable (legal_get_page('about'), "How pricing and billing
+  /// actually work").
+  String get mrpWorthDisplay => (pricing['mrp_worth_display'] ?? '').toString();
+  String get mrpWorthLabel => (pricing['mrp_worth_label'] ?? '').toString();
 
   /// CHANGE #636 — the floating cart pill, rendered entirely by cart_render().
   ///
@@ -898,10 +943,12 @@ class CartModel extends ChangeNotifier {
   String get pillCta => (pill['cta'] ?? '').toString();
   String get pillImage => (pill['image'] ?? '').toString();
 
-  /// #615 — the one figure the customer pays, as the SERVER computed it:
-  /// sum(qty × MRP). `grand_total` in the render block, `mrp_total` /
-  /// `subtotal` / `net_payable` at the top level are all the same number by
-  /// construction, so there is nothing left that can disagree.
+  /// #355 — the one figure the customer pays, as the SERVER computed it: the
+  /// trade payable (taxable + GST) over the lines that have a trade rate.
+  /// `grand_total` in the render block and `net_payable` at the top level are
+  /// the same number by construction. `mrp_total` is deliberately NOT that
+  /// number any more — it is the reference ceiling, and pricing an order on it
+  /// is what feature_gaps #79 was.
   double get grandTotal => (render['grand_total'] as num?)?.toDouble() ?? 0.0;
 
   /// Total MRP as the SERVER computed it.
@@ -909,8 +956,8 @@ class CartModel extends ChangeNotifier {
       ((_cart['mrp_total'] as num?)?.toDouble() ?? 0.0) +
       _sampleLines.values.fold(0.0, (s, l) => s + l.product.mrp * l.quantity);
 
-  /// Net payable, straight from cart_state(). #615: identical to the MRP
-  /// subtotal — there is no discount, GST or delivery fee to apply.
+  /// Net payable, straight from cart_state(). #355: the trade total incl. GST
+  /// over priced lines — 0 while no line in the basket has a trade rate yet.
   double get netPayable => (_cart['net_payable'] as num?)?.toDouble() ?? 0.0;
 
   bool get hasSampleItems => _sampleLines.isNotEmpty;

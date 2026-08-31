@@ -12,6 +12,7 @@ import 'bulk_upload_screen.dart';
 import '../utils/render_log.dart';
 import '../models/cart_model.dart';
 import '../models/product.dart';
+import '../design_tokens.dart';
 import '../theme.dart';
 import '../user_state.dart';
 import '../util.dart';
@@ -2272,12 +2273,19 @@ class _CheckoutBar extends StatelessWidget {
                     ),
                   const SizedBox(height: 8),
                 ],
-                // CHANGE #615 — the whole footer is two backend strings: the
-                // subtotal and the line that explains it ("8 items • MRP worth
-                // ₹6,685.25"). Both arrive formatted from cart_render(); the
-                // label, the counts and the amount are never assembled here.
-                // In View As the same two strings come from
-                // cart_selected_total() for the ticked lines only.
+                // CHANGE #615/#355 — the footer is backend strings only: the
+                // tax breakup, the line that explains the basket, and the one
+                // amount owed. All arrive formatted from cart_render(); the
+                // label, the counts, the GST split and the amount are never
+                // assembled here. In View As the summary line and the amount
+                // come from cart_selected_total() for the ticked lines only.
+                //
+                // #355 — the big number is net_payable_display (the TRADE
+                // payable, taxable + GST). It used to be subtotal_display,
+                // which was the MRP total: the cart quoted the printed ceiling
+                // as the amount owed, which is feature_gaps #79.
+                if (selectedTotal == null && cart.hasTax)
+                  _CartTaxBreakup(cart: cart),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   crossAxisAlignment: CrossAxisAlignment.end,
@@ -2300,7 +2308,7 @@ class _CheckoutBar extends StatelessWidget {
                     Text(
                       selectedTotal != null
                           ? selectedTotal!
-                          : cart.rs('subtotal_display'),
+                          : cart.netPayableDisplay,
                       style: const TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.w800,
@@ -2309,6 +2317,12 @@ class _CheckoutBar extends StatelessWidget {
                     ),
                   ],
                 ),
+                if (selectedTotal == null && cart.unpricedNote.isNotEmpty)
+                  Padding(
+                    padding: EdgeInsets.only(top: Ds.space.x4),
+                    child: Text(cart.unpricedNote,
+                        style: Ds.t.caption, textAlign: TextAlign.right),
+                  ),
                 const SizedBox(height: 12),
                 // Place Order (auth-gated)
                 Builder(builder: (ctx) {
@@ -2657,6 +2671,80 @@ class _EmptyCart extends StatelessWidget {
           Text(
             AppState.of(context).emptyNote,
             style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+
+/// CHANGE #355 — the GST breakup, rendered verbatim from cart_render().
+///
+/// feature_gaps #81: cart_render() carried no GST block at all — a pharmacy
+/// could not see the input credit on a basket before paying for it. The rows
+/// below are `render.tax_lines` in payload order; this widget knows neither
+/// the rate, nor the split, nor the wording, and adds nothing of its own.
+class _CartTaxBreakup extends StatelessWidget {
+  final CartModel cart;
+  const _CartTaxBreakup({required this.cart});
+
+  @override
+  Widget build(BuildContext context) {
+    final lines = cart.taxLines;
+    if (lines.isEmpty) return const SizedBox.shrink();
+    final note = cart.gstNote;
+    final mrpLabel = cart.mrpWorthLabel;
+    final mrpValue = cart.mrpWorthDisplay;
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: Ds.space.x12),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final l in lines)
+            Padding(
+              padding: EdgeInsets.only(bottom: Ds.space.x4),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Flexible(
+                    child: Text((l['label'] ?? '').toString(),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Ds.t.caption),
+                  ),
+                  Text((l['value'] ?? '').toString(), style: Ds.t.caption),
+                ],
+              ),
+            ),
+          // The printed ceiling keeps its own row, under the label the backend
+          // gives it. It is reference information, never the amount owed.
+          if (mrpLabel.isNotEmpty && mrpValue.isNotEmpty)
+            Padding(
+              padding: EdgeInsets.only(bottom: Ds.space.x4),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Flexible(
+                    child: Text(mrpLabel,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Ds.t.caption),
+                  ),
+                  Text(mrpValue, style: Ds.t.caption),
+                ],
+              ),
+            ),
+          if (note.isNotEmpty)
+            Padding(
+              padding: EdgeInsets.only(top: Ds.space.x4),
+              child: Text(note, style: Ds.t.caption),
+            ),
+          Padding(
+            padding: EdgeInsets.only(top: Ds.space.x8),
+            child: Divider(height: 1, color: Ds.c.divider),
           ),
         ],
       ),

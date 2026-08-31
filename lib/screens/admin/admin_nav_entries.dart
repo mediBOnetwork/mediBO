@@ -66,16 +66,35 @@ List<AdminNavEntry> get kAdminBottomNav => <AdminNavEntry>[
 /// The labels, the icons, the order and the destructive tone all arrive in the
 /// payload; this file renders them and computes nothing.
 class AdminProfileMenuTiles extends StatelessWidget {
-  /// `nav_registry().profile_menu`, in payload order.
+  /// `nav_registry().profile_menu`, in payload order. Defaults to empty, which
+  /// draws no rows at all — see the note on the legacy parameters below.
   final List<Map<String, dynamic>> items;
 
   /// Fires the row's own `route_key`, untouched.
   final ValueChanged<String> nav;
 
+  /// LEGACY, IGNORED — home_shell.dart still passes these three, and that file
+  /// belongs to another command in flight (#326 holds its lease), so its call
+  /// site could not be updated in this change. They are accepted and dropped
+  /// on the floor rather than removed, because the alternative is a branch
+  /// that does not compile.
+  ///
+  /// The effect is exactly what this change is for: the ~16 feature rows this
+  /// widget used to generate are gone from the mobile profile sheet, and the
+  /// only rows left there are the ones home_shell hand-writes. Passing `items`
+  /// — which the sheet will do once that file is free — draws the registry's
+  /// two identity rows instead.
+  final bool isSuperAdmin;
+  final int deletionCount;
+  final int alertCount;
+
   const AdminProfileMenuTiles({
     super.key,
-    required this.items,
+    this.items = const <Map<String, dynamic>>[],
     required this.nav,
+    this.isSuperAdmin = false,
+    this.deletionCount = 0,
+    this.alertCount = 0,
   });
 
   @override
@@ -138,4 +157,33 @@ class AdminSheetTile extends StatelessWidget {
       ),
     );
   }
+}
+
+/// LEGACY SHIM — the wide shell's "More" popup, now drawing nothing.
+///
+/// CHANGE #325 deleted `kAdminOverflowNav`, the list this popup rendered and
+/// the reason ~20 features were reachable without being registered. The popup
+/// goes with it: everything it held is a categorised dashboard section now,
+/// and the command palette reaches any of it in two keystrokes.
+///
+/// It survives as an empty widget only because its call site lives in
+/// home_shell.dart, which another command holds the lease on. Rendering
+/// `SizedBox.shrink()` removes the button from the header exactly as intended;
+/// the call site itself goes when that file is free.
+class AdminMoreNavMenu extends StatelessWidget {
+  final ValueChanged<String> onNav;
+  final int deletionCount;
+  final int alertCount;
+  final bool isSuperAdmin;
+
+  const AdminMoreNavMenu({
+    super.key,
+    required this.onNav,
+    this.deletionCount = 0,
+    this.alertCount = 0,
+    this.isSuperAdmin = false,
+  });
+
+  @override
+  Widget build(BuildContext context) => const SizedBox.shrink();
 }

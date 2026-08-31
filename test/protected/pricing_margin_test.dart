@@ -343,11 +343,11 @@ void main() {
   // asserts the whole chain for the pricing screen — entry exists, carries a
   // route, and that exact key is switched on in home_shell.
   group('the admin backfill screen is reachable', () {
-    test('Product pricing has an overflow entry with a route', () {
-      final routes =
-          kAdminOverflowNav.map((e) => e.route).whereType<String>().toSet();
-
-      expect(routes, contains('pricing_backfill'));
+    // CHANGE #325 — the surface moved from kAdminOverflowNav (deleted) to
+    // feature_registry, mirrored offline in registered_routes.dart. The
+    // property is unchanged: a screen the nav does not name cannot be opened.
+    test('Product pricing is a registered feature with a route', () {
+      expect(kRegisteredAdminRoutes, contains('pricing_backfill'));
     });
 
     test('_handleAdminNav switches on that exact key', () {

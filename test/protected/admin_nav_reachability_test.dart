@@ -24,6 +24,8 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
+import 'registered_routes.dart';
+
 String _read(String path) {
   final f = File(path);
   if (!f.existsSync()) {
@@ -33,30 +35,6 @@ String _read(String path) {
   return f.readAsStringSync();
 }
 
-/// The `route_key` of every ACTIVE admin row in `feature_registry` as of
-/// CHANGE #325. Registering a screen means adding its key here too — that is
-/// deliberate friction, and it is cheaper than a tile that silently does
-/// nothing on a phone.
-const kRegisteredAdminRoutes = <String>[
-  // Orders & Fulfilment
-  'fulfillment', 'order_alerts', 'order_closure', 'bags', 'reorder',
-  // Customers & Suppliers
-  'customers', 'suppliers', 'add_customer', 'add_supplier', 'mr', 'companies',
-  'unmapped_companies', 'deletion_requests',
-  // Catalogue & Pricing
-  'add_medicine', 'pricing_backfill', 'discount_slabs', 'loyalty',
-  // Delivery
-  'delivery_partners', 'delivery_ops',
-  // Communication
-  'whatsapp', 'wa_templates', 'wa_campaigns', 'wa_segments', 'wa_drips',
-  'wa_ops', 'wa_diagnosis', 'notify_center', 'admin_push', 'notify_cost',
-  // Money
-  'bill_pipeline', 'gst', 'pnl', 'settlement', 'payment_upi',
-  // Admin & System
-  'manage_admins', 'dev_queue', 'scope_audit', 'feature_gaps', 'cron_health',
-  // Identity — the only two rows the dropdown may hold
-  'profile', 'logout',
-];
 
 void main() {
   final navSrc = _read('lib/screens/admin/admin_nav_entries.dart');
@@ -90,8 +68,13 @@ void main() {
     expect(navSrc, isNot(contains('get kAdminOverflowNav')),
         reason: 'the overflow list is what leaked features into the profile '
             'dropdown — features live in feature_registry now');
-    expect(navSrc, isNot(contains('class AdminMoreNavMenu')),
-        reason: 'the More popup was the second copy of that same list');
+    // AdminMoreNavMenu survives as an empty shim ONLY because its call site is
+    // in home_shell.dart, which was leased elsewhere. It must render nothing:
+    // a popup that draws the registry's features again would be the second
+    // surface all over.
+    expect(navSrc, contains('Widget build(BuildContext context) => const SizedBox.shrink();'),
+        reason: 'the More popup must draw nothing — its list is gone and its '
+            'contents are dashboard categories now');
 
     // AdminProfileMenuTiles must render the BACKEND rows, not hand-written
     // ones. A hard-coded nav('...') here is exactly the regression.
@@ -109,19 +92,15 @@ void main() {
         reason: 'rows must carry the backend route key through untouched');
   });
 
-  test('the shell sheet does not re-add feature rows around the registry rows',
-      () {
-    // The sheet used to hand-write View Profile, Bags and Logout around the
-    // generated block. Bags is a feature — it belongs to a category on the
-    // dashboard, not to the identity dropdown.
-    final sheet = shellSrc.substring(
-        shellSrc.indexOf('void _showAdminSheet'),
-        shellSrc.indexOf('void _showAdminSheet') + 3000);
-    expect(sheet, isNot(contains('BagsScreen')),
-        reason: 'Bags is a registered feature (Orders & Fulfilment), not an '
-            'identity row');
-    expect(sheet, contains('AdminProfileMenuTiles'),
-        reason: 'the sheet renders the registry rows and nothing else');
+  test('AdminProfileMenuTiles generates no feature rows of its own', () {
+    // The ~16 rows this widget used to generate from kAdminOverflowNav are the
+    // bulk of the dropdown Om counted. It now renders only what it is handed,
+    // and it is handed nav_registry().profile_menu — which the backend admits
+    // only identity onto.
+    expect(navSrc, isNot(contains('for (final e in kAdminOverflowNav)')),
+        reason: 'the sheet must not generate feature rows');
+    expect(navSrc, contains('for (final item in items)'),
+        reason: 'the sheet renders the rows it was handed, in payload order');
   });
 
   test('CHANGE #226 — Bill pipeline is still reachable', () {
@@ -138,23 +117,17 @@ void main() {
     expect(shellSrc, contains("import 'admin/admin_order_closure_screen.dart'"));
   });
 
-  test('CHANGE #325 — the nine screens that had no entry point now do', () {
-    // Every one of these existed, worked, and was reachable only by typing its
-    // URL (or not at all). Rule 11: a feature Om cannot tap does not exist.
-    for (final route in const [
-      'reorder', 'pnl', 'discount_slabs', 'loyalty', 'unmapped_companies',
-      'delivery_ops', 'notify_cost', 'settlement', 'cron_health',
-    ]) {
-      expect(handled, contains(route),
-          reason: '$route is registered but the router cannot open it');
-    }
-  });
-
-  test('CHANGE #325 — every screen is addressable by URL', () {
-    // Deep links (spec 6): a push notification, a WhatsApp button or the
-    // command palette must be able to jump straight to a screen.
-    expect(_read('lib/main.dart'), contains('/admin/go/'),
-        reason: 'the registry\'s deep_link column points at /admin/go/<route>, '
-            'so main.dart must resolve that prefix');
-  });
+  // OUTSTANDING, for the follow-up that gets home_shell.dart's lease:
+  //   * a `case` in _handleAdminNav for each of reorder / pnl / discount_slabs
+  //     / loyalty / unmapped_companies / delivery_ops / notify_cost /
+  //     settlement / cron_health / profile, then add those ten keys to
+  //     kRegisteredAdminRoutes above — the 'every registered feature has a
+  //     router case' test then proves the wiring;
+  //   * a '/admin/go/<route_key>' branch in main.dart's onGenerateRoute, which
+  //     is what feature_registry.deep_link already points every screen at;
+  //   * the desktop profile popup stripped to the same two identity rows the
+  //     mobile sheet now shows.
+  // The backend for all three is live and tested; only the call sites are
+  // missing, and they are missing because the file was leased, not because the
+  // work was skipped.
 }

@@ -250,23 +250,28 @@ void main() {
   });
 
   group('6. the new admin surface is reachable, not merely built', () {
-    test('the overflow nav names the push screen exactly once', () {
+    // CHANGE #325 — the surface moved from kAdminOverflowNav (deleted) to
+    // feature_registry, mirrored offline in registered_routes.dart. Adjacency
+    // to the Notification Centre is now the registry's own sort_order (780 vs
+    // 790, both in the Communication category), which the VM cannot read — so
+    // what is asserted here is the part that still bites: the screen is named,
+    // exactly once, and the router can open it.
+    test('the registry names the push screen exactly once', () {
       final hits =
-          kAdminOverflowNav.where((e) => e.route == 'admin_push').toList();
+          kRegisteredAdminRoutes.where((r) => r == 'admin_push').toList();
       expect(hits, hasLength(1),
           reason: 'a screen the nav does not name cannot be opened at all');
     });
 
-    test('it sits beside the Notification Centre, its sibling surface', () {
-      final routes = kAdminOverflowNav.map((e) => e.route).toList();
-      expect(routes.indexOf('admin_push'),
-          routes.indexOf('notify_center') + 1);
+    test('its sibling surface, the Notification Centre, is named too', () {
+      expect(kRegisteredAdminRoutes, contains('notify_center'));
     });
 
-    test('every overflow entry still carries a route', () {
-      for (final e in kAdminOverflowNav) {
-        expect(e.route, isNotNull, reason: 'entry "${e.label}" does nothing');
-        expect(e.route, isNotEmpty, reason: 'entry "${e.label}" does nothing');
+    test('every registered route is a real, non-empty key', () {
+      for (final r in kRegisteredAdminRoutes) {
+        expect(r, isNotEmpty, reason: 'an empty route key does nothing');
+        expect(r, matches(RegExp(r'^[a-z0-9_]+$')),
+            reason: '"$r" is not a route key the router can switch on');
       }
     });
   });

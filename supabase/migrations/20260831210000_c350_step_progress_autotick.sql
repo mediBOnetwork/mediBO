@@ -79,3 +79,9 @@ update dev_runner_config
          'autotick',   true))
  where key = 'worker_pool'
    and not (value ? 'steps_watchdog');
+
+-- RLS to match its sibling config tables (file_predict_rule, cron_task): the
+-- rules are read only through SECURITY DEFINER functions, so no client role
+-- needs direct access. Enabling it with no policy is a deny-all, which is the
+-- intent — not an oversight for the advisor to find later.
+alter table dev_step_fact_rule enable row level security;

@@ -45,7 +45,16 @@
 # ═══════════════════════════════════════════════════════════════════════════
 set -uo pipefail
 
-cd ~/mediBO || { echo "selftest: cannot cd ~/mediBO"; exit 1; }
+# CHANGE #352 — test the tree that is being DEPLOYED, not the shared checkout.
+# The merge worker (#324) builds from its own worktree and exports MEDIBO_REPO;
+# this line hardcoded ~/mediBO, the checkout five runners share and constantly
+# switch branches in. So the gate that is supposed to prove the MERGED tree is
+# green was running the protected suite against whatever branch happened to be
+# checked out next door — red for another command's in-flight literals, or
+# green for code that was never in the batch. Same trap as ~/deploy.sh's
+# hardcoded path, one directory up.
+MEDIBO_REPO="${MEDIBO_REPO:-$HOME/mediBO}"
+cd "$MEDIBO_REPO" || { echo "selftest: cannot cd $MEDIBO_REPO"; exit 1; }
 export PATH="$PATH:$HOME/flutter/bin"
 
 DEVCMD="$HOME/mediBO-runner/devcmd.sh"

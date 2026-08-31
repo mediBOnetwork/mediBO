@@ -1093,3 +1093,17 @@ on conflict (feature_key) do update set
   roles_allowed= excluded.roles_allowed,
   is_active    = excluded.is_active,
   description  = excluded.description;
+
+-- ── 13. The index dev_cmd_complete could not finish without ────────────────
+-- rg_check's `scan_gs1_flow` behaviour test runs
+--   select count(*) from "MEDICINE" where _norm_barcode(barcode) = '<code>'
+-- which is the scalar-helper-scan the latency rules name: a per-row IMMUTABLE
+-- helper over 562,549 rows, 19,908 ms measured, run several times inside the
+-- guard that dev_cmd_complete calls. It blew the 55 s statement timeout, so
+-- EVERY command's completion failed with "canceling statement due to statement
+-- timeout" — a fleet-wide block, not a #355 one. An expression index on the
+-- same helper makes it index-usable: 19,908 ms -> 0.143 ms, measured.
+-- Live copy was built CONCURRENTLY under the exclusive DB lane; a fresh
+-- database gets it here, where a plain build is correct and cheap.
+create index if not exists idx_medicine_norm_barcode
+  on "MEDICINE" (public._norm_barcode(barcode));

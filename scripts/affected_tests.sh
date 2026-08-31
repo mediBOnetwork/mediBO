@@ -40,12 +40,21 @@ done <<< "$CHANGED"
 while IFS= read -r f; do
   case "$f" in lib/*) ;; *) continue ;; esac
   base=$(basename "$f" .dart)
-  # a protected test that imports the file, or is named after it
-  hits=$(grep -rl -- "$base" test/protected/ 2>/dev/null || true)
+  # A protected test that imports the file, or is named after it.
+  # --include is not optional: test/protected/ also holds DATA the suite reads
+  # (design_literal_baseline.json, no_hardcoded_copy_denylist.g.dart,
+  # ui_copy_fixture.dart/.json). A bare -rl matched those too and handed them
+  # to `flutter test`, which cannot load a .json or a fixture as a test — four
+  # phantom "Failing tests" on a run whose 788 real tests were all green. A
+  # runner that learns to ignore red is worse than no gate at all.
+  hits=$(grep -rlF --include='*_test.dart' -- "$base" test/protected/ 2>/dev/null || true)
   [ -n "$hits" ] && PICK="$PICK $hits"
 done <<< "$CHANGED"
 
-PICK=$(printf '%s\n' $PICK | sort -u | tr '\n' ' ')
+# Final guard — only ever hand `flutter test` real, existing *_test.dart files.
+PICK=$(printf '%s\n' $PICK | sort -u | while IFS= read -r p; do
+  case "$p" in *_test.dart) [ -f "$p" ] && printf '%s\n' "$p" ;; esac
+done | tr '\n' ' ')
 
 if [ -z "${PICK// /}" ]; then
   echo "[affected] changed files map to no specific test — running the FULL protected suite"

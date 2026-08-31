@@ -76,6 +76,12 @@ class PartnerHomeScreen extends StatefulWidget {
 
 class _PartnerHomeScreenState extends State<PartnerHomeScreen> {
   Map<String, dynamic>? _payload;
+
+  /// CHANGE #398 — partner_work_queue(): what is WAITING, as opposed to what
+  /// this partner is allowed to open. Fetched beside partner_home() and
+  /// rendered above it; a board that fails to load simply does not draw, so a
+  /// queue outage can never cost the partner the feature list underneath it.
+  Map<String, dynamic>? _queue;
   bool _loading = true;
 
   /// CHANGE #326 — explicit absence. `_payload = {}` on a thrown RPC used to be
@@ -104,9 +110,16 @@ class _PartnerHomeScreenState extends State<PartnerHomeScreen> {
       p = <String, dynamic>{};
       failed = true;
     }
+    Map<String, dynamic>? q;
+    try {
+      q = await _rpc('partner_work_queue', const {'p_limit': 5});
+    } catch (_) {
+      q = null;
+    }
     if (!mounted) return;
     setState(() {
       _payload = p;
+      _queue = q;
       _failed = failed;
       _loading = false;
     });
@@ -145,6 +158,7 @@ class _PartnerHomeScreenState extends State<PartnerHomeScreen> {
     if (_loading) return const PartnerHomeSkeleton();
     return PartnerHomeView(
       payload: _payload ?? const {},
+      queue: _queue,
       onOpen: _open,
       failed: _failed,
       onRetry: _load,
@@ -186,12 +200,18 @@ class PartnerHomeView extends StatelessWidget {
     super.key,
     required this.payload,
     required this.onOpen,
+    this.queue,
     this.failed = false,
     this.onRetry,
     this.onSignOut,
   });
 
   final Map<String, dynamic> payload;
+
+  /// CHANGE #398 — partner_work_queue()'s payload, or null when the board did
+  /// not answer. Null draws nothing: absence is explicit, never an empty board
+  /// that reads as "no work".
+  final Map<String, dynamic>? queue;
   final void Function(String featureKey) onOpen;
 
   /// CHANGE #326 — the partner_home() call itself threw. Distinct from a clean
@@ -246,6 +266,8 @@ class PartnerHomeView extends StatelessWidget {
           ? Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                if (queue != null && queue!['ok'] == true)
+                  PartnerWorkQueue(payload: queue!, onOpen: onOpen),
                 for (final g in groups)
                   _Group(group: Map<String, dynamic>.from(g as Map), onOpen: onOpen),
               ],
@@ -487,6 +509,193 @@ class PartnerFeaturePage extends StatelessWidget {
       backgroundColor: Ds.c.bg,
       appBar: AppBar(title: Text(title, style: Ds.t.subtitle)),
       body: SafeArea(child: child),
+    );
+  }
+}
+
+// ── CHANGE #398 — THE WORK QUEUE BOARD ──────────────────────────────────────
+//
+// partner_home() answers "what may I open?". This answers "what is waiting?" —
+// today's zone, every fulfilment stage, its count, its oldest orders and the
+// next action for each. Nothing here is computed: the stage list, its order,
+// the counts, the plural forms, the money, the ages and the action words are
+// all fields of partner_work_queue(). A stage the partner has no permission
+// for is not in the payload, so it cannot be drawn.
+
+/// Backend `tone` -> a colour pair. Same contract as [partnerIcon]: the WORD is
+/// the backend's, only the swatch is local, because a Color cannot travel in
+/// JSON. An unknown tone renders neutral rather than nothing.
+({Color bg, Color fg}) partnerTone(String tone) {
+  switch (tone) {
+    case 'success': return (bg: Ds.c.successSoft, fg: Ds.c.success);
+    case 'warning': return (bg: Ds.c.warningSoft, fg: Ds.c.warning);
+    case 'danger':  return (bg: Ds.c.dangerSoft,  fg: Ds.c.danger);
+    case 'info':    return (bg: Ds.c.infoSoft,    fg: Ds.c.info);
+    default:        return (bg: Ds.c.brandSoft,   fg: Ds.c.brand);
+  }
+}
+
+class PartnerWorkQueue extends StatelessWidget {
+  const PartnerWorkQueue({super.key, required this.payload, required this.onOpen});
+
+  final Map<String, dynamic> payload;
+  final void Function(String featureKey) onOpen;
+
+  String _s(String k) => (payload[k] ?? '').toString();
+
+  @override
+  Widget build(BuildContext context) {
+    final stages = (payload['stages'] as List?) ?? const [];
+    try {
+      RenderLog.write('c398_partner_queue',
+          'stages=${stages.length},total=${payload['total'] ?? 0},zone=${payload['zone_id'] ?? ''}');
+    } catch (_) {}
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: Ds.space.x24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(child: Text(_s('title'), style: Ds.t.subtitle)),
+              if (_s('total_label').isNotEmpty)
+                Text(_s('total_label'), style: Ds.t.caption),
+            ],
+          ),
+          if (_s('subtitle').isNotEmpty) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(_s('subtitle'), style: Ds.t.caption),
+          ],
+          if (_s('today_label').isNotEmpty) ...[
+            SizedBox(height: Ds.space.x8),
+            Text(_s('today_label'), style: Ds.t.caption),
+          ],
+          SizedBox(height: Ds.space.x12),
+          if (payload['has_any'] == true)
+            for (final s in stages)
+              _StageCard(
+                stage: Map<String, dynamic>.from(s as Map),
+                onOpen: onOpen,
+              )
+          else
+            _Empty(title: _s('empty_title'), message: _s('empty_message')),
+        ],
+      ),
+    );
+  }
+}
+
+/// One stage: its count chip, its oldest orders and the way in. A stage with
+/// nothing in it still shows — an empty Pack queue is information — but it
+/// carries no rows and no button.
+class _StageCard extends StatelessWidget {
+  const _StageCard({required this.stage, required this.onOpen});
+
+  final Map<String, dynamic> stage;
+  final void Function(String featureKey) onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final orders = (stage['orders'] as List?) ?? const [];
+    final feature = (stage['feature_key'] ?? '').toString();
+    final tone = partnerTone((stage['tone'] ?? '').toString());
+    final hasAny = stage['has_any'] == true;
+    final canOpen = stage['can_open'] == true && feature.isNotEmpty;
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: Ds.space.x12),
+      child: Container(
+        padding: EdgeInsets.all(Ds.space.x16),
+        decoration: BoxDecoration(
+          color: Ds.c.surface,
+          borderRadius: Ds.r.rCard,
+          boxShadow: Ds.elevation.e1,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                    child: Text((stage['label'] ?? '').toString(),
+                        style: Ds.t.bodyStrong)),
+                Container(
+                  padding: EdgeInsets.symmetric(
+                      horizontal: Ds.space.x12, vertical: Ds.space.x4),
+                  decoration: BoxDecoration(
+                      color: hasAny ? tone.bg : Ds.c.bg,
+                      borderRadius: Ds.r.rChip),
+                  child: Text((stage['count_label'] ?? '').toString(),
+                      style: Ds.t.caption.copyWith(
+                          color: hasAny ? tone.fg : Ds.c.textSecondary)),
+                ),
+              ],
+            ),
+            for (final o in orders)
+              _OrderRow(order: Map<String, dynamic>.from(o as Map)),
+            if ((stage['more_label'] ?? '').toString().isNotEmpty) ...[
+              SizedBox(height: Ds.space.x8),
+              Text((stage['more_label'] ?? '').toString(), style: Ds.t.caption),
+            ],
+            if (hasAny && canOpen) ...[
+              SizedBox(height: Ds.space.x12),
+              SizedBox(
+                width: double.infinity,
+                height: Ds.touch.minTarget,
+                child: OutlinedButton(
+                  onPressed: () => onOpen(feature),
+                  child: Text((stage['open_label'] ?? '').toString()),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// One waiting order. Every field is printed: the money is the backend's ₹
+/// string, the age is the backend's phrase, and the next action is the stage's
+/// own sentence rather than a word this widget picked.
+class _OrderRow extends StatelessWidget {
+  const _OrderRow({required this.order});
+
+  final Map<String, dynamic> order;
+
+  String _s(String k) => (order[k] ?? '').toString();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: BoxConstraints(minHeight: Ds.touch.listRowMinHeight),
+      padding: EdgeInsets.only(top: Ds.space.x12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(_s('order_code'), style: Ds.t.body),
+                if (_s('customer').isNotEmpty)
+                  Text(_s('customer'), style: Ds.t.caption),
+                if (_s('next_action').isNotEmpty)
+                  Text(_s('next_action'), style: Ds.t.caption),
+              ],
+            ),
+          ),
+          SizedBox(width: Ds.space.x12),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(_s('amount_display'), style: Ds.t.bodyStrong),
+              Text(_s('age_label'), style: Ds.t.caption),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }

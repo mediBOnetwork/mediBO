@@ -976,7 +976,7 @@ grant execute on function public.pnl_config_set(jsonb) to authenticated, service
 -- (min_amount / discount_pct) and the older ones are accepted, so a proposal
 -- typed against either vocabulary still prices.
 create or replace function public._pnl_slab_pct(p_slabs jsonb, p_total numeric)
-returns numeric language sql immutable as $$
+returns numeric language sql immutable set search_path to 'public' as $$
   select coalesce((
     select coalesce((e->>'discount_pct')::numeric, (e->>'pct')::numeric, 0)
       from jsonb_array_elements(coalesce(p_slabs, '[]'::jsonb)) e

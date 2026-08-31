@@ -368,6 +368,8 @@ begin
     'can_settle',   v_admin and p.status = 'due',
     'settle_label', public._stl_c('period.settle'),
     'record_label', public._stl_c('route.record'),
+    'amount_label', public._stl_c('fld.amount'),
+    'reference_label', public._stl_c('fld.reference'),
     'route_mode',   coalesce(cfg.route_mode,'manual'),
     'route_label',  public._stl_c('route.' || coalesce(cfg.route_mode,'manual')),
     'route_note',   public._stl_c('route.' || coalesce(cfg.route_mode,'manual') || '_note'),
@@ -621,6 +623,7 @@ begin
       public._stl_tile('tile.orders', t.orders::text)),
     'route',  public.settlement_config_get(),
     'zones',  public.settlement_zones(),
+    'cost_types', public.settlement_cost_types(),
     'periods', public.settlement_periods(30, p_partner_id),
     'month_rollup', jsonb_build_object(
       'heading', public._stl_c('sec.month_rollup'),
@@ -817,3 +820,11 @@ begin
 end $$;
 revoke all on function public.c323_settlement_proof() from public, anon;
 grant execute on function public.c323_settlement_proof() to authenticated, service_role;
+
+-- The two strings the screen needs BEFORE its first payload arrives: a load
+-- that never returned has no payload to quote, so the fallback is still the
+-- backend's word, cached in ui_copy — never a Dart sentence.
+insert into public.ui_copy (key, value) values
+  ('settlement.error', to_jsonb('Could not load the settlement figures.'::text)),
+  ('settlement.retry', to_jsonb('Retry'::text))
+on conflict (key) do nothing;

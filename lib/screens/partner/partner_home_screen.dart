@@ -16,6 +16,7 @@ import '../../services/partner_state.dart';
 import '../../utils/render_log.dart';
 import '../admin/admin_fulfillment_screen_web.dart';
 import '../admin/admin_supplier_screen_web.dart';
+import 'partner_statement_screen.dart';
 
 /// Backend `icon_key` -> a glyph. The KEY is the backend's; only the glyph is
 /// local, because an IconData cannot travel in JSON. An unknown key renders the
@@ -25,6 +26,7 @@ IconData partnerIcon(String key) {
     case 'forum':     return Icons.forum_outlined;
     case 'receipt':   return Icons.receipt_long_outlined;
     case 'rupee':     return Icons.currency_rupee;
+    case 'handshake': return Icons.handshake_outlined;
     case 'store':     return Icons.storefront_outlined;
     case 'inventory': return Icons.inventory_2_outlined;
     case 'bag':       return Icons.shopping_bag_outlined;
@@ -52,6 +54,10 @@ Widget? partnerDestination(String routeKey) {
     case 'bag_mapping':     return AdminFulfillmentScreen(initialTab: 2);
     case 'pack':            return AdminFulfillmentScreen(initialTab: 3);
     case 'assign_delivery': return AdminFulfillmentScreen(initialTab: 5);
+    // CHANGE #323 — the partner's own settlement statement. Zone-clamped like
+    // every surface above it: partner_statement() resolves the zone from the
+    // partner's own row and refuses anything else.
+    case 'settlement':      return const PartnerStatementScreen();
     default:                return null;
   }
 }

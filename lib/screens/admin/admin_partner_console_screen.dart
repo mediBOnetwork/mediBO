@@ -16,7 +16,9 @@ import 'package:flutter/material.dart';
 
 import '../../design_tokens.dart';
 import '../../services/partner_state.dart';
+import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
+import 'settlement_screen.dart';
 
 class AdminPartnerConsoleScreen extends StatefulWidget {
   const AdminPartnerConsoleScreen({
@@ -162,7 +164,22 @@ class _AdminPartnerConsoleScreenState extends State<AdminPartnerConsoleScreen> {
     final p = _payload ?? const <String, dynamic>{};
     return Scaffold(
       backgroundColor: Ds.c.bg,
-      appBar: AppBar(title: Text((p['partner_name'] ?? '').toString())),
+      appBar: AppBar(
+        title: Text((p['partner_name'] ?? '').toString()),
+        actions: [
+          // CHANGE #323 — the settlement lane for this partner. The word is
+          // ui_copy's, not a Dart literal; the screen behind it refuses a
+          // non-admin itself.
+          IconButton(
+            key: const ValueKey('partner_settlement_entry'),
+            tooltip: c('settlement.entry'),
+            icon: const Icon(Icons.handshake_outlined),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const SettlementScreen()),
+            ),
+          ),
+        ],
+      ),
       body: _loading
           ? const _ConsoleSkeleton()
           : PartnerConsoleView(

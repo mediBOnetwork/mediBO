@@ -23,6 +23,7 @@ import 'models/inquiry_lock_model.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/partner/partner_home_screen.dart';
 import 'screens/admin/admin_partner_console_screen.dart';
+import 'screens/admin/settlement_screen.dart'; // /admin/settlement
 import 'screens/home_shell.dart';
 import 'screens/public/inquiry_form_screen.dart';
 import 'screens/public/stock_update_form_screen.dart'; // C639: /stock-update/<token>
@@ -600,6 +601,20 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
                 return MaterialPageRoute(
                   settings: settings,
                   builder: (_) => const CronHealthScreen(),
+                );
+              }
+              // CHANGE #323 — partner settlement, at a real URL for the same
+              // reason /admin/cron-health has one: Flutter canvas cannot be
+              // clicked headlessly, so without a URL the post-deploy verifier
+              // can never prove the screen painted. Authorisation stays in the
+              // backend — settlement_dashboard() answers "Admins only." itself
+              // and the screen renders that refusal. Still reachable by tapping
+              // through Payment and Partner -> a partner card -> the people
+              // icon -> the settlement action.
+              if (name == '/admin/settlement') {
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => const SettlementScreen(),
                 );
               }
               // CHANGE #307 — one partner's logins + access matrix, at a real

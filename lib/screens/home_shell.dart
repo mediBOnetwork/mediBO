@@ -31,6 +31,7 @@ import 'admin/admin_company_screen.dart';
 import 'admin/admin_dashboard_screen.dart';
 import 'admin/admin_deletion_request_screen.dart';
 import 'admin/admin_delivery_partner_screen.dart';
+import 'partner/partner_console_screen.dart'; // C399: the region-partner console
 import 'admin/admin_mr_screen.dart';
 import 'admin/admin_alert_overlay.dart';
 import 'admin/admin_nav_entries.dart';
@@ -1021,6 +1022,19 @@ class _HomeShellState extends State<HomeShell> {
 
     if (surface == AccountSurface.supplier) {
       return const SupplierShell();
+    }
+
+    // CHANGE #399 — the region-partner console.
+    //
+    // my_session() has returned surface:'partner' for a region-partner login
+    // since that login existed, but AccountSurface had no word for it, so it
+    // resolved to `unresolved` and the partner fell through to the customer
+    // storefront — the one surface a partner has no business on. One branch,
+    // in the same place the supplier surface is decided, and nothing else
+    // changes: no other session has ever produced this word.
+    if (surface == AccountSurface.partner) {
+      RenderLog.write('c399_surface', 'partner');
+      return const PartnerConsoleScreen();
     }
 
     // Pending-approval supplier: waiting screen. Every string below is printed

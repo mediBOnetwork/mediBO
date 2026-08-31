@@ -111,6 +111,21 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       }
       return;
     }
+    // CHANGE #395 — a registry row may name a REAL named route instead of a
+    // shell route key. `_handleAdminNav`'s switch has no default branch, so a
+    // key it has never heard of renders a perfect tile that does nothing on
+    // tap — the #645/#646 bug, and the reason every new screen used to need an
+    // edit in home_shell.dart before its tile worked. A deep_link that is an
+    // ordinary path is pushed straight onto the navigator, so registering a
+    // screen that already has a route in main.dart is now a pure INSERT.
+    //
+    // `/admin/go/<key>` is excluded on purpose: that form is the shell's own
+    // parking route and must keep going through the switch.
+    final deep = (tile['deep_link'] ?? '').toString();
+    if (deep.startsWith('/') && !deep.startsWith('/admin/go/')) {
+      Navigator.of(context).pushNamed(deep);
+      return;
+    }
     final route = (tile['route_key'] ?? '').toString();
     if (route.isEmpty) return;
     // CHANGE #396 — the two screens that carry a subject with them. Like a Dev

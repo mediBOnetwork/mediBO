@@ -37,6 +37,9 @@ const kRegisteredAdminRoutes = <String>[
   'bill_pipeline', 'gst', 'pnl', 'settlement', 'payment_upi',
   // Admin & System
   'manage_admins', 'dev_queue', 'scope_audit', 'feature_gaps', 'cron_health',
+  // CHANGE #397 — bulk editing and exports; both open AdminBulkScreen, the
+  // second on its Exports tab.
+  'bulk_actions', 'exports',
   // Identity — the only two rows the dropdown may hold
   'profile', 'logout',
 ];

@@ -50,6 +50,7 @@ import 'admin/admin_pricing_screen.dart';
 import 'admin/admin_shell.dart';
 import 'admin/pricing_backfill_screen.dart';
 import 'admin/admin_bill_pipeline_screen.dart'; // CHANGE #226
+import 'admin/admin_bulk_screen.dart'; // C397: bulk actions, exports, undo
 import 'admin/admin_scope_audit_screen.dart'; // CHANGE #227
 import 'admin/admin_order_closure_screen.dart'; // CHANGE #229
 import 'admin/admin_gst_screen.dart'; // CHANGE #320
@@ -628,6 +629,21 @@ class _HomeShellState extends State<HomeShell> {
       case 'bill_pipeline':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const AdminBillPipelineScreen()));
+        break;
+
+      // CHANGE #397 — two registry features share one screen: bulk editing and
+      // exports are the same admin acting on a SET of rows, so the tile that
+      // was tapped only decides which tab opens.
+      case 'bulk_actions':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const AdminBulkScreen()));
+        break;
+
+      case 'exports':
+        Navigator.push(
+            context,
+            MaterialPageRoute(
+                builder: (_) => const AdminBulkScreen(initialTab: 1)));
         break;
       // CHANGE #227 — Scope audit (date + zone across order → delivered).
       case 'scope_audit':

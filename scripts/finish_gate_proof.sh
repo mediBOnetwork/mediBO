@@ -66,7 +66,7 @@ fi
 st=$(Q "select status from dev_commands where id=$id")
 [ "$st" = "completed" ] && ok "row status is completed" || bad "row status is '$st'"
 af=$(Q "select auto_finished||'/'||coalesce(auto_finish_source,'') from dev_commands where id=$id")
-[ "$af" = "t/harness" ] && ok "stamped auto_finished=t source=harness" || bad "auto_finish stamp is '$af'"
+[ "$af" = "true/harness" ] && ok "stamped auto_finished=t source=harness" || bad "auto_finish stamp is '$af'"
 echo "  ── the summary the model never had to write ──"
 Q "select result_summary from dev_commands where id=$id" | sed 's/^/     /'
 Q "select plain_summary from dev_commands where id=$id" | sed 's/^/     /'

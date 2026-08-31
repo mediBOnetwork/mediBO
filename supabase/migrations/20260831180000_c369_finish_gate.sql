@@ -50,7 +50,7 @@ update dev_runner_config
 
 insert into ui_copy (key, value) values
   ('dev_queue.finish_ready_chip',  to_jsonb('✅ All conditions met — closing automatically'::text)),
-  ('dev_queue.finish_auto_chip',   to_jsonb('🤖 Auto-completed by the harness'::text)),
+  ('dev_queue.finish_auto_chip',   to_jsonb('🤖 Auto-completed by the harness · {drift} after the last step'::text)),
   ('dev_queue.finish_msg',         to_jsonb('🤖 Auto-completed by the harness — every finish condition was observed ({source}). The session was interrupted so nothing runs after success.'::text)),
   ('dev_queue.finish_line_change', to_jsonb('• Change no — CHANGE #{n} live.'::text)),
   ('dev_queue.finish_line_nodeploy', to_jsonb('• Deploy — backend only, none.'::text)),
@@ -408,7 +408,7 @@ begin
   select value#>>'{}' into t_ssteps from ui_copy where key='dev_queue.steps_stale_chip';
   select value#>>'{}' into t_shint  from ui_copy where key='dev_queue.steps_stale_hint';
   t_fready := _c_or('dev_queue.finish_ready_chip', '✅ All conditions met — closing automatically');
-  t_fauto  := _c_or('dev_queue.finish_auto_chip',  '🤖 Auto-completed by the harness');
+  t_fauto  := _c_or('dev_queue.finish_auto_chip',  '🤖 Auto-completed by the harness · {drift} after the last step');
 
   select coalesce(jsonb_agg(to_jsonb(t) order by t.created_at desc, t.id desc), '[]') into v_rows from (
     select dc.id, _dev_title(dc.title, dc.build_log) as title, dc.status, dc.priority, dc.urgent, dc.depends_on, dc.batch_label,
@@ -476,9 +476,20 @@ begin
                 else '' end as resume_chip,
            -- ── CHANGE #369: the finish gate, on the card ───────────────────
            -- Om's answer to "is this thing actually done?" without opening it.
-           case when dc.status='completed' and coalesce(dc.auto_finished,false) then t_fauto
+           case when dc.status='completed' and coalesce(dc.auto_finished,false)
+                then replace(t_fauto, '{drift}',
+                       _fmt_dur(greatest(coalesce(extract(epoch from dc.finished_at - dc.steps_snap_at), 0), 0)))
                 when dc.status='building' and dc.finish_ready_at is not null then t_fready
                 else '' end as finish_chip,
+           -- The measurement #369 exists to move, on every finished row so the
+           -- before/after is readable straight off the queue: how long the row
+           -- stayed open after its last step landed, and what that cost.
+           case when dc.status='completed' and dc.steps_snap_at is not null
+                then round(extract(epoch from dc.finished_at - dc.steps_snap_at))::int
+                else null end as finish_drift_s,
+           case when dc.status='completed' and dc.steps_snap_tokens is not null
+                then greatest((dc.cost_input_tokens + dc.cost_output_tokens) - dc.steps_snap_tokens, 0)
+                else null end as finish_tokens_after,
            case when dc.status='completed' and coalesce(dc.auto_finished,false) then 'success'
                 when dc.status='building' and dc.finish_ready_at is not null then 'info'
                 else 'neutral' end as finish_tone,

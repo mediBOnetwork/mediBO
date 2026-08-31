@@ -191,6 +191,9 @@ begin
              'label', public._stk_copy('stock.src_' || l.source_kind, l.source_kind),
              'lots', count(*)::int,
              'units', sum(l.qty_available),
+             'chip_label', public._stk_copy('stock.src_' || l.source_kind, l.source_kind)
+                           || ' · ' || count(*)::text
+                           || ' · ' || public._stk_money(sum(l.value_at_trade)),
              'value_display', public._stk_money(sum(l.value_at_trade))) as x
       from stock_lot_v l
      where l.status='available' and l.qty_available > 0
@@ -225,6 +228,11 @@ begin
                              when coalesce(l.age_days,0) >= v_aged/2 then 'warning'
                              else 'neutral' end,
         'rate_display', public._stk_money(l.trade_rate),
+        'qty_rate_display', trim(to_char(l.qty_available,'FM999999990.##'))
+                            || ' × ' || public._stk_money(l.trade_rate),
+        'source_order_label', array_to_string(array_remove(array[
+                                nullif(coalesce(o.order_code,''),''),
+                                nullif(coalesce(l.supplier_name,''),'')], null), ' · '),
         'has_rate',     l.trade_rate is not null,
         'value_display',public._stk_money(l.value_at_trade)) as x
       from stock_lot_v l

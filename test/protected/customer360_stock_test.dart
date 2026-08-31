@@ -111,7 +111,14 @@ Map<String, dynamic> _stockPayload() => {
         {'key': 'value', 'label': 'VALUE-TILE', 'value': '₹10777.26', 'tone': 'info'},
       ],
       'kinds': [
-        {'key': 'stalled', 'label': 'KIND-LABEL', 'lots': 9, 'units': 33, 'value_display': '₹10777.26'},
+        {
+          'key': 'stalled',
+          'label': 'KIND-LABEL',
+          'chip_label': 'CHIP-LABEL',
+          'lots': 9,
+          'units': 33,
+          'value_display': '₹10777.26'
+        },
       ],
       'columns': ['C1', 'C2'],
       'rows': [
@@ -124,6 +131,8 @@ Map<String, dynamic> _stockPayload() => {
           'source_label': 'SOURCE-LABEL',
           'order_code': 'ORDER-CODE',
           'qty_label': '2',
+          'qty_rate_display': '2 × ₹47.31',
+          'source_order_label': 'ORDER-CODE · SUPPLIER-NAME',
           'age_label': 'AGE-LABEL',
           'age_tone': 'danger',
           'rate_display': '₹47.31',
@@ -230,8 +239,10 @@ void main() {
       expect(find.text('BATCH-LABEL'), findsOneWidget);
       expect(find.text('EXPIRY-LABEL'), findsOneWidget);
       expect(find.text('₹94.62'), findsOneWidget);
-      // the qty × rate line is composed from the two backend strings
+      // the qty × rate line is ONE backend string — Dart does not join it
       expect(find.text('2 × ₹47.31'), findsOneWidget);
+      expect(find.text('ORDER-CODE · SUPPLIER-NAME'), findsOneWidget);
+      expect(find.text('CHIP-LABEL'), findsOneWidget);
       expect(find.text('WRITEOFF-LABEL'), findsOneWidget);
     });
 

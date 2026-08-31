@@ -300,10 +300,8 @@ class _AdminStockOnHandScreenState extends State<AdminStockOnHandScreen> {
             if (k is Map)
               ChoiceChip(
                 selected: _kind == (k['key'] ?? '').toString(),
-                label: Text(
-                  '${k['label']} · ${k['lots']} · ${k['value_display']}',
-                  style: Ds.t.caption,
-                ),
+                label: Text((k['chip_label'] ?? '').toString(),
+                    style: Ds.t.caption),
                 onSelected: (on) {
                   setState(() => _kind = on ? (k['key'] ?? '').toString() : '');
                   _load();
@@ -346,23 +344,15 @@ class _AdminStockOnHandScreenState extends State<AdminStockOnHandScreen> {
               ],
             ),
             SizedBox(height: Ds.space.x8),
-            Text(
-              '${r['qty_label']} × ${r['rate_display']}',
-              style: Ds.t.bodySecondary,
-            ),
+            Text((r['qty_rate_display'] ?? '').toString(),
+                style: Ds.t.bodySecondary),
             SizedBox(height: Ds.space.x4),
             Text((r['batch_label'] ?? '').toString(), style: Ds.t.caption),
             Text((r['expiry_label'] ?? '').toString(), style: Ds.t.caption),
-            if ((r['order_code'] ?? '').toString().isNotEmpty ||
-                (r['supplier_name'] ?? '').toString().isNotEmpty) ...[
+            if ((r['source_order_label'] ?? '').toString().isNotEmpty) ...[
               SizedBox(height: Ds.space.x4),
-              Text(
-                [
-                  (r['order_code'] ?? '').toString(),
-                  (r['supplier_name'] ?? '').toString(),
-                ].where((s) => s.isNotEmpty).join(' · '),
-                style: Ds.t.caption,
-              ),
+              Text((r['source_order_label'] ?? '').toString(),
+                  style: Ds.t.caption),
             ],
             SizedBox(height: Ds.space.x12),
             SizedBox(

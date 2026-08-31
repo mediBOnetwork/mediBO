@@ -391,7 +391,7 @@ class _AdminCustomer360ScreenState extends State<AdminCustomer360Screen> {
         children: dl['has'] == true
             ? [
                 Text((dl['success_display'] ?? '').toString(),
-                    style: Ds.t.display.copyWith(
+                    style: Ds.t.title.copyWith(
                         color: _tone((dl['success_tone'] ?? '').toString()))),
                 SizedBox(height: Ds.space.x12),
                 _kv((dl['attempts_label'] ?? '').toString(), '${dl['attempts']}'),

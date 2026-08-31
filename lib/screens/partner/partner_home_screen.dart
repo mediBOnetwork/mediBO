@@ -13,6 +13,8 @@ import 'package:flutter/material.dart';
 
 import '../../design_tokens.dart';
 import '../../services/partner_state.dart';
+import '../../services/ui_copy.dart';
+import '../../user_state.dart';
 import '../../utils/render_log.dart';
 import '../admin/admin_fulfillment_screen_web.dart';
 import '../admin/admin_supplier_screen_web.dart';
@@ -76,6 +78,11 @@ class _PartnerHomeScreenState extends State<PartnerHomeScreen> {
   Map<String, dynamic>? _payload;
   bool _loading = true;
 
+  /// CHANGE #326 — explicit absence. `_payload = {}` on a thrown RPC used to be
+  /// indistinguishable from "the backend says you are not a partner", so a
+  /// network blip rendered a blank card with no words and no way forward.
+  bool _failed = false;
+
   PartnerRpc get _rpc => widget.rpc ?? PartnerApi.call;
 
   @override
@@ -85,16 +92,22 @@ class _PartnerHomeScreenState extends State<PartnerHomeScreen> {
   }
 
   Future<void> _load() async {
-    setState(() => _loading = true);
+    setState(() {
+      _loading = true;
+      _failed = false;
+    });
     Map<String, dynamic> p;
+    var failed = false;
     try {
       p = await _rpc('partner_home', const {});
     } catch (_) {
       p = <String, dynamic>{};
+      failed = true;
     }
     if (!mounted) return;
     setState(() {
       _payload = p;
+      _failed = failed;
       _loading = false;
     });
   }
@@ -130,7 +143,13 @@ class _PartnerHomeScreenState extends State<PartnerHomeScreen> {
   @override
   Widget build(BuildContext context) {
     if (_loading) return const PartnerHomeSkeleton();
-    return PartnerHomeView(payload: _payload ?? const {}, onOpen: _open);
+    return PartnerHomeView(
+      payload: _payload ?? const {},
+      onOpen: _open,
+      failed: _failed,
+      onRetry: _load,
+      onSignOut: () => UserState.read(context).signOut(),
+    );
   }
 }
 
@@ -163,10 +182,23 @@ class PartnerHomeSkeleton extends StatelessWidget {
 
 /// The pure render half — every word below comes out of [payload].
 class PartnerHomeView extends StatelessWidget {
-  const PartnerHomeView({super.key, required this.payload, required this.onOpen});
+  const PartnerHomeView({
+    super.key,
+    required this.payload,
+    required this.onOpen,
+    this.failed = false,
+    this.onRetry,
+    this.onSignOut,
+  });
 
   final Map<String, dynamic> payload;
   final void Function(String featureKey) onOpen;
+
+  /// CHANGE #326 — the partner_home() call itself threw. Distinct from a clean
+  /// `is_partner:false` answer, which is the backend saying something true.
+  final bool failed;
+  final VoidCallback? onRetry;
+  final VoidCallback? onSignOut;
 
   String _s(String k) => (payload[k] ?? '').toString();
 
@@ -178,10 +210,28 @@ class PartnerHomeView extends StatelessWidget {
           'features=${payload['feature_count'] ?? 0},zone=${payload['zone_id'] ?? ''}');
     } catch (_) {}
 
+    // CHANGE #326 — a thrown RPC gets backend copy and a Retry, not a blank
+    // card. The words come from ui_copy (cached at boot) precisely because the
+    // call that would have carried them is the one that failed.
+    if (failed) {
+      return _Shell(
+        title: c('partner.error_title'),
+        zoneChip: '',
+        onSignOut: onSignOut,
+        child: _Empty(
+          title: '',
+          message: c('partner.error_message'),
+          actionLabel: c('partner.retry_label'),
+          onAction: onRetry,
+        ),
+      );
+    }
+
     if (payload['is_partner'] != true) {
       return _Shell(
         title: _s('title'),
         zoneChip: '',
+        onSignOut: onSignOut,
         child: _Empty(title: _s('message'), message: ''),
       );
     }
@@ -191,6 +241,7 @@ class PartnerHomeView extends StatelessWidget {
       subtitle: _s('subtitle'),
       zoneChip: _s('zone_chip'),
       partnerName: _s('partner_name'),
+      onSignOut: onSignOut,
       child: payload['has_features'] == true
           ? Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -211,10 +262,16 @@ class _Shell extends StatelessWidget {
     required this.child,
     this.subtitle = '',
     this.partnerName = '',
+    this.onSignOut,
   });
 
   final String title, subtitle, zoneChip, partnerName;
   final Widget child;
+
+  /// CHANGE #326 — a partner never reaches the customer shell's profile menu,
+  /// so without this there is no way out of the app at all. The word is the
+  /// backend's.
+  final VoidCallback? onSignOut;
 
   @override
   Widget build(BuildContext context) {
@@ -230,7 +287,23 @@ class _Shell extends StatelessWidget {
             child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(title, style: Ds.t.title),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: Text(title, style: Ds.t.title)),
+                  if (onSignOut != null && c('partner.sign_out_label').isNotEmpty)
+                    TextButton(
+                      onPressed: onSignOut,
+                      style: TextButton.styleFrom(
+                        foregroundColor: Ds.c.textSecondary,
+                        minimumSize: Size(
+                            Ds.touch.minTarget, Ds.touch.minTarget),
+                      ),
+                      child: Text(c('partner.sign_out_label'),
+                          style: Ds.t.caption),
+                    ),
+                ],
+              ),
               if (partnerName.isNotEmpty) ...[
                 SizedBox(height: Ds.space.x4),
                 Text(partnerName, style: Ds.t.bodyStrong),
@@ -352,8 +425,14 @@ class _FeatureTile extends StatelessWidget {
 }
 
 class _Empty extends StatelessWidget {
-  const _Empty({required this.title, required this.message});
-  final String title, message;
+  const _Empty({
+    required this.title,
+    required this.message,
+    this.actionLabel = '',
+    this.onAction,
+  });
+  final String title, message, actionLabel;
+  final VoidCallback? onAction;
 
   @override
   Widget build(BuildContext context) {
@@ -372,6 +451,17 @@ class _Empty extends StatelessWidget {
           if (message.isNotEmpty) ...[
             SizedBox(height: Ds.space.x8),
             Text(message, style: Ds.t.caption),
+          ],
+          if (actionLabel.isNotEmpty && onAction != null) ...[
+            SizedBox(height: Ds.space.x16),
+            SizedBox(
+              width: double.infinity,
+              height: Ds.touch.minTarget,
+              child: FilledButton(
+                onPressed: onAction,
+                child: Text(actionLabel),
+              ),
+            ),
           ],
         ],
       ),

@@ -5,9 +5,10 @@ import 'package:pharma_b2b/widgets/admin_date_picker.dart';
 import 'package:pharma_b2b/widgets/admin_zone_picker.dart'; // CHANGE #609
 import 'package:pharma_b2b/widgets/order_hours_card.dart';
 import 'package:pharma_b2b/widgets/notifications_card.dart';
+import '../../design_tokens.dart';
 import '../../services/ui_copy.dart';
-import 'reorder_admin_screen.dart'; // CHANGE #173
-import 'pnl_screen.dart';       // CHANGE #319
+import 'command_palette.dart';   // CHANGE #325
+import 'nav_registry_view.dart'; // CHANGE #325
 
 class AdminDashboardScreen extends StatefulWidget {
   const AdminDashboardScreen({super.key});
@@ -19,16 +20,18 @@ class AdminDashboardScreen extends StatefulWidget {
 class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   int _pendingBills = 0;
   int _totalMedicines = 0;
-  int _billsNeedingReview = 0;
-  int _pendingOrders = 0;
-  int _inquiries = 0;
-  int _pendingRegistrations = 0;
   bool _loading = true;
+
+  // CHANGE #325 — the whole nav, from nav_registry(). Sections, labels, icons,
+  // order, live counts and the role composition all arrive here; this screen
+  // renders them and nothing else.
+  Map<String, dynamic> _nav = const {};
 
   @override
   void initState() {
     super.initState();
     _loadStats();
+    _loadNav();
   }
 
   Future<void> _loadStats() async {
@@ -39,12 +42,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       int n(String k) => (c[k] as num?)?.toInt() ?? 0;
       if (mounted) {
         setState(() {
-          _totalMedicines       = n('medicines');
-          _pendingBills         = n('pending_bills');
-          _billsNeedingReview   = n('flagged_bills');
-          _pendingOrders        = n('pending_orders');
-          _inquiries            = n('contact_inquiries');
-          _pendingRegistrations = n('pending_customers');
+          _totalMedicines = n('medicines');
+          _pendingBills   = n('pending_bills');
           _loading = false;
         });
       }
@@ -53,46 +52,83 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     }
   }
 
+  /// CHANGE #325 — one call for the entire dashboard nav.
+  Future<void> _loadNav() async {
+    try {
+      final raw = await Supabase.instance.client.rpc('nav_registry');
+      final map = Map<String, dynamic>.from(
+          (raw is List ? raw.first : raw) as Map);
+      if (mounted) setState(() => _nav = map);
+    } catch (_) {
+      // A failed nav call leaves the previous payload on screen rather than
+      // blanking the dashboard — the offline rule: the cache is a render
+      // fallback, never an authority.
+    }
+  }
+
+  List<Map<String, dynamic>> _list(String key) =>
+      (_nav[key] as List?)
+          ?.whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList() ??
+      const <Map<String, dynamic>>[];
+
+  String _label(String key) =>
+      ((_nav['labels'] as Map?)?[key] ?? '').toString();
+
+  /// Every open goes through nav_open() first: it is the usage log that ranks
+  /// tiles, and it is the HARD GATE at the door — a screen that is not in the
+  /// registry cannot be opened through it.
+  void _openTile(Map<String, dynamic> tile) {
+    final featureKey = (tile['feature_key'] ?? '').toString();
+    if (featureKey.isNotEmpty) {
+      Supabase.instance.client
+          .rpc('nav_open', params: {'p_feature_key': featureKey})
+          .catchError((_) => null);
+    }
+    final route = (tile['route_key'] ?? '').toString();
+    if (route.isEmpty) return;
+    QuickLinkNavigator.of(context)?.navigate(route);
+  }
+
+  Future<Map<String, dynamic>> _togglePin(String featureKey) async {
+    try {
+      final raw = await Supabase.instance.client
+          .rpc('nav_pin_toggle', params: {'p_feature_key': featureKey});
+      final map = Map<String, dynamic>.from(
+          (raw is List ? raw.first : raw) as Map);
+      await _loadNav();
+      return map;
+    } catch (_) {
+      return const <String, dynamic>{};
+    }
+  }
+
+  Future<Map<String, dynamic>> _search(String query) async {
+    final raw = await Supabase.instance.client
+        .rpc('nav_search', params: {'p_q': query});
+    return Map<String, dynamic>.from((raw is List ? raw.first : raw) as Map);
+  }
+
+  void _openPalette() {
+    showCommandPalette(
+      context,
+      search: _search,
+      onPick: _openTile,
+      hint: _label('search_hint'),
+      title: _label('search_title'),
+    );
+  }
+
+  /// CHANGE #325 — action-first tiles. The list, the counts and the phrase
+  /// under each number ("10 bills to review") are all `nav_registry()`'s
+  /// `action_tiles`; there is no hand-written card here any more, and a tile
+  /// only exists while its badge_source has something to answer.
   Widget _buildActionRequired() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Wrap(
-          spacing: 12,
-          runSpacing: 12,
-          children: [
-            _ActionCard(
-              label: c('admin_dashboard.action_bills_to_review'),
-              count: _billsNeedingReview,
-              icon: Icons.assignment_late_outlined,
-              activeColor: const Color(0xFFDC2626),
-              route: 'bills',
-            ),
-            _ActionCard(
-              label: c('admin_dashboard.action_pending_orders'),
-              count: _pendingOrders,
-              icon: Icons.receipt_long_outlined,
-              activeColor: const Color(0xFFD97706),
-              route: 'orders',
-            ),
-            _ActionCard(
-              label: c('admin_dashboard.action_inquiries'),
-              count: _inquiries,
-              icon: Icons.help_outline,
-              activeColor: const Color(0xFF2563EB),
-              route: 'inquiry',
-            ),
-            _ActionCard(
-              label: c('admin_dashboard.action_pending_signups'),
-              count: _pendingRegistrations,
-              icon: Icons.person_add_outlined,
-              activeColor: const Color(0xFF1B7A43),
-              route: 'customers',
-            ),
-          ],
-        ),
-      ],
+    return NavActionTiles(
+      tiles: _list('action_tiles'),
+      emptyLabel: _label('empty_actions'),
+      onOpen: _openTile,
     );
   }
 
@@ -183,147 +219,39 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                       ],
                     ),
                   ),
+                  // CHANGE #325 — the command palette. One search box above
+                  // everything else: it jumps to any screen, order, customer,
+                  // supplier or medicine, so nothing needs to be hunted for.
+                  _PaletteButton(
+                      label: _label('search_button'), onTap: _openPalette),
+                  SizedBox(height: Ds.space.x16),
                   const OrderHoursCard(),
                   const NotificationsCard(),
-                  _sectionLabel(c('admin_dashboard.section_action_required')),
+                  _sectionLabel(_label('action_required')),
                   _buildActionRequired(),
                   const SizedBox(height: 28),
                   _sectionLabel(c('admin_dashboard.section_overview')),
                   _buildOverview(),
                   const SizedBox(height: 28),
-                  _sectionLabel(c('admin_dashboard.section_quick_navigation')),
-                  Wrap(spacing: 10, runSpacing: 10, children: [
-                    _QuickTile(
-                        label: c('admin_dashboard.quick_add_medicine'),
-                        icon: Icons.medication_outlined,
-                        route: 'add_medicine'),
-                    _QuickTile(
-                        label: c('admin_dashboard.quick_orders'),
-                        icon: Icons.receipt_long_outlined,
-                        route: 'orders'),
-                    _QuickTile(
-                        label: c('admin_dashboard.quick_inquiry'),
-                        icon: Icons.help_outline,
-                        route: 'inquiry'),
-                    _QuickTile(
-                        label: c('admin_dashboard.quick_suppliers'),
-                        icon: Icons.inventory_2_outlined,
-                        route: 'suppliers'),
-                    _QuickTile(
-                        label: c('admin_dashboard.quick_customers'),
-                        icon: Icons.people_outline,
-                        route: 'customers'),
-                    _QuickTile(
-                        label: c('admin_dashboard.quick_bills'),
-                        icon: Icons.inbox_outlined,
-                        route: 'bills'),
-                    // CHANGE #173 — the reorder suite's admin surface: every
-                    // auto-reorder and every open WhatsApp nudge, with pause /
-                    // resume / cancel. Pushes its own screen because the shell
-                    // route table is not this command's to edit.
-                    _QuickTile(
-                      label: c('admin_dashboard.quick_reorder'),
-                      icon: Icons.autorenew,
-                      onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                            builder: (_) => const ReorderAdminScreen()),
-                      ),
-                    ),
-                    // CHANGE #319 — Profit & loss: true margin per line,
-                    // order, customer, supplier and zone. Pushes its own
-                    // screen for the same reason the tile above does — the
-                    // shell route table belongs to another command in flight.
-                    _QuickTile(
-                      label: c('admin_dashboard.quick_pnl'),
-                      icon: Icons.trending_up,
-                      onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute<void>(builder: (_) => const PnlScreen()),
-                      ),
-                    ),
-                  ]),
+                  _sectionLabel(_label('all_features')),
+                  // CHANGE #325 — "Quick Navigation" was eight hand-written
+                  // tiles while thirty features hid in the profile dropdown.
+                  // It is now every registered feature, categorised, ordered
+                  // and role-composed by the backend.
+                  NavSections(
+                    sections: _list('sections'),
+                    pinned: _list('pinned'),
+                    pinnedLabel: _label('pinned'),
+                    pinHint: _label('pin_hint'),
+                    onOpen: _openTile,
+                    onPin: _togglePin,
+                  ),
                 ],
               ),
           ],
         ),
       );
     });
-  }
-}
-
-// ── Action-required card ──────────────────────────────────────────────────────
-
-class _ActionCard extends StatelessWidget {
-  final String label;
-  final int count;
-  final IconData icon;
-  final Color activeColor;
-  final String route;
-
-  const _ActionCard({
-    required this.label,
-    required this.count,
-    required this.icon,
-    required this.activeColor,
-    required this.route,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final isActive = count > 0;
-    final color = isActive ? activeColor : const Color(0xFF9CA3AF);
-    return InkWell(
-      onTap: () => QuickLinkNavigator.of(context)?.navigate(route),
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        width: 172,
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.06),
-              blurRadius: 8,
-              offset: const Offset(0, 2),
-            ),
-          ],
-          border: isActive
-              ? Border.all(color: activeColor.withValues(alpha: 0.18), width: 1)
-              : Border.all(color: const Color(0xFFF3F4F6)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.10),
-                borderRadius: BorderRadius.circular(9),
-              ),
-              child: Icon(icon, size: 18, color: color),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              '$count',
-              style: TextStyle(
-                fontSize: 26,
-                fontWeight: FontWeight.w800,
-                color: isActive ? activeColor : const Color(0xFF374151),
-              ),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              label,
-              style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ],
-        ),
-      ),
-    );
   }
 }
 
@@ -383,68 +311,6 @@ class _StatCard extends StatelessWidget {
   }
 }
 
-// ── Quick-action tile ─────────────────────────────────────────────────────────
-
-class _QuickTile extends StatelessWidget {
-  final String label;
-  final IconData icon;
-
-  /// A shell route key, handled by `_handleAdminNav`. Null for a tile that
-  /// pushes its own screen instead ([onTap]).
-  final String? route;
-
-  /// CHANGE #173 — a tile that opens a screen directly rather than through the
-  /// shell's route table. Exactly one of [route] / [onTap] is set.
-  final VoidCallback? onTap;
-
-  const _QuickTile({
-    required this.label,
-    required this.icon,
-    this.route,
-    this.onTap,
-  }) : assert(route != null || onTap != null);
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap ?? () => QuickLinkNavigator.of(context)?.navigate(route!),
-      borderRadius: BorderRadius.circular(10),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: const Color(0xFFE5E7EB)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.04),
-              blurRadius: 6,
-              offset: const Offset(0, 1),
-            ),
-          ],
-        ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Container(
-            width: 32,
-            height: 32,
-            decoration: BoxDecoration(
-              color: const Color(0xFFECFDF5),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Icon(icon, size: 17, color: const Color(0xFF1B7A43)),
-          ),
-          const SizedBox(width: 10),
-          Text(label,
-              style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF374151))),
-        ]),
-      ),
-    );
-  }
-}
-
 // ── Inherited widget — tiles/cards trigger navigation in AdminShell ────────────
 
 class QuickLinkNavigator extends InheritedWidget {
@@ -466,3 +332,36 @@ class QuickLinkNavigator extends InheritedWidget {
 
 
 
+
+
+// ── CHANGE #325: the command-palette entry point ─────────────────────────────
+
+class _PaletteButton extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+
+  const _PaletteButton({required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    RenderLog.write('c325_palette_button', 1);
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(Ds.r.button),
+      child: Container(
+        height: Ds.space.x48,
+        padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+        decoration: BoxDecoration(
+          color: Ds.c.bg,
+          borderRadius: BorderRadius.circular(Ds.r.button),
+          border: Border.all(color: Ds.c.divider),
+        ),
+        child: Row(children: [
+          Icon(Icons.search, size: Ds.space.x24, color: Ds.c.textSecondary),
+          SizedBox(width: Ds.space.x12),
+          Expanded(child: Text(label, style: Ds.t.bodySecondary)),
+        ]),
+      ),
+    );
+  }
+}

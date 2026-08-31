@@ -372,6 +372,85 @@ class _TileWrap extends StatelessWidget {
   }
 }
 
+/// CHANGE #325 (spec 5) — "a monthly report of features nobody opened".
+///
+/// `nav_unused_report()` counts opens over its own window and names every
+/// registered feature with zero. This is the surface that makes it readable:
+/// the title, the window label, every row's note and the all-clear line are
+/// the backend's, so the report can change its window or its wording without
+/// a deploy.
+class NavUnusedReportSheet extends StatelessWidget {
+  final Map<String, dynamic> report;
+
+  const NavUnusedReportSheet({super.key, required this.report});
+
+  @override
+  Widget build(BuildContext context) {
+    final items = (report['items'] as List?)
+            ?.whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList() ??
+        const <Map<String, dynamic>>[];
+    RenderLog.write('c325_unused_report', items.length);
+    return SafeArea(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(context).height * 0.8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: EdgeInsets.fromLTRB(
+                  Ds.space.x16, Ds.space.x24, Ds.space.x16, Ds.space.x4),
+              child: Text(_s(report, 'title'), style: Ds.t.title),
+            ),
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+              child: Text(_s(report, 'window_label'), style: Ds.t.caption),
+            ),
+            SizedBox(height: Ds.space.x16),
+            if (items.isEmpty)
+              Padding(
+                padding: EdgeInsets.all(Ds.space.x16),
+                child: Text(_s(report, 'empty_label'), style: Ds.t.caption),
+              )
+            else
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  padding: EdgeInsets.only(bottom: Ds.space.x24),
+                  itemCount: items.length,
+                  itemBuilder: (_, i) {
+                    final row = items[i];
+                    return Container(
+                      constraints: BoxConstraints(minHeight: Ds.space.x48),
+                      padding: EdgeInsets.symmetric(
+                          horizontal: Ds.space.x16, vertical: Ds.space.x8),
+                      child: Row(children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(_s(row, 'label'), style: Ds.t.body),
+                              Text(_s(row, 'category'), style: Ds.t.caption),
+                            ],
+                          ),
+                        ),
+                        Text(_s(row, 'note'), style: Ds.t.caption),
+                      ]),
+                    );
+                  },
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// One registry tile. Tap opens; long-press pins or unpins it, and the toast
 /// it shows is the RPC's own `message`.
 ///

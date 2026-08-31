@@ -110,6 +110,28 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     return Map<String, dynamic>.from((raw is List ? raw.first : raw) as Map);
   }
 
+  /// CHANGE #325 (spec 5) — the dead-feature report. Sits under the feature
+  /// list because that is the question it answers about the list above it.
+  Future<void> _openUnusedReport() async {
+    Map<String, dynamic> report = const {};
+    try {
+      final raw = await Supabase.instance.client.rpc('nav_unused_report');
+      report = Map<String, dynamic>.from((raw is List ? raw.first : raw) as Map);
+    } catch (_) {
+      return;
+    }
+    if (!mounted) return;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(Ds.r.sheet)),
+      ),
+      builder: (_) => NavUnusedReportSheet(report: report),
+    );
+  }
+
   void _openPalette() {
     showCommandPalette(
       context,
@@ -245,6 +267,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                     pinHint: _label('pin_hint'),
                     onOpen: _openTile,
                     onPin: _togglePin,
+                  ),
+                  TextButton.icon(
+                    onPressed: _openUnusedReport,
+                    icon: const Icon(Icons.insights_outlined),
+                    label: Text(_label('unused_report')),
                   ),
                 ],
               ),

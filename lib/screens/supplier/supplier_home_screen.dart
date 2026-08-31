@@ -1,3 +1,4 @@
+import 'supplier_shop_entries.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -99,6 +100,9 @@ class _SupplierHomeScreenState extends State<SupplierHomeScreen> {
   Widget build(BuildContext context) {
     final isDesktop = MediaQuery.of(context).size.width >= 900;
     return Column(children: [
+      // cmd #401 — the two "about my shop" entry points, above the search bar
+      // so a shop left marked closed is visible on the tab he lands on.
+      const SupplierShopEntries(),
       // Search bar
       Container(
         padding: EdgeInsets.fromLTRB(

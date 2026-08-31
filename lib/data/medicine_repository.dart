@@ -7,6 +7,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/home_sections.dart';
 import '../models/product.dart';
 import '../models/product_detail.dart';
+import '../models/product_reviews.dart';
+import '../models/product_compare.dart';
 import '../models/storefront_p3.dart';
 import 'storefront_labels.dart';
 
@@ -429,6 +431,115 @@ class MedicineRepository {
       return WishlistResult.fromMap(Map<String, dynamic>.from(res));
     } catch (_) {
       return WishlistResult.failed;
+    }
+  }
+
+  // ── CMD #410 — reviews, Q&A and compare ────────────────────────────────
+  //
+  // Five calls, all the same shape as everything above: send the ids, parse
+  // the payload, and let a refusal come back as a MODEL carrying the
+  // backend's sentence. Nothing here decides whether a write is allowed —
+  // `product_reviews().can_write` and each write RPC's own gate do that, and
+  // re-deciding it here would be the second copy of a rule that is only
+  // enforced once.
+
+  /// The reviews + Q&A block for one product. Paged by the BACKEND's
+  /// `next_offset`, never by a page size guessed here.
+  Future<ProductReviews> fetchProductReviews(String productId,
+      {int offset = 0}) async {
+    final id = int.tryParse(productId);
+    if (id == null) return ProductReviews.empty_;
+    try {
+      final res = await _rpc('product_reviews',
+          params: {'p_product_id': id, 'p_offset': offset});
+      if (res is! Map) return ProductReviews.empty_;
+      return ProductReviews.fromMap(Map<String, dynamic>.from(res));
+    } catch (_) {
+      return ProductReviews.empty_;
+    }
+  }
+
+  Future<ReviewWriteResult> reviewSubmit(
+      String productId, int stars, String body) async {
+    final id = int.tryParse(productId);
+    if (id == null) return ReviewWriteResult.failed;
+    try {
+      final res = await _rpc('review_submit',
+          params: {'p_product_id': id, 'p_stars': stars, 'p_body': body});
+      if (res is! Map) return ReviewWriteResult.failed;
+      return ReviewWriteResult.fromMap(Map<String, dynamic>.from(res));
+    } catch (_) {
+      return ReviewWriteResult.failed;
+    }
+  }
+
+  Future<ReviewWriteResult> questionSubmit(String productId, String body) async {
+    final id = int.tryParse(productId);
+    if (id == null) return ReviewWriteResult.failed;
+    try {
+      final res = await _rpc('question_submit',
+          params: {'p_product_id': id, 'p_body': body});
+      if (res is! Map) return ReviewWriteResult.failed;
+      return ReviewWriteResult.fromMap(Map<String, dynamic>.from(res));
+    } catch (_) {
+      return ReviewWriteResult.failed;
+    }
+  }
+
+  Future<ReviewWriteResult> answerSubmit(String questionId, String body) async {
+    final id = int.tryParse(questionId);
+    if (id == null) return ReviewWriteResult.failed;
+    try {
+      final res = await _rpc('answer_submit',
+          params: {'p_question_id': id, 'p_body': body});
+      if (res is! Map) return ReviewWriteResult.failed;
+      return ReviewWriteResult.fromMap(Map<String, dynamic>.from(res));
+    } catch (_) {
+      return ReviewWriteResult.failed;
+    }
+  }
+
+  Future<ReviewWriteResult> contentFlag(String kind, String targetId,
+      {String reason = ''}) async {
+    final id = int.tryParse(targetId);
+    if (id == null) return ReviewWriteResult.failed;
+    try {
+      final res = await _rpc('content_flag_raise',
+          params: {'p_kind': kind, 'p_target_id': id, 'p_reason': reason});
+      if (res is! Map) return ReviewWriteResult.failed;
+      return ReviewWriteResult.fromMap(Map<String, dynamic>.from(res));
+    } catch (_) {
+      return ReviewWriteResult.failed;
+    }
+  }
+
+  /// The compare table. The ids are the ONLY thing the app contributes; every
+  /// row, label, cell and dash in the reply is composed server-side.
+  Future<ProductCompare> fetchCompare(List<String> productIds) async {
+    final ids = productIds
+        .map(int.tryParse)
+        .whereType<int>()
+        .toList(growable: false);
+    if (ids.isEmpty) return ProductCompare.failed;
+    try {
+      final res = await _rpc('product_compare', params: {'p_ids': ids});
+      if (res is! Map) return ProductCompare.failed;
+      return ProductCompare.fromMap(Map<String, dynamic>.from(res));
+    } catch (_) {
+      return ProductCompare.failed;
+    }
+  }
+
+  /// CMD #410 — the wishlist's price/stock alert block. The digest that
+  /// generated these rows is sent by the dispatcher; this is the in-app
+  /// record of the same events.
+  Future<Map<String, dynamic>> fetchWishlistAlerts() async {
+    try {
+      final res = await _rpc('wishlist_alerts');
+      if (res is! Map) return const {'ok': false, 'has': false, 'items': []};
+      return Map<String, dynamic>.from(res);
+    } catch (_) {
+      return const {'ok': false, 'has': false, 'items': []};
     }
   }
 

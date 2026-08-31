@@ -229,7 +229,8 @@ insert into public.pnl_label (key, label, tone, sort_order) values
   ('cfg.packing_per_order', 'Packing per order (₹)',                            null, 4),
   ('cfg.packing_per_line',  'Packing per line (₹)',                             null, 5),
   ('cfg.delivery_cost_fallback','Delivery cost when a zone has no rate (₹)',    null, 6),
-  ('cfg.saved',             'Saved.',                                           'success', 0)
+  ('cfg.saved',             'Saved.',                                           'success', 0),
+  ('cfg.save',              'Save rates',                                       'brand',   0)
 on conflict (key) do update
   set label = excluded.label, tone = excluded.tone, sort_order = excluded.sort_order;
 
@@ -922,6 +923,25 @@ revoke all on function public.pnl_alerts(int) from public, anon;
 grant execute on function public.pnl_alerts(int) to authenticated, service_role;
 
 -- ── 15. The rates, readable and editable ────────────────────────────────────
+-- One shape, built from a row that is passed in, so the SET path can render
+-- the row it JUST wrote. Calling a STABLE pnl_config_get() from inside the
+-- setter returned the caller the values from before its own update — the
+-- screen saved a rate and redrew the old one.
+create or replace function public._pnl_config_payload(c public.pnl_cost_config)
+returns jsonb language sql stable security definer set search_path to 'public' as $$
+  select jsonb_build_object('ok', true,
+    'heading', public._pnl_c('cfg.heading'),
+    'saved_text', public._pnl_c('cfg.saved'),
+    'save_label', public._pnl_c('cfg.save'),
+    'fields', jsonb_build_array(
+      jsonb_build_object('key','gateway_fee_pct',       'label', public._pnl_c('cfg.gateway_fee_pct'),       'value', c.gateway_fee_pct),
+      jsonb_build_object('key','gateway_fee_fixed',     'label', public._pnl_c('cfg.gateway_fee_fixed'),     'value', c.gateway_fee_fixed),
+      jsonb_build_object('key','gateway_fee_gst_pct',   'label', public._pnl_c('cfg.gateway_fee_gst_pct'),   'value', c.gateway_fee_gst_pct),
+      jsonb_build_object('key','packing_per_order',     'label', public._pnl_c('cfg.packing_per_order'),     'value', c.packing_per_order),
+      jsonb_build_object('key','packing_per_line',      'label', public._pnl_c('cfg.packing_per_line'),      'value', c.packing_per_line),
+      jsonb_build_object('key','delivery_cost_fallback','label', public._pnl_c('cfg.delivery_cost_fallback'),'value', c.delivery_cost_fallback)));
+$$;
+
 create or replace function public.pnl_config_get()
 returns jsonb language plpgsql stable security definer set search_path to 'public' as $$
 declare c public.pnl_cost_config%rowtype;
@@ -931,20 +951,12 @@ begin
                               'message', public._pnl_c('ui.not_authorized'));
   end if;
   select * into c from public.pnl_cost_config where id = 1;
-  return jsonb_build_object('ok', true,
-    'heading', public._pnl_c('cfg.heading'),
-    'saved_text', public._pnl_c('cfg.saved'),
-    'fields', jsonb_build_array(
-      jsonb_build_object('key','gateway_fee_pct',      'label', public._pnl_c('cfg.gateway_fee_pct'),      'value', c.gateway_fee_pct),
-      jsonb_build_object('key','gateway_fee_fixed',    'label', public._pnl_c('cfg.gateway_fee_fixed'),    'value', c.gateway_fee_fixed),
-      jsonb_build_object('key','gateway_fee_gst_pct',  'label', public._pnl_c('cfg.gateway_fee_gst_pct'),  'value', c.gateway_fee_gst_pct),
-      jsonb_build_object('key','packing_per_order',    'label', public._pnl_c('cfg.packing_per_order'),    'value', c.packing_per_order),
-      jsonb_build_object('key','packing_per_line',     'label', public._pnl_c('cfg.packing_per_line'),     'value', c.packing_per_line),
-      jsonb_build_object('key','delivery_cost_fallback','label', public._pnl_c('cfg.delivery_cost_fallback'),'value', c.delivery_cost_fallback)));
+  return public._pnl_config_payload(c);
 end $$;
 
 create or replace function public.pnl_config_set(p_patch jsonb)
 returns jsonb language plpgsql security definer set search_path to 'public' as $$
+declare c public.pnl_cost_config%rowtype;
 begin
   if not public.is_admin() then
     return jsonb_build_object('ok', false, 'error','not_authorized',
@@ -959,9 +971,11 @@ begin
     packing_per_line       = coalesce((p_patch->>'packing_per_line')::numeric,       packing_per_line),
     delivery_cost_fallback = coalesce((p_patch->>'delivery_cost_fallback')::numeric, delivery_cost_fallback),
     updated_at = now(), updated_by = coalesce(auth.jwt()->>'email', 'admin')
-  where id = 1;
+  where id = 1
+  returning * into c;
 
-  return public.pnl_config_get() || jsonb_build_object('message', public._pnl_c('cfg.saved'));
+  return public._pnl_config_payload(c)
+         || jsonb_build_object('message', public._pnl_c('cfg.saved'));
 end $$;
 
 revoke all on function public.pnl_config_get() from public, anon;

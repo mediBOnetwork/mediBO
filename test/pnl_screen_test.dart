@@ -235,6 +235,57 @@ void main() {
     expect(find.text('Lines pushed below cost'), findsOneWidget);
   });
 
+  testWidgets('the rates sheet posts only what was typed and prints the backend toast',
+      (t) async {
+    Map<String, dynamic>? patch;
+    PnlScreen.rpcOverride = (fn, params) async {
+      if (fn == 'pnl_dashboard') return _dash();
+      if (fn == 'pnl_config_get') {
+        return {
+          'ok': true,
+          'heading': 'Rates used below the goods',
+          'saved_text': 'Saved.',
+          'save_label': 'Save rates',
+          'fields': [
+            {'key': 'gateway_fee_pct', 'label': 'Gateway fee %', 'value': 2},
+            {'key': 'packing_per_line', 'label': 'Packing per line (₹)', 'value': 0},
+          ],
+        };
+      }
+      if (fn == 'pnl_config_set') {
+        patch = Map<String, dynamic>.from(params?['p_patch'] as Map);
+        return {
+          'ok': true,
+          'message': 'Saved.',
+          'heading': 'Rates used below the goods',
+          'saved_text': 'Saved.',
+          'save_label': 'Save rates',
+          // the SET path returns the row it just wrote, not the one before it
+          'fields': [
+            {'key': 'gateway_fee_pct', 'label': 'Gateway fee %', 'value': 2},
+            {'key': 'packing_per_line', 'label': 'Packing per line (₹)', 'value': 1.5},
+          ],
+        };
+      }
+      return {'ok': true};
+    };
+    await pump(t);
+
+    await t.tap(find.byIcon(Icons.tune));
+    await t.pumpAndSettle();
+    expect(find.text('Rates used below the goods'), findsOneWidget);
+    expect(find.text('Gateway fee %'), findsOneWidget);
+
+    await t.enterText(
+        find.byKey(const ValueKey('pnl_cfg_packing_per_line')), '1.5');
+    await t.tap(find.text('Save rates'));
+    await t.pumpAndSettle();
+
+    // only the edited field travels; an untouched rate is not resent as a guess
+    expect(patch, {'packing_per_line': 1.5});
+    expect(find.text('Saved.'), findsOneWidget);
+  });
+
   testWidgets('a refusal renders the backend message instead of throwing',
       (t) async {
     PnlScreen.rpcOverride = (fn, params) async =>

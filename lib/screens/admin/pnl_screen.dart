@@ -155,6 +155,86 @@ class _PnlScreenState extends State<PnlScreen> {
     }
   }
 
+  /// The rates sheet. Every label and the saved toast are the backend's; this
+  /// only collects six numbers and posts them back.
+  Future<void> _openRates() async {
+    final cfg = _asMap(await _rpc('pnl_config_get'));
+    if (!mounted) return;
+    if (cfg['ok'] == false) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text((cfg['message'] ?? '').toString())));
+      return;
+    }
+    final fields = <Map<String, dynamic>>[
+      for (final f in (cfg['fields'] as List?) ?? const [])
+        if (f is Map) Map<String, dynamic>.from(f),
+    ];
+    final edited = <String, dynamic>{};
+
+    // A sheet, not a dialog — the house rule for anything with inputs.
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      builder: (sheetCtx) => Padding(
+        padding: EdgeInsets.only(
+          left: Ds.space.x16,
+          right: Ds.space.x16,
+          top: Ds.space.x24,
+          bottom: MediaQuery.of(sheetCtx).viewInsets.bottom + Ds.space.x24,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text((cfg['heading'] ?? '').toString(), style: Ds.t.subtitle),
+            SizedBox(height: Ds.space.x16),
+            for (final f in fields)
+              Padding(
+                padding: EdgeInsets.only(bottom: Ds.space.x12),
+                child: TextFormField(
+                  key: ValueKey('pnl_cfg_${f['key']}'),
+                  initialValue: '${f['value'] ?? ''}',
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  style: Ds.t.body,
+                  decoration: InputDecoration(
+                    labelText: (f['label'] ?? '').toString(),
+                    isDense: true,
+                  ),
+                  onChanged: (v) {
+                    final n = num.tryParse(v);
+                    if (n != null) edited['${f['key']}'] = n;
+                  },
+                ),
+              ),
+            SizedBox(height: Ds.space.x8),
+            SizedBox(
+              width: double.infinity,
+              height: Ds.touch.minTarget,
+              child: FilledButton(
+                onPressed: () async {
+                  final res = _asMap(
+                      await _rpc('pnl_config_set', {'p_patch': edited}));
+                  if (!sheetCtx.mounted) return;
+                  Navigator.of(sheetCtx).pop();
+                  final msg = (res['message'] ?? res['saved_text'] ?? '')
+                      .toString();
+                  if (msg.isNotEmpty && mounted) {
+                    ScaffoldMessenger.of(context)
+                        .showSnackBar(SnackBar(content: Text(msg)));
+                  }
+                  await _load();
+                },
+                child: Text((cfg['save_label'] ?? '').toString()),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Color _tone(String? tone) {
     switch (tone) {
       case 'brand':
@@ -183,6 +263,14 @@ class _PnlScreenState extends State<PnlScreen> {
         backgroundColor: Ds.c.surface,
         elevation: 0,
         actions: [
+          // The rates that turn gross margin into contribution live in
+          // pnl_cost_config; this is the door to them, so changing what a
+          // payment or a parcel costs never needs a deploy.
+          IconButton(
+            tooltip: (d?['costs']?['heading'] ?? '').toString(),
+            onPressed: _loading ? null : _openRates,
+            icon: const Icon(Icons.tune),
+          ),
           IconButton(
             tooltip: (d?['range_label'] ?? '').toString(),
             onPressed: _loading ? null : _load,

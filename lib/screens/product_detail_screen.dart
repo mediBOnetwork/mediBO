@@ -149,9 +149,17 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
   /// backend knows what the list looks like afterwards. Nothing is patched
   /// optimistically here.
   Future<void> _loadReviews({int offset = 0}) async {
-    final load = widget.reviewsLoader ??
-        (id, off) => MedicineRepository().fetchProductReviews(id, offset: off);
-    final res = await load(widget.productId, offset);
+    ProductReviews res;
+    try {
+      final load = widget.reviewsLoader ??
+          (id, off) => MedicineRepository().fetchProductReviews(id, offset: off);
+      res = await load(widget.productId, offset);
+    } catch (_) {
+      // The block is an ADDITION to the page, never a gate on it: a product
+      // page that cannot reach the reviews RPC still shows the product. The
+      // empty payload renders as ok:false, which draws nothing at all.
+      res = ProductReviews.empty_;
+    }
     if (!mounted) return;
     setState(() => _reviews = res);
   }
@@ -168,9 +176,14 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
   }
 
   Future<void> _openCompare() async {
-    final load = widget.compareLoader ??
-        (ids) => MedicineRepository().fetchCompare(ids);
-    final res = await load(_compare.ids);
+    ProductCompare res;
+    try {
+      final load = widget.compareLoader ??
+          (ids) => MedicineRepository().fetchCompare(ids);
+      res = await load(_compare.ids);
+    } catch (_) {
+      res = ProductCompare.failed;
+    }
     if (!mounted) return;
     await CompareSheet.show(context, res);
   }

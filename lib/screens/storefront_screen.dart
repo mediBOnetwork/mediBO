@@ -195,7 +195,12 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
   }
 
   Future<void> _openCompare() async {
-    final res = await widget.repo.fetchCompare(_compare.ids);
+    ProductCompare res;
+    try {
+      res = await widget.repo.fetchCompare(_compare.ids);
+    } catch (_) {
+      res = ProductCompare.failed;
+    }
     if (!mounted) return;
     await CompareSheet.show(context, res);
   }

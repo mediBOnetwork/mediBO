@@ -209,6 +209,7 @@ class _PartnerHomeScreenState extends State<PartnerHomeScreen> {
       payload: _payload ?? const {},
       queue: _queue,
       ring: OrderAlertService.instance.items,
+      ringBadge: OrderAlertService.instance.badgeLabel,
       ringBusy: _ringBusy,
       onRingAct: _ringAct,
       onOpen: _open,
@@ -254,6 +255,7 @@ class PartnerHomeView extends StatelessWidget {
     required this.onOpen,
     this.queue,
     this.ring = const [],
+    this.ringBadge = '',
     this.ringBusy = false,
     this.onRingAct,
     this.failed = false,
@@ -272,6 +274,10 @@ class PartnerHomeView extends StatelessWidget {
   /// Empty is the normal state; every word on the card, including whether
   /// Accept may be offered at all, is the backend's.
   final List<Map<String, dynamic>> ring;
+
+  /// order_alert_feed().badge_label — the backend's own count sentence. Empty
+  /// when nothing is ringing, and never assembled from ring.length here.
+  final String ringBadge;
   final bool ringBusy;
   final void Function(String orderId, String action)? onRingAct;
   final void Function(String featureKey) onOpen;
@@ -323,6 +329,7 @@ class PartnerHomeView extends StatelessWidget {
       subtitle: _s('subtitle'),
       zoneChip: _s('zone_chip'),
       partnerName: _s('partner_name'),
+      ringBadge: ringBadge,
       onSignOut: onSignOut,
       child: payload['has_features'] == true
           ? Column(
@@ -352,10 +359,11 @@ class _Shell extends StatelessWidget {
     required this.child,
     this.subtitle = '',
     this.partnerName = '',
+    this.ringBadge = '',
     this.onSignOut,
   });
 
-  final String title, subtitle, zoneChip, partnerName;
+  final String title, subtitle, zoneChip, partnerName, ringBadge;
   final Widget child;
 
   /// CHANGE #326 — a partner never reaches the customer shell's profile menu,
@@ -402,9 +410,18 @@ class _Shell extends StatelessWidget {
                 SizedBox(height: Ds.space.x4),
                 Text(subtitle, style: Ds.t.caption),
               ],
-              if (zoneChip.isNotEmpty) ...[
+              if (zoneChip.isNotEmpty || ringBadge.isNotEmpty) ...[
                 SizedBox(height: Ds.space.x12),
-                _Chip(label: zoneChip),
+                Wrap(
+                  spacing: Ds.space.x8,
+                  runSpacing: Ds.space.x8,
+                  children: [
+                    if (zoneChip.isNotEmpty) _Chip(label: zoneChip),
+                    // CHANGE #398 — the ring badge, in the backend's words.
+                    if (ringBadge.isNotEmpty)
+                      _Chip(label: ringBadge, tone: 'danger'),
+                  ],
+                ),
               ],
               SizedBox(height: Ds.space.x24),
               child,
@@ -420,19 +437,22 @@ class _Shell extends StatelessWidget {
 }
 
 class _Chip extends StatelessWidget {
-  const _Chip({required this.label});
+  const _Chip({required this.label, this.tone = ''});
   final String label;
+  final String tone;
 
   @override
   Widget build(BuildContext context) {
+    final t = partnerTone(tone);
     return Container(
       padding: EdgeInsets.symmetric(
           horizontal: Ds.space.x12, vertical: Ds.space.x8),
       decoration: BoxDecoration(
-        color: Ds.c.brandSoft,
+        color: t.bg,
         borderRadius: Ds.r.rChip,
       ),
-      child: Text(label, style: Ds.t.caption),
+      child: Text(label,
+          style: tone.isEmpty ? Ds.t.caption : Ds.t.caption.copyWith(color: t.fg)),
     );
   }
 }

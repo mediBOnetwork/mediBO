@@ -74,6 +74,8 @@ IconData safetyChipIcon(SafetyChipKind kind) {
       return Icons.cloud_off_outlined;
     case SafetyChipKind.stall:
       return Icons.report_problem_outlined;
+    case SafetyChipKind.stepsStale:
+      return Icons.rule_folder_outlined;
     case SafetyChipKind.steps:
       return Icons.checklist_rtl;
     case SafetyChipKind.resumed:

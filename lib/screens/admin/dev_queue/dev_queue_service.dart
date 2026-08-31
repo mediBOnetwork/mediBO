@@ -63,6 +63,12 @@ class DevQueueService {
   Future<Map<String, dynamic>> dbHealth() async =>
       _asMap(await _c.rpc('db_health_status'));
 
+  /// CMD #368 — save one admission-control threshold (or the on/off switch).
+  /// The backend clamps every value to its own bounds and returns the stored
+  /// block; the caller reloads rather than trusting what it sent.
+  Future<Map<String, dynamic>> admissionSet(Map<String, dynamic> patch) async =>
+      _asMap(await _c.rpc('db_admission_set', params: {'p_patch': patch}));
+
   /// CHANGE #324 — the deploy lane, now a merge queue: who holds the lane and
   /// for how long, what is waiting to be batched, the batch in flight, wait
   /// time vs hold time over the last seven days, any claim still holding a

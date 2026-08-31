@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../design_tokens.dart';
+import '../../../services/ui_copy.dart';
 import 'dev_queue_common.dart';
 
 /// CHANGE #301 — the Database lane, on the Cron health screen.
@@ -17,7 +18,17 @@ import 'dev_queue_common.dart';
 /// resolved through the shared palette. It renders them in payload order.
 class DbLaneSection extends StatelessWidget {
   final Map<String, dynamic> data;
-  const DbLaneSection({super.key, required this.data});
+
+  /// CMD #368 — saving a threshold. Null in a read-only context; the Cron
+  /// health screen passes the callback that POSTs `db_admission_set` and then
+  /// reloads, so the numbers on screen are always the SERVER's, not a local
+  /// optimistic copy.
+  final Future<void> Function(Map<String, dynamic> patch)? onAdmissionPatch;
+  const DbLaneSection({
+    super.key,
+    required this.data,
+    this.onAdmissionPatch,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -40,6 +51,11 @@ class DbLaneSection extends StatelessWidget {
     final alerts =
         (data['alerts'] as Map?)?.cast<String, dynamic>() ?? const {};
     final recent = (alerts['recent'] as List?) ?? const [];
+    final admission =
+        (data['admission'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final violations =
+        (data['violations'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final violRecent = (violations['recent'] as List?) ?? const [];
 
     return DqCard(
       child: Column(
@@ -107,11 +123,51 @@ class DbLaneSection extends StatelessWidget {
               ),
               SizedBox(height: Ds.space.x8),
             ],
+          if (admission.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x24),
+            Divider(color: kBorder, height: Ds.space.x24),
+            _AdmissionBlock(data: admission, onPatch: onAdmissionPatch),
+          ],
           SizedBox(height: Ds.space.x24),
           _line(
             (guard['label'] as String?) ?? '',
             (guard['value_label'] as String?) ?? '',
           ),
+          if (violations.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x16),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: _line(
+                    (violations['label'] as String?) ?? '',
+                    (violations['value_label'] as String?) ?? '',
+                  ),
+                ),
+                SizedBox(width: Ds.space.x8),
+                ToneChip(
+                  label: '${violRecent.length}',
+                  tone: toneByName(
+                    (violations['tone'] as String?) ?? 'neutral',
+                  ),
+                ),
+              ],
+            ),
+            for (final v in violRecent) ...[
+              SizedBox(height: Ds.space.x8),
+              Text(
+                '${(v as Map)['at_label'] ?? ''} · ${v['label'] ?? ''}',
+                style: Ds.t.caption.copyWith(
+                  fontWeight: FontWeight.w600,
+                  color: kTextHi,
+                ),
+              ),
+              Text(
+                '${v['detail'] ?? ''}',
+                style: Ds.t.caption.copyWith(color: kTextLo),
+              ),
+            ],
+          ],
           SizedBox(height: Ds.space.x16),
           _line(
             (window['label'] as String?) ?? '',
@@ -225,4 +281,232 @@ class DbLaneSection extends StatelessWidget {
       ],
     ),
   );
+}
+
+/// CMD #368 — Runner admission control, edited in place.
+///
+/// The card decides nothing. Headline, every threshold label, every hint, the
+/// empty state and the "claims held back" lines are strings built by
+/// `db_admission_status()` (folded into `db_health_status().admission`). Tapping
+/// a threshold opens a sheet with a number field; saving calls
+/// `db_admission_set(patch)` and the whole Cron health screen reloads, so what
+/// comes back on screen is what the SERVER stored, never a local guess.
+class _AdmissionBlock extends StatelessWidget {
+  final Map<String, dynamic> data;
+  final Future<void> Function(Map<String, dynamic> patch)? onPatch;
+  const _AdmissionBlock({required this.data, this.onPatch});
+
+  @override
+  Widget build(BuildContext context) {
+    final toggle = (data['toggle'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final thresholds = (data['thresholds'] as List?) ?? const [];
+    final recent = (data['recent'] as List?) ?? const [];
+    final editable = onPatch != null;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Text(
+                (data['label'] as String?) ?? '',
+                style: Ds.t.body.copyWith(
+                  fontWeight: FontWeight.w600,
+                  color: kTextHi,
+                ),
+              ),
+            ),
+            SizedBox(width: Ds.space.x8),
+            if (editable)
+              Switch(
+                value: toggle['value'] == true,
+                activeColor: kBrand,
+                onChanged: (v) => onPatch!({'enabled': v}),
+              )
+            else
+              ToneChip(
+                label: '${toggle['value'] == true}',
+                tone: toneByName((data['tone'] as String?) ?? 'neutral'),
+              ),
+          ],
+        ),
+        SizedBox(height: Ds.space.x4),
+        Text(
+          (data['value_label'] as String?) ?? '',
+          style: Ds.t.body.copyWith(color: kTextHi),
+        ),
+        SizedBox(height: Ds.space.x4),
+        Text(
+          (toggle['hint'] as String?) ?? '',
+          style: Ds.t.caption.copyWith(color: kTextLo),
+        ),
+        SizedBox(height: Ds.space.x12),
+        for (final t in thresholds)
+          _ThresholdRow(
+            data: (t as Map).cast<String, dynamic>(),
+            onPatch: onPatch,
+          ),
+        SizedBox(height: Ds.space.x12),
+        Text(
+          (data['source_label'] as String?) ?? '',
+          style: Ds.t.caption.copyWith(color: kTextLo),
+        ),
+        SizedBox(height: Ds.space.x4),
+        Text(
+          (data['updated_label'] as String?) ?? '',
+          style: Ds.t.caption.copyWith(color: kTextLo),
+        ),
+        SizedBox(height: Ds.space.x16),
+        Text(
+          (data['recent_heading'] as String?) ?? '',
+          style: Ds.t.caption.copyWith(color: kTextLo),
+        ),
+        SizedBox(height: Ds.space.x4),
+        if (recent.isEmpty)
+          Text(
+            (data['recent_empty'] as String?) ?? '',
+            style: Ds.t.caption.copyWith(color: kTextLo),
+          )
+        else
+          for (final r in recent) ...[
+            SizedBox(height: Ds.space.x8),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                ToneChip(
+                  label: ((r as Map)['at_label'] as String?) ?? '',
+                  tone: toneByName((r['tone'] as String?) ?? 'warning'),
+                ),
+                SizedBox(width: Ds.space.x8),
+                Expanded(
+                  child: Text(
+                    '${r['label'] ?? ''} — ${r['detail'] ?? ''}',
+                    style: Ds.t.caption.copyWith(color: kTextLo),
+                  ),
+                ),
+              ],
+            ),
+          ],
+      ],
+    );
+  }
+}
+
+/// One editable threshold. Value, unit, bounds and the sentence explaining why
+/// the number is what it is all come from the payload.
+class _ThresholdRow extends StatelessWidget {
+  final Map<String, dynamic> data;
+  final Future<void> Function(Map<String, dynamic> patch)? onPatch;
+  const _ThresholdRow({required this.data, this.onPatch});
+
+  @override
+  Widget build(BuildContext context) {
+    final key = (data['key'] as String?) ?? '';
+    final label = (data['label'] as String?) ?? '';
+    final hint = (data['hint'] as String?) ?? '';
+    final unit = (data['unit'] as String?) ?? '';
+    final value = '${data['value'] ?? ''}';
+
+    return InkWell(
+      onTap: onPatch == null ? null : () => _edit(context, key, label, hint),
+      borderRadius: Ds.r.rButton,
+      child: Container(
+        constraints: BoxConstraints(minHeight: Ds.space.x48),
+        padding: EdgeInsets.symmetric(vertical: Ds.space.x8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label, style: Ds.t.body.copyWith(color: kTextHi)),
+                  SizedBox(height: Ds.space.x4),
+                  Text(hint, style: Ds.t.caption.copyWith(color: kTextLo)),
+                ],
+              ),
+            ),
+            SizedBox(width: Ds.space.x12),
+            Text(
+              unit == '%' ? '$value%' : '$value $unit',
+              style: Ds.t.body.copyWith(
+                fontWeight: FontWeight.w600,
+                color: kTextHi,
+              ),
+            ),
+            if (onPatch != null) ...[
+              SizedBox(width: Ds.space.x8),
+              Icon(Icons.edit_outlined, size: 16, color: kTextLo),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _edit(
+    BuildContext context,
+    String key,
+    String label,
+    String hint,
+  ) async {
+    final ctrl = TextEditingController(text: '${data['value'] ?? ''}');
+    final saved = await showModalBottomSheet<int>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.of(ctx).viewInsets.bottom,
+        ),
+        child: Container(
+          padding: EdgeInsets.all(Ds.space.x24),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(Ds.r.sheet)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: Ds.t.subtitle.copyWith(
+                  fontWeight: FontWeight.w700,
+                  color: kTextHi,
+                ),
+              ),
+              SizedBox(height: Ds.space.x8),
+              Text(hint, style: Ds.t.caption.copyWith(color: kTextLo)),
+              SizedBox(height: Ds.space.x16),
+              TextField(
+                controller: ctrl,
+                autofocus: true,
+                keyboardType: TextInputType.number,
+                decoration: InputDecoration(
+                  filled: true,
+                  fillColor: kPageBg,
+                  border: OutlineInputBorder(borderRadius: Ds.r.rButton),
+                ),
+              ),
+              SizedBox(height: Ds.space.x24),
+              SizedBox(
+                width: double.infinity,
+                height: Ds.space.x48,
+                child: FilledButton(
+                  style: FilledButton.styleFrom(backgroundColor: kBrand),
+                  onPressed: () =>
+                      Navigator.pop(ctx, int.tryParse(ctrl.text.trim())),
+                  child: Text(c('dev_queue.admission_save')),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (saved != null && onPatch != null) await onPatch!({key: saved});
+  }
 }

@@ -207,7 +207,13 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
                     _headline(),
                     if (_db.isNotEmpty) ...[
                       SizedBox(height: Ds.space.x24),
-                      DbLaneSection(data: _db),
+                      DbLaneSection(
+                        data: _db,
+                        onAdmissionPatch: (patch) async {
+                          await _svc.admissionSet(patch);
+                          await _load();
+                        },
+                      ),
                     ],
                     // Its own condition, deliberately: a refused DB-lane read
                     // must not take the deploy lane down with it.

@@ -353,8 +353,9 @@ class FeatureAccessRow extends StatelessWidget {
                 child: InkWell(
                   borderRadius: Ds.r.rChip,
                   onTap: on ? null : () => onPick(value),
+                  // Same reason as the audit filters: an alignment here would
+                  // stretch each of the three levels across the whole row.
                   child: Container(
-                    alignment: Alignment.center,
                     padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
                     decoration: BoxDecoration(
                       color: on ? _toneColor(o['tone']?.toString() ?? '') : Ds.c.surface,

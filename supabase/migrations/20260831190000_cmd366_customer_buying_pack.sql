@@ -807,3 +807,12 @@ begin
 end $$;
 
 grant execute on function public.sub_offer_open_for_order(uuid) to authenticated, service_role;
+
+-- The old two-argument storefront_margin_page must GO, not linger beside the
+-- three-argument one. rg_check flags this as critical for a real reason: with
+-- both present, `p_min_margin` defaulted, a call carrying only offset and limit
+-- is ambiguous, and PostgREST resolves overloads by argument NAMES — so the
+-- storefront could silently land on the version that ignores the filter. The
+-- new signature is a strict superset (p_min_margin defaults to null = the old
+-- behaviour), so nothing that called the old one loses anything.
+drop function if exists public.storefront_margin_page(integer, integer);

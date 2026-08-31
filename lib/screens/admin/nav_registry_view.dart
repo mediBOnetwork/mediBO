@@ -199,6 +199,34 @@ class NavProfileMenu {
     // backend admitted exactly N rows onto the profile surface. Two is the
     // number the CHECK constraint permits; anything else means the gate moved.
     RenderLog.write('c325_profile_menu_loaded', items.value.length);
+    _writeIconProof(payload);
+  }
+
+  /// CHANGE #349 — boot-time proof for the dashboard defect.
+  ///
+  /// The tiles themselves paint on a canvas a headless verifier cannot read,
+  /// and their paint-time keys only fire once someone has the dashboard open.
+  /// This runs on the SAME payload at boot and asserts the honest thing: how
+  /// many tiles arrived, and how many of them name an icon this build cannot
+  /// draw. `unresolved=0` is the fix; anything else is the bug still live.
+  static void _writeIconProof(Map payload) {
+    var tiles = 0;
+    var unresolved = 0;
+    void count(Object? rows) {
+      if (rows is! List) return;
+      for (final r in rows.whereType<Map>()) {
+        tiles++;
+        if (!navIconResolves((r['icon_key'] ?? '').toString())) unresolved++;
+      }
+    }
+
+    for (final section in (payload['sections'] as List? ?? const [])
+        .whereType<Map>()) {
+      count(section['items']);
+    }
+    count(payload['action_tiles']);
+    count(payload['pinned']);
+    RenderLog.write('c349_nav_icons', 'tiles=$tiles unresolved=$unresolved');
   }
 }
 

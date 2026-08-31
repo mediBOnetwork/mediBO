@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../../../design_tokens.dart';
 import '../../../services/ui_copy.dart';
+import '../../../utils/render_log.dart';
 import '../../../utils/toast.dart';
 import 'dev_queue_common.dart';
 import 'dev_queue_service.dart';
@@ -202,6 +203,8 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
   @override
   Widget build(BuildContext context) {
     final reorderable = _status == 'pending';
+    // CHANGE #349 — one entry point where nine bare glyphs used to be.
+    RenderLog.write('c349_tools_button', 1);
     return Scaffold(
       backgroundColor: kPageBg,
       appBar: AppBar(

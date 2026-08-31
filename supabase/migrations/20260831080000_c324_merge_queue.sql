@@ -541,3 +541,343 @@ begin
 end $$;
 ;
 
+-- ═══ 20260831084500 · c324_lane_split_hold + evict signature ═══
+-- CHANGE #324 (e) — HOLD THE LANE ONLY FOR THE BATCH CLAIM AND THE DEPLOY.
+--
+-- The first real batch (CHANGE #834) held the lane 191s because the merge and
+-- the protected suite ran INSIDE it. They do not need to: with one merge
+-- worker, the open `deploy_batch` row is the mutual exclusion between merge
+-- passes. The deploy_lock's remaining job is keeping a legacy runner out of the
+-- production upload, which is a much shorter window.
+--
+-- So the lane is now taken twice, briefly: milliseconds to claim the waiting
+-- entries atomically, then again for number + deploy. hold_s is the SUM of the
+-- two, so the metric stays honest.
+
+-- release the lane but keep the batch open (merge + test run unlocked)
+create or replace function public.merge_lane_unlock(p_token uuid)
+returns jsonb language plpgsql security definer set search_path to 'public' as $$
+declare l deploy_lock%rowtype; v_hold int;
+begin
+  perform _dev_guard();
+  select * into l from deploy_lock where id = 1 for update;
+  if l.token is null or l.token <> p_token then
+    return jsonb_build_object('ok', false, 'error','not_lock_holder');
+  end if;
+  v_hold := extract(epoch from now() - coalesce(l.acquired_at, now()))::int;
+  update deploy_batch
+     set status = 'testing', merged_at = coalesce(merged_at, now()),
+         token = null, hold_s = coalesce(hold_s, 0) + v_hold,
+         log = log || jsonb_build_object('at', now(), 'phase','merged', 'hold_s', v_hold)
+   where token = p_token;
+  update deploy_lock set token = null, holder = null, title = null,
+                         acquired_at = null, expires_at = null where id = 1;
+  return jsonb_build_object('ok', true, 'hold_s', v_hold,
+    'next_step','Lane free. Run the protected suite and the build UNLOCKED, then merge_lane_relock(batch_id) for the deploy.');
+end $$;
+
+-- take the lane back for number + deploy
+create or replace function public.merge_lane_relock(p_batch bigint, p_agent text default null)
+returns jsonb language plpgsql security definer set search_path to 'public' as $$
+declare l deploy_lock%rowtype; v_token uuid := gen_random_uuid();
+        cfg jsonb := _mq_cfg(); v_ttl int; b deploy_batch%rowtype;
+begin
+  perform _dev_guard();
+  v_ttl := coalesce((cfg->>'lock_ttl_minutes')::int, 5);
+  select * into b from deploy_batch where id = p_batch;
+  if b.id is null or b.status not in ('testing','merging') then
+    return jsonb_build_object('ok', false, 'error','batch_not_open',
+      'status', coalesce(b.status,'(missing)'));
+  end if;
+
+  select * into l from deploy_lock where id = 1 for update;
+  if l.token is not null and l.expires_at > now() then
+    return jsonb_build_object('ok', false, 'reason','busy', 'held_by', l.holder,
+      'frees_in_s', greatest(extract(epoch from l.expires_at - now())::int, 0));
+  end if;
+
+  -- the deploy is the long half, so give it the real TTL
+  update deploy_lock
+     set token = v_token, holder = coalesce(p_agent, b.agent, 'merge-worker'),
+         title = 'deploy batch ' || p_batch, acquired_at = now(),
+         expires_at = now() + make_interval(mins => greatest(v_ttl * 3, 10))
+   where id = 1;
+  update deploy_batch set token = v_token, status = 'deploying',
+                          tested_at = coalesce(tested_at, now())
+   where id = p_batch;
+
+  return jsonb_build_object('ok', true, 'token', v_token, 'batch_id', p_batch,
+    'next_step','merge_batch_number(token), stamp version.json, deploy, verify, merge_batch_finish(token).');
+end $$;
+
+-- evict by batch id, so a bisect can run while the lane is UNLOCKED
+create or replace function public.merge_batch_evict(
+  p_token uuid, p_entry_id bigint, p_reason text default null)
+returns jsonb language plpgsql security definer set search_path to 'public' as $$
+declare v_batch bigint; v_left int; l deploy_lock%rowtype; v_ok boolean := false;
+begin
+  perform _dev_guard();
+  -- Either the lane token (legacy call) or simply an entry sitting in an OPEN
+  -- batch is enough: the bisect now happens with the lane deliberately free.
+  select * into l from deploy_lock where id = 1;
+  if l.token is not null and l.token = p_token then v_ok := true; end if;
+  if not v_ok then
+    select true into v_ok from deploy_queue q join deploy_batch b on b.id = q.batch_id
+     where q.id = p_entry_id and q.status = 'batched'
+       and b.status in ('merging','testing','deploying');
+  end if;
+  if not coalesce(v_ok, false) then
+    return jsonb_build_object('ok', false, 'error','not_in_open_batch');
+  end if;
+
+  update deploy_queue
+     set status = 'evicted', finished_at = now(),
+         reason = coalesce(p_reason,'evicted by bisect')
+   where id = p_entry_id and status = 'batched'
+  returning batch_id into v_batch;
+  if v_batch is null then
+    return jsonb_build_object('ok', false, 'error','not_in_open_batch');
+  end if;
+
+  select count(*) into v_left from deploy_queue where batch_id = v_batch and status = 'batched';
+  update deploy_batch
+     set evicted = evicted + 1, entries = v_left,
+         log = log || jsonb_build_object('at', now(), 'evicted_entry', p_entry_id,
+                                         'reason', coalesce(p_reason,'bisect'))
+   where id = v_batch;
+
+  return jsonb_build_object('ok', true, 'batch_id', v_batch, 'remaining', v_left,
+    'next_step', case when v_left = 0
+      then 'Batch is empty — call merge_batch_abandon(batch_id).'
+      else 'Re-run the protected suite on the remaining ' || v_left || ' branch(es).' end);
+end $$;
+
+-- close a batch that never reached the lane (all branches evicted, or a red
+-- suite with nothing left) — no lock involved, because none is held
+create or replace function public.merge_batch_abandon(p_batch bigint, p_note text default null)
+returns jsonb language plpgsql security definer set search_path to 'public' as $$
+begin
+  perform _dev_guard();
+  update deploy_queue
+     set status = 'failed', finished_at = now(), reason = coalesce(p_note, reason)
+   where batch_id = p_batch and status in ('batched','merged');
+  update deploy_batch
+     set status = 'failed', closed_at = now(), note = coalesce(p_note, note)
+   where id = p_batch and status in ('merging','testing','deploying');
+  return jsonb_build_object('ok', true, 'batch_id', p_batch);
+end $$;
+
+-- finish must ADD to the hold already banked by merge_lane_unlock
+create or replace function public.merge_batch_finish(
+  p_token uuid, p_status text default 'success',
+  p_commit text default null, p_note text default null)
+returns jsonb language plpgsql security definer set search_path to 'public' as $$
+declare l deploy_lock%rowtype; b deploy_batch%rowtype; v_hold int; v_total int; v_ok boolean;
+begin
+  perform _dev_guard();
+  select * into l from deploy_lock where id = 1 for update;
+  if l.token is null or l.token <> p_token then
+    return jsonb_build_object('ok', false, 'error','not_lock_holder');
+  end if;
+  select * into b from deploy_batch where token = p_token order by id desc limit 1;
+
+  v_ok    := p_status in ('success','deployed');
+  v_hold  := extract(epoch from now() - coalesce(l.acquired_at, now()))::int;
+  v_total := coalesce(b.hold_s, 0) + v_hold;
+
+  if b.id is not null then
+    update deploy_batch
+       set status      = case when v_ok then 'deployed' else 'failed' end,
+           deployed_at = case when v_ok then now() end,
+           closed_at   = now(), hold_s = v_total, token = null,
+           commit_sha  = coalesce(p_commit, commit_sha),
+           note        = coalesce(p_note, note),
+           log         = log || jsonb_build_object('at', now(), 'phase','deployed', 'hold_s', v_hold)
+     where id = b.id;
+
+    update deploy_queue
+       set status = case when v_ok then 'deployed' else 'failed' end,
+           finished_at = now(), reason = coalesce(p_note, reason)
+     where batch_id = b.id and status in ('batched','merged');
+
+    if b.change_no is not null then
+      update deploy_registry
+         set status      = case when v_ok then 'success' else 'failed' end,
+             deployed_at = case when v_ok then now() end,
+             commit_sha  = coalesce(p_commit, commit_sha),
+             hold_s      = v_total,
+             wait_s      = (select max(wait_s) from deploy_queue where batch_id = b.id)
+       where change_no = b.change_no;
+    end if;
+  end if;
+
+  update deploy_lock set token = null, holder = null, title = null,
+                         acquired_at = null, expires_at = null where id = 1;
+  perform public.version_watch();
+
+  return jsonb_build_object('ok', true, 'batch_id', b.id, 'change_no', b.change_no,
+    'hold_s', v_total, 'deploy_hold_s', v_hold,
+    'status', case when v_ok then 'deployed' else 'failed' end,
+    'target_hold_s', coalesce((_mq_cfg()->>'target_hold_s')::int, 60));
+end $$;
+;
+-- p_token is optional: the bisect runs with the lane deliberately free.
+CREATE OR REPLACE FUNCTION public.deploy_lane_guarded_ok()
+ RETURNS boolean
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+  select coalesce(auth.jwt()->>'role','') = 'service_role'
+      or public.get_my_role() = 'super_admin'
+$function$
+
+CREATE OR REPLACE FUNCTION public.deploy_lane_status(p_limit integer DEFAULT 12)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare l deploy_lock%rowtype; cfg jsonb := _mq_cfg();
+        v_wait int; v_target int; v_busy boolean;
+        v_hold_avg numeric; v_wait_avg numeric; v_n int;
+begin
+  if not public.deploy_lane_guarded_ok() then
+    return jsonb_build_object('ok', false,
+      'error', 'Deploy lane is visible to super-admins only.');
+  end if;
+  select * into l from deploy_lock where id = 1;
+  v_busy   := l.token is not null and l.expires_at > now();
+  v_target := coalesce((cfg->>'target_hold_s')::int, 60);
+  select count(*) into v_wait from deploy_queue where status = 'waiting';
+
+  select count(*), avg(hold_s), avg(wait_s) into v_n, v_hold_avg, v_wait_avg
+    from deploy_registry
+   where deployed_at is not null and deployed_at > now() - interval '7 days';
+
+  return jsonb_build_object(
+    'ok', true,
+    'title', 'Deploy lane',
+    'subtitle', case when coalesce((cfg->>'enabled')::boolean, true)
+                     then 'Merge queue — runners push a branch and leave; one worker batches, tests once, deploys once.'
+                     else 'Merge queue is OFF — runners fall back to holding the lane one at a time.' end,
+    'mode_label', case when coalesce((cfg->>'enabled')::boolean, true) then 'MERGE QUEUE' else 'MUTEX (legacy)' end,
+    'mode_tone',  case when coalesce((cfg->>'enabled')::boolean, true) then 'success' else 'warning' end,
+    'lane', jsonb_build_object(
+      'busy', v_busy,
+      'label', case when v_busy then 'Lane held by ' || coalesce(l.holder,'?') else 'Lane free' end,
+      'detail', case when v_busy
+        then coalesce(l.title,'merge batch') || ' · held ' ||
+             extract(epoch from now() - l.acquired_at)::int || 's'
+        else 'Nothing merging right now.' end,
+      'held_label', case when v_busy then extract(epoch from now() - l.acquired_at)::int || 's' else '—' end,
+      'over_target', case when v_busy then extract(epoch from now() - l.acquired_at)::int > v_target else false end,
+      'tone', case when not v_busy then 'success'
+                   when extract(epoch from now() - l.acquired_at)::int > v_target then 'error'
+                   else 'info' end),
+    'queue', jsonb_build_object(
+      'count', v_wait,
+      'label', case when v_wait = 0 then 'Queue empty'
+                    when v_wait = 1 then '1 branch waiting'
+                    else v_wait || ' branches waiting' end,
+      'empty_hint', 'Runners push a branch here and go straight back to building. Nothing waits on a lock.',
+      'rows', (select coalesce(jsonb_agg(jsonb_build_object(
+                 'entry_id', id, 'command_id', command_id,
+                 'label', case when command_id is null then title else '#'||command_id||' · '||title end,
+                 'detail', agent || ' · ' || branch,
+                 'value_label', 'waiting ' || extract(epoch from now() - pushed_at)::int || 's',
+                 'tone', 'info') order by pushed_at), '[]'::jsonb)
+               from deploy_queue where status = 'waiting')),
+    'batch', (select jsonb_build_object(
+                 'id', b.id, 'status', b.status,
+                 'label', 'Batch ' || b.id || ' · ' || b.entries || ' branch(es)',
+                 'value_label', b.status,
+                 'tone', case b.status when 'deployed' then 'success' when 'failed' then 'error' else 'info' end,
+                 'change_no', b.change_no, 'evicted', b.evicted)
+               from deploy_batch b
+              where b.status in ('merging','testing','deploying')
+              order by b.id desc limit 1),
+    'metrics', jsonb_build_object(
+      'heading', 'Wait vs hold, last 7 days',
+      'samples', v_n,
+      'avg_hold_label', case when v_hold_avg is null then 'no hold time recorded yet'
+                             else 'avg lane hold ' || round(v_hold_avg)::int || 's' end,
+      'avg_wait_label', case when v_wait_avg is null then 'no queue wait recorded yet'
+                             else 'avg queue wait ' || round(v_wait_avg)::int || 's' end,
+      'target_label', 'target hold under ' || v_target || 's',
+      'tone', case when v_hold_avg is null then 'info'
+                   when v_hold_avg > v_target then 'warning' else 'success' end),
+    'recent_heading', 'Recent deploys',
+    'recent', (select coalesce(jsonb_agg(jsonb_build_object(
+                 'change_no', r.change_no,
+                 'label', '#' || r.change_no || ' · ' || r.title,
+                 'detail', coalesce(r.agent,'?'),
+                 'value_label', case
+                    when r.deployed_at is null and r.status = 'claimed'
+                      then 'claimed ' || extract(epoch from now() - r.claimed_at)::int || 's ago · never released'
+                    when r.deployed_at is null then r.status
+                    else 'held ' || coalesce(r.hold_s, extract(epoch from r.deployed_at - r.claimed_at)::int) || 's'
+                         || case when r.wait_s is not null then ' · waited ' || r.wait_s || 's' else '' end end,
+                 'tone', case r.status when 'success' then 'success'
+                                     when 'expired' then 'warning'
+                                     when 'failed'  then 'error' else 'info' end
+                 ) order by r.change_no desc), '[]'::jsonb)
+               from (select * from deploy_registry order by change_no desc limit greatest(coalesce(p_limit,12),1)) r),
+    'stale_heading', 'Stale claims',
+    'stale_empty', 'No claim is holding a queue slot past its TTL.',
+    'stale', (select coalesce(jsonb_agg(jsonb_build_object(
+                 'change_no', change_no,
+                 'label', '#' || change_no || ' · ' || title,
+                 'detail', coalesce(agent,'?'),
+                 'value_label', 'held since ' || to_char(claimed_at at time zone 'Asia/Kolkata', 'DD Mon HH24:MI') || ' IST',
+                 'tone', 'warning')
+                 order by change_no), '[]'::jsonb)
+               from deploy_registry
+              where status = 'claimed'
+                and claimed_at < now() - make_interval(mins => greatest(coalesce((cfg->>'claim_ttl_minutes')::int,20),5))),
+    'config', cfg);
+end $function$
+
+CREATE OR REPLACE FUNCTION public.merge_batch_evict(p_entry_id bigint, p_reason text DEFAULT NULL::text, p_token uuid DEFAULT NULL::uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_batch bigint; v_left int; l deploy_lock%rowtype; v_ok boolean := false;
+begin
+  perform _dev_guard();
+  select * into l from deploy_lock where id = 1;
+  if p_token is not null and l.token is not null and l.token = p_token then v_ok := true; end if;
+  if not v_ok then
+    select true into v_ok from deploy_queue q join deploy_batch b on b.id = q.batch_id
+     where q.id = p_entry_id and q.status = 'batched'
+       and b.status in ('merging','testing','deploying');
+  end if;
+  if not coalesce(v_ok, false) then
+    return jsonb_build_object('ok', false, 'error','not_in_open_batch');
+  end if;
+
+  update deploy_queue
+     set status = 'evicted', finished_at = now(),
+         reason = coalesce(p_reason,'evicted by bisect')
+   where id = p_entry_id and status = 'batched'
+  returning batch_id into v_batch;
+  if v_batch is null then
+    return jsonb_build_object('ok', false, 'error','not_in_open_batch');
+  end if;
+
+  select count(*) into v_left from deploy_queue where batch_id = v_batch and status = 'batched';
+  update deploy_batch
+     set evicted = evicted + 1, entries = v_left,
+         log = log || jsonb_build_object('at', now(), 'evicted_entry', p_entry_id,
+                                         'reason', coalesce(p_reason,'bisect'))
+   where id = v_batch;
+
+  return jsonb_build_object('ok', true, 'batch_id', v_batch, 'remaining', v_left,
+    'next_step', case when v_left = 0
+      then 'Batch is empty — call merge_batch_abandon(batch_id).'
+      else 'Re-run the protected suite on the remaining ' || v_left || ' branch(es).' end);
+end $function$
+
+;

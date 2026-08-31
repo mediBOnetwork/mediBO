@@ -831,3 +831,87 @@ grant execute on function public.admin_discount_slab_save(jsonb) to authenticate
 grant execute on function public.admin_discount_slab_set_active(bigint, boolean) to authenticated;
 grant execute on function public.admin_discount_slab_delete(bigint) to authenticated;
 grant execute on function public.discount_slab_pick(numeric, timestamptz) to authenticated;
+
+-- CHANGE #318 part F — threshold labels read the way Om says them.
+--
+-- "Above ₹2,999", not "Above ₹2,999.00": a slab threshold is a whole-rupee
+-- number and the paise were noise. The seeded notes said the same thing the
+-- amount label already says, so the note column goes back to being an
+-- operator's own remark.
+update public.discount_slabs
+   set note = null, updated_at = now()
+ where note in ('Above ₹2,999','Above ₹5,999','Above ₹19,999','Above ₹49,999','Above ₹99,999');
+
+create or replace function public._slab_amount_label(p_amount numeric)
+returns text
+language sql
+immutable
+as $function$
+  select 'Above ' ||
+         case when coalesce(p_amount,0) = trunc(coalesce(p_amount,0))
+              then '₹' || to_char(trunc(coalesce(p_amount,0)), 'FM99,99,99,990')
+              else public.inr_money(coalesce(p_amount,0)) end;
+$function$;
+
+create or replace function public.admin_discount_slabs()
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path to 'public'
+as $function$
+declare v_rows jsonb; v_today date := (now() at time zone 'Asia/Kolkata')::date;
+begin
+  if not public._slab_can_admin() then
+    return jsonb_build_object('ok', false, 'error', 'not_authorized',
+                              'message', public._c('slabs.not_authorized'));
+  end if;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'id',             s.id,
+           'min_amount',     s.min_amount,
+           'discount_pct',   s.discount_pct,
+           'effective_from', to_char(s.effective_from,'YYYY-MM-DD'),
+           'active',         s.active,
+           'note',           coalesce(s.note,''),
+           'amount_label',   public._slab_amount_label(s.min_amount),
+           'pct_label',      trim_scale(s.discount_pct)::text || '%',
+           'effective_label','From ' || to_char(s.effective_from,'DD Mon YYYY'),
+           'status_label',   case when not s.active then public._c('slabs.inactive_label')
+                                  when s.effective_from > v_today then public._c('slabs.scheduled_label')
+                                  else public._c('slabs.active_label') end,
+           'status_tone',    case when not s.active then 'neutral'
+                                  when s.effective_from > v_today then 'info'
+                                  else 'success' end,
+           'toggle_label',   case when s.active then public._c('slabs.deactivate_label')
+                                  else public._c('slabs.activate_label') end,
+           'toggle_to',      not s.active)
+         order by s.min_amount, s.effective_from), '[]'::jsonb)
+    into v_rows
+  from public.discount_slabs s;
+
+  return jsonb_build_object(
+    'ok',            true,
+    'title',         public._c('slabs.title'),
+    'subtitle',      public._c('slabs.subtitle'),
+    'commitment_note', public._c('slabs.commitment_note'),
+    'add_label',     public._c('slabs.add_label'),
+    'edit_label',    public._c('slabs.edit_label'),
+    'save_label',    public._c('slabs.save_label'),
+    'cancel_label',  public._c('slabs.cancel_label'),
+    'delete_label',  public._c('slabs.delete_label'),
+    'delete_confirm',public._c('slabs.delete_confirm'),
+    'empty_title',   public._c('slabs.empty_title'),
+    'empty_hint',    public._c('slabs.empty_hint'),
+    'fields', jsonb_build_array(
+      jsonb_build_object('key','min_amount','label',public._c('slabs.field_min_amount'),
+                         'hint',public._c('slabs.hint_min_amount'),'kind','number'),
+      jsonb_build_object('key','discount_pct','label',public._c('slabs.field_discount_pct'),
+                         'hint',public._c('slabs.hint_discount_pct'),'kind','number'),
+      jsonb_build_object('key','effective_from','label',public._c('slabs.field_effective_from'),
+                         'hint',public._c('slabs.hint_effective_from'),'kind','date'),
+      jsonb_build_object('key','note','label',public._c('slabs.field_note'),
+                         'hint','','kind','text')),
+    'rows',          v_rows,
+    'today',         to_char(v_today,'YYYY-MM-DD'));
+end $function$;

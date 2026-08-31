@@ -11,6 +11,12 @@
 // Tapping a row opens that entity's FULL history from `admin_audit_entity()`,
 // which is the question an audit trail actually gets asked: not "what happened
 // at 4pm" but "what has ever happened to this bill".
+//
+// CHANGE #397 — each row also carries the backend's verdict on whether it can
+// be taken back (`row['undo']`). The card shows an Undo button when the backend
+// says can:true, and the reason IT gives when it says can:false — money entries
+// are never reversible here, a closed window says so, and an entry that has
+// already been undone says that. Dart decides none of it.
 
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -79,6 +85,30 @@ class _AdminAuditScreenState extends State<AdminAuditScreen> {
         _loading = false;
       });
     }
+  }
+
+  /// The Undo path. The confirmation copy, the button captions and the result
+  /// banner are all the backend's; this only asks and reports.
+  Future<void> _undo(Map<String, dynamic> row) async {
+    final undo = Map<String, dynamic>.from(
+        (row['undo'] as Map? ?? const {}));
+    final ok = await showModalBottomSheet<bool>(
+      context: context,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(Ds.r.sheet))),
+      builder: (_) => _UndoConfirmSheet(undo: undo),
+    );
+    if (ok != true || !mounted) return;
+
+    final res = await _call('admin_undo_audit', {'p_audit_id': row['id']});
+    if (!mounted) return;
+    final message = res['message']?.toString() ?? '';
+    if (message.isNotEmpty) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(message)));
+    }
+    await _load();
   }
 
   Future<void> _openHistory(Map<String, dynamic> row) async {
@@ -158,6 +188,7 @@ class _AdminAuditScreenState extends State<AdminAuditScreen> {
                     beforeLabel: d['before_label']?.toString() ?? '',
                     afterLabel: d['after_label']?.toString() ?? '',
                     onTap: () => _openHistory(r),
+                    onUndo: () => _undo(r),
                   ),
                 )),
           if (d['has_more'] == true) ...[
@@ -185,12 +216,14 @@ class AuditRowCard extends StatelessWidget {
     required this.beforeLabel,
     required this.afterLabel,
     this.onTap,
+    this.onUndo,
   });
 
   final Map<String, dynamic> row;
   final String beforeLabel;
   final String afterLabel;
   final VoidCallback? onTap;
+  final VoidCallback? onUndo;
 
   @override
   Widget build(BuildContext context) {
@@ -244,6 +277,9 @@ class AuditRowCard extends StatelessWidget {
                       child: _ChangeLine(
                           change: ch, beforeLabel: beforeLabel, afterLabel: afterLabel),
                     )),
+              _UndoFooter(
+                  undo: Map<String, dynamic>.from(row['undo'] as Map? ?? const {}),
+                  onUndo: onUndo),
             ],
           ),
         ),
@@ -303,6 +339,82 @@ class _ValuePill extends StatelessWidget {
         borderRadius: Ds.r.rChip,
       ),
       child: Text('$caption $value', style: Ds.t.caption),
+    );
+  }
+}
+
+/// The row's Undo affordance — a button when the backend allows it, its own
+/// refusal line when it does not, and nothing at all when it says neither.
+class _UndoFooter extends StatelessWidget {
+  const _UndoFooter({required this.undo, required this.onUndo});
+
+  final Map<String, dynamic> undo;
+  final VoidCallback? onUndo;
+
+  @override
+  Widget build(BuildContext context) {
+    final can = undo['can'] == true && onUndo != null;
+    final blocked = undo['blocked_label']?.toString() ?? '';
+    if (!can && blocked.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: EdgeInsets.only(top: Ds.space.x12),
+      child: can
+          ? SizedBox(
+              height: Ds.touch.minTarget,
+              child: OutlinedButton.icon(
+                onPressed: onUndo,
+                icon: const Icon(Icons.undo),
+                label: Text(undo['label']?.toString() ?? ''),
+              ),
+            )
+          : Text(blocked, style: Ds.t.caption),
+    );
+  }
+}
+
+/// Confirmation before a reversal. Sheet, not dialog, and every word backend.
+class _UndoConfirmSheet extends StatelessWidget {
+  const _UndoConfirmSheet({required this.undo});
+
+  final Map<String, dynamic> undo;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.all(Ds.space.x24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(undo['confirm_title']?.toString() ?? '', style: Ds.t.subtitle),
+          SizedBox(height: Ds.space.x8),
+          Text(undo['confirm_body']?.toString() ?? '', style: Ds.t.bodySecondary),
+          SizedBox(height: Ds.space.x24),
+          Row(
+            children: [
+              Expanded(
+                child: SizedBox(
+                  height: Ds.touch.minTarget,
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.of(context).pop(false),
+                    child: Text(undo['cancel_label']?.toString() ?? ''),
+                  ),
+                ),
+              ),
+              SizedBox(width: Ds.space.x12),
+              Expanded(
+                child: SizedBox(
+                  height: Ds.touch.minTarget,
+                  child: FilledButton(
+                    onPressed: () => Navigator.of(context).pop(true),
+                    child: Text(undo['confirm_cta']?.toString() ?? ''),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }

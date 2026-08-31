@@ -62,6 +62,31 @@ function argVal(flag) {
 }
 const keysArg      = argVal('--keys');
 const requiredKeys = keysArg ? keysArg.split(',').map(k => k.trim()).filter(Boolean) : ['boot_status', 'fulfillment_three_areas_mounted'];
+
+// CMD #410 — PHASE-SCOPED KEYS: `--keys storefront:c410_compare_tick`.
+//
+// Every phase used to demand EVERY requested key, and the boot phase runs
+// first and unconditionally. So a key that only a later phase can produce —
+// anything on a customer surface, since boot is an admin session on the site
+// root — failed boot, and a failed boot means the phase that would have
+// produced the key never ran at all. The key was unprovable by construction,
+// and the render-log reachability rule in CLAUDE.md quietly could not be
+// satisfied for any customer-facing screen.
+//
+// A key with no prefix keeps today's behaviour exactly: required everywhere.
+// A key written `<phase>:<key>` is required ONLY in that phase and ignored by
+// the others. Nothing that passes today can start failing because of this.
+function keysForPhase(phase) {
+  const out = [];
+  for (const raw of requiredKeys) {
+    const i = raw.indexOf(':');
+    if (i < 0) { out.push(raw); continue; }
+    const p = raw.slice(0, i);
+    if (!PHASE_NAMES.includes(p)) { out.push(raw); continue; }  // a colon in a key name, not a scope
+    if (p === phase) out.push(raw.slice(i + 1));
+  }
+  return out;
+}
 const timeoutSec      = parseInt(argVal('--timeout') || '45', 10);
 const inquiryToken    = argVal('--inquiry-token');
 const supplierKeys    = argv.includes('--supplier-keys');
@@ -269,8 +294,13 @@ async function phaseStorefront(browser, session, expectedHash) {
         console.log(`  Showing    : ${log['c553_showing_label']}`);
       }
 
-      const missing = requiredKeys.filter(k => !(k in log));
-      if (missing.length) console.log(`  Keys       : MISSING: ${missing.join(', ')}`);
+      const wantKeys = keysForPhase('storefront');
+      const missing = wantKeys.filter(k => !(k in log));
+      if (missing.length) {
+        console.log(`  Keys       : MISSING: ${missing.join(', ')}`);
+      } else if (wantKeys.length) {
+        console.log(`  Keys       : all present (${wantKeys.join(', ')}) ✓`);
+      }
 
       // --shot <path> captures the authed grid. shot.sh cannot: it has no
       // session, and the chips only exist for a viewer the backend shows a
@@ -342,7 +372,8 @@ async function phaseAdmin(browser, session, expectedHash) {
       const gotHash = log['build'];
       const hashOk  = gotHash === expectedHash;
       // c175_* and c174_portal_* keys come from supplier sessions — skip in admin phase
-      const adminKeys = requiredKeys.filter(k => !k.startsWith('c175_') && !k.startsWith('c174_portal'));
+      const adminKeys = keysForPhase('boot')
+        .filter(k => !k.startsWith('c175_') && !k.startsWith('c174_portal'));
       const missing = adminKeys.filter(k => !(k in log));
 
       console.log(`  Build hash : got=${gotHash} want=${expectedHash} → ${hashOk ? '✓ MATCH' : '✗ MISMATCH'}`);

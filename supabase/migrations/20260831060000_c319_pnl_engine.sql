@@ -170,8 +170,9 @@ insert into public.pnl_label (key, label, tone, sort_order) values
   ('tab.zone',              'Zones',                                           null, 4),
   ('tab.day',               'Daily',                                           null, 5),
   ('tab.month',             'Monthly',                                         null, 6),
-  ('tab.alerts',            'Below cost',                                      null, 7),
-  ('tab.simulator',         'Slab simulator',                                  null, 8),
+  ('tab.order',             'Orders',                                          null, 7),
+  ('tab.alerts',            'Below cost',                                      null, 8),
+  ('tab.simulator',         'Slab simulator',                                  null, 9),
 
   ('tile.revenue',          'Revenue (taxable)',                               null, 1),
   ('tile.cost',             'Goods cost',                                      null, 2),

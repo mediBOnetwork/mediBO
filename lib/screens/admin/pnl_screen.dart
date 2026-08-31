@@ -235,6 +235,46 @@ class _PnlScreenState extends State<PnlScreen> {
     );
   }
 
+  /// One order's P&L, printed exactly as pnl_order() returns it.
+  Future<void> _openOrder(String orderId) async {
+    final o = _asMap(await _rpc('pnl_order', {'p_order_id': orderId}));
+    if (!mounted) return;
+    if (o['ok'] == false) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text((o['message'] ?? '').toString())));
+      return;
+    }
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      builder: (sheetCtx) => DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.75,
+        builder: (_, controller) => ListView(
+          controller: controller,
+          padding: EdgeInsets.all(Ds.space.x16),
+          children: [
+            Text((o['title'] ?? '').toString(), style: Ds.t.subtitle),
+            SizedBox(height: Ds.space.x4),
+            Text((o['subtitle'] ?? '').toString(), style: Ds.t.caption),
+            SizedBox(height: Ds.space.x16),
+            _tilesGrid((o['tiles'] as List?) ?? const []),
+            SizedBox(height: Ds.space.x24),
+            _costsCard(_asMap(o['costs'])),
+            SizedBox(height: Ds.space.x24),
+            _sectionCard(
+              heading: (o['lines_heading'] ?? '').toString(),
+              rows: (o['lines'] as List?) ?? const [],
+              emptyText: (o['empty_text'] ?? '').toString(),
+            ),
+            SizedBox(height: Ds.space.x24),
+          ],
+        ),
+      ),
+    );
+  }
+
   Color _tone(String? tone) {
     switch (tone) {
       case 'brand':
@@ -413,6 +453,8 @@ class _PnlScreenState extends State<PnlScreen> {
         note: (t['note'] ?? '').toString(),
         rows: (t['rows'] as List?) ?? const [],
         emptyText: (t['empty_text'] ?? '').toString(),
+        // an order row is the only one with somewhere to go: the bill behind it
+        onRowTap: _tab == 'order' ? _openOrder : null,
       ),
     ];
   }
@@ -585,6 +627,7 @@ class _PnlScreenState extends State<PnlScreen> {
     required List<dynamic> rows,
     required String emptyText,
     String note = '',
+    void Function(String key)? onRowTap,
   }) =>
       Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -599,11 +642,12 @@ class _PnlScreenState extends State<PnlScreen> {
             _message(emptyText, null)
           else
             for (final r in rows)
-              if (r is Map) _row(Map<String, dynamic>.from(r)),
+              if (r is Map) _row(Map<String, dynamic>.from(r), onRowTap),
         ],
       );
 
-  Widget _row(Map<String, dynamic> r) => Container(
+  Widget _row(Map<String, dynamic> r, [void Function(String key)? onTap]) {
+    final card = Container(
         margin: EdgeInsets.only(bottom: Ds.space.x8),
         padding: EdgeInsets.all(Ds.space.x16),
         constraints: BoxConstraints(minHeight: Ds.touch.listRowMinHeight),
@@ -635,6 +679,13 @@ class _PnlScreenState extends State<PnlScreen> {
           ],
         ),
       );
+    if (onTap == null) return card;
+    return InkWell(
+      onTap: () => onTap((r['key'] ?? '').toString()),
+      borderRadius: Ds.r.rCard,
+      child: card,
+    );
+  }
 
   Widget _message(String text, String? tone) => Container(
         width: double.infinity,

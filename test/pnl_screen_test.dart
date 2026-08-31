@@ -286,6 +286,63 @@ void main() {
     expect(find.text('Saved.'), findsOneWidget);
   });
 
+  testWidgets('an order row opens that bill P&L and prints its own numbers',
+      (t) async {
+    String? askedOrder;
+    PnlScreen.rpcOverride = (fn, params) async {
+      if (fn == 'pnl_dashboard') {
+        final d = _dash();
+        (d['tabs'] as List).add({'key': 'order', 'label': 'Orders'});
+        return d;
+      }
+      if (fn == 'pnl_breakdown') {
+        return {
+          'ok': true,
+          'dim': 'order',
+          'heading': 'orders',
+          'empty_text': 'No billed lines in this window yet.',
+          'rows': [
+            {'key': 'ord-1', 'label': 'CPO310826', 'sub': 'Shree Medical  ·  ₹1,900.00',
+             'value': '₹81.82', 'value_tone': 'success'},
+          ],
+        };
+      }
+      if (fn == 'pnl_order') {
+        askedOrder = params?['p_order_id'] as String?;
+        return {
+          'ok': true,
+          'title': 'CPO310826',
+          'subtitle': 'Shree Medical',
+          'tiles': [
+            {'key': 'gross', 'label': 'Gross margin', 'value': '₹81.82', 'tone': 'success'},
+          ],
+          'costs': {
+            'heading': 'Below the goods',
+            'rows': [{'label': 'WhatsApp messages', 'value': '- ₹0.23'}],
+          },
+          'lines_heading': 'Lines',
+          'empty_text': 'No billed lines in this window yet.',
+          'lines': [
+            {'key': 'l1', 'label': 'Oxilyk Capsule',
+             'sub': '10 × ₹100.00  ·  +1 free', 'value': '₹131.82',
+             'value_tone': 'success'},
+          ],
+        };
+      }
+      return {'ok': true};
+    };
+    await pump(t);
+
+    await t.tap(find.text('Orders'));
+    await t.pumpAndSettle();
+    await t.tap(find.text('CPO310826'));
+    await t.pumpAndSettle();
+
+    expect(askedOrder, 'ord-1');
+    expect(find.text('Oxilyk Capsule'), findsOneWidget);
+    expect(find.text('₹131.82'), findsWidgets);
+  });
+
   testWidgets('a refusal renders the backend message instead of throwing',
       (t) async {
     PnlScreen.rpcOverride = (fn, params) async =>

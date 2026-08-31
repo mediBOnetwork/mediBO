@@ -54,5 +54,9 @@ if [ -n "$CMD_ID" ]; then
       '{p_command_id:$id,p_ok:true,p_detail:{phase:"post_deploy_rg",rg:$r,commit:$c}}')" \
     >/dev/null 2>&1 || true
 fi
+# CHANGE #327 — god-file debt is refreshed on the same pass as the guard, so
+# the Build lane card and the warn-level rg_alerts rows never go stale. It is a
+# REPORT: a failure here is noise, never a red deploy.
+bash "$(dirname "$0")/god_files.sh" >/dev/null 2>&1 || true
 
 exit 0

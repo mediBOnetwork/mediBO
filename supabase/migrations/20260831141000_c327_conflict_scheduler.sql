@@ -302,3 +302,109 @@ update dev_commands
    set predicted_files = dev_cmd_predict_files(title, spec, area)
  where predicted_files is null;
 select dev_cmd_autochain(null);
+-- CHANGE #327 — leasing IS learning.
+--
+-- The final proof run showed the residual cost of prediction: #325 has a
+-- 4,000-char spec that mentions WhatsApp and delivery in passing, so its guess
+-- claims lib/features/whatsapp/% and lib/screens/delivery/% and a WhatsApp copy
+-- tweak chains behind it. dev_cmd_files_learn already fixes exactly this — but
+-- only if the runner remembers to call it, and a rule that depends on runner
+-- discipline is a rule that decays.
+--
+-- So the lease call does it. The moment a worker names the files it will touch,
+-- those files REPLACE the guess on the row and everything queued behind it is
+-- re-judged. The guess only ever survives until the first real plan.
+create or replace function public._lease_learn_internal(p_command_id bigint)
+returns void language plpgsql security definer set search_path to 'public' as $$
+DECLARE v text[];
+BEGIN
+  SELECT array_agg(path) INTO v FROM file_leases WHERE command_id = p_command_id;
+  IF coalesce(array_length(v,1),0) = 0 THEN RETURN; END IF;
+  UPDATE dev_commands SET predicted_files = v WHERE id = p_command_id;
+  PERFORM dev_cmd_autochain(NULL);
+END $$;
+
+create or replace function public.lease_try_split(p_command_id bigint, p_worker text, p_paths text[])
+returns jsonb language plpgsql security definer set search_path to 'public' as $$
+DECLARE v_deferred jsonb; v_free text[]; v_n int;
+BEGIN
+  PERFORM _dev_guard();
+  IF p_paths IS NULL OR array_length(p_paths,1) IS NULL THEN
+    RETURN jsonb_build_object('ok', true, 'leased', '[]'::jsonb, 'deferred', '[]'::jsonb);
+  END IF;
+  PERFORM pg_advisory_xact_lock(hashtext('file_leases_gate'));
+
+  SELECT coalesce(jsonb_agg(jsonb_build_object('path', fl.path, 'command_id', fl.command_id, 'worker', fl.worker)), '[]')
+    INTO v_deferred
+  FROM file_leases fl
+  WHERE fl.path = ANY(p_paths) AND fl.command_id <> p_command_id;
+
+  SELECT coalesce(array_agg(p), '{}') INTO v_free
+  FROM unnest(p_paths) p
+  WHERE NOT EXISTS (SELECT 1 FROM file_leases fl WHERE fl.path = p AND fl.command_id <> p_command_id);
+
+  INSERT INTO file_leases (path, command_id, worker)
+  SELECT p, p_command_id, p_worker FROM unnest(v_free) p
+  ON CONFLICT (path) DO NOTHING;
+
+  INSERT INTO lease_event (kind, path, command_id, worker)
+  SELECT 'granted', p, p_command_id, p_worker FROM unnest(v_free) p;
+
+  INSERT INTO lease_event (kind, path, command_id, worker, holder_command_id, holder_worker)
+  SELECT 'deferred', d->>'path', p_command_id, p_worker, (d->>'command_id')::bigint, d->>'worker'
+  FROM jsonb_array_elements(v_deferred) d;
+
+  PERFORM _lease_learn_internal(p_command_id);
+
+  v_n := coalesce(array_length(v_free,1),0);
+  RETURN jsonb_build_object(
+    'ok', true,
+    'leased', to_jsonb(v_free),
+    'leased_count', v_n,
+    'deferred', v_deferred,
+    'deferred_count', jsonb_array_length(v_deferred),
+    'next_step', CASE WHEN jsonb_array_length(v_deferred) > 0
+      THEN 'Build the backend and every granted file NOW. Re-call lease_try_split for the deferred paths when you reach them — do not idle.'
+      ELSE 'Everything granted — build straight through.' END);
+END $$;
+
+create or replace function public.lease_try_all(p_command_id bigint, p_worker text, p_paths text[])
+returns jsonb language plpgsql security definer set search_path to 'public' as $function$
+DECLARE v_conflicts jsonb; v_owned int;
+BEGIN
+  PERFORM _dev_guard();
+  IF p_paths IS NULL OR array_length(p_paths,1) IS NULL THEN
+    RETURN jsonb_build_object('ok', true, 'leased', 0);
+  END IF;
+  PERFORM pg_advisory_xact_lock(hashtext('file_leases_gate'));
+  SELECT coalesce(jsonb_agg(jsonb_build_object('path', fl.path, 'command_id', fl.command_id, 'worker', fl.worker)), '[]')
+    INTO v_conflicts
+  FROM file_leases fl
+  WHERE fl.path = ANY(p_paths) AND fl.command_id <> p_command_id;
+  IF jsonb_array_length(v_conflicts) > 0 THEN
+    INSERT INTO lease_event (kind, path, command_id, worker, holder_command_id, holder_worker)
+    SELECT 'conflict', c->>'path', p_command_id, p_worker,
+           (c->>'command_id')::bigint, c->>'worker'
+    FROM jsonb_array_elements(v_conflicts) c;
+    RETURN jsonb_build_object('ok', false, 'conflicts', v_conflicts,
+      'next_step', 'Do not poll this. Use lease_try_split: take what is free, build it, and come back for the rest with lease_free_check.');
+  END IF;
+  INSERT INTO file_leases (path, command_id, worker)
+  SELECT p, p_command_id, p_worker FROM unnest(p_paths) p
+  ON CONFLICT (path) DO NOTHING;
+  SELECT count(*) INTO v_owned FROM file_leases WHERE command_id=p_command_id AND path = ANY(p_paths);
+  IF v_owned <> array_length(p_paths,1) THEN
+    DELETE FROM file_leases WHERE command_id=p_command_id AND path = ANY(p_paths);
+    v_conflicts := (SELECT coalesce(jsonb_agg(jsonb_build_object('path',path,'command_id',command_id,'worker',worker)),'[]')
+                    FROM file_leases WHERE path=ANY(p_paths) AND command_id<>p_command_id);
+    INSERT INTO lease_event (kind, path, command_id, worker, holder_command_id, holder_worker)
+    SELECT 'conflict', c->>'path', p_command_id, p_worker,
+           (c->>'command_id')::bigint, c->>'worker'
+    FROM jsonb_array_elements(v_conflicts) c;
+    RETURN jsonb_build_object('ok', false, 'conflicts', v_conflicts);
+  END IF;
+  INSERT INTO lease_event (kind, path, command_id, worker)
+  SELECT 'granted', p, p_command_id, p_worker FROM unnest(p_paths) p;
+  PERFORM _lease_learn_internal(p_command_id);
+  RETURN jsonb_build_object('ok', true, 'leased', v_owned);
+END $function$;

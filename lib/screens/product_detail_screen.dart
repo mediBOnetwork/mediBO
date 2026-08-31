@@ -11,6 +11,7 @@ import '../models/product_detail.dart';
 import '../models/product_reviews.dart';
 import '../models/storefront_p3.dart';
 import '../theme.dart';
+import '../utils/render_log.dart';
 import '../utils/toast.dart';
 import '../widgets/animations.dart';
 import '../widgets/compact_product_card.dart';
@@ -162,6 +163,13 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     }
     if (!mounted) return;
     setState(() => _reviews = res);
+    // CMD #410 — REACHABILITY PROOF for the PDP block. Canvas cannot be
+    // clicked by a tool, so this records what the backend actually decided:
+    // whether the composer is open to this account, whether the aggregate
+    // cleared its floor, and how many rows were drawn.
+    RenderLog.write('c410_reviews_block',
+        'ok=${res.ok};can_write=${res.canWrite};rating=${res.summary.has};'
+        'items=${res.items.length};qs=${res.questions.length}');
   }
 
   /// The tray refuses at the cap with the BACKEND's sentence — the payload

@@ -163,6 +163,13 @@ begin
 end $function$;
 
 -- ── Push: the same card, addressed ──────────────────────────────────────────
+-- The old TWO-argument order_alert_push(bigint, text) must go, not just be
+-- replaced: adding a defaulted third parameter creates a SECOND function, and
+-- then every existing `order_alert_push(a.id, 'new')` — the tick's own rungs
+-- included — fails with "function is not unique". Dropping it is what makes
+-- the new signature the only one.
+drop function if exists public.order_alert_push(bigint, text);
+
 create or replace function public.order_alert_push(p_alert_id bigint, p_kind text default 'new',
                                                    p_audience text default null)
 returns jsonb

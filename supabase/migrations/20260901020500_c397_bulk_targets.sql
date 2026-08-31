@@ -29,10 +29,10 @@ insert into public.admin_bulk_target(
 values
   ('product_availability',
    'Product availability',
-   'Turn products on or off for ordering, and correct the GST rate they bill at.',
+   'Catalogue sale status and the GST rate a product bills at. The buyable flag is NOT here — it is derived from live supplier availability by a trigger and cannot be set by hand.',
    'MEDICINE', 'id', 'product', 'admin.pricing_backfill',
    't.product_name',
-   $$coalesce(t.marketer,'') || case when t.buyable then ' · Available' else ' · Not available' end$$,
+   $$coalesce(t.marketer,'') || ' · ' || coalesce(nullif(t.status,''),'No status') || case when t.buyable then ' · In stock' else '' end$$,
    'true', 't.product_name', '',
    true, true, 10, true),
 
@@ -93,10 +93,15 @@ insert into public.admin_bulk_field(
   target_key, field, label, input_kind, options, options_sql,
   min_value, max_value, hint, confirm_body, snapshot_cols, extra_set, sort_order)
 values
-  ('product_availability', 'buyable', 'Available to order', 'bool',
-   '[]'::jsonb, '', null, null,
-   'Turning this off hides the product from the storefront immediately.',
-   'Customers stop seeing these products the moment this is applied.',
+  ('product_availability', 'status', 'Catalogue status', 'enum',
+   '[{"value":"Available","label":"Available"},
+     {"value":"SOLD OUT","label":"Sold out"},
+     {"value":"NOT FOR SALE","label":"Not for sale"},
+     {"value":"DISCONTINUED","label":"Discontinued"},
+     {"value":"BANNED FOR SALE","label":"Banned for sale"}]'::jsonb,
+   '', null, null,
+   'The catalogue status a product is listed under. Whether it can actually be ordered also depends on live supplier availability.',
+   'These products are listed under the new status straight away.',
    '{}', '', 10),
 
   ('product_availability', 'gst_percent', 'GST %', 'number',

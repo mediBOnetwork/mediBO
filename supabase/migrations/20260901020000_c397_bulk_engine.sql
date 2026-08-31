@@ -167,6 +167,23 @@ returns text language sql immutable as $$
               then null else p_value #>> '{}' end;
 $$;
 
+-- ── putting one value back, whatever its type ───────────────────────────────
+-- A snapshot is jsonb, so restoring it is not one cast but three cases. A jsonb
+-- COLUMN must be restored as jsonb (`#>>'{}'` would hand back the unquoted text
+-- "before", which is not valid JSON); an array column must be rebuilt element
+-- by element; everything else casts from its text form.
+create or replace function public._undo_assign(p_col text, p_json text, p_type text)
+returns text language sql immutable as $$
+  select case
+    when p_type in ('json','jsonb')
+      then format('%I = (%s)::%s', p_col, p_json, p_type)
+    when right(p_type, 2) = '[]'
+      then format('%I = (select array_agg(e #>> ''{}'' order by o) from jsonb_array_elements(%s) with ordinality x(e, o))::%s',
+                  p_col, p_json, p_type)
+    else format('%I = (%s #>> ''{}'')::%s', p_col, p_json, p_type)
+  end;
+$$;
+
 -- Validates one submitted value against a field spec. Returns '' when the
 -- value is acceptable, otherwise the backend's own refusal copy.
 create or replace function public._bulk_validate(f public.admin_bulk_field, p_value jsonb)
@@ -530,7 +547,7 @@ begin
         'message', 'The ' || v_col || ' field no longer exists, so this change cannot be reversed.');
     end if;
     v_set := v_set || case when v_set = '' then '' else ', ' end ||
-             format('%I = (r.before -> %L #>> ''{}'')::%s', v_col, v_col, v_type);
+             public._undo_assign(v_col, format('r.before -> %L', v_col), v_type);
   end loop;
 
   -- What the rows look like NOW, so the undo's own audit entry is honest about

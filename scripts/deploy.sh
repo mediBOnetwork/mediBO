@@ -5,8 +5,16 @@
 # stale-alias trap (#582) was one `rm` away from being lost and no reviewer
 # could see it. ~/deploy.sh is now a thin wrapper that execs this file.
 set -euo pipefail
-cd ~/mediBO
+# CHANGE #324 — the merge worker deploys from its OWN git worktree, never from
+# the checkout five runners are editing at the same time. MEDIBO_REPO lets it
+# say where; unset, this is byte-for-byte the old `cd ~/mediBO`.
+MEDIBO_REPO="${MEDIBO_REPO:-$HOME/mediBO}"
+cd "$MEDIBO_REPO"
 export PATH="$PATH:$HOME/flutter/bin"
+# CHANGE #324 — a warm pub/Gradle/Flutter cache is the difference between a
+# two-minute build and a ten-minute one, and `flutter clean` (mandatory, see
+# below) cannot touch any of it because it all lives outside the repo.
+[ -f "$HOME/mediBO-runner/cache.env" ] && source "$HOME/mediBO-runner/cache.env"
 
 # ── Load Cloudflare token (required for wrangler direct upload) ──────────────
 if [ ! -f ~/.medibo/cf.env ]; then
@@ -510,7 +518,7 @@ for i in $(seq 1 $MAX); do
     # script already discards it every time. .dart_tool IS safe to drop — it is
     # gitignored and the next build regenerates it.
     git worktree prune 2>/dev/null || true
-    rm -rf ~/mediBO/.dart_tool 2>/dev/null || true
+    rm -rf "$MEDIBO_REPO/.dart_tool" 2>/dev/null || true
     FREE_MB=$(df -Pm / | awk 'NR==2{print $4}')
     echo "[self-prune] worktrees pruned, .dart_tool dropped — free ${FREE_MB}MB"
     if [ "$FREE_MB" -lt 2048 ]; then

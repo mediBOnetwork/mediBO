@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../design_tokens.dart';
+import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 import 'partner_expense_screen.dart';
 import 'partner_staff_screen.dart';
@@ -41,7 +42,6 @@ class PartnerConsoleScreen extends StatefulWidget {
 class _PartnerConsoleScreenState extends State<PartnerConsoleScreen> {
   Map<String, dynamic>? _data;
   bool _loading = true;
-  String _error = '';
 
   @override
   void initState() {
@@ -50,7 +50,7 @@ class _PartnerConsoleScreenState extends State<PartnerConsoleScreen> {
   }
 
   Future<void> _load() async {
-    setState(() { _loading = true; _error = ''; });
+    setState(() => _loading = true);
     try {
       final res = await Supabase.instance.client.rpc('partner_home');
       final map = Map<String, dynamic>.from(res as Map);
@@ -58,9 +58,12 @@ class _PartnerConsoleScreenState extends State<PartnerConsoleScreen> {
           'ok=${map['ok']} groups=${(map['groups'] as List?)?.length ?? 0}');
       if (!mounted) return;
       setState(() { _data = map; _loading = false; });
-    } catch (e) {
+    } catch (_) {
+      // The console RPC never answered. The screen falls to its error state,
+      // whose words come from ui_copy — cached at boot, so they survive the
+      // very outage that produced them.
       if (!mounted) return;
-      setState(() { _loading = false; _error = e.toString(); });
+      setState(() => _loading = false);
     }
   }
 
@@ -85,8 +88,13 @@ class _PartnerConsoleScreenState extends State<PartnerConsoleScreen> {
           ? const PartnerSkeleton()
           : (d == null || d['ok'] != true)
               ? PartnerNotice(
-                  text: (d?['message'] as String?) ?? _error,
+                  title: (d?['message'] as String?) == null
+                      ? c('partner.error_title')
+                      : '',
+                  text: (d?['message'] as String?) ??
+                      c('partner.error_message'),
                   onRetry: _load,
+                  retryLabel: c('partner.retry_label'),
                 )
               : RefreshIndicator(
                   onRefresh: _load,
@@ -141,7 +149,10 @@ class _PartnerConsoleScreenState extends State<PartnerConsoleScreen> {
     final accessLabel = (fm['access_label'] as String?) ?? '';
     return Padding(
       padding: EdgeInsets.only(bottom: Ds.space.x12),
-      child: Material(
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+            borderRadius: Ds.r.rCard, boxShadow: Ds.elevation.e1),
+        child: Material(
         color: Ds.c.surface,
         borderRadius: Ds.r.rCard,
         child: InkWell(
@@ -160,6 +171,7 @@ class _PartnerConsoleScreenState extends State<PartnerConsoleScreen> {
               ],
             ),
           ),
+        ),
         ),
       ),
     );
@@ -236,12 +248,16 @@ class PartnerCard extends StatelessWidget {
     );
     return Padding(
       padding: EdgeInsets.only(bottom: Ds.space.x12),
-      child: Material(
-        color: Ds.c.surface,
-        borderRadius: Ds.r.rCard,
-        child: onTap == null
-            ? body
-            : InkWell(borderRadius: Ds.r.rCard, onTap: onTap, child: body),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+            borderRadius: Ds.r.rCard, boxShadow: Ds.elevation.e1),
+        child: Material(
+          color: Ds.c.surface,
+          borderRadius: Ds.r.rCard,
+          child: onTap == null
+              ? body
+              : InkWell(borderRadius: Ds.r.rCard, onTap: onTap, child: body),
+        ),
       ),
     );
   }

@@ -1066,3 +1066,12 @@ exception when others then
 end $function$;
 
 grant execute on function public.c399_partner_fence_proof() to service_role;
+
+-- The label a screen needs when its OWN RPC never answered. It cannot live in
+-- that RPC's payload for the obvious reason, so it rides ui_copy, which the app
+-- already has cached from boot — alongside partner.error_title and
+-- partner.error_message, which were already there waiting for a screen to use
+-- them.
+insert into public.ui_copy(key, value) values
+  ('partner.retry_label', to_jsonb('Try again'::text))
+on conflict (key) do update set value = excluded.value;

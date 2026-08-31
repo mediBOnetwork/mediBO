@@ -14,6 +14,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../design_tokens.dart';
+import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 import '../../utils/toast.dart';
 import 'partner_console_screen.dart';
@@ -30,7 +31,6 @@ class _PartnerSupplierPaymentScreenState
     extends State<PartnerSupplierPaymentScreen> {
   Map<String, dynamic>? _d;
   bool _loading = true;
-  String _error = '';
 
   @override
   void initState() {
@@ -39,7 +39,7 @@ class _PartnerSupplierPaymentScreenState
   }
 
   Future<void> _load() async {
-    if (mounted) setState(() { _loading = true; _error = ''; });
+    if (mounted) setState(() => _loading = true);
     try {
       final res = await Supabase.instance.client
           .rpc('partner_supplier_payment_console', params: {'p_limit': 40});
@@ -49,9 +49,12 @@ class _PartnerSupplierPaymentScreenState
           'write=${map['can_write']}');
       if (!mounted) return;
       setState(() { _d = map; _loading = false; });
-    } catch (e) {
+    } catch (_) {
+      // The console RPC never answered. The screen falls to its error state,
+      // whose words come from ui_copy — cached at boot, so they survive the
+      // very outage that produced them.
       if (!mounted) return;
-      setState(() { _loading = false; _error = e.toString(); });
+      setState(() => _loading = false);
     }
   }
 
@@ -69,7 +72,15 @@ class _PartnerSupplierPaymentScreenState
       body: _loading
           ? const PartnerSkeleton()
           : (d == null || d['ok'] != true)
-              ? PartnerNotice(text: (d?['message'] as String?) ?? _error)
+              ? PartnerNotice(
+                  title: (d?['message'] as String?) == null
+                      ? c('partner.error_title')
+                      : '',
+                  text: (d?['message'] as String?) ??
+                      c('partner.error_message'),
+                  onRetry: _load,
+                  retryLabel: c('partner.retry_label'),
+                )
               : RefreshIndicator(
                   onRefresh: _load,
                   child: PartnerSupplierPaymentView(

@@ -389,6 +389,31 @@ void main() {
       expect(find.byType(OrderAlertCard), findsNothing);
     });
 
+    testWidgets('the badge is the backend sentence, and absent when nothing rings',
+        (tester) async {
+      await tester.pumpWidget(_host(PartnerHomeView(
+        payload: homeJson,
+        queue: queueJson,
+        ring: const [ringingItem],
+        ringBadge: '1 order waiting for a decision',
+        onOpen: (_) {},
+        onRingAct: (_, __) {},
+      )));
+      await tester.pump();
+      expect(find.text('1 order waiting for a decision'), findsOneWidget);
+
+      await tester.pumpWidget(_host(PartnerHomeView(
+        payload: homeJson,
+        queue: queueJson,
+        onOpen: (_) {},
+      )));
+      await tester.pump();
+      // Nothing ringing -> the backend sends no badge sentence -> no chip. The
+      // widget never composes one from a list length.
+      expect(find.text('1 order waiting for a decision'), findsNothing);
+      expect(find.text('Zone · Raipur Zone'), findsOneWidget);
+    });
+
     testWidgets('the ring sits ABOVE the work queue on the home', (tester) async {
       await tester.pumpWidget(_host(PartnerHomeView(
         payload: homeJson,

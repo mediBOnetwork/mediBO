@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'storefront_scrollbar.dart';
 import '../app_state.dart'; // CHANGE #454
 import '../data/medicine_repository.dart';
+import '../data/storefront_labels.dart';
 import '../design_tokens.dart';
 import '../models/product.dart';
 import '../services/ui_copy.dart';
@@ -17,6 +18,7 @@ import '../util.dart';
 import '../utils/render_log.dart';
 import '../widgets/animations.dart';
 import '../widgets/compact_product_card.dart';
+import '../widgets/compare_tray.dart';
 import '../widgets/home_sections_view.dart'; // C637
 
 const double _kMaxContent = 1200;
@@ -161,6 +163,41 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
     _loadAllCounts();
     _resetAndLoad();
     _injectScrollbarCss();
+    // CMD #410 — the compare tick's caption is a storefront_ui_label row, and
+    // a customer can land straight on a search URL without ever passing the
+    // home feed (the only other place that loaded the set). A label that has
+    // not arrived reads as '' and CompareCheckbox draws nothing, so this is
+    // the difference between the tick existing and silently not existing.
+    if (!StorefrontLabels.isLoaded) {
+      unawaited(widget.repo.loadStorefrontLabels().then((_) {
+        if (mounted) setState(() {});
+      }));
+    }
+  }
+
+  // ── CMD #410 — compare tray ─────────────────────────────────────────────
+  //
+  // The ONLY compare state the app holds: which ids are ticked. The cap, the
+  // "you can compare 3 at a time" sentence and every cell in the table itself
+  // are the backend's.
+  late final CompareSelection _compare = CompareSelection(max: 3);
+
+  void _toggleCompare(String id) {
+    final reason = _compare.toggle(id);
+    if (reason == 'full') {
+      final msg = StorefrontLabels.get('cmp_full');
+      if (msg.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      }
+      return;
+    }
+    setState(() {});
+  }
+
+  Future<void> _openCompare() async {
+    final res = await widget.repo.fetchCompare(_compare.ids);
+    if (!mounted) return;
+    await CompareSheet.show(context, res);
   }
 
   Future<void> _loadAllCounts() async {
@@ -715,6 +752,10 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
                 onRetry: _resetAndLoad,
                 onSuggestionTap: widget.onSuggestionTap,
                 onLoadMore: _handleLoadMore,
+                compare: _compare,
+                onToggleCompare: _toggleCompare,
+                onOpenCompare: _openCompare,
+                onClearCompare: () => setState(_compare.clear),
               ),
             ),
           ),
@@ -1125,7 +1166,19 @@ class _ProductsSection extends StatelessWidget {
   final VoidCallback onRetry;
   final ValueChanged<String> onSuggestionTap;
   final VoidCallback onLoadMore;
+  /// CMD #410 — the compare tray on the SEARCH RESULTS, the second entry
+  /// point the spec names. Same contract as on the same-salt rail: the app
+  /// contributes ids, `product_compare()` composes every number.
+  final CompareSelection compare;
+  final void Function(String id) onToggleCompare;
+  final Future<void> Function() onOpenCompare;
+  final VoidCallback onClearCompare;
+
   const _ProductsSection({
+    required this.compare,
+    required this.onToggleCompare,
+    required this.onOpenCompare,
+    required this.onClearCompare,
     required this.items,
     required this.categoryTotal,
     required this.showingLabel,
@@ -1205,6 +1258,20 @@ class _ProductsSection extends StatelessWidget {
         if (sortOptions.isNotEmpty) ...[
           SizedBox(height: Ds.space.x12),
           _SortChips(options: sortOptions, onSelected: onSortSelected),
+        ],
+        // CMD #410 — the tray, above the results it was filled from. Its
+        // caption, its cap message and its clear label are all
+        // storefront_ui_label rows.
+        if (compare.count > 0) ...[
+          SizedBox(height: Ds.space.x12),
+          CompareBar(
+            count: compare.count,
+            max: compare.max,
+            ctaLabel: StorefrontLabels.get('cmp_cta'),
+            clearLabel: StorefrontLabels.get('cmp_clear'),
+            onCompare: compare.canCompare ? () => onOpenCompare() : null,
+            onClear: onClearCompare,
+          ),
         ],
         const SizedBox(height: 20),
         // Cross-fade the grid on category change OR on each new search query.
@@ -1357,11 +1424,31 @@ class _ProductsSection extends StatelessWidget {
           // stagger. Scrolling back up replayed it, so products appeared to
           // drop in from above every time — the page never looked settled. A
           // product grid is a list of products; it is painted, not performed.
-          itemBuilder: (context, i) => CompactProductCard(
-            key: ValueKey(items[i].id),
-            product: items[i],
-            onTap: () =>
-                Navigator.of(context).pushNamed('/product/${items[i].id}'),
+          // CMD #410 — the compare tick rides in a Stack ON TOP of the card
+          // rather than inside it. CompactProductCard.extent is a frozen
+          // constant that the grid, the skeleton and a protected test all
+          // read; adding a row inside the card would change its height on
+          // every surface at once. An overlay changes nothing.
+          itemBuilder: (context, i) => Stack(
+            children: [
+              Positioned.fill(
+                child: CompactProductCard(
+                  key: ValueKey(items[i].id),
+                  product: items[i],
+                  onTap: () =>
+                      Navigator.of(context).pushNamed('/product/${items[i].id}'),
+                ),
+              ),
+              Positioned(
+                left: 0,
+                bottom: 0,
+                child: CompareCheckbox(
+                  label: StorefrontLabels.get('cmp_add'),
+                  selected: compare.contains(items[i].id),
+                  onTap: () => onToggleCompare(items[i].id),
+                ),
+              ),
+            ],
           ),
         );
       },

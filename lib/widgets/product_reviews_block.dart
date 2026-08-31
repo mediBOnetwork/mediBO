@@ -285,8 +285,7 @@ class _AggregateRow extends StatelessWidget {
 
 class _Stars extends StatelessWidget {
   final double value;
-  final double size;
-  const _Stars({required this.value, this.size = 16});
+  const _Stars({required this.value});
   @override
   Widget build(BuildContext context) => Row(
         mainAxisSize: MainAxisSize.min,
@@ -298,7 +297,7 @@ class _Stars extends StatelessWidget {
                   : (value >= i - 0.5
                       ? Icons.star_half_rounded
                       : Icons.star_border_rounded),
-              size: size,
+              size: Ds.space.x16,
               color: Ds.c.warning,
             ),
         ],

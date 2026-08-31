@@ -298,6 +298,7 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
     final prefix = (_rateCapture['prefix'] as String?) ?? '';
     return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
       Expanded(
+        flex: 3,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
@@ -311,9 +312,10 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
         ),
       ),
       SizedBox(width: Ds.space.x12),
-      SizedBox(
-        width: 132,
-        height: 48,
+      // Proportional, never a hard-coded pixel width: the field keeps its share
+      // of the row at 360, 414 and 1280.
+      Expanded(
+        flex: 2,
         child: TextField(
           controller: ctl,
           keyboardType: const TextInputType.numberWithOptions(decimal: true),

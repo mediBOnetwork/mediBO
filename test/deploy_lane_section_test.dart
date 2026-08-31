@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:medibo/screens/admin/dev_queue/deploy_lane_section.dart';
+import 'package:pharma_b2b/screens/admin/dev_queue/deploy_lane_section.dart';
 
 /// CHANGE #324 — the Deploy lane section computes NOTHING.
 ///

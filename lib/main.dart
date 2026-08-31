@@ -29,6 +29,7 @@ import 'screens/home_shell.dart';
 import 'screens/public/inquiry_form_screen.dart';
 import 'screens/public/stock_update_form_screen.dart'; // C639: /stock-update/<token>
 import 'screens/public/substitute_token_screen.dart'; // #366: /substitute/<token>
+import 'screens/admin/returns_refunds_screen.dart'; // C395: /admin/returns
 import 'pages/dispute_token_page.dart';
 import 'screens/public/dispute_form_screen.dart';
 import 'screens/public/public_order_page.dart';
@@ -835,6 +836,12 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
               // guards nothing. It is also reachable without a URL, from the
               // dashboard's quick-navigation tile.
               '/admin/reorder': (_) => const ReorderAdminScreen(),
+              // CHANGE #395 — Returns, refunds & cancellation. Same shape as
+              // the templates route above: returns_orders_list() /
+              // order_returns_panel() enforce _returns_guard() themselves, so
+              // the screen renders the backend's own not-authorized copy
+              // rather than the route guessing a role.
+              '/admin/returns': (_) => const ReturnsRefundsScreen(),
               '/about-app':    (_) => const AboutScreen(),
               '/contact':      (_) => const ContactScreen(),
               '/terms':        (_) => const TermsScreen(),

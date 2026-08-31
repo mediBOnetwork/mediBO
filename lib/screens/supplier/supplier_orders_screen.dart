@@ -12,6 +12,7 @@ import '../../utils/toast.dart';
 import '../../widgets/bill_actions_row.dart' show BillActionButton;
 import '../../widgets/bill_viewer.dart';
 import '../../widgets/order_item_card.dart';
+import '../../widgets/po_pricing.dart';
 import '../../widgets/sup_pay_panel.dart';
 
 // Parses a backend-supplied "#RRGGBB" (or "RRGGBB") hex colour string.
@@ -766,9 +767,20 @@ class _OrderCardState extends State<_OrderCard> {
                       style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280)))
                   : Builder(builder: (_) {
                       RenderLog.write('c189_supplier_tab_shared_card', 'true');
-                      return Column(
-                        children: items.map((item) => OrderItemCard(item: item)).toList(),
-                      );
+                      return Column(children: [
+                        PoPricingBanner(
+                            pricing: widget.order['pricing'] is Map
+                                ? Map<String, dynamic>.from(
+                                    widget.order['pricing'] as Map)
+                                : null),
+                        ...items.map((item) => Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                OrderItemCard(item: item),
+                                PoRateLine(item: item),
+                              ],
+                            )),
+                      ]);
                     }),
             ),
           ],

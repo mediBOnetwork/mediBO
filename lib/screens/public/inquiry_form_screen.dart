@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../design_tokens.dart';
 import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 import '../../widgets/inquiry_v12.dart';
@@ -26,6 +27,13 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
   bool _submitted = false;
   List<Map<String, dynamic>> _submittedItems = [];
   final Map<int, String> _selections = {};
+  // CHANGE #353 (#59) — the supplier's own trade rate per item. Availability
+  // alone was never a quote: the PO had nothing to price with and fell back to
+  // MRP (#29). Every label, hint and error below arrives from
+  // inquiry_rate_capture(); nothing here is worded in Dart.
+  final Map<int, TextEditingController> _rateCtl = {};
+  Map<String, dynamic> _rateCapture = const {};
+  String? _submitError;
   bool _submitting = false;
   bool _newItemsAdded = false;
   Set<int> _prevUnlockedIds = {};
@@ -52,6 +60,10 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
       _rt = null;
     }
     _c458Debounce?.cancel();
+    for (final ctl in _rateCtl.values) {
+      ctl.dispose();
+    }
+    _rateCtl.clear();
     super.dispose();
   }
 
@@ -129,6 +141,17 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
           .map((e) => Map<String, dynamic>.from(e as Map))
           .toList();
 
+      // CHANGE #353 (#59) — rate capture is a backend contract: enabled,
+      // required, and every string. An older backend simply returns nothing
+      // and the field is absent rather than half-worded in Dart.
+      Map<String, dynamic> capture = const {};
+      try {
+        final cap = await Supabase.instance.client.rpc('inquiry_rate_capture');
+        if (cap is Map) capture = Map<String, dynamic>.from(cap);
+      } catch (_) {
+        capture = const {};
+      }
+
       final unlockedIds = items
           .where((i) => i['locked'] == false)
           .map((i) => (i['inquiry_id'] as num).toInt())
@@ -144,6 +167,7 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
 
       setState(() {
         _supplierName = data['supplier_name'] as String?;
+        _rateCapture = capture;
         _items = items;
         // CHANGE #639 — an item the backend pre-ticked (prestate) is shown
         // SELECTED, so it must also count as answered: it has to submit, and
@@ -253,25 +277,115 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
     }
   }
 
+  // CHANGE #353 (#59) — the rate the supplier typed for one item, or null.
+  // The widget carries the string; the backend validates and stores the number.
+  String? _rateFor(int id) {
+    final raw = _rateCtl[id]?.text.trim() ?? '';
+    return raw.isEmpty ? null : raw;
+  }
+
+  bool get _rateCaptureOn => _rateCapture['enabled'] == true;
+  bool get _rateRequired => _rateCapture['required'] == true;
+  String get _rateAnswer => (_rateCapture['answer'] as String?) ?? 'Available';
+
+  /// The rate row, rendered under an item the supplier has marked available.
+  /// Absent for every other answer — a rate without stock means nothing.
+  Widget? _rateField(Map<String, dynamic> item) {
+    if (!_rateCaptureOn) return null;
+    final id = (item['inquiry_id'] as num).toInt();
+    if (_selections[id] != _rateAnswer) return null;
+    final ctl = _rateCtl.putIfAbsent(id, () => TextEditingController());
+    final prefix = (_rateCapture['prefix'] as String?) ?? '';
+    return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+      Expanded(
+        flex: 3,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text((_rateCapture['label'] as String?) ?? '',
+                style: Ds.t.bodyStrong),
+            SizedBox(height: Ds.space.x4),
+            Text((_rateCapture['mrp_caption'] as String?) ?? '',
+                style: Ds.t.caption),
+          ],
+        ),
+      ),
+      SizedBox(width: Ds.space.x12),
+      // Proportional, never a hard-coded pixel width: the field keeps its share
+      // of the row at 360, 414 and 1280.
+      Expanded(
+        flex: 2,
+        child: TextField(
+          controller: ctl,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          textAlign: TextAlign.right,
+          style: Ds.t.body,
+          onChanged: (_) => setState(() {}),
+          decoration: InputDecoration(
+            isDense: true,
+            prefixText: prefix.isEmpty ? null : prefix,
+            hintText: (_rateCapture['hint'] as String?) ?? '',
+            hintStyle: Ds.t.caption,
+            contentPadding: EdgeInsets.symmetric(
+                horizontal: Ds.space.x12, vertical: Ds.space.x12),
+            filled: true,
+            fillColor: Ds.c.bg,
+            border: OutlineInputBorder(
+                borderRadius: Ds.r.rButton,
+                borderSide: BorderSide(color: Ds.c.divider)),
+            enabledBorder: OutlineInputBorder(
+                borderRadius: Ds.r.rButton,
+                borderSide: BorderSide(color: Ds.c.divider)),
+            focusedBorder: OutlineInputBorder(
+                borderRadius: Ds.r.rButton,
+                borderSide: BorderSide(color: Ds.c.brand)),
+          ),
+        ),
+      ),
+    ]);
+  }
+
   Future<void> _submit() async {
     final unanswered = _items.where((i) => i['locked'] == false).toList();
     final toSubmit = unanswered
         .map((i) {
           final id = (i['inquiry_id'] as num).toInt();
-          return {'inquiry_id': id, 'answer': _selections[id] ?? ''};
+          final answer = _selections[id] ?? '';
+          final rate = answer == _rateAnswer ? _rateFor(id) : null;
+          return <String, dynamic>{
+            'inquiry_id': id,
+            'answer': answer,
+            if (rate != null) 'rate': rate,
+          };
         })
         .where((a) => (a['answer'] as String).isNotEmpty)
         .toList();
 
     if (toSubmit.isEmpty) return;
 
-    setState(() => _submitting = true);
+    setState(() {
+      _submitting = true;
+      _submitError = null;
+    });
     try {
-      await Supabase.instance.client.rpc('submit_inquiry_form', params: {
-        'p_token': widget.token,
-        'p_answers': toSubmit,
-      });
+      final res = await Supabase.instance.client.rpc('submit_inquiry_form',
+          params: {
+            'p_token': widget.token,
+            'p_answers': toSubmit,
+          });
+      // A refusal is a payload, not an exception. Its wording is the
+      // backend's — printed verbatim, never re-phrased here.
+      if (res is Map && res['error'] != null && res['message'] != null) {
+        if (mounted) {
+          setState(() => _submitError = res['message'] as String);
+          RenderLog.write('inquiry_rate_refused', '${res['error']}');
+        }
+        return;
+      }
       RenderLog.write('inquiry_form_submitted', '${toSubmit.length}_answers');
+      RenderLog.write('inquiry_rate_sent',
+          '${toSubmit.where((a) => a.containsKey('rate')).length}');
       await _load();
     } catch (e) {
       RenderLog.write(
@@ -292,8 +406,19 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
   bool get _canSubmit {
     final unanswered = _items.where((i) => i['locked'] == false).toList();
     if (unanswered.isEmpty) return false;
-    return unanswered.every(
-        (i) => _selections.containsKey((i['inquiry_id'] as num).toInt()));
+    return unanswered.every((i) {
+      final id = (i['inquiry_id'] as num).toInt();
+      if (!_selections.containsKey(id)) return false;
+      // Whether a rate is mandatory is the BACKEND's call (inquiry_rate_
+      // capture().required), not this screen's.
+      if (_rateCaptureOn &&
+          _rateRequired &&
+          _selections[id] == _rateAnswer &&
+          _rateFor(id) == null) {
+        return false;
+      }
+      return true;
+    });
   }
 
   @override
@@ -705,8 +830,21 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
               onAnswer: (id, ans) =>
                   setState(() => _selections[id] = ans),
               onBulkCompanyCategory: _bulkDontStockCompanyCategory,
+              itemTrailingWidget: _rateField,
               surface: 'link',
             ),
+            if (_submitError != null) ...[
+              SizedBox(height: Ds.space.x8),
+              Container(
+                width: double.infinity,
+                padding: EdgeInsets.all(Ds.space.x12),
+                decoration: BoxDecoration(
+                  color: Ds.c.dangerSoft,
+                  borderRadius: Ds.r.rCard,
+                ),
+                child: Text(_submitError!, style: Ds.t.body),
+              ),
+            ],
             const SizedBox(height: 8),
             SizedBox(
               width: double.infinity,

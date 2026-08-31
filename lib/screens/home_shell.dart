@@ -26,6 +26,8 @@ import '../services/push_service.dart'; // CHANGE #298
 import 'admin/admin_push_screen.dart'; // CHANGE #298
 import 'admin/admin_add_medicine_screen.dart';
 import 'admin/admin_manage_admins_screen.dart';
+import 'admin/admin_audit_screen.dart';
+import 'admin/admin_roles_screen.dart';
 import 'admin/admin_customer_screen.dart';
 import 'admin/admin_company_screen.dart';
 import 'admin/admin_dashboard_screen.dart';
@@ -716,6 +718,19 @@ class _HomeShellState extends State<HomeShell> {
           Navigator.push(context,
               MaterialPageRoute(builder: (_) => const AdminManageAdminsScreen()));
         }
+        break;
+      // CHANGE #394 — the audit trail and the roles editor. Neither is gated
+      // on _amISuper here: admin_audit_screen() answers on admin_can(
+      // 'admin.audit_log','read') and admin_roles_screen() on _is_super(),
+      // and each screen renders that refusal itself. The fence is the RPC's,
+      // not the router's — a Dart `if` is not an access control.
+      case 'audit_log':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const AdminAuditScreen()));
+        break;
+      case 'admin_roles':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const AdminRolesScreen()));
         break;
       case 'payment_upi':
         if (_amISuper) {

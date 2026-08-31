@@ -420,6 +420,8 @@ begin
       return jsonb_build_object('ok', false, 'message', 'That is not valid JSON.');
     end;
     if jsonb_typeof(v_json) = 'object' then v_json := jsonb_build_array(v_json); end if;
+    select count(*) filter (where public.gst_norm_gstin(e->>'gstin') is null)
+      into v_bad from jsonb_array_elements(v_json) e;
     insert into public.gst_2b_entry (tax_period, gstin, invoice_no, invoice_date, taxable, tax, raw)
     select v_period,
            public.gst_norm_gstin(e->>'gstin'),
@@ -430,18 +432,17 @@ begin
                     coalesce((e->>'cgst')::numeric,0) + coalesce((e->>'sgst')::numeric,0)
                     + coalesce((e->>'igst')::numeric,0), 0),
            e::text
-      from jsonb_array_elements(v_json) e;
+      from jsonb_array_elements(v_json) e
+     where public.gst_norm_gstin(e->>'gstin') is not null;
     get diagnostics v_ok = row_count;
   else
     foreach ln in array regexp_split_to_array(v_txt, E'\r?\n') loop
       ln := btrim(ln);
       continue when ln = '';
       parts := regexp_split_to_array(ln, '\s*,\s*');
-      if array_length(parts,1) is null or array_length(parts,1) < 2 then
-        v_bad := v_bad + 1; continue;
-      end if;
-      if public.gst_norm_gstin(parts[1]) is null and public.gst_inv_key(parts[2]) is null then
-        v_bad := v_bad + 1; continue;   -- header row or junk
+      if array_length(parts,1) is null or array_length(parts,1) < 2
+         or public.gst_norm_gstin(parts[1]) is null then
+        v_bad := v_bad + 1; continue;   -- header row, or a row that can never match
       end if;
       begin
         insert into public.gst_2b_entry (tax_period, gstin, invoice_no, invoice_date, taxable, tax, raw)

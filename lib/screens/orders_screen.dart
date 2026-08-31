@@ -24,6 +24,7 @@ import '../design_tokens.dart'; // #173: Ds tokens for the reorder entry points
 import 'reorder_screen.dart'; // #173: reorder suite (suggestions + smart diff)
 import 'purchases_screen.dart'; // #367 row 174: purchase analytics + register
 import 'order_lists_screen.dart'; // #367 row 178: named saved order lists
+import '../widgets/substitute_choice.dart'; // #366 row 176: customer picks the substitute
 
 // ─── Data models ─────────────────────────────────────────────────────────────
 
@@ -1128,10 +1129,59 @@ class _ItemsTabState extends State<_ItemsTab> {
                 const SizedBox(height: 10),
               ],
               ...order.unfulfilledLines.map(_itemRow),
+              // CMD #366 row 176 — the buyer's own say. Until now the split
+              // was silent: order_items.unfulfillable was set server-side and
+              // this block only reported the outcome. Now every open offer on
+              // this order renders the SAME chooser the admin sees and the
+              // WhatsApp page shows, so "the customer approved it" means one
+              // thing wherever it was recorded.
+              ..._offersFor(order.id).map((offer) => Padding(
+                    padding: EdgeInsets.only(top: Ds.space.x12),
+                    child: SubstituteChoice(
+                      offer: offer,
+                      onDecided: (fresh) => setState(() {
+                        final list = _subOffers[order.id];
+                        if (list == null) return;
+                        final i = list.indexWhere((e) =>
+                            e['offer_id'] == fresh['offer_id']);
+                        if (i >= 0) list[i] = fresh;
+                      }),
+                    ),
+                  )),
             ]),
           ),
       ]),
     );
+  }
+
+  /// CMD #366 row 176 — substitute offers, keyed by order id. Loaded lazily
+  /// the first time an order with a shortage is drawn, so an account with no
+  /// shortage never pays for the call.
+  final Map<String, List<Map<String, dynamic>>> _subOffers = {};
+  final Set<String> _subOffersLoading = {};
+
+  List<Map<String, dynamic>> _offersFor(String orderId) {
+    final cached = _subOffers[orderId];
+    if (cached != null) return cached;
+    if (_subOffersLoading.add(orderId)) {
+      // ignore: discarded_futures — fire-and-forget; the setState redraws.
+      SubstituteChoice.rpc('sub_offers_for_order', {'p_order_id': orderId})
+          .then((res) {
+        if (!mounted) return;
+        final rows = (res is Map ? (res['offers'] as List?) : null) ?? const [];
+        setState(() {
+          _subOffers[orderId] = rows
+              .whereType<Map>()
+              .map((e) => e.cast<String, dynamic>())
+              .toList();
+        });
+      }).catchError((_) {
+        // A failed lookup leaves the shortage block exactly as it was. It must
+        // never take the order card down with it.
+        if (mounted) setState(() => _subOffers[orderId] = const []);
+      });
+    }
+    return const [];
   }
 
   // ── One row shape for both lists ──────────────────────────────────────────

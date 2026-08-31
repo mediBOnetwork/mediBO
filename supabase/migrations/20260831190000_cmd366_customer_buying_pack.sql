@@ -729,3 +729,81 @@ begin
 end $$;
 
 grant execute on function public.product_detail_v2(bigint, text) to anon, authenticated, service_role;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- ROW 172, the surface. The storefront already draws a chip row from
+-- sort_options ({key,label,active}) and already routes by the key the BACKEND
+-- put on the chip. So the margin thresholds ship as more chips on that same
+-- row — no new control, no new payload shape, and the filter cannot appear
+-- while no product has a real trade rate because the whole list is gated on
+-- medicine_pricing.pricing_ready.
+-- ═══════════════════════════════════════════════════════════════════════════
+create or replace function public.storefront_sort_options(p_active text default null)
+returns jsonb
+language plpgsql stable security definer set search_path to 'public'
+as $$
+declare
+  v_default text := coalesce((select value from storefront_ui_label
+                                where key = 'sort_default_label'), 'Popular');
+  v_margin  text := coalesce((select value from storefront_ui_label
+                                where key = 'sort_margin_label'), 'Highest margin');
+  v_active  text := case when coalesce(p_active,'') like 'margin%' then p_active else 'default' end;
+  v_ready   int;
+  v_chips   jsonb;
+begin
+  if not (public.viewer_is_approved_customer()
+          or public.get_my_role() = any (array['admin','super_admin'])) then
+    return '[]'::jsonb;
+  end if;
+
+  select count(*) into v_ready
+    from public.medicine_pricing mp
+    join "MEDICINE" m on m.id = mp.product_id
+   where mp.pricing_ready
+     and lower(coalesce(m.buyable::text, '')) in ('true', 't');
+  if v_ready = 0 then
+    return '[]'::jsonb;
+  end if;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'key', 'margin:' || f.min_pct::text,
+           'label', f.label,
+           'active', v_active = 'margin:' || f.min_pct::text)
+         order by f.sort), '[]'::jsonb)
+    into v_chips from public.storefront_margin_filter f where f.active;
+
+  return jsonb_build_array(
+    jsonb_build_object('key', 'default', 'label', v_default,
+                       'active', v_active = 'default'),
+    jsonb_build_object('key', 'margin',  'label', v_margin,
+                       'active', v_active = 'margin'))
+    || v_chips;
+end;
+$$;
+
+-- Admin convenience: open an offer on EVERY still-unfulfillable line of one
+-- order. The admin surface holds the order id, not the line uuids, and asking
+-- the backend which lines are short is the backend's job anyway. Still asks —
+-- it creates offers, it never substitutes.
+create or replace function public.sub_offer_open_for_order(p_order_id uuid)
+returns jsonb
+language plpgsql security definer set search_path to 'public'
+as $$
+declare r record; v_opened int := 0;
+begin
+  if coalesce(public.get_my_role(), '') <> all (array['admin','super_admin']) then
+    raise exception 'sub_offer_open_for_order: admin only';
+  end if;
+  for r in select oi.id from public.order_items oi
+            where oi.order_id = p_order_id and oi.unfulfillable
+              and not exists (select 1 from public.order_substitute_offer o
+                               where o.order_item_id = oi.id
+                                 and o.status in ('offered','approved','held'))
+  loop
+    perform public.sub_offer_open(r.id);
+    v_opened := v_opened + 1;
+  end loop;
+  return public.sub_offers_for_order(p_order_id) || jsonb_build_object('opened', v_opened);
+end $$;
+
+grant execute on function public.sub_offer_open_for_order(uuid) to authenticated, service_role;

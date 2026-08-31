@@ -579,7 +579,12 @@ class MedicineRepository {
   Future<ProductDetail> fetchProductDetail(String productId) async {
     final id = int.tryParse(productId);
     if (id == null) return ProductDetail.notFound(const {});
-    final res = await _rpc('product_detail', params: {'p_product_id': id});
+    // CMD #366 — product_detail_v2 IS product_detail plus the two blocks rows
+    // 171 and 175 added (priced substitutes, delivery promise from actuals).
+    // It delegates, so the page is still ONE round trip and still one payload
+    // that cannot disagree with itself.
+    final res = await _rpc('product_detail_v2',
+        params: {'p_product_id': id, 'p_pincode': null});
     if (res is! Map) return ProductDetail.notFound(const {});
     return ProductDetail.fromMap(Map<String, dynamic>.from(res));
   }
@@ -705,10 +710,19 @@ class MedicineRepository {
         // #174 — the margin lane is its own RPC, returning the same envelope
         // and the same item shape. Which lane to use is decided by the key the
         // backend put on the chip, not by anything the grid knows about margin.
-        final env = sort == 'margin'
+        // CMD #366 row 172 — the margin chips now carry a threshold in their
+        // own key ('margin', 'margin:15'), so the filter arrives through the
+        // control that already existed. This still decides nothing about
+        // margin: it reads the number the BACKEND put on the chip and hands it
+        // straight back. An item without a real imported trade rate is never in
+        // the margin lane's set at all, so no threshold can conjure one.
+        final env = sort.startsWith('margin')
             ? await _rpc('storefront_margin_page', params: {
                 'p_offset': offset,
                 'p_limit': limit,
+                'p_min_margin': sort.contains(':')
+                    ? num.tryParse(sort.split(':').last)
+                    : null,
               })
             : await _rpc('storefront_page', params: {
                 'category_filter': category,

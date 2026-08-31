@@ -265,6 +265,29 @@ class _Body extends StatelessWidget {
             lessLabel: data.label('pdp_read_less'),
           ),
         ],
+        // CMD #366 row 175 — the delivery promise. `has` is the backend's
+        // answer to "have we delivered here often enough to promise
+        // anything". Below its sample floor there is no block at all: an
+        // invented date on a pharmacy's buying screen is worse than none,
+        // because it is a promise nobody ever measured.
+        if (data.deliveryPromise.has) ...[
+          SizedBox(height: Ds.space.x16),
+          _PromiseRow(promise: data.deliveryPromise),
+        ],
+        // CMD #366 row 171 — the priced substitute block. Same mechanism as
+        // the salt rail below, extended: normalised strength and form, the
+        // real price, and a saving computed net-rate against net-rate.
+        if (data.substitutes.has) ...[
+          SizedBox(height: Ds.space.x24),
+          _SectionTitle(text: data.substitutes.heading),
+          SizedBox(height: Ds.space.x4),
+          Text(
+            data.substitutes.note,
+            style: Ds.t.caption.copyWith(color: Ds.c.textSecondary),
+          ),
+          SizedBox(height: Ds.space.x12),
+          _SubstituteRail(items: data.substitutes.items),
+        ],
         // The rail renders only when the backend actually sent tiles.
         if (data.similar.isNotEmpty) ...[
           const SizedBox(height: 28),
@@ -273,6 +296,137 @@ class _Body extends StatelessWidget {
           _SimilarRail(items: data.similar),
         ],
       ],
+    );
+  }
+}
+
+/// CMD #366 row 175 — one line, both strings from `delivery_promise()`.
+class _PromiseRow extends StatelessWidget {
+  final PdPromise promise;
+  const _PromiseRow({required this.promise});
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: EdgeInsets.all(Ds.space.x12),
+        decoration: BoxDecoration(
+          color: Ds.c.infoSoft,
+          borderRadius: Ds.r.rButton,
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.local_shipping_outlined,
+                size: Ds.space.x16, color: Ds.c.info),
+            SizedBox(width: Ds.space.x8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(promise.label,
+                      style: Ds.t.body.copyWith(
+                          fontWeight: FontWeight.w600, color: Ds.c.text)),
+                  SizedBox(height: Ds.space.x4),
+                  Text(promise.note,
+                      style:
+                          Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+}
+
+/// CMD #366 row 171 — the substitute rail. Price, saving and margin are
+/// printed only when the payload carried them; there is no "—" placeholder and
+/// no locally computed comparison, because an item with no imported trade rate
+/// genuinely has no price to compare.
+class _SubstituteRail extends StatelessWidget {
+  final List<PdSubstitute> items;
+  const _SubstituteRail({required this.items});
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        height: 226,
+        child: ListView.separated(
+          scrollDirection: Axis.horizontal,
+          itemCount: items.length,
+          separatorBuilder: (_, _) => SizedBox(width: Ds.space.x12),
+          itemBuilder: (_, i) => _SubstituteTile(item: items[i]),
+        ),
+      );
+}
+
+class _SubstituteTile extends StatelessWidget {
+  final PdSubstitute item;
+  const _SubstituteTile({required this.item});
+
+  @override
+  Widget build(BuildContext context) {
+    final price = item.pricing?.priceDisplay ?? '';
+    return InkWell(
+      borderRadius: Ds.r.rCard,
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => ProductDetailScreen(productId: item.id),
+        ),
+      ),
+      child: Container(
+        width: 168,
+        padding: EdgeInsets.all(Ds.space.x12),
+        decoration: BoxDecoration(
+          color: Ds.c.surface,
+          borderRadius: Ds.r.rCard,
+          border: Border.all(color: Ds.c.divider),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Center(
+                child: ProductImage(
+                  url: item.image,
+                  width: 96,
+                  height: 76,
+                  radius: Ds.r.rButton,
+                ),
+              ),
+            ),
+            SizedBox(height: Ds.space.x8),
+            Text(item.name,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: Ds.t.body.copyWith(
+                    fontWeight: FontWeight.w600, color: Ds.c.text)),
+            Text(item.company,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+            SizedBox(height: Ds.space.x4),
+            Text(item.matchLabel,
+                style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+            if (price.isNotEmpty) ...[
+              SizedBox(height: Ds.space.x4),
+              Text(price,
+                  style: Ds.t.body.copyWith(
+                      fontWeight: FontWeight.w700, color: Ds.c.text)),
+            ],
+            if (item.hasSaving) ...[
+              SizedBox(height: Ds.space.x4),
+              Text(item.savingLabel,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Ds.t.caption.copyWith(
+                      fontWeight: FontWeight.w600, color: Ds.c.success)),
+            ],
+            if (item.hasMargin) ...[
+              SizedBox(height: Ds.space.x4),
+              Text(item.marginLabel,
+                  style: Ds.t.caption.copyWith(color: Ds.c.info)),
+            ],
+          ],
+        ),
+      ),
     );
   }
 }

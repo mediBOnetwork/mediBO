@@ -133,6 +133,12 @@ class _AdminPricingScreenState extends State<AdminPricingScreen> {
                             ChoiceChip(
                               label: Text((o['label'] ?? '').toString()),
                               selected: (o['mode'] ?? '').toString() == mode,
+                              // Design QA: a bare ChoiceChip is ~32 px tall.
+                              // The policy switch is a real decision on a real
+                              // phone, so it gets a 44 px target.
+                              padding: EdgeInsets.symmetric(
+                                  horizontal: Ds.space.x12,
+                                  vertical: Ds.space.x8),
                               onSelected: _busy
                                   ? null
                                   : (_) =>

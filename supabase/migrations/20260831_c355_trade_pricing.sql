@@ -1068,8 +1068,28 @@ values ('pricing_coverage_refresh', 720, 'poll',
         'CHANGE #355 - nightly trade-price / GST coverage measurement, off-peak IST')
 on conflict (name) do nothing;
 
--- The nav label for the new admin screen. A key with no row renders blank, so
--- the entry ships with its copy (CHANGE #645/#646's lesson, one step earlier).
-insert into public.ui_copy (key, value)
-values ('admin_nav.overflow_pricing', '"Trade Pricing"'::jsonb)
-on conflict (key) do nothing;
+-- ── 12. The admin entry point (CHANGE #325 — nav is a table, not a list) ───
+-- feature_registry drives nav_registry(), which the shell renders verbatim.
+-- A screen with no row here is a screen nobody can reach — and #645/#646 is
+-- the precedent for shipping one. Sibling of admin.pricing_backfill (#174,
+-- where a rate is ENTERED); this row is the MEASUREMENT of how many products
+-- have one at all.
+insert into public.feature_registry
+  (feature_key, label, group_label, icon_key, route_key, sort_order, category,
+   surface, roles_allowed, is_active, description)
+values
+  ('admin.pricing_coverage', 'Trade price coverage', 'Catalogue & Pricing',
+   'percent', 'pricing', 525, 'catalogue', 'dashboard',
+   array['admin','super_admin'], true,
+   'CHANGE #355 - how much of the catalogue has a trade rate, and whether an unpriced product may be ordered')
+on conflict (feature_key) do update set
+  label        = excluded.label,
+  group_label  = excluded.group_label,
+  icon_key     = excluded.icon_key,
+  route_key    = excluded.route_key,
+  sort_order   = excluded.sort_order,
+  category     = excluded.category,
+  surface      = excluded.surface,
+  roles_allowed= excluded.roles_allowed,
+  is_active    = excluded.is_active,
+  description  = excluded.description;

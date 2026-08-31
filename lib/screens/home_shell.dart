@@ -54,6 +54,7 @@ import 'admin/admin_bulk_screen.dart'; // C397: bulk actions, exports, undo
 import 'admin/admin_scope_audit_screen.dart'; // CHANGE #227
 import 'admin/admin_order_closure_screen.dart'; // CHANGE #229
 import 'admin/admin_gst_screen.dart'; // CHANGE #320
+import 'admin/admin_reviews_screen.dart'; // CMD #410: review & Q&A moderation
 import '../features/whatsapp/ui/wa_home_screen.dart';
 import '../features/whatsapp/ui/wa_templates_screen.dart';
 import 'admin/wa_campaigns_screen.dart';
@@ -667,6 +668,16 @@ class _HomeShellState extends State<HomeShell> {
       case 'gst':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const AdminGstScreen()));
+        break;
+      // CMD #410 — the moderation desk. Nothing a pharmacy writes about a
+      // product is public until it is approved here, so the queue needs a way
+      // in from a phone: the feature_registry row alone is a tile with nowhere
+      // to go (that was #397's finding). review_moderation_queue() gates on
+      // get_my_role() and the screen renders its refusal, so there is no
+      // _amISuper test here — same story as wa_ops and notify_center.
+      case 'reviews':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const AdminReviewsScreen()));
         break;
       case 'mr': setState(() { _index = 7; _cartOpen = false; }); break;
       case 'companies': setState(() { _index = 8; _cartOpen = false; }); break;

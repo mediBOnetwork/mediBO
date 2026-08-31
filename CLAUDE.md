@@ -588,6 +588,50 @@ could see was a lie. Three layers, so progress never depends on memory alone:
    checklist is VISIBLY untrusted instead of silently wrong. Any real tick —
    agent or derived — clears the flag immediately.
 
+## 18. FINISHED MEANS EXIT (permanent — CHANGE #369)
+
+Completion is an OBSERVATION the harness makes, not a turn the model takes.
+#355 finished everything — 12/12 steps, CHANGE #855 live, render_verify green,
+QA journeys green, the agent even typed "Completing." — and then ran two more
+command batches while its card still read `building` at 1.3M tokens. The
+step-sync backstop nagged it fifteen minutes after the work was already done.
+Measured across the rows before this change, a finished build stayed open a
+median ~8 minutes and ~290K tokens past its last step; #355 cost 41 minutes and
+782K.
+
+1. **THE HARNESS COMPLETES.** Every heartbeat, `finish_detect.sh` (hooked into
+   `devcmd.sh`, never `runner.sh` — a long-running loop holds its own copy of
+   that file in memory) calls `dev_cmd_autofinish`. When every condition is
+   observed the BACKEND completes the row and the harness sends ONE Ctrl-C to
+   the tmux pane: the turn ends, the session lives (killing it would cost Om a
+   new-device notification). Zero model turns after success.
+2. **THE SUMMARY IS COMPOSED, NOT WRITTEN.** `dev_cmd_result_compose` builds
+   `result_summary` and `plain_summary` from the artifacts already on the row —
+   step count, change number, QA verdict, journeys, proofs, decisions — in Om's
+   bullet format, inside the 10-line / 50-word limit. The model never gets a
+   "write the summary" turn.
+3. **THE WATCHDOG IS THE BACKSTOP.** `dev_cmd_autofinish_sweep()` rides the one
+   cron dispatcher (`dev-cmd-autofinish`, 60s). A row green for longer than
+   `worker_pool.finish_gate.grace_s` (120s) is completed server-side whether or
+   not a worker is still listening; the 20s status poll in `devcmd.sh` then ends
+   the turn. Drift is impossible rather than discouraged.
+4. **IT CANNOT FIRE EARLY.** Every condition must hold together: steps N/N on a
+   plan that EXISTS, no open question, QA passed/waived where required, required
+   journeys green with no unanswered red, screenshot proof in `dev-cmd-proofs`,
+   the change deployed AND promoted with a green self-test — and `rg_check`
+   green, enforced by `dev_cmd_complete` itself, whose exception is caught and
+   reported as a blocker rather than swallowed as a completion.
+   `bash scripts/finish_gate_proof.sh` rehearses all of it on synthetic rows.
+5. **THE CARD SAYS SO.** `finish_chip` while a build sits green, then
+   "Auto-completed by the harness · {drift} after the last step"; every
+   completed row carries `finish_drift_s` and `finish_tokens_after`, so the
+   number this change exists to move is readable off the queue.
+   `test/protected/finish_gate_test.dart` pins the boundary: Dart renders the
+   verdict and never infers readiness from `steps_done == steps_total`.
+
+For the builder: mark the last step the moment it lands, and treat
+`already: true` from `devcmd.sh complete` as success — the gate got there first.
+
 ## 13. PARALLEL WORKERS (permanent — CHANGE #74)
 
 The VM runs a WORKER POOL, not a single builder. The supervisor

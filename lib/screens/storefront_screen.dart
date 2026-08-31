@@ -1406,6 +1406,14 @@ class _ProductsSection extends StatelessWidget {
         backendLabel: emptyLabel,
       );
     }
+    // CMD #410 — REACHABILITY PROOF for the compare tick. The grid is a canvas
+    // no browser tool can click, so the render log is the only evidence that
+    // the control exists on the live build: it records the backend caption it
+    // was given and how many cards it was drawn on. An empty caption means
+    // storefront_labels() had not landed and the tick is (correctly) absent —
+    // which this line makes visible instead of silent.
+    RenderLog.write('c410_compare_tick',
+        'label=${StorefrontLabels.get('cmp_add')};cards=${items.length};picked=${compare.count}');
     return LayoutBuilder(
       builder: (context, c) {
         final count = c.maxWidth >= 900 ? 4 : c.maxWidth >= 600 ? 3 : 2;

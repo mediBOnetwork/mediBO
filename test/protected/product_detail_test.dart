@@ -34,6 +34,7 @@ import 'package:pharma_b2b/app_state.dart';
 import 'package:pharma_b2b/models/cart_model.dart';
 import 'package:pharma_b2b/models/product_detail.dart';
 import 'package:pharma_b2b/screens/product_detail_screen.dart';
+import 'package:pharma_b2b/utils/render_log.dart';
 
 /// The labels product_detail() attaches to every response, ok:true or not.
 const _labels = <String, dynamic>{
@@ -163,6 +164,14 @@ Future<void> _pump(WidgetTester tester, Map<String, dynamic> payload) async {
 }
 
 void main() {
+  // CMD #410 — the page now writes `c410_reviews_block` to the render log so
+  // the live build can PROVE the reviews block reached a real browser (canvas
+  // cannot be clicked by a tool). RenderLog's 800 ms flush is a real Timer
+  // that would outlive every test here and try to reach Supabase, so it is
+  // disabled — exactly the setUpAll CLAUDE.md prescribes. No assertion below
+  // is touched: this is the harness, not the contract.
+  setUpAll(() => RenderLog.flushEnabled = false);
+
   group('the page prints the payload verbatim', () {
     testWidgets('header, company and pack come straight from the payload',
         (tester) async {

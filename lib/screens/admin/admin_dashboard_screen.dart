@@ -11,6 +11,8 @@ import 'admin_ops_board_screen.dart';
 import 'command_palette.dart';   // CHANGE #325
 import 'nav_registry_view.dart'; // CHANGE #325
 import 'dev_queue/dev_queue_screen.dart'; // CHANGE #349 — openDevTool
+import 'admin_customer_360_screen.dart';  // CHANGE #396
+import 'admin_stock_on_hand_screen.dart'; // CHANGE #396
 
 class AdminDashboardScreen extends StatefulWidget {
   const AdminDashboardScreen({super.key});
@@ -111,6 +113,29 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     }
     final route = (tile['route_key'] ?? '').toString();
     if (route.isEmpty) return;
+    // CHANGE #396 — the two screens that carry a subject with them. Like a Dev
+    // Queue tool they are PUSHED rather than swapped into the shell's tab
+    // table, because the palette hands the subject down in `seed` (a customer
+    // id) and a tab index cannot carry one.
+    if (route == 'customer_360') {
+      final seed = (tile['seed'] ?? '').toString();
+      if (seed.isEmpty) {
+        // No subject: the registry tile itself. Ask for one the way the rest
+        // of the app does — through the palette.
+        _openPalette();
+        return;
+      }
+      Navigator.push(
+          context,
+          MaterialPageRoute(
+              builder: (_) => AdminCustomer360Screen(customerId: seed)));
+      return;
+    }
+    if (route == 'stock_on_hand') {
+      Navigator.push(context,
+          MaterialPageRoute(builder: (_) => const AdminStockOnHandScreen()));
+      return;
+    }
     QuickLinkNavigator.of(context)?.navigate(route);
   }
 

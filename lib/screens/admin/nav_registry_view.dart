@@ -101,6 +101,27 @@ class NavProfileMenu {
   }
 }
 
+/// CHANGE #325 — DEEP LINKS (spec 6). `/admin/go/<route_key>` is parked here
+/// by main.dart's route resolver and consumed by the shell on its first frame.
+///
+/// It exists because the two halves of a deep link live in different places:
+/// main.dart knows the URL but owns no route table, and the shell owns the
+/// route table but never sees the URL. One nullable string, read exactly once,
+/// is the whole handshake — and it means every registered screen has a real
+/// address that a push notification or a WhatsApp button can point at.
+class PendingAdminNav {
+  PendingAdminNav._();
+
+  static String? route;
+
+  /// Read-and-clear: a deep link fires once, never again on the next rebuild.
+  static String? take() {
+    final r = route;
+    route = null;
+    return r;
+  }
+}
+
 /// A tap on a registry tile. [tile] is the backend's own map, handed back
 /// untouched so the caller reads `route_key` / `deep_link` / `feature_key`
 /// from the payload rather than from anything this file inferred.

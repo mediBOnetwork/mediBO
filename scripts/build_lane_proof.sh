@@ -93,7 +93,9 @@ echo "   wall clock: $(( $(date +%s) - T0 ))s"
 if [ "$KEEP" != "--keep" ]; then
   echo
   echo "── cleanup ─────────────────────────────────────────────────────────────"
-  # dev_cmd_delete only accepts a CANCELLED row — cancel first, then delete.
+  # A probe that WAS claimed is 'building'; hand it back first, then cancel,
+  # then delete — dev_cmd_delete only ever accepts a cancelled row.
+  for a in c327-probe-1 c327-probe-2; do "$D" release "$a" "c327 proof cleanup" >/dev/null 2>&1; done
   for i in $A $B $C $DD; do
     "$D" rpc dev_cmd_cancel "{\"p_id\":$i}" >/dev/null 2>&1
     "$D" rpc dev_cmd_delete "{\"p_id\":$i}" >/dev/null 2>&1

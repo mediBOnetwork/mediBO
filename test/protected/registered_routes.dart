@@ -14,29 +14,29 @@ library;
 
 /// Every `route_key` in feature_registry that the shell router can open.
 ///
-/// NOT yet here, and deliberately: reorder, pnl, discount_slabs, loyalty,
-/// unmapped_companies, delivery_ops, notify_cost, settlement, cron_health,
-/// profile. All ten are registered in the table and all ten need a `case` in
-/// `_handleAdminNav`; home_shell.dart was leased to another command for the
-/// whole of #325, so the router half could not land. Adding the cases and then
-/// these ten keys is the follow-up's acceptance test, written in advance.
+/// The ten keys that were held back mid-#325 (reorder, pnl, discount_slabs,
+/// loyalty, unmapped_companies, delivery_ops, notify_cost, settlement,
+/// cron_health, profile) are IN this list now: home_shell.dart's lease freed
+/// before the command ended, `_handleAdminNav` gained a case for each, and the
+/// nine registry rows that had been parked at is_active=false were switched
+/// back on. Nine of those ten screens had never had a tappable way in at all.
 const kRegisteredAdminRoutes = <String>[
   // Orders & Fulfilment
-  'fulfillment', 'order_alerts', 'order_closure', 'bags',
+  'fulfillment', 'order_alerts', 'order_closure', 'bags', 'reorder',
   // Customers & Suppliers
   'customers', 'suppliers', 'add_customer', 'add_supplier', 'mr', 'companies',
-  'deletion_requests',
+  'unmapped_companies', 'deletion_requests',
   // Catalogue & Pricing
-  'add_medicine', 'pricing_backfill',
+  'add_medicine', 'pricing_backfill', 'discount_slabs', 'loyalty',
   // Delivery
-  'delivery_partners',
+  'delivery_partners', 'delivery_ops',
   // Communication
   'whatsapp', 'wa_templates', 'wa_campaigns', 'wa_segments', 'wa_drips',
-  'wa_ops', 'wa_diagnosis', 'notify_center', 'admin_push',
+  'wa_ops', 'wa_diagnosis', 'notify_center', 'admin_push', 'notify_cost',
   // Money
-  'bill_pipeline', 'gst', 'payment_upi',
+  'bill_pipeline', 'gst', 'pnl', 'settlement', 'payment_upi',
   // Admin & System
-  'manage_admins', 'dev_queue', 'scope_audit', 'feature_gaps',
-  // Identity
-  'logout',
+  'manage_admins', 'dev_queue', 'scope_audit', 'feature_gaps', 'cron_health',
+  // Identity — the only two rows the dropdown may hold
+  'profile', 'logout',
 ];

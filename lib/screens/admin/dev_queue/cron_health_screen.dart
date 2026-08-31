@@ -103,6 +103,13 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
           'c324_deploy_lane',
           _lane['ok'] == true ? 'ok' : (_lane.isEmpty ? 'absent' : 'refused'),
         );
+        // CHANGE #327 — painted-proof for the build lane, same contract as the
+        // two lanes above: 'ok' only when the backend answered AND the section
+        // drew its payload.
+        RenderLog.write(
+          'c327_build_lane',
+          _build['ok'] == true ? 'ok' : (_build.isEmpty ? 'absent' : 'refused'),
+        );
         RenderLog.write('c273_cron_tasks', '${tasks.length}');
         // The before/after report is the command's deliverable, so it gets its
         // own painted-proof key rather than hiding inside the screen's.

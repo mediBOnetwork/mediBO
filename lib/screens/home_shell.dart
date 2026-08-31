@@ -34,6 +34,16 @@ import 'admin/admin_delivery_partner_screen.dart';
 import 'admin/admin_mr_screen.dart';
 import 'admin/admin_alert_overlay.dart';
 import 'admin/admin_nav_entries.dart';
+import 'admin/nav_registry_view.dart';          // CHANGE #325
+import 'admin/reorder_admin_screen.dart';       // CHANGE #325
+import 'admin/pnl_screen.dart';                 // CHANGE #325
+import 'admin/loyalty_admin_screen.dart';       // CHANGE #325
+import 'admin/unmapped_companies_screen.dart';  // CHANGE #325
+import 'admin/admin_delivery_ops_screen.dart';  // CHANGE #325
+import 'admin/notify_cost_screen.dart';         // CHANGE #325
+import 'admin/settlement_screen.dart';          // CHANGE #325
+import 'admin/dev_queue/cron_health_screen.dart'; // CHANGE #325
+import '../services/discount_slabs_service.dart'; // CHANGE #325
 import 'admin/admin_shell.dart';
 import 'admin/pricing_backfill_screen.dart';
 import 'admin/admin_bill_pipeline_screen.dart'; // CHANGE #226
@@ -272,6 +282,18 @@ class _HomeShellState extends State<HomeShell> {
     } catch (_) {}
   }
 
+  /// CHANGE #325 — the two identity rows the profile dropdown may hold. Loaded
+  /// once and parked in NavProfileMenu; the dropdown's four draw sites read it
+  /// from there rather than each making a call of their own.
+  Future<void> _loadNavProfileMenu() async {
+    try {
+      final raw = await Supabase.instance.client.rpc('nav_registry');
+      NavProfileMenu.adopt(raw is List ? raw.first : raw);
+    } catch (_) {
+      // Leaves whatever was there; an empty menu simply draws no rows.
+    }
+  }
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -280,6 +302,8 @@ class _HomeShellState extends State<HomeShell> {
       _amISuperChecked = true;
       _checkAmISuper();
       _loadDeletionCount();
+      _loadNavProfileMenu(); // CHANGE #325
+      _consumePendingDeepLink(); // CHANGE #325
     }
     // CHANGE #298 — login, account switch and logout all reach the shell as an
     // auth rebuild, and all three mean the same thing to a device token.
@@ -538,6 +562,18 @@ class _HomeShellState extends State<HomeShell> {
 
   // Admin section indices in the pages list: 3=Dashboard, 4=AddMedicine,
   // 5=Suppliers, 6=Customers
+  /// CHANGE #325 — a /admin/go/<route_key> URL, parked by main.dart's route
+  /// resolver, opened once the shell (and therefore the route table) exists.
+  void _consumePendingDeepLink() {
+    final route = PendingAdminNav.take();
+    if (route == null || route.isEmpty) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      RenderLog.write('c325_deep_link_opened', route);
+      _handleAdminNav(route);
+    });
+  }
+
   void _handleAdminNav(String route) {
     if (!mounted) return;
     switch (route) {
@@ -708,6 +744,59 @@ class _HomeShellState extends State<HomeShell> {
             ),
           ),
         ).then((_) => _loadDeletionCount());
+        break;
+      // CHANGE #325 — the screens the registry now lists that the router
+      // could not open. Every one of them existed and worked; none of them had
+      // a tappable way in, which by rule 11 means they did not exist. None is
+      // gated here: each screen's RPCs check get_my_role() and the screen
+      // renders the backend's own refusal, the same story as the WhatsApp
+      // screens above.
+      case 'reorder':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const ReorderAdminScreen()));
+        break;
+      case 'pnl':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const PnlScreen()));
+        break;
+      case 'discount_slabs':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => buildDiscountSlabsScreen()));
+        break;
+      case 'loyalty':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const LoyaltyAdminScreen()));
+        break;
+      case 'unmapped_companies':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const UnmappedCompaniesScreen()));
+        break;
+      case 'delivery_ops':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const AdminDeliveryOpsScreen()));
+        break;
+      case 'notify_cost':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const NotifyCostScreen()));
+        break;
+      case 'settlement':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const SettlementScreen()));
+        break;
+      case 'cron_health':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const CronHealthScreen()));
+        break;
+      // The identity row the profile dropdown fires.
+      case 'profile':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const ProfileScreen()));
+        break;
+      // CHANGE #325 — a medicine chosen in the command palette lands on the
+      // storefront with that name already typed, which is the search the
+      // shell already owns.
+      case 'search':
+        setState(() { _index = 0; _cartOpen = false; });
         break;
       case 'logout':
         UserState.read(context).signOut(); break;
@@ -1501,26 +1590,14 @@ class _MobileProfileAvatar extends StatelessWidget {
             const SizedBox(height: 16),
             const Divider(),
             Builder(builder: (_) { RenderLog.write('c473_profile_menu_built', 1); return const SizedBox.shrink(); }),
-            AdminSheetTile(icon: Icons.person_outline, label: c('home_shell.view_profile'), onTap: () {
-              Navigator.pop(context);
-              Navigator.push(context, MaterialPageRoute(builder: (_) => const ProfileScreen()));
-            }),
-            AdminProfileMenuTiles(isSuperAdmin: isSuperAdmin, nav: nav, deletionCount: deletionCount, alertCount: alertCount),
-            AdminSheetTile(
-              icon: Icons.qr_code_2,
-              label: c('home_shell.bags'),
-              onTap: () {
-                RenderLog.write('c250_bags_menu', 'tapped');
-                Navigator.pop(context);
-                Navigator.push(context, MaterialPageRoute(builder: (_) => const BagsScreen()));
-              },
-            ),
-            const Divider(),
-            AdminSheetTile(
-              icon: Icons.logout,
-              label: c('home_shell.logout'),
-              color: const Color(0xFFDC2626),
-              onTap: () { Navigator.pop(context); nav('logout'); },
+            // CHANGE #325 — View Profile and Logout, and nothing else. The
+            // rows are nav_registry().profile_menu, and the backend admits
+            // only identity onto that surface, so a feature cannot come back
+            // here by anyone editing this file.
+            ValueListenableBuilder<List<Map<String, dynamic>>>(
+              valueListenable: NavProfileMenu.items,
+              builder: (_, items, __) =>
+                  AdminProfileMenuTiles(items: items, nav: nav),
             ),
           ],
         ),
@@ -3954,120 +4031,24 @@ class _DesktopProfileButton extends StatelessWidget {
           RenderLog.write('c206_dropdown_bills', 1);
         }
         return [
-        PopupMenuItem(
-          value: 'profile',
-          child: Row(
-            children: [
-              const Icon(Icons.person_outline, size: 16, color: Color(0xFF374151)),
-              const SizedBox(width: 10),
-              Text(c('home_shell.view_profile'),
-                  style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
-            ],
-          ),
-        ),
-        if (hasAdminNav) ...[
-          const PopupMenuDivider(),
-          if (isSuperAdmin)
+        for (final row in NavProfileMenu.items.value)
+          if ((row['feature_key'] ?? '') != 'identity.logout')
             PopupMenuItem(
-              value: 'manage_admins',
-              child: Row(children: [
-                const Icon(Icons.admin_panel_settings_outlined, size: 16, color: Color(0xFF1B7A43)),
-                const SizedBox(width: 10),
-                Text(c('home_shell.manage_admins'), style: const TextStyle(fontSize: 14, color: Color(0xFF1B7A43))),
-              ]),
+              value: (row['route_key'] ?? '').toString(),
+              child: Row(
+                children: [
+                  Icon(navIcon((row['icon_key'] ?? '').toString()),
+                      size: 16, color: const Color(0xFF374151)),
+                  const SizedBox(width: 10),
+                  Text((row['label'] ?? '').toString(),
+                      style: const TextStyle(
+                          fontSize: 14, color: Color(0xFF374151))),
+                ],
+              ),
             ),
-          if (isSuperAdmin)
-            PopupMenuItem(
-              value: 'payment_upi',
-              child: Row(children: [
-                const Icon(Icons.qr_code_outlined, size: 16, color: Color(0xFF1B7A43)),
-                const SizedBox(width: 10),
-                Text(c('home_shell.payment_and_partner'), style: const TextStyle(fontSize: 14, color: Color(0xFF1B7A43))),
-              ]),
-            ),
-          if (isSuperAdmin)
-            PopupMenuItem(
-              value: 'dev_queue',
-              child: Row(children: [
-                const Icon(Icons.terminal, size: 16, color: Color(0xFF1B7A43)),
-                const SizedBox(width: 10),
-                Text(c('dev_queue.nav_label'), style: const TextStyle(fontSize: 14, color: Color(0xFF1B7A43))),
-              ]),
-            ),
-          PopupMenuItem(
-            value: 'add_supplier',
-            child: Row(children: [
-              const Icon(Icons.add_business_outlined, size: 16, color: Color(0xFF374151)),
-              const SizedBox(width: 10),
-              Text(c('home_shell.add_supplier'), style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
-            ]),
-          ),
-          PopupMenuItem(
-            value: 'add_customer',
-            child: Row(children: [
-              const Icon(Icons.person_add_outlined, size: 16, color: Color(0xFF374151)),
-              const SizedBox(width: 10),
-              Text(c('home_shell.add_customer'), style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
-            ]),
-          ),
-          PopupMenuItem(
-            value: 'add_medicine',
-            child: Row(children: [
-              const Icon(Icons.medication_outlined, size: 16, color: Color(0xFF374151)),
-              const SizedBox(width: 10),
-              Text(c('home_shell.add_medicine'), style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
-            ]),
-          ),
-          PopupMenuItem(
-            value: 'bags',
-            child: Row(children: [
-              const Icon(Icons.qr_code_2, size: 16, color: Color(0xFF374151)),
-              const SizedBox(width: 10),
-              Text(c('home_shell.bags'), style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
-            ]),
-          ),
-          PopupMenuItem(
-            value: 'mr',
-            child: Row(children: [
-              const Icon(Icons.badge_outlined, size: 16, color: Color(0xFF374151)),
-              const SizedBox(width: 10),
-              Text(c('home_shell.mr_registrations'), style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
-            ]),
-          ),
-          PopupMenuItem(
-            value: 'companies',
-            child: Row(children: [
-              const Icon(Icons.business_outlined, size: 16, color: Color(0xFF374151)),
-              const SizedBox(width: 10),
-              Text(c('home_shell.company_registrations'), style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
-            ]),
-          ),
-          PopupMenuItem(
-            value: 'delivery_partners',
-            child: Row(children: [
-              const Icon(Icons.delivery_dining_outlined, size: 16, color: Color(0xFF374151)),
-              const SizedBox(width: 10),
-              Text(c('home_shell.delivery_partners'), style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
-            ]),
-          ),
-          PopupMenuItem(
-            value: 'wa_templates',
-            child: Row(children: [
-              const Icon(Icons.description_outlined, size: 16, color: Color(0xFF374151)),
-              const SizedBox(width: 10),
-              Text(c('home_shell.whatsapp_templates'), style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
-            ]),
-          ),
-          PopupMenuItem(
-            value: 'wa_campaigns',
-            child: Row(children: [
-              const Icon(Icons.campaign_outlined, size: 16, color: Color(0xFF374151)),
-              const SizedBox(width: 10),
-              Text(c('home_shell.whatsapp_campaigns'), style: const TextStyle(fontSize: 14, color: Color(0xFF374151))),
-            ]),
-          ),
-          const PopupMenuDivider(),
-        ],
+        // CHANGE #325 — the ~20 feature rows that used to sit here are the
+        // dropdown Om counted to thirty. They live on the dashboard now. This
+        // popup draws View Profile and Logout, from the registry.
         PopupMenuItem(
           value: 'logout',
           child: Row(
@@ -4432,10 +4413,9 @@ class _AdminDesktopHeader extends StatelessWidget {
             ),
             const SizedBox(width: 2),
           ],
-          // Overflow rather than two more links: at the 900 px where this shell
-          // begins, the row has no room left.
-          AdminMoreNavMenu(onNav: onAdminNav, deletionCount: deletionCount, alertCount: alertCount, isSuperAdmin: isSuperAdmin),
-          const SizedBox(width: 8),
+          // CHANGE #325 — the "More" popup is gone with kAdminOverflowNav.
+          // Everything it held is on the dashboard now, categorised, and the
+          // command palette reaches any of it in two keystrokes.
           // CHANGE #298 — admins read the same inbox as everyone else; the
           // events they are recipients of are events too.
           if (UserState.of(context).isAuthenticated)

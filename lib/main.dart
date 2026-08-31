@@ -38,6 +38,7 @@ import 'screens/public/wa_link_redirect_page.dart'; // /r/:code — campaign lin
 import 'screens/admin/wa_campaigns_screen.dart'; // /admin/wa-campaigns
 import 'screens/admin/admin_scope_audit_screen.dart'; // /admin/scope-audit
 import 'screens/admin/dev_queue/cron_health_screen.dart'; // /admin/cron-health
+import 'screens/admin/nav_registry_view.dart'; // CHANGE #325 — deep links
 import 'screens/product_detail_screen.dart'; // C636: /product/:id
 import 'screens/reorder_screen.dart'; // #173: /reorder
 import 'screens/admin/reorder_admin_screen.dart'; // #173: /admin/reorder
@@ -603,6 +604,32 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
               // cron_health() calls _dev_guard() and answers service_role or
               // super_admin only, never a role check in this file. The screen is
               // still reachable from Dev Queue -> the clock icon.
+              // CHANGE #325 — DEEP LINKS. Every registered screen is
+              // addressable, because the registry gives each row a deep_link
+              // of /admin/go/<route_key>: a push notification, a WhatsApp
+              // button or a command-palette result can jump straight to it.
+              // The shell owns the route table, so the key is parked here and
+              // consumed on the first frame after the shell mounts — the same
+              // shape the storefront already uses to read a category out of
+              // the URL. Authorisation is untouched: every destination screen
+              // still gates on its own RPCs.
+              if (name.startsWith('/admin/go/')) {
+                final key = name
+                    .substring('/admin/go/'.length)
+                    .split('?')
+                    .first
+                    .replaceAll('/', '');
+                if (key.isNotEmpty) {
+                  PendingAdminNav.route = key;
+                  try {
+                    RenderLog.write('c325_deep_link', key);
+                  } catch (_) {}
+                  return MaterialPageRoute(
+                    settings: settings,
+                    builder: (_) => _AppRoot(auth: _auth),
+                  );
+                }
+              }
               if (name == '/admin/cron-health') {
                 return MaterialPageRoute(
                   settings: settings,

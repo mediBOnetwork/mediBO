@@ -72,9 +72,8 @@ void main() {
     // in home_shell.dart, which was leased elsewhere. It must render nothing:
     // a popup that draws the registry's features again would be the second
     // surface all over.
-    expect(navSrc, contains('Widget build(BuildContext context) => const SizedBox.shrink();'),
-        reason: 'the More popup must draw nothing — its list is gone and its '
-            'contents are dashboard categories now');
+    expect(navSrc, isNot(contains('class AdminMoreNavMenu')),
+        reason: 'the More popup was the second copy of that same list');
 
     // AdminProfileMenuTiles must render the BACKEND rows, not hand-written
     // ones. A hard-coded nav('...') here is exactly the regression.
@@ -117,17 +116,44 @@ void main() {
     expect(shellSrc, contains("import 'admin/admin_order_closure_screen.dart'"));
   });
 
-  // OUTSTANDING, for the follow-up that gets home_shell.dart's lease:
-  //   * a `case` in _handleAdminNav for each of reorder / pnl / discount_slabs
-  //     / loyalty / unmapped_companies / delivery_ops / notify_cost /
-  //     settlement / cron_health / profile, then add those ten keys to
-  //     kRegisteredAdminRoutes above — the 'every registered feature has a
-  //     router case' test then proves the wiring;
-  //   * a '/admin/go/<route_key>' branch in main.dart's onGenerateRoute, which
-  //     is what feature_registry.deep_link already points every screen at;
-  //   * the desktop profile popup stripped to the same two identity rows the
-  //     mobile sheet now shows.
-  // The backend for all three is live and tested; only the call sites are
-  // missing, and they are missing because the file was leased, not because the
-  // work was skipped.
+  test('CHANGE #325 — the nine screens that had no entry point now do', () {
+    // Every one existed, worked, and was reachable only by typing its URL (or
+    // not at all). Rule 11: a feature Om cannot tap does not exist.
+    for (final route in const [
+      'reorder', 'pnl', 'discount_slabs', 'loyalty', 'unmapped_companies',
+      'delivery_ops', 'notify_cost', 'settlement', 'cron_health',
+    ]) {
+      expect(handled, contains(route),
+          reason: '\$route is registered but the router cannot open it');
+    }
+  });
+
+  test('CHANGE #325 — the identity row the dropdown fires is openable', () {
+    // profile_menu ships route_key 'profile'. A row the sheet dispatches that
+    // the router cannot open is a dead tap on the one surface every role sees.
+    expect(handled, contains('profile'));
+  });
+
+  test('CHANGE #325 — every screen is addressable by URL', () {
+    // Deep links (spec 6): a push notification, a WhatsApp button or the
+    // palette must jump straight to a screen. feature_registry.deep_link
+    // points every row at /admin/go/<route_key>.
+    expect(_read('lib/main.dart'), contains('/admin/go/'),
+        reason: 'main.dart must resolve the deep_link prefix the registry uses');
+  });
+
+  test('CHANGE #325 — the desktop popup no longer hand-writes feature rows', () {
+    // The ~14 PopupMenuItems that made the dropdown thirty deep are gone; the
+    // popup draws NavProfileMenu's registry rows plus Logout.
+    for (final gone in const [
+      "value: 'add_supplier'", "value: 'add_customer'", "value: 'add_medicine'",
+      "value: 'bags'", "value: 'mr'", "value: 'companies'",
+      "value: 'delivery_partners'", "value: 'wa_templates'",
+      "value: 'wa_campaigns'", "value: 'manage_admins'", "value: 'payment_upi'",
+    ]) {
+      expect(shellSrc, isNot(contains(gone)),
+          reason: '\$gone is a feature row — it belongs to a dashboard '
+              'category, not the identity dropdown');
+    }
+  });
 }

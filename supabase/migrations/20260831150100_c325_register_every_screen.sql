@@ -2,13 +2,17 @@
 -- table does not render in nav at all, so "nothing may be missing" is a data
 -- statement rather than a habit.
 --
--- The nine rows inserted with is_active=false are registered but not drawn:
--- their route_key has no `case` in _handleAdminNav, because home_shell.dart was
--- leased to another command for the whole of #325. A registered tile whose
--- route the router cannot open renders perfectly and does nothing on tap —
--- the #645/#646 bug this repo has fought three times. They stay here as the
--- follow-up's worklist; flipping is_active back to true after the cases exist
--- needs an UPDATE, not a deploy, which is the point of a registry-driven nav.
+-- Nine of these screens (reorder, pnl, discount_slabs, loyalty,
+-- unmapped_companies, delivery_ops, notify_cost, settlement, cron_health) had
+-- no tappable way in at all before this change — they existed, worked, and
+-- could only be reached by typing a URL, which by rule 11 means they did not
+-- exist. They ship active because _handleAdminNav now has a case for each.
+--
+-- Mid-build they were parked at is_active=false, because home_shell.dart was
+-- leased to another command and a registered tile whose route the router
+-- cannot open renders perfectly and does nothing on tap (the #645/#646 bug).
+-- Parking and un-parking were both a one-line UPDATE with no deploy, which is
+-- the argument for a registry-driven nav in one sentence.
 
 update feature_registry set category = 'orders'
   where feature_key in ('partner.inquiry','partner.supplier_orders','partner.collect',
@@ -29,21 +33,21 @@ values
   ('admin.order_alerts','New-order alerts','Orders & Fulfilment','alert','order_alerts',320,'medibo',false,'none',true,'orders','dashboard','order_alerts',array['admin','super_admin'],'/admin/go/order_alerts'),
   ('admin.order_closure','Order closure','Orders & Fulfilment','task','order_closure',330,'medibo',false,'none',true,'orders','dashboard','pending_orders',array['admin','super_admin'],'/admin/go/order_closure'),
   ('admin.bags','Bags','Orders & Fulfilment','qr','bags',340,'medibo',false,'none',true,'orders','dashboard',null,array['admin','super_admin'],'/admin/go/bags'),
-  ('admin.reorder','Reorder & auto-reorders','Orders & Fulfilment','autorenew','reorder',350,'medibo',false,'none',false,'orders','dashboard',null,array['admin','super_admin'],'/admin/go/reorder'),
+  ('admin.reorder','Reorder & auto-reorders','Orders & Fulfilment','autorenew','reorder',350,'medibo',false,'none',true,'orders','dashboard',null,array['admin','super_admin'],'/admin/go/reorder'),
   ('admin.customers','Customers','Customers & Suppliers','people','customers',410,'medibo',false,'none',true,'parties','dashboard','pending_customers',array['admin','super_admin'],'/admin/go/customers'),
   ('admin.suppliers','Suppliers','Customers & Suppliers','inventory','suppliers',420,'medibo',false,'none',true,'parties','dashboard',null,array['admin','super_admin'],'/admin/go/suppliers'),
   ('admin.add_customer','Add Customer','Customers & Suppliers','person_add','add_customer',430,'medibo',false,'none',true,'parties','dashboard',null,array['admin','super_admin'],'/admin/go/add_customer'),
   ('admin.add_supplier','Add Supplier','Customers & Suppliers','add_business','add_supplier',440,'medibo',false,'none',true,'parties','dashboard',null,array['admin','super_admin'],'/admin/go/add_supplier'),
   ('admin.mr','MR Registrations','Customers & Suppliers','badge','mr',450,'medibo',false,'none',true,'parties','dashboard',null,array['admin','super_admin'],'/admin/go/mr'),
   ('admin.companies','Company Registrations','Customers & Suppliers','business','companies',460,'medibo',false,'none',true,'parties','dashboard',null,array['admin','super_admin'],'/admin/go/companies'),
-  ('admin.unmapped_companies','Unmapped companies','Customers & Suppliers','link_off','unmapped_companies',470,'medibo',false,'none',false,'parties','dashboard',null,array['admin','super_admin'],'/admin/go/unmapped_companies'),
+  ('admin.unmapped_companies','Unmapped companies','Customers & Suppliers','link_off','unmapped_companies',470,'medibo',false,'none',true,'parties','dashboard',null,array['admin','super_admin'],'/admin/go/unmapped_companies'),
   ('admin.deletion_requests','Deletion Requests','Customers & Suppliers','person_remove','deletion_requests',480,'medibo',false,'none',true,'parties','dashboard','deletion_requests',array['admin','super_admin'],'/admin/go/deletion_requests'),
   ('admin.add_medicine','Add Medicine','Catalogue & Pricing','medication','add_medicine',510,'medibo',false,'none',true,'catalogue','dashboard',null,array['admin','super_admin'],'/admin/go/add_medicine'),
   ('admin.pricing_backfill','Product pricing','Catalogue & Pricing','rupee','pricing_backfill',520,'medibo',false,'none',true,'catalogue','dashboard',null,array['admin','super_admin'],'/admin/go/pricing_backfill'),
-  ('admin.discount_slabs','Discount slabs','Catalogue & Pricing','percent','discount_slabs',530,'medibo',false,'none',false,'catalogue','dashboard',null,array['admin','super_admin'],'/admin/go/discount_slabs'),
-  ('admin.loyalty','Loyalty','Catalogue & Pricing','stars','loyalty',540,'medibo',false,'none',false,'catalogue','dashboard',null,array['admin','super_admin'],'/admin/go/loyalty'),
+  ('admin.discount_slabs','Discount slabs','Catalogue & Pricing','percent','discount_slabs',530,'medibo',false,'none',true,'catalogue','dashboard',null,array['admin','super_admin'],'/admin/go/discount_slabs'),
+  ('admin.loyalty','Loyalty','Catalogue & Pricing','stars','loyalty',540,'medibo',false,'none',true,'catalogue','dashboard',null,array['admin','super_admin'],'/admin/go/loyalty'),
   ('admin.delivery_partners','Delivery Partners','Delivery','moped','delivery_partners',610,'medibo',false,'none',true,'delivery','dashboard',null,array['admin','super_admin'],'/admin/go/delivery_partners'),
-  ('admin.delivery_ops','Delivery operations','Delivery','route','delivery_ops',620,'medibo',false,'none',false,'delivery','dashboard',null,array['admin','super_admin'],'/admin/delivery-ops'),
+  ('admin.delivery_ops','Delivery operations','Delivery','route','delivery_ops',620,'medibo',false,'none',true,'delivery','dashboard',null,array['admin','super_admin'],'/admin/delivery-ops'),
   ('admin.whatsapp','WhatsApp','Communication','forum','whatsapp',710,'medibo',false,'none',true,'comms','dashboard',null,array['admin','super_admin'],'/admin/go/whatsapp'),
   ('admin.wa_templates','WhatsApp Templates','Communication','description','wa_templates',720,'medibo',false,'none',true,'comms','dashboard',null,array['admin','super_admin'],'/admin/go/wa_templates'),
   ('admin.wa_campaigns','WhatsApp Campaigns','Communication','campaign','wa_campaigns',730,'medibo',false,'none',true,'comms','dashboard',null,array['admin','super_admin'],'/admin/go/wa_campaigns'),
@@ -53,17 +57,17 @@ values
   ('admin.wa_diagnosis','WhatsApp delivery diagnosis','Communication','fact_check','wa_diagnosis',770,'medibo',false,'none',true,'comms','dashboard',null,array['admin','super_admin'],'/admin/go/wa_diagnosis'),
   ('admin.notify_center','Notification Centre','Communication','notifications','notify_center',780,'medibo',false,'none',true,'comms','dashboard',null,array['admin','super_admin'],'/admin/go/notify_center'),
   ('admin.admin_push','Push notifications','Communication','phonelink_ring','admin_push',790,'medibo',false,'none',true,'comms','dashboard',null,array['admin','super_admin'],'/admin/go/admin_push'),
-  ('admin.notify_cost','Notification cost','Communication','payments','notify_cost',800,'medibo',false,'none',false,'comms','dashboard',null,array['admin','super_admin'],'/admin/go/notify_cost'),
+  ('admin.notify_cost','Notification cost','Communication','payments','notify_cost',800,'medibo',false,'none',true,'comms','dashboard',null,array['admin','super_admin'],'/admin/go/notify_cost'),
   ('admin.bill_pipeline','Bill pipeline','Money','receipt','bill_pipeline',810,'medibo',false,'none',true,'money','dashboard','flagged_bills',array['admin','super_admin'],'/admin/go/bill_pipeline'),
   ('admin.gst','GST','Money','account_balance','gst',820,'medibo',false,'none',true,'money','dashboard',null,array['admin','super_admin'],'/admin/go/gst'),
-  ('admin.pnl','Profit & loss','Money','trending_up','pnl',830,'medibo',false,'none',false,'money','dashboard',null,array['admin','super_admin'],'/admin/go/pnl'),
-  ('admin.settlement','Partner settlement','Money','handshake','settlement',840,'medibo',false,'none',false,'money','dashboard',null,array['admin','super_admin'],'/admin/settlement'),
+  ('admin.pnl','Profit & loss','Money','trending_up','pnl',830,'medibo',false,'none',true,'money','dashboard',null,array['admin','super_admin'],'/admin/go/pnl'),
+  ('admin.settlement','Partner settlement','Money','handshake','settlement',840,'medibo',false,'none',true,'money','dashboard',null,array['admin','super_admin'],'/admin/settlement'),
   ('admin.payment_upi','Payment and Partner','Money','qr','payment_upi',850,'medibo',false,'none',true,'money','dashboard',null,array['super_admin'],'/admin/go/payment_upi'),
   ('admin.manage_admins','Manage Admins','Admin & System','admin_panel','manage_admins',910,'medibo',false,'none',true,'system','dashboard',null,array['super_admin'],'/admin/go/manage_admins'),
   ('admin.dev_queue','Dev Queue','Admin & System','terminal','dev_queue',920,'medibo',false,'none',true,'system','dashboard',null,array['super_admin'],'/admin/go/dev_queue'),
   ('admin.scope_audit','Scope audit','Admin & System','rule','scope_audit',930,'medibo',false,'none',true,'system','dashboard',null,array['admin','super_admin'],'/admin/go/scope_audit'),
   ('admin.feature_gaps','Feature gaps','Admin & System','rule_folder','feature_gaps',940,'medibo',false,'none',true,'system','dashboard',null,array['admin','super_admin'],'/admin/feature-gaps'),
-  ('admin.cron_health','Cron health','Admin & System','schedule','cron_health',950,'medibo',false,'none',false,'system','dashboard',null,array['super_admin'],'/admin/cron-health'),
+  ('admin.cron_health','Cron health','Admin & System','schedule','cron_health',950,'medibo',false,'none',true,'system','dashboard',null,array['super_admin'],'/admin/cron-health'),
   ('identity.view_profile','View Profile','Account','person','profile',10,'medibo',true,'read',true,'identity','profile',null,array['admin','super_admin','supplier','customer','delivery','worker','mr','company'],'/profile'),
   ('identity.logout','Logout','Account','logout','logout',20,'medibo',true,'read',true,'identity','profile',null,array['admin','super_admin','supplier','customer','delivery','worker','mr','company'],null)
 on conflict (feature_key) do update set

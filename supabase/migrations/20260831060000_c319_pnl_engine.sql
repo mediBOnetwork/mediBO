@@ -1194,3 +1194,8 @@ insert into public.ui_copy (key, value) values
   ('pnl.error', '"Could not load the profit & loss figures."'::jsonb),
   ('pnl.retry', '"Retry"'::jsonb)
 on conflict (key) do nothing;
+
+-- The label on the admin dashboard's quick tile that reaches this screen.
+insert into public.ui_copy (key, value) values
+  ('admin_dashboard.quick_pnl', '"Profit & loss"'::jsonb)
+on conflict (key) do nothing;

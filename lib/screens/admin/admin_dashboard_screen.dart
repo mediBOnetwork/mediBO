@@ -7,6 +7,7 @@ import 'package:pharma_b2b/widgets/order_hours_card.dart';
 import 'package:pharma_b2b/widgets/notifications_card.dart';
 import '../../services/ui_copy.dart';
 import 'reorder_admin_screen.dart'; // CHANGE #173
+import 'pnl_screen.dart';       // CHANGE #319
 
 class AdminDashboardScreen extends StatefulWidget {
   const AdminDashboardScreen({super.key});
@@ -226,6 +227,17 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                       onTap: () => Navigator.of(context).push(
                         MaterialPageRoute<void>(
                             builder: (_) => const ReorderAdminScreen()),
+                      ),
+                    ),
+                    // CHANGE #319 — Profit & loss: true margin per line,
+                    // order, customer, supplier and zone. Pushes its own
+                    // screen for the same reason the tile above does — the
+                    // shell route table belongs to another command in flight.
+                    _QuickTile(
+                      label: c('admin_dashboard.quick_pnl'),
+                      icon: Icons.trending_up,
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(builder: (_) => const PnlScreen()),
                       ),
                     ),
                   ]),

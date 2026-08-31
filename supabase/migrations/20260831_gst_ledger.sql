@@ -781,3 +781,88 @@ AS $function$
 $function$
 ;
 
+
+-- ── the 36 state codes a GSTIN can start with ──────────────────────────────
+insert into public.gst_state_code (code, name) values
+  ('01','Jammu and Kashmir'),('02','Himachal Pradesh'),('03','Punjab'),
+  ('04','Chandigarh'),('05','Uttarakhand'),('06','Haryana'),('07','Delhi'),
+  ('08','Rajasthan'),('09','Uttar Pradesh'),('10','Bihar'),('11','Sikkim'),
+  ('12','Arunachal Pradesh'),('13','Nagaland'),('14','Manipur'),('15','Mizoram'),
+  ('16','Tripura'),('17','Meghalaya'),('18','Assam'),('19','West Bengal'),
+  ('20','Jharkhand'),('21','Odisha'),('22','Chhattisgarh'),('23','Madhya Pradesh'),
+  ('24','Gujarat'),('25','Daman and Diu'),('26','Dadra and Nagar Haveli and Daman and Diu'),
+  ('27','Maharashtra'),('28','Andhra Pradesh (old)'),('29','Karnataka'),('30','Goa'),
+  ('31','Lakshadweep'),('32','Kerala'),('33','Tamil Nadu'),('34','Puducherry'),
+  ('35','Andaman and Nicobar Islands'),('36','Telangana'),('37','Andhra Pradesh'),
+  ('38','Ladakh'),('96','Foreign Country'),('97','Other Territory')
+on conflict (code) do update set name = excluded.name;
+
+-- ── RLS: the ledger is admin-only ──────────────────────────────────────────
+alter table public.gst_ledger   enable row level security;
+alter table public.gst_2b_entry enable row level security;
+drop policy if exists gst_ledger_no_anon on public.gst_ledger;
+create policy gst_ledger_no_anon on public.gst_ledger
+  for select to authenticated using (public.is_admin());
+drop policy if exists gst_2b_entry_admin_only on public.gst_2b_entry;
+create policy gst_2b_entry_admin_only on public.gst_2b_entry
+  for select to authenticated using (public.is_admin());
+
+revoke all on function public.gst_ledger_build_input(date,date)  from public, anon, authenticated;
+revoke all on function public.gst_ledger_build_output(date,date) from public, anon, authenticated;
+revoke all on function public.gst_ledger_rebuild(int) from public, anon;
+revoke all on function public.gst_2b_import(date,text) from public, anon;
+revoke all on function public.admin_gst_screen(date)   from public, anon;
+grant execute on function public.gst_ledger_rebuild(int) to authenticated, service_role;
+grant execute on function public.gst_2b_import(date,text) to authenticated, service_role;
+grant execute on function public.admin_gst_screen(date)   to authenticated, service_role;
+
+-- ── every word the GST screen prints ───────────────────────────────────────
+insert into public.ui_copy (key, value) values
+  ('gst.title','"GST"'::jsonb),
+  ('gst.subtitle','"Input credit, monthly position and GSTR exports"'::jsonb),
+  ('gst.tab.position','"Position"'::jsonb),
+  ('gst.tab.credit','"Input credit"'::jsonb),
+  ('gst.tab.exports','"Exports"'::jsonb),
+  ('gst.tab.recon','"GSTR-2B"'::jsonb),
+  ('gst.working.heading','"How this month is worked out"'::jsonb),
+  ('gst.working.output','"Output tax on sales"'::jsonb),
+  ('gst.working.input','"Less: input credit on purchases"'::jsonb),
+  ('gst.working.net','"Cash payable"'::jsonb),
+  ('gst.working.carry','"Credit carried forward"'::jsonb),
+  ('gst.working.note','"Output tax minus input credit. A negative net is credit you carry to next month, not cash back."'::jsonb),
+  ('gst.credit.heading','"Where the credit came from"'::jsonb),
+  ('gst.credit.empty','"No purchase invoices in this month yet. Credit appears here as supplier bills are imported."'::jsonb),
+  ('gst.position.empty','"Nothing billed in this month yet."'::jsonb),
+  ('gst.exports.heading','"Returns"'::jsonb),
+  ('gst.exports.gstr1','"GSTR-1 · outward supplies"'::jsonb),
+  ('gst.exports.gstr3b','"GSTR-3B · summary"'::jsonb),
+  ('gst.exports.hsn','"HSN summary"'::jsonb),
+  ('gst.exports.empty','"Nothing to file for this month."'::jsonb),
+  ('gst.exports.copy_hint','"Copy the table and hand it to your CA, or paste it into the portal offline tool."'::jsonb),
+  ('gst.recon.heading','"Credit that has not shown up"'::jsonb),
+  ('gst.recon.note','"A supplier who has not filed leaves you without the credit. Chase these before you file."'::jsonb),
+  ('gst.recon.empty','"Every purchase invoice this month is matched. Nothing to chase."'::jsonb),
+  ('gst.recon.matched','"Matched"'::jsonb),
+  ('gst.recon.pending','"Not in GSTR-2B"'::jsonb),
+  ('gst.recon.no_gstin','"Supplier GSTIN missing"'::jsonb),
+  ('gst.rebuild','"Rebuild ledger"'::jsonb),
+  ('gst.rebuilt','"Ledger rebuilt from the bills."'::jsonb),
+  ('gst.error','"Could not load the GST position."'::jsonb),
+  ('gst.retry','"Retry"'::jsonb),
+  ('gst.nav','"GST"'::jsonb),
+  ('gst.delivery_hsn','"9968"'::jsonb),
+  ('gst.delivery_label','"Delivery charge"'::jsonb)
+on conflict (key) do update set value = excluded.value, updated_at = now();
+
+-- ── the invoice's own halves must add up (see the DO block's note) ─────────
+do $do$
+declare src text; out text;
+begin
+  src := pg_get_functiondef(
+    'public._bill_compose(jsonb,jsonb,numeric,numeric,boolean,jsonb,jsonb,jsonb)'::regprocedure);
+  out := regexp_replace(src,
+    '(''sgst'',\s*''₹'' \|\| to_char\()round\(g\.gt/2,\s*2\)', '\1g.gt - round(g.gt/2,2)', 'g');
+  out := regexp_replace(out,
+    '(''sgst_label'',\s*''₹'' \|\| to_char\()round\(v_gst/2,\s*2\)', '\1v_gst - round(v_gst/2,2)', 'g');
+  if out <> src then execute out; end if;
+end $do$;

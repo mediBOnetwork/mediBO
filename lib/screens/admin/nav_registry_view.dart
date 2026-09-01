@@ -238,6 +238,44 @@ class NavProfileMenu {
 /// route table but never sees the URL. One nullable string, read exactly once,
 /// is the whole handshake — and it means every registered screen has a real
 /// address that a push notification or a WhatsApp button can point at.
+/// CMD #421 — the ONE parser for an `/admin/go/...` URL.
+///
+/// It lives here rather than inside main.dart's route resolver because a
+/// closure inside `onGenerateRoute` cannot be tested, and this is exactly the
+/// kind of string handling that goes quietly wrong: the old code stripped
+/// EVERY slash out of the tail, so `/admin/go/customer_360/<id>` arrived as
+/// one welded key that no case in the shell's switch had ever heard of, and
+/// the link opened nothing at all.
+class AdminGoLink {
+  /// The route key — the first path segment after the prefix.
+  final String route;
+
+  /// The subject the link carries, when it has one. Null, never '', so a
+  /// caller can tell "no subject" from "a subject of no characters".
+  final String? seed;
+
+  const AdminGoLink(this.route, this.seed);
+
+  static const String prefix = '/admin/go/';
+
+  /// Null when [name] is not an admin-go link at all, or names no route.
+  static AdminGoLink? parse(String name) {
+    if (!name.startsWith(prefix)) return null;
+    final segments = name
+        .substring(prefix.length)
+        .split('?')
+        .first
+        .split('/')
+        .where((s) => s.isNotEmpty)
+        .toList();
+    if (segments.isEmpty) return null;
+    return AdminGoLink(
+      segments.first,
+      segments.length > 1 ? segments.sublist(1).join('/') : null,
+    );
+  }
+}
+
 class PendingAdminNav {
   PendingAdminNav._();
 

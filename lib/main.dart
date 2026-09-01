@@ -639,16 +639,9 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
                 // rest is the subject (rejoined, so an id that contains a
                 // slash survives), and dropping empty segments keeps a
                 // trailing slash harmless exactly as the old replaceAll did.
-                final segments = name
-                    .substring('/admin/go/'.length)
-                    .split('?')
-                    .first
-                    .split('/')
-                    .where((s) => s.isNotEmpty)
-                    .toList();
-                final key = segments.isEmpty ? '' : segments.first;
-                final seed =
-                    segments.length > 1 ? segments.sublist(1).join('/') : null;
+                final link = AdminGoLink.parse(name);
+                final key = link?.route ?? '';
+                final seed = link?.seed;
                 if (key.isNotEmpty) {
                   PendingAdminNav.park(key, seed);
                   try {

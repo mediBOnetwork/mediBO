@@ -159,6 +159,8 @@ create table if not exists public.pos_settings (
   updated_at        timestamptz not null default now()
 );
 
+-- Every pos_* table gets RLS. `pos_gst_rule` is created further down (section
+-- 8) and enables its own — see the note there for what it cost to find out.
 alter table public.pos_sales          enable row level security;
 alter table public.pos_sale_lines     enable row level security;
 alter table public.pos_invoice_counter enable row level security;
@@ -1276,6 +1278,14 @@ create unique index if not exists pos_gst_rule_default_idx
   on public.pos_gst_rule (match_kind) where match_kind = 'default';
 create index if not exists pos_gst_rule_lookup_idx
   on public.pos_gst_rule (match_kind, priority) where is_active;
+
+-- RLS, and it is NOT decoration. This table is created below section 1's
+-- blanket enable-RLS block, so it did not inherit it — and hostile QA on this
+-- very command proved what that costs: with the anon key that ships inside the
+-- web bundle and the APK, a PATCH on /rest/v1/pos_gst_rule set the default rate
+-- to 0 and every retail invoice would then have printed 0% GST. Read AND write
+-- are closed; _pos_gst_for() is SECURITY DEFINER and reads it as the owner.
+alter table public.pos_gst_rule enable row level security;
 
 -- The statutory slabs, as data. These are the standard Indian GST rates for
 -- pharmacy stock; a pharmacy whose accountant disagrees changes a row.

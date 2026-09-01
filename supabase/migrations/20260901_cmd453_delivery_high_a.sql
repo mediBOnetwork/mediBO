@@ -88,10 +88,14 @@ begin
     select stop_group,
            row_number() over (order by cold desc, cur_seq) new_seq
       from ranked)
+  -- `r` is the record VARIABLE above; aliasing the CTE `r` too made every
+  -- reference ambiguous, so this statement raised and took the whole
+  -- optimiser (and delivery_start_run, which calls it) down with it. Found by
+  -- the CMD #453 proof the moment the OWNER path was actually exercised.
   update deliveries d
-     set seq = r.new_seq
-    from renum r
-   where d.run_id = p_run_id and d.stop_group = r.stop_group
+     set seq = q.new_seq
+    from renum q
+   where d.run_id = p_run_id and d.stop_group = q.stop_group
      and d.status not in ('delivered','cancelled');
 
   update delivery_runs
@@ -185,9 +189,15 @@ begin
                     else 'Trip completed — ' || v_left || ' parcel(s) marked for return' end);
 end $$;
 
-revoke execute on function public.delivery_optimize_run(uuid) from anon;
-revoke execute on function public.delivery_start_run(uuid)    from anon;
-revoke execute on function public.delivery_finish_run(uuid)   from anon;
+-- A signed-out caller has no business sequencing, starting or finishing a run.
+-- anon inherits PUBLIC, so revoking anon alone leaves the door open: the grant
+-- has to come off PUBLIC and go back to the two roles that legitimately call it.
+revoke execute on function public.delivery_optimize_run(uuid) from public, anon;
+revoke execute on function public.delivery_start_run(uuid)    from public, anon;
+revoke execute on function public.delivery_finish_run(uuid)   from public, anon;
+grant  execute on function public.delivery_optimize_run(uuid) to authenticated, service_role;
+grant  execute on function public.delivery_start_run(uuid)    to authenticated, service_role;
+grant  execute on function public.delivery_finish_run(uuid)   to authenticated, service_role;
 
 -- ── the in-app notification helper the delivery surface uses ────────────────
 create or replace function public._delivery_inbox(

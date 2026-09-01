@@ -186,6 +186,13 @@ begin
 end
 $function$;
 
+-- `create or replace function` leaves Postgres' default EXECUTE grant to PUBLIC
+-- in place, which would hand anon a callable entry point. The function already
+-- refuses a caller with no auth.uid(), but a signed-out role must not hold
+-- EXECUTE on an authed surface at all. Idempotent: revoking a grant that is
+-- already gone is a no-op.
+revoke all on function public.customer_shop_home() from public;
+revoke all on function public.customer_shop_home() from anon;
 grant execute on function public.customer_shop_home() to authenticated;
 
 -- The first pass shipped a customer_shop_features() that hardcoded a list of

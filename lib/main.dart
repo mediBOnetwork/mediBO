@@ -48,6 +48,7 @@ import 'screens/pharmacy/pharmacy_expiry_screen.dart';   // CMD #413 — /pharma
 import 'screens/pharmacy/pharmacy_radar_screen.dart';    // CMD #425 — /pharmacy/radar
 import 'screens/pharmacy/pharmacy_parcel_count_screen.dart'; // CMD #431 — /pharmacy/parcel-count
 import 'screens/pharmacy/pharmacy_variance_screen.dart'; // CMD #413 — /pharmacy/stock-check
+import 'screens/pharmacy/pharmacy_audit_screen.dart';   // CMD #447 — /pharmacy/audit
 import 'screens/pharmacy/rx_scan_screen.dart';           // CMD #418 — /pharmacy/prescription
 import 'screens/admin/nav_registry_view.dart'; // CHANGE #325 — deep links
 import 'screens/product_detail_screen.dart'; // C636: /product/:id
@@ -773,6 +774,19 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
                 return MaterialPageRoute(
                   settings: settings,
                   builder: (_) => const PharmacyVarianceScreen(),
+                );
+              }
+              // CMD #447 — the stock audit (#430). It shipped reachable only
+              // from the shelf app bar, which left it the one #430 surface the
+              // post-deploy verifier could not paint: that verifier drives the
+              // app by URL. Same authorisation story as the four routes above
+              // and no role test here — pharmacy_audit_home() resolves the
+              // caller's OWN shop and answers _c430_denied() for anyone else,
+              // so this URL grants nothing it did not already have.
+              if (name.split('?').first == '/pharmacy/audit') {
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => const PharmacyAuditScreen(),
                 );
               }
               if (name == '/admin/cron-health') {

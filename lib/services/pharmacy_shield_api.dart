@@ -63,7 +63,7 @@ class PharmacyShieldApi {
     String? photoPath,
   }) => call('pharmacy_expiry_return_send', {
     'p_list_id': listId,
-    if (photoPath != null) 'p_photo_path': photoPath,
+    ?'p_photo_path': photoPath,
   });
 
   // ── stock check (owner only — the gate is the RPC, not this file) ─────────

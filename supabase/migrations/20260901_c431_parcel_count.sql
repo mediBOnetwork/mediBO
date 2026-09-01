@@ -1552,3 +1552,155 @@ update public.feature_registry
    set label = 'Count outside parcel',
        description = 'CMD #431 - count a parcel from one of the pharmacy''s OTHER suppliers against the bill they photographed. A mediBO parcel is counted from its own order card.'
  where feature_key = 'admin.parcel_count';
+
+-- ═══════════════════ 15. OM'S SECOND CORRECTION (live screenshots, 1:47/1:50)
+--
+-- Two things he could not do on the deployed build, and both were real:
+--
+-- (a) "in order tab to count the item which they received why the count button
+--     not their" — because §14 drew the chip only once a delivery was stamped
+--     or a bill existed. Om's pharmacy has 13 orders and NOT ONE of them has
+--     either, so the feature he had just paid for was invisible on every card.
+--     A gate that is correct and hides the whole feature is still a bug: the
+--     chip now stands beside Items/Payment/Bill/Track on every order that is
+--     not cancelled, and the BACKEND says whether it can be tapped yet. An
+--     order still on its way carries the reason in its own words instead of
+--     vanishing. A cancelled order keeps no chip — nothing will ever arrive.
+--
+-- (b) "how will it upload the image by camera or by selecting photo or file" —
+--     because there was no way at all. #423 built the whole photo intake
+--     (pharmacy_vault_bill_start -> shots -> queue) and nothing in the app ever
+--     called it, so "Photograph an outside bill in the bill vault" pointed at a
+--     door that did not exist. The outside surface now carries the intake
+--     ACTION itself, described by the backend: its caption, the two ways in
+--     (camera / photo or file), the guide, and the words on the sheet.
+
+create or replace function public.pharmacy_parcel_order_chip(p_order_id uuid)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_shop uuid := public._c431_shop();
+  v_bill public.pharmacy_purchase_bill%rowtype;
+  v_sess public.pharmacy_parcel_count%rowtype;
+  v_delivered boolean;
+  v_status text;
+begin
+  if v_shop is null then return jsonb_build_object('ok', true, 'show', false); end if;
+
+  select o.status into v_status from public.orders o
+   where o.id = p_order_id and o.customer_id = v_shop;
+  if v_status is null then
+    return jsonb_build_object('ok', true, 'show', false);
+  end if;
+
+  -- A cancelled order has no parcel coming. Everything else does, so the chip
+  -- is drawn and the enabled flag carries the truth.
+  if v_status = 'cancelled' then
+    return jsonb_build_object('ok', true, 'show', false);
+  end if;
+
+  select exists (select 1 from public.deliveries d
+                  where d.order_id = p_order_id and d.delivered_at is not null)
+    into v_delivered;
+
+  select * into v_bill from public.pharmacy_purchase_bill
+   where pharmacy_id = v_shop and order_id = p_order_id;
+
+  if v_bill.id is not null then
+    select * into v_sess from public.pharmacy_parcel_count
+     where bill_id = v_bill.id order by created_at desc limit 1;
+  end if;
+
+  -- Nothing has arrived yet: the chip is there to be understood, not tapped.
+  if not v_delivered and v_bill.id is null then
+    return jsonb_build_object('ok', true, 'show', true, 'enabled', false,
+      'label', public.ui_text('phpc.chip_count'),
+      'tone',  'muted',
+      'message', public.ui_text('phpc.chip_not_yet'),
+      'session_id', null);
+  end if;
+
+  return jsonb_build_object('ok', true, 'show', true, 'enabled', true,
+    'label', case
+               when v_sess.status = 'open' then public.ui_text('phpc.chip_resume')
+               when v_sess.status = 'done' then public.ui_text('phpc.chip_done')
+               else public.ui_text('phpc.chip_count') end,
+    'tone',  case when v_sess.status = 'done' then 'success'
+                  when v_sess.status = 'open' then 'warning'
+                  else 'neutral' end,
+    'session_id', case when v_sess.status = 'open' then v_sess.id else null end);
+end $$;
+
+-- The outside surface stops pointing at a door and becomes one. `add_bill` is
+-- the whole affordance: the button caption, the two ways to bring a photo in,
+-- and the words the sheet is built from. Dart writes none of them.
+create or replace function public.pharmacy_parcel_home()
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_shop uuid := public._c431_shop();
+  v_out  jsonb := '[]'::jsonb;
+  b      public.pharmacy_purchase_bill%rowtype;
+  v_open integer := 0;
+begin
+  if v_shop is null then return public._c431_denied(); end if;
+
+  for b in
+    select * from public.pharmacy_purchase_bill
+     where pharmacy_id = v_shop and source <> 'medibo'
+       and status in ('read', 'review', 'confirmed')
+     order by coalesce(invoice_date, created_at::date) desc, created_at desc
+     limit 30
+  loop
+    v_out := v_out || jsonb_build_array(public._c431_bill_row(b));
+  end loop;
+
+  select count(*) into v_open from public.pharmacy_parcel_count
+   where pharmacy_id = v_shop and status = 'open' and kind = 'outside';
+
+  return jsonb_build_object(
+    'ok', true,
+    'title',    public.ui_text('phpc.title_outside'),
+    'subtitle', public.ui_text('phpc.subtitle_outside'),
+    'open_count', v_open,
+    'open_label', case when v_open > 0
+                    then public.ui_fmt('phpc.open_n', jsonb_build_object('n', v_open::text))
+                    else null end,
+    'tabs', jsonb_build_array(
+      jsonb_build_object('key', 'outside', 'label', public.ui_text('phpc.tab_outside'),
+                         'empty', public.ui_text('phpc.empty_outside'), 'rows', v_out)),
+    'photo_bucket', 'stock-imports',
+    'outside_hint', public.ui_text('phpc.outside_hint'),
+    'medibo_hint', public.ui_text('phpc.medibo_moved'),
+    -- THE INTAKE. Present on this surface because this is where a pharmacist
+    -- stands when the box is on the counter.
+    'add_bill', jsonb_build_object(
+      'show',           true,
+      'label',          public.ui_text('phpc.add_label'),
+      'sheet_title',    public.ui_text('phpc.add_sheet_title'),
+      'sheet_hint',     public.ui_text('phpc.add_sheet_hint'),
+      'camera_label',   public.ui_text('phpc.add_camera'),
+      'gallery_label',  public.ui_text('phpc.add_gallery'),
+      'more_label',     public.ui_text('phpc.add_more'),
+      'submit_label',   public.ui_text('phpc.add_submit'),
+      'shots_label',    public.ui_text('phpc.add_shots'),
+      'working_label',  public.ui_text('phpc.add_working'),
+      'done_label',     public.ui_text('phpc.add_done'),
+      'failed_label',   public.ui_text('phpc.add_failed')))
+;
+end $$;
+
+grant execute on function public.pharmacy_parcel_order_chip(uuid) to authenticated;
+
+insert into public.ui_copy (key, value) values
+  ('phpc.chip_not_yet',     to_jsonb('Count this parcel when it arrives — this order has not been delivered yet.'::text)),
+  ('phpc.add_label',        to_jsonb('Add outside bill'::text)),
+  ('phpc.add_sheet_title',  to_jsonb('Photograph the outside bill'::text)),
+  ('phpc.add_sheet_hint',   to_jsonb('One clear photo of the whole bill. Add more shots if it runs over a page.'::text)),
+  ('phpc.add_camera',       to_jsonb('Take a photo'::text)),
+  ('phpc.add_gallery',      to_jsonb('Choose photo or file'::text)),
+  ('phpc.add_more',         to_jsonb('Add another page'::text)),
+  ('phpc.add_submit',       to_jsonb('Read this bill'::text)),
+  ('phpc.add_shots',        to_jsonb('{n} page(s) ready'::text)),
+  ('phpc.add_working',      to_jsonb('Reading the bill…'::text)),
+  ('phpc.add_done',         to_jsonb('Bill sent for reading. It will appear here to count.'::text)),
+  ('phpc.add_failed',       to_jsonb('That photo could not be uploaded. Try again.'::text))
+on conflict (key) do update set value = excluded.value;

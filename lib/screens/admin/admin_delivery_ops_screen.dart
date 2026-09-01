@@ -207,6 +207,7 @@ class _AdminDeliveryOpsScreenState extends State<AdminDeliveryOpsScreen> {
               'service' => _serviceRow(r),
               'docs' => _docRow(r),
               'ratings' => _ratingRow(r),
+              'geofence' => _geofenceRow(r),
               _ => const SizedBox.shrink(),
             },
             Divider(height: Ds.space.x24, color: Ds.c.divider),
@@ -489,5 +490,38 @@ class _AdminDeliveryOpsScreenState extends State<AdminDeliveryOpsScreen> {
           ]),
         ),
         Text(r['when_label']?.toString() ?? '', style: Ds.t.caption),
+      ]);
+
+  // ── (8) geofence — CHANGE #462 (feature_gaps 106) ──────────────────────────
+  // Completions whose coordinates landed outside the stop's radius. Every word
+  // here — the distance sentence, the chip, the button — is a backend string;
+  // this widget only decides where it sits.
+  Widget _geofenceRow(Map<String, dynamic> r) => Row(children: [
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(
+              '${r['partner_name'] ?? ''}${(r['order_code']?.toString() ?? '').isEmpty ? '' : ' · ${r['order_code']}'}',
+              style: Ds.t.body,
+            ),
+            Text(r['distance_label']?.toString() ?? '', style: Ds.t.caption),
+          ]),
+        ),
+        SizedBox(width: Ds.space.x8),
+        Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+          _chip(r['status_chip']?.toString() ?? '', _colors(r, 'status_colors')),
+          SizedBox(height: 4),
+          Text(r['when_label']?.toString() ?? '', style: Ds.t.caption),
+        ]),
+        if (r['can_clear'] == true) ...[
+          SizedBox(width: Ds.space.x8),
+          SizedBox(
+            height: 44,
+            child: TextButton(
+              onPressed: () => _rpc('admin_delivery_geofence_clear',
+                  {'p_delivery_id': r['delivery_id']}),
+              child: Text(r['clear_label']?.toString() ?? ''),
+            ),
+          ),
+        ],
       ]);
 }

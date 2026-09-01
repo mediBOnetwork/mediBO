@@ -1094,3 +1094,59 @@ class _AuditEntryCardState extends State<AuditEntryCard> {
     );
   }
 }
+
+/// The same entry, as an app-bar icon for the shelf. Label, badge and whether
+/// the button exists at all are `pharmacy_audit_entry()`'s call — a shop that
+/// is not a pharmacy simply gets no icon, with no role test on this side.
+class AuditNavIcon extends StatefulWidget {
+  final ShieldRpc? rpc;
+  const AuditNavIcon({super.key, this.rpc});
+
+  @override
+  State<AuditNavIcon> createState() => _AuditNavIconState();
+}
+
+class _AuditNavIconState extends State<AuditNavIcon> {
+  Map<String, dynamic> _entry = const {};
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final r = widget.rpc != null
+          ? await widget.rpc!('pharmacy_audit_entry', const {})
+          : await PharmacyAuditApi.entry();
+      if (!mounted) return;
+      setState(() => _entry = r);
+      if (r['show'] == true) RenderLog.write('c430_audit_nav', 1);
+    } catch (_) {
+      // no icon is better than a broken one
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_entry['show'] != true) return const SizedBox.shrink();
+    final badge = _s(_entry['badge']);
+    return IconButton(
+      icon: badge.isEmpty
+          ? Icon(Icons.fact_check_outlined, color: Ds.c.brand)
+          : Badge(
+              label: Text(badge),
+              backgroundColor: Ds.c.info,
+              child: Icon(Icons.fact_check_outlined, color: Ds.c.brand),
+            ),
+      tooltip: _s(_entry['label']),
+      onPressed: () => Navigator.push(
+        context,
+        MaterialPageRoute<void>(
+          builder: (_) => PharmacyAuditScreen(rpc: widget.rpc),
+        ),
+      ),
+    );
+  }
+}

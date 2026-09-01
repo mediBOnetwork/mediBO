@@ -215,7 +215,7 @@ CREATE OR REPLACE FUNCTION public.admin_claim_ask_utr(p_claim_id uuid)
  SECURITY DEFINER
  SET search_path TO 'public'
 AS $function$
-declare c record; v jsonb; v_ok boolean := false;
+declare c record; r record; v jsonb; v_ok boolean := false; v_msg text;
 begin
   if not is_admin() then return jsonb_build_object('ok', false, 'message', 'Not allowed'); end if;
   select * into c from payment_claims where id = p_claim_id;
@@ -228,6 +228,19 @@ begin
   if nullif(btrim(c.sender_phone),'') is null then
     return jsonb_build_object('ok', false,
       'message', 'This claim has no sender number, so there is nobody to ask.');
+  end if;
+
+  -- Say WHY it cannot send, in the words of the thing that needs doing. A raw
+  -- 'unknown_event' told the admin nothing and named no screen.
+  select * into r from wa_event_routes where event_key = 'payment_utr_request';
+  if r.event_key is null then
+    return jsonb_build_object('ok', false,
+      'message', 'The "Ask for the UTR" message is not set up yet. It needs an event route called payment_utr_request.');
+  end if;
+  if not r.enabled or r.template_id is null then
+    return jsonb_build_object('ok', false,
+      'message', 'The "Ask for the UTR" message has no approved WhatsApp template yet. '
+              || 'Pick one on WhatsApp ops → Event routes → "Ask the customer for the UTR", switch it on, and this will send.');
   end if;
 
   begin
@@ -434,7 +447,7 @@ begin
            o.created_at,
            round(coalesce(o.total_amount,0) - coalesce(paid.amt,0), 2) as open_amount,
            public._c450_age_days(o.created_at) as age_days,
-           public._c450_age_bucket(public._c450_age_days(o.created_at)) as bucket
+           public._c450_age_bucket_at(o.created_at) as bucket
       from orders o
       left join pharmacy_profiles pp on pp.user_id = o.user_id and coalesce(pp.is_deleted,false) = false
       left join lateral (
@@ -512,7 +525,8 @@ CREATE OR REPLACE FUNCTION public.admin_receivables_chase(p_user_id uuid)
  SECURITY DEFINER
  SET search_path TO 'public'
 AS $function$
-declare v jsonb; v_ok boolean := false; v_phone text; v_name text; v_open numeric;
+declare v jsonb; v_ok boolean := false; v_phone text; v_name text;
+        v_open numeric; v_n int; r record; o record; v_reason text;
 begin
   if not is_admin() then return jsonb_build_object('ok', false, 'message', 'Not allowed'); end if;
 
@@ -522,33 +536,79 @@ begin
     from pharmacy_profiles pp
    where pp.user_id = p_user_id and coalesce(pp.is_deleted,false)=false limit 1;
 
-  select coalesce(sum(round(coalesce(o.total_amount,0) - coalesce(paid.amt,0),2)),0)
-    into v_open
-    from orders o
+  select coalesce(sum(round(coalesce(o2.total_amount,0) - coalesce(paid.amt,0),2)),0), count(*)::int
+    into v_open, v_n
+    from orders o2
     left join lateral (select sum(p.amount) amt from payment_claims p
-                        where p.order_id=o.id and p.status='verified') paid on true
-   where o.user_id = p_user_id
-     and coalesce(o.status,'pending') in ('pending','accepted')
-     and coalesce(o.fulfillment_status,'open') <> 'cancelled'
-     and round(coalesce(o.total_amount,0) - coalesce(paid.amt,0),2) > 0;
+                        where p.order_id=o2.id and p.status='verified') paid on true
+   where o2.user_id = p_user_id
+     and coalesce(o2.status,'pending') in ('pending','accepted')
+     and coalesce(o2.fulfillment_status,'open') <> 'cancelled'
+     and round(coalesce(o2.total_amount,0) - coalesce(paid.amt,0),2) > 0;
 
   if v_phone is null then
     return jsonb_build_object('ok', false,
       'message', 'No WhatsApp number on ' || v_name || ' — there is nobody to chase.');
   end if;
+  if coalesce(v_n,0) = 0 then
+    return jsonb_build_object('ok', false,
+      'message', v_name || ' has nothing open — there is nothing to chase.');
+  end if;
+
+  -- The oldest open order is what the reminder names.
+  select o2.id,
+         coalesce(nullif(btrim(o2.order_code),''),'PO-'||upper(right(replace(o2.id::text,'-',''),4))) as code
+    into o
+    from orders o2
+    left join lateral (select sum(p.amount) amt from payment_claims p
+                        where p.order_id=o2.id and p.status='verified') paid on true
+   where o2.user_id = p_user_id
+     and coalesce(o2.status,'pending') in ('pending','accepted')
+     and coalesce(o2.fulfillment_status,'open') <> 'cancelled'
+     and round(coalesce(o2.total_amount,0) - coalesce(paid.amt,0),2) > 0
+   order by o2.created_at asc nulls first
+   limit 1;
+
+  select * into r from wa_event_routes where event_key = 'payment_due';
+  if r.event_key is null then
+    return jsonb_build_object('ok', false,
+      'message', 'The payment reminder is not set up yet — it needs an event route called payment_due.');
+  end if;
+  if not r.enabled or r.template_id is null then
+    return jsonb_build_object('ok', false,
+      'message', 'The payment reminder has no approved WhatsApp template switched on. '
+              || 'Set it on WhatsApp ops → Event routes → "Payment due", and this will send.');
+  end if;
 
   begin
-    v := public.wa_send_event_or_fallback('payment_due_reminder', p_user_id,
-           jsonb_build_object('amount', public.inr_money(v_open)), v_phone, null);
+    -- Every token the template asks for, supplied here rather than left to be
+    -- resolved: the amount is the customer's TOTAL open value, which is the
+    -- number this screen is about.
+    v := public.wa_send_event_or_fallback('payment_due', p_user_id,
+           jsonb_build_object(
+             'customer_name', v_name,
+             'order_code',    o.code,
+             'amount',        public.inr_money(v_open)),
+           v_phone, o.id);
     v_ok := coalesce((v->>'ok')::boolean, false);
   exception when others then
     v_ok := false; v := jsonb_build_object('ok', false, 'reason', sqlerrm);
   end;
 
+  -- A refusal names what is missing instead of printing a machine slug.
+  v_reason := coalesce(v->>'reason','WhatsApp refused it');
+  if v_reason = 'missing_values' then
+    v_reason := 'the template still wants ' ||
+      coalesce((select string_agg(x, ', ') from jsonb_array_elements_text(coalesce(v->'missing','[]'::jsonb)) x),
+               'values this reminder does not carry');
+  end if;
+
   return jsonb_build_object('ok', v_ok,
+    'order_code', o.code,
     'message', case when v_ok
-                    then 'Reminded ' || v_name || ' about ' || public.inr_money(v_open) || ' on WhatsApp.'
-                    else 'Could not send the reminder: ' || coalesce(v->>'reason','WhatsApp refused it') end,
+                    then 'Reminded ' || v_name || ' about ' || public.inr_money(v_open)
+                         || ' on WhatsApp, naming ' || o.code || '.'
+                    else 'Could not send the reminder: ' || v_reason end,
     'detail', v);
 end $function$
 ;
@@ -574,7 +634,8 @@ begin
     select jsonb_build_object(
       'order_id',     o.id,
       'order_code',   coalesce(nullif(btrim(o.order_code),''),'PO-'||upper(right(replace(o.id::text,'-',''),4))),
-      'placed_label', 'Placed ' || to_char(o.created_at at time zone 'Asia/Kolkata','DD Mon yyyy'),
+      'placed_label', case when o.created_at is null then 'No order date recorded'
+                          else 'Placed ' || to_char(o.created_at at time zone 'Asia/Kolkata','DD Mon yyyy') end,
       'total_label',  public.inr_money(o.total_amount),
       'paid_label',   public.inr_money(coalesce(paid.amt,0)),
       'open_amount',  round(coalesce(o.total_amount,0) - coalesce(paid.amt,0), 2),
@@ -585,7 +646,7 @@ begin
                            else public.inr_money(paid.amt) || ' verified so far' end,
       'age_days',     public._c450_age_days(o.created_at),
       'age_label',    public._c450_age_label(o.created_at),
-      'age_tone',     public._c450_age_tone(public._c450_age_days(o.created_at)),
+      'age_tone',     public._c450_age_tone_at(o.created_at),
       'status_label', initcap(coalesce(o.status,'pending'))
     ) as x
     from orders o
@@ -801,7 +862,6 @@ begin
                            else 'On' end,
       'status_tone', case when not r.enabled then 'muted'
                           when r.template_id is null then 'warn' else 'good' end,
-      -- CMD #450 — the pre-send blocker, on the row, before anybody sends.
       'blocked',       r.enabled and coalesce((bl->>'blocked')::boolean, false),
       'blocker_label', case when r.enabled then coalesce(bl->>'blocker_label','') else '' end,
       'blocker_detail',case when r.enabled then coalesce(bl->>'message','') else '' end,
@@ -819,7 +879,7 @@ begin
       'updated_label', to_char(r.updated_at at time zone 'Asia/Kolkata','DD Mon, HH12:MI AM')
     ) as x
     from wa_event_routes r
-    left join lateral (select public.wa_route_blockers(r.event_key, r.template_id) as bl) b on true
+    left join lateral (select public._wa_route_blockers_raw(r.event_key, r.template_id) as bl) b on true
   ) q;
 
   return jsonb_build_object(
@@ -844,54 +904,11 @@ CREATE OR REPLACE FUNCTION public.wa_route_blockers(p_event_key text, p_template
  STABLE SECURITY DEFINER
  SET search_path TO 'public'
 AS $function$
-declare r record; t record; v_fmt text; v_expiry timestamptz; v_dead boolean;
 begin
-  select * into r from wa_event_routes where event_key = p_event_key;
-  if r.event_key is null then
-    return jsonb_build_object('blocked', true, 'error', 'unknown_event',
-      'message', 'That event does not exist.');
+  if role_for_medibo_only() not in ('admin','super_admin') then
+    return jsonb_build_object('blocked', true, 'error', 'not_authorized', 'message', '');
   end if;
-
-  select * into t from wa_templates where id = coalesce(p_template_id, r.template_id);
-
-  if t.id is null then
-    return jsonb_build_object('blocked', true, 'error', 'no_template',
-      'message', 'Choose a template before switching this event on.',
-      'blocker_label', 'No template chosen', 'blocker_tone', 'bad');
-  end if;
-
-  if t.status <> 'APPROVED' then
-    return jsonb_build_object('blocked', true, 'error', 'not_approved',
-      'message', 'That template is ' || t.status || ' at Meta — only approved templates can be sent.',
-      'blocker_label', 'Template is ' || t.status || ' at Meta', 'blocker_tone', 'bad');
-  end if;
-
-  v_fmt := public.wa_template_needs_header_media(t.id);
-  if v_fmt is not null then
-    begin
-      v_expiry := public.wa_header_handle_expiry(t.header_handle);
-    exception when others then v_expiry := null;
-    end;
-    v_dead := v_expiry is not null and v_expiry < now();
-
-    if t.header_handle is null then
-      return jsonb_build_object('blocked', true, 'error', 'missing_header_media',
-        'message', 'This template has a ' || upper(v_fmt) || ' header and no sample file. '
-                || 'Meta refuses every send until one is uploaded — that is the '
-                || 'missing_header_media failure. Upload the sample on the template first.',
-        'blocker_label', 'No ' || lower(v_fmt) || ' sample uploaded',
-        'blocker_tone', 'bad');
-    end if;
-    if v_dead then
-      return jsonb_build_object('blocked', true, 'error', 'header_media_expired',
-        'message', 'The sample file for this template''s header expired at Meta. '
-                || 'Upload it again before switching this event on.',
-        'blocker_label', 'Header sample expired at Meta',
-        'blocker_tone', 'bad');
-    end if;
-  end if;
-
-  return jsonb_build_object('blocked', false, 'message', '', 'blocker_label', '', 'blocker_tone', 'good');
+  return public._wa_route_blockers_raw(p_event_key, p_template_id);
 end $function$
 ;
 
@@ -914,6 +931,8 @@ declare
   v_ok_n    int;
   v_bad_n   int;
   v_retry_n int;
+  v_shown_n int;
+  v_shown_retry int;
   v_wlabel  text;
 begin
   if public.role_for_medibo_only() not in ('admin','super_admin') then
@@ -1026,7 +1045,12 @@ begin
   select jsonb_agg(jsonb_build_object(
            'reason', g.reason,
            'event_key', g.event_key,
-           'title', g.event_key,
+           -- FINDING 6: the heading was the raw machine slug. wa_event_routes
+           -- already carries a written label for every event we own; fall back
+           -- to the key only for an event that has no route (which is itself
+           -- worth seeing as a key).
+           'title', coalesce((select nullif(btrim(er.label),'') from public.wa_event_routes er
+                               where er.event_key = g.event_key), g.event_key),
            'count', g.n,
            'count_label', g.n || case when g.n = 1 then ' failed send' else ' failed sends' end,
            'share_label', round(100.0 * g.n / nullif((select count(*) from bad),0))::int || '% of all failures',
@@ -1048,7 +1072,8 @@ begin
 
   select coalesce(jsonb_agg(jsonb_build_object(
            'id',           a.id,
-           'title',        a.event_key,
+           'title',        coalesce((select nullif(btrim(er.label),'') from public.wa_event_routes er
+                                      where er.event_key = a.event_key), a.event_key),
            'order_code',   coalesce(nullif(btrim(o.order_code),''),''),
            'phone_label',  coalesce(nullif(btrim(a.phone),''),'No number'),
            'when_label',   to_char(a.created_at at time zone 'Asia/Kolkata','DD Mon, HH12:MI AM'),
@@ -1064,10 +1089,21 @@ begin
          ) order by a.ok asc, a.created_at desc), '[]'::jsonb)
     into v_rows
     from (
-      select * from public.wa_send_attempts
-       where created_at >= v_since and coalesce(phone,'') not like '9000000%'
-       order by ok asc, created_at desc
-       limit 100
+      -- FINDING 5: one cap ordered `ok asc` swallowed every slot with failures,
+      -- so the successes the summary line promised were unreachable. Two
+      -- separate caps: the failures this screen exists for, and enough
+      -- successes to prove sending works at all.
+      (select * from public.wa_send_attempts
+        where created_at >= v_since and coalesce(phone,'') not like '9000000%'
+          and ok = false
+        order by created_at desc
+        limit 120)
+      union all
+      (select * from public.wa_send_attempts
+        where created_at >= v_since and coalesce(phone,'') not like '9000000%'
+          and ok = true
+        order by created_at desc
+        limit 30)
     ) a
     left join orders o on o.id = a.order_id;
 
@@ -1077,6 +1113,13 @@ begin
     into v_ok_n, v_bad_n, v_retry_n
     from public.wa_send_attempts
    where created_at >= v_since and coalesce(phone,'') not like '9000000%';
+
+  -- FINDING 4/5: how much of the above actually reached the feed, so the
+  -- retry sentence describes the buttons that exist rather than a population
+  -- the screen cannot show.
+  select count(*)::int, count(*) filter (where (r->>'can_retry')::boolean)::int
+    into v_shown_n, v_shown_retry
+    from jsonb_array_elements(coalesce(v_rows,'[]'::jsonb)) r;
 
   return jsonb_build_object(
     'ok', true,
@@ -1104,15 +1147,30 @@ begin
     'reasons', coalesce(v_reasons, '[]'::jsonb),
     'reasons_title', 'Why sends are failing',
     'rows', v_rows,
-    'summary_label', v_bad_n || case when v_bad_n = 1 then ' send failed' else ' sends failed' end
+    -- FINDING 4: total_failed comes from faults[], which UNIONs our own send
+    -- log with Meta's delivery failures on whatsapp_messages; summary_label
+    -- counts the send log alone. They are different questions and used to be
+    -- two bare numbers on one screen disagreeing by nearly 3x, so each now
+    -- says which population it is counting.
+    'summary_label', v_bad_n || case when v_bad_n = 1 then ' send attempt failed' else ' send attempts failed' end
                      || ', ' || v_ok_n || ' went out',
     'summary_tone', case when v_bad_n = 0 then 'good' when v_bad_n > v_ok_n then 'bad' else 'warn' end,
     'range_label', v_wlabel,
     'retry_label', 'Send again',
-    'retryable_count', v_retry_n,
-    'retryable_label', case when v_retry_n = 0 then ''
-                            when v_retry_n = 1 then '1 failed send can be sent again'
-                            else v_retry_n || ' failed sends can be sent again' end,
+    'total_failed_label', case when coalesce(v_total,0) = 0 then ''
+                               else coalesce(v_total,0) || ' refused sends in this window, '
+                                    || 'counting Meta''s own delivery failures as well as ours' end,
+    -- The retry sentence describes the buttons ON SCREEN, not a population the
+    -- feed was truncated out of.
+    'retryable_count', v_shown_retry,
+    'retryable_total', v_retry_n,
+    'retryable_label', case when v_shown_retry = 0 then ''
+                            when v_shown_retry = 1 then '1 failed send below can be sent again'
+                            else v_shown_retry || ' failed sends below can be sent again' end,
+    'truncated_label', case when v_bad_n + v_ok_n > v_shown_n
+                            then 'Showing the ' || v_shown_n || ' most recent of '
+                                 || (v_bad_n + v_ok_n) || ' attempts in this window'
+                            else '' end,
     'empty_label', 'No sends were attempted in this window.',
     'window_note', 'Newest first, failures at the top. Retry needs a number to send to — not an order.',
     'note', 'This state is read from our own send log, not from Meta''s account card. Meta can call the account approved while it is refusing every message we send.'

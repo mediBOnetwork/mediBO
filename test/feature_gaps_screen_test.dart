@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:pharma_b2b/screens/admin/feature_gaps_screen.dart';
+import 'package:pharma_b2b/services/ui_copy.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 
 Map<String, dynamic> _payload({
@@ -128,7 +129,20 @@ void _tall(WidgetTester tester) {
 }
 
 void main() {
-  setUpAll(() => RenderLog.flushEnabled = false);
+  setUpAll(() {
+    RenderLog.flushEnabled = false;
+    // CHANGE #459 · GAP 179 — the error state is ui_copy now, so the fixture
+    // carries the same rows the backend serves for these two codes.
+    UiCopy.debugSet(const {
+      'error.generic.title': 'Could not load this',
+      'error.generic.body': 'Something went wrong on our side. Try again in a moment.',
+      'error.generic.action': 'Try again',
+      'error.42501.title': 'Admins only',
+      'error.42501.body':
+          'This screen is for signed-in mediBO admins. Sign in with an admin account to open it.',
+      'error.42501.action': 'Sign in',
+    });
+  });
 
   testWidgets('empty register renders the backend copy, not a Dart sentence',
       (tester) async {
@@ -271,7 +285,14 @@ void main() {
     expect(asked.last['p_sort'], 'severity');
   });
 
-  testWidgets('a thrown RPC shows the error with a Retry, never a white screen',
+  // CHANGE #459 · GAP 179 — this test used to assert the OPPOSITE: it pumped
+  // `Exception('boom')` and demanded the word "boom" appear on screen. That is
+  // the defect the register recorded as row 179 — a signed-out visit printed
+  // `PostgrestException(message: permission denied for function
+  // feature_gaps_list, code: 42501, ...)` centred on the page. The RPC was
+  // refusing correctly; the screen was the bug. The contract is now inverted:
+  // only the driver's CODE survives the catch, and the words are ui_copy's.
+  testWidgets('a thrown RPC shows BACKEND copy, never the driver sentence',
       (tester) async {
     var attempt = 0;
     await tester.pumpWidget(_host(
@@ -284,9 +305,55 @@ void main() {
     ));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('boom'), findsOneWidget);
-    await tester.tap(find.byIcon(Icons.refresh).last);
+    // The driver's own sentence never reaches the visitor.
+    expect(find.textContaining('boom'), findsNothing);
+    expect(find.textContaining('Exception'), findsNothing);
+
+    // What they see is the backend's copy for this code family, verbatim.
+    expect(find.text('Could not load this'), findsOneWidget);
+    expect(find.text('Something went wrong on our side. Try again in a moment.'),
+        findsOneWidget);
+
+    // A transient error is retryable, and the action label is the backend's.
+    await tester.tap(find.widgetWithText(FilledButton, 'Try again'));
     await tester.pumpAndSettle();
     expect(find.text('No gaps recorded yet'), findsOneWidget);
+    expect(attempt, 2);
   });
+
+  // A REFUSAL is a different answer, and the screen must not offer a retry the
+  // visitor cannot win: 42501 renders its own copy and no button at all.
+  testWidgets('42501 renders the refusal copy and offers no retry',
+      (tester) async {
+    var attempt = 0;
+    await tester.pumpWidget(_host(
+      (_) async {
+        attempt++;
+        throw _Refused();
+      },
+      (_, __) async => const {'ok': true},
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('permission denied'), findsNothing);
+    expect(find.text('Admins only'), findsOneWidget);
+    expect(
+        find.text(
+            'This screen is for signed-in mediBO admins. Sign in with an admin account to open it.'),
+        findsOneWidget);
+    // isRefusal -> the screen passes no callback, so no button is drawn.
+    expect(find.byType(FilledButton), findsNothing);
+    expect(attempt, 1);
+  });
+}
+
+/// A stand-in for the driver's own exception: it carries `code` and a message
+/// the visitor must never see. Duck-typed exactly like PostgrestException, and
+/// deliberately not importing it.
+class _Refused implements Exception {
+  final String code = '42501';
+  @override
+  String toString() =>
+      'PostgrestException(message: permission denied for function '
+      'feature_gaps_list, code: 42501, details: , hint: null)';
 }

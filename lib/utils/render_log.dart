@@ -147,6 +147,12 @@ class RenderLog {
   // it is given rather than replacing the row, so a signed-out writer can never
   // wipe what a signed-in one recorded.
   static void _flushToSupabase(String? buildHash) {
+    // CHANGE #536 — the seam has to hold here too, not only on the debounced
+    // path. writeNow() calls this DIRECTLY, so a widget test rendering a
+    // writeNow caller reached Supabase from the VM even with flushEnabled
+    // false. It was survivable only because the throw lands in the catch
+    // below; in a test where Supabase IS initialised it would be a real write.
+    if (!flushEnabled) return;
     try {
       final data = Map<String, dynamic>.from(_log)..remove('build');
       Supabase.instance.client.rpc('render_log_note', params: {

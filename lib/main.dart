@@ -44,6 +44,7 @@ import 'screens/admin/dev_queue/cron_health_screen.dart'; // /admin/cron-health
 import 'screens/admin/admin_delivery_extras_screen.dart'; // /admin/delivery-programme
 import 'screens/pharmacy/pharmacy_expiry_screen.dart';   // CMD #413 — /pharmacy/expiry
 import 'screens/pharmacy/pharmacy_radar_screen.dart';    // CMD #425 — /pharmacy/radar
+import 'screens/pharmacy/pharmacy_parcel_count_screen.dart'; // CMD #431 — /pharmacy/parcel-count
 import 'screens/pharmacy/pharmacy_variance_screen.dart'; // CMD #413 — /pharmacy/stock-check
 import 'screens/pharmacy/rx_scan_screen.dart';           // CMD #418 — /pharmacy/prescription
 import 'screens/admin/nav_registry_view.dart'; // CHANGE #325 — deep links
@@ -962,6 +963,12 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
               // the screen renders the backend's own not-authorized copy
               // rather than the route guessing a role.
               '/admin/returns': (_) => const ReturnsRefundsScreen(),
+              // CMD #431 — count an arrived parcel against its bill. Same
+              // shape as the routes above: pharmacy_parcel_home() resolves the
+              // caller's own pharmacy and renders its own refusal, so the route
+              // guards nothing. It is also reachable without a URL, from the
+              // "Count parcel" tile on the pharmacy's own account screen.
+              '/pharmacy/parcel-count': (_) => const ParcelCountHomeScreen(),
               '/about-app':    (_) => const AboutScreen(),
               '/contact':      (_) => const ContactScreen(),
               '/terms':        (_) => const TermsScreen(),

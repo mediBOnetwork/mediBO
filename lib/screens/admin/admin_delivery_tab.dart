@@ -30,13 +30,17 @@
 // ready_count, status_label, status_colors and every partner label in the
 // picker arrive finished.
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../fulfill/fulfill_lookups.dart';
 import '../../services/admin_date_scope.dart';
 import '../../services/admin_zone_scope.dart';
+import '../../services/masked_call_service.dart';
 import '../../utils/render_log.dart';
+import '../../widgets/masked_call_button.dart';
 import 'admin_delivery_ops_screen.dart';
 import '../../services/ui_copy.dart';
 import '../../design_tokens.dart';
@@ -77,6 +81,11 @@ class AdminDeliveryTabState extends State<AdminDeliveryTab>
   String _zoneLabel = '';
   int _readyCount = 0;
   List<Map<String, dynamic>> _orders = const [];
+
+  // CHANGE #404 — order_id -> the masked-call buttons THIS admin gets on it.
+  // The screen never learns a counterparty number; call_mask_targets decides
+  // who is callable and what each button says.
+  Map<String, List<MaskedCallTarget>> _callTargets = const {};
   List<Map<String, dynamic>> _partners = const [];
 
   /// order_id -> selected. Only ever holds ids the backend said can_assign.
@@ -143,6 +152,11 @@ class AdminDeliveryTabState extends State<AdminDeliveryTab>
         _loading = false;
       });
 
+      // A second read, deliberately not folded into admin_delivery_queue: the
+      // callable set depends on the VIEWER, not on the queue, and every screen
+      // that grows a call button asks the same one question here.
+      unawaited(_loadCallTargets());
+
       // `allowed` is logged so an empty zone/date reads as "this caller is not
       // an admin" rather than "the zone filter is broken" — the two look
       // identical in the log otherwise.
@@ -153,6 +167,26 @@ class AdminDeliveryTabState extends State<AdminDeliveryTab>
       if (!mounted) return;
       setState(() => _loading = false);
       RenderLog.write('c629_delivery_err', e.toString());
+    }
+  }
+
+  Future<void> _loadCallTargets() async {
+    final ids = <String>[
+      for (final o in _orders)
+        if ((o['order_id']?.toString() ?? '').isNotEmpty) o['order_id'].toString(),
+    ];
+    if (ids.isEmpty) {
+      if (mounted) setState(() => _callTargets = const {});
+      return;
+    }
+    try {
+      final t = await MaskedCallService.targets(ids);
+      if (!mounted) return;
+      setState(() => _callTargets = t);
+    } catch (e) {
+      // A masking layer that is down must not blank the delivery queue — the
+      // buttons simply do not appear.
+      RenderLog.write('c404_masked_call_err', e.toString());
     }
   }
 
@@ -581,6 +615,15 @@ class AdminDeliveryTabState extends State<AdminDeliveryTab>
               child: Text(_ui('dlv_rto_receive'), style: const TextStyle(fontSize: 12.5)),
             ),
           ]),
+        ],
+
+        // CHANGE #404 — masked calling. Ops reaches the pharmacy or the rider
+        // on this order through a DID; no counterparty number is in this
+        // payload, this widget, or the browser. An order with nobody callable
+        // renders nothing at all.
+        if ((_callTargets[orderId] ?? const []).isNotEmpty) ...[
+          SizedBox(height: Ds.space.x12),
+          MaskedCallRow(targets: _callTargets[orderId]!, dense: true),
         ],
       ]),
     );

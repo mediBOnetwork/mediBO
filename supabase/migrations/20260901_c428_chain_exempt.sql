@@ -131,7 +131,7 @@ language sql stable
 security definer
 set search_path to 'public'
 as $$
-  select coalesce(array_agg(distinct x order by x), '{}')
+  select coalesce(array_agg(distinct x), '{}')
     from unnest(coalesce(a,'{}')) x
     join unnest(coalesce(b,'{}')) y on y = x
    where position('%' in x) = 0        -- a glob is an area hint, not a file
@@ -189,7 +189,7 @@ begin
 
     -- the actual files the chain is about — the card names them, so a chain is
     -- never again a number nobody can argue with
-    select coalesce(array_agg(distinct p order by p), '{}')
+    select coalesce(array_agg(distinct p), '{}')
       into v_paths
       from unnest(coalesce(v_blockers,'{}')) bid,
            unnest(dev_paths_conflict(dev_cmd_footprint(bid), r.predicted_files)) p;

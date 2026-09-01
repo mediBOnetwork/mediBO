@@ -374,16 +374,30 @@ begin
                               'medicine_id', v_id, 'product_name', v_name);
   end if;
 
+  -- WHY TWO TRIGRAM MEASURES, BLENDED. `similarity` compares the WHOLE strings,
+  -- so it punishes a catalogue name for carrying a dosage form the bill never
+  -- prints: "montek lc" vs "Montek LC Kid Syrup" scores 0.50 and the right
+  -- product is missed. `word_similarity` asks instead how well the bill's text
+  -- matches a RUN of words inside the catalogue name, which finds it at 1.00 —
+  -- but on its own it cannot tell "Montek LC" from "Montek LC Kid", because
+  -- both contain the query perfectly. Blended 60/40 the pair does what neither
+  -- does alone: it FINDS the family, and it lands the wrong strength at ~0.80,
+  -- under match_confirm, which is precisely a question for a human rather than
+  -- a silent substitution. Both operators (`%` and `<%`) ride the existing GIN
+  -- index on _norm_name(product_name).
+
   -- 3a. THIS SHOP'S OWN SHELF. What it already stocks beats the whole
   --     catalogue: the same distributor prints the same abbreviation forever.
   select s.medicine_id, s.product_name,
-         round(similarity(s.name_key, 'n:' || v_key)::numeric, 4)
+         round((0.6 * word_similarity(v_key, s.name_key)
+              + 0.4 * similarity(s.name_key, 'n:' || v_key))::numeric, 4)
     into v_id, v_name, v_score
     from public.pharmacy_stock s
    where s.pharmacy_id = p_shop
      and s.medicine_id is not null
-     and s.name_key % ('n:' || v_key)
-   order by similarity(s.name_key, 'n:' || v_key) desc
+     and (s.name_key % ('n:' || v_key) or v_key <% s.name_key)
+   order by (0.6 * word_similarity(v_key, s.name_key)
+           + 0.4 * similarity(s.name_key, 'n:' || v_key)) desc
    limit 1;
   if v_id is not null and v_score >= v_cfg.match_confirm then
     return jsonb_build_object('status', 'matched', 'source', 'shelf', 'score', v_score,
@@ -394,11 +408,14 @@ begin
   select c.id, c.product_name, c.sim into v_id, v_name, v_score
     from (
       select m.id, m.product_name,
-             round(similarity(public._norm_name(m.product_name), v_key)::numeric, 4) sim,
+             round((0.6 * word_similarity(v_key, public._norm_name(m.product_name))
+                  + 0.4 * similarity(public._norm_name(m.product_name), v_key))::numeric, 4) sim,
              coalesce(m.sales_count, 0) sc
         from public."MEDICINE" m
        where public._norm_name(m.product_name) % v_key
-       order by similarity(public._norm_name(m.product_name), v_key) desc,
+          or v_key <% public._norm_name(m.product_name)
+       order by (0.6 * word_similarity(v_key, public._norm_name(m.product_name))
+               + 0.4 * similarity(public._norm_name(m.product_name), v_key)) desc,
                 coalesce(m.sales_count, 0) desc
        limit v_cfg.candidates
     ) c

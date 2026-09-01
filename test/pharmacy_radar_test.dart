@@ -81,6 +81,7 @@ Map<String, dynamic> _item({
   'supplier_label': 'SAI GANESH PHARMA',
   'window_label': 'Return window has closed',
   'window_tone': 'danger',
+  'ask_button': 'How many left?',
   'ask': ask,
 };
 
@@ -200,8 +201,8 @@ void main() {
       tester,
       (fn, p) async => _home(items: [_item(ask: _ask())], asks: [_ask()]),
     );
-    // 'Quick check' is the section heading; it must NOT also be a row action.
-    expect(find.widgetWithText(TextButton, 'Quick check'), findsNothing);
+    // The row already carries an ask, so it must not offer a second way in.
+    expect(find.widgetWithText(TextButton, 'How many left?'), findsNothing);
   });
 
   testWidgets('a lot with no ask offers one, and it raises the ask', (
@@ -216,7 +217,10 @@ void main() {
       return _home();
     });
 
-    await tester.tap(find.widgetWithText(TextButton, 'Quick check'));
+    final rowAsk = find.widgetWithText(TextButton, 'How many left?');
+    await tester.ensureVisible(rowAsk);
+    await tester.pumpAndSettle();
+    await tester.tap(rowAsk);
     await tester.pumpAndSettle();
     expect(calls, contains('pharmacy_radar_ask_open'));
   });
@@ -233,9 +237,13 @@ void main() {
       return _home();
     });
 
-    expect(find.text('WhatsApp alerts are off'), findsOneWidget);
+    // The card sits below the fold: scroll to it before reading it, exactly as
+    // an owner would.
     final button =
         find.widgetWithText(FilledButton, 'Turn on WhatsApp alerts');
+    await tester.scrollUntilVisible(button, 300);
+    await tester.pumpAndSettle();
+    expect(find.text('WhatsApp alerts are off'), findsOneWidget);
     await tester.ensureVisible(button);
     await tester.pumpAndSettle();
     await tester.tap(button);
@@ -255,6 +263,8 @@ void main() {
 
     final blocked =
         find.widgetWithText(FilledButton, 'Turn on WhatsApp alerts');
+    await tester.scrollUntilVisible(blocked, 300);
+    await tester.pumpAndSettle();
     await tester.ensureVisible(blocked);
     await tester.pumpAndSettle();
     await tester.tap(blocked);
@@ -279,6 +289,14 @@ void main() {
     );
     expect(find.text('This screen is for a pharmacy account.'), findsOneWidget);
     expect(find.text('Worst first'), findsNothing);
+  });
+
+  testWidgets('a row with no ask_button offers no action at all', (
+    tester,
+  ) async {
+    final bare = _item()..remove('ask_button');
+    await pump(tester, (fn, p) async => _home(items: [bare]));
+    expect(find.byType(TextButton), findsNothing);
   });
 
   testWidgets('an empty radar states it, with the backend hint', (

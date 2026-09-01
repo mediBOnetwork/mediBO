@@ -610,7 +610,17 @@ begin
   if new.delivered_at is not null
      and (tg_op = 'INSERT' or old.delivered_at is distinct from new.delivered_at)
      and new.order_id is not null then
-    perform public.pharmacy_stock_ingest_order(new.order_id);
+    -- Same rule as the POS consumer: a shelf that cannot be written must NEVER
+    -- stop the fact being recorded. A rider standing at the door with proof in
+    -- hand must be able to mark the delivery whatever the inventory layer
+    -- thinks. The failure is raised as a warning and the intake stays
+    -- re-runnable — pharmacy_stock_ingest_order is idempotent, so replaying it
+    -- later costs nothing and fixes the shelf.
+    begin
+      perform public.pharmacy_stock_ingest_order(new.order_id);
+    exception when others then
+      raise warning 'pharmacy_stock: intake failed for order % — %', new.order_id, sqlerrm;
+    end;
   end if;
   return new;
 end $$;

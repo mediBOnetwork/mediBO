@@ -570,9 +570,12 @@ begin
     'has_lines',   jsonb_array_length(v_lines) > 0,
     'empty',       public.ui_text('rx.empty'),
     'empty_hint',  public.ui_text('rx.empty_hint'),
+    -- The counter boy is shown the BACKEND's sentence, never the technical
+    -- error. This used to render `ocr_error` when it was set, and the first
+    -- live failure put a 900-character Google billing JSON on the till screen.
+    -- The raw text stays on the row for the audit; it never reaches a payload.
     'failed_message', case when r.status = 'failed'
-                           then coalesce(nullif(r.ocr_error, ''),
-                                         public.ui_text('rx.err_read_failed')) end,
+                           then public.ui_text('rx.err_read_failed') end,
     'confirm_button', public.ui_text('rx.confirm_button'),
     'confirming',     public.ui_text('rx.confirming'),
     'discard_button', public.ui_text('rx.discard_button'),

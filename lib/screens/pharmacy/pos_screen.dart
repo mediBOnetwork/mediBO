@@ -29,6 +29,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../design_tokens.dart';
 import '../../services/pos_api.dart';
+import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 
 /// A uuid v4 for the offline key. Minted on the device, before the network is
@@ -90,7 +91,11 @@ class PosScreen extends StatefulWidget {
 
 class _PosScreenState extends State<PosScreen> {
   Map<String, dynamic>? _home;
-  String? _bootError;
+  /// The backend's own refusal copy. Permanent — a retry cannot change it.
+  String? _bootRefusal;
+  /// The request never landed. That IS retryable, and it must never put a Dart
+  /// exception string on screen.
+  bool _bootFailed = false;
 
   final List<PosCartLine> _cart = [];
   Map<String, dynamic> _quote = const {};
@@ -129,7 +134,7 @@ class _PosScreenState extends State<PosScreen> {
       final home = await _call('pos_home', const {});
       if (!mounted) return;
       if (home['ok'] != true) {
-        setState(() => _bootError = _s(home['message']));
+        setState(() => _bootRefusal = _s(home['message']));
         RenderLog.write('c411_pos_denied', 1);
         return;
       }
@@ -141,8 +146,10 @@ class _PosScreenState extends State<PosScreen> {
       // Anything billed while the network was gone lands now, before the
       // operator starts a new bill on a day-close that would be wrong.
       unawaited(_replayPending());
-    } catch (e) {
-      if (mounted) setState(() => _bootError = e.toString());
+    } catch (_) {
+      // Never print the exception: a dart2js error string is not copy, and it
+      // is not the backend's. Offer the retry instead.
+      if (mounted) setState(() => _bootFailed = true);
     }
   }
 
@@ -335,7 +342,17 @@ class _PosScreenState extends State<PosScreen> {
   // ── build ─────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    if (_bootError != null) return _Refusal(message: _bootError!);
+    if (_bootRefusal != null) return _Refusal(message: _bootRefusal!);
+    if (_bootFailed) {
+      return _Refusal(
+        message: c('pos.boot_failed'),
+        retryLabel: c('pos.retry'),
+        onRetry: () {
+          setState(() => _bootFailed = false);
+          _boot();
+        },
+      );
+    }
     if (_home == null) return const _BootSkeleton();
 
     final labels = _labels();
@@ -1100,9 +1117,15 @@ class _BootSkeleton extends StatelessWidget {
 }
 
 /// The backend's own refusal, printed. No Dart copy, no role test.
+///
+/// A Retry appears ONLY when asking again could actually help: a request that
+/// never landed. A refusal like "the counter is available on a pharmacy
+/// account" is an ANSWER, and offering to ask it again would be a lie.
 class _Refusal extends StatelessWidget {
   final String message;
-  const _Refusal({required this.message});
+  final String? retryLabel;
+  final VoidCallback? onRetry;
+  const _Refusal({required this.message, this.retryLabel, this.onRetry});
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -1114,10 +1137,32 @@ class _Refusal extends StatelessWidget {
     body: Center(
       child: Padding(
         padding: EdgeInsets.all(Ds.space.x24),
-        child: Text(
-          message,
-          textAlign: TextAlign.center,
-          style: Ds.t.bodySecondary,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: Ds.t.bodySecondary,
+            ),
+            if (onRetry != null && (retryLabel ?? '').isNotEmpty) ...[
+              SizedBox(height: Ds.space.x24),
+              SizedBox(
+                height: Ds.touch.minTarget,
+                child: OutlinedButton(
+                  onPressed: onRetry,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Ds.c.brand,
+                    side: BorderSide(color: Ds.c.brand),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: Ds.r.rButton,
+                    ),
+                  ),
+                  child: Text(retryLabel!),
+                ),
+              ),
+            ],
+          ],
         ),
       ),
     ),

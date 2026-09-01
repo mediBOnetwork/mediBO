@@ -467,7 +467,12 @@ end $$;
 -- system is LEAST sure and where the money is, catches the same losses months
 -- earlier and never closes the shop.
 -- ─────────────────────────────────────────────────────────────────────────────
-create or replace function public.pharmacy_audit_cycle_plan(p_shop uuid default null)
+-- INTERNAL. It takes a shop id, so it must never be client-reachable: #414's
+-- fence journey exists precisely because a shop-id argument on a granted
+-- function is a cross-tenant hole waiting for someone to pass a different uuid.
+-- The client calls the no-arg wrapper below, which resolves the shop from the
+-- login and cannot be pointed at anybody else's shelf.
+create or replace function public._c430_cycle_plan(p_shop uuid default null)
 returns jsonb language plpgsql security definer set search_path to 'public' as $$
 declare
   v_shop uuid := coalesce(p_shop, public._c430_shop());
@@ -533,6 +538,14 @@ begin
     'empty', public.ui_text('phaudit.cycle_empty'),
     'items', jsonb_build_object('stock_ids', v_ids, 'rows', v_rows),
     'rows',  v_rows);
+end $$;
+
+create or replace function public.pharmacy_audit_cycle_plan()
+returns jsonb language plpgsql security definer set search_path to 'public' as $$
+declare v_shop uuid := public._c430_shop();
+begin
+  if v_shop is null then return public._c430_denied(); end if;
+  return public._c430_cycle_plan(v_shop);
 end $$;
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -762,7 +775,7 @@ begin
 
   select items into v_plan from public.pharmacy_cycle_plan
    where pharmacy_id = v_shop and plan_on = public._c413_today();
-  if v_plan is null then v_plan := public.pharmacy_audit_cycle_plan(v_shop)->'items'; end if;
+  if v_plan is null then v_plan := public._c430_cycle_plan(v_shop)->'items'; end if;
 
   for r in
     select * from public.pharmacy_count_session
@@ -848,7 +861,8 @@ grant execute on function public.pharmacy_audit_recount_sheet(uuid) to authentic
 grant execute on function public.pharmacy_audit_recount(uuid, numeric, text) to authenticated;
 grant execute on function public.pharmacy_audit_resolve(uuid, numeric) to authenticated;
 grant execute on function public.pharmacy_audit_accept(uuid) to authenticated;
-grant execute on function public.pharmacy_audit_cycle_plan(uuid) to authenticated;
+grant execute on function public.pharmacy_audit_cycle_plan() to authenticated;
+revoke execute on function public._c430_cycle_plan(uuid) from authenticated, anon;
 grant execute on function public.pharmacy_audit_seal(uuid) to authenticated;
 grant execute on function public.pharmacy_audit_verify(uuid) to authenticated;
 grant execute on function public.pharmacy_audit_certificate(uuid) to authenticated;

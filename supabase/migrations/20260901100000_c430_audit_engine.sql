@@ -307,7 +307,7 @@ begin
     select items into v_plan from public.pharmacy_cycle_plan
      where pharmacy_id = v_shop and plan_on = public._c413_today();
     if v_plan is null then
-      v_plan := (public.pharmacy_audit_cycle_plan()->'items');
+      v_plan := (public._c430_cycle_plan(v_shop)->'items');
     end if;
   end if;
 

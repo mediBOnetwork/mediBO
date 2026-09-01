@@ -549,7 +549,12 @@ class _StatCard extends StatelessWidget {
 // ── Inherited widget — tiles/cards trigger navigation in AdminShell ────────────
 
 class QuickLinkNavigator extends InheritedWidget {
-  final void Function(String route) navigate;
+  /// CMD #421 — [seed] is the SUBJECT the route carries, when it has one: the
+  /// pharmacy id on a `customer_360` link, the same value nav_search puts on a
+  /// palette result. It is optional because most routes are a whole
+  /// destination by themselves, and the shell's route table is the one place
+  /// that has to know which is which.
+  final void Function(String route, [String? seed]) navigate;
 
   const QuickLinkNavigator({
     super.key,

@@ -243,11 +243,40 @@ class PendingAdminNav {
 
   static String? route;
 
+  /// CMD #421 — the SUBJECT the route carries, when it has one. A customer 360
+  /// link is `/admin/go/customer_360/<pharmacy id>`, and the id is the whole
+  /// point of the link: a route key on its own opens a screen that has nothing
+  /// to show. It is the same `seed` nav_search puts on a palette result, kept
+  /// beside the route rather than smuggled into it, so a route key stays a
+  /// route key and nothing has to parse one back apart.
+  static String? seed;
+
   /// Read-and-clear: a deep link fires once, never again on the next rebuild.
+  ///
+  /// This clears the ROUTE only. The shell parks a link straight back when the
+  /// account is not allowed to open it yet ("not ours to open"), and a subject
+  /// that was dropped on that first pass could never be recovered — the URL is
+  /// long gone by then. The subject is cleared by [takeSeed], which the shell
+  /// calls only when it is actually opening the screen.
   static String? take() {
     final r = route;
     route = null;
     return r;
+  }
+
+  /// Read-and-clear the subject. Call it at the moment the screen opens.
+  static String? takeSeed() {
+    final s = seed;
+    seed = null;
+    return s;
+  }
+
+  /// Park a link. [seedValue] is optional because most routes are a whole
+  /// destination by themselves; an empty string parks nothing rather than a
+  /// subject made of no characters.
+  static void park(String routeKey, [String? seedValue]) {
+    route = routeKey;
+    seed = (seedValue == null || seedValue.isEmpty) ? null : seedValue;
   }
 }
 

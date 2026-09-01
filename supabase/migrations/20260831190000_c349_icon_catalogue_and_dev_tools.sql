@@ -48,7 +48,9 @@ insert into public.ui_icon (icon_key, label) values
   ('build','Spanner'), ('science','Lab flask'), ('history','History'),
   ('dashboard','Dashboard grid'), ('tools','Toolbox'),
   -- CMD #452 — the customer support inbox (feature_gaps #132).
-  ('support_agent','Support agent')
+  ('support_agent','Support agent'),
+  -- CHANGE #460 — Catalogue health (feature_gaps 161).
+  ('image','Picture')
 on conflict (icon_key) do update set label = excluded.label;
 
 -- ── the dev_tools surface ───────────────────────────────────────────────────

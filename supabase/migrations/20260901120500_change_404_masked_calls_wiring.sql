@@ -668,23 +668,30 @@ end $patch$;
 --     a phone number is a public endpoint until it is explicitly revoked. This
 --     is the same trap #25/#353/#395/#422/#436 each landed in.
 --
+--     `authenticated` is revoked too, not just anon: this project's default
+--     privileges hand every new function to `authenticated`, and a signed-in
+--     customer calling call_actor_party(<any uuid>) would read a stranger's
+--     name and number straight out of the view this layer exists to hide.
+--
 --     The two exceptions are deliberate and both gate on auth.uid()/role
 --     internally: call_mask_targets (a signed-in viewer asking which of ITS own
 --     buttons to draw) and call_setup_status (admins only, by its first line).
 -- ─────────────────────────────────────────────────────────────────────────
-revoke all on function public._call_e164(text)                          from public, anon;
-revoke all on function public._call_allowed(text, text)                 from public, anon;
-revoke all on function public.call_actor_party(uuid)                    from public, anon;
-revoke all on function public._call_target(uuid, text)                  from public, anon;
-revoke all on function public._call_action_block(text, text, uuid)      from public, anon;
-revoke all on function public.call_mask_prepare(uuid, uuid, text)       from public, anon;
-revoke all on function public.call_mask_store(uuid, text, text, text, text, jsonb) from public, anon;
-revoke all on function public.call_inbound_match(text, text, text, jsonb) from public, anon;
-revoke all on function public.call_leg_log(text, text, integer, text, jsonb) from public, anon;
-revoke all on function public.call_sessions_close_for_order(uuid, text)  from public, anon;
-revoke all on function public.call_expire_sweep()                        from public, anon;
-revoke all on function public.call_mask_targets(uuid[])                  from public, anon;
-revoke all on function public.call_setup_status()                        from public, anon;
+revoke all on function public._call_e164(text)                          from public, anon, authenticated;
+revoke all on function public._call_allowed(text, text)                 from public, anon, authenticated;
+revoke all on function public.call_actor_party(uuid)                    from public, anon, authenticated;
+revoke all on function public._call_target(uuid, text)                  from public, anon, authenticated;
+revoke all on function public._call_action_block(text, text, uuid)      from public, anon, authenticated;
+revoke all on function public.call_mask_prepare(uuid, uuid, text)       from public, anon, authenticated;
+revoke all on function public.call_mask_store(uuid, text, text, text, text, jsonb) from public, anon, authenticated;
+revoke all on function public.call_inbound_match(text, text, text, jsonb) from public, anon, authenticated;
+revoke all on function public.call_leg_log(text, text, integer, text, jsonb) from public, anon, authenticated;
+revoke all on function public.call_sessions_close_for_order(uuid, text)  from public, anon, authenticated;
+revoke all on function public._call_sessions_order_closed_trg()          from public, anon, authenticated;
+revoke all on function public._call_sessions_delivered_trg()             from public, anon, authenticated;
+revoke all on function public.call_expire_sweep()                        from public, anon, authenticated;
+revoke all on function public.call_mask_targets(uuid[])                  from public, anon, authenticated;
+revoke all on function public.call_setup_status()                        from public, anon, authenticated;
 
 grant execute on function public.call_mask_targets(uuid[]) to authenticated;
 grant execute on function public.call_setup_status()       to authenticated;

@@ -1871,3 +1871,25 @@ Answer with ONE JSON object and nothing else:
 
 Do not add commentary.'::text))
 on conflict (key) do update set value = excluded.value;
+
+-- ═══════════════════════ 13. THE REGISTRY ENTRY ════════════════════════════
+-- The vault's real address. It is reached from the shelf's app bar for the
+-- pharmacist who is already looking at their stock, and by route_key for
+-- everything that needs to point AT it — the admin registry, the command
+-- palette, a WhatsApp button, a push about a bill still waiting to be checked.
+-- `icon_key` is one this build can actually draw (#415's lesson), and the row
+-- carries the search terms a pharmacist would actually type.
+insert into public.feature_registry
+  (feature_key, label, group_label, icon_key, route_key, sort_order, owner,
+   partner_eligible, default_access, is_active, category, surface,
+   roles_allowed, search_terms, description)
+values
+  ('admin.pharmacy_vault', 'Bill vault', 'Pharmacy tools', 'receipt', 'pharmacy_vault',
+   4133, 'medibo', false, 'none', true, 'parties', 'dashboard',
+   array['admin', 'super_admin'],
+   'bill vault purchase invoice photo scan ocr batch expiry back import shoebox stock register',
+   'CMD #423 - the bill vault: every purchase bill becomes lots, from a mediBO delivery, a photographed outside bill, a bulk back-import or a shelf photo.')
+on conflict (feature_key) do update
+  set label = excluded.label, route_key = excluded.route_key,
+      icon_key = excluded.icon_key, search_terms = excluded.search_terms,
+      description = excluded.description, is_active = true;

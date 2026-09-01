@@ -47,12 +47,12 @@ begin
   if public._c425_week_count(p_shop) >= v_cfg.max_msgs_per_week then
     return jsonb_build_object('ok', false, 'reason','weekly_cap');
   end if;
-  if exists (select 1 from public.pharmacy_expiry_alert_log
+  if exists (select 1 from public.pharmacy_radar_send_log
               where pharmacy_id = p_shop and kind = p_kind and dedupe_key = p_dedupe) then
     return jsonb_build_object('ok', false, 'reason','duplicate');
   end if;
 
-  insert into public.pharmacy_expiry_alert_log (pharmacy_id, kind, dedupe_key, detail)
+  insert into public.pharmacy_radar_send_log (pharmacy_id, kind, dedupe_key, detail)
   values (p_shop, p_kind, p_dedupe,
           jsonb_build_object('text', p_text, 'vars', coalesce(p_vars,'{}'::jsonb)))
   on conflict do nothing;
@@ -76,7 +76,7 @@ begin
                coalesce(p_vars,'{}'::jsonb) || jsonb_build_object('customer_id', p_shop::text));
   end if;
 
-  update public.pharmacy_expiry_alert_log
+  update public.pharmacy_radar_send_log
      set detail = detail || jsonb_build_object('result', v_res, 'window_open', v_open)
    where pharmacy_id = p_shop and kind = p_kind and dedupe_key = p_dedupe;
 
@@ -114,13 +114,16 @@ begin
       v_skipped := v_skipped + 1; continue;
     end if;
 
-    -- The most expensive batch whose return window is closing, above this
-    -- shop's own floor. Expected loss, never value at cost.
+    -- The most expensive MISTAKE this shop is about to make, above its own
+    -- floor. Two ways to still act on it: the supplier will take it back
+    -- (window open), or there is enough time left to sell it down
+    -- (alert_days). A closed window is not a reason to stay quiet — it is
+    -- exactly when the shop has to push the stock itself.
     select * into r from public._c425_rows(sh.id) x
      where x.expected_loss >= v_cfg.min_expected_loss
        and x.days_to_expiry >= 0
        and (x.window_state = 'open'
-            or x.days_to_expiry <= coalesce((v_g->>'urgent_days')::int, 21))
+            or x.days_to_expiry <= coalesce((v_g->>'alert_days')::int, 60))
      order by x.expected_loss desc, x.days_to_expiry
      limit 1;
 
@@ -140,7 +143,12 @@ begin
                     else public.ui_fmt('phradar.batch_label',
                            jsonb_build_object('batch', r.batch_no)) end;
 
-    v_text := public.ui_fmt('phradar.wa_urgent', jsonb_build_object(
+    -- "closes in 0 days" is not a sentence a shopkeeper can act on: when the
+    -- window is already shut the message has to say so and point at selling it
+    -- down instead of returning it.
+    v_text := public.ui_fmt(
+      case when r.window_state = 'open' then 'phradar.wa_urgent'
+           else 'phradar.wa_urgent_closed' end, jsonb_build_object(
       'product',    coalesce(r.product_name,''),
       'batch_word', v_batch,
       'date',       to_char(r.expiry_on, 'DD/MM/YY'),
@@ -204,18 +212,18 @@ begin
 
     v_text := public.ui_fmt('phradar.wa_digest', jsonb_build_object(
       'shop',  coalesce(sh.pharmacy_name,''),
-      'bills', v_bills::text,
+      'bills', public._c425_plural('phradar.n_bills', v_bills),
       'stock', public.inr_money(v_stock),
       'value', public.inr_money(v_risk),
-      'items', v_items::text));
+      'items', public._c425_plural('phradar.n_items', v_items)));
 
     v_res := public._c425_send(sh.id, 'radar_month', v_month,
       'pharmacy_radar_month', v_text,
       jsonb_build_object('shop', coalesce(sh.pharmacy_name,''),
-                         'bills', v_bills::text,
+                         'bills', public._c425_plural('phradar.n_bills', v_bills),
                          'stock', public.inr_money(v_stock),
                          'value', public.inr_money(v_risk),
-                         'items', v_items::text));
+                         'items', public._c425_plural('phradar.n_items', v_items)));
     if coalesce((v_res->>'ok')::boolean, false)
       then v_sent := v_sent + 1; else v_skipped := v_skipped + 1; end if;
   end loop;

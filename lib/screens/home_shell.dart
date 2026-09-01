@@ -314,7 +314,25 @@ class _HomeShellState extends State<HomeShell> {
   Future<void> _loadNavProfileMenu() async {
     try {
       final raw = await Supabase.instance.client.rpc('nav_registry');
-      NavProfileMenu.adopt(raw is List ? raw.first : raw);
+      final payload = raw is List ? raw.first : raw;
+      NavProfileMenu.adopt(payload);
+      // CHANGE #402 — boot-time proof for a surface behind a tap. The paint-time
+      // keys (c402_payout_queue, c402_i18n_missing) only fire once someone opens
+      // the screen, and a headless verifier cannot tap a canvas app — so they
+      // never reach the render-log. This fires at BOOT and asserts the honest
+      // thing instead: the registry ADMITTED the supplier-accounts tile onto
+      // this login's dashboard, which is exactly what "reachable" means here.
+      // 0 means the tile is gone or this role was not admitted; 1 means the tap
+      // target the route handler answers is on screen.
+      try {
+        var admitted = 0;
+        for (final sec in (payload is Map ? (payload['sections'] ?? []) : []) as List) {
+          for (final item in ((sec is Map ? sec['items'] : null) ?? []) as List) {
+            if (item is Map && item['route_key'] == 'supplier_accounts') admitted++;
+          }
+        }
+        RenderLog.write('c402_supplier_accounts_tile', admitted);
+      } catch (_) {}
     } catch (_) {
       // Leaves whatever was there; an empty menu simply draws no rows.
     }

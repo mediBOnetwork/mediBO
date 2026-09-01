@@ -89,6 +89,8 @@ import '../services/pharmacy_stock_api.dart'; // CMD #412 — pharmacy_stock_ent
 import 'pharmacy/pharmacy_vault_screen.dart'; // CMD #423 — /admin/go/pharmacy_vault
 import 'pharmacy/pharmacy_stock_screen.dart'; // CMD #412 — the pharmacy's shelf
 import 'pharmacy/pharmacy_refill_screen.dart'; // CMD #417 — refills & counter
+import 'pharmacy/pharmacy_overpay_screen.dart'; // CMD #427 — /admin/go/price_check
+import 'admin/admin_demand_engine_screen.dart'; // CMD #427 — /admin/go/demand_engine
 import 'profile_screen.dart';
 import 'storefront_screen.dart';
 import 'supplier/supplier_shell.dart';
@@ -646,7 +648,14 @@ class _HomeShellState extends State<HomeShell> {
   /// on an admin role, so opening them from a link grants nothing: each one
   /// renders the backend's refusal when the account has no business there.
   /// Every other key stays admin-only exactly as it was.
-  static const Set<String> _selfGatedRoutes = {'pharmacy_stock', 'pharmacy_vault', 'pos', 'home'};
+  static const Set<String> _selfGatedRoutes = {
+    'pharmacy_stock', 'pharmacy_vault', 'pos', 'home',
+    // CMD #427 — the price check is a PHARMACY's own screen.
+    // pharmacy_overpay_insights() gates on the caller's own pharmacy and the
+    // screen prints its refusal, so opening this link as the wrong role shows
+    // the backend's sentence instead of nothing at all.
+    'price_check',
+  };
 
   void _consumePendingDeepLink() {
     final route = PendingAdminNav.take();
@@ -795,6 +804,20 @@ class _HomeShellState extends State<HomeShell> {
       case 'pharmacy_stock':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const PharmacyStockScreen()));
+        break;
+      // CMD #427 — THE PRICE CHECK. Also reachable from the vault's app bar;
+      // this case is what gives it an address, so a monthly WhatsApp note or a
+      // push about a rate can point straight at /admin/go/price_check.
+      case 'price_check':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const PharmacyOverpayScreen()));
+        break;
+      // CMD #427 — THE DEMAND ENGINE, the operator side of the same aggregate.
+      // Admin-only by omission from _selfGatedRoutes, and admin_demand_engine()
+      // checks is_admin() for itself on top of that.
+      case 'demand_engine':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const AdminDemandEngineScreen()));
         break;
       // CMD #423 — the BILL VAULT. Reached from the shelf's own app bar via
       // pharmacy_vault_entry(), and this case is what gives it a real address:

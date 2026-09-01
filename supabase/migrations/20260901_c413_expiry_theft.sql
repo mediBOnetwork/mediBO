@@ -167,11 +167,14 @@ create table if not exists public.pharmacy_return_list_item (
   -- from a mediBO order, so the return can be raised without retyping anything.
   source_order_id      uuid,
   source_order_item_id uuid,
+  medibo_qty           numeric(12,3),   -- what the RETURNS ENGINE says is left
   medibo_return_id     uuid,
   medibo_status        text,
   medibo_message       text,
   created_at           timestamptz not null default now()
 );
+alter table public.pharmacy_return_list_item
+  add column if not exists medibo_qty numeric(12,3);
 create index if not exists pharmacy_return_list_item_list_idx
   on public.pharmacy_return_list_item (list_id);
 
@@ -259,6 +262,9 @@ insert into public.ui_copy (key, value) values
   ('phx.value_label',       to_jsonb('Value at cost'::text)),
   ('phx.cost_note',         to_jsonb('Valued at what you paid, not at MRP'::text)),
   ('phx.items_label',       to_jsonb('Items'::text)),
+  ('phx.items_one',         to_jsonb('1 item'::text)),
+  ('phx.items_many',        to_jsonb('{n} items'::text)),
+  ('phx.items_none',        to_jsonb('Nothing'::text)),
   ('phx.empty',             to_jsonb('Nothing in this window.'::text)),
   ('phx.empty_hint',        to_jsonb('Stock that moves into this window will appear here.'::text)),
   ('phx.window_title',      to_jsonb('Return windows closing'::text)),
@@ -298,6 +304,8 @@ insert into public.ui_copy (key, value) values
   ('phx.photo_label',       to_jsonb('Photo of the batch'::text)),
   ('phx.photo_hint',        to_jsonb('mediBO needs one photo of the expiring stock before a return can be raised. One photo covers the whole list.'::text)),
   ('phx.pending_note',      to_jsonb('Raised for approval. mediBO checks it and the credit note follows.'::text)),
+  ('phx.medibo_qty_label',  to_jsonb('{n} of these were bought on mediBO'::text)),
+  ('phx.medibo_qty_none',   to_jsonb('None of this batch was bought on mediBO'::text)),
 
   ('phv.title',             to_jsonb('Stock check'::text)),
   ('phv.subtitle',          to_jsonb('Counted against expected'::text)),
@@ -340,7 +348,8 @@ insert into public.ui_copy (key, value) values
   ('phv.unit_default',      to_jsonb('units'::text)),
   ('phv.line_short',        to_jsonb('{qty} {unit} {product} unaccounted'::text)),
   ('phv.line_over',         to_jsonb('{qty} {unit} {product} more on the shelf than expected'::text)),
-  ('phv.trend_line',        to_jsonb('{now} this period · {prev} the period before'::text))
+  ('phv.trend_line',        to_jsonb('{now} this period · {prev} the period before'::text)),
+  ('phv.staff_unnamed',     to_jsonb('Unnamed shift'::text))
 on conflict (key) do nothing;
 
 -- ═════════════════════════ 4. THE SMALL HELPERS ═════════════════════════════
@@ -464,6 +473,15 @@ set search_path to 'public' as $$ select trim_scale(coalesce(p, 0))::text; $$;
 
 -- "closes in 1 days" is the tell that a plural was built in code. Three keys,
 -- the backend picks; Dart prints whichever came back.
+create or replace function public._c413_items_label(p_n bigint)
+returns text language sql stable
+set search_path to 'public' as $$
+  select case when coalesce(p_n, 0) = 0 then public.ui_text('phx.items_none')
+              when p_n = 1              then public.ui_text('phx.items_one')
+              else public.ui_text_f('phx.items_many',
+                                    jsonb_build_object('n', p_n::text)) end;
+$$;
+
 create or replace function public._c413_closes_label(p_days integer)
 returns text language sql stable
 set search_path to 'public' as $$
@@ -537,17 +555,16 @@ set search_path to 'public' as $$
 $$;
 
 -- ── pharmacy_expiry_home: the whole screen from exactly one call ────────────
-create or replace function public.pharmacy_expiry_home()
+create or replace function public._c413_home(p_shop uuid)
 returns jsonb language plpgsql stable security definer
 set search_path to 'public' as $function$
 declare
-  v_shop uuid := public._c413_shop();
+  v_shop uuid := p_shop;
   v_90   numeric := 0;
   v_buckets jsonb;
   v_windows jsonb;
   v_head text;
 begin
-  if v_shop is null then return public._c413_denied('phx.err_not_pharmacy'); end if;
 
   select coalesce(sum(r.value_at_cost), 0) into v_90
     from public._c413_rows(v_shop) r
@@ -567,7 +584,7 @@ begin
       'bucket_key', keys.k,
       'label',      keys.lbl,
       'item_count', count(r.stock_id),
-      'count_label', count(r.stock_id)::text || ' ' || public.ui_text('phx.items_label'),
+      'count_label', public._c413_items_label(count(r.stock_id)),
       'value',      coalesce(sum(r.value_at_cost), 0),
       'value_display', public.inr_money(coalesce(sum(r.value_at_cost), 0)),
       'has',        count(r.stock_id) > 0,
@@ -633,17 +650,16 @@ begin
 end $function$;
 
 -- ── the rows behind one bucket ──────────────────────────────────────────────
-create or replace function public.pharmacy_expiry_items(
-  p_bucket text, p_limit integer default 50, p_offset integer default 0)
+create or replace function public._c413_items(
+  p_shop uuid, p_bucket text, p_limit integer default 50, p_offset integer default 0)
 returns jsonb language plpgsql stable security definer
 set search_path to 'public' as $function$
 declare
-  v_shop uuid := public._c413_shop();
+  v_shop uuid := p_shop;
   v_lim  integer := least(greatest(coalesce(p_limit, 50), 1), 200);
   v_off  integer := greatest(coalesce(p_offset, 0), 0);
   v_items jsonb; v_total bigint;
 begin
-  if v_shop is null then return public._c413_denied('phx.err_not_pharmacy'); end if;
 
   select count(*) into v_total
     from public._c413_rows(v_shop) r where r.bucket_key = p_bucket;
@@ -690,7 +706,7 @@ begin
     'items',      v_items,
     'has_more',   (v_off + v_lim) < v_total,
     'next_offset', v_off + v_lim,
-    'count_label', v_total::text || ' ' || public.ui_text('phx.items_label'),
+    'count_label', public._c413_items_label(v_total),
     'empty',      public.ui_text('phx.empty'),
     'empty_hint', public.ui_text('phx.empty_hint'),
     'cost_note',  public.ui_text('phx.cost_note'));
@@ -706,29 +722,37 @@ end $function$;
 -- Only rows whose window is OPEN go on the list. A closed window is not a
 -- return, it is a write-off, and putting it on the sheet wastes the trip.
 
-create or replace function public.pharmacy_expiry_return_build(p_bucket text default 'd90')
+create or replace function public._c413_return_build(p_shop uuid, p_bucket text default 'window', p_actor uuid default null)
 returns jsonb language plpgsql security definer
 set search_path to 'public' as $function$
 declare
-  v_shop uuid := public._c413_shop();
+  v_shop uuid := p_shop;
   v_list uuid;
   v_n integer; v_val numeric;
 begin
-  if v_shop is null then return public._c413_denied('phx.err_not_pharmacy'); end if;
 
   insert into public.pharmacy_return_list (pharmacy_id, bucket, created_by)
-  values (v_shop, coalesce(p_bucket, 'd90'), auth.uid())
+  values (v_shop, coalesce(p_bucket, 'window'), p_actor)
   returning id into v_list;
 
   insert into public.pharmacy_return_list_item
     (list_id, stock_id, product_id, product_name, batch_no, expiry, qty, unit_cost,
-     value_at_cost, supplier_name, closes_on, source_order_id, source_order_item_id)
+     value_at_cost, supplier_name, closes_on, source_order_id, source_order_item_id,
+     medibo_qty)
+  -- A shelf row can hold 40 strips of which only 5 ever came through mediBO —
+  -- the rest were bought locally. The pre-filled quantity is therefore the
+  -- RETURNS ENGINE's own returnable number, capped by what is actually on the
+  -- shelf. Asking it to take back 40 would be refused, correctly, and the owner
+  -- would learn nothing from the refusal.
   select v_list, r.stock_id, r.product_id, r.product_name, r.batch_no, r.expiry,
          r.qty, r.unit_cost, r.value_at_cost, r.supplier_name, r.closes_on,
-         r.source_order_id, r.source_order_item_id
+         r.source_order_id, r.source_order_item_id,
+         case when r.source_order_item_id is not null
+              then least(r.qty, public._return_returnable_qty(r.source_order_item_id))
+         end
     from public._c413_rows(v_shop) r
    where r.window_state = 'open'
-     and (coalesce(p_bucket,'d90') = 'all'
+     and (coalesce(p_bucket, 'window') in ('window', 'all')
           or r.bucket_key = p_bucket
           or (p_bucket = 'd90' and r.bucket_key in ('d30','d60','d90')));
 
@@ -745,18 +769,17 @@ begin
      set item_count = v_n, value_at_cost = round(v_val, 2)
    where id = v_list;
 
-  return public.pharmacy_expiry_return_get(v_list);
+  return public._c413_return_get(v_shop, v_list);
 end $function$;
 
-create or replace function public.pharmacy_expiry_return_get(p_list_id uuid)
+create or replace function public._c413_return_get(p_shop uuid, p_list_id uuid)
 returns jsonb language plpgsql stable security definer
 set search_path to 'public' as $function$
 declare
-  v_shop uuid := public._c413_shop();
+  v_shop uuid := p_shop;
   l public.pharmacy_return_list%rowtype;
   v_groups jsonb; v_can_send boolean;
 begin
-  if v_shop is null then return public._c413_denied('phx.err_not_pharmacy'); end if;
 
   select * into l from public.pharmacy_return_list
    where id = p_list_id and pharmacy_id = v_shop;
@@ -772,7 +795,7 @@ begin
              'supplier_label', coalesce(nullif(btrim(coalesce(i.supplier_name,'')),''),
                                         public.ui_text('phx.no_supplier')),
              'item_count',    count(*),
-             'count_label',   count(*)::text || ' ' || public.ui_text('phx.items_label'),
+             'count_label',   public._c413_items_label(count(*)),
              'value_display', public.inr_money(sum(i.value_at_cost)),
              'items', jsonb_agg(jsonb_build_object(
                  'item_id',       i.id,
@@ -783,7 +806,14 @@ begin
                  'expiry_label',  public.ui_text('phx.expiry_label') || ' ' || coalesce(i.expiry, ''),
                  'qty_label',     public._c413_qty(i.qty) || ' ' || public._c413_unit(i.product_id),
                  'value_display', public.inr_money(i.value_at_cost),
-                 'from_medibo',   i.source_order_item_id is not null,
+                 'from_medibo',   i.source_order_item_id is not null
+                                    and coalesce(i.medibo_qty, 0) > 0,
+                 'medibo_qty_label', case
+                    when i.source_order_item_id is null then null
+                    when coalesce(i.medibo_qty, 0) > 0
+                      then public.ui_text_f('phx.medibo_qty_label',
+                             jsonb_build_object('n', public._c413_qty(i.medibo_qty)))
+                    else public.ui_text('phx.medibo_qty_none') end,
                  'source_label',  case when i.source_order_item_id is not null
                                        then public.ui_text('phx.medibo_label')
                                        else public.ui_text('phx.outside_label') end,
@@ -799,6 +829,7 @@ begin
 
   select exists (select 1 from public.pharmacy_return_list_item i
                   where i.list_id = l.id and i.source_order_item_id is not null
+                    and coalesce(i.medibo_qty, 0) > 0
                     and i.medibo_return_id is null)
     into v_can_send;
 
@@ -808,7 +839,7 @@ begin
     'title',         public.ui_text('phx.list_title'),
     'status',        l.status,
     'item_count',    l.item_count,
-    'count_label',   l.item_count::text || ' ' || public.ui_text('phx.items_label'),
+    'count_label',   public._c413_items_label(l.item_count),
     'value_display', public.inr_money(l.value_at_cost),
     'value_label',   public.ui_text('phx.value_label'),
     'cost_note',     public.ui_text('phx.cost_note'),
@@ -829,15 +860,14 @@ end $function$;
 -- this file's. All this does is stop the owner retyping an order line they
 -- already have. A line the engine refuses keeps the engine's OWN message; this
 -- command never invents a second wording for the same refusal.
-create or replace function public.pharmacy_expiry_return_send(p_list_id uuid, p_photo_path text default null)
+create or replace function public._c413_return_send(p_shop uuid, p_list_id uuid, p_photo_path text default null)
 returns jsonb language plpgsql security definer
 set search_path to 'public' as $function$
 declare
-  v_shop uuid := public._c413_shop();
+  v_shop uuid := p_shop;
   l public.pharmacy_return_list%rowtype;
   it record; v_res jsonb; v_ok integer := 0; v_skip integer := 0;
 begin
-  if v_shop is null then return public._c413_denied('phx.err_not_pharmacy'); end if;
 
   select * into l from public.pharmacy_return_list
    where id = p_list_id and pharmacy_id = v_shop for update;
@@ -853,11 +883,12 @@ begin
   for it in
     select * from public.pharmacy_return_list_item
      where list_id = l.id and source_order_item_id is not null
+       and coalesce(medibo_qty, 0) > 0
        and medibo_return_id is null
   loop
     begin
       v_res := public.order_return_add(
-                 it.source_order_id, it.source_order_item_id, it.qty,
+                 it.source_order_id, it.source_order_item_id, it.medibo_qty,
                  'expired', 'sealed',
                  'Expiry return raised from the shop expiry watch (CMD #413)',
                  nullif(btrim(coalesce(p_photo_path, '')), ''), null, null);
@@ -885,18 +916,17 @@ begin
     update public.pharmacy_return_list set status = 'sent', sent_at = now() where id = l.id;
   end if;
 
-  return public.pharmacy_expiry_return_get(l.id)
+  return public._c413_return_get(v_shop, l.id)
          || jsonb_build_object('raised', v_ok, 'refused', v_skip,
                                'toast', case when v_ok > 0 then public.ui_text('phx.sent_toast')
                                              else public.ui_text('phx.err_nothing') end);
 end $function$;
 
-create or replace function public.pharmacy_expiry_lists(p_limit integer default 20)
+create or replace function public._c413_lists(p_shop uuid, p_limit integer default 20)
 returns jsonb language plpgsql stable security definer
 set search_path to 'public' as $function$
-declare v_shop uuid := public._c413_shop();
+declare v_shop uuid := p_shop;
 begin
-  if v_shop is null then return public._c413_denied('phx.err_not_pharmacy'); end if;
   return jsonb_build_object(
     'ok', true,
     'title', public.ui_text('phx.list_title'),
@@ -904,7 +934,7 @@ begin
     'lists', coalesce((
       select jsonb_agg(jsonb_build_object(
                'list_id',       l.id,
-               'count_label',   l.item_count::text || ' ' || public.ui_text('phx.items_label'),
+               'count_label',   public._c413_items_label(l.item_count),
                'value_display', public.inr_money(l.value_at_cost),
                'status',        l.status,
                'date_label',    to_char(l.created_at at time zone 'Asia/Kolkata', 'DD Mon YYYY'))
@@ -1107,17 +1137,15 @@ $$;
 -- Random, not "the ones you suspect" — a count you choose is a count you can
 -- steer. The expected number is computed AT PICK TIME and stored on the line,
 -- but it is never returned to the caller until the count is submitted.
-create or replace function public.pharmacy_count_start(p_n integer default 10)
+create or replace function public._c413_count_start(p_shop uuid, p_n integer default 10, p_actor uuid default null)
 returns jsonb language plpgsql security definer
 set search_path to 'public' as $function$
 declare
-  v_shop uuid := public._c413_shop();
+  v_shop uuid := p_shop;
   v_n integer := least(greatest(coalesce(p_n, 10), 1), 50);
   v_from timestamptz;
   v_sess uuid; v_rows integer;
 begin
-  if v_shop is null then return public._c413_denied('phv.err_not_pharmacy'); end if;
-  if not public._c413_is_owner(v_shop) then return public._c413_denied('phv.err_not_owner'); end if;
 
   -- The window starts at the last submitted count, or seven days back for a
   -- shop that has never counted.
@@ -1126,7 +1154,7 @@ begin
    where cs.pharmacy_id = v_shop and cs.status = 'submitted';
 
   insert into public.pharmacy_count_session (pharmacy_id, window_from, started_by)
-  values (v_shop, v_from, auth.uid()) returning id into v_sess;
+  values (v_shop, v_from, p_actor) returning id into v_sess;
 
   insert into public.pharmacy_count_line
     (session_id, product_id, product_name, pack_label, unit_cost,
@@ -1146,22 +1174,20 @@ begin
   end if;
 
   update public.pharmacy_count_session set sku_count = v_rows where id = v_sess;
-  return public.pharmacy_count_detail(v_sess);
+  return public._c413_count_detail(v_shop, v_sess);
 end $function$;
 
 -- The count sheet before submission, and the variance report after it. ONE
 -- function, because they are the same screen: what changes is what the backend
 -- is willing to show, and that decision is made here, not in Dart.
-create or replace function public.pharmacy_count_detail(p_session_id uuid)
+create or replace function public._c413_count_detail(p_shop uuid, p_session_id uuid)
 returns jsonb language plpgsql stable security definer
 set search_path to 'public' as $function$
 declare
-  v_shop uuid := public._c413_shop();
+  v_shop uuid := p_shop;
   cs public.pharmacy_count_session%rowtype;
   v_lines jsonb; v_open boolean; v_attr jsonb;
 begin
-  if v_shop is null then return public._c413_denied('phv.err_not_pharmacy'); end if;
-  if not public._c413_is_owner(v_shop) then return public._c413_denied('phv.err_not_owner'); end if;
 
   select * into cs from public.pharmacy_count_session
    where id = p_session_id and pharmacy_id = v_shop;
@@ -1208,15 +1234,21 @@ begin
   select coalesce(jsonb_agg(x order by (x->>'sort_value')::numeric desc), '[]'::jsonb)
     into v_attr from (
     select jsonb_build_object(
-             'staff_label',   coalesce(a.staff_label, ''),
-             'sold_label',    public._c413_qty(sum(a.sold_qty)),
-             'share_label',   trim_scale(round(sum(a.share_pct), 1))::text || '%',
-             'variance_label', public._c413_qty(sum(a.variance_qty)),
-             'value_display', public.inr_money(abs(sum(a.variance_value))),
-             'sort_value',    abs(sum(a.variance_value))) as x
-      from public.pharmacy_count_attribution a
-     where a.session_id = cs.id
-     group by coalesce(a.staff_label, '')) q;
+             'staff_label',    case when g.staff = '' then public.ui_text('phv.staff_unnamed')
+                                    else g.staff end,
+             'sold_label',     public._c413_qty(g.sold),
+             'share_label',    trim_scale(round(g.share, 1))::text || '%',
+             'variance_label', public._c413_qty(g.var_qty),
+             'value_display',  public.inr_money(abs(g.var_val)),
+             'sort_value',     abs(g.var_val)) as x
+      from (select coalesce(a.staff_label, '') as staff,
+                   sum(a.sold_qty) as sold,
+                   100.0 * sum(abs(a.variance_value))
+                     / nullif(sum(sum(abs(a.variance_value))) over (), 0) as share,
+                   sum(a.variance_qty) as var_qty, sum(a.variance_value) as var_val
+              from public.pharmacy_count_attribution a
+             where a.session_id = cs.id
+             group by coalesce(a.staff_label, '')) g) q;
 
   return jsonb_build_object(
     'ok', true,
@@ -1255,16 +1287,14 @@ end $function$;
 -- Submit. p_lines: [{line_id, counted_qty}] — a line left out is left
 -- UNCOUNTED (variance null), never defaulted to zero. "I did not count it" and
 -- "I counted zero" are different facts and the report must not conflate them.
-create or replace function public.pharmacy_count_submit(p_session_id uuid, p_lines jsonb)
+create or replace function public._c413_count_submit(p_shop uuid, p_session_id uuid, p_lines jsonb)
 returns jsonb language plpgsql security definer
 set search_path to 'public' as $function$
 declare
-  v_shop uuid := public._c413_shop();
+  v_shop uuid := p_shop;
   cs public.pharmacy_count_session%rowtype;
   v_n integer;
 begin
-  if v_shop is null then return public._c413_denied('phv.err_not_pharmacy'); end if;
-  if not public._c413_is_owner(v_shop) then return public._c413_denied('phv.err_not_owner'); end if;
 
   select * into cs from public.pharmacy_count_session
    where id = p_session_id and pharmacy_id = v_shop for update;
@@ -1337,24 +1367,22 @@ begin
                                      where cl.session_id = s.id), 0)
    where s.id = cs.id;
 
-  return public.pharmacy_count_detail(cs.id)
+  return public._c413_count_detail(v_shop, cs.id)
          || jsonb_build_object('toast', public.ui_text('phv.submitted_toast'));
 end $function$;
 
 -- ── the report: "14 strips Dolo unaccounted this week" ──────────────────────
 -- Every headline sentence is built HERE, unit noun included, so Dart never
 -- pluralises and never picks a word.
-create or replace function public.pharmacy_variance_report(p_days integer default 7)
+create or replace function public._c413_variance(p_shop uuid, p_days integer default 7)
 returns jsonb language plpgsql stable security definer
 set search_path to 'public' as $function$
 declare
-  v_shop uuid := public._c413_shop();
+  v_shop uuid := p_shop;
   v_days integer := least(greatest(coalesce(p_days, 7), 1), 180);
   v_from timestamptz := now() - make_interval(days => v_days);
   v_items jsonb; v_staff jsonb; v_val numeric := 0; v_sessions integer := 0;
 begin
-  if v_shop is null then return public._c413_denied('phv.err_not_pharmacy'); end if;
-  if not public._c413_is_owner(v_shop) then return public._c413_denied('phv.err_not_owner'); end if;
 
   select count(*), coalesce(sum(cs.variance_value), 0) into v_sessions, v_val
     from public.pharmacy_count_session cs
@@ -1374,7 +1402,7 @@ begin
                                  'unit',    public._c413_unit(cl.product_id),
                                  'product', min(cl.product_name))),
              'value_display', public.inr_money(abs(sum(coalesce(cl.variance_value,0)))),
-             'counts_label',  count(*)::text || ' × ' || public.ui_text('phv.counted_label'),
+             'counts_label',  public._c413_items_label(count(*)),
              'tone',          case when sum(coalesce(cl.variance_qty,0)) < 0
                                    then 'danger' else 'warning' end,
              'sort_value',    abs(sum(coalesce(cl.variance_value,0)))) as x
@@ -1391,26 +1419,33 @@ begin
   select coalesce(jsonb_agg(x order by (x->>'sort_value')::numeric desc), '[]'::jsonb)
     into v_staff from (
     select jsonb_build_object(
-             'staff_label',   coalesce(nullif(a.staff_label,''), public.ui_text('phv.unit_default')),
-             'variance_label', public._c413_qty(sum(a.variance_qty)),
-             'value_display', public.inr_money(abs(sum(a.variance_value))),
-             'share_label',   trim_scale(round(avg(a.share_pct), 1))::text || '%',
-             'trend_label',   public.ui_text_f('phv.trend_line', jsonb_build_object(
-                                'now',  public.inr_money(abs(sum(a.variance_value))),
-                                'prev', public.inr_money(abs(coalesce((
-                                  select sum(a2.variance_value)
-                                    from public.pharmacy_count_attribution a2
-                                    join public.pharmacy_count_session s2 on s2.id = a2.session_id
-                                   where s2.pharmacy_id = v_shop and s2.status = 'submitted'
-                                     and s2.submitted_at >= v_from - make_interval(days => v_days)
-                                     and s2.submitted_at <  v_from
-                                     and coalesce(a2.staff_label,'') = coalesce(a.staff_label,'')), 0))))),
-             'sort_value',    abs(sum(a.variance_value))) as x
-      from public.pharmacy_count_attribution a
-      join public.pharmacy_count_session cs on cs.id = a.session_id
-     where cs.pharmacy_id = v_shop and cs.status = 'submitted'
-       and cs.submitted_at >= v_from
-     group by coalesce(a.staff_label, '')) q;
+             'staff_label',    case when g.staff = '' then public.ui_text('phv.staff_unnamed')
+                                    else g.staff end,
+             'variance_label', public._c413_qty(g.var_qty),
+             'value_display',  public.inr_money(abs(g.var_val)),
+             'share_label',    trim_scale(round(g.share, 1))::text || '%',
+             'trend_label',    public.ui_text_f('phv.trend_line', jsonb_build_object(
+                                 'now',  public.inr_money(abs(g.var_val)),
+                                 'prev', public.inr_money(abs(coalesce((
+                                   select sum(a2.variance_value)
+                                     from public.pharmacy_count_attribution a2
+                                     join public.pharmacy_count_session s2 on s2.id = a2.session_id
+                                    where s2.pharmacy_id = v_shop and s2.status = 'submitted'
+                                      and s2.submitted_at >= v_from - make_interval(days => v_days)
+                                      and s2.submitted_at <  v_from
+                                      and coalesce(a2.staff_label, '') = g.staff), 0))))),
+             'sort_value',     abs(g.var_val)) as x
+      from (
+        select coalesce(a.staff_label, '') as staff,
+               sum(a.variance_qty)         as var_qty,
+               sum(a.variance_value)       as var_val,
+               100.0 * sum(abs(a.variance_value))
+                 / nullif(sum(sum(abs(a.variance_value))) over (), 0) as share
+          from public.pharmacy_count_attribution a
+          join public.pharmacy_count_session cs on cs.id = a.session_id
+         where cs.pharmacy_id = v_shop and cs.status = 'submitted'
+           and cs.submitted_at >= v_from
+         group by coalesce(a.staff_label, '')) g) q;
 
   return jsonb_build_object(
     'ok', true,
@@ -1477,6 +1512,151 @@ on conflict (feature_key) do update
       deep_link = excluded.deep_link, description = excluded.description,
       is_active = excluded.is_active;
 
+-- ══════════ 8b. THE PUBLIC DOOR — the shop check and the owner check ════════
+-- Each builder above is pure: give it a shop and it returns that shop's payload.
+-- These wrappers are the ONLY thing that decides which shop you are and whether
+-- you are its owner, so there is exactly one place to read that fence, and the
+-- proof below can drive the very same builders with an explicit shop instead of
+-- a second copy of the logic that would be free to drift.
+
+create or replace function public.pharmacy_expiry_home()
+returns jsonb language plpgsql stable security definer
+set search_path to 'public' as $function$
+declare v_shop uuid := public._c413_shop();
+begin
+  if v_shop is null then return public._c413_denied('phx.err_not_pharmacy'); end if;
+  return public._c413_home(v_shop);
+end $function$;
+
+create or replace function public.pharmacy_expiry_items(
+  p_bucket text, p_limit integer default 50, p_offset integer default 0)
+returns jsonb language plpgsql stable security definer
+set search_path to 'public' as $function$
+declare v_shop uuid := public._c413_shop();
+begin
+  if v_shop is null then return public._c413_denied('phx.err_not_pharmacy'); end if;
+  return public._c413_items(v_shop, p_bucket, p_limit, p_offset);
+end $function$;
+
+create or replace function public.pharmacy_expiry_return_build(p_bucket text default 'window')
+returns jsonb language plpgsql security definer
+set search_path to 'public' as $function$
+declare v_shop uuid := public._c413_shop();
+begin
+  if v_shop is null then return public._c413_denied('phx.err_not_pharmacy'); end if;
+  return public._c413_return_build(v_shop, coalesce(nullif(btrim(p_bucket), ''), 'window'), auth.uid());
+end $function$;
+
+create or replace function public.pharmacy_expiry_return_get(p_list_id uuid)
+returns jsonb language plpgsql stable security definer
+set search_path to 'public' as $function$
+declare v_shop uuid := public._c413_shop();
+begin
+  if v_shop is null then return public._c413_denied('phx.err_not_pharmacy'); end if;
+  return public._c413_return_get(v_shop, p_list_id);
+end $function$;
+
+create or replace function public.pharmacy_expiry_return_send(
+  p_list_id uuid, p_photo_path text default null)
+returns jsonb language plpgsql security definer
+set search_path to 'public' as $function$
+declare v_shop uuid := public._c413_shop();
+begin
+  if v_shop is null then return public._c413_denied('phx.err_not_pharmacy'); end if;
+  return public._c413_return_send(v_shop, p_list_id, p_photo_path);
+end $function$;
+
+create or replace function public.pharmacy_expiry_lists(p_limit integer default 20)
+returns jsonb language plpgsql stable security definer
+set search_path to 'public' as $function$
+declare v_shop uuid := public._c413_shop();
+begin
+  if v_shop is null then return public._c413_denied('phx.err_not_pharmacy'); end if;
+  return public._c413_lists(v_shop, p_limit);
+end $function$;
+
+-- ── the three owner-only doors ──────────────────────────────────────────────
+create or replace function public.pharmacy_count_start(p_n integer default 10)
+returns jsonb language plpgsql security definer
+set search_path to 'public' as $function$
+declare v_shop uuid := public._c413_shop();
+begin
+  if v_shop is null then return public._c413_denied('phv.err_not_pharmacy'); end if;
+  if not public._c413_is_owner(v_shop) then return public._c413_denied('phv.err_not_owner'); end if;
+  return public._c413_count_start(v_shop, p_n, auth.uid());
+end $function$;
+
+create or replace function public.pharmacy_count_detail(p_session_id uuid)
+returns jsonb language plpgsql stable security definer
+set search_path to 'public' as $function$
+declare v_shop uuid := public._c413_shop();
+begin
+  if v_shop is null then return public._c413_denied('phv.err_not_pharmacy'); end if;
+  if not public._c413_is_owner(v_shop) then return public._c413_denied('phv.err_not_owner'); end if;
+  return public._c413_count_detail(v_shop, p_session_id);
+end $function$;
+
+create or replace function public.pharmacy_count_submit(p_session_id uuid, p_lines jsonb)
+returns jsonb language plpgsql security definer
+set search_path to 'public' as $function$
+declare v_shop uuid := public._c413_shop();
+begin
+  if v_shop is null then return public._c413_denied('phv.err_not_pharmacy'); end if;
+  if not public._c413_is_owner(v_shop) then return public._c413_denied('phv.err_not_owner'); end if;
+  return public._c413_count_submit(v_shop, p_session_id, p_lines);
+end $function$;
+
+create or replace function public.pharmacy_variance_report(p_days integer default 7)
+returns jsonb language plpgsql stable security definer
+set search_path to 'public' as $function$
+declare v_shop uuid := public._c413_shop();
+begin
+  if v_shop is null then return public._c413_denied('phv.err_not_pharmacy'); end if;
+  if not public._c413_is_owner(v_shop) then return public._c413_denied('phv.err_not_owner'); end if;
+  return public._c413_variance(v_shop, p_days);
+end $function$;
+
+-- ══════════════ 8c. THE PROOF DRIVER (service_role only) ════════════════════
+-- Drives the REAL builders for one shop, end to end, and returns everything the
+-- proof script asserts on in one payload. It cannot be reached by anon or by
+-- `authenticated` — the grant fence below closes it with the rest of the
+-- internals — so it adds no surface while making the flows provable.
+create or replace function public.c413_proof_run(p_shop uuid)
+returns jsonb language plpgsql security definer
+set search_path to 'public' as $function$
+declare
+  v_list jsonb; v_sent jsonb; v_sheet jsonb; v_sub jsonb; v_lines jsonb;
+begin
+  v_list := public._c413_return_build(p_shop, 'window', null);
+  if coalesce((v_list->>'ok')::boolean, false) then
+    -- the same one tap the screen makes, photo attached
+    v_sent := public._c413_return_send(p_shop, (v_list->>'list_id')::uuid,
+                                       'dev-cmd-proofs/c413/batch.jpg');
+  end if;
+
+  v_sheet := public._c413_count_start(p_shop, 6, null);
+  if coalesce((v_sheet->>'ok')::boolean, false) then
+    -- count every picked line 2 units SHORT of the book, which is what a real
+    -- short count looks like, then submit exactly those lines.
+    select jsonb_agg(jsonb_build_object(
+             'line_id', cl.id,
+             'counted_qty', greatest(cl.expected_qty - 2, 0)))
+      into v_lines
+      from public.pharmacy_count_line cl
+     where cl.session_id = (v_sheet->>'session_id')::uuid;
+    v_sub := public._c413_count_submit(p_shop, (v_sheet->>'session_id')::uuid, v_lines);
+  end if;
+
+  return jsonb_build_object(
+    'home',       public._c413_home(p_shop),
+    'items_d30',  public._c413_items(p_shop, 'd30', 50, 0),
+    'list',       v_list,
+    'sent',       v_sent,
+    'sheet_open', v_sheet,
+    'submitted',  v_sub,
+    'report',     public._c413_variance(p_shop, 7));
+end $function$;
+
 -- ═══════════════════════════ 9. THE GRANT FENCE ═════════════════════════════
 -- A new function inherits Postgres's GRANT TO PUBLIC, and `anon` ships in the
 -- bundle. Revoke everything in this family from everyone, then hand back only
@@ -1494,7 +1674,8 @@ begin
             or p.proname like 'pharmacy\_expiry\_%'
             or p.proname like 'pharmacy\_count\_%'
             or p.proname like 'pharmacy\_variance\_%'
-            or p.proname like 'pharmacy\_shield\_%')
+            or p.proname like 'pharmacy\_shield\_%'
+            or p.proname like 'c413\_%')
   loop
     execute format('revoke all on function %s from public', r.sig);
     execute format('revoke all on function %s from anon', r.sig);
@@ -1549,3 +1730,4 @@ set search_path to 'public' as $$
 $$;
 revoke all on function public.c413_qa_report() from public, anon, authenticated;
 grant execute on function public.c413_qa_report() to service_role;
+grant execute on function public.c413_proof_run(uuid) to service_role;

@@ -29,6 +29,8 @@
 // No network, no Supabase, no goldens — both screens are pumped through their
 // `rpc` test seams against fixtures.
 
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -315,6 +317,30 @@ void main() {
       final bar = t.widget<LinearProgressIndicator>(
           find.byType(LinearProgressIndicator));
       expect(bar.value, 0.75); // the BACKEND's fraction, not 9/12 done here
+    });
+  });
+  // ── Reachability, proved offline ─────────────────────────────────────────
+  //
+  // #645/#646, the bug the nav-reachability suite exists to retire: a registry
+  // row renders a perfect tile and does nothing on tap. CHANGE #395 gave the
+  // dashboard a second, better door — a registry row whose `deep_link` is an
+  // ordinary path is pushed straight onto the navigator, so a screen with a
+  // route of its own needs no `case` in the shell at all. That is the door
+  // this screen uses, so THIS is where its wiring has to be pinned: if the
+  // named route ever disappears from main.dart, the tile goes dead and no
+  // canvas tool could tell us.
+  group('the screen is reachable', () {
+    final mainSrc = File('lib/main.dart').readAsStringSync();
+
+    test('main.dart declares the named route the registry deep-links to', () {
+      expect(mainSrc, contains("'/admin/delivery-programme'"),
+          reason: 'feature_registry.deep_link points here — without this route '
+              'the Delivery programme tile is a dead tap');
+    });
+
+    test('and pushes this screen for it', () {
+      expect(mainSrc, contains('AdminDeliveryExtrasScreen'),
+          reason: 'the route must build the screen this test file covers');
     });
   });
 }

@@ -180,11 +180,25 @@ create table if not exists public.pharmacy_stock (
   batch_key      text generated always as
                    (upper(coalesce(nullif(btrim(batch_no), ''), '~'))) stored,
   expiry_key     text generated always as
-                   (coalesce(nullif(btrim(expiry), ''), '~')) stored
+                   (coalesce(nullif(btrim(expiry), ''), '~')) stored,
+
+  -- The SECOND way a lot is found, and it is not redundant: a counter line
+  -- typed by hand carries no medicine_id, so its item_key is name-shaped while
+  -- the lot that came off a mediBO delivery is id-shaped. Matching on item_key
+  -- alone let a 9-unit sale walk straight past 6 units sitting on the shelf and
+  -- invent a negative lot beside them. Every lot therefore also carries its
+  -- normalised NAME, and a sale looks for either.
+  name_key       text generated always as ('n:' || public._norm_name(product_name)) stored
 );
+
+alter table public.pharmacy_stock add column if not exists name_key text
+  generated always as ('n:' || public._norm_name(product_name)) stored;
 
 create unique index if not exists pharmacy_stock_lot_uidx
   on public.pharmacy_stock (pharmacy_id, item_key, batch_key, expiry_key);
+
+create index if not exists pharmacy_stock_name_idx
+  on public.pharmacy_stock (pharmacy_id, name_key);
 
 -- FEFO reads this one every sale: the open lots of one item, earliest expiry
 -- first. Partial on qty <> 0 so the dead lots never widen it.
@@ -420,6 +434,16 @@ begin
        and item_key    = v_item
        and batch_key   = upper(coalesce(v_batch, '~'))
        and expiry_key  = coalesce(v_exp, '~');
+
+    -- Same medicine, other key shape. A line typed by name must land on the
+    -- pile that arrived with a catalogue id, and vice versa.
+    if v_lot.id is null then
+      select * into v_lot from public.pharmacy_stock
+       where pharmacy_id = p_shop
+         and name_key    = 'n:' || public._norm_name(coalesce(v_name, ''))
+         and batch_key   = upper(coalesce(v_batch, '~'))
+         and expiry_key  = coalesce(v_exp, '~');
+    end if;
   end if;
 
   if v_lot.id is null then
@@ -606,6 +630,7 @@ declare
   v_need   numeric;
   v_take   numeric;
   v_item   text;
+  v_nkey   text;
   v_short  numeric := 0;
   v_neg    integer := 0;
   v_lines  integer := 0;
@@ -627,6 +652,7 @@ begin
     if v_need <= 0 then continue; end if;
     v_lines := v_lines + 1;
     v_item  := public._phs_item_key(v_line.medicine_id, v_line.product_name);
+    v_nkey  := 'n:' || public._norm_name(coalesce(v_line.product_name, ''));
 
     -- 1 + 2 in one pass: the cashier's batch is simply sorted to the front of
     -- the FEFO list, so a hand-picked batch wins and everything after it is
@@ -635,7 +661,7 @@ begin
       select s.id, s.qty
         from public.pharmacy_stock s
        where s.pharmacy_id = v_shop
-         and s.item_key    = v_item
+         and (s.item_key = v_item or s.name_key = v_nkey)
          and s.qty         > 0
        order by
          (case when nullif(btrim(coalesce(v_line.batch_no,'')),'') is not null

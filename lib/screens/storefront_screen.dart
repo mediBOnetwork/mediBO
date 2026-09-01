@@ -527,6 +527,15 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
               'category=${widget.category};loadedCount=${page.length}');
         }
       }
+      // CMD #434 — an EMPTY showing_label is no longer a mystery. It means
+      // exactly one thing: this page came from the outage fallback, which has
+      // no envelope and therefore no counter. Saying so beside the empty label
+      // is the difference between "the backend regressed" and "one RPC call
+      // hiccuped and the keyset lane served the page".
+      RenderLog.write('c434_page_degraded',
+          'category=${widget.category};degraded=${pageResult.degraded};'
+          'cached=${MedicineRepository.lastCallWasCacheHit};'
+          'rpc=${browseErr ?? '-'}');
       // CHANGE #553 — take the backend's rendered labels as-is.
       RenderLog.write('c553_showing_label', pageResult.showingLabel ?? '');
       RenderLog.write('c553_gated', pageResult.gated ? '1' : '0');
@@ -556,6 +565,22 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         _loadSuggestions();
       }
     } catch (e) {
+      // CMD #434 — WRITE THE REASON FIRST. This catch used to swallow the
+      // exception straight into _pageError, so a category page that failed on
+      // the live build showed `c410_compare_tick=...;state=error` and an EMPTY
+      // c553_count_label with nothing anywhere saying WHY — while
+      // storefront_page() called directly was healthy. The grid is a canvas no
+      // browser tool can read, so this line is the only evidence production
+      // can produce. Written before the early return on purpose: a stale token
+      // still means this fetch failed.
+      RenderLog.write(
+        'c434_page_error',
+        'category=${widget.category};query=${widget.query.trim().isEmpty ? '-' : widget.query.trim()};'
+        'sort=$_sort;buyable=$_onlyBuyable;stale=${token != _loadToken};'
+        'type=${e.runtimeType};rpc=${MedicineRepository.browseRpcError ?? '-'};'
+        'err=${_shortErr(e)}',
+      );
+      MedicineRepository.browseRpcError = null;
       if (token != _loadToken || !mounted) return;
       widget.onLoadingChanged?.call(false);
       setState(() {
@@ -564,6 +589,13 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         _pageNetworkError = _isNetworkErr(e);
       });
     }
+  }
+
+  /// CMD #434 — the render log is one DOM node; a full Postgrest stack in it
+  /// would drown every other key `render_verify.js` reads.
+  static String _shortErr(Object e) {
+    final s = e.toString().replaceAll(RegExp(r'\s+'), ' ').trim();
+    return s.length <= 140 ? s : '${s.substring(0, 140)}…';
   }
 
   Future<void> _loadSuggestions() async {

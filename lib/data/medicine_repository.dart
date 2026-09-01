@@ -67,6 +67,15 @@ typedef FetchPageResult = ({
   // which is the normal state until a product has trade pricing. The grid
   // never builds this list itself and never decides which sort is active.
   List<Map<String, dynamic>> sortOptions,
+  // CMD #434 — true when this page came from an OUTAGE FALLBACK rather than
+  // from the storefront envelope. A degraded page carries no showing_label,
+  // no total, no paging plan and no sort chips, so it must never be written
+  // into the session cache: one transient RPC hiccup used to leave that
+  // category serving a label-less page for the rest of the session (an EMPTY
+  // c553_count_label while storefront_page itself was perfectly healthy), and
+  // Retry re-read the poisoned entry, so the grid could never recover without
+  // a full reload. Callers read it; nothing else in the app branches on it.
+  bool degraded,
 });
 
 /// CHANGE #553 — one product plus the backend's availability verdict, as
@@ -78,6 +87,14 @@ typedef StorefrontProduct = ({String status, bool gated, Product? item});
 final Map<String, FetchPageResult> _resultCache = {};
 final Map<String, List<String>> _suggestCache = {};
 const int _kMaxCacheEntries = 50;
+
+/// CMD #434 — one short, log-safe line for an exception. The render log is a
+/// single DOM node read by `render_verify.js`, so a full Postgrest stack would
+/// drown every other key in it.
+String _short(Object e) {
+  final s = e.toString().replaceAll(RegExp(r'\s+'), ' ').trim();
+  return s.length <= 120 ? s : '${s.substring(0, 120)}…';
+}
 
 void _cacheSet<V>(Map<String, V> cache, String key, V value) {
   if (cache.length >= _kMaxCacheEntries) {
@@ -378,6 +395,8 @@ class MedicineRepository {
       sortOptions: ((env['sort_options'] as List?) ?? const [])
           .map((o) => Map<String, dynamic>.from(o as Map))
           .toList(growable: false),
+      // A real envelope. Cacheable.
+      degraded: false,
     );
   }
 
@@ -806,9 +825,14 @@ class MedicineRepository {
           moreLabel: null,
           endLabel: null,
           sortOptions: const <Map<String, dynamic>>[],
+          // Outage fallback — see [FetchPageResult.degraded].
+          degraded: true,
         );
       }
-      _cacheSet(_resultCache, cacheKey, result);
+      // CMD #434 — a degraded page is NEVER cached. Caching it under the key
+      // the healthy envelope uses is what turned one transient RPC failure
+      // into a session-long label-less page.
+      if (!result.degraded) _cacheSet(_resultCache, cacheKey, result);
       return result;
     }
 
@@ -849,13 +873,27 @@ class MedicineRepository {
       } catch (e) {
         // storefront_page failed — fall back to the keyset RPC. It carries
         // neither a counter label nor an availability verdict.
-        _browseRpcError = '${category}:${e.toString().substring(0, e.toString().length.clamp(0, 80))}';
-        final items = await _fetchKeysetFallback(
-          category: category,
-          afterId: afterId,
-          limit: limit ?? pageSize,
-          buyable: true,
-        );
+        _browseRpcError = '${category}:${_short(e)}';
+        final List<Product> items;
+        try {
+          items = await _fetchKeysetFallback(
+            category: category,
+            afterId: afterId,
+            limit: limit ?? pageSize,
+            buyable: true,
+          );
+        } catch (fallbackError) {
+          // CMD #434 — BOTH lanes are down, so this call has no page to
+          // return and the grid will render its error state. Rethrowing the
+          // FALLBACK's error is what made that state undiagnosable: the
+          // caller was shown medicine_page_v2's message while the thing that
+          // actually broke was storefront_page. Report both, primary first.
+          _browseRpcError =
+              '$category:primary=${_short(e)};fallback=${_short(fallbackError)}';
+          // The PRIMARY error is the one worth surfacing — the fallback only
+          // ever runs because it already failed.
+          throw e;
+        }
         final result = (
           items: items,
           exactCount: null,
@@ -871,8 +909,10 @@ class MedicineRepository {
           moreLabel: null,
           endLabel: null,
           sortOptions: const <Map<String, dynamic>>[],
+          // Outage fallback — see [FetchPageResult.degraded].
+          degraded: true,
         );
-        _cacheSet(_resultCache, cacheKey, result);
+        // CMD #434 — NOT cached. See [FetchPageResult.degraded].
         return result;
       }
     }
@@ -910,6 +950,9 @@ class MedicineRepository {
       endLabel: null,
       // #174 — no envelope on the outage path, so no sort control is offered.
       sortOptions: const <Map<String, dynamic>>[],
+      // The non-buyable priority lane never had an envelope to begin with, so
+      // it is not a fallback and stays cacheable.
+      degraded: false,
     );
     _cacheSet(_resultCache, cacheKey, result);
     return result;

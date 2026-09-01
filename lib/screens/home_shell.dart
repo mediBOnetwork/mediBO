@@ -110,6 +110,10 @@ import 'pharmacy/px_screen.dart';
 import 'pharmacy/pharmacy_owner_screen.dart';
 import 'pharmacy/pharmacy_radar_screen.dart';
 import 'pharmacy/near_listing_screen.dart';
+// CHANGE #536 QA round 2 — /admin/go/purchases. The pharmacy's own purchase
+// analytics (CMD #367) existed but its ONLY door was a button inside Orders,
+// so the Money section the spec asks for had no Purchase reports tile.
+import 'purchases_screen.dart';
 import 'admin/admin_money_screen.dart'; // CMD #450 — /admin/go/money
 import 'admin/admin_demand_engine_screen.dart'; // CMD #427 — /admin/go/demand_engine
 import 'profile_screen.dart';
@@ -199,6 +203,11 @@ class HomeShell extends StatefulWidget {
     // deep link its own case comment says is the reason the case exists — was
     // parked for every pharmacy. Found by QA round 1.
     'refill',
+    // 'purchases' — my_purchases_screen() resolves the caller's OWN pharmacy,
+    // so the link is a door and never a permission. Found by QA round 2:
+    // the spec names Purchase reports in Money and the screen was built, but
+    // it was reachable only from a button buried inside Orders.
+    'purchases',
   };
 
   @override
@@ -993,6 +1002,13 @@ class _HomeShellState extends State<HomeShell> {
       case 'near_listing':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const NearListingScreen()));
+        break;
+      // CHANGE #536 QA round 2 — Purchase reports. my_purchases_screen()
+      // resolves the caller's own pharmacy and the screen prints the backend's
+      // refusal for anyone else, so there is no role test here.
+      case 'purchases':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const PurchasesScreen()));
         break;
       case 'mr': setState(() { _index = 7; _cartOpen = false; }); break;
       case 'companies': setState(() { _index = 8; _cartOpen = false; }); break;

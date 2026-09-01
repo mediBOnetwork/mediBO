@@ -10,12 +10,70 @@
 // decides what a success or a failure MEANS. This function only fetches bytes
 // and uploads them.
 //
-// Body: { limit?: number }   Auth: x-mirror-secret, or a service-role JWT.
+// Body: { limit?: number }   Auth: Authorization: Bearer <service-role key>.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-const MIRROR_SECRET = (Deno.env.get('MIRROR_SECRET') ?? 'medibo_image_mirror_2027').trim();
+// AUTH — CHANGE #460 QA round 1, finding 1.
+// This worker drives privileged RPCs and storage writes, so it must never be
+// callable by anyone who can read the repo. It used to fall back to a literal
+// shared secret that was committed in this file AND in two migrations AND in
+// cron_task.work_sql, which made that value a public credential: a POST from
+// the open internet, with no apikey and no JWT, did real work.
+//
+// There is now exactly ONE accepted credential, the platform-injected
+// service-role key, which is never in git. MIRROR_SECRET stays as an optional
+// break-glass override for a future caller that cannot hold that key; it is
+// UNSET today, and an unset/short value grants nothing. No fallback literal —
+// if nothing is configured, the function fails closed and refuses everyone.
+const ACCEPTED: string[] = [
+  Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+  Deno.env.get('MIRROR_SECRET') ?? '',
+].map((v) => v.trim()).filter((v) => v.length >= 20);
+
+// Constant-time compare so a caller cannot walk the credential byte by byte.
+function credentialMatches(presented: string): boolean {
+  if (presented.length < 20 || ACCEPTED.length === 0) return false;
+  let hit = false;
+  for (const good of ACCEPTED) {
+    let diff = presented.length ^ good.length;
+    for (let i = 0; i < presented.length; i++) {
+      diff |= presented.charCodeAt(i) ^ good.charCodeAt(i % good.length);
+    }
+    if (diff === 0) hit = true;
+  }
+  return hit;
+}
+
+// A project has TWO service-role credentials — the legacy signed JWT and the
+// newer opaque `sb_secret_...` string — and the platform injects only one of
+// them here. Byte-equality against the injected value therefore refuses the
+// OTHER perfectly legitimate form, which is what happened on the first attempt
+// at this fix: the cron's own key came back not_authorized.
+//
+// So authorise by CAPABILITY, not by string identity. This function is
+// deployed with verify_jwt=true, so the Supabase gateway has already checked
+// the signature and expiry of anything that reaches this line — an attacker
+// cannot mint or edit a token. All that is left for us to decide is WHICH
+// verified caller is allowed, and that is the role claim.
+function roleFromVerifiedJwt(token: string): string | null {
+  const parts = token.split('.');
+  if (parts.length !== 3) return null;              // not a JWT (opaque key)
+  try {
+    const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const payload = JSON.parse(atob(b64 + '='.repeat((4 - (b64.length % 4)) % 4)));
+    return typeof payload?.role === 'string' ? payload.role : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function isAuthorized(token: string): boolean {
+  if (!token) return false;
+  if (roleFromVerifiedJwt(token) === 'service_role') return true;  // signed by the gateway
+  return credentialMatches(token);                                  // opaque injected key
+}
 const BUCKET = 'product-images';
 const MAX_BYTES = 10 * 1024 * 1024;          // the bucket's own limit
 const FETCH_TIMEOUT_MS = 15000;
@@ -26,7 +84,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 // call it later. (CORS is mandatory on anything the web app can reach.)
 const CORS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-mirror-secret',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
@@ -61,8 +119,7 @@ Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
 
   const auth = (req.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '').trim();
-  const secret = (req.headers.get('x-mirror-secret') ?? '').trim();
-  if (secret !== MIRROR_SECRET && auth !== SUPABASE_KEY) {
+  if (!isAuthorized(auth)) {
     return new Response(JSON.stringify({ ok: false, error: 'not_authorized' }),
       { status: 401, headers: { ...CORS, 'Content-Type': 'application/json' } });
   }

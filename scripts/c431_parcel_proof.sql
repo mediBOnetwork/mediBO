@@ -78,10 +78,13 @@ begin
     json_build_object('sub', v_uid::text, 'role', 'authenticated')::text, true);
 
   -- ═══════════ PARCEL 1 — a mediBO delivery ══════════════════════════════
+  -- placed_by_admin so the order-hours gate lets a proof seed an order at any
+  -- hour. It changes nothing this proof asserts: counting a parcel does not
+  -- care who typed the order, only what the bill said.
   insert into public.orders (user_id, customer_id, pharmacy_name, total_amount, status,
-                             order_code, order_date)
+                             order_code, order_date, placed_by_admin)
   values (v_uid, v_shop, 'C431 Counting Chemist', 3000, 'accepted', 'C431PARCEL',
-          (now() at time zone 'Asia/Kolkata')::date)
+          (now() at time zone 'Asia/Kolkata')::date, true)
   returning id into v_ord;
 
   -- Three lines: one that will match, one that will be SHORT, one whose BATCH
@@ -281,6 +284,26 @@ begin
   perform pg_temp.chk('28 a finished parcel cannot be quietly re-counted',
     coalesce((v_r ->> 'ok')::boolean, true) = false and v_r ->> 'error' = 'closed', v_r::text);
 
+  -- ═══════════ THE DOOR OM ASKED FOR — count from the ORDER ══════════════
+  -- A mediBO parcel is not a stray box: it is this order, arriving. So the
+  -- count is reached from the order card, and the standalone screen keeps only
+  -- the parcels that have no order behind them.
+  perform set_config('request.jwt.claims',
+    json_build_object('sub', v_uid::text, 'role', 'authenticated')::text, true);
+
+  v_r := public.pharmacy_parcel_order_chip(v_ord);
+  perform pg_temp.chk('28b the order card carries the chip, captioned by the backend',
+    coalesce((v_r ->> 'show')::boolean, false)
+    and v_r ->> 'label' = 'Counted'
+    and v_r ->> 'tone' = 'success', v_r::text);
+
+  v_r := public.pharmacy_parcel_open_order(v_ord);
+  perform pg_temp.chk('28c opening from the ORDER finds the same bill, never a second one',
+    coalesce((v_r ->> 'ok')::boolean, false)
+    and (v_r ->> 'bill_id')::uuid = v_bill
+    and (select count(*) from public.pharmacy_purchase_bill
+          where pharmacy_id = v_shop and order_id = v_ord) = 1, v_r ->> 'bill_id');
+
   -- ═══════════ PARCEL 2 — an outside supplier's bill ═════════════════════
   insert into public.pharmacy_purchase_bill (
     pharmacy_id, source, supplier_name, supplier_gstin, invoice_no, invoice_date,
@@ -302,6 +325,16 @@ begin
   values (v_obill, 2, 'C431GAMMA 10MG CAPSULE', 8, 170, 1360, 'GM-7002', '03/2029',
           170, 220, 12, v_med3, 'matched', 'ok', true)
   returning id into v_bl2;
+
+  v_r := public.pharmacy_parcel_home();
+  perform pg_temp.chk('28d the standalone screen lists OUTSIDE parcels only — one door per box',
+    jsonb_array_length(v_r -> 'tabs') = 1
+    and (v_r -> 'tabs' -> 0 ->> 'key') = 'outside'
+    and (select bool_and(r ->> 'kind' = 'outside')
+           from jsonb_array_elements(v_r -> 'tabs' -> 0 -> 'rows') r)
+    and v_r ->> 'medibo_hint' =
+        'A mediBO parcel is counted from its own order — Orders › Count.',
+    v_r ->> 'medibo_hint');
 
   v_r := public.pharmacy_parcel_open(v_obill);
   v_osess := (v_r ->> 'session_id')::uuid;
@@ -391,9 +424,12 @@ begin
 
   v_r := public.pharmacy_parcel_home();
   perform pg_temp.chk('41 and sees none of its parcels',
-    jsonb_array_length(v_r -> 'tabs' -> 0 -> 'rows') = 0
-    and jsonb_array_length(v_r -> 'tabs' -> 1 -> 'rows') = 0,
-    v_r::text);
+    jsonb_array_length(v_r -> 'tabs' -> 0 -> 'rows') = 0, v_r::text);
+
+  perform pg_temp.chk('41b another pharmacy gets no count chip on someone else''s order',
+    coalesce((public.pharmacy_parcel_order_chip(v_ord) ->> 'show')::boolean, false) = false);
+  perform pg_temp.chk('41c and cannot open it either',
+    (public.pharmacy_parcel_open_order(v_ord) ->> 'error') = 'not_your_order');
 
   perform set_config('request.jwt.claims', '', true);
   v_r := public.pharmacy_parcel_home();

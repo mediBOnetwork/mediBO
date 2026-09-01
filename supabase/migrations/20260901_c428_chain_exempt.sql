@@ -345,3 +345,4 @@ values ('chain_watchdog', 105, 'poll', 'select public.dev_chain_watchdog()',
         'CHANGE #428 — alerts when pending commands are chained while a runner idles')
 on conflict (name) do update
    set work_sql = excluded.work_sql, enabled = true, note = excluded.note;
+

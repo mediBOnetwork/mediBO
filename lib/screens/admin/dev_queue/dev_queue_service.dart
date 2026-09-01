@@ -85,6 +85,13 @@ class DevQueueService {
   Future<Map<String, dynamic>> buildLane({int days = 7}) async =>
       _asMap(await _c.rpc('build_contention_status', params: {'p_days': days}));
 
+  /// CHANGE #530 — the boot doctor's verdict per runner: what a crash left
+  /// behind, what was repaired, and which runners are refusing to claim. Its
+  /// own RPC beside the three lanes, so a refused read of one never blanks the
+  /// others. Every word and tone is built by `runner_boot_status()`.
+  Future<Map<String, dynamic>> runnerBoot({int limit = 12}) async =>
+      _asMap(await _c.rpc('runner_boot_status', params: {'p_limit': limit}));
+
   /// CHANGE #404 — is masked calling actually on, and what is still missing
   /// before real calls flow. Render-ready: every word and tone on the card is
   /// built by this RPC.

@@ -363,7 +363,10 @@ insert into public.ui_copy(key, value) values
  ('phradar.subtitle',       to_jsonb('Ranked by what it will actually cost you, not by what is closest.'::text)),
  ('phradar.headline',       to_jsonb('{{value}} likely to expire unsold'::text)),
  ('phradar.headline_none',  to_jsonb('Nothing worth worrying about yet'::text)),
- ('phradar.headline_note',  to_jsonb('{{items}} batches on the radar · at your purchase cost'::text)),
+ ('phradar.headline_note',  to_jsonb('{{items}} on the radar · at your purchase cost'::text)),
+ ('phradar.n_batches_one',  to_jsonb('1 batch'::text)),
+ ('phradar.n_batches_many', to_jsonb('{{n}} batches'::text)),
+ ('phradar.row_ask',        to_jsonb('How many left?'::text)),
  ('phradar.headline_none_note', to_jsonb('We will tell you the moment a batch starts costing you money.'::text)),
  ('phradar.list_title',     to_jsonb('Worst first'::text)),
  ('phradar.value_label',    to_jsonb('Expected loss'::text)),
@@ -432,6 +435,9 @@ update public.ui_copy
 update public.ui_copy
    set value = to_jsonb('{{product}} ({{batch_word}}) expires {{date}} — about {{value}} at risk, and the return window has closed. How many are left?'::text)
  where key = 'phradar.wa_urgent_closed';
+update public.ui_copy
+   set value = to_jsonb('{{items}} on the radar · at your purchase cost'::text)
+ where key = 'phradar.headline_note';
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 6. THE ASK — question and options, composed in the backend
@@ -625,6 +631,9 @@ returns jsonb language sql stable set search_path to 'public' as $$
     'window_tone', case r.window_state when 'open' then 'warning'
                                        when 'closed' then 'danger'
                                        else 'neutral' end,
+    -- The row's own action label. It is NOT the section heading reused: a
+    -- button that repeats the heading above it reads as a stray word.
+    'ask_button', public.ui_text('phradar.row_ask'),
     'ask', p_ask);
 $$;
 
@@ -674,9 +683,14 @@ begin
   if v_shop is null then return public._c425_denied(); end if;
   v_cfg := public._c425_config(v_shop);
 
+  -- The headline counts lots with money at risk, so the list must be the SAME
+  -- set. Showing ₹0.00 rows under "Worst first" was the ₹40-maybe problem
+  -- wearing a different hat: it made the headline ("1 batch") disagree with
+  -- the four rows printed under it.
   for r in
     select * from public._c425_rows(v_shop)
      where bucket_key in ('expired','d30','d60','d90')
+       and expected_loss > 0
      order by expected_loss desc, days_to_expiry
      limit 25
   loop
@@ -724,7 +738,8 @@ begin
         else public.ui_text('phradar.headline_none') end,
     'headline_note', case when v_risk > 0
         then public.ui_fmt('phradar.headline_note',
-               jsonb_build_object('items', v_n::text))
+               jsonb_build_object('items',
+                 public._c425_plural('phradar.n_batches', v_n)))
         else public.ui_text('phradar.headline_none_note') end,
     'list_title', public.ui_text('phradar.list_title'),
     'items', v_items,
@@ -775,6 +790,7 @@ begin
     select * from public._c425_rows(v_shop)
      where (p_bucket is null or bucket_key = p_bucket)
        and bucket_key in ('expired','d30','d60','d90')
+       and expected_loss > 0
      order by expected_loss desc, days_to_expiry
      limit greatest(coalesce(p_limit,50),1) offset greatest(coalesce(p_offset,0),0)
   loop
@@ -782,7 +798,8 @@ begin
   end loop;
   select count(*) into v_total from public._c425_rows(v_shop)
    where (p_bucket is null or bucket_key = p_bucket)
-     and bucket_key in ('expired','d30','d60','d90');
+     and bucket_key in ('expired','d30','d60','d90')
+     and expected_loss > 0;
   return jsonb_build_object('ok', true, 'items', v_items, 'total', v_total,
     'has_more', greatest(coalesce(p_offset,0),0) + jsonb_array_length(v_items) < v_total,
     'empty', public.ui_text('phradar.empty'),

@@ -28,6 +28,7 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../design_tokens.dart';
+import 'pharmacy_owner_screen.dart';  // CHANGE #419
 import 'pharmacy_reorder_screen.dart';  // CHANGE #414
 import 'pharmacy_stock_screen.dart';
 import 'pos_margin_strip.dart';  // CHANGE #414
@@ -499,6 +500,15 @@ class _PosScreenState extends State<PosScreen> {
                   // and the screen behind it renders its own empty state when
                   // there is nothing running low.
                   _ReorderEntryTile(rpc: widget.rpc),
+                  SizedBox(height: Ds.space.x12),
+                  // CHANGE #419 — the owner's night screens (money, the
+                  // anonymous benchmark, the zone demand radar), from the same
+                  // counter. Backend copy owns the label, so clearing the copy
+                  // removes the entry with no deploy.
+                  OwnerDashboardEntryTile(
+                    rpc: widget.rpc,
+                    label: c('owner419.tile_label'),
+                  ),
                   SizedBox(height: Ds.space.x12),
                   _searchField(labels),
                   if (_results.isNotEmpty || _searchMessage.isNotEmpty) ...[

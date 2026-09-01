@@ -301,7 +301,7 @@ begin
            count(distinct c.bill_id)                                     as bills,
            max(c.product_name)                                           as product_name,
            max(c.pack_label)                                             as pack_label,
-           percentile_cont(0.5) within group (order by c.rate)           as shop_rate
+           (percentile_cont(0.5) within group (order by c.rate))::numeric           as shop_rate
       from _c427_cur c
      where c.rate is not null and c.rate > 0
      group by c.zone_id, c.medicine_id, c.pharmacy_id
@@ -312,9 +312,9 @@ begin
            sum(units)                                                    as units,
            sum(bills)::int                                               as bills,
            count(distinct pharmacy_id)::int                              as n,
-           percentile_cont(0.50) within group (order by shop_rate)       as median_rate,
-           percentile_cont(0.25) within group (order by shop_rate)       as p25_rate,
-           percentile_cont(0.75) within group (order by shop_rate)       as p75_rate
+           (percentile_cont(0.50) within group (order by shop_rate))::numeric       as median_rate,
+           (percentile_cont(0.25) within group (order by shop_rate))::numeric       as p25_rate,
+           (percentile_cont(0.75) within group (order by shop_rate))::numeric       as p75_rate
       from per_shop group by zone_id, medicine_id
   ), prev as (
     select zone_id, medicine_id, sum(units) as units
@@ -349,7 +349,7 @@ begin
     select c.zone_id, c.medicine_id, c.supplier_key, c.pharmacy_id,
            max(c.supplier_label)                                         as supplier_label,
            sum(c.units)                                                  as units,
-           percentile_cont(0.5) within group (order by c.rate)           as shop_rate
+           (percentile_cont(0.5) within group (order by c.rate))::numeric           as shop_rate
       from _c427_cur c
      where c.rate is not null and c.rate > 0
      group by c.zone_id, c.medicine_id, c.supplier_key, c.pharmacy_id
@@ -358,7 +358,7 @@ begin
            max(supplier_label)                                           as supplier_label,
            sum(units)                                                    as units,
            count(distinct pharmacy_id)::int                              as n,
-           percentile_cont(0.5) within group (order by shop_rate)        as median_rate,
+           (percentile_cont(0.5) within group (order by shop_rate))::numeric        as median_rate,
            min(shop_rate)                                                as min_rate,
            max(shop_rate)                                                as max_rate
       from per_shop group by zone_id, medicine_id, supplier_key
@@ -500,7 +500,7 @@ begin
            max(product_name) as product_name,
            max(pack_label)   as pack_label,
            sum(units)        as units,
-           percentile_cont(0.5) within group (order by rate) as shop_rate
+           (percentile_cont(0.5) within group (order by rate))::numeric as shop_rate
       from raw where rate is not null and rate > 0
      group by zone_id, medicine_id, pharmacy_id
   ), peers as (
@@ -508,7 +508,7 @@ begin
     select a.zone_id, a.medicine_id, a.pharmacy_id, a.product_name, a.pack_label,
            a.units, a.shop_rate,
            count(b.pharmacy_id)::int as peer_shops,
-           percentile_cont(0.5) within group (order by b.shop_rate) as peer_median
+           (percentile_cont(0.5) within group (order by b.shop_rate))::numeric as peer_median
       from per_shop a
       join per_shop b
         on b.zone_id = a.zone_id and b.medicine_id = a.medicine_id
@@ -1009,3 +1009,221 @@ revoke execute on function public.network_demand_refresh(date)  from anon, authe
 revoke execute on function public.network_season_refresh()      from anon, authenticated;
 revoke execute on function public.network_overpay_refresh(date) from anon, authenticated;
 revoke execute on function public._c427_bill_units(date, date)  from anon, authenticated;
+
+-- ── 15. The radar is fed by the vault ──────────────────────────────────────
+-- #419's `_c419_units` saw two things: what a shop SOLD over its own counter,
+-- and what it bought FROM mediBO. It could not see the box a pharmacy bought
+-- from a distributor mediBO has never dealt with — which is most of the
+-- market, and exactly the thing the vault now holds. Same body, one more arm,
+-- and the mediBO-orders arm learns the guard #424 already uses so an order
+-- that was also photographed into the vault is counted ONCE.
+create or replace function public._c419_units(p_from date, p_to date)
+returns table (zone_id smallint, medicine_id bigint, product_name text,
+               pharmacy_id uuid, units numeric)
+language sql stable security definer set search_path to 'public' as $$
+  select p.zone_id, l.medicine_id, max(l.product_name), s.pharmacy_id, sum(l.qty)
+    from public.pos_sale_lines l
+    join public.pos_sales s on s.id = l.sale_id
+    join public.pharmacy_profiles p on p.id = s.pharmacy_id
+   where s.status = 'completed' and s.sold_on between p_from and p_to
+     and p.zone_id is not null and l.medicine_id is not null
+     and public._c419_sharing(s.pharmacy_id)
+   group by p.zone_id, l.medicine_id, s.pharmacy_id
+  union all
+  select p.zone_id, oi.product_id::bigint, max(oi.product_name), o.customer_id, sum(oi.quantity)
+    from public.order_items oi
+    join public.orders o on o.id = oi.order_id
+    join public.pharmacy_profiles p on p.id = o.customer_id
+   where o.order_date between p_from and p_to
+     and p.zone_id is not null and oi.product_id is not null
+     and coalesce(oi.unfulfillable, false) = false
+     and public._c419_sharing(o.customer_id)
+     -- counted on the bill instead when the bill exists (CMD #427)
+     and not exists (select 1 from public.pharmacy_purchase_bill b
+                      where b.order_id = o.id and b.status in ('confirmed','applied'))
+   group by p.zone_id, oi.product_id, o.customer_id
+  union all
+  -- CMD #427 — every bill in the vault, including purchases mediBO never
+  -- supplied. The opt-out and the zone requirement live inside the reader.
+  select u.zone_id, u.medicine_id, max(u.product_name), u.pharmacy_id, sum(u.units)
+    from public._c427_bill_units(p_from, p_to) u
+   group by u.zone_id, u.medicine_id, u.pharmacy_id;
+$$;
+
+-- ── 16. PROOF ──────────────────────────────────────────────────────────────
+-- Seeds a SIX-pharmacy zone and a FOUR-pharmacy zone, eight months of bills
+-- each, one shop deliberately overpaying, one SKU deliberately seasonal. Then
+-- it asserts the four things this command claims, and deletes every row it
+-- made — including on failure.
+create or replace function public.c427_network_proof()
+returns jsonb
+language plpgsql security definer set search_path to 'public' as $$
+declare
+  v_big smallint := 904; v_small smallint := 905;
+  v_floor integer := public._c427_floor();
+  v_med bigint; v_med2 bigint;
+  v_shop uuid; v_bill uuid;
+  v_big_ids uuid[] := '{}'; v_small_ids uuid[] := '{}';
+  v_m date; v_month0 date := public._c427_month();
+  i integer; k integer; v_units numeric; v_rate numeric; v_mo smallint;
+  v_sku_big integer; v_sku_small integer; v_sup_big integer;
+  v_season_rows integer; v_season_peak numeric; v_radar_units numeric;
+  v_over jsonb; v_over_big integer; v_over_small integer; v_over_row record;
+  v_named integer;
+begin
+  select id into v_med  from public."MEDICINE" where therapeutic_class ilike '%ANTIPYRETIC%' limit 1;
+  if v_med is null then select id into v_med from public."MEDICINE" order by id limit 1; end if;
+  select id into v_med2 from public."MEDICINE" where id <> v_med order by id limit 1;
+
+  insert into public.zones (id, code, name, is_active) values
+    (v_big,   'C427BIG', 'C427 Proof Big',   false),
+    (v_small, 'C427SML', 'C427 Proof Small', false)
+  on conflict (id) do nothing;
+
+  -- 6 shops in the big zone, 4 in the small one — one under the floor of 5.
+  for i in 1..10 loop
+    insert into public.pharmacy_profiles (user_id, pharmacy_name, customer_name,
+      address, city, pincode, zone_id, approved, status)
+    values (gen_random_uuid(), 'C427 proof shop ' || i, 'C427 proof ' || i,
+            'proof', 'proof', '000000',
+            case when i <= 6 then v_big else v_small end, true, 'approved')
+    returning id into v_shop;
+    if i <= 6 then v_big_ids := v_big_ids || v_shop;
+    else            v_small_ids := v_small_ids || v_shop; end if;
+
+    -- Eight months of purchase bills, newest last.
+    for k in 0..7 loop
+      v_m := (v_month0 - (k || ' months')::interval)::date;
+      v_mo := extract(month from v_m)::smallint;
+      -- The seasonal shape: this SKU triples in the monsoon (Jun–Sep IST).
+      v_units := case when v_mo between 6 and 9 then 60 else 20 end;
+      -- Shop 1 in the big zone pays ~15% over its neighbours. Everyone else
+      -- pays the same rate, so the peer median is unambiguous.
+      v_rate  := case when i = 1 then 110.00 else 96.00 end;
+
+      insert into public.pharmacy_purchase_bill
+        (pharmacy_id, supplier_name, supplier_gstin, invoice_no, invoice_date,
+         status, source, line_count, confirmed_at)
+      values (v_shop,
+              -- the supplier alternates by MONTH, not by shop, so every
+              -- supplier row is seen by all six shops and clears the floor
+              case when k % 2 = 0 then 'C427 Distributors' else 'C427 Traders' end,
+              case when k % 2 = 0 then '22AAAAA0000A1Z5'  else '22BBBBB0000B1Z5' end,
+              'C427/' || i || '/' || k, (v_m + 4)::date, 'confirmed', 'photo', 2, now())
+      returning id into v_bill;
+
+      insert into public.pharmacy_purchase_bill_line
+        (bill_id, line_no, medicine_id, product_name, qty, unit_cost, mrp, match_status)
+      values (v_bill, 1, v_med,  'C427 fever pack', v_units, v_rate, 150, 'matched'),
+             (v_bill, 2, v_med2, 'C427 steady pack', 12,     40.00, 60,  'matched');
+    end loop;
+  end loop;
+
+  -- Run the engine over every seeded month, then the two derived layers.
+  for k in 0..7 loop
+    perform public.network_demand_refresh((v_month0 - (k || ' months')::interval)::date);
+  end loop;
+  perform public.network_season_refresh();
+  v_over := public.network_overpay_refresh(v_month0);
+
+  -- 1. DEMAND: the six-shop zone aggregates; the four-shop zone does not exist.
+  select count(*) into v_sku_big   from public.pharmacy_network_sku_month where zone_id = v_big;
+  select count(*) into v_sku_small from public.pharmacy_network_sku_month where zone_id = v_small;
+  select count(*) into v_sup_big   from public.pharmacy_network_supplier_rate where zone_id = v_big;
+
+  -- 2. RADAR: the same bills are now visible to #419's own reader.
+  select coalesce(sum(units), 0) into v_radar_units
+    from public._c419_units(v_month0, (v_month0 + interval '1 month - 1 day')::date)
+   where zone_id = v_big;
+
+  -- 3. SEASONALITY: a monsoon month must read above an average month.
+  select count(*), coalesce(max(factor), 0) into v_season_rows, v_season_peak
+    from public.pharmacy_sku_season
+   where zone_id = v_big and medicine_id = v_med and month_no between 6 and 9;
+
+  -- 4. OVERPAY: exactly the shop that paid more, and nobody in the small zone.
+  select count(*) into v_over_big   from public.pharmacy_overpay_insight
+   where pharmacy_id = any(v_big_ids);
+  select count(*) into v_over_small from public.pharmacy_overpay_insight
+   where pharmacy_id = any(v_small_ids);
+  select * into v_over_row from public.pharmacy_overpay_insight
+   where pharmacy_id = v_big_ids[1] and medicine_id = v_med limit 1;
+
+  -- No other pharmacy is named anywhere in what the subject would be shown.
+  select count(*) into v_named
+    from public.pharmacy_overpay_insight i
+    join public.pharmacy_profiles p on p.id <> i.pharmacy_id
+   where i.pharmacy_id = any(v_big_ids)
+     and (i.product_name ilike '%' || p.pharmacy_name || '%'
+          or coalesce(i.pack_label,'') ilike '%' || p.pharmacy_name || '%');
+
+  -- ── clean up EVERYTHING, then answer ──
+  delete from public.pharmacy_overpay_insight
+   where pharmacy_id = any(v_big_ids) or pharmacy_id = any(v_small_ids);
+  delete from public.pharmacy_network_sku_month     where zone_id in (v_big, v_small);
+  delete from public.pharmacy_network_supplier_rate where zone_id in (v_big, v_small);
+  delete from public.pharmacy_sku_season            where zone_id in (v_big, v_small);
+  delete from public.pharmacy_category_season       where zone_id in (v_big, v_small);
+  delete from public.pharmacy_zone_sku_prior        where zone_id in (v_big, v_small);
+  delete from public.pharmacy_purchase_bill_line l using public.pharmacy_purchase_bill b
+   where l.bill_id = b.id and (b.pharmacy_id = any(v_big_ids) or b.pharmacy_id = any(v_small_ids));
+  delete from public.pharmacy_purchase_bill
+   where pharmacy_id = any(v_big_ids) or pharmacy_id = any(v_small_ids);
+  delete from public.pharmacy_insight_optout
+   where pharmacy_id = any(v_big_ids) or pharmacy_id = any(v_small_ids);
+  delete from public.pharmacy_profiles
+   where id = any(v_big_ids) or id = any(v_small_ids);
+  delete from public.zones where id in (v_big, v_small);
+
+  return jsonb_build_object(
+    'ok', v_sku_big > 0
+          and v_sku_small = 0
+          and v_sup_big > 0
+          and v_radar_units > 0
+          and v_season_rows > 0 and v_season_peak > 1
+          and v_over_big = 1
+          and v_over_small = 0
+          and v_named = 0
+          and v_floor >= 5
+          and coalesce(v_over_row.peer_shops, 0) >= v_floor,
+    'min_cohort', v_floor,
+    'demand', jsonb_build_object(
+      'sku_rows_six_shop_zone',  v_sku_big,
+      'sku_rows_four_shop_zone', v_sku_small,
+      'supplier_rate_rows',      v_sup_big,
+      'radar_units_from_vault',  trim_scale(round(v_radar_units, 2))),
+    'season', jsonb_build_object(
+      'monsoon_rows', v_season_rows,
+      'peak_factor',  trim_scale(round(v_season_peak, 3))),
+    'overpay', jsonb_build_object(
+      'insights_six_shop_zone',  v_over_big,
+      'insights_four_shop_zone', v_over_small,
+      'your_rate',   public._c427_money(v_over_row.your_rate),
+      'peer_median', public._c427_money(v_over_row.peer_median),
+      'delta_pct',   public._c427_pct(-coalesce(v_over_row.delta_pct, 0)),
+      'peer_shops',  coalesce(v_over_row.peer_shops, 0),
+      'refresh',     v_over,
+      'other_pharmacy_named', v_named),
+    'note', 'Six pharmacies in one zone and four in another, eight months of '
+            'bills each. The six-shop zone aggregates, produces a monsoon '
+            'seasonal factor and one overpay note for the shop that paid more. '
+            'The four-shop zone is stored nowhere and is told nothing.');
+exception when others then
+  delete from public.pharmacy_overpay_insight
+   where pharmacy_id = any(v_big_ids) or pharmacy_id = any(v_small_ids);
+  delete from public.pharmacy_network_sku_month     where zone_id in (904, 905);
+  delete from public.pharmacy_network_supplier_rate where zone_id in (904, 905);
+  delete from public.pharmacy_sku_season            where zone_id in (904, 905);
+  delete from public.pharmacy_category_season       where zone_id in (904, 905);
+  delete from public.pharmacy_zone_sku_prior        where zone_id in (904, 905);
+  delete from public.pharmacy_purchase_bill_line l using public.pharmacy_purchase_bill b
+   where l.bill_id = b.id and (b.pharmacy_id = any(v_big_ids) or b.pharmacy_id = any(v_small_ids));
+  delete from public.pharmacy_purchase_bill
+   where pharmacy_id = any(v_big_ids) or pharmacy_id = any(v_small_ids);
+  delete from public.pharmacy_profiles
+   where id = any(v_big_ids) or id = any(v_small_ids);
+  delete from public.zones where id in (904, 905);
+  return jsonb_build_object('ok', false, 'error', SQLERRM);
+end $$;
+
+revoke execute on function public.c427_network_proof() from anon, authenticated;

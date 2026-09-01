@@ -173,6 +173,37 @@ class PushService {
     _onOpen?.call(l);
   }
 
+  /// CMD #477 — register THIS device for the signed-in user without touching
+  /// anything else the channel already owns.
+  ///
+  /// [start] is the shell's call: it binds the FCM handlers and, critically,
+  /// installs the navigator's own deep-link router as [_onOpen]. A second
+  /// surface calling `start` again would overwrite that router with its own
+  /// narrower callback, so a surface that only needs a TOKEN calls this
+  /// instead. It reads the backend config if the shell has not yet (so it is
+  /// safe on a cold path), leaves `_onOpen` and the handlers exactly as it
+  /// found them, and is idempotent on the token like every other entry point.
+  ///
+  /// The rider surface is why this exists: #454 built the whole
+  /// delivery_assigned push path server-side, and notif_push_send answers
+  /// `no_active_token` — writing no notification_log row at all — for a rider
+  /// whose device never registered.
+  Future<void> ensureRegistered() async {
+    try {
+      config ??= await _readConfig();
+      if (!configured) {
+        RenderLog.write('c477_rider_push', 'not_configured');
+        return;
+      }
+      await registerForCurrentUser();
+      RenderLog.write('c477_rider_push', _token == null ? 'no_token' : 'registered');
+    } catch (e) {
+      // Push must never take a surface down — BOOT RESILIENCE RULE.
+      RenderLog.write('c477_rider_push', 'error');
+      debugPrint('[push] ensureRegistered failed: $e');
+    }
+  }
+
   /// Ask for permission and register this device against the signed-in user.
   /// Called on login and on every account switch.
   Future<void> registerForCurrentUser() async {

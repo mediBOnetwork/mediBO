@@ -30,6 +30,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../fulfill/fulfill_lookups.dart';
 import '../../services/device_location.dart';
 import '../../services/masked_call_service.dart';
+import '../../services/push_service.dart';
 import '../../user_state.dart';
 import '../../utils/render_log.dart';
 import 'agency_team_section.dart'; // C630: PART D
@@ -117,18 +118,51 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
   /// D1 — the agency section is gated on my_delivery_home()'s is_agency.
   bool get _isAgency => _home['is_agency'] == true;
 
+  /// CMD #477 — the rider half of #454's assignment notification.
+  ///
+  /// #454 built the whole server side (the delivery_assigned route, the inbox
+  /// row, the WhatsApp fallback) but could not land the client half, so
+  /// notif_push_send answered `no_active_token` for every rider and wrote no
+  /// notification_log row at all. This surface registers the device token, so
+  /// the push the backend already composes has somewhere to land.
+  bool _pushWired = false;
+  void Function(String)? _prevOnForeground;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     FulfillLookups.instance.ensureLoaded();
     _load();
+    // After the first frame, exactly as the shell does it: a Firebase failure
+    // must never sit in front of this screen's own build (BOOT RESILIENCE
+    // RULE), and PushService swallows every error for the same reason.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _registerPush());
+  }
+
+  /// Register this device for the signed-in rider. `ensureRegistered` is used
+  /// rather than `start` on purpose: the shell owns the deep-link router and a
+  /// second `start` would overwrite it. The call is idempotent on the token.
+  Future<void> _registerPush() async {
+    if (_pushWired || !mounted) return;
+    _pushWired = true;
+    final push = PushService.instance;
+    // A new assignment that arrives while the rider is looking at this screen
+    // must show up on it. The shell's own foreground listener (the bell) is
+    // kept and called first — this chains onto it, it does not replace it.
+    _prevOnForeground = push.onForeground;
+    push.onForeground = (link) {
+      _prevOnForeground?.call(link);
+      if (mounted) _load();
+    };
+    await push.ensureRegistered();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _stopHeartbeat();
+    if (_pushWired) PushService.instance.onForeground = _prevOnForeground;
     super.dispose();
   }
 
@@ -538,7 +572,15 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
             icon: const Icon(Icons.refresh, size: 20),
           ),
           TextButton(
-            onPressed: () => UserState.read(context).signOut(),
+            // CMD #477 — retire this device's token BEFORE the credential
+            // goes, so a signed-out phone stops receiving rider pushes. The
+            // token is only known to PushService, so it has to happen here
+            // rather than inside signOut().
+            onPressed: () async {
+              final user = UserState.read(context);
+              await PushService.instance.clearOnLogout();
+              await user.signOut();
+            },
             child: Text(_ui('dlv_sign_out'), style: TextStyle(fontSize: 12.5, color: _kSub)),
           ),
         ],

@@ -19,6 +19,7 @@ import '../../models/order_hours_model.dart';
 import '../../order_hours_state.dart';
 import '../../services/match_status_service.dart';
 import '../../services/spn_options.dart';
+import '../../design_tokens.dart'; // cmd #435 — Ds tokens, no new literals
 import '../../utils/render_log.dart';
 import '../../utils/safe_parse.dart';
 import '../../services/admin_date_scope.dart'; // CHANGE #545
@@ -32,6 +33,7 @@ import '../../widgets/fullscreen_image.dart';
 import '../../widgets/inquiry_v12.dart';
 import '../../widgets/order_item_card.dart';
 import '../../widgets/sup_pay_panel.dart';
+import '../../widgets/supplier_closure_control.dart'; // cmd #435
 import 'admin_add_medicine_screen.dart';
 import 'unmapped_companies_screen.dart';
 
@@ -438,6 +440,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   String? _spnSupplierId;
   final Set<String> _expandedLeads = {};
   final Map<String, int> _companyCounts = {};
+  // cmd #435 — closure state per supplier, keyed the way the backend matches
+  // closures (trimmed + lower-cased name). ONE call for the whole visible list.
+  Map<String, Map<String, dynamic>> _closureStates = const {};
   final Map<String, void Function(Map<String, dynamic>)> _spnCallbacks = {};
 
   // Import Supplier popover (mirrors Clear Cart popover pattern)
@@ -953,6 +958,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         RenderLog.write('inquiry_tab_count_${inquiryOverview.length}', 'true');
         RenderLog.write('c444_sup_orders', '${_orders.length}');
       }
+      _loadClosureStates(); // cmd #435
       _fetchUnassignedItems(silent: true);
       _fetchStaging();
     } catch (e) {
@@ -960,6 +966,27 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
       // Silently swallow load errors — never surface a red banner on the homepage
     } finally {
       _loadInFlight = false;
+    }
+  }
+
+  // cmd #435 — one RPC for the whole visible list. A per-row call would be an
+  // N+1 on a table that can hold every approved supplier, and the pill on each
+  // row is only ever a rendering of what this returns.
+  Future<void> _loadClosureStates() async {
+    final names = _suppliers
+        .map((r) => r.supplierName)
+        .where((n) => n.isNotEmpty)
+        .toList();
+    if (names.isEmpty) return;
+    try {
+      final res = await Supabase.instance.client.rpc(
+          'admin_supplier_closure_states', params: {'p_suppliers': names});
+      if (!mounted) return;
+      setState(() => _closureStates = supplierClosureStatesOf(res));
+      RenderLog.write('admin_supplier_closure_states', '${_closureStates.length}');
+    } catch (_) {
+      // A closure read never blocks the supplier list — the pill is simply
+      // absent until the next load.
     }
   }
 
@@ -4429,6 +4456,12 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             SizedBox(width: 420, child: Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
+                SupplierClosureControl( // cmd #435
+                  supplierName: row.supplierName,
+                  state: _closureStates[supplierClosureKey(row.supplierName)],
+                  onChanged: _loadClosureStates,
+                ),
+                SizedBox(width: Ds.space.x8),
                 GestureDetector(
                   onTap: () => _toggleSpn(row.id),
                   child: Container(
@@ -4559,8 +4592,13 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
                 const SizedBox(height: 8),
                 _MatchStatusChip(status: _matchService.statuses.value[row.id], supplierId: row.id),
                 const SizedBox(height: 8),
-                // Last action row: [SPN] [Companies (N)] [Edit] [Delete]
+                // Last action row: [Availability] [SPN] [Companies (N)] [Edit] [Delete]
                 Wrap(spacing: 8, runSpacing: 6, children: [
+                  SupplierClosureControl( // cmd #435
+                    supplierName: row.supplierName,
+                    state: _closureStates[supplierClosureKey(row.supplierName)],
+                    onChanged: _loadClosureStates,
+                  ),
                   GestureDetector(
                     onTap: () => _toggleSpn(row.id),
                     child: Container(

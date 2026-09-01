@@ -102,6 +102,20 @@ class CrashReporting {
   /// app fails to boot. Every failure path leaves the app running with the
   /// local queue, which is exactly the no-DSN path.
   static Future<void> init({String platform = 'web', String buildCommit = ''}) async {
+    if (_initOnce != null) return _initOnce!;
+    return _initOnce = _init(platform: platform, buildCommit: buildCommit);
+  }
+
+  static Future<void>? _initOnce;
+
+  /// Idempotent boot for callers that may run BEFORE main()'s own init — the
+  /// Crashes card is one, since its test button must scrub with the real rules
+  /// whether or not boot got there first. Concurrent callers share one future,
+  /// so the SDK is never initialised twice.
+  static Future<void> ensureReady({String buildCommit = ''}) =>
+      init(platform: kIsWeb ? 'web' : defaultTargetPlatform.name, buildCommit: buildCommit);
+
+  static Future<void> _init({required String platform, required String buildCommit}) async {
     _buildCommit = buildCommit;
     try {
       final raw = await Supabase.instance.client

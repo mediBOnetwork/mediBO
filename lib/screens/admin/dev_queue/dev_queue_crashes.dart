@@ -52,6 +52,11 @@ class _DevQueueCrashesCardState extends State<DevQueueCrashesCard> {
 
   Future<void> _load() async {
     try {
+      // The card is reachable before boot has finished wiring crash reporting
+      // (and on a hot restart), so it makes sure the backend rules are loaded
+      // before its own test button can raise anything. Idempotent — the boot
+      // call and this one share a single future.
+      await CrashReporting.ensureReady();
       final card = await widget.service.crashCard();
       final buffered = await CrashReporting.bufferedCount();
       if (!mounted) return;

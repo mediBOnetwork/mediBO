@@ -17,6 +17,7 @@ import 'rewards_screen.dart';
 import 'customer/customer_staff_screen.dart';  // CHANGE #408
 import 'wishlist_screen.dart';
 import 'pharmacy/pos_screen.dart'; // CMD #411 — the pharmacy counter
+import 'pharmacy/pharmacy_parcel_count_screen.dart'; // CMD #431 — count a parcel
 import 'pharmacy/pharmacy_stock_screen.dart'; // CMD #412 — the pharmacy's shelf
 import 'pharmacy/pharmacy_gst_screen.dart'; // CMD #416 — the pharmacy's GST pack
 
@@ -235,6 +236,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       // pharmacy_gst_entry() said so, so a supplier or an admin
                       // opening this screen sees none of the three.
                       GstMenuTile(),
+                      // CMD #431 — counting the box that just arrived against
+                      // the bill that came with it. Gated the same way as the
+                      // three above: pharmacy_parcel_entry() decides, and it
+                      // carries its own badge when a count is still open.
+                      ParcelMenuTile(),
                     ],
                   ),
                 ),

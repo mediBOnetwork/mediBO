@@ -250,6 +250,16 @@ Current files and what they hold down:
   editable, prestate null arrives unselected, a submitted answer outranks the
   tick and a live tap outranks both, and items render in payload order (no
   client sort).
+- `supplier_records_test.dart` — the supplier records layer: the TAB LIST is
+  supplier_records_home()'s (an unknown tab_key renders an empty body instead
+  of throwing), nothing on the four surfaces is computed in Dart (every rupee,
+  percentage, quantity, date and plural prints verbatim — the growth tile shows
+  '-18.4%' because the BACKEND sent it), a document is asked for and then
+  polled on the backend's own `poll_ms` and opened at the backend's own
+  bucket+path (the screen never builds a URL or invents a timeout), a debit's
+  tone and its photo affordance are payload flags rather than inferences, and
+  an untouched bill-search filter is an ABSENT parameter, never an empty
+  string.
 - `cart_unavailable_test.dart` — the cart's red state is the backend's flag:
   per-line unavailable/qty_locked are carried through untouched,
   unavailable_badge prints verbatim (never pluralised in Dart), the badge is

@@ -887,3 +887,93 @@ revoke execute on function public.pharmacy_infer_lots(uuid)          from public
 revoke execute on function public.pharmacy_zone_prior_refresh()      from public, anon, authenticated;
 revoke execute on function public.pharmacy_infer_recompute()         from public, anon, authenticated;
 revoke execute on function public.c424_montikop_proof()              from public, anon, authenticated;
+
+-- ─────────────────────────── 12. THE BUG BECOMES A JOURNEY (#129) ───────────
+--
+-- QA's blocker on this command — engine internals that take a shop id were
+-- reachable by any signed-in account — is retired as a CLASS here, not as one
+-- fixed line. The probe walks every function this feature owns and fails the
+-- moment one of them takes a shop id and is executable by a client again.
+create or replace function public._journey_c424_shop_fence()
+returns jsonb
+language plpgsql security definer set search_path to 'public' as $$
+declare a1 boolean; a2 boolean; a3 boolean; v_open text; v_missing text;
+begin
+  -- 1. No function in this feature that takes a shop id as an ARGUMENT may be
+  --    executable by a client. This is the blocker itself.
+  select string_agg(p.proname, ', ') into v_open
+    from pg_proc p
+   where p.pronamespace = 'public'::regnamespace
+     and (p.proname like 'pharmacy\_%' or p.proname like '\_c424\_%')
+     and pg_get_function_identity_arguments(p.oid) like '%uuid%'
+     and (pg_get_function_identity_arguments(p.oid) like '%p_shop uuid%'
+          or pg_get_function_identity_arguments(p.oid) like '%p_shop%')
+     and p.prosrc like '%c424%'
+     and (has_function_privilege('authenticated', p.oid, 'EXECUTE')
+          or has_function_privilege('anon', p.oid, 'EXECUTE'));
+  a1 := v_open is null;
+
+  -- 2. The two client surfaces still exist and still resolve the shop from the
+  --    SESSION, so fencing the internals did not fence the owner out.
+  select string_agg(x.fn, ', ') into v_missing
+    from (values ('pharmacy_inference_screen'), ('pharmacy_lot_correct')) x(fn)
+   where not exists (
+     select 1 from pg_proc p
+      where p.pronamespace = 'public'::regnamespace and p.proname = x.fn
+        and p.prosrc like '%pos_shop()%'
+        and has_function_privilege('authenticated', p.oid, 'EXECUTE'));
+  a2 := v_missing is null;
+
+  -- 3. And the engine still answers: the fixture that reproduces Om's own
+  --    sequence must still come out true, so a fence can never be "fixed" by
+  --    breaking the thing it protects.
+  a3 := coalesce((public.c424_montikop_proof() ->> 'ok')::boolean, false);
+
+  return jsonb_build_object(
+    'status', case when a1 and a2 and a3 then 'passed' else 'failed' end,
+    'evidence', jsonb_build_object('db_proof',
+      'no shop-id engine function is client-reachable=' || a1::text
+   || coalesce(' -> ' || v_open, '')
+   || ' | both session-scoped surfaces reachable=' || a2::text
+   || coalesce(' -> missing ' || v_missing, '')
+   || ' | montikop fixture still green=' || a3::text));
+end $$;
+
+revoke execute on function public._journey_c424_shop_fence() from public, anon, authenticated;
+
+update public.dev_journeys
+   set steps = jsonb_build_array(
+         'A signed-in pharmacy account calls every function this feature owns',
+         'Any function taking a shop id as an argument must refuse it (no EXECUTE)',
+         'The two session-scoped surfaces must still work for their own shop',
+         'The Montikop fixture must still reproduce the spec''s numbers'),
+       assertions = jsonb_build_array(
+         'no shop-id engine function is client-reachable',
+         'pharmacy_inference_screen and pharmacy_lot_correct resolve the shop from the session',
+         'c424_montikop_proof() returns ok:true')
+ where name = 'qa-424-237';
+
+-- The dispatcher branch is SPLICED, never CREATE OR REPLACE'd (#290's rule):
+-- dev_journey_probe carries one branch per command, and a full-body replace
+-- built from a definition read minutes ago silently deletes another worker's
+-- branch. This reads the LIVE definition, returns early when its marker is
+-- already there, and RAISEs if the anchor ever moves.
+do $c424s$
+declare v_def text; v_new text;
+begin
+  select pg_get_functiondef(p.oid) into v_def
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.proname = 'dev_journey_probe';
+  if v_def is null then raise exception 'c424: dev_journey_probe not found'; end if;
+  if position('qa-424-237' in v_def) > 0 then return; end if;   -- idempotent
+
+  v_new := replace(v_def,
+$a$  if p_name = 'qa-414-227' then return public._journey_c414_shop_fence(); end if;$a$,
+$a$  if p_name = 'qa-414-227' then return public._journey_c414_shop_fence(); end if;
+  -- CHANGE #424 — the same class in the inference engine, caught by qa-414-227
+  -- on #424 itself: an engine internal that takes a shop id must never be
+  -- client-reachable, and fencing it must not fence the owner out.
+  if p_name = 'qa-424-237' then return public._journey_c424_shop_fence(); end if;$a$);
+  if v_new = v_def then raise exception 'c424: qa-414-227 anchor moved'; end if;
+  execute v_new;
+end $c424s$;

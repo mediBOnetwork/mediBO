@@ -13,6 +13,7 @@ import '../design_tokens.dart';
 import 'auth/business_details_screen.dart';
 import 'admin/view_as_picker_dialog.dart';
 import 'admin/loyalty_admin_screen.dart';
+import 'delivery/delivery_register_screen.dart';
 import 'rewards_screen.dart';
 import 'customer/customer_staff_screen.dart';  // CHANGE #408
 import 'wishlist_screen.dart';
@@ -646,6 +647,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 if (!isViewAs && isRegistered)
                   _RewardsEntryCard(),
 
+                // Deliver with mediBO (CMD #453, feature_gaps 95) — the rider
+                // signup was registered at /delivery-register and linked from
+                // NOWHERE: no button, no menu item, no card. A prospective
+                // rider could only reach it by typing the URL, which on a phone
+                // means it did not exist. It is shown to everyone signed in,
+                // because the screen behind it answers for every case itself —
+                // my_delivery_application() returns the form, the pending
+                // verdict, the rejection with its reason, or the invite row.
+                if (!isViewAs) _DeliverWithUsEntryCard(),
                 // Staff logins (CHANGE #408) — the pharmacy owner hands out
                 // extra logins instead of sharing their own. Shown to every
                 // registered customer because customer_staff_list() decides
@@ -1092,6 +1102,18 @@ class _MenuEntryCard extends StatelessWidget {
       ),
     );
   }
+}
+
+/// CMD #453 — the way into rider signup / the rider's own application status.
+class _DeliverWithUsEntryCard extends StatelessWidget {
+  const _DeliverWithUsEntryCard();
+
+  @override
+  Widget build(BuildContext context) => _MenuEntryCard(
+        icon: Icons.two_wheeler_outlined,
+        copyKey: 'profile.row_deliver_with_us',
+        destination: () => const DeliveryRegisterScreen(),
+      );
 }
 
 /// CHANGE #408 — the way into the pharmacy's staff logins.

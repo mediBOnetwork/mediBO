@@ -22,6 +22,7 @@ import '../widgets/animations.dart';
 import '../widgets/checkout_pay_sheet.dart';
 import 'auth/login_screen.dart';
 import 'profile_screen.dart';
+import 'customer/profile_edit_screen.dart'; // CHANGE #572 — the notice's action
 
 class CartScreen extends StatefulWidget {
   final VoidCallback? onOrderPlaced;
@@ -252,6 +253,23 @@ class _CartScreenState extends State<CartScreen> {
 
   String get _placeOrderLabel =>
       (_checkout['button_label'] ?? '').toString();
+
+  /// CHANGE #572 — the ONE notice's inline action.
+  ///
+  /// `render.notice.action` is a descriptor, not a route: the payload says
+  /// there IS an action, what it is called and which profile field it is
+  /// about. Only the navigation is ours. An action kind this build has never
+  /// heard of opens nothing, in silence — the same forward-compat rule the
+  /// home feed follows for an unknown layout.
+  Future<void> _openNoticeAction(Map<String, dynamic> action) async {
+    if ((action['kind'] ?? '').toString() != 'profile_edit') return;
+    RenderLog.write('c572_notice_action', (action['field'] ?? '').toString());
+    await Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => const ProfileEditScreen()));
+    if (!mounted) return;
+    // The licence may now be on file, so the gate has to be asked again.
+    await AppState.of(context).reloadFromServer();
+  }
 
   Future<void> _fetchCheckoutAction() async {
     try {
@@ -863,6 +881,7 @@ class _CartScreenState extends State<CartScreen> {
                               cart: cart,
                               onPlaceOrder: _placeOrder,
                               placeOrderLabel: _placeOrderLabel,
+                              onNoticeAction: _openNoticeAction,
                               selectedTotal: selectedTotal,
                               selectedSubtotalLine: _selectedSubtotalLine,
                               availabilityBlocked: blocked,
@@ -908,6 +927,7 @@ class _CartScreenState extends State<CartScreen> {
               cart: cart,
               onPlaceOrder: _placeOrder,
               placeOrderLabel: _placeOrderLabel,
+              onNoticeAction: _openNoticeAction,
               selectedTotal: selectedTotal,
               selectedSubtotalLine: _selectedSubtotalLine,
               availabilityBlocked: blocked,
@@ -1711,17 +1731,18 @@ class _CartItemCard extends StatelessWidget {
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // CMD #452 — feature_gaps #182. 19.6% of buyable products
-                    // carry no MRP. The backend now says so explicitly
-                    // (has_mrp:false, an EMPTY mrp_display and its own
-                    // mrp_note) instead of coalescing the missing ceiling to
-                    // ₹0.00, and this line prints the absence rather than a
-                    // price that was never printed on the pack.
-                    if (line.ds('line_mrp_display').isEmpty)
-                      Text(line.ds('mrp_note'), style: Ds.t.caption)
-                    else
+                    // CHANGE #572 — ONE PRICE TRUTH PER LINE. `price_line` is
+                    // the amount and `price_note` the caption under it, and
+                    // the BACKEND decides which of them exists. A line with no
+                    // trade rate yet sends an EMPTY price_line and folds its
+                    // MRP into the caption ("MRP ₹260.38 · trade rate on
+                    // confirmation"), so a rupee figure can never sit above the
+                    // words that say the rate is not known. CMD #452's absent
+                    // MRP (feature_gaps #182) is the same mechanism: the
+                    // caption says so instead of a ₹0.00 nobody printed.
+                    if (line.ds('price_line').isNotEmpty)
                       Text(
-                        line.ds('line_mrp_display'),
+                        line.ds('price_line'),
                         style: const TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w800,
@@ -1729,10 +1750,10 @@ class _CartItemCard extends StatelessWidget {
                           height: 1.1,
                         ),
                       ),
-                    const SizedBox(height: 3),
+                    if (line.ds('price_line').isNotEmpty)
+                      const SizedBox(height: 3),
                     Text(
-                      // "4 × ₹153.30" — the backend's own wording.
-                      line.ds('qty_label'),
+                      line.ds('price_note'),
                       style: const TextStyle(
                         fontSize: 11,
                         color: Color(0xFF6B7280),
@@ -2201,6 +2222,29 @@ String? _orderGateMessage(AuthNotifier auth, [ViewAsNotifier? viewAs, String? or
   return gate.hasBlocker ? gate.shortLabel : null;
 }
 
+
+// ─── CHANGE #572 — the button's word and its enabled state are the payload's ──
+//
+// "Pay & Place Order" is a promise about money, and the cart made it on a
+// basket where nothing was payable. `cart_render().render.cta` answers both
+// questions in one place: the label ("Place order" until an amount exists,
+// "Pay & place order" once one does) and whether the button may be pressed at
+// all. checkout_action()'s label is the fallback for the moment before the
+// cart payload has arrived, and ui_copy is the fallback for that.
+Map<String, dynamic> _cta(Map<String, dynamic> render) =>
+    (render['cta'] as Map?)?.cast<String, dynamic>() ?? const {};
+
+String c572CtaLabel(Map<String, dynamic> render, String checkoutActionLabel) {
+  final fromCart = (_cta(render)['label'] ?? '').toString();
+  if (fromCart.isNotEmpty) return fromCart;
+  if (checkoutActionLabel.isNotEmpty) return checkoutActionLabel;
+  return c('cart.btn_place_order');
+}
+
+/// Absent is NOT disabled: a payload that never mentioned `enabled` leaves the
+/// button exactly as the other gates found it.
+bool c572CtaEnabled(Map<String, dynamic> render) => _cta(render)['enabled'] != false;
+
 // ─── Fixed checkout bar (narrow layout) ──────────────────────────────────────
 
 class _CheckoutBar extends StatelessWidget {
@@ -2219,6 +2263,11 @@ class _CheckoutBar extends StatelessWidget {
 
   /// CHANGE #553 — true while cart_availability() reports a blocking_label.
   final bool availabilityBlocked;
+
+  /// CHANGE #572 — what the ONE notice's inline action opens. The payload
+  /// says whether there is an action and what it is called; the screen
+  /// owns the navigation.
+  final void Function(Map<String, dynamic> action)? onNoticeAction;
   const _CheckoutBar({
     required this.cart,
     required this.onPlaceOrder,
@@ -2226,6 +2275,7 @@ class _CheckoutBar extends StatelessWidget {
     this.selectedTotal,
     this.selectedSubtotalLine = '',
     this.availabilityBlocked = false,
+    this.onNoticeAction,
   });
 
   @override
@@ -2308,47 +2358,19 @@ class _CheckoutBar extends StatelessWidget {
                 // as the amount owed, which is feature_gaps #79.
                 if (selectedTotal == null && cart.hasTax)
                   _CartTaxBreakup(cart: cart),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Expanded(
-                      child: Text(
-                        selectedTotal != null
-                            ? selectedSubtotalLine
-                            : cart.rs('subtotal_line'),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                          color: Color(0xFF6B7280),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Text(
-                      selectedTotal != null
-                          ? selectedTotal!
-                          : cart.netPayableDisplay,
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w800,
-                        color: Color(0xFF111827),
-                      ),
-                    ),
-                  ],
+                // CHANGE #572 — items → ONE summary line → ONE notice → button.
+                // The four repetitions of "Awaiting supplier rates" (the
+                // summary line, the big amount, Net payable and Total payable)
+                // and the second amber box are gone: cart_render() now decides
+                // which line, which rows and which single notice exist, and
+                // this footer prints that decision.
+                C572TotalsBlock(
+                  render: cart.render,
+                  selectedTotal: selectedTotal,
+                  selectedLine: selectedSubtotalLine,
                 ),
-                if (selectedTotal == null && cart.unpricedNote.isNotEmpty)
-                  Padding(
-                    padding: EdgeInsets.only(top: Ds.space.x4),
-                    child: Text(cart.unpricedNote,
-                        style: Ds.t.caption, textAlign: TextAlign.right),
-                  ),
-                // CHANGE #461 — the delivery ladder (#167) and the Rx /
-                // rewards notices (#170, #168). All verbatim from cart_render.
-                if (selectedTotal == null) C461DeliveryLines(render: cart.render),
-                if (selectedTotal == null) C461CartNotices(render: cart.render),
+                if (selectedTotal == null)
+                  C572CartNotice(render: cart.render, onAction: onNoticeAction),
                 const SizedBox(height: 12),
                 // Place Order (auth-gated)
                 Builder(builder: (ctx) {
@@ -2367,7 +2389,8 @@ class _CheckoutBar extends StatelessWidget {
                   // CHANGE #553 — an availability block greys Place Order
                   // exactly like the existing order gates; the tap then
                   // surfaces the backend's blocking_label.
-                  final blocked = gateMsg != null || inquiryLocked || availabilityBlocked;
+                  final blocked = gateMsg != null || inquiryLocked || availabilityBlocked ||
+                        !c572CtaEnabled(cart.render);
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
@@ -2401,9 +2424,7 @@ class _CheckoutBar extends StatelessWidget {
                                           : (orderHoursClosed
                                               ? (orderHours.buttonLabel ?? '')
                                               : (auth.isAuthenticated
-                                                  ? (placeOrderLabel.isNotEmpty
-                                                      ? placeOrderLabel
-                                                      : c('cart.btn_place_order'))
+                                                  ? c572CtaLabel(cart.render, placeOrderLabel)
                                                   : c('cart.btn_login_to_order'))),
                                       style: const TextStyle(
                                         color: Colors.white,
@@ -2449,6 +2470,11 @@ class _OrderSummaryPanel extends StatelessWidget {
 
   /// CHANGE #553 — true while cart_availability() reports a blocking_label.
   final bool availabilityBlocked;
+
+  /// CHANGE #572 — what the ONE notice's inline action opens. The payload
+  /// says whether there is an action and what it is called; the screen
+  /// owns the navigation.
+  final void Function(Map<String, dynamic> action)? onNoticeAction;
   const _OrderSummaryPanel({
     required this.cart,
     required this.onPlaceOrder,
@@ -2456,6 +2482,7 @@ class _OrderSummaryPanel extends StatelessWidget {
     this.selectedTotal,
     this.selectedSubtotalLine = '',
     this.availabilityBlocked = false,
+    this.onNoticeAction,
   });
 
   @override
@@ -2484,31 +2511,15 @@ class _OrderSummaryPanel extends StatelessWidget {
           // gone: none of those figures exist in the payload any more, and the
           // "Items" row was the app counting SKUs and packs and wording the
           // plural itself.
-          Text(
-            selectedTotal != null
-                ? selectedSubtotalLine
-                : cart.rs('subtotal_line'),
-            style: const TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w500,
-              color: Color(0xFF6B7280),
-            ),
+          // CHANGE #572 — the sidebar prints the same three backend blocks as
+          // the narrow footer: one summary, one notice, one button.
+          C572TotalsBlock(
+            render: cart.render,
+            selectedTotal: selectedTotal,
+            selectedLine: selectedSubtotalLine,
           ),
-          const SizedBox(height: 6),
-          Text(
-            selectedTotal != null
-                ? selectedTotal!
-                : cart.rs('subtotal_display'),
-            style: const TextStyle(
-              fontSize: 26,
-              fontWeight: FontWeight.w800,
-              color: Color(0xFF111827),
-              height: 1.1,
-            ),
-          ),
-          // CHANGE #461 — same three blocks in the desktop sidebar.
-          if (selectedTotal == null) C461DeliveryLines(render: cart.render),
-          if (selectedTotal == null) C461CartNotices(render: cart.render),
+          if (selectedTotal == null)
+            C572CartNotice(render: cart.render, onAction: onNoticeAction),
           const SizedBox(height: 16),
           Builder(builder: (ctx) {
             final auth = UserState.of(ctx);
@@ -2520,7 +2531,8 @@ class _OrderSummaryPanel extends StatelessWidget {
             final gateMsg = _orderGateMessage(
                 auth, ViewAsState.of(ctx), orderHoursClosed ? orderHours.buttonLabel : null);
             // CHANGE #553 — availability block greys Place Order too.
-            final blocked = gateMsg != null || inquiryLocked || availabilityBlocked;
+            final blocked = gateMsg != null || inquiryLocked || availabilityBlocked ||
+                        !c572CtaEnabled(cart.render);
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -2546,9 +2558,7 @@ class _OrderSummaryPanel extends StatelessWidget {
                               : (orderHoursClosed
                                   ? (orderHours.buttonLabel ?? '')
                                   : (auth.isAuthenticated
-                                      ? (placeOrderLabel.isNotEmpty
-                                          ? placeOrderLabel
-                                          : c('cart.btn_place_order'))
+                                      ? c572CtaLabel(cart.render, placeOrderLabel)
                                       : c('cart.btn_login_to_order'))),
                           style: const TextStyle(
                             color: Colors.white,
@@ -2824,6 +2834,10 @@ class _C461TotalRow extends StatelessWidget {
 
 /// The delivery ladder: delivery, its GST when there is one, then the grand
 /// total. Absent from the payload → absent from the screen.
+///
+/// CHANGE #572 — the cart no longer draws this block. It is kept for the
+/// surfaces that still print a raw delivery ladder; the cart's totals are
+/// `render.summary.rows`, which the BACKEND assembles (see [C572TotalsBlock]).
 class C461DeliveryLines extends StatelessWidget {
   final Map<String, dynamic> render;
   const C461DeliveryLines({super.key, required this.render});
@@ -2873,13 +2887,25 @@ class C461DeliveryLines extends StatelessWidget {
   }
 }
 
-/// A backend notice: title, message and the tone the payload chose. Used for
-/// the Rx / drug-licence gate and for the tier-benefit note.
+/// A backend notice: title, message and the tone the payload chose.
 class C461Notice extends StatelessWidget {
   final String title;
   final String message;
   final Map<String, dynamic>? tone;
-  const C461Notice({super.key, required this.title, required this.message, this.tone});
+
+  /// CHANGE #572 — the notice's own inline action, when the payload sent one
+  /// ("Add licence"). Label and existence are the backend's; this widget only
+  /// prints the label and calls back.
+  final String actionLabel;
+  final VoidCallback? onAction;
+  const C461Notice({
+    super.key,
+    required this.title,
+    required this.message,
+    this.tone,
+    this.actionLabel = '',
+    this.onAction,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -2900,51 +2926,150 @@ class C461Notice extends StatelessWidget {
           if (title.isNotEmpty && message.isNotEmpty) SizedBox(height: Ds.space.x4),
           if (message.isNotEmpty)
             Text(message, style: Ds.t.body.copyWith(color: fg)),
+          // The action the backend attached to this notice. It is the way OUT
+          // of the block, so it sits inside the block that raised it.
+          if (actionLabel.isNotEmpty && onAction != null) ...[
+            SizedBox(height: Ds.space.x8),
+            SizedBox(
+              height: Ds.space.x48,
+              child: OutlinedButton(
+                onPressed: onAction,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: fg,
+                  side: BorderSide(color: fg),
+                  shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+                ),
+                child: Text(actionLabel, style: Ds.t.body.copyWith(color: fg)),
+              ),
+            ),
+          ],
         ],
       ),
     );
   }
 }
 
-/// The Rx / drug-licence gate (#170) and the tier-benefit note (#168), both
-/// straight out of cart_render().
-class C461CartNotices extends StatelessWidget {
+/// CHANGE #572 — the cart's totals, exactly as `cart_render().render.summary`
+/// assembled them.
+///
+/// The cart used to say "Awaiting supplier rates" four times over: once in the
+/// summary line, once as the big amount, once against "Net payable" and once
+/// against "Total payable". Which rows exist is now a BACKEND decision:
+/// `summary.rows` carries the ladder, and while nothing is payable it carries
+/// only Delivery — the one true number on an unpriced basket. Nothing here
+/// decides, formats or pluralises; `has_amount` is the payload's answer to
+/// "is there an amount?", never a `> 0` computed on this side.
+class C572TotalsBlock extends StatelessWidget {
   final Map<String, dynamic> render;
-  const C461CartNotices({super.key, required this.render});
+
+  /// View As substitutes cart_selected_total()'s own two strings for the
+  /// ticked lines. Null outside View As.
+  final String? selectedTotal;
+  final String selectedLine;
+  const C572TotalsBlock({
+    super.key,
+    required this.render,
+    this.selectedTotal,
+    this.selectedLine = '',
+  });
 
   @override
   Widget build(BuildContext context) {
-    final rx = (render['rx_gate'] as Map?)?.cast<String, dynamic>() ?? const {};
-    final rewards = (render['rewards'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final s = (render['summary'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final line = selectedTotal != null ? selectedLine : (s['line'] ?? '').toString();
+    final amount =
+        selectedTotal ?? (s['has_amount'] == true ? (s['amount_display'] ?? '').toString() : '');
+    final rows = selectedTotal != null
+        ? const <Map<String, dynamic>>[]
+        : ((s['rows'] as List?) ?? const [])
+            .whereType<Map>()
+            .map((e) => e.cast<String, dynamic>())
+            .toList(growable: false);
+    final deliveryNote =
+        selectedTotal != null ? '' : (s['delivery_note'] ?? '').toString();
 
-    final rxMsg = (rx['message'] ?? '').toString();
-    final rxNote = (rx['rx_note'] ?? '').toString();
-    final rewardNote = (rewards['note'] ?? '').toString();
+    if (line.isEmpty && amount.isEmpty && rows.isEmpty) {
+      return const SizedBox.shrink();
+    }
 
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // The count line shows whenever the basket holds Rx stock, even when
-        // the licence is fine — that is the record the audit asked for.
-        if (rxMsg.isEmpty && rxNote.isNotEmpty)
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Expanded(
+              child: Text(line,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: Ds.t.bodySecondary),
+            ),
+            if (amount.isNotEmpty) ...[
+              SizedBox(width: Ds.space.x8),
+              Text(amount, style: Ds.t.display),
+            ],
+          ],
+        ),
+        for (final r in rows)
+          _C461TotalRow(
+            label: (r['label'] ?? '').toString(),
+            amount: (r['amount'] ?? '').toString(),
+            strong: r['strong'] == true,
+          ),
+        if (deliveryNote.isNotEmpty)
           Padding(
-            padding: EdgeInsets.only(top: Ds.space.x8),
-            child: Text(rxNote, style: Ds.t.caption),
-          ),
-        if (rxMsg.isNotEmpty)
-          C461Notice(
-            title: (rx['title'] ?? '').toString(),
-            message: rxMsg,
-            tone: (rx['tone'] as Map?)?.cast<String, dynamic>(),
-          ),
-        if (rewards['has'] == true && rewardNote.isNotEmpty)
-          C461Notice(
-            title: (rewards['tier_label'] ?? '').toString(),
-            message: rewardNote,
-            tone: (rewards['tone'] as Map?)?.cast<String, dynamic>(),
+            padding: EdgeInsets.only(top: Ds.space.x4),
+            child: Text(deliveryNote, style: Ds.t.caption),
           ),
       ],
+    );
+  }
+}
+
+/// CHANGE #572 — THE cart notice. One, not two.
+///
+/// `render.notice` is the backend's choice of which single thing the customer
+/// has to deal with before ordering — today the drug-licence gate. The tier
+/// benefit note is deliberately NOT offered here any more: on a basket that is
+/// simply awaiting quotes it read as a defect ("Nothing in the catalogue is
+/// trade-priced for you yet"), and it belongs where the benefit applies.
+///
+/// `note` is the record line ("2 prescription items in this order"), which is
+/// a caption and not a second notice.
+class C572CartNotice extends StatelessWidget {
+  final Map<String, dynamic> render;
+
+  /// What the notice's inline action opens. The screen owns navigation; the
+  /// payload owns whether there is an action and what it is called.
+  final void Function(Map<String, dynamic> action)? onAction;
+  const C572CartNotice({super.key, required this.render, this.onAction});
+
+  @override
+  Widget build(BuildContext context) {
+    final n = (render['notice'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final note = (n['note'] ?? '').toString();
+
+    if (n['has'] != true) {
+      if (note.isEmpty) return const SizedBox.shrink();
+      return Padding(
+        padding: EdgeInsets.only(top: Ds.space.x8),
+        child: Text(note, style: Ds.t.caption),
+      );
+    }
+
+    final action = (n['action'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final actionLabel =
+        action['has'] == true ? (action['label'] ?? '').toString() : '';
+
+    return C461Notice(
+      title: (n['title'] ?? '').toString(),
+      message: (n['message'] ?? '').toString(),
+      tone: (n['tone'] as Map?)?.cast<String, dynamic>(),
+      actionLabel: actionLabel,
+      onAction: (actionLabel.isEmpty || onAction == null)
+          ? null
+          : () => onAction!(action),
     );
   }
 }

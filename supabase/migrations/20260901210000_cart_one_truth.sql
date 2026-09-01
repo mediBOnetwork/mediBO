@@ -164,9 +164,13 @@ declare
   v_block  boolean := coalesce((p_rx->>'blocked')::boolean, false);
   v_label  text;
 begin
+  -- No warning to give: the record line stays ("2 prescription items in this
+  -- order"), because it is a record, not a second notice.
   if v_msg = '' then
     return jsonb_build_object('has', false, 'blocking', false,
-      'title', '', 'message', '', 'action', jsonb_build_object('has', false));
+      'title', '', 'message', '',
+      'note', coalesce(p_rx->>'rx_note',''),
+      'action', jsonb_build_object('has', false));
   end if;
 
   v_label := case when v_reason = 'expired'
@@ -179,6 +183,7 @@ begin
     'kind',     'drug_licence',
     'title',    coalesce(p_rx->>'title',''),
     'message',  v_msg,
+    'note',     '',
     'tone',     coalesce(p_rx->'tone', jsonb_build_object('bg','#FEF3C7','fg','#92400E')),
     'action',   jsonb_build_object(
                   'has',   (v_label <> ''),
@@ -275,6 +280,7 @@ begin
 
   return jsonb_build_object(
     'line',           v_line,
+    'delivery_note',  coalesce(p_delivery->>'note',''),
     'has_amount',     v_has,
     'amount_display', case when v_has then coalesce(p_pricing->>'net_payable_display','') else '' end,
     'priced_count',   v_priced,

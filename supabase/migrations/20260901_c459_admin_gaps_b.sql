@@ -43,3 +43,16 @@
 --      was no shared error state that renders backend copy for 42501.
 --
 -- The live SQL is applied via supabase migrations of the names above.
+
+-- ---------------------------------------------------------------------------
+-- QA ROUND (same command). The live capture of "Waiting at the warehouse"
+-- showed a row whose state chip read "Count differences" — the OTHER queue's
+-- SECTION heading used as a per-row state — beside a qty_label of "5 of 5"
+-- that flatly denied any difference existed. Two strings on one row
+-- contradicting each other. Applied to prod as:
+--   c459_arrivals_row_state_fix
+-- admin_arrivals_waiting() now reuses the per-row wording the count queue
+-- already owns (ops.count.short / ops.count.over) and prints the honest pair
+-- (ops.count.pair) whenever count_diff <> 0, so the numbers agree with the
+-- chip. Untouched rows are unchanged ("4 of 4" / "Next: pack it").
+-- Idempotent: create or replace, same signature and same default.

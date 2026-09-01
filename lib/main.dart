@@ -43,6 +43,7 @@ import 'screens/admin/admin_scope_audit_screen.dart'; // /admin/scope-audit
 import 'screens/admin/dev_queue/cron_health_screen.dart'; // /admin/cron-health
 import 'screens/admin/admin_delivery_extras_screen.dart'; // /admin/delivery-programme
 import 'screens/pharmacy/pharmacy_expiry_screen.dart';   // CMD #413 — /pharmacy/expiry
+import 'screens/pharmacy/pharmacy_radar_screen.dart';    // CMD #425 — /pharmacy/radar
 import 'screens/pharmacy/pharmacy_variance_screen.dart'; // CMD #413 — /pharmacy/stock-check
 import 'screens/pharmacy/rx_scan_screen.dart';           // CMD #418 — /pharmacy/prescription
 import 'screens/admin/nav_registry_view.dart'; // CHANGE #325 — deep links
@@ -694,6 +695,18 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
                 return MaterialPageRoute(
                   settings: settings,
                   builder: (_) => const PharmacyExpiryScreen(),
+                );
+              }
+              // CMD #425 — the expiry radar, ranked by expected loss. Same
+              // reason for a real URL as its sibling above, and the same
+              // authorisation story: pharmacy_radar_home() answers "This screen
+              // is for a pharmacy account." in its own words and the screen
+              // prints that, so opening this URL as the wrong role shows the
+              // backend's sentence rather than a blank page.
+              if (name.split('?').first == '/pharmacy/radar') {
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => const PharmacyRadarScreen(),
                 );
               }
               // CMD #418 — the prescription scanner, at a real URL for the

@@ -117,23 +117,24 @@ class CrashReporting {
 
   static Future<void> _init({required String platform, required String buildCommit}) async {
     _buildCommit = buildCommit;
-    try {
-      final raw = await Supabase.instance.client
-          .rpc('crash_config_get', params: {'p_platform': platform})
-          .timeout(const Duration(seconds: 6));
-      _cfg = Map<String, dynamic>.from(raw as Map);
-    } catch (_) {
-      _cfg = const <String, dynamic>{};
+    _platform = platform;
+
+    // CACHE FIRST, THEN NETWORK — the same shape as UiCopy, and for the same
+    // reason (Om's offline rule). Boot fires a dozen RPCs at once and this one
+    // lost that race often enough to matter: on the #963 boots the config did
+    // not arrive, so the scrubber had no rules and the crashes that WERE
+    // captured carried no breadcrumbs at all. The last payload is kept on the
+    // device and applied instantly, so a slow boot still reports a full crash;
+    // the network answer overwrites it moments later. The cache is a render
+    // fallback, never an authority — it can only ever say "which words are
+    // sensitive", never "is Sentry on" for a DSN it has not been handed.
+    var source = 'none';
+    if (_applyConfig(await _readCache())) source = 'cache';
+    if (_applyConfig(await _fetchConfig())) {
+      source = 'network';
+      unawaited(_writeCache(_cfg));
     }
 
-    _scrubber = CrashScrubber.fromConfig(
-      scrubKeys: (_cfg['scrub_keys'] as List?) ?? const [],
-      scrubPatterns: (_cfg['scrub_patterns'] as List?) ?? const [],
-      mask: _cfg['redaction_mask']?.toString() ?? '',
-    );
-
-    // The release id: the build-time stamp when there is one, otherwise the
-    // backend's template filled with what this build knows. Both are data.
     _release = _buildRelease.isNotEmpty
         ? _buildRelease
         : _fill(_cfg['release_template']?.toString() ?? '');
@@ -159,8 +160,86 @@ class CrashReporting {
     RenderLog.write('c473_crash_reporting', _sentryOn ? 'sentry' : 'local_queue');
     RenderLog.write('c473_crash_release', _release.isEmpty ? 'unstamped' : _release);
     RenderLog.write('c473_crash_scrub_rules', _scrubber.hasRules ? 1 : 0);
+    RenderLog.write('c473_crash_cfg', source);
+
+    // A first-ever boot has no cache to fall back on, so a lost race there
+    // leaves the device unconfigured for the whole session. One quiet retry,
+    // after the boot storm has passed, is the difference between that and a
+    // device that reports properly from its second minute onwards.
+    if (source != 'network') unawaited(_retryConfig(platform));
 
     unawaited(_flushBuffer());
+  }
+
+  /// Reads the config. Returns null on any failure — an EXPLICIT "no answer",
+  /// never a half-filled map.
+  static Future<Map<String, dynamic>?> _fetchConfig() async {
+    try {
+      final raw = await Supabase.instance.client
+          .rpc('crash_config_get', params: {'p_platform': _platform})
+          .timeout(const Duration(seconds: 12));
+      if (raw is! Map) return null;
+      final m = Map<String, dynamic>.from(raw);
+      return m['ok'] == true ? m : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static String _platform = 'web';
+
+  /// One delayed retry for a device that has never had the config. Silent by
+  /// design: it either upgrades the session or changes nothing.
+  static Future<void> _retryConfig(String platform) async {
+    _platform = platform;
+    await Future<void>.delayed(const Duration(seconds: 20));
+    final fresh = await _fetchConfig();
+    if (fresh == null || !_applyConfig(fresh)) return;
+    unawaited(_writeCache(fresh));
+    RenderLog.write('c473_crash_cfg', 'network_retry');
+    RenderLog.write('c473_crash_scrub_rules', _scrubber.hasRules ? 1 : 0);
+  }
+
+  /// Applies a payload and rebuilds the scrubber from it. Returns false for a
+  /// payload that carries no rules, so a blank answer never REPLACES a good
+  /// cached one.
+  static bool _applyConfig(Map<String, dynamic>? cfg) {
+    if (cfg == null || cfg['ok'] != true) return false;
+    final scrubber = CrashScrubber.fromConfig(
+      scrubKeys: (cfg['scrub_keys'] as List?) ?? const [],
+      scrubPatterns: (cfg['scrub_patterns'] as List?) ?? const [],
+      mask: cfg['redaction_mask']?.toString() ?? '',
+    );
+    if (!scrubber.hasRules) return false;
+    _cfg = cfg;
+    _scrubber = scrubber;
+    return true;
+  }
+
+  static const _cfgKey = 'crash_config_cache_v1';
+
+  static Future<Map<String, dynamic>?> _readCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_cfgKey);
+      if (raw == null || raw.isEmpty) return null;
+      final m = jsonDecode(raw);
+      if (m is! Map) return null;
+      final cfg = Map<String, dynamic>.from(m);
+      // A cached DSN is never trusted: whether Sentry runs is a live answer.
+      cfg['dsn'] = '';
+      cfg['enabled'] = false;
+      return cfg;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<void> _writeCache(Map<String, dynamic> cfg) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_cfgKey, jsonEncode(cfg));
+    } catch (_) {}
   }
 
   static void _configure(SentryFlutterOptions o) {

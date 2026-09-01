@@ -23,6 +23,7 @@ import 'models/inquiry_lock_model.dart';
 import 'screens/auth/login_screen.dart';
 import 'models/app_session.dart';
 import 'screens/partner/partner_home_screen.dart';
+import 'screens/customer/customer_staff_screen.dart'; // CMD #438: /customer/staff
 import 'screens/admin/admin_partner_console_screen.dart';
 import 'screens/admin/settlement_screen.dart'; // /admin/settlement
 import 'screens/home_shell.dart';
@@ -894,6 +895,15 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
               // backend — partner_home() answers `is_partner:false` with its
               // own copy for anyone else, so this route guards nothing.
               '/partner':      (_) => const PartnerHomeScreen(),
+              // CHANGE #438 — the pharmacy's own staff logins (CHANGE #408) at
+              // a real URL, for the same reason /partner has one: a headless
+              // session can open it and PROVE the screen painted, and the
+              // owner can bookmark it. It guards nothing —
+              // customer_staff_list() answers not_authorized with its own copy
+              // for anyone who is not on that pharmacy, so authorisation stays
+              // in the backend. The tappable way in is still Profile ▸ Staff
+              // logins.
+              '/customer/staff': (_) => const CustomerStaffScreen(),
               '/register':     (_) => const LoginScreen(),
               // CHANGE #631 (PART A) — the delivery-partner registration form.
               // delivery_partner_register() stamps auth.uid() itself, so the

@@ -571,8 +571,11 @@ begin
                         'n', public._c424_qty(li.inferred_sold),
                         'inn', public._c424_qty(li.qty_in),
                         'on', coalesce(to_char(li.received_on, 'DD Mon'), '—'))),
+               -- The rate the LOT was actually poured at, not the SKU's stored
+               -- source: a lot the counter priced is described by the counter's
+               -- own rate, however thin its purchase history happens to be.
                'rate_label', case
-                 when v.source in ('own','pos','corrected')
+                 when li.method = 'pos_actual' or v.source in ('own','pos','corrected')
                    then public.ui_text_f('infer424.rate',
                           jsonb_build_object('n', public._c424_qty(round(li.per_day, 2))))
                  when v.source = 'zone' then public.ui_text('infer424.rate_zone')

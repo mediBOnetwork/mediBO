@@ -381,8 +381,10 @@ begin
     return jsonb_build_object('ok', false, 'error', 'not_found',
       'message', public.ui_text('pos.err_not_found'));
   end if;
-  return jsonb_build_object('ok', true, 'sale_id', s.id)
-         || jsonb_build_object('qr', public._pos_sale_upi(s));
+  -- Same key and same shape as pos_sale_detail's, so a caller that already
+  -- renders one panel cannot be handed a differently-named other.
+  return jsonb_build_object('ok', true, 'sale_id', s.id,
+                            'upi', public._pos_sale_upi(s));
 end $function$;
 
 -- The whole UPI panel for a sale — QR, the honesty prompt, and the state of the

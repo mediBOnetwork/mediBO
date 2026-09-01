@@ -22,6 +22,7 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../design_tokens.dart';
+import '../../widgets/pos_upi_qr_card.dart';
 import '../../services/khata_api.dart';
 import '../../utils/render_log.dart';
 
@@ -132,10 +133,7 @@ class _KhataScreenState extends State<KhataScreen> {
         _failed = false;
       });
       RenderLog.write('c415_khata_home', 1);
-      RenderLog.write(
-        'c415_khata_accounts',
-        _rows(res['accounts']).length,
-      );
+      RenderLog.write('c415_khata_accounts', _rows(res['accounts']).length);
     } catch (_) {
       if (mounted) {
         setState(() {
@@ -156,9 +154,7 @@ class _KhataScreenState extends State<KhataScreen> {
 
   void _toast(String msg) {
     if (msg.isEmpty || !mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(msg)));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
   @override
@@ -168,7 +164,9 @@ class _KhataScreenState extends State<KhataScreen> {
       backgroundColor: Ds.c.bg,
       appBar: AppBar(
         title: Text(
-          _s(labels['title']).isEmpty ? _s(_home['shop_name']) : _s(labels['title']),
+          _s(labels['title']).isEmpty
+              ? _s(_home['shop_name'])
+              : _s(labels['title']),
         ),
         actions: [
           if (_home.isNotEmpty)
@@ -229,10 +227,7 @@ class _KhataScreenState extends State<KhataScreen> {
           _filterRow(),
           SizedBox(height: Ds.space.x16),
           if (accounts.isEmpty)
-            _EmptyState(
-              title: _s(empty['title']),
-              hint: _s(empty['hint']),
-            )
+            _EmptyState(title: _s(empty['title']), hint: _s(empty['hint']))
           else
             ...accounts.map(_accountTile),
         ],
@@ -723,6 +718,11 @@ class _KhataAccountScreenState extends State<KhataAccountScreen> {
         accountId: widget.accountId,
         labels: labels,
         methods: _rows(_data['methods']),
+        // CMD #432 — the settlement QR. khata_account_detail() already carries
+        // the shop's UPI block for THIS balance, built by the same
+        // upi_qr_string() the counter's bills use, so the patient scans the
+        // same picture whether they are settling a khata or paying a bill.
+        upi: _m(_data['upi']),
         call: _call,
         onDone: (msg) {
           _toast(msg);
@@ -852,6 +852,7 @@ class _PaymentSheet extends StatefulWidget {
     required this.accountId,
     required this.labels,
     required this.methods,
+    required this.upi,
     required this.call,
     required this.onDone,
   });
@@ -859,7 +860,9 @@ class _PaymentSheet extends StatefulWidget {
   final String accountId;
   final Map<String, dynamic> labels;
   final List<Map<String, dynamic>> methods;
-  final Future<Map<String, dynamic>> Function(String, Map<String, dynamic>) call;
+  final Map<String, dynamic> upi;
+  final Future<Map<String, dynamic>> Function(String, Map<String, dynamic>)
+  call;
   final void Function(String) onDone;
 
   @override
@@ -924,61 +927,90 @@ class _PaymentSheetState extends State<_PaymentSheet> {
         Ds.space.x16,
         MediaQuery.of(context).viewInsets.bottom + Ds.space.x16,
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(_s(widget.labels['record_payment']), style: Ds.t.subtitle),
-          SizedBox(height: Ds.space.x16),
-          TextField(
-            controller: _amount,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            autofocus: true,
-            decoration: InputDecoration(
-              labelText: _s(widget.labels['amount']),
-              isDense: true,
-            ),
-          ),
-          SizedBox(height: Ds.space.x12),
-          Wrap(
-            spacing: Ds.space.x8,
-            children: widget.methods.map((m) {
-              final k = _s(m['key']);
-              return ChoiceChip(
-                label: Text(_s(m['label'])),
-                selected: _method == k,
-                selectedColor: Ds.c.brandSoft,
-                onSelected: (_) => setState(() => _method = k),
-              );
-            }).toList(),
-          ),
-          SizedBox(height: Ds.space.x12),
-          TextField(
-            controller: _note,
-            decoration: InputDecoration(
-              labelText: _s(widget.labels['note']),
-              isDense: true,
-            ),
-          ),
-          if (_error.isNotEmpty) ...[
-            SizedBox(height: Ds.space.x8),
-            Text(_error, style: Ds.t.caption.copyWith(color: Ds.c.danger)),
-          ],
-          SizedBox(height: Ds.space.x16),
-          SizedBox(
-            width: double.infinity,
-            height: Ds.touch.minTarget,
-            child: FilledButton(
-              style: FilledButton.styleFrom(
-                backgroundColor: Ds.c.brand,
-                foregroundColor: Ds.c.surface,
-                shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(_s(widget.labels['record_payment']), style: Ds.t.subtitle),
+            SizedBox(height: Ds.space.x16),
+            TextField(
+              controller: _amount,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
               ),
-              onPressed: _busy ? null : _save,
-              child: Text(_s(widget.labels['save'])),
+              autofocus: true,
+              decoration: InputDecoration(
+                labelText: _s(widget.labels['amount']),
+                isDense: true,
+              ),
             ),
-          ),
-        ],
+            SizedBox(height: Ds.space.x12),
+            Wrap(
+              spacing: Ds.space.x8,
+              children: widget.methods.map((m) {
+                final k = _s(m['key']);
+                return ChoiceChip(
+                  label: Text(_s(m['label'])),
+                  selected: _method == k,
+                  selectedColor: Ds.c.brandSoft,
+                  onSelected: (_) => setState(() => _method = k),
+                );
+              }).toList(),
+            ),
+            if (_method == 'upi' && widget.upi['has'] == true) ...[
+              SizedBox(height: Ds.space.x16),
+              UpiQrCard(
+                view: UpiQrView(
+                  has: true,
+                  title: _s(widget.upi['qr_caption']),
+                  qrString: _s(widget.upi['qr_string']),
+                  vpa: _s(widget.upi['vpa']),
+                  payee: _s(widget.upi['payee']),
+                  rows: [
+                    {
+                      'label': _s(widget.labels['amount']),
+                      'value': _s(widget.upi['amount_display']),
+                      'strong': true,
+                    },
+                    {
+                      'label': _s(widget.upi['label']),
+                      'value': _s(widget.upi['vpa']),
+                      'strong': false,
+                    },
+                  ],
+                ),
+                size: 180,
+              ),
+            ],
+            SizedBox(height: Ds.space.x12),
+            TextField(
+              controller: _note,
+              decoration: InputDecoration(
+                labelText: _s(widget.labels['note']),
+                isDense: true,
+              ),
+            ),
+            if (_error.isNotEmpty) ...[
+              SizedBox(height: Ds.space.x8),
+              Text(_error, style: Ds.t.caption.copyWith(color: Ds.c.danger)),
+            ],
+            SizedBox(height: Ds.space.x16),
+            SizedBox(
+              width: double.infinity,
+              height: Ds.touch.minTarget,
+              child: FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: Ds.c.brand,
+                  foregroundColor: Ds.c.surface,
+                  shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+                ),
+                onPressed: _busy ? null : _save,
+                child: Text(_s(widget.labels['save'])),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -996,7 +1028,8 @@ class _AccountSheet extends StatefulWidget {
   final Map<String, dynamic> labels;
   final List<Map<String, dynamic>> kinds;
   final Map<String, dynamic>? existing;
-  final Future<Map<String, dynamic>> Function(String, Map<String, dynamic>) call;
+  final Future<Map<String, dynamic>> Function(String, Map<String, dynamic>)
+  call;
   final void Function(String) onDone;
 
   @override
@@ -1147,7 +1180,8 @@ class _UpiSheet extends StatefulWidget {
   });
 
   final Map<String, dynamic> upi;
-  final Future<Map<String, dynamic>> Function(String, Map<String, dynamic>) call;
+  final Future<Map<String, dynamic>> Function(String, Map<String, dynamic>)
+  call;
   final void Function(String) onDone;
 
   @override
@@ -1382,11 +1416,7 @@ class _Refusal extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(
-              message,
-              textAlign: TextAlign.center,
-              style: Ds.t.body,
-            ),
+            Text(message, textAlign: TextAlign.center, style: Ds.t.body),
             if (onRetry != null) ...[
               SizedBox(height: Ds.space.x16),
               SizedBox(

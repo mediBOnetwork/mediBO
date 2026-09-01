@@ -20,6 +20,13 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { PDFDocument, StandardFonts, rgb } from 'https://esm.sh/pdf-lib@1.17.1'
 import fontkit from 'https://esm.sh/@pdf-lib/fontkit@1.1.1'
+// CMD #432 — the UPI QR block. qrcode-generator is pure TypeScript and returns
+// a MODULE MATRIX rather than a PNG, which is exactly what pdf-lib wants: each
+// dark module becomes one filled rectangle, so the code stays vector-sharp at
+// any print size and the function pulls in no canvas, no image codec and no
+// binary dependency. The string it encodes is composed by upi_qr_string() in
+// the database and arrives finished — this file never builds a upi:// URI.
+import qrcode from 'https://esm.sh/qrcode-generator@1.4.4'
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
@@ -109,6 +116,25 @@ async function renderPosInvoice(inv: any): Promise<Uint8Array> {
   const hr = (yy: number) => page.drawLine({
     start: { x: PM, y: yy }, end: { x: PW - PM, y: yy }, thickness: 0.5, color: line })
   const newPage = () => { page = pdf.addPage([PW, PH]); y = PH - PM }
+
+  // Draw one QR at (x, yTop), `side` points wide. Error correction M is the
+  // UPI-app norm and survives a thermal printer's smearing.
+  const qr = (data: string, x: number, yTop: number, side: number) => {
+    const q = qrcode(0, 'M')
+    q.addData(data)
+    q.make()
+    const n = q.getModuleCount()
+    const cell = side / n
+    for (let r = 0; r < n; r++) {
+      for (let c = 0; c < n; c++) {
+        if (!q.isDark(r, c)) continue
+        page.drawRectangle({
+          x: x + c * cell, y: yTop - (r + 1) * cell,
+          width: cell, height: cell, color: ink,
+        })
+      }
+    }
+  }
 
   const seller = inv.seller ?? {}, invo = inv.invoice ?? {}, net = inv.net ?? {}
 
@@ -218,6 +244,31 @@ async function renderPosInvoice(inv: any): Promise<Uint8Array> {
 
   y = Math.min(ladderEnd, ty) - 12
   if (net.words) { txt(net.words, PM, y, 8, F, grey); y -= 14 }
+
+  // ── the two QRs: this bill's exact amount, and the shop's standing code ──
+  const qrs = inv.qr ?? {}
+  const codes = [qrs.bill, qrs.shop].filter(
+    (b: any) => b && b.has === true && typeof b.qr_string === 'string' && b.qr_string)
+  if (codes.length) {
+    const side = 96
+    if (y < PM + side + 60) newPage()
+    y -= 8
+    hr(y); y -= 14
+    let qx = PM
+    for (const b of codes) {
+      txt(b.title ?? '', qx, y, 8.5, FB)
+      qr(String(b.qr_string), qx, y - 8, side)
+      let by = y - 8 - side - 10
+      txt(clip(String(b.sub ?? ''), F, 7, 210), qx, by, 7, F, grey)
+      for (const row of (Array.isArray(b.rows) ? b.rows : [])) {
+        by -= 9
+        txt(clip(`${row.label ?? ''}: ${row.value ?? ''}`, F, 7, 210), qx, by, 7, F,
+            row.strong === true ? ink : grey)
+      }
+      qx += 250
+    }
+    y -= side + 46
+  }
 
   const foot = inv.footer ?? {}
   hr(y); y -= 12

@@ -411,19 +411,12 @@ class _DesktopProfileButton extends StatelessWidget {
         // CHANGE #325 — the ~20 feature rows that used to sit here are the
         // dropdown Om counted to thirty. They live on the dashboard now. This
         // popup draws View Profile and Logout, from the registry.
-        // CMD #411 — the pharmacy counter, from pos_entry().
-        if (PosEntry.show)
-          PopupMenuItem(
-            value: 'pos',
-            child: Row(
-              children: [
-                Icon(Icons.point_of_sale_outlined, size: 16, color: Ds.c.brand),
-                SizedBox(width: Ds.space.x8),
-                Text((PosEntry.value.value['label'] ?? '').toString(),
-                    style: Ds.t.body),
-              ],
-            ),
-          ),
+        // CHANGE #536 — and the counter row that #411 left behind is gone with
+        // them. It was the LAST feature in this menu, and the only way into a
+        // suite of nineteen: the shop reached the counter here, then chained
+        // app-bar buttons off it to find the shelf, the khata and the vault.
+        // My Shop is that surface now, so the account menu is account things
+        // only again.
         PopupMenuItem(
           value: 'logout',
           child: Row(

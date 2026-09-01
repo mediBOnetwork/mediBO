@@ -11,6 +11,7 @@ import 'supplier_home_screen.dart';
 import 'supplier_inquiry_screen.dart';
 import 'supplier_orders_screen.dart';
 import 'supplier_payout_screen.dart';
+import 'supplier_records_screen.dart';
 import 'supplier_staff_screen.dart';
 
 class SupplierShell extends StatefulWidget {
@@ -186,6 +187,19 @@ class _SupplierShellState extends State<SupplierShell> {
                   Navigator.pop(sheetCtx);
                   Navigator.push(context, MaterialPageRoute<void>(
                       builder: (_) => const SupplierPayoutScreen()));
+                },
+              ),
+            // CHANGE #403 — one row, four record surfaces behind it. The tabs
+            // inside are the backend's list, so a fifth record type never
+            // grows this sheet.
+            if (_canRead('supplier.records'))
+              ListTile(
+                leading: Icon(Icons.folder_outlined, color: Ds.c.text),
+                title: Text(c('supplier_records.feature_label'), style: Ds.t.body),
+                onTap: () {
+                  Navigator.pop(sheetCtx);
+                  Navigator.push(context, MaterialPageRoute<void>(
+                      builder: (_) => const SupplierRecordsScreen()));
                 },
               ),
             ListTile(

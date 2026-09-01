@@ -8550,7 +8550,14 @@ class AdminFulfillmentScreen extends StatefulWidget {
   /// Default 0 keeps every existing call site byte-identical.
   final int initialTab;
 
-  AdminFulfillmentScreen({this.initialTab = 0}) : super(key: _key);
+  /// CHANGE #528 (feature_gaps row 142) — the tab indexes this caller may see.
+  /// `null` = unbounded, which is every admin/super-admin call site and keeps
+  /// them byte-identical. A partner is handed the list `partner_open().tabs`
+  /// returned, so ONE grant no longer opens all six tabs.
+  final Set<int>? allowedTabs;
+
+  AdminFulfillmentScreen({this.initialTab = 0, this.allowedTabs})
+      : super(key: _key);
   static void triggerFocus() => _key.currentState?._onFocus();
 
   @override
@@ -8673,7 +8680,7 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
   }
   // #132B: open Disputes tab from item popup "View dispute". (#280: Disputes is now index 4)
   void _openDisputesTab() {
-    if (mounted) setState(() => _tab = 4);
+    if (mounted && _tabAllowed(4)) setState(() => _tab = 4);
   }
 
   // C174/B6+B15: single refresh point — call after any dispute-state-changing action.
@@ -8697,10 +8704,28 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
     if (mounted) setState(() {});
   }
 
+  /// CHANGE #528 row 142 — the permission question, asked in ONE place.
+  bool _tabAllowed(int i) =>
+      widget.allowedTabs == null || widget.allowedTabs!.contains(i);
+
+  int? _firstAllowedTab() {
+    for (var i = 0; i < 6; i++) {
+      if (_tabAllowed(i)) return i;
+    }
+    return null;
+  }
+
   @override
   void initState() {
     super.initState();
     _tab = widget.initialTab;           // CHANGE #307
+    // CHANGE #528 row 142 — a bounded caller can never land on, or reach, a
+    // tab it was not granted. The clamp is here as well as on the tab row so
+    // an out-of-range initialTab cannot smuggle one in.
+    if (!_tabAllowed(_tab)) {
+      final first = _firstAllowedTab();
+      if (first != null) _tab = first;
+    }
     WidgetsBinding.instance.addObserver(this);
     AdminDateScope.instance.addListener(_onDateScopeChanged);
     // CHANGE #531: one fetch per session for fw_error_messages()+fw_issue_options(),
@@ -8763,6 +8788,7 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
 
   // #137: switch to Collect tab and pre-select supplier so staff can use the voice feature.
   void _openVoiceInCollect(String supplier) {
+    if (!_tabAllowed(0)) return;   // CHANGE #528 row 142
     setState(() => _tab = 0);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _collectKey.currentState?.selectSupplierForVoice(supplier);
@@ -8796,7 +8822,8 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
             child: Row(children: [
               // CHANGE #473: count badges — 'count' (shop) / 'warehouse_count'
               // (warehouse) from fw_list_arrivals, muted/neutral (not an alert).
-              Stack(clipBehavior: Clip.none, children: [
+              // CHANGE #528 row 142 — every slot below is gated on the grant.
+              if (_tabAllowed(0)) Stack(clipBehavior: Clip.none, children: [
                 _TabBtn('Supplier Shop', _tab == 0, () {
                   setState(() => _tab = 0);
                   _scheduleCollectReload();
@@ -8816,8 +8843,8 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
                     ),
                   ),
               ]),
-              const SizedBox(width: 6),
-              Stack(clipBehavior: Clip.none, children: [
+              if (_tabAllowed(0) && _tabAllowed(1)) const SizedBox(width: 6),
+              if (_tabAllowed(1)) Stack(clipBehavior: Clip.none, children: [
                 _TabBtn('Warehouse', _tab == 1, () {
                   setState(() => _tab = 1);
                   WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -8839,25 +8866,25 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
                     ),
                   ),
               ]),
-              const SizedBox(width: 6),
-              // CHANGE #280: Bag tab (bag-wise) — index 2
-              _TabBtn('Bag', _tab == 2, () {
+              if (_tabAllowed(2)) const SizedBox(width: 6),
+              if (_tabAllowed(2)) _TabBtn('Bag', _tab == 2, () {
                 setState(() => _tab = 2);
                 WidgetsBinding.instance.addPostFrameCallback((_) {
                   _bagTabKey.currentState?._load();
                 });
               }),
-              const SizedBox(width: 6),
-              // CHANGE #278: Pack tab (customer-wise) — index 3 (#280: shifted from 2)
-              _TabBtn('Pack', _tab == 3, () {
+              if (_tabAllowed(3)) const SizedBox(width: 6),
+              if (_tabAllowed(3)) _TabBtn('Pack', _tab == 3, () {
                 setState(() => _tab = 3);
                 WidgetsBinding.instance.addPostFrameCallback((_) {
                   _packTabKey.currentState?._load();
                 });
               }),
-              const SizedBox(width: 6),
-              // #132C: Disputes tab with open-count badge (#280: now index 4)
-              Stack(clipBehavior: Clip.none, children: [
+              if (_tabAllowed(4)) const SizedBox(width: 6),
+              // #132C: Disputes tab with open-count badge (#280: now index 4).
+              // CHANGE #528 row 142 — 'partner.disputes' is a registered
+              // feature now, so this tab is governed like the other five.
+              if (_tabAllowed(4)) Stack(clipBehavior: Clip.none, children: [
                 _TabBtn('Disputes', _tab == 4, () {
                   setState(() => _tab = 4);
                   WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -8879,11 +8906,11 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
                     ),
                   ),
               ]),
-              const SizedBox(width: 6),
+              if (_tabAllowed(5)) const SizedBox(width: 6),
               // CHANGE #629: Delivery tab — index 5. Shares the ONE admin date
               // picker and the ONE zone picker; the tab itself passes both to
               // every call it makes.
-              _TabBtn(FulfillLookups.instance.ui('dlv_admin_tab'), _tab == 5, () {
+              if (_tabAllowed(5)) _TabBtn(FulfillLookups.instance.ui('dlv_admin_tab'), _tab == 5, () {
                 setState(() => _tab = 5);
                 WidgetsBinding.instance.addPostFrameCallback((_) {
                   _deliveryKey.currentState?.reload();
@@ -8902,21 +8929,30 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
           RenderLog.write('c629_fulfill_tabs', 6);
           // CHANGE #284: confirms Confirm-all gating removed; fires at boot for curl verify.
           RenderLog.write('c284_confirm_always_clickable', 'gating_removed=y;enabled=always');
+          // CHANGE #528 row 142 — a tab the caller was not granted is not
+          // merely unselectable, it is not built. IndexedStack indexes stay
+          // aligned, so tab 3 is still tab 3 for everyone.
           return IndexedStack(
             index: _tab,
             children: [
-              _PickToLightScreen(key: _collectKey, onSupplierCountChanged: _setShopCount),
-              _ArrivalsScreen(
-                key: _arrivalsKey,
-                onVoiceCount: _openVoiceInCollect,
-                onSupplierCountChanged: _setWarehouseCount,
-              ),
-              _BagTab(key: _bagTabKey),
-              _PackTab(key: _packTabKey),
-              _DisputesScreen(key: _disputesKey, onCountChanged: _setDisputeCount,
-                  onRefreshCollect: _refreshCollect, onRefreshArrivals: _refreshArrivals,
-                  onRefreshPack: _refreshPack),
-              AdminDeliveryTab(key: _deliveryKey),
+              if (_tabAllowed(0))
+                _PickToLightScreen(key: _collectKey, onSupplierCountChanged: _setShopCount)
+              else const SizedBox.shrink(),
+              if (_tabAllowed(1))
+                _ArrivalsScreen(
+                  key: _arrivalsKey,
+                  onVoiceCount: _openVoiceInCollect,
+                  onSupplierCountChanged: _setWarehouseCount,
+                )
+              else const SizedBox.shrink(),
+              if (_tabAllowed(2)) _BagTab(key: _bagTabKey) else const SizedBox.shrink(),
+              if (_tabAllowed(3)) _PackTab(key: _packTabKey) else const SizedBox.shrink(),
+              if (_tabAllowed(4))
+                _DisputesScreen(key: _disputesKey, onCountChanged: _setDisputeCount,
+                    onRefreshCollect: _refreshCollect, onRefreshArrivals: _refreshArrivals,
+                    onRefreshPack: _refreshPack)
+              else const SizedBox.shrink(),
+              if (_tabAllowed(5)) AdminDeliveryTab(key: _deliveryKey) else const SizedBox.shrink(),
             ],
           );
         }),

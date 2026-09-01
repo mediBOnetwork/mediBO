@@ -41,6 +41,8 @@ import 'screens/admin/wa_campaigns_screen.dart'; // /admin/wa-campaigns
 import 'screens/admin/admin_scope_audit_screen.dart'; // /admin/scope-audit
 import 'screens/admin/dev_queue/cron_health_screen.dart'; // /admin/cron-health
 import 'screens/admin/admin_delivery_extras_screen.dart'; // /admin/delivery-programme
+import 'screens/pharmacy/pharmacy_expiry_screen.dart';   // CMD #413 — /pharmacy/expiry
+import 'screens/pharmacy/pharmacy_variance_screen.dart'; // CMD #413 — /pharmacy/stock-check
 import 'screens/admin/nav_registry_view.dart'; // CHANGE #325 — deep links
 import 'screens/product_detail_screen.dart'; // C636: /product/:id
 import 'screens/reorder_screen.dart'; // #173: /reorder
@@ -657,6 +659,31 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
                 return MaterialPageRoute(
                   settings: settings,
                   builder: (_) => AdminDeliveryExtrasScreen(initialTab: q),
+                );
+              }
+              // CMD #413 — the pharmacy shop-management pair gets real URLs
+              // for the same reason /admin/cron-health has one: Flutter canvas
+              // cannot be clicked headlessly, so without a URL the post-deploy
+              // verifier can never prove either screen painted. It is also the
+              // pharmacy OWNER's own way in while the profile sheet that will
+              // carry the tiles is being written elsewhere.
+              //
+              // Authorisation stays entirely in the backend: pharmacy_expiry_home()
+              // answers "Expiry watch is available on a pharmacy account." and
+              // pharmacy_variance_report() answers "This is an owner-only report."
+              // in their own words, and each screen renders that refusal. Opening
+              // the URL as the wrong role therefore shows the backend's sentence,
+              // never a blank page and never a Dart role test.
+              if (name.split('?').first == '/pharmacy/expiry') {
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => const PharmacyExpiryScreen(),
+                );
+              }
+              if (name.split('?').first == '/pharmacy/stock-check') {
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => const PharmacyVarianceScreen(),
                 );
               }
               if (name == '/admin/cron-health') {

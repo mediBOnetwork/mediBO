@@ -28,7 +28,9 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../design_tokens.dart';
+import 'pharmacy_reorder_screen.dart';  // CHANGE #414
 import 'pharmacy_stock_screen.dart';
+import 'pos_margin_strip.dart';  // CHANGE #414
 import '../../services/pharmacy_stock_api.dart';
 import '../../services/pos_api.dart';
 import '../../services/ui_copy.dart';
@@ -112,6 +114,13 @@ class _PosScreenState extends State<PosScreen> {
   Timer? _debounce;
   bool _searching = false;
   bool _saving = false;
+
+  /// CHANGE #414 — the counter margin finder, for the line just added.
+  /// Empty until pos_margin_options() answers, and `has` is the ONLY thing that
+  /// draws it: whether a same-salt alternative is worth offering is a question
+  /// only the backend can answer, because only it knows what is on the shelf
+  /// and what it actually cost.
+  Map<String, dynamic> _margin = const {};
 
   Future<Map<String, dynamic>> _call(String fn, Map<String, dynamic> p) =>
       widget.rpc != null ? widget.rpc!(fn, p) : PosApi.call(fn, p);
@@ -226,6 +235,70 @@ class _PosScreenState extends State<PosScreen> {
       _results = const [];
       _searchMessage = '';
     });
+    _requote();
+    _loadMargin(mid);
+  }
+
+  /// CHANGE #414 — ask for same-salt alternatives that are ALSO on this
+  /// pharmacy's shelf, ranked by what they actually earn on them. A brand they
+  /// do not stock, or one whose batch has no recorded cost, never comes back —
+  /// that filtering is the backend's, and an estimated margin is worse than
+  /// none because the owner would act on it.
+  Future<void> _loadMargin(int? medicineId) async {
+    if (medicineId == null) {
+      if (mounted) setState(() => _margin = const {});
+      return;
+    }
+    try {
+      final res = await _call('pos_margin_options',
+          {'p_medicine_id': medicineId, 'p_limit': 5});
+      if (!mounted) return;
+      setState(() => _margin = res);
+    } catch (_) {
+      if (mounted) setState(() => _margin = const {});
+    }
+  }
+
+  /// One tap swaps the line. The replacement is PRICED by the backend
+  /// (pos_margin_swap returns the line), and the bill is re-quoted through the
+  /// same pos_quote every other change goes through.
+  Future<void> _swapLine(Map<String, dynamic> row) async {
+    final toRaw = row['medicine_id'];
+    final to = toRaw is num ? toRaw.toInt() : int.tryParse(_s(toRaw));
+    final fromRaw = _margin['for_medicine_id'];
+    final from = fromRaw is num ? fromRaw.toInt() : int.tryParse(_s(fromRaw));
+    if (to == null || from == null) return;
+
+    final at = _cart.indexWhere((l) => l.medicineId == from);
+    if (at < 0) return;
+
+    final res = await _call('pos_margin_swap',
+        {'p_from': from, 'p_to': to, 'p_qty': _cart[at].qty});
+    if (!mounted) return;
+    if (res['ok'] != true) {
+      final msg = _s(res['message']);
+      if (msg.isNotEmpty) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(msg)));
+      }
+      return;
+    }
+    final line = res['line'];
+    final l = line is Map ? Map<String, dynamic>.from(line) : const {};
+    setState(() {
+      _cart[at] = PosCartLine(
+        medicineId: to,
+        productName: _s(l['product_name']),
+        packLabel: _s(l['pack_label']),
+        qty: _cart[at].qty,
+      );
+      _margin = const {};
+    });
+    RenderLog.write('c414_margin_swap', 1);
+    final msg = _s(res['message']);
+    if (msg.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    }
     _requote();
   }
 
@@ -421,6 +494,12 @@ class _PosScreenState extends State<PosScreen> {
                   Ds.space.x24,
                 ),
                 children: [
+                  // CHANGE #414 — the way to "what to reorder", from the
+                  // counter where the owner already is. The label is ui_copy,
+                  // and the screen behind it renders its own empty state when
+                  // there is nothing running low.
+                  _ReorderEntryTile(rpc: widget.rpc),
+                  SizedBox(height: Ds.space.x12),
                   _searchField(labels),
                   if (_results.isNotEmpty || _searchMessage.isNotEmpty) ...[
                     SizedBox(height: Ds.space.x12),
@@ -428,6 +507,9 @@ class _PosScreenState extends State<PosScreen> {
                   ],
                   SizedBox(height: Ds.space.x24),
                   _cartCard(labels),
+                  // CHANGE #414 — same salt, better margin, on their own shelf.
+                  if (_cart.isNotEmpty)
+                    PosMarginStrip(payload: _margin, onSwap: _swapLine),
                   if (_cart.isNotEmpty) ...[
                     SizedBox(height: Ds.space.x24),
                     _patientCard(labels),
@@ -1244,4 +1326,46 @@ class PosMenuTile extends StatelessWidget {
           );
         },
       );
+}
+
+/// CHANGE #414 — the reorder entry, on the counter screen.
+class _ReorderEntryTile extends StatelessWidget {
+  final PosRpc? rpc;
+  const _ReorderEntryTile({required this.rpc});
+
+  @override
+  Widget build(BuildContext context) {
+    final label = c('reorder414.tile_label');
+    if (label.isEmpty) return const SizedBox.shrink();
+    RenderLog.write('c414_reorder_entry', 1);
+    return InkWell(
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute<void>(
+          builder: (_) => PharmacyReorderScreen(rpc: rpc),
+        ),
+      ),
+      child: Container(
+        constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+        padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x16,
+          vertical: Ds.space.x12,
+        ),
+        decoration: BoxDecoration(
+          color: Ds.c.surface,
+          borderRadius: Ds.r.rCard,
+          boxShadow: Ds.elevation.e1,
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.trending_up, size: Ds.space.x24, color: Ds.c.brand),
+            SizedBox(width: Ds.space.x12),
+            Expanded(child: Text(label, style: Ds.t.bodyStrong)),
+            Icon(Icons.chevron_right, size: Ds.space.x24,
+                color: Ds.c.textSecondary),
+          ],
+        ),
+      ),
+    );
+  }
 }

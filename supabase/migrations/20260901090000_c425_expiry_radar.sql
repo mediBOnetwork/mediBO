@@ -407,7 +407,12 @@ insert into public.ui_copy(key, value) values
  ('phradar.wa_read_partial',to_jsonb('Read your bill but some lines were unclear ({{lines}} items). Open mediBO to check.'::text)),
  ('phradar.wa_failed',      to_jsonb('We could not read that bill. Please send a clearer photo in daylight.'::text)),
  ('phradar.wa_urgent',      to_jsonb('{{product}} ({{batch_word}}) expires {{date}} — about {{value}} at risk. Return window closes in {{days}} days. How many are left?'::text)),
- ('phradar.wa_digest',      to_jsonb('{{shop}} — this month: {{bills}} bills captured, stock worth about {{stock}}, and {{value}} at risk of expiring. Check these {{items}} items in mediBO.'::text)),
+ ('phradar.wa_urgent_closed', to_jsonb('{{product}} ({{batch_word}}) expires {{date}} — about {{value}} at risk, and the return window has closed. How many are left?'::text)),
+ ('phradar.wa_digest',      to_jsonb('{{shop}} — this month: {{bills}} captured, stock worth about {{stock}}, and {{value}} at risk of expiring. Check {{items}} in mediBO.'::text)),
+ ('phradar.n_bills_one',    to_jsonb('1 bill'::text)),
+ ('phradar.n_bills_many',   to_jsonb('{{n}} bills'::text)),
+ ('phradar.n_items_one',    to_jsonb('1 item'::text)),
+ ('phradar.n_items_many',   to_jsonb('{{n}} items'::text)),
  ('phradar.digest_title',   to_jsonb('This month'::text)),
  ('phradar.digest_bills',   to_jsonb('Bills captured'::text)),
  ('phradar.digest_stock',   to_jsonb('Stock value'::text)),
@@ -416,9 +421,31 @@ insert into public.ui_copy(key, value) values
  ('phradar.saved',          to_jsonb('Saved'::text))
 on conflict (key) do nothing;
 
+-- The seed above deliberately does not overwrite copy Om may have edited. These
+-- two keys are the exception: this command shipped them WRONG in its own first
+-- pass ("2 bills bills captured", "these 1 item items"), so the fix belongs
+-- with the mistake rather than in a follow-up. Both now take a finished plural
+-- phrase from _c425_plural(); the sentence must not add a noun of its own.
+update public.ui_copy
+   set value = to_jsonb('{{shop}} — this month: {{bills}} captured, stock worth about {{stock}}, and {{value}} at risk of expiring. Check {{items}} in mediBO.'::text)
+ where key = 'phradar.wa_digest';
+update public.ui_copy
+   set value = to_jsonb('{{product}} ({{batch_word}}) expires {{date}} — about {{value}} at risk, and the return window has closed. How many are left?'::text)
+ where key = 'phradar.wa_urgent_closed';
+
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 6. THE ASK — question and options, composed in the backend
 -- ─────────────────────────────────────────────────────────────────────────────
+-- Plural is a language rule, so it is resolved here and shipped as a finished
+-- phrase. Nothing downstream ever appends an 's'.
+create or replace function public._c425_plural(p_base text, p_n integer)
+returns text language sql stable set search_path to 'public' as $$
+  select case when coalesce(p_n,0) = 1
+              then public.ui_text(p_base || '_one')
+              else public.ui_fmt(p_base || '_many',
+                     jsonb_build_object('n', coalesce(p_n,0)::text)) end;
+$$;
+
 create or replace function public._c425_ask_options(p_left numeric)
 returns jsonb language sql immutable set search_path to 'public' as $$
   select coalesce(jsonb_agg(distinct_opt order by distinct_opt), '[]'::jsonb)

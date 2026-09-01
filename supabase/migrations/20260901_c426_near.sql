@@ -278,7 +278,10 @@ $$;
 
 create or replace function public._c426_token()
 returns text language sql volatile as $$
-  select lower(replace(encode(gen_random_bytes(9), 'base64'), '/', '_'));
+  -- 24 hex chars from two UUIDs: unguessable enough for a public listing
+  -- token, and no pgcrypto dependency (gen_random_bytes lives in the
+  -- extensions schema here, which a search_path-pinned function cannot see).
+  select substr(md5(gen_random_uuid()::text || gen_random_uuid()::text), 1, 24);
 $$;
 
 -- Every opted-in pharmacy owns exactly one poster token, minted the moment it

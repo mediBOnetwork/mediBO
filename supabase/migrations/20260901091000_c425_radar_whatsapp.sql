@@ -143,7 +143,12 @@ begin
                     else public.ui_fmt('phradar.batch_label',
                            jsonb_build_object('batch', r.batch_no)) end;
 
-    v_text := public.ui_fmt('phradar.wa_urgent', jsonb_build_object(
+    -- "closes in 0 days" is not a sentence a shopkeeper can act on: when the
+    -- window is already shut the message has to say so and point at selling it
+    -- down instead of returning it.
+    v_text := public.ui_fmt(
+      case when r.window_state = 'open' then 'phradar.wa_urgent'
+           else 'phradar.wa_urgent_closed' end, jsonb_build_object(
       'product',    coalesce(r.product_name,''),
       'batch_word', v_batch,
       'date',       to_char(r.expiry_on, 'DD/MM/YY'),
@@ -207,18 +212,18 @@ begin
 
     v_text := public.ui_fmt('phradar.wa_digest', jsonb_build_object(
       'shop',  coalesce(sh.pharmacy_name,''),
-      'bills', v_bills::text,
+      'bills', public._c425_plural('phradar.n_bills', v_bills),
       'stock', public.inr_money(v_stock),
       'value', public.inr_money(v_risk),
-      'items', v_items::text));
+      'items', public._c425_plural('phradar.n_items', v_items)));
 
     v_res := public._c425_send(sh.id, 'radar_month', v_month,
       'pharmacy_radar_month', v_text,
       jsonb_build_object('shop', coalesce(sh.pharmacy_name,''),
-                         'bills', v_bills::text,
+                         'bills', public._c425_plural('phradar.n_bills', v_bills),
                          'stock', public.inr_money(v_stock),
                          'value', public.inr_money(v_risk),
-                         'items', v_items::text));
+                         'items', public._c425_plural('phradar.n_items', v_items)));
     if coalesce((v_res->>'ok')::boolean, false)
       then v_sent := v_sent + 1; else v_skipped := v_skipped + 1; end if;
   end loop;

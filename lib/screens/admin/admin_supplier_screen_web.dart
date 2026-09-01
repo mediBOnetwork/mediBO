@@ -210,7 +210,30 @@ class AdminSupplierScreen extends StatefulWidget {
   /// (`partner_open().tabs`); `null` = unbounded, i.e. every admin call site.
   final Set<int>? allowedTabs;
 
-  AdminSupplierScreen({this.allowedTabs}) : super(key: _screenKey);
+  /// CHANGE #537 — the Fulfill pipeline mounts this SAME screen as its stage-2
+  /// tab ("Supplier inquiry") and its stage-3 tab ("Supplier order"), one
+  /// instance each. Two optional inputs make that navigation rather than a
+  /// rewrite:
+  ///
+  ///  * [initialFilter] — which of this screen's own sub-tabs it opens on
+  ///    ('inquiry' / 'orders'). Null keeps the historical default, which since
+  ///    #528 is "the first tab this caller was granted".
+  ///  * [embedded] — when true this screen drops its OWN row of tab pills,
+  ///    because the Fulfill pipeline bar above it is already the tab row. The
+  ///    header's CONTROLS (refresh, the inquiry lock, the overflow menu) stay:
+  ///    they belong to the view, not to the navigation.
+  ///
+  /// Nothing else differs, and the standalone Suppliers page is untouched.
+  ///
+  /// The shell's instance still takes the static [_screenKey], so
+  /// [triggerFocus] keeps reaching it and only it; an embedded instance is
+  /// given its own key by its host, which is what lets several exist at once.
+  final String? initialFilter;
+  final bool embedded;
+
+  AdminSupplierScreen(
+      {Key? key, this.allowedTabs, this.initialFilter, this.embedded = false})
+      : super(key: key ?? _screenKey);
 
   /// Called by the shell when this screen becomes the active page.
   static void triggerFocus() =>
@@ -579,6 +602,15 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     if (!_filterAllowed(_filter)) {
       for (var i = 0; i < _tabOrder.length; i++) {
         if (_tabAllowed(i)) { _filter = _tabOrder[i]; break; }
+      }
+    }
+    // CHANGE #537 — then open on the sub-tab the pipeline asked for, but only
+    // if #528 says this caller may see it: a stage key must never widen a
+    // partner's grant. An unknown key is ignored rather than thrown on.
+    final want = widget.initialFilter;
+    if (want != null && want.isNotEmpty) {
+      for (final f in _SupFilter.values) {
+        if (f.name == want && _filterAllowed(f)) { _filter = f; break; }
       }
     }
     _matchService = MatchStatusService();
@@ -1249,7 +1281,11 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         final isMobile = MediaQuery.of(context).size.width < 700;
         return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
           // ── Scrollable tab pills ────────────────────────────────────────────
-          Expanded(
+          // CHANGE #537 — embedded in the Fulfill pipeline these pills would be
+          // a second tab row under the first, so the space goes to the controls
+          // instead and they stay pinned right exactly where they were.
+          if (widget.embedded) const Spacer()
+          else Expanded(
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Row(mainAxisSize: MainAxisSize.min, children: [

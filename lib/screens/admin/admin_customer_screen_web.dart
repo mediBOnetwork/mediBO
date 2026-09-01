@@ -356,7 +356,27 @@ enum _CustFilter {
 class AdminCustomerScreen extends StatefulWidget {
   static final _screenKey = GlobalKey<_AdminCustomerScreenState>();
 
-  AdminCustomerScreen() : super(key: _screenKey);
+  /// CHANGE #537 — the Fulfill pipeline mounts this SAME screen as its stage-1
+  /// tab ("Customer order"). Two things had to be optional for that to be
+  /// navigation rather than a rewrite:
+  ///
+  ///  * [initialFilter] — which of this screen's own sub-tabs it opens on. Null
+  ///    keeps the historical default (Customers).
+  ///  * [embedded] — when true the screen does not draw its OWN tab row,
+  ///    because the Fulfill pipeline bar is already the tab row above it. A
+  ///    tab bar inside a tab bar is the thing this change exists to remove.
+  ///
+  /// Nothing else differs. The embedded instance loads, refetches, renders and
+  /// acts exactly as the standalone one does.
+  ///
+  /// The shell's instance still takes the static [_screenKey], so
+  /// [triggerFocus] keeps reaching it and only it; an embedded instance is
+  /// given its own key by its host, which is what lets both exist at once.
+  final String? initialFilter;
+  final bool embedded;
+
+  AdminCustomerScreen({Key? key, this.initialFilter, this.embedded = false})
+      : super(key: key ?? _screenKey);
 
   /// Called by the shell when this screen becomes the active page.
   static void triggerFocus() =>
@@ -610,6 +630,15 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   @override
   void initState() {
     super.initState();
+    // CHANGE #537 — open on the sub-tab the host asked for. An unknown key is
+    // ignored rather than thrown on, so the backend can name a stage this
+    // build has never heard of without white-screening the pipeline.
+    final want = widget.initialFilter;
+    if (want != null && want.isNotEmpty) {
+      for (final f in _CustFilter.values) {
+        if (f.name == want) { _filter = f; break; }
+      }
+    }
     // CHANGE #545 — follow the central admin date.
     AdminDateScope.instance.addListener(_onDateScopeChanged);
     AdminDateScope.instance.ensureLoaded();
@@ -1752,7 +1781,9 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _buildHeader(isDesktop),
+              // CHANGE #537 — embedded in the Fulfill pipeline the bar above is
+              // already the tab row; drawing this screen's own would be two.
+              if (!widget.embedded) _buildHeader(isDesktop),
               _buildScrollContent(isDesktop),
             ],
           ),

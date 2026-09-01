@@ -19,6 +19,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../design_tokens.dart';
 import '../utils/render_log.dart';
 
 /// One stage of the pipeline, exactly as `fulfill_tabs().tabs[]` sent it.
@@ -119,6 +120,21 @@ class FulfillPipelinePayload {
   );
 
   bool get hasTabs => tabs.isNotEmpty;
+
+  /// The same payload with a narrower tab list — used when an index-bounded
+  /// caller (#307/#528 hand the screen a set of legacy tab indexes) must not
+  /// be widened by a stage the backend was happy to send. Everything else,
+  /// including the backend's copy, is carried through untouched.
+  FulfillPipelinePayload copyWithTabs(List<FulfillPipelineTab> next) =>
+      FulfillPipelinePayload(
+        ok: ok,
+        tabs: next,
+        message: message,
+        emptyTitle: emptyTitle,
+        emptyMessage: emptyMessage,
+        isPartner: isPartner,
+        zoneLabel: zoneLabel,
+      );
 
   static FulfillPipelinePayload fromJson(Map<String, dynamic> m) {
     final rows = (m['tabs'] as List? ?? const [])
@@ -266,14 +282,15 @@ class _FulfillPipelineTabBarState extends State<FulfillPipelineTabBar> {
     final row = SingleChildScrollView(
       controller: _scroll,
       scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.symmetric(horizontal: 4),
+      padding: EdgeInsets.symmetric(horizontal: Ds.space.x4),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           for (final t in widget.tabs) ...[
             Padding(
               key: _keys.putIfAbsent(t.stageKey, () => GlobalKey()),
-              padding: const EdgeInsets.only(right: 8, top: 4, bottom: 4),
+              padding: EdgeInsets.only(
+                  right: Ds.space.x8, top: Ds.space.x4, bottom: Ds.space.x4),
               child: _PipelineTabChip(
                 tab: t,
                 selected: t.stageKey == widget.selectedStage,
@@ -289,7 +306,7 @@ class _FulfillPipelineTabBarState extends State<FulfillPipelineTabBar> {
     );
 
     return SizedBox(
-      height: 52,
+      height: Ds.touch.minTarget + Ds.space.x8,
       child: Stack(children: [
         Positioned.fill(child: row),
         if (_moreLeft)
@@ -338,19 +355,20 @@ class _PipelineTabChip extends StatelessWidget {
         child: Stack(clipBehavior: Clip.none, children: [
           // 44 px minimum touch target, on the grid.
           Container(
-            constraints: const BoxConstraints(minHeight: 44),
+            constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
             alignment: Alignment.center,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            padding: EdgeInsets.symmetric(
+                horizontal: Ds.space.x16, vertical: Ds.space.x8),
             decoration: BoxDecoration(
               color: selected ? selectedColor : Colors.transparent,
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: Ds.r.rButton,
             ),
             child: Text(
               tab.label,
               maxLines: 1,
               softWrap: false,
               style: TextStyle(
-                fontSize: 14,
+                fontSize: Ds.t.bodySize,
                 fontWeight: FontWeight.w700,
                 color: selected ? Colors.white : unselectedColor,
               ),
@@ -362,15 +380,16 @@ class _PipelineTabChip extends StatelessWidget {
               right: -2,
               child: Container(
                 padding:
-                    const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                    EdgeInsets.symmetric(
+                        horizontal: Ds.space.x4, vertical: Ds.space.x4 / 2),
                 decoration: BoxDecoration(
                   color: badgeColor,
-                  borderRadius: BorderRadius.circular(10),
+                  borderRadius: Ds.r.rChip,
                 ),
                 child: Text(
                   badge,
-                  style: const TextStyle(
-                      fontSize: 10,
+                  style: TextStyle(
+                      fontSize: Ds.t.captionSize - 3,
                       fontWeight: FontWeight.w700,
                       color: Colors.white,
                       height: 1.2),
@@ -392,7 +411,7 @@ class _EdgeFade extends StatelessWidget {
   Widget build(BuildContext context) {
     return IgnorePointer(
       child: Container(
-        width: 24,
+        width: Ds.space.x24,
         decoration: BoxDecoration(
           gradient: LinearGradient(
             begin: toRight ? Alignment.centerRight : Alignment.centerLeft,

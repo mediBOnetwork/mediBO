@@ -9,16 +9,23 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 /// Signature every partner screen accepts, so a test can hand it a payload
 /// instead of a network.
-typedef PartnerRpc = Future<Map<String, dynamic>> Function(
-    String fn, Map<String, dynamic> params);
+typedef PartnerRpc =
+    Future<Map<String, dynamic>> Function(
+      String fn,
+      Map<String, dynamic> params,
+    );
 
 class PartnerApi {
   PartnerApi._();
 
   static Future<Map<String, dynamic>> call(
-      String fn, Map<String, dynamic> params) async {
-    final raw = await Supabase.instance.client
-        .rpc(fn, params: params.isEmpty ? null : params);
+    String fn,
+    Map<String, dynamic> params,
+  ) async {
+    final raw = await Supabase.instance.client.rpc(
+      fn,
+      params: params.isEmpty ? null : params,
+    );
     final map = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
     return map is Map ? Map<String, dynamic>.from(map) : <String, dynamic>{};
   }
@@ -27,4 +34,13 @@ class PartnerApi {
 
   static Future<Map<String, dynamic>> open(String featureKey) =>
       call('partner_open', {'p_feature': featureKey});
+}
+
+/// CHANGE #398 — the work queue board. One RPC, rendered verbatim: the stage
+/// list, the counts, the order rows and every word in them are the backend's.
+class PartnerQueueApi {
+  PartnerQueueApi._();
+
+  static Future<Map<String, dynamic>> board({int limit = 5}) =>
+      PartnerApi.call('partner_work_queue', {'p_limit': limit});
 }

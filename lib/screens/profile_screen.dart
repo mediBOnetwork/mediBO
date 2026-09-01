@@ -15,7 +15,12 @@ import 'admin/view_as_picker_dialog.dart';
 import 'admin/loyalty_admin_screen.dart';
 import 'delivery/delivery_register_screen.dart';
 import 'rewards_screen.dart';
+import 'customer/customer_staff_screen.dart';  // CHANGE #408
 import 'wishlist_screen.dart';
+import 'pharmacy/pos_screen.dart'; // CMD #411 — the pharmacy counter
+import 'pharmacy/pharmacy_parcel_count_screen.dart'; // CMD #431 — count a parcel
+import 'pharmacy/pharmacy_stock_screen.dart'; // CMD #412 — the pharmacy's shelf
+import 'pharmacy/pharmacy_gst_screen.dart'; // CMD #416 — the pharmacy's GST pack
 
 class ProfileScreen extends StatefulWidget {
   // CHANGE #374 — when set (View As Customer), load the impersonated
@@ -208,6 +213,38 @@ class _ProfileScreenState extends State<ProfileScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                // CMD #411 — the pharmacy's shop-management tools. This is the
+                // surface a customer account actually reaches on a phone: the
+                // avatar opens THIS screen directly (there is no menu sheet for
+                // a non-admin), so a counter used dozens of times a day belongs
+                // at the top of it rather than behind a menu that never opens.
+                // The tile draws itself only when pos_entry() said so.
+                Container(
+                  color: Ds.c.surface,
+                  padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+                  child: const Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      PosMenuTile(),
+                      // CMD #412 — the shelf, beside the counter. Both tiles
+                      // draw themselves only when their own entry RPC said so,
+                      // so a supplier or an admin opening this screen sees
+                      // neither and the shell still knows nothing about what a
+                      // pharmacy is.
+                      StockMenuTile(),
+                      // CMD #416 — the month's GST paperwork. Third tile in the
+                      // same column and gated the same way: it draws only when
+                      // pharmacy_gst_entry() said so, so a supplier or an admin
+                      // opening this screen sees none of the three.
+                      GstMenuTile(),
+                      // CMD #431 — counting the box that just arrived against
+                      // the bill that came with it. Gated the same way as the
+                      // three above: pharmacy_parcel_entry() decides, and it
+                      // carries its own badge when a count is still open.
+                      ParcelMenuTile(),
+                    ],
+                  ),
+                ),
                 // Avatar + pharmacy name header
                 Container(
                   color: Colors.white,
@@ -619,6 +656,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 // my_delivery_application() returns the form, the pending
                 // verdict, the rejection with its reason, or the invite row.
                 if (!isViewAs) _DeliverWithUsEntryCard(),
+                // Staff logins (CHANGE #408) — the pharmacy owner hands out
+                // extra logins instead of sharing their own. Shown to every
+                // registered customer because customer_staff_list() decides
+                // for itself whether the caller may manage anything: a staff
+                // member opening it gets their own row and can_manage:false,
+                // which is a real answer, not an error. The screen renders
+                // that refusal in the backend's own words.
+                if (!isViewAs && isRegistered)
+                  _StaffLoginsEntryCard(),
 
                 // Loyalty control panel (CHANGE #176) — super-admin only, and
                 // loyalty_config_get() re-checks the role server-side, so this
@@ -1067,6 +1113,18 @@ class _DeliverWithUsEntryCard extends StatelessWidget {
         icon: Icons.two_wheeler_outlined,
         copyKey: 'profile.row_deliver_with_us',
         destination: () => const DeliveryRegisterScreen(),
+      );
+}
+
+/// CHANGE #408 — the way into the pharmacy's staff logins.
+class _StaffLoginsEntryCard extends StatelessWidget {
+  const _StaffLoginsEntryCard();
+
+  @override
+  Widget build(BuildContext context) => _MenuEntryCard(
+        icon: Icons.badge_outlined,
+        copyKey: 'profile.row_staff_logins',
+        destination: () => const CustomerStaffScreen(),
       );
 }
 

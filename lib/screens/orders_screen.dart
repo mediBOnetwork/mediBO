@@ -6,7 +6,12 @@ import 'package:flutter/material.dart';
 
 import '../fulfill/fulfill_lookups.dart'; // C629: backend-owned button copy
 import '../services/date_labels.dart';
-import 'delivery/customer_track_sheet.dart'; // C629: PART F1 — live tracking
+import 'delivery/customer_track_sheet.dart';  // C629: PART F1 — live tracking
+import 'customer/order_edit_sheet.dart';  // CHANGE #408
+import 'customer/order_cancel_sheet.dart'; // CMD #452 — gaps #130
+import 'customer/order_help_sheet.dart';   // CMD #452 — gaps #132
+import 'customer/order_return_sheet.dart'; // CMD #452 — gaps #131
+import 'pharmacy/pharmacy_parcel_count_screen.dart'; // CMD #431 — Count, on the order
 import 'package:http/http.dart' as http;
 import 'package:pharma_b2b/utils/toast.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -22,6 +27,9 @@ import '../widgets/customer_order_item_card.dart'; // #641: the Items-tab card
 import '../services/ui_copy.dart';
 import '../design_tokens.dart'; // #173: Ds tokens for the reorder entry points
 import 'reorder_screen.dart'; // #173: reorder suite (suggestions + smart diff)
+import 'purchases_screen.dart'; // #367 row 174: purchase analytics + register
+import 'order_lists_screen.dart'; // #367 row 178: named saved order lists
+import '../widgets/substitute_choice.dart'; // #366 row 176: customer picks the substitute
 
 // ─── Data models ─────────────────────────────────────────────────────────────
 
@@ -60,6 +68,17 @@ class _DbOrder {
   /// Every item on the order, fulfilled or not. Counted server-side.
   final int totalItemCount;
 
+  /// CHANGE #408 — the edit window, decided by the backend and carried on the
+  /// order row. `can_edit` is the whole affordance; when it is false the
+  /// payload also names the reason and the sentence to show.
+  final Map<String, dynamic> edit;
+
+  /// CMD #452 — every door this buyer has on this order, decided server-side
+  /// and carried on the row: cancel (#130), returns (#131), help (#132). The
+  /// card renders the list in payload order, with the payload's own labels,
+  /// and never works out for itself whether an action is allowed.
+  final List<Map<String, dynamic>> actions;
+
   _DbOrder({
     required this.id,
     required this.number,
@@ -81,6 +100,8 @@ class _DbOrder {
     this.unfulfilledNote = '',
     this.unfulfilledCollapsed = true,
     this.totalItemCount = 0,
+    this.edit = const {},
+    this.actions = const [],
   });
 
   /// One parser for both arrays — they carry identical row shapes, so there is
@@ -119,6 +140,13 @@ class _DbOrder {
         unfulfilledNote: (row['unfulfilled_note'] ?? '').toString(),
         unfulfilledCollapsed: row['unfulfilled_collapsed'] != false,
         totalItemCount: (row['total_item_count'] as num?)?.toInt() ?? 0,
+        edit: row['edit'] is Map
+            ? Map<String, dynamic>.from(row['edit'] as Map)
+            : const {},
+        actions: ((row['actions'] as List<dynamic>?) ?? const [])
+            .whereType<Map>()
+            .map((a) => Map<String, dynamic>.from(a))
+            .toList(),
       );
 }
 
@@ -582,10 +610,14 @@ class _OrdersScreenState extends State<OrdersScreen> {
         physics: platformScrollPhysics(),
         // CHANGE #173 — first row is the reorder entry: it opens the predictive
         // "Due for reorder" screen (cadence computed server-side from history).
-        itemCount: _orders.length + 1,
+        // CMD #367 — two more entry points ride the same header rows:
+        // Purchases (row 174) and Saved lists (row 178), both reachable for
+        // every signed-in customer straight from Orders.
+        itemCount: _orders.length + 2,
         itemBuilder: (context, i) {
           if (i == 0) return const _ReorderEntry();
-          final o = _orders[i - 1];
+          if (i == 1) return const _PurchasesAndListsEntry();
+          final o = _orders[i - 2];
           // CHANGE #298 — the deep-linked order opens itself and is scrolled
           // into view; every other card is untouched.
           final focused = _focusCode != null && o.number == _focusCode;
@@ -593,6 +625,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
             key: focused ? _focusKey : null,
             order: o,
             autoOpen: focused,
+            onChanged: _fetch,
           );
         },
       ),
@@ -650,6 +683,230 @@ class _ReorderEntry extends StatelessWidget {
   }
 }
 
+/// CMD #367 — the customer's two new surfaces, side by side under the reorder
+/// entry: **Purchases** (row 174 — spend by month, top products and companies,
+/// savings vs MRP and the downloadable purchase register) and **Saved lists**
+/// (row 178 — named, editable, schedulable lists with one-tap reorder).
+/// The chrome words come from ui_copy; both screens render backend payloads.
+class _PurchasesAndListsEntry extends StatelessWidget {
+  const _PurchasesAndListsEntry();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: Ds.space.x12),
+      child: Row(
+        children: [
+          Expanded(
+            child: _EntryTile(
+              icon: Icons.insights_outlined,
+              title: c('purchases.entry_title').isEmpty
+                  ? 'Purchases'
+                  : c('purchases.entry_title'),
+              subtitle: c('purchases.entry_sub').isEmpty
+                  ? 'Spend, register, savings'
+                  : c('purchases.entry_sub'),
+              onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const PurchasesScreen())),
+            ),
+          ),
+          SizedBox(width: Ds.space.x12),
+          Expanded(
+            child: _EntryTile(
+              icon: Icons.playlist_add_check_outlined,
+              title: c('order_lists.entry_title').isEmpty
+                  ? 'Saved lists'
+                  : c('order_lists.entry_title'),
+              subtitle: c('order_lists.entry_sub').isEmpty
+                  ? 'Reorder in one tap'
+                  : c('order_lists.entry_sub'),
+              onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const OrderListsScreen())),
+            ),
+          ),
+          // CMD #452 — feature_gaps #132. Support used to be one "Contact Us"
+          // link in the storefront footer with nothing to come back to. Every
+          // help request raised from an order lives here, with its reference,
+          // its status and the thread the customer can reopen.
+          SizedBox(width: Ds.space.x12),
+          Expanded(
+            child: _EntryTile(
+              icon: Icons.support_agent_outlined,
+              title: c('support.entry_title'),
+              subtitle: c('support.entry_sub'),
+              onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => const MySupportRequestsScreen())),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EntryTile extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+  const _EntryTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: Ds.r.rCard,
+      onTap: onTap,
+      child: Container(
+        constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+        padding: EdgeInsets.all(Ds.space.x12),
+        decoration: BoxDecoration(
+          color: Ds.c.surface,
+          borderRadius: Ds.r.rCard,
+          boxShadow: Ds.elevation.e1,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(icon, color: Ds.c.brand),
+            SizedBox(height: Ds.space.x8),
+            Text(title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Ds.t.body.copyWith(fontWeight: FontWeight.w600)),
+            Text(subtitle,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: Ds.t.caption),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// CMD #452 — the customer's action row on an order card: cancel (#130),
+/// returns (#131) and help (#132). Every label, tone, badge and disabled
+/// explanation is the payload's; the only thing decided here is which sheet a
+/// key opens.
+class _CustomerActionsRow extends StatelessWidget {
+  final String orderId;
+  final List<Map<String, dynamic>> actions;
+  final Future<void> Function()? onChanged;
+
+  const _CustomerActionsRow({
+    required this.orderId,
+    required this.actions,
+    this.onChanged,
+  });
+
+  Future<void> _open(BuildContext context, String key) async {
+    var changed = false;
+    switch (key) {
+      case 'cancel':
+        changed = await showOrderCancelSheet(context, orderId);
+        break;
+      case 'returns':
+        changed = await showOrderReturnSheet(context, orderId);
+        break;
+      case 'help':
+        changed = await showOrderHelpSheet(context, orderId);
+        break;
+      default:
+        // Forward compatibility: a key this build does not know is not an
+        // error, it is a button a newer backend added. Skip it.
+        return;
+    }
+    if (changed && onChanged != null) await onChanged!();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    RenderLog.write('c452_order_actions', actions.length);
+    return Wrap(
+      spacing: Ds.space.x8,
+      runSpacing: Ds.space.x8,
+      children: [
+        for (final a in actions)
+          _ActionChip(
+            label: (a['label'] ?? '').toString(),
+            badge: (a['badge'] ?? '').toString(),
+            danger: (a['tone'] ?? '') == 'danger',
+            enabled: a['enabled'] == true,
+            note: (a['note'] ?? '').toString(),
+            onTap: () => _open(context, (a['key'] ?? '').toString()),
+          ),
+      ],
+    );
+  }
+}
+
+class _ActionChip extends StatelessWidget {
+  final String label;
+  final String badge;
+  final bool danger;
+  final bool enabled;
+  final String note;
+  final VoidCallback onTap;
+
+  const _ActionChip({
+    required this.label,
+    required this.badge,
+    required this.danger,
+    required this.enabled,
+    required this.note,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (label.isEmpty) return const SizedBox.shrink();
+    final fg = !enabled
+        ? Ds.c.textSecondary
+        : danger
+            ? Ds.c.danger
+            : Ds.c.brand;
+    return Tooltip(
+      // The backend's own sentence for why a closed window is closed.
+      message: enabled ? '' : note,
+      child: OutlinedButton(
+        onPressed: enabled
+            ? onTap
+            : (note.isEmpty
+                ? null
+                : () => showToast(context, note)),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: fg,
+          side: BorderSide(color: fg.withValues(alpha: 0.35)),
+          shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+          minimumSize: Size(0, Ds.touch.minTarget),
+          padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Flexible(
+              child: Text(label,
+                  overflow: TextOverflow.ellipsis, style: Ds.t.body.copyWith(color: fg))),
+          if (badge.isNotEmpty) ...[
+            SizedBox(width: Ds.space.x8),
+            Container(
+              padding: EdgeInsets.symmetric(
+                  horizontal: Ds.space.x8, vertical: Ds.space.x4),
+              decoration: BoxDecoration(
+                  color: fg.withValues(alpha: 0.12),
+                  borderRadius: Ds.r.rChip),
+              child: Text(badge, style: Ds.t.caption.copyWith(color: fg)),
+            ),
+          ],
+        ]),
+      ),
+    );
+  }
+}
+
 // ─── Order card ───────────────────────────────────────────────────────────────
 // CHANGE #446 — expands into an Items / Bill / Payment accordion, backed by
 // ONE call to cust_order_panel(order_id). The frontend only displays strings
@@ -662,7 +919,15 @@ class _OrderCard extends StatefulWidget {
   /// open, so the tap lands on the content, not on a collapsed row.
   final bool autoOpen;
 
-  const _OrderCard({super.key, required this.order, this.autoOpen = false});
+  /// CMD #452 — a self-cancel or a return changes the ORDER, not just this
+  /// card, so the screen re-fetches instead of the card patching itself.
+  final Future<void> Function()? onChanged;
+
+  const _OrderCard(
+      {super.key,
+      required this.order,
+      this.autoOpen = false,
+      this.onChanged});
 
   @override
   State<_OrderCard> createState() => _OrderCardState();
@@ -674,12 +939,33 @@ class _OrderCardState extends State<_OrderCard> {
   // independent per-section booleans that could disagree.
   int? _tab;
 
+  // CHANGE #408 — the edit window, as the BACKEND sees it. It arrives ON the
+  // order row from my_orders_screen(), so the card asks nobody: only the
+  // backend knows whether a supplier has been asked yet, and inferring it here
+  // from a status string is exactly the client-side logic this codebase does
+  // not allow. Re-read after a save, because the server recomputed it.
+  late Map<String, dynamic> _editState = widget.order.edit;
+
   @override
   void initState() {
     super.initState();
     // CHANGE #298 — the ONLY card that auto-expands is the one a notification
     // named. #458's "no auto-expand" rule still holds for every other card.
     if (widget.autoOpen) _tab = 0;
+  }
+
+  /// After a save the basket changed, so the window is re-read rather than
+  /// assumed to still be open.
+  Future<void> _reloadEditState() async {
+    try {
+      final raw = await Supabase.instance.client
+          .rpc('order_edit_state', params: {'p_order_id': widget.order.id});
+      if (!mounted) return;
+      setState(() =>
+          _editState = raw is Map ? Map<String, dynamic>.from(raw) : const {});
+    } catch (_) {
+      // A card that cannot ask simply keeps what the list gave it.
+    }
   }
 
   // CHANGE #458 B3: tapping the open button again closes it; tapping a different
@@ -795,32 +1081,111 @@ class _OrderCardState extends State<_OrderCard> {
             ),
           ]),
           const SizedBox(height: 14),
-          Row(children: [
-            Expanded(
-              child: _TabButton(label: c('orders.tab_items'), selected: _tab == 0, onTap: () => _toggleTab(0)),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: _TabButton(label: c('orders.tab_payment'), selected: _tab == 1, onTap: () => _toggleTab(1)),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: _TabButton(label: c('orders.tab_bill'), selected: _tab == 2, onTap: () => _toggleTab(2)),
-            ),
-            const SizedBox(width: 8),
-            // CHANGE #629 (PART F1): Track. This opens a sheet rather than a
-            // fourth accordion section, because customer_track_order() answers
-            // for itself whether there is anything to track — including
-            // 'Preparing your order' when no delivery row exists yet. The card
-            // never works that out from order.status.
-            Expanded(
-              child: _TabButton(
-                label: FulfillLookups.instance.ui('dlv_track'),
-                selected: false,
-                onTap: () => showCustomerTrackSheet(context, order.id),
+          // CMD #431 — the row scrolls sideways now. It stopped being four
+          // equal columns the moment Count joined it: five Expanded chips on a
+          // 360 px phone squeeze every caption to two cramped lines, and the
+          // fifth one would be the first to go. So the chips keep a readable
+          // minimum width, share the row evenly when there IS room, and scroll
+          // when there is not — which also means a sixth chip tomorrow costs
+          // this layout nothing.
+          LayoutBuilder(builder: (context, box) {
+            const gap = 8.0;
+            const minChip = 84.0;
+            final chips = <Widget Function(double)>[
+              (w) => SizedBox(
+                    width: w,
+                    child: _TabButton(
+                        label: c('orders.tab_items'),
+                        selected: _tab == 0,
+                        onTap: () => _toggleTab(0)),
+                  ),
+              (w) => SizedBox(
+                    width: w,
+                    child: _TabButton(
+                        label: c('orders.tab_payment'),
+                        selected: _tab == 1,
+                        onTap: () => _toggleTab(1)),
+                  ),
+              (w) => SizedBox(
+                    width: w,
+                    child: _TabButton(
+                        label: c('orders.tab_bill'),
+                        selected: _tab == 2,
+                        onTap: () => _toggleTab(2)),
+                  ),
+              // CHANGE #629 (PART F1): Track. This opens a sheet rather than a
+              // fourth accordion section, because customer_track_order()
+              // answers for itself whether there is anything to track —
+              // including 'Preparing your order' when no delivery row exists
+              // yet. The card never works that out from order.status.
+              (w) => SizedBox(
+                    width: w,
+                    child: _TabButton(
+                        label: FulfillLookups.instance.ui('dlv_track'),
+                        selected: false,
+                        onTap: () => showCustomerTrackSheet(context, order.id)),
+                  ),
+              // CMD #431 — count this parcel against this order's own bill.
+              // The chip draws itself only when pharmacy_parcel_order_chip()
+              // said so, and its caption ('Count' / 'Counting' / 'Counted') is
+              // the backend's, so the card never works out where the count got
+              // to either.
+              (w) => ParcelOrderChip(
+                    orderId: order.id,
+                    builder: (ctx, label, onTap) => SizedBox(
+                      width: w,
+                      child: _TabButton(
+                          label: label, selected: false, onTap: onTap),
+                    ),
+                  ),
+            ];
+            final n = chips.length;
+            final even = (box.maxWidth - gap * (n - 1)) / n;
+            final w = even >= minChip ? even : minChip;
+            final row = [
+              for (var i = 0; i < n; i++) ...[
+                if (i > 0) const SizedBox(width: gap),
+                chips[i](w),
+              ],
+            ];
+            return SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              physics: const ClampingScrollPhysics(),
+              child: Row(children: row),
+            );
+          }),
+          // CHANGE #408 — edit this order, but ONLY while the backend says the
+          // window is open. OrderEditButton renders nothing at all when
+          // `can_edit` is false, so the affordance disappears the moment the
+          // waterfall starts — and the write is refused server-side too, so
+          // this is a courtesy, not the guard.
+          if (_editState['can_edit'] == true) ...[
+            SizedBox(height: Ds.space.x8),
+            SizedBox(
+              width: double.infinity,
+              child: OrderEditButton(
+                state: _editState,
+                onTap: () async {
+                  final saved = await showOrderEditSheet(context, order.id);
+                  if (saved && mounted) await _reloadEditState();
+                },
               ),
             ),
-          ]),
+          ],
+          // CMD #452 — the doors a buyer has on this order. The list, the
+          // labels, whether each is enabled and the sentence shown when one is
+          // not all arrive on the order row (`actions`), so this row renders
+          // and routes; it decides nothing. An action key this build has never
+          // heard of is skipped in silence, so the backend can add one without
+          // a deploy.
+          if (order.actions.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x8),
+            _CustomerActionsRow(
+              orderId: order.id,
+              actions: order.actions,
+              onChanged: widget.onChanged,
+            ),
+          ],
           // CHANGE #173 — Reorder this order. Opens the Smart Basket Diff:
           // the backend reconciles this past order against the current catalog
           // (unavailable dropped, out-of-stock swapped, price changes flagged)
@@ -1030,10 +1395,59 @@ class _ItemsTabState extends State<_ItemsTab> {
                 const SizedBox(height: 10),
               ],
               ...order.unfulfilledLines.map(_itemRow),
+              // CMD #366 row 176 — the buyer's own say. Until now the split
+              // was silent: order_items.unfulfillable was set server-side and
+              // this block only reported the outcome. Now every open offer on
+              // this order renders the SAME chooser the admin sees and the
+              // WhatsApp page shows, so "the customer approved it" means one
+              // thing wherever it was recorded.
+              ..._offersFor(order.id).map((offer) => Padding(
+                    padding: EdgeInsets.only(top: Ds.space.x12),
+                    child: SubstituteChoice(
+                      offer: offer,
+                      onDecided: (fresh) => setState(() {
+                        final list = _subOffers[order.id];
+                        if (list == null) return;
+                        final i = list.indexWhere((e) =>
+                            e['offer_id'] == fresh['offer_id']);
+                        if (i >= 0) list[i] = fresh;
+                      }),
+                    ),
+                  )),
             ]),
           ),
       ]),
     );
+  }
+
+  /// CMD #366 row 176 — substitute offers, keyed by order id. Loaded lazily
+  /// the first time an order with a shortage is drawn, so an account with no
+  /// shortage never pays for the call.
+  final Map<String, List<Map<String, dynamic>>> _subOffers = {};
+  final Set<String> _subOffersLoading = {};
+
+  List<Map<String, dynamic>> _offersFor(String orderId) {
+    final cached = _subOffers[orderId];
+    if (cached != null) return cached;
+    if (_subOffersLoading.add(orderId)) {
+      // ignore: discarded_futures — fire-and-forget; the setState redraws.
+      SubstituteChoice.rpc('sub_offers_for_order', {'p_order_id': orderId})
+          .then((res) {
+        if (!mounted) return;
+        final rows = (res is Map ? (res['offers'] as List?) : null) ?? const [];
+        setState(() {
+          _subOffers[orderId] = rows
+              .whereType<Map>()
+              .map((e) => e.cast<String, dynamic>())
+              .toList();
+        });
+      }).catchError((_) {
+        // A failed lookup leaves the shortage block exactly as it was. It must
+        // never take the order card down with it.
+        if (mounted) setState(() => _subOffers[orderId] = const []);
+      });
+    }
+    return const [];
   }
 
   // ── One row shape for both lists ──────────────────────────────────────────

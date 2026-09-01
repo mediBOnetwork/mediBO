@@ -250,6 +250,24 @@ Current files and what they hold down:
   editable, prestate null arrives unselected, a submitted answer outranks the
   tick and a live tap outranks both, and items render in payload order (no
   client sort).
+- `supplier_records_test.dart` — the supplier records layer: the TAB LIST is
+  supplier_records_home()'s (an unknown tab_key renders an empty body instead
+  of throwing), nothing on the four surfaces is computed in Dart (every rupee,
+  percentage, quantity, date and plural prints verbatim — the growth tile shows
+  '-18.4%' because the BACKEND sent it), a document is asked for and then
+  polled on the backend's own `poll_ms` and opened at the backend's own
+  bucket+path (the screen never builds a URL or invents a timeout), a debit's
+  tone and its photo affordance are payload flags rather than inferences, and
+  an untouched bill-search filter is an ABSENT parameter, never an empty
+  string.
+- `masked_call_test.dart` — the number masking layer (CHANGE #404): a call
+  button is built ONLY from a backend descriptor and carries no phone number
+  (has:false, a missing label or a missing role each render nothing), the label
+  prints verbatim, `user_dials` dials the DID and only the DID, `provider_dials`
+  dials nothing at all, a refusal shows the backend's own `message` with no Dart
+  fallback wording, and an order with no permitted counterparty is absent from
+  call_mask_targets rather than a greyed-out button.
+
 - `cart_unavailable_test.dart` — the cart's red state is the backend's flag:
   per-line unavailable/qty_locked are carried through untouched,
   unavailable_badge prints verbatim (never pluralised in Dart), the badge is
@@ -554,6 +572,83 @@ cross-area commands, shows the chain, claims with two runners and asserts the
 chained one is never handed out. Om reads the lane at Dev Queue → Cron health →
 **Build lane** (`build_contention_status()`), and `lease_event` is the
 permanent conflict history the before/after count is measured from.
+
+## 17. STEP PROGRESS MUST TICK ITSELF (permanent — CHANGE #350)
+
+The card's checklist is Om's only live answer to "where is this build?". #340
+sat at "Step 0 of 7" with 550K tokens spent and a change already promoted: the
+agent worked the whole time and never called the step RPC, so the one thing Om
+could see was a lie. Three layers, so progress never depends on memory alone:
+
+1. **PROTOCOL — mark it the moment it lands.** `devcmd.sh steps_set <ID>
+   '["…","…"]' <branch>` before you code; `devcmd.sh step_done <ID> <n>
+   <commit> "<what landed>"` the instant each step is on the branch — never a
+   catch-up pass before `complete`. A checklist that only becomes truthful
+   after the build is over told Om nothing while it mattered.
+2. **RE-PLANNING REWRITES THE LIST.** A hostile-QA round, a bigger spec, a
+   dropped approach — call `steps_set` AGAIN with the plan you are actually
+   following. Same title at the same number keeps its done mark, so a rewrite
+   is cheap. Abandoning the plan at 0 while you work a different one is the
+   failure this change exists to end.
+3. **DERIVED TICKS.** Every heartbeat the harness (`step_autotick.sh`) reports
+   the facts it can observe for itself — a commit touching
+   `supabase/migrations/`, a commit touching `lib/**.dart`, a green test run,
+   `queue_push`, the change going live — and `dev_cmd_step_autotick()` ticks
+   whichever pending step each fact satisfies. The mapping is DATA
+   (`dev_step_fact_rule`): a new detectable fact is one INSERT, not a deploy.
+   It covers the mechanical steps only; a decision or a QA fix is still yours.
+4. **BACKSTOP.** `dev_cmd_watchdog()` compares tokens spent against steps
+   reported. Checklist frozen past `worker_pool.steps_watchdog.stale_min` while
+   at least `min_tokens` were spent => it writes a `⚠ STEP SYNC` nudge into the
+   live session (the same channel Om's replies ride, injected by
+   `build_bridge.sh`) and sets `steps_stale_flagged`, which the card renders as
+   "Steps not being reported — checklist may be stale ({age})". A stale
+   checklist is VISIBLY untrusted instead of silently wrong. Any real tick —
+   agent or derived — clears the flag immediately.
+
+## 18. FINISHED MEANS EXIT (permanent — CHANGE #369)
+
+Completion is an OBSERVATION the harness makes, not a turn the model takes.
+#355 finished everything — 12/12 steps, CHANGE #855 live, render_verify green,
+QA journeys green, the agent even typed "Completing." — and then ran two more
+command batches while its card still read `building` at 1.3M tokens. The
+step-sync backstop nagged it fifteen minutes after the work was already done.
+Measured across the rows before this change, a finished build stayed open a
+median ~8 minutes and ~290K tokens past its last step; #355 cost 41 minutes and
+782K.
+
+1. **THE HARNESS COMPLETES.** Every heartbeat, `finish_detect.sh` (hooked into
+   `devcmd.sh`, never `runner.sh` — a long-running loop holds its own copy of
+   that file in memory) calls `dev_cmd_autofinish`. When every condition is
+   observed the BACKEND completes the row and the harness sends ONE Ctrl-C to
+   the tmux pane: the turn ends, the session lives (killing it would cost Om a
+   new-device notification). Zero model turns after success.
+2. **THE SUMMARY IS COMPOSED, NOT WRITTEN.** `dev_cmd_result_compose` builds
+   `result_summary` and `plain_summary` from the artifacts already on the row —
+   step count, change number, QA verdict, journeys, proofs, decisions — in Om's
+   bullet format, inside the 10-line / 50-word limit. The model never gets a
+   "write the summary" turn.
+3. **THE WATCHDOG IS THE BACKSTOP.** `dev_cmd_autofinish_sweep()` rides the one
+   cron dispatcher (`dev-cmd-autofinish`, 60s). A row green for longer than
+   `worker_pool.finish_gate.grace_s` (120s) is completed server-side whether or
+   not a worker is still listening; the 20s status poll in `devcmd.sh` then ends
+   the turn. Drift is impossible rather than discouraged.
+4. **IT CANNOT FIRE EARLY.** Every condition must hold together: steps N/N on a
+   plan that EXISTS, no open question, QA passed/waived where required, required
+   journeys green with no unanswered red, screenshot proof in `dev-cmd-proofs`,
+   the change deployed AND promoted with a green self-test — and `rg_check`
+   green, enforced by `dev_cmd_complete` itself, whose exception is caught and
+   reported as a blocker rather than swallowed as a completion.
+   `bash scripts/finish_gate_proof.sh` rehearses all of it on synthetic rows.
+5. **THE CARD SAYS SO.** `finish_chip` while a build sits green, then
+   "Auto-completed by the harness · {drift} after the last step"; every
+   completed row carries `finish_drift_s` and `finish_tokens_after`, so the
+   number this change exists to move is readable off the queue.
+   `test/protected/finish_gate_test.dart` pins the boundary: Dart renders the
+   verdict and never infers readiness from `steps_done == steps_total`.
+
+For the builder: mark the last step the moment it lands, and treat
+`already: true` from `devcmd.sh complete` as success — the gate got there first.
 
 ## 13. PARALLEL WORKERS (permanent — CHANGE #74)
 

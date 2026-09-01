@@ -16,6 +16,8 @@ import 'package:flutter/material.dart';
 import '../../design_tokens.dart';
 import '../../services/partner_state.dart';
 import '../../utils/render_log.dart';
+import '../../utils/toast.dart';
+import 'settlement_ack_card.dart';
 import '../admin/settlement_screen.dart';
 
 class PartnerStatementScreen extends StatefulWidget {
@@ -63,6 +65,28 @@ class _PartnerStatementScreenState extends State<PartnerStatementScreen> {
         '${((_asMap(p['periods'])['rows']) as List?)?.length ?? 0}');
   }
 
+  /// Records the acknowledgement and reloads: the CARD's next state comes from
+  /// the server, never from what we just sent.
+  Future<void> _ack(String state, String note) async {
+    final id = _periodId ?? _asMap(_asMap(_payload?['statement']))['period_id'];
+    if (id == null) return;
+    try {
+      final r = _asMap(await _rpc('settlement_ack_set', {
+        'p_period_id': id,
+        'p_state': state,
+        'p_note': note.isEmpty ? null : note,
+      }));
+      if (!mounted) return;
+      final msg = (r['message'] ?? '').toString();
+      if (msg.isNotEmpty) {
+        showToast(context, msg, isError: r['ok'] != true);
+      }
+    } catch (e) {
+      if (mounted) showToast(context, e.toString(), isError: true);
+    }
+    await _load();
+  }
+
   @override
   Widget build(BuildContext context) {
     final p = _payload;
@@ -104,6 +128,13 @@ class _PartnerStatementScreenState extends State<PartnerStatementScreen> {
               settlementMessage(
                   (statement['negative_text'] ?? '').toString(), 'warning'),
             ],
+            SizedBox(height: Ds.space.x16),
+            // CHANGE #400 — Agree / Dispute, above the numbers it is about.
+            SettlementAckCard(
+              ack: _asMap(statement['ack']),
+              onAgree: (n) => _ack('agreed', n),
+              onDispute: (n) => _ack('disputed', n),
+            ),
             SizedBox(height: Ds.space.x16),
             settlementTiles((statement['tiles'] as List?) ?? const []),
             SizedBox(height: Ds.space.x24),

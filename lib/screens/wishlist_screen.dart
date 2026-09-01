@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -16,6 +18,15 @@ class WishlistScreen extends StatefulWidget {
 
 class _WishlistScreenState extends State<WishlistScreen> {
   Map<String, dynamic>? _payload;
+
+  /// CMD #410 — `wishlist_alerts()`: what has changed on these products since
+  /// the customer saved them. The same events the daily digest reports, shown
+  /// in the app so the alert has somewhere to land when the push is dismissed.
+  /// Every chip, tone and figure in it is the backend's; an unentitled viewer
+  /// gets the fact that a rate moved with NO number, because a trade rate is
+  /// gated the same way here as it is on a product card.
+  Map<String, dynamic>? _alerts;
+
   bool _loading = true;
   bool _error = false;
   final Set<String> _removing = {};
@@ -38,8 +49,24 @@ class _WishlistScreenState extends State<WishlistScreen> {
               : <String, dynamic>{});
       if (mounted) setState(() { _payload = p; _loading = false; });
       RenderLog.write('wishlist_screen', 'loaded:${_items(p).length}');
+      unawaited(_loadAlerts());
     } catch (_) {
       if (mounted) setState(() { _error = true; _loading = false; });
+    }
+  }
+
+  /// A failure here leaves the wishlist itself untouched: the alert strip is
+  /// an addition to the page, never a gate on it.
+  Future<void> _loadAlerts() async {
+    try {
+      final raw = await Supabase.instance.client.rpc('wishlist_alerts');
+      if (raw is! Map) return;
+      if (!mounted) return;
+      setState(() => _alerts = Map<String, dynamic>.from(raw));
+      RenderLog.write('c410_wishlist_alerts',
+          '${(Map<String, dynamic>.from(raw)['items'] as List?)?.length ?? 0}');
+    } catch (_) {
+      // Keep the wishlist on screen.
     }
   }
 
@@ -185,6 +212,13 @@ class _WishlistScreenState extends State<WishlistScreen> {
             Text(countLabel,
                 style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
             SizedBox(height: Ds.space.x12),
+          ],
+          // CMD #410 — the price/stock alert strip. `has` is the backend's
+          // verdict; with nothing to report there is no strip at all, not an
+          // empty box.
+          if (_alerts?['has'] == true) ...[
+            _AlertStrip(payload: _alerts!),
+            SizedBox(height: Ds.space.x24),
           ],
           ...items.map((item) => _WishlistCard(
                 item: item,
@@ -346,6 +380,104 @@ class _WishlistCard extends StatelessWidget {
           ],
         ),
       ],
+    );
+  }
+}
+
+
+/// CMD #410 — the wishlist's price and stock alerts.
+///
+/// One card, one line per event, every string out of `wishlist_alerts()`: the
+/// heading, the footnote about the once-a-day digest, each chip's label and
+/// the "from X to Y" detail. The widget picks the colour from the backend's
+/// own `tone` word and prints the rest.
+///
+/// `has_detail` is why there is no formatting here: a viewer who is not
+/// entitled to trade prices is told a rate CHANGED and shown no figure, and
+/// that decision is made once, in SQL, next to the price block that makes the
+/// same decision for every card in the app.
+class _AlertStrip extends StatelessWidget {
+  final Map<String, dynamic> payload;
+  const _AlertStrip({required this.payload});
+
+  static String _s(Object? v) => v?.toString() ?? '';
+
+  Color _tone(String tone) {
+    switch (tone) {
+      case 'success':
+        return Ds.c.success;
+      case 'warning':
+        return Ds.c.warning;
+      case 'danger':
+        return Ds.c.danger;
+      default:
+        return Ds.c.info;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final items = (payload['items'] as List?)
+            ?.whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList() ??
+        const <Map<String, dynamic>>[];
+
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.all(Ds.space.x16),
+      decoration: BoxDecoration(
+        color: Ds.c.surface,
+        borderRadius: Ds.r.rCard,
+        border: Border.all(color: Ds.c.divider),
+        boxShadow: Ds.elevation.e1,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(_s(payload['title']), style: Ds.t.subtitle),
+          SizedBox(height: Ds.space.x12),
+          for (final a in items) ...[
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  padding: EdgeInsets.symmetric(
+                      horizontal: Ds.space.x8, vertical: Ds.space.x4),
+                  decoration: BoxDecoration(
+                    color: _tone(_s(a['tone'])).withValues(alpha: 0.12),
+                    borderRadius: Ds.r.rChip,
+                  ),
+                  child: Text(
+                    _s(a['label']),
+                    style: Ds.t.caption.copyWith(
+                        color: _tone(_s(a['tone'])),
+                        fontWeight: FontWeight.w500),
+                  ),
+                ),
+                SizedBox(width: Ds.space.x8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(_s(a['name']),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: Ds.t.body),
+                      // Absent unless the backend said this viewer may see the
+                      // figure. There is no Dart fallback that prints it anyway.
+                      if (a['has_detail'] == true)
+                        Text(_s(a['detail']), style: Ds.t.caption),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            SizedBox(height: Ds.space.x12),
+          ],
+          Text(_s(payload['note']), style: Ds.t.caption),
+        ],
+      ),
     );
   }
 }

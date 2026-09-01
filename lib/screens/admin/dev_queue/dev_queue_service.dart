@@ -63,6 +63,12 @@ class DevQueueService {
   Future<Map<String, dynamic>> dbHealth() async =>
       _asMap(await _c.rpc('db_health_status'));
 
+  /// CMD #368 — save one admission-control threshold (or the on/off switch).
+  /// The backend clamps every value to its own bounds and returns the stored
+  /// block; the caller reloads rather than trusting what it sent.
+  Future<Map<String, dynamic>> admissionSet(Map<String, dynamic> patch) async =>
+      _asMap(await _c.rpc('db_admission_set', params: {'p_patch': patch}));
+
   /// CHANGE #324 — the deploy lane, now a merge queue: who holds the lane and
   /// for how long, what is waiting to be batched, the batch in flight, wait
   /// time vs hold time over the last seven days, any claim still holding a
@@ -78,6 +84,12 @@ class DevQueueService {
   /// `build_contention_status()`; the section renders it in payload order.
   Future<Map<String, dynamic>> buildLane({int days = 7}) async =>
       _asMap(await _c.rpc('build_contention_status', params: {'p_days': days}));
+
+  /// CHANGE #404 — is masked calling actually on, and what is still missing
+  /// before real calls flow. Render-ready: every word and tone on the card is
+  /// built by this RPC.
+  Future<Map<String, dynamic>> maskedCalling() async =>
+      _asMap(await _c.rpc('call_setup_status'));
 
   /// CHANGE #275 — every Google sign-in failure recorded on a real device,
   /// newest first, already rendered by the backend.
@@ -179,6 +191,12 @@ class DevQueueService {
   /// blocking loader.
   Future<Map<String, dynamic>> draftsInbox() async =>
       _asMap(await _c.rpc('drafts_inbox'));
+
+  /// CHANGE #349 — the labelled tools surface. One payload: the groups, the
+  /// labels, the descriptions, the icon keys and the drafts badge. A tool the
+  /// registry does not list is not in it, which is the whole gate.
+  Future<Map<String, dynamic>> devTools() async =>
+      _asMap(await _c.rpc('dev_tools'));
 
   Future<void> draftCancel(int id) async =>
       _c.rpc('draft_cancel', params: {'p_id': id});
@@ -445,6 +463,18 @@ class DevQueueService {
   // ── GCP Control plane (all render-ready from the live backend) ────────────
   Future<Map<String, dynamic>> gcpGet() async =>
       _asMap(await _c.rpc('dev_gcp_get'));
+
+  /// Run the monthly cloud waste scan NOW via the `cloud-waste-scan` edge
+  /// function (carries the user's JWT; the function re-checks super_admin and
+  /// holds the AWS key, which is deliberately nowhere on the builder VM). It is
+  /// READ-ONLY — it lists, prices and deletes nothing. Returns the same
+  /// rendered payload `dev_gcp_get().waste` serves.
+  Future<Map<String, dynamic>> wasteScan() async {
+    final res = await _c.functions
+        .invoke('cloud-waste-scan', body: {'action': 'run'});
+    final d = res.data;
+    return d is Map ? Map<String, dynamic>.from(d) : <String, dynamic>{};
+  }
 
   /// One-tap GCP action (enable_api|restart_vm|resize_disk|quotas|billing_now).
   /// restart_vm carries the PIN. Enqueues an urgent gcp command; returns {id,...}.

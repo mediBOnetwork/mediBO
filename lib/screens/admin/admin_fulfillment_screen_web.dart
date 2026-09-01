@@ -12,6 +12,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:convert';
+import '../../design_tokens.dart';
 import '../../utils/render_log.dart';
 import 'dispute/dispute_models.dart';
 import '../../fulfill/fulfill_view_logic.dart'; // C355: shared logic for both layouts
@@ -1073,6 +1074,9 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     if (s.isNotEmpty) _activeBagBySupplier[s] = v;
   }
   bool _confirmingAll = false;
+  // cmd #401 — per-supplier "closed until … · ready from … · N parcels",
+  // rendered verbatim under the supplier's name on the Collect card.
+  Map<String, String> _supplierStatusLine = const {};
   bool _submittingCollect = false; // #125: Z1 guard — disables both Collect submit buttons mid-flight
 
   // #116: supplier count mode from fw_get_state ('shop'|'warehouse'|null)
@@ -1663,6 +1667,12 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
       final packedMap = <String, Map<String, String>>{};
       final methodMap = <String, Map<String, String>>{};
       final submitMap = <String, Map<String, String>>{};
+      // cmd #401: the closed-until sentence and the ready-for-pickup line, both
+      // composed by the backend (supplier_closure_state / supplier_ready_block)
+      // and printed here verbatim. Only a shop that IS closed, and only a
+      // supplier who actually stated a ready time, contribute a line — silence
+      // stays silent rather than becoming a reassuring default.
+      final statusMap = <String, String>{};
       Map<String, String>? asDot(dynamic v) => v is Map
           ? {
               'fill': v['fill']?.toString() ?? '',
@@ -1680,7 +1690,21 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         if (dm != null) methodMap[s] = dm;
         final ds = asDot(m['dot_submit']);
         if (ds != null) submitMap[s] = ds;
+        final parts = <String>[];
+        final closed = m['closed'];
+        if (closed is Map && closed['closed'] == true) {
+          parts.add((closed['status_label'] ?? '').toString());
+        }
+        final ready = m['ready'];
+        if (ready is Map && ready['has_ready'] == true) {
+          parts.add((ready['ready_label'] ?? '').toString());
+          final pl = ready['parcels_label'];
+          if (pl != null) parts.add(pl.toString());
+        }
+        final line = parts.where((p) => p.isNotEmpty).join(' · ');
+        if (line.isNotEmpty) statusMap[s] = line;
       }
+      RenderLog.write('c401_collect_status', '${statusMap.length}');
       RenderLog.write('78_collect_suppliers_count', '${names.length}');
       RenderLog.write('c444_shop_suppliers', '${names.length}');
       setState(() {
@@ -1689,6 +1713,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
         _supplierDotPackedMap = {..._supplierDotPackedMap, ...packedMap};
         _supplierDotMethodMap = {..._supplierDotMethodMap, ...methodMap};
         _supplierDotSubmitMap = {..._supplierDotSubmitMap, ...submitMap};
+        _supplierStatusLine = {..._supplierStatusLine, ...statusMap};
       });
       widget.onSupplierCountChanged?.call(names.length);
       _loadCollectModes(); // #120: populate C/CR badge map
@@ -4337,6 +4362,7 @@ class _PickToLightScreenState extends State<_PickToLightScreen> {
     return _SupplierAccordionShell(
       name: name,
       hexDots: hexDots,
+      statusLine: _supplierStatusLine[name],
       isExpanded: isExpanded,
       anyExpanded: _selectedSupplier != null,
       rowKey: rowKey,
@@ -7735,6 +7761,9 @@ class _SupplierAccordionShell extends StatelessWidget {
   // dot_packed]) — already ordered by the caller. null entries render the
   // fallback yellow dot.
   final List<Map<String, String>?>? hexDots;
+  /// cmd #401 — one backend-composed line (closed-until / ready-from /
+  /// parcels). Null when the backend sent nothing worth saying.
+  final String? statusLine;
 
   const _SupplierAccordionShell({
     required this.name,
@@ -7743,6 +7772,7 @@ class _SupplierAccordionShell extends StatelessWidget {
     required this.rowKey,
     required this.onTap,
     required this.expandedContent,
+    this.statusLine,
     this.hexDots,
   });
 
@@ -7776,12 +7806,21 @@ class _SupplierAccordionShell extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
               child: Row(children: [
                 Expanded(
-                  child: Text(name,
-                      style: TextStyle(
-                        fontSize: 15, fontWeight: FontWeight.w600,
-                        color: isExpanded ? _kGreen : _kText,
-                      ),
-                      maxLines: 2, overflow: TextOverflow.ellipsis),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(name,
+                          style: TextStyle(
+                            fontSize: 15, fontWeight: FontWeight.w600,
+                            color: isExpanded ? _kGreen : _kText,
+                          ),
+                          maxLines: 2, overflow: TextOverflow.ellipsis),
+                      if (statusLine != null && statusLine!.isNotEmpty)
+                        Text(statusLine!, style: Ds.t.caption,
+                            maxLines: 1, overflow: TextOverflow.ellipsis),
+                    ],
+                  ),
                 ),
                 const SizedBox(width: 8),
                 // #183: AnimatedRotation — same turns/duration/curve as Disputes chevron

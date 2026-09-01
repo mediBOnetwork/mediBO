@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
 
+import '../../design_tokens.dart';
 import '../../services/date_labels.dart';
 import '../../services/ui_copy.dart';
 import '../../widgets/date_label_text.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:pharma_b2b/utils/toast.dart';
+
+import 'admin_audit_screen.dart';
+import 'admin_roles_screen.dart';
 
 // Emails that can never be removed or demoted — matches DB-side lock list.
 const _kLockedEmails = {'masteromprakashsahu@gmail.com', 'medibonetwork@gmail.com'};
@@ -179,6 +183,36 @@ class _AdminManageAdminsScreenState extends State<AdminManageAdminsScreen> {
               ),
               const SizedBox(height: 24),
               _buildTable(),
+              // CHANGE #394 — the two screens this one is the door to: who can
+              // open what (admin_permissions), and what everybody has already
+              // done (audit_log). Both labels come from ui_copy; both targets
+              // enforce their own access in the RPC, so this is a link and
+              // never a permission check.
+              SizedBox(height: Ds.space.x24),
+              Wrap(
+                spacing: Ds.space.x12,
+                runSpacing: Ds.space.x12,
+                children: [
+                  SizedBox(
+                    height: Ds.space.x48,
+                    child: OutlinedButton.icon(
+                      icon: const Icon(Icons.admin_panel_settings_outlined),
+                      label: Text(c('roles.open_label')),
+                      onPressed: () => Navigator.push(context,
+                          MaterialPageRoute(builder: (_) => const AdminRolesScreen())),
+                    ),
+                  ),
+                  SizedBox(
+                    height: Ds.space.x48,
+                    child: OutlinedButton.icon(
+                      icon: const Icon(Icons.history),
+                      label: Text(c('audit.title')),
+                      onPressed: () => Navigator.push(context,
+                          MaterialPageRoute(builder: (_) => const AdminAuditScreen())),
+                    ),
+                  ),
+                ],
+              ),
             ],
           ),
         ),

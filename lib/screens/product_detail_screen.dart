@@ -1,17 +1,25 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
 import '../data/medicine_repository.dart';
 import '../design_tokens.dart';
 import '../models/product.dart';
+import '../models/product_compare.dart';
 import '../models/product_detail.dart';
+import '../models/product_reviews.dart';
 import '../models/storefront_p3.dart';
+import '../services/storefront_fast_order.dart';
 import '../theme.dart';
+import '../utils/render_log.dart';
 import '../utils/toast.dart';
 import '../widgets/animations.dart';
 import '../widgets/compact_product_card.dart';
+import '../widgets/compare_tray.dart';
 import '../widgets/notify_control.dart';
 import '../widgets/product_image.dart';
+import '../widgets/product_reviews_block.dart';
 
 typedef WishlistToggle = Future<WishlistResult> Function(String productId);
 
@@ -46,6 +54,17 @@ class ProductDetailScreen extends StatefulWidget {
   /// `wishlist_toggle` through [MedicineRepository].
   final WishlistToggle? wishlistToggle;
 
+  /// CMD #410 — test seams for reviews/Q&A and compare. Production goes
+  /// through [MedicineRepository]; a test supplies parsed payloads so the
+  /// block can be rendered with no network and no Supabase, the same
+  /// constructor-injected-closure shape the rest of the protected suite uses.
+  final Future<ProductReviews> Function(String productId, int offset)? reviewsLoader;
+  final Future<ReviewWriteResult> Function(String productId, int stars, String body)? reviewSubmit;
+  final Future<ReviewWriteResult> Function(String productId, String body)? questionSubmit;
+  final Future<ReviewWriteResult> Function(String questionId, String body)? answerSubmit;
+  final Future<ReviewWriteResult> Function(String kind, String targetId)? flagRaise;
+  final Future<ProductCompare> Function(List<String> ids)? compareLoader;
+
   const ProductDetailScreen({
     super.key,
     required this.productId,
@@ -53,6 +72,12 @@ class ProductDetailScreen extends StatefulWidget {
     this.notifyStatusLoader,
     this.notifyRequest,
     this.wishlistToggle,
+    this.reviewsLoader,
+    this.reviewSubmit,
+    this.questionSubmit,
+    this.answerSubmit,
+    this.flagRaise,
+    this.compareLoader,
   });
 
   @override
@@ -64,6 +89,15 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
   bool _loading = true;
   bool _subscribed = false;
   bool _wishlisted = false;
+
+  /// CMD #410 — the reviews block is a SECOND call on purpose: it pages by the
+  /// backend's own offset and it is re-read after every write, while the page
+  /// payload above it is not. Folding it into product_detail_v2 would make
+  /// every "show more" refetch the whole product.
+  ProductReviews _reviews = ProductReviews.empty_;
+
+  /// The compare tray. The app owns exactly this: which ids are ticked.
+  late final CompareSelection _compare = CompareSelection(max: 3);
 
   @override
   void initState() {
@@ -97,6 +131,13 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
       _wishlisted = res.isWishlisted;
     });
 
+    if (res.ok) unawaited(_loadReviews());
+    // CMD #409 — one product open, recorded into the customer's recently-viewed
+    // ring. Fire-and-forget by contract: a customer never waits on, and is
+    // never shown an error from, their own view history. An anonymous viewer
+    // keeps none — the backend refuses it, and that refusal is silent here.
+    if (res.ok) unawaited(StorefrontFastOrder.recordView(widget.productId));
+
     // Only ask about a subscription for a product that cannot be bought —
     // that is the only state where the control exists. Read ONCE.
     final av = res.availability;
@@ -108,6 +149,57 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     final subscribed = await status(widget.productId);
     if (!mounted) return;
     setState(() => _subscribed = subscribed);
+  }
+
+  /// CMD #410 — (re)read the reviews block. Called on load and after every
+  /// successful write, because a submitted review is PENDING and only the
+  /// backend knows what the list looks like afterwards. Nothing is patched
+  /// optimistically here.
+  Future<void> _loadReviews({int offset = 0}) async {
+    ProductReviews res;
+    try {
+      final load = widget.reviewsLoader ??
+          (id, off) => MedicineRepository().fetchProductReviews(id, offset: off);
+      res = await load(widget.productId, offset);
+    } catch (_) {
+      // The block is an ADDITION to the page, never a gate on it: a product
+      // page that cannot reach the reviews RPC still shows the product. The
+      // empty payload renders as ok:false, which draws nothing at all.
+      res = ProductReviews.empty_;
+    }
+    if (!mounted) return;
+    setState(() => _reviews = res);
+    // CMD #410 — REACHABILITY PROOF for the PDP block. Canvas cannot be
+    // clicked by a tool, so this records what the backend actually decided:
+    // whether the composer is open to this account, whether the aggregate
+    // cleared its floor, and how many rows were drawn.
+    RenderLog.write('c410_reviews_block',
+        'ok=${res.ok};can_write=${res.canWrite};rating=${res.summary.has};'
+        'items=${res.items.length};qs=${res.questions.length}');
+  }
+
+  /// The tray refuses at the cap with the BACKEND's sentence — the payload
+  /// already carries it, so the widget looks it up instead of writing one.
+  void _toggleCompare(String id, String fullMessage) {
+    final reason = _compare.toggle(id);
+    if (reason == 'full' && fullMessage.isNotEmpty) {
+      showToast(context, fullMessage);
+      return;
+    }
+    setState(() {});
+  }
+
+  Future<void> _openCompare() async {
+    ProductCompare res;
+    try {
+      final load = widget.compareLoader ??
+          (ids) => MedicineRepository().fetchCompare(ids);
+      res = await load(_compare.ids);
+    } catch (_) {
+      res = ProductCompare.failed;
+    }
+    if (!mounted) return;
+    await CompareSheet.show(context, res);
   }
 
   Future<void> _toggleWishlist() async {
@@ -145,7 +237,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
         actions: [
           if (showWishlistBtn)
             IconButton(
-              tooltip: d!.label(
+              tooltip: d.label(
                   _wishlisted ? 'pdp_wishlist_remove' : 'pdp_wishlist_add'),
               icon: Icon(
                 _wishlisted ? Icons.favorite : Icons.favorite_border,
@@ -159,7 +251,31 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
           ? const _PdpSkeleton()
           : (d == null || !d.ok)
               ? _NotFound(data: d)
-              : _Body(data: d),
+              : _Body(
+                  data: d,
+                  reviews: _reviews,
+                  compare: _compare,
+                  onToggleCompare: _toggleCompare,
+                  onOpenCompare: _openCompare,
+                  onClearCompare: () => setState(_compare.clear),
+                  onReviewsChanged: _loadReviews,
+                  onReview: (stars, body) =>
+                      (widget.reviewSubmit ??
+                              (id, s2, b) => MedicineRepository()
+                                  .reviewSubmit(id, s2, b))(d.id, stars, body),
+                  onQuestion: (body) =>
+                      (widget.questionSubmit ??
+                              (id, b) => MedicineRepository()
+                                  .questionSubmit(id, b))(d.id, body),
+                  onAnswer: (qid, body) =>
+                      (widget.answerSubmit ??
+                              (id, b) => MedicineRepository()
+                                  .answerSubmit(id, b))(qid, body),
+                  onFlag: (kind, target) =>
+                      (widget.flagRaise ??
+                              (k, t) => MedicineRepository()
+                                  .contentFlag(k, t))(kind, target),
+                ),
       bottomNavigationBar: (!_loading && d != null && d.ok)
           ? _StickyBar(
               data: d,
@@ -175,7 +291,33 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
 
 class _Body extends StatelessWidget {
   final ProductDetail data;
-  const _Body({required this.data});
+
+  /// CMD #410 — the reviews block and the compare tray. Both are handed in
+  /// already resolved; this widget still prints and decides nothing.
+  final ProductReviews reviews;
+  final CompareSelection compare;
+  final void Function(String id, String fullMessage) onToggleCompare;
+  final Future<void> Function() onOpenCompare;
+  final VoidCallback onClearCompare;
+  final Future<void> Function() onReviewsChanged;
+  final Future<ReviewWriteResult> Function(int stars, String body) onReview;
+  final Future<ReviewWriteResult> Function(String body) onQuestion;
+  final Future<ReviewWriteResult> Function(String questionId, String body) onAnswer;
+  final Future<ReviewWriteResult> Function(String kind, String targetId) onFlag;
+
+  const _Body({
+    required this.data,
+    required this.reviews,
+    required this.compare,
+    required this.onToggleCompare,
+    required this.onOpenCompare,
+    required this.onClearCompare,
+    required this.onReviewsChanged,
+    required this.onReview,
+    required this.onQuestion,
+    required this.onAnswer,
+    required this.onFlag,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -222,6 +364,13 @@ class _Body extends StatelessWidget {
             style: const TextStyle(fontSize: 13, color: Color(0xFF4B5563)),
           ),
         ],
+        // CMD #410 — the aggregate rating. `has` is the backend's verdict on
+        // whether there is enough evidence to show one at all; below its floor
+        // there is no row here, not a 5.0 written by a single customer.
+        if (data.rating.has) ...[
+          SizedBox(height: Ds.space.x8),
+          _RatingRow(summary: data.rating),
+        ],
         const SizedBox(height: 14),
         _PriceRow(data: data),
         if (data.hasHistory) ...[
@@ -238,6 +387,17 @@ class _Body extends StatelessWidget {
         ],
         const SizedBox(height: 12),
         _StockRow(data: data),
+        // CMD #367 (row 177) — the supply trust strip. `has` is the backend's
+        // verdict, so a product with no supply history shows nothing at all
+        // rather than a flattering default. No expiry claim is rendered here
+        // or anywhere else on this page: we do not know a batch's expiry
+        // before we buy it.
+        if (data.trust.has) ...[
+          SizedBox(height: Ds.space.x16),
+          _SectionTitle(text: data.trust.title),
+          SizedBox(height: Ds.space.x8),
+          _TrustStrip(trust: data.trust),
+        ],
         if (data.overview.isNotEmpty) ...[
           const SizedBox(height: 24),
           _SectionTitle(text: data.label('pdp_overview_title')),
@@ -254,6 +414,50 @@ class _Body extends StatelessWidget {
             lessLabel: data.label('pdp_read_less'),
           ),
         ],
+        // CMD #366 row 175 — the delivery promise. `has` is the backend's
+        // answer to "have we delivered here often enough to promise
+        // anything". Below its sample floor there is no block at all: an
+        // invented date on a pharmacy's buying screen is worse than none,
+        // because it is a promise nobody ever measured.
+        if (data.deliveryPromise.has) ...[
+          SizedBox(height: Ds.space.x16),
+          _PromiseRow(promise: data.deliveryPromise),
+        ],
+        // CMD #366 row 171 — the priced substitute block. Same mechanism as
+        // the salt rail below, extended: normalised strength and form, the
+        // real price, and a saving computed net-rate against net-rate.
+        if (data.substitutes.has) ...[
+          SizedBox(height: Ds.space.x24),
+          _SectionTitle(text: data.substitutes.heading),
+          SizedBox(height: Ds.space.x4),
+          Text(
+            data.substitutes.note,
+            style: Ds.t.caption.copyWith(color: Ds.c.textSecondary),
+          ),
+          SizedBox(height: Ds.space.x12),
+          _SubstituteRail(
+            items: data.substitutes.items,
+            compareLabel: data.compareAddLabel,
+            selection: compare,
+            onToggleCompare: (id) =>
+                onToggleCompare(id, data.label('cmp_full')),
+          ),
+          // CMD #410 — the tray. It appears the moment something is ticked and
+          // its CTA only fires at two or more, which is the backend's rule
+          // (`cmp_min`) expressed as a disabled button rather than a toast the
+          // app would have to word itself.
+          if (compare.count > 0) ...[
+            SizedBox(height: Ds.space.x12),
+            CompareBar(
+              count: compare.count,
+              max: data.compareMax,
+              ctaLabel: data.compareCtaLabel,
+              clearLabel: data.label('cmp_clear'),
+              onCompare: compare.canCompare ? () => onOpenCompare() : null,
+              onClear: onClearCompare,
+            ),
+          ],
+        ],
         // The rail renders only when the backend actually sent tiles.
         if (data.similar.isNotEmpty) ...[
           const SizedBox(height: 28),
@@ -261,7 +465,210 @@ class _Body extends StatelessWidget {
           const SizedBox(height: 12),
           _SimilarRail(items: data.similar),
         ],
+        // CMD #410 — ratings, reviews and Q&A. The block renders nothing at
+        // all until product_reviews() answers ok:true, so a slow second call
+        // never leaves a half-drawn section on the page.
+        ProductReviewsBlock(
+          data: reviews,
+          onChanged: onReviewsChanged,
+          onReview: onReview,
+          onQuestion: onQuestion,
+          onAnswer: onAnswer,
+          onFlag: onFlag,
+        ),
       ],
+    );
+  }
+}
+
+/// CMD #410 — the stars plus the backend's own sentence. The app paints the
+/// five icons; it does not build the words beside them.
+class _RatingRow extends StatelessWidget {
+  final RatingSummary summary;
+  const _RatingRow({required this.summary});
+
+  @override
+  Widget build(BuildContext context) => Row(
+        children: [
+          for (var i = 1; i <= 5; i++)
+            Icon(
+              summary.stars >= i
+                  ? Icons.star_rounded
+                  : (summary.stars >= i - 0.5
+                      ? Icons.star_half_rounded
+                      : Icons.star_border_rounded),
+              size: Ds.space.x16,
+              color: Ds.c.warning,
+            ),
+          SizedBox(width: Ds.space.x8),
+          Flexible(
+            child: Text(summary.countLabel,
+                overflow: TextOverflow.ellipsis, style: Ds.t.caption),
+          ),
+        ],
+      );
+}
+
+/// CMD #366 row 175 — one line, both strings from `delivery_promise()`.
+class _PromiseRow extends StatelessWidget {
+  final PdPromise promise;
+  const _PromiseRow({required this.promise});
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: EdgeInsets.all(Ds.space.x12),
+        decoration: BoxDecoration(
+          color: Ds.c.infoSoft,
+          borderRadius: Ds.r.rButton,
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.local_shipping_outlined,
+                size: Ds.space.x16, color: Ds.c.info),
+            SizedBox(width: Ds.space.x8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(promise.label,
+                      style: Ds.t.body.copyWith(
+                          fontWeight: FontWeight.w600, color: Ds.c.text)),
+                  SizedBox(height: Ds.space.x4),
+                  Text(promise.note,
+                      style:
+                          Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+}
+
+/// CMD #366 row 171 — the substitute rail. Price, saving and margin are
+/// printed only when the payload carried them; there is no "—" placeholder and
+/// no locally computed comparison, because an item with no imported trade rate
+/// genuinely has no price to compare.
+class _SubstituteRail extends StatelessWidget {
+  final List<PdSubstitute> items;
+
+  /// CMD #410 — the compare tick's caption, straight from the payload. An
+  /// empty label means the backend did not send one and the tick is not drawn.
+  final String compareLabel;
+  final CompareSelection selection;
+  final void Function(String id) onToggleCompare;
+
+  const _SubstituteRail({
+    required this.items,
+    required this.compareLabel,
+    required this.selection,
+    required this.onToggleCompare,
+  });
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        height: 270,
+        child: ListView.separated(
+          scrollDirection: Axis.horizontal,
+          itemCount: items.length,
+          separatorBuilder: (_, _) => SizedBox(width: Ds.space.x12),
+          itemBuilder: (_, i) => _SubstituteTile(
+            item: items[i],
+            compareLabel: compareLabel,
+            compareSelected: selection.contains(items[i].id),
+            onToggleCompare: () => onToggleCompare(items[i].id),
+          ),
+        ),
+      );
+}
+
+class _SubstituteTile extends StatelessWidget {
+  final PdSubstitute item;
+  final String compareLabel;
+  final bool compareSelected;
+  final VoidCallback onToggleCompare;
+  const _SubstituteTile({
+    required this.item,
+    required this.compareLabel,
+    required this.compareSelected,
+    required this.onToggleCompare,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final price = item.pricing?.priceDisplay ?? '';
+    return InkWell(
+      borderRadius: Ds.r.rCard,
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => ProductDetailScreen(productId: item.id),
+        ),
+      ),
+      child: Container(
+        width: 168,
+        padding: EdgeInsets.all(Ds.space.x12),
+        decoration: BoxDecoration(
+          color: Ds.c.surface,
+          borderRadius: Ds.r.rCard,
+          border: Border.all(color: Ds.c.divider),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Center(
+                child: ProductImage(
+                  url: item.image,
+                  width: 96,
+                  height: 76,
+                  radius: Ds.r.rButton,
+                ),
+              ),
+            ),
+            SizedBox(height: Ds.space.x8),
+            Text(item.name,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: Ds.t.body.copyWith(
+                    fontWeight: FontWeight.w600, color: Ds.c.text)),
+            Text(item.company,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+            SizedBox(height: Ds.space.x4),
+            Text(item.matchLabel,
+                style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+            if (price.isNotEmpty) ...[
+              SizedBox(height: Ds.space.x4),
+              Text(price,
+                  style: Ds.t.body.copyWith(
+                      fontWeight: FontWeight.w700, color: Ds.c.text)),
+            ],
+            if (item.hasSaving) ...[
+              SizedBox(height: Ds.space.x4),
+              Text(item.savingLabel,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Ds.t.caption.copyWith(
+                      fontWeight: FontWeight.w600, color: Ds.c.success)),
+            ],
+            if (item.hasMargin) ...[
+              SizedBox(height: Ds.space.x4),
+              Text(item.marginLabel,
+                  style: Ds.t.caption.copyWith(color: Ds.c.info)),
+            ],
+            // CMD #410 — the compare entry point, on the same-salt row the
+            // spec names. Ticking it only records an id; every number in the
+            // resulting table is composed by product_compare().
+            CompareCheckbox(
+              label: compareLabel,
+              selected: compareSelected,
+              onTap: onToggleCompare,
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -563,6 +970,24 @@ class _StockRow extends StatelessWidget {
         bg: const Color(0xFFECFDF3),
         fg: const Color(0xFF15803D),
       );
+    }
+    // CMD #451 row 84 — a banned / discontinued / not-for-sale product is not
+    // "out of stock", and saying so beside a supplier count was the exact
+    // contradiction the register row was raised for. The chip's words and the
+    // reason under it are the backend's.
+    if (data.blockedByStatus && data.statusLabel.isNotEmpty) {
+      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        _Chip(
+          text: data.statusLabel,
+          bg: Ds.c.dangerSoft,
+          fg: Ds.c.danger,
+        ),
+        if (data.statusReason.isNotEmpty)
+          Padding(
+            padding: EdgeInsets.only(top: Ds.space.x4),
+            child: Text(data.statusReason, style: Ds.t.caption),
+          ),
+      ]);
     }
     return Text(
       data.label('stock_out_label'),
@@ -879,7 +1304,17 @@ class _StickyBar extends StatelessWidget {
             ],
             // CHANGE #638 — an unbuyable product offers Notify instead of a
             // dead disabled button.
-            if (!canAdd)
+            // CMD #451 row 84 — Notify is for stock that can come back. A
+            // product blocked by its catalogue status never will, so the bar
+            // prints the backend's verdict instead of a subscription control.
+            if (!canAdd && data.blockedByStatus)
+              Expanded(
+                child: Text(
+                  av?.ctaLabel ?? data.statusLabel,
+                  style: Ds.t.bodyStrong.copyWith(color: Ds.c.danger),
+                ),
+              )
+            else if (!canAdd)
               NotifyControl(
                 productId: data.id,
                 initiallySubscribed: subscribed,
@@ -1149,6 +1584,86 @@ class _RxBanner extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// The trust strip: chips printed in payload order, each with the backend's
+/// own label, note and tone. The only mapping done here is tone-name → design
+/// token, which is styling, not a decision.
+class _TrustStrip extends StatelessWidget {
+  final PdTrust trust;
+  const _TrustStrip({required this.trust});
+
+  Color _toneColor(String tone) {
+    switch (tone) {
+      case 'success':
+        return Ds.c.success;
+      case 'warning':
+        return Ds.c.warning;
+      case 'danger':
+        return Ds.c.danger;
+      case 'info':
+        return Ds.c.info;
+      default:
+        return Ds.c.textSecondary;
+    }
+  }
+
+  Color _toneBg(String tone) {
+    switch (tone) {
+      case 'success':
+        return Ds.c.successSoft;
+      case 'warning':
+        return Ds.c.warningSoft;
+      case 'danger':
+        return Ds.c.dangerSoft;
+      case 'info':
+        return Ds.c.infoSoft;
+      default:
+        return Ds.c.bg;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (final chip in trust.chips)
+          Padding(
+            padding: EdgeInsets.only(bottom: Ds.space.x8),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Container(
+                  padding: EdgeInsets.symmetric(
+                      horizontal: Ds.space.x12, vertical: Ds.space.x4),
+                  decoration: BoxDecoration(
+                    color: _toneBg(chip.tone),
+                    borderRadius: Ds.r.rChip,
+                  ),
+                  child: Text(
+                    chip.label,
+                    style: Ds.t.caption.copyWith(
+                      color: _toneColor(chip.tone),
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                SizedBox(width: Ds.space.x8),
+                Expanded(
+                  child: Text(
+                    chip.note,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Ds.t.caption,
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
     );
   }
 }

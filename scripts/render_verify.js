@@ -62,6 +62,31 @@ function argVal(flag) {
 }
 const keysArg      = argVal('--keys');
 const requiredKeys = keysArg ? keysArg.split(',').map(k => k.trim()).filter(Boolean) : ['boot_status', 'fulfillment_three_areas_mounted'];
+
+// CMD #410 — PHASE-SCOPED KEYS: `--keys storefront:c410_compare_tick`.
+//
+// Every phase used to demand EVERY requested key, and the boot phase runs
+// first and unconditionally. So a key that only a later phase can produce —
+// anything on a customer surface, since boot is an admin session on the site
+// root — failed boot, and a failed boot means the phase that would have
+// produced the key never ran at all. The key was unprovable by construction,
+// and the render-log reachability rule in CLAUDE.md quietly could not be
+// satisfied for any customer-facing screen.
+//
+// A key with no prefix keeps today's behaviour exactly: required everywhere.
+// A key written `<phase>:<key>` is required ONLY in that phase and ignored by
+// the others. Nothing that passes today can start failing because of this.
+function keysForPhase(phase) {
+  const out = [];
+  for (const raw of requiredKeys) {
+    const i = raw.indexOf(':');
+    if (i < 0) { out.push(raw); continue; }
+    const p = raw.slice(0, i);
+    if (!PHASE_NAMES.includes(p)) { out.push(raw); continue; }  // a colon in a key name, not a scope
+    if (p === phase) out.push(raw.slice(i + 1));
+  }
+  return out;
+}
 const timeoutSec      = parseInt(argVal('--timeout') || '45', 10);
 const inquiryToken    = argVal('--inquiry-token');
 const supplierKeys    = argv.includes('--supplier-keys');
@@ -74,6 +99,16 @@ const supplierKeys    = argv.includes('--supplier-keys');
 // screenshot the completion gate asks for.
 const adminPath       = argVal('--admin-path');
 const shotPath        = argVal('--shot');
+
+// CMD #447 — the SAME reachability proof, through the eyes the screen is built
+// for. /pharmacy/audit is a shop-owner surface: pharmacy_audit_home() resolves
+// the caller's own shop via my_customer_id() and refuses everyone else, so the
+// admin session --admin-path drives renders the refusal and never writes
+// c430_audit_home. --customer-path logs in as test.cust1 (which HAS a shop),
+// boots the root, then deep-links — the only session that can prove that route
+// paints. --customer-shot saves those pixels.
+const customerPath    = argVal('--customer-path');
+const customerShot    = argVal('--customer-shot');
 
 // ── Phase selection (CHANGE #192) ─────────────────────────────────────────────
 // The verifier used to run EVERY phase on every invocation, so the mandated
@@ -91,7 +126,7 @@ const shotPath        = argVal('--shot');
 //   --phases a,b,c     → exactly these (names below)
 const PHASE_NAMES = ['boot', 'inquiry', 'allocation', 'receiving', 'voice',
                      'arrivals', 'supplier', 'admin-mobile', 'supplier-mobile',
-                     'storefront'];
+                     'storefront', 'customer-path'];
 const phasesArg = argVal('--phases');
 const wantAll   = argv.includes('--all');
 const wantApi   = argv.includes('--api');
@@ -111,6 +146,7 @@ if (phasesArg) {
   selected.add('boot');
   if (inquiryToken) selected.add('inquiry');
   if (supplierKeys) selected.add('supplier');
+  if (customerPath) selected.add('customer-path');
   if (wantAll || wantApi) ['allocation', 'receiving', 'voice', 'arrivals'].forEach(p => selected.add(p));
   if (wantAll || wantLayout) ['admin-mobile', 'supplier-mobile'].forEach(p => selected.add(p));
 }
@@ -269,8 +305,13 @@ async function phaseStorefront(browser, session, expectedHash) {
         console.log(`  Showing    : ${log['c553_showing_label']}`);
       }
 
-      const missing = requiredKeys.filter(k => !(k in log));
-      if (missing.length) console.log(`  Keys       : MISSING: ${missing.join(', ')}`);
+      const wantKeys = keysForPhase('storefront');
+      const missing = wantKeys.filter(k => !(k in log));
+      if (missing.length) {
+        console.log(`  Keys       : MISSING: ${missing.join(', ')}`);
+      } else if (wantKeys.length) {
+        console.log(`  Keys       : all present (${wantKeys.join(', ')}) ✓`);
+      }
 
       // --shot <path> captures the authed grid. shot.sh cannot: it has no
       // session, and the chips only exist for a viewer the backend shows a
@@ -292,6 +333,74 @@ async function phaseStorefront(browser, session, expectedHash) {
   }
 
   console.log(passed ? '\n✅ Storefront phase PASSED' : '\n❌ Storefront phase FAILED');
+  return passed;
+}
+
+// ── CMD #447: customer-session deep link ─────────────────────────
+// Phase 1's --admin-path proves an ADMIN screen. A pharmacy-owner screen needs
+// the owner: the audit RPCs resolve the caller's own shop and refuse anyone
+// else, so an admin capture is a picture of the refusal, not of the feature.
+// Same shape as phase 1 — boot the root so auth resolves, THEN deep link, then
+// read the render-log on that page.
+async function phaseCustomerPath(browser, session, expectedHash) {
+  console.log(`\n── Phase 12: customer deep link ${customerPath} ──────────`);
+  const wantKeys = keysForPhase('customer-path');
+  let passed = false;
+
+  for (let attempt = 1; attempt <= MAX_RETRIES && !passed; attempt++) {
+    console.log(`  Attempt ${attempt}/${MAX_RETRIES}`);
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    await ctx.addInitScript(({ key, val }) => {
+      localStorage.setItem(key, val);
+    }, { key: STORAGE_KEY, val: JSON.stringify(session) });
+    const page = await ctx.newPage();
+    page.on('console', () => {});
+
+    try {
+      await page.goto(TARGET, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await waitForFlutter(page, 10, 'boot_status=painted');
+      console.log(`  Deep link  : ${customerPath}`);
+      await page.goto(`${TARGET}${customerPath}`,
+        { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await waitForFlutter(page, 10, customerPath);
+
+      const logText = await readRenderLog(page);
+      if (customerShot) {
+        try {
+          await page.screenshot({ path: customerShot, fullPage: false });
+          console.log(`  Screenshot : ${customerShot}`);
+        } catch (e) {
+          console.log(`  Screenshot : FAILED (${e.message})`);
+        }
+      }
+
+      console.log('\n  ── Render log ─────────────────────────────────');
+      console.log(logText || '  (empty)');
+      console.log('  ──────────────────────────────────────────\n');
+
+      const log     = parseLog(logText);
+      const gotHash = log['build'];
+      const hashOk  = gotHash === expectedHash;
+      const missing = wantKeys.filter(k => !(k in log));
+
+      console.log(`  Build hash : got=${gotHash} want=${expectedHash} → ${hashOk ? '✓ MATCH' : '✗ MISMATCH'}`);
+      if (missing.length) {
+        console.log(`  Keys       : MISSING: ${missing.join(', ')}`);
+        console.log(`               present: ${Object.keys(log).join(', ')}`);
+      } else if (wantKeys.length) {
+        console.log(`  Keys       : all present (${wantKeys.join(', ')}) ✓`);
+      }
+      if (hashOk && missing.length === 0) passed = true;
+    } catch (err) {
+      console.error(`  Error: ${err.message}`);
+    } finally {
+      await ctx.close();
+    }
+    if (!passed && attempt < MAX_RETRIES) console.log('  Retrying...\n');
+  }
+
+  console.log(passed ? '\n✅ Customer deep-link phase PASSED'
+                     : '\n❌ Customer deep-link phase FAILED');
   return passed;
 }
 
@@ -342,7 +451,8 @@ async function phaseAdmin(browser, session, expectedHash) {
       const gotHash = log['build'];
       const hashOk  = gotHash === expectedHash;
       // c175_* and c174_portal_* keys come from supplier sessions — skip in admin phase
-      const adminKeys = requiredKeys.filter(k => !k.startsWith('c175_') && !k.startsWith('c174_portal'));
+      const adminKeys = keysForPhase('boot')
+        .filter(k => !k.startsWith('c175_') && !k.startsWith('c174_portal'));
       const missing = adminKeys.filter(k => !(k in log));
 
       console.log(`  Build hash : got=${gotHash} want=${expectedHash} → ${hashOk ? '✓ MATCH' : '✗ MISMATCH'}`);
@@ -1115,6 +1225,26 @@ async function main() {
           }
           console.log(`   ✓ Got session for ${c.user?.email}`);
           return phaseStorefront(browser, c, expectedHash);
+        });
+      await runPhase('customer-path', `Phase 12 — customer deep link ${customerPath}`,
+        async () => {
+          console.log(`\n🔐 Authenticating ${CUSTOMER_EMAIL}...`);
+          const c = await httpsPost(
+            `${SUPABASE_URL}/auth/v1/token?grant_type=password`,
+            { 'apikey': ANON_KEY, 'Content-Type': 'application/json' },
+            { email: CUSTOMER_EMAIL, password: CUSTOMER_PASS },
+          );
+          // No admin fallback here, unlike Phase 11: the whole point of this
+          // phase is WHOSE eyes the route paints through. An admin capture of a
+          // pharmacy-owner screen is a picture of the refusal, and a proof that
+          // quietly swaps the viewer is worse than no proof.
+          if (!c || !c.access_token) {
+            console.log(`   ⚠ ${CUSTOMER_EMAIL} does not authenticate `
+              + `(${c && c.msg ? c.msg : 'no session'}) — cannot prove an owner screen.`);
+            return false;
+          }
+          console.log(`   ✓ Got session for ${c.user?.email}`);
+          return phaseCustomerPath(browser, c, expectedHash);
         });
       await runPhase('supplier', 'Phase 8 — supplier inquiry',
         async () => {

@@ -9,14 +9,18 @@ import 'package:flutter/material.dart';
 import 'storefront_scrollbar.dart';
 import '../app_state.dart'; // CHANGE #454
 import '../data/medicine_repository.dart';
+import '../data/storefront_labels.dart';
 import '../design_tokens.dart';
 import '../models/product.dart';
+import '../models/product_compare.dart';
 import '../services/ui_copy.dart';
 import '../theme.dart';
 import '../util.dart';
 import '../utils/render_log.dart';
 import '../widgets/animations.dart';
 import '../widgets/compact_product_card.dart';
+import '../widgets/recently_viewed_rail.dart';
+import '../widgets/compare_tray.dart';
 import '../widgets/home_sections_view.dart'; // C637
 
 const double _kMaxContent = 1200;
@@ -161,6 +165,46 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
     _loadAllCounts();
     _resetAndLoad();
     _injectScrollbarCss();
+    // CMD #410 — the compare tick's caption is a storefront_ui_label row, and
+    // a customer can land straight on a search URL without ever passing the
+    // home feed (the only other place that loaded the set). A label that has
+    // not arrived reads as '' and CompareCheckbox draws nothing, so this is
+    // the difference between the tick existing and silently not existing.
+    if (!StorefrontLabels.isLoaded) {
+      unawaited(widget.repo.loadStorefrontLabels().then((_) {
+        if (mounted) setState(() {});
+      }));
+    }
+  }
+
+  // ── CMD #410 — compare tray ─────────────────────────────────────────────
+  //
+  // The ONLY compare state the app holds: which ids are ticked. The cap, the
+  // "you can compare 3 at a time" sentence and every cell in the table itself
+  // are the backend's.
+  late final CompareSelection _compare = CompareSelection(max: 3);
+
+  void _toggleCompare(String id) {
+    final reason = _compare.toggle(id);
+    if (reason == 'full') {
+      final msg = StorefrontLabels.get('cmp_full');
+      if (msg.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      }
+      return;
+    }
+    setState(() {});
+  }
+
+  Future<void> _openCompare() async {
+    ProductCompare res;
+    try {
+      res = await widget.repo.fetchCompare(_compare.ids);
+    } catch (_) {
+      res = ProductCompare.failed;
+    }
+    if (!mounted) return;
+    await CompareSheet.show(context, res);
   }
 
   Future<void> _loadAllCounts() async {
@@ -483,6 +527,15 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
               'category=${widget.category};loadedCount=${page.length}');
         }
       }
+      // CMD #434 — an EMPTY showing_label is no longer a mystery. It means
+      // exactly one thing: this page came from the outage fallback, which has
+      // no envelope and therefore no counter. Saying so beside the empty label
+      // is the difference between "the backend regressed" and "one RPC call
+      // hiccuped and the keyset lane served the page".
+      RenderLog.write('c434_page_degraded',
+          'category=${widget.category};degraded=${pageResult.degraded};'
+          'cached=${MedicineRepository.lastCallWasCacheHit};'
+          'rpc=${browseErr ?? '-'}');
       // CHANGE #553 — take the backend's rendered labels as-is.
       RenderLog.write('c553_showing_label', pageResult.showingLabel ?? '');
       RenderLog.write('c553_gated', pageResult.gated ? '1' : '0');
@@ -512,6 +565,22 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         _loadSuggestions();
       }
     } catch (e) {
+      // CMD #434 — WRITE THE REASON FIRST. This catch used to swallow the
+      // exception straight into _pageError, so a category page that failed on
+      // the live build showed `c410_compare_tick=...;state=error` and an EMPTY
+      // c553_count_label with nothing anywhere saying WHY — while
+      // storefront_page() called directly was healthy. The grid is a canvas no
+      // browser tool can read, so this line is the only evidence production
+      // can produce. Written before the early return on purpose: a stale token
+      // still means this fetch failed.
+      RenderLog.write(
+        'c434_page_error',
+        'category=${widget.category};query=${widget.query.trim().isEmpty ? '-' : widget.query.trim()};'
+        'sort=$_sort;buyable=$_onlyBuyable;stale=${token != _loadToken};'
+        'type=${e.runtimeType};rpc=${MedicineRepository.browseRpcError ?? '-'};'
+        'err=${_shortErr(e)}',
+      );
+      MedicineRepository.browseRpcError = null;
       if (token != _loadToken || !mounted) return;
       widget.onLoadingChanged?.call(false);
       setState(() {
@@ -520,6 +589,13 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
         _pageNetworkError = _isNetworkErr(e);
       });
     }
+  }
+
+  /// CMD #434 — the render log is one DOM node; a full Postgrest stack in it
+  /// would drown every other key `render_verify.js` reads.
+  static String _shortErr(Object e) {
+    final s = e.toString().replaceAll(RegExp(r'\s+'), ' ').trim();
+    return s.length <= 140 ? s : '${s.substring(0, 140)}…';
   }
 
   Future<void> _loadSuggestions() async {
@@ -715,6 +791,10 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
                 onRetry: _resetAndLoad,
                 onSuggestionTap: widget.onSuggestionTap,
                 onLoadMore: _handleLoadMore,
+                compare: _compare,
+                onToggleCompare: _toggleCompare,
+                onOpenCompare: _openCompare,
+                onClearCompare: () => setState(_compare.clear),
               ),
             ),
           ),
@@ -1125,7 +1205,19 @@ class _ProductsSection extends StatelessWidget {
   final VoidCallback onRetry;
   final ValueChanged<String> onSuggestionTap;
   final VoidCallback onLoadMore;
+  /// CMD #410 — the compare tray on the SEARCH RESULTS, the second entry
+  /// point the spec names. Same contract as on the same-salt rail: the app
+  /// contributes ids, `product_compare()` composes every number.
+  final CompareSelection compare;
+  final void Function(String id) onToggleCompare;
+  final Future<void> Function() onOpenCompare;
+  final VoidCallback onClearCompare;
+
   const _ProductsSection({
+    required this.compare,
+    required this.onToggleCompare,
+    required this.onOpenCompare,
+    required this.onClearCompare,
     required this.items,
     required this.categoryTotal,
     required this.showingLabel,
@@ -1205,6 +1297,20 @@ class _ProductsSection extends StatelessWidget {
         if (sortOptions.isNotEmpty) ...[
           SizedBox(height: Ds.space.x12),
           _SortChips(options: sortOptions, onSelected: onSortSelected),
+        ],
+        // CMD #410 — the tray, above the results it was filled from. Its
+        // caption, its cap message and its clear label are all
+        // storefront_ui_label rows.
+        if (compare.count > 0) ...[
+          SizedBox(height: Ds.space.x12),
+          CompareBar(
+            count: compare.count,
+            max: compare.max,
+            ctaLabel: StorefrontLabels.get('cmp_cta'),
+            clearLabel: StorefrontLabels.get('cmp_clear'),
+            onCompare: compare.canCompare ? () => onOpenCompare() : null,
+            onClear: onClearCompare,
+          ),
         ],
         const SizedBox(height: 20),
         // Cross-fade the grid on category change OR on each new search query.
@@ -1308,6 +1414,21 @@ class _ProductsSection extends StatelessWidget {
   }
 
   Widget _gridBody() {
+    // CMD #410 — REACHABILITY PROOF for the compare tick, written BEFORE the
+    // early returns on purpose. The grid is a canvas no browser tool can
+    // click, so the render log is the only evidence the control exists on the
+    // live build — and a key that is only written on the fully-loaded happy
+    // path proves nothing on the run where the category page is still
+    // fetching, which is exactly the run a verifier tends to catch. This
+    // records the state the section is actually in, every time: the backend
+    // caption it was handed (empty means storefront_labels() has not landed
+    // and the tick is correctly absent), how many cards it has, and how many
+    // are ticked.
+    RenderLog.write(
+      'c410_compare_tick',
+      'label=${StorefrontLabels.get('cmp_add')};cards=${items.length};'
+      'picked=${compare.count};state=${loadingFirst ? 'loading' : (error != null ? 'error' : (items.isEmpty ? 'empty' : 'grid'))}',
+    );
     if (loadingFirst) return const _SkeletonGrid();
     // Show offline widget ONLY on genuine network failure.
     // API errors / empty results are NOT offline — show retry or no-results.
@@ -1326,11 +1447,21 @@ class _ProductsSection extends StatelessWidget {
     }
     // CHANGE #553 — when the backend sent an empty_label, print it verbatim.
     if (items.isEmpty) {
-      return _EmptyResults(
-        query: query,
-        suggestions: suggestions,
-        onSuggestionTap: onSuggestionTap,
-        backendLabel: emptyLabel,
+      // CMD #409 — a search that found nothing is the one moment a customer
+      // most wants what they were just looking at. The rail draws itself only
+      // when `recently_viewed_rail()` says `has` — signed out, no history, or
+      // everything viewed gone off-sale all render as nothing.
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _EmptyResults(
+            query: query,
+            suggestions: suggestions,
+            onSuggestionTap: onSuggestionTap,
+            backendLabel: emptyLabel,
+          ),
+          const RecentlyViewedRail(),
+        ],
       );
     }
     return LayoutBuilder(
@@ -1357,11 +1488,31 @@ class _ProductsSection extends StatelessWidget {
           // stagger. Scrolling back up replayed it, so products appeared to
           // drop in from above every time — the page never looked settled. A
           // product grid is a list of products; it is painted, not performed.
-          itemBuilder: (context, i) => CompactProductCard(
-            key: ValueKey(items[i].id),
-            product: items[i],
-            onTap: () =>
-                Navigator.of(context).pushNamed('/product/${items[i].id}'),
+          // CMD #410 — the compare tick rides in a Stack ON TOP of the card
+          // rather than inside it. CompactProductCard.extent is a frozen
+          // constant that the grid, the skeleton and a protected test all
+          // read; adding a row inside the card would change its height on
+          // every surface at once. An overlay changes nothing.
+          itemBuilder: (context, i) => Stack(
+            children: [
+              Positioned.fill(
+                child: CompactProductCard(
+                  key: ValueKey(items[i].id),
+                  product: items[i],
+                  onTap: () =>
+                      Navigator.of(context).pushNamed('/product/${items[i].id}'),
+                ),
+              ),
+              Positioned(
+                left: 0,
+                bottom: 0,
+                child: CompareCheckbox(
+                  label: StorefrontLabels.get('cmp_add'),
+                  selected: compare.contains(items[i].id),
+                  onTap: () => onToggleCompare(items[i].id),
+                ),
+              ),
+            ],
           ),
         );
       },

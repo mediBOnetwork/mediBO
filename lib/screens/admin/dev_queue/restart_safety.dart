@@ -16,7 +16,7 @@
 library;
 
 /// What kind of restart-safety chip a label is — the screen picks the glyph.
-enum SafetyChipKind { offline, stall, steps, resumed }
+enum SafetyChipKind { offline, stall, stepsStale, steps, resumed }
 
 class SafetyChip {
   final SafetyChipKind kind;
@@ -48,6 +48,14 @@ class RowLiveness {
   bool get showCountdown =>
       status == 'building' && row['has_eta'] == true && isLive;
 
+  /// The backend's verdict that the checklist has stopped being reported.
+  /// Absent is false: an older payload degrades to "trusted", never to a
+  /// warning Dart invented.
+  bool get stepsStale => (row['steps_stale_chip'] ?? '').toString().isNotEmpty;
+
+  /// One line of guidance, worded by the backend, for the detail screen.
+  String get stepsStaleHint => (row['steps_stale_hint'] ?? '').toString();
+
   int get stepsDone => (row['steps_done'] as num?)?.toInt() ?? 0;
   int get stepsTotal => (row['steps_total'] as num?)?.toInt() ?? 0;
   bool get hasPlan => stepsTotal > 0;
@@ -64,10 +72,55 @@ class RowLiveness {
 
     add(SafetyChipKind.offline, 'live_chip', 'error');
     add(SafetyChipKind.stall, 'stall_chip', 'warning');
+    // CHANGE #350 — sits IMMEDIATELY before the progress chip on purpose: it is
+    // the warning that the very next chip cannot be trusted. The backend sets
+    // it when tokens climbed while the checklist stood still, and clears it the
+    // moment any step is reported, so Dart neither measures it nor guesses it.
+    add(SafetyChipKind.stepsStale, 'steps_stale_chip', 'warning');
     add(SafetyChipKind.steps, 'steps_chip', 'info');
     add(SafetyChipKind.resumed, 'resume_chip', 'neutral');
     return out;
   }
+}
+
+/// CHANGE #369 — the finish gate, as the card reads it.
+///
+/// #355 finished its work — 12/12 steps, CHANGE #855 live, QA green — and then
+/// kept running for fifteen minutes while its card still said `building`. The
+/// gate that ends that lives entirely in the backend: it observes every
+/// completion condition, completes the row itself, and interrupts the agent's
+/// turn. This class is the card's HALF of that contract, and its whole job is
+/// to make one thing impossible — Dart deciding for itself that a build looks
+/// finished.
+///
+/// So there is deliberately no `stepsDone == stepsTotal` here. Readiness is a
+/// backend verdict (`finish_ready_at` stamped, rendered as `finish_chip`), and
+/// a payload that sends no chip means "not ready" — never "work it out".
+class RowFinish {
+  final Map<String, dynamic> row;
+  const RowFinish(this.row);
+
+  /// The sentence, composed by dev_cmd_list from ui_copy. Empty = no chip.
+  String get label => (row['finish_chip'] ?? '').toString();
+
+  /// The tone NAME the backend chose; the screen resolves it via toneByName.
+  String get tone => (row['finish_tone'] ?? 'neutral').toString();
+
+  /// Was this row closed by the harness rather than by the model? The backend
+  /// stamps it at completion; absent degrades to false.
+  bool get autoFinished => row['auto_finished'] == true;
+
+  /// 'harness' (the heartbeat detector) or 'watchdog' (the server-side
+  /// backstop) — printed verbatim wherever the source matters.
+  String get source => (row['auto_finish_source'] ?? '').toString();
+
+  /// What is still holding the row open, in the backend's own words. Used by
+  /// the detail screen; the card only needs [label].
+  List<String> get blockers => (row['finish_blockers'] is List)
+      ? (row['finish_blockers'] as List).map((e) => e.toString()).toList()
+      : const <String>[];
+
+  bool get show => label.isNotEmpty;
 }
 
 /// The live-view badge. Honest in BOTH directions: the backend measures whether

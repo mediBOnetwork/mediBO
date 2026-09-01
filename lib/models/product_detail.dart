@@ -1,4 +1,5 @@
 import 'product.dart' show Availability, Pricing;
+import 'product_reviews.dart' show RatingSummary;
 
 /// CHANGE #636 — the `product_detail(p_product_id)` payload, parsed and nothing
 /// more.
@@ -50,9 +51,41 @@ class ProductDetail {
   final bool hasSupplierLabel;
   final String supplierLabel;
 
+  /// CMD #451 (register row 84) — the catalogue status blocks this product for
+  /// EVERYONE: banned, discontinued, not for sale. It is a backend flag, never
+  /// derived here from [buyable] or from a supplier count, and
+  /// [statusLabel]/[statusReason] are the backend's own words for it. When it
+  /// is true the page states the reason instead of offering Notify — you
+  /// cannot be notified about a product that will never come back.
+  final bool blockedByStatus;
+  final String statusLabel;
+  final String statusReason;
+
+  /// CMD #367 (row 177) — the supply trust strip. Fill rate + cold chain,
+  /// computed and worded by `product_trust_strip()`. There is deliberately NO
+  /// expiry field: expiry and batch change with every purchase, so a
+  /// minimum-expiry promise made before the stock is bought would be false.
+  final PdTrust trust;
+
   final List<PdOverviewRow> overview;
   final List<PdSection> sections;
   final List<PdSimilar> similar;
+
+  /// CMD #366 (row 171) — the PRICED substitute block. `similar` above is the
+  /// original salt rail and keeps its exact shape (a protected test pins it);
+  /// this is the same mechanism extended, as Om asked, rather than a second
+  /// rail alongside it: normalised salt+strength+form, a real price, and a
+  /// saving computed net-rate against net-rate. It is deliberately possible
+  /// for an item here to carry NO price, NO margin and NO saving — MRP is the
+  /// legal ceiling, not a rate we sell at, so a saving derived from it would
+  /// be a number we invented.
+  final PdSubstitutes substitutes;
+
+  /// CMD #366 (row 175) — "usually delivered in ...", the rolling average of
+  /// our OWN past deliveries to this area. `has` is false until enough real
+  /// deliveries exist, and then the page shows nothing at all rather than a
+  /// promise we never measured.
+  final PdPromise deliveryPromise;
 
   final bool hasHistory;
   final String historyLabel;
@@ -60,6 +93,18 @@ class ProductDetail {
   // wishlist — gated to approved customers; populated by product_detail()
   final bool showWishlist;
   final bool isWishlisted;
+
+  /// CMD #410 — the reviews aggregate, from product_rating_summary() via
+  /// product_detail_v2. `has` is false below the review floor, and then the
+  /// header shows NOTHING: a 5.0 written by one customer is an anecdote, not
+  /// a rating, and this is a buying screen.
+  final RatingSummary rating;
+
+  /// CMD #410 — the compare checkbox's caption and the tray's cap, both the
+  /// backend's. The app owns only WHICH products are in the tray.
+  final String compareAddLabel;
+  final String compareCtaLabel;
+  final int compareMax;
 
   const ProductDetail({
     required this.ok,
@@ -79,15 +124,25 @@ class ProductDetail {
     required this.availability,
     required this.pricing,
     required this.buyable,
+    this.blockedByStatus = false,
+    this.statusLabel = '',
+    this.statusReason = '',
     required this.hasSupplierLabel,
     required this.supplierLabel,
+    required this.trust,
     required this.overview,
     required this.sections,
     required this.similar,
+    required this.substitutes,
+    required this.deliveryPromise,
     required this.hasHistory,
     required this.historyLabel,
     required this.showWishlist,
     required this.isWishlisted,
+    this.rating = RatingSummary.absent,
+    this.compareAddLabel = '',
+    this.compareCtaLabel = '',
+    this.compareMax = 3,
   });
 
   /// One backend label, e.g. `pdp_overview_title`. Missing reads as '' — never
@@ -136,8 +191,16 @@ class ProductDetail {
       availability: Availability.fromMap(m['availability']),
       pricing: Pricing.fromMap(m['pricing']),
       buyable: stock['buyable'] == true,
+      blockedByStatus: stock['blocked_by_status'] == true,
+      statusLabel: _s((stock['status_block'] is Map
+          ? (stock['status_block'] as Map)['label']
+          : null)),
+      statusReason: _s((stock['status_block'] is Map
+          ? (stock['status_block'] as Map)['reason']
+          : null)),
       hasSupplierLabel: stock['has_supplier_label'] == true,
       supplierLabel: _s(stock['supplier_label']),
+      trust: PdTrust.fromMap(m['trust']),
       overview: ((m['overview'] as List?) ?? const [])
           .whereType<Map>()
           .map((r) => PdOverviewRow(
@@ -159,10 +222,18 @@ class ProductDetail {
                 mrpLabel: _s(r['mrp_label']),
               ))
           .toList(growable: false),
+      substitutes: PdSubstitutes.fromMap(m['substitutes']),
+      deliveryPromise: PdPromise.fromMap(m['delivery_promise']),
       hasHistory: hist['has'] == true,
       historyLabel: _s(hist['label']),
       showWishlist: m['show_wishlist'] == true,
       isWishlisted: m['is_wishlisted'] == true,
+      rating: RatingSummary.fromMap(m['rating']),
+      compareAddLabel: _s((m['compare'] as Map?)?['add_label']),
+      compareCtaLabel: _s((m['compare'] as Map?)?['cta_label']),
+      compareMax: ((m['compare'] as Map?)?['max'] is int)
+          ? (m['compare'] as Map)['max'] as int
+          : int.tryParse(_s((m['compare'] as Map?)?['max'])) ?? 3,
     );
   }
 
@@ -186,16 +257,141 @@ class ProductDetail {
         availability: null,
         pricing: null,
         buyable: false,
+        blockedByStatus: false,
+        statusLabel: '',
+        statusReason: '',
         hasSupplierLabel: false,
         supplierLabel: '',
+        trust: const PdTrust.empty(),
         overview: const [],
         sections: const [],
         similar: const [],
+        substitutes: const PdSubstitutes.empty(),
+        deliveryPromise: const PdPromise.empty(),
         hasHistory: false,
         historyLabel: '',
         showWishlist: false,
         isWishlisted: false,
       );
+}
+
+/// CMD #366 row 171. Every string here is `same_composition_options()`'s —
+/// heading, note, empty state, the match label and the saving sentence. The
+/// widget prints them in payload order and computes nothing, least of all a
+/// price comparison.
+class PdSubstitutes {
+  final bool has;
+  final String heading;
+  final String note;
+  final String empty;
+  final List<PdSubstitute> items;
+  const PdSubstitutes({
+    required this.has,
+    required this.heading,
+    required this.note,
+    required this.empty,
+    required this.items,
+  });
+  const PdSubstitutes.empty()
+      : has = false,
+        heading = '',
+        note = '',
+        empty = '',
+        items = const [];
+
+  factory PdSubstitutes.fromMap(Object? raw) {
+    if (raw is! Map) return const PdSubstitutes.empty();
+    final m = raw.cast<String, dynamic>();
+    return PdSubstitutes(
+      has: m['has'] == true,
+      heading: ProductDetail._s(m['heading']),
+      note: ProductDetail._s(m['note']),
+      empty: ProductDetail._s(m['empty']),
+      items: ((m['items'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((r) => PdSubstitute.fromMap(r.cast<String, dynamic>()))
+          .toList(growable: false),
+    );
+  }
+}
+
+class PdSubstitute {
+  final String id;
+  final String name;
+  final String company;
+  final String packLabel;
+  final String image;
+  final String matchLabel;
+
+  /// The same pricing block every card reads — so the substitute's price and
+  /// the catalogue's price can never disagree.
+  final Pricing? pricing;
+
+  /// Present only when BOTH this item and the one being viewed have a real
+  /// trade rate. No rate on either side => hasSaving is false and there is no
+  /// line, never a "saves 0%".
+  final bool hasSaving;
+  final String savingLabel;
+
+  /// Present only when the backend emitted has_margin, which needs
+  /// pricing_ready AND an entitled viewer.
+  final bool hasMargin;
+  final String marginLabel;
+
+  const PdSubstitute({
+    required this.id,
+    required this.name,
+    required this.company,
+    required this.packLabel,
+    required this.image,
+    required this.matchLabel,
+    required this.pricing,
+    required this.hasSaving,
+    required this.savingLabel,
+    required this.hasMargin,
+    required this.marginLabel,
+  });
+
+  factory PdSubstitute.fromMap(Map<String, dynamic> m) {
+    final saving = (m['saving'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final margin = (m['margin'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final chip = (margin['chip'] as Map?)?.cast<String, dynamic>() ?? const {};
+    return PdSubstitute(
+      id: ProductDetail._s(m['id']),
+      name: ProductDetail._s(m['name']),
+      company: ProductDetail._s(m['company']),
+      packLabel: ProductDetail._s(m['pack_label']),
+      image: ProductDetail._s(m['image']),
+      matchLabel: ProductDetail._s(m['match_label']),
+      pricing: m['pricing'] is Map
+          ? Pricing.fromMap((m['pricing'] as Map).cast<String, dynamic>())
+          : null,
+      hasSaving: saving['has'] == true,
+      savingLabel: ProductDetail._s(saving['label']),
+      hasMargin: margin['has'] == true,
+      marginLabel: ProductDetail._s(chip['label']),
+    );
+  }
+}
+
+/// CMD #366 row 175. `has` is the backend's answer to "have we delivered here
+/// enough times to promise anything", never a client-side sample count.
+class PdPromise {
+  final bool has;
+  final String label;
+  final String note;
+  const PdPromise({required this.has, required this.label, required this.note});
+  const PdPromise.empty() : has = false, label = '', note = '';
+
+  factory PdPromise.fromMap(Object? raw) {
+    if (raw is! Map) return const PdPromise.empty();
+    final m = raw.cast<String, dynamic>();
+    return PdPromise(
+      has: m['has'] == true,
+      label: ProductDetail._s(m['label']),
+      note: ProductDetail._s(m['note']),
+    );
+  }
 }
 
 class PdOverviewRow {
@@ -227,4 +423,52 @@ class PdSimilar {
     required this.image,
     required this.mrpLabel,
   });
+}
+
+
+/// One chip on the PDP trust strip. Every field is a backend string — the app
+/// picks no words and computes no percentage.
+class PdTrustChip {
+  final String key;
+  final String label;
+  final String note;
+  final String tone;
+  const PdTrustChip({
+    required this.key,
+    required this.label,
+    required this.note,
+    required this.tone,
+  });
+}
+
+/// The trust strip. `has` is the backend's own verdict on whether there is
+/// anything worth showing — the page never re-derives it from chips.length,
+/// and a product nobody has asked for yet shows nothing rather than an
+/// invented 100%.
+class PdTrust {
+  final bool has;
+  final String title;
+  final List<PdTrustChip> chips;
+  const PdTrust({required this.has, required this.title, required this.chips});
+  const PdTrust.empty()
+      : has = false,
+        title = '',
+        chips = const [];
+
+  factory PdTrust.fromMap(Object? raw) {
+    if (raw is! Map) return const PdTrust.empty();
+    return PdTrust(
+      has: raw['has'] == true,
+      title: raw['title']?.toString() ?? '',
+      chips: ((raw['chips'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((c) => PdTrustChip(
+                key: c['key']?.toString() ?? '',
+                label: c['label']?.toString() ?? '',
+                note: c['note']?.toString() ?? '',
+                tone: c['tone']?.toString() ?? '',
+              ))
+          .toList(growable: false),
+    );
+  }
 }

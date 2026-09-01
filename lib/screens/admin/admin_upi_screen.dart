@@ -260,10 +260,14 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
         .then((r) => List<Map<String, dynamic>>.from(r as List));
   }
 
-  Future<Map<String, dynamic>> _rpcSetActivePartner(String area) {
+  Future<Map<String, dynamic>> _rpcSetActivePartner(String area,
+      [String? overrideReason]) {
     if (widget.setActivePartnerRpc != null) return widget.setActivePartnerRpc!(area);
     return Supabase.instance.client
-        .rpc('set_active_partner', params: {'p_area': area})
+        .rpc('set_active_partner', params: {
+          'p_area': area,
+          'p_override_reason': overrideReason,
+        })
         .then((r) => Map<String, dynamic>.from(r as Map));
   }
 
@@ -295,11 +299,20 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
     }
   }
 
-  Future<void> _setActivePartner(String area) async {
+  Future<void> _setActivePartner(String area, {String? overrideReason}) async {
     if (_partnerBusy.contains(area)) return;
     setState(() => _partnerBusy.add(area));
     try {
-      final data = await _rpcSetActivePartner(area);
+      final data = await _rpcSetActivePartner(area, overrideReason);
+      // CHANGE #400 — the onboarding gate refused. Offer the override instead
+      // of a dead end: the reason is required, and the BACKEND logs it.
+      if (data['ok'] != true && data['error'] == 'onboarding_incomplete') {
+        if (mounted) setState(() => _partnerBusy.remove(area));
+        final reason = await _overrideReasonSheet(data);
+        if (reason == null || reason.isEmpty) return;
+        await _setActivePartner(area, overrideReason: reason);
+        return;
+      }
       final message = data['message'] as String?;
       if (mounted && message != null) {
         showToast(context, message, isError: data['ok'] != true);
@@ -309,6 +322,55 @@ class _AdminUpiScreenState extends State<AdminUpiScreen> {
       if (mounted) showToast(context, c('admin_upi_screen.generic_error'), isError: true);
     }
     if (mounted) setState(() => _partnerBusy.remove(area));
+  }
+
+  /// Asks for the override reason, printing the backend's own refusal message
+  /// and its own hint. Returns null when the admin backs out.
+  Future<String?> _overrideReasonSheet(Map<String, dynamic> data) async {
+    final ob = data['onboarding'] is Map
+        ? Map<String, dynamic>.from(data['onboarding'] as Map)
+        : const <String, dynamic>{};
+    final ctrl = TextEditingController();
+    final ok = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(
+          left: Ds.space.x16,
+          right: Ds.space.x16,
+          top: Ds.space.x24,
+          bottom: MediaQuery.of(ctx).viewInsets.bottom + Ds.space.x24,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('${data['message'] ?? ''}', style: Ds.t.body),
+            SizedBox(height: Ds.space.x8),
+            Text('${ob['ready_label'] ?? ''}', style: Ds.t.caption),
+            SizedBox(height: Ds.space.x16),
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              maxLines: 2,
+              decoration:
+                  InputDecoration(hintText: '${ob['override_hint'] ?? ''}'),
+            ),
+            SizedBox(height: Ds.space.x24),
+            SizedBox(
+              height: Ds.touch.minTarget,
+              child: FilledButton(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: Text('${ob['activate_label'] ?? ''}'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    return ok == true ? ctrl.text.trim() : null;
   }
 
   Future<void> _confirmDeletePartner(String area) async {
@@ -1545,6 +1607,18 @@ class _AddUpiCard extends StatelessWidget {
 
 // ── Partner Card ─────────────────────────────────────────────────────────────
 
+/// CHANGE #400 — backend tone slug -> token. The slug is the backend's; only
+/// the token lookup lives here.
+Color _obTone(Object? tone, {bool bg = false}) {
+  switch ('${tone ?? ''}') {
+    case 'success': return bg ? Ds.c.successSoft : Ds.c.success;
+    case 'danger':  return bg ? Ds.c.dangerSoft  : Ds.c.danger;
+    case 'info':    return bg ? Ds.c.infoSoft    : Ds.c.info;
+    case 'warning': return bg ? Ds.c.warningSoft : Ds.c.warning;
+  }
+  return bg ? Ds.c.bg : Ds.c.textSecondary;
+}
+
 class _PartnerCard extends StatelessWidget {
   final Map<String, dynamic> partner;
   final bool busy;
@@ -1581,6 +1655,10 @@ class _PartnerCard extends StatelessWidget {
     final blockedReason = partner['delete_blocked_reason'] as String?;
     final detailLines =
         (partner['detail_lines'] as List? ?? []).cast<Map<String, dynamic>>();
+    // CHANGE #400 — onboarding progress, straight off the same payload.
+    final onboarding = partner['onboarding'] is Map
+        ? Map<String, dynamic>.from(partner['onboarding'] as Map)
+        : const <String, dynamic>{};
     final docs = (partner['docs'] as List? ?? []).cast<Map<String, dynamic>>();
 
     return Container(
@@ -1687,6 +1765,43 @@ class _PartnerCard extends StatelessWidget {
           if (!canDelete && blockedReason != null) ...[
             const SizedBox(height: 4),
             Text(blockedReason, style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
+          ],
+          // CHANGE #400 — onboarding progress. Every string and tone is the
+          // backend's; this strip decides nothing but where to put them.
+          if (onboarding['ok'] == true) ...[
+            SizedBox(height: Ds.space.x12),
+            Row(
+              children: [
+                Expanded(
+                  child: Text('${onboarding['progress_label'] ?? ''}',
+                      style: Ds.t.caption),
+                ),
+                Container(
+                  padding: EdgeInsets.symmetric(
+                      horizontal: Ds.space.x8, vertical: Ds.space.x4),
+                  decoration: BoxDecoration(
+                    color: _obTone(onboarding['ready_tone'], bg: true),
+                    borderRadius: Ds.r.rChip,
+                  ),
+                  child: Text('${onboarding['ready_label'] ?? ''}',
+                      style: Ds.t.caption
+                          .copyWith(color: _obTone(onboarding['ready_tone']))),
+                ),
+              ],
+            ),
+            SizedBox(height: Ds.space.x8),
+            ClipRRect(
+              borderRadius: Ds.r.rChip,
+              child: LinearProgressIndicator(
+                value: ((onboarding['total_count'] as num?) ?? 0) == 0
+                    ? 0
+                    : ((onboarding['done_count'] as num?) ?? 0) /
+                        ((onboarding['total_count'] as num?) ?? 1),
+                minHeight: Ds.space.x4,
+                backgroundColor: Ds.c.divider,
+                color: _obTone(onboarding['ready_tone']),
+              ),
+            ),
           ],
           const SizedBox(height: 10),
           ...detailLines.map((line) => Padding(

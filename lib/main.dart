@@ -23,11 +23,15 @@ import 'models/inquiry_lock_model.dart';
 import 'screens/auth/login_screen.dart';
 import 'models/app_session.dart';
 import 'screens/partner/partner_home_screen.dart';
+import 'screens/customer/customer_staff_screen.dart'; // CMD #438: /customer/staff
 import 'screens/admin/admin_partner_console_screen.dart';
 import 'screens/admin/settlement_screen.dart'; // /admin/settlement
 import 'screens/home_shell.dart';
 import 'screens/public/inquiry_form_screen.dart';
 import 'screens/public/stock_update_form_screen.dart'; // C639: /stock-update/<token>
+import 'screens/public/storefront_screen.dart'; // CMD #417: /shop/<token>
+import 'screens/public/substitute_token_screen.dart'; // #366: /substitute/<token>
+import 'screens/admin/returns_refunds_screen.dart'; // C395: /admin/returns
 import 'pages/dispute_token_page.dart';
 import 'screens/public/dispute_form_screen.dart';
 import 'screens/public/public_order_page.dart';
@@ -38,6 +42,14 @@ import 'screens/public/wa_link_redirect_page.dart'; // /r/:code — campaign lin
 import 'screens/admin/wa_campaigns_screen.dart'; // /admin/wa-campaigns
 import 'screens/admin/admin_scope_audit_screen.dart'; // /admin/scope-audit
 import 'screens/admin/dev_queue/cron_health_screen.dart'; // /admin/cron-health
+import 'screens/admin/admin_delivery_extras_screen.dart'; // /admin/delivery-programme
+import 'screens/pharmacy/pharmacy_owner_screen.dart';
+import 'screens/pharmacy/pharmacy_expiry_screen.dart';   // CMD #413 — /pharmacy/expiry
+import 'screens/pharmacy/pharmacy_radar_screen.dart';    // CMD #425 — /pharmacy/radar
+import 'screens/pharmacy/pharmacy_parcel_count_screen.dart'; // CMD #431 — /pharmacy/parcel-count
+import 'screens/pharmacy/pharmacy_variance_screen.dart'; // CMD #413 — /pharmacy/stock-check
+import 'screens/pharmacy/pharmacy_audit_screen.dart';   // CMD #447 — /pharmacy/audit
+import 'screens/pharmacy/rx_scan_screen.dart';           // CMD #418 — /pharmacy/prescription
 import 'screens/admin/nav_registry_view.dart'; // CHANGE #325 — deep links
 import 'screens/product_detail_screen.dart'; // C636: /product/:id
 import 'screens/reorder_screen.dart'; // #173: /reorder
@@ -56,6 +68,8 @@ import 'screens/about_screen.dart';
 import 'screens/contact_screen.dart';
 import 'screens/legal_pages.dart';
 import 'screens/admin/admin_delivery_ops_screen.dart';
+import 'screens/admin/admin_delivery_waves_screen.dart';
+import 'screens/public/near_screen.dart'; // CMD #426 — /near, /near/p/<token>
 import 'services/feature_gaps_service.dart'; // CHANGE #312
 import 'services/ui_copy.dart';
 import 'supabase_config.dart';
@@ -549,6 +563,55 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
               // CHANGE #639 — the stock-update link the 5pm sweep sends over
               // WhatsApp. Public, exactly like /inquiry/<token>: the token IS
               // the authorisation. Declared above the trailing /:code guard.
+              // CMD #366 row 176 — the substitute link a no-app customer
+              // gets over WhatsApp. Same shape as the stock-update link: the
+              // token in the URL is the authorisation.
+              if (name.startsWith('/substitute/')) {
+                final token =
+                    name.substring('/substitute/'.length).split('?').first;
+                return MaterialPageRoute(
+                  builder: (_) => SubstituteTokenScreen(token: token),
+                );
+              }
+              // CMD #417 — /shop/<token>: the pharmacy's own WhatsApp
+              // storefront, shared as a link or a QR. PUBLIC and anonymous by
+              // design — the token in the URL is the authorisation, exactly
+              // the way /stock-update/<token> works, and the page it opens
+              // shows MRP and availability only.
+              if (name.startsWith('/shop/')) {
+                final token = name.substring('/shop/'.length).split('?').first;
+                if (token.isNotEmpty) {
+                  return MaterialPageRoute(
+                    settings: settings,
+                    builder: (_) => StorefrontScreen(token: token),
+                  );
+                }
+              }
+              // CMD #426 — /near and /near/p/<token>: the CONSUMER surface.
+              // PUBLIC and anonymous, and that is the whole product: a person
+              // with a prescription opens a URL, with no login, no account and
+              // no app store, and asks which pharmacy nearby is likely to have
+              // it. near_boot/near_search/near_pharmacy are the anon-granted,
+              // rate-limited RPCs behind it, and they expose availability only
+              // — never a price, a quantity or a supplier.
+              // Declared above the trailing /:code guard for the same reason
+              // /stock-update/ is: a bare token must not be mistaken for one.
+              if (name == '/near' || name.startsWith('/near?')) {
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => const NearScreen(),
+                );
+              }
+              if (name.startsWith('/near/p/')) {
+                final token =
+                    name.substring('/near/p/'.length).split('?').first;
+                if (token.isNotEmpty) {
+                  return MaterialPageRoute(
+                    settings: settings,
+                    builder: (_) => NearPharmacyScreen(token: token),
+                  );
+                }
+              }
               if (name.startsWith('/stock-update/')) {
                 final token =
                     name.substring('/stock-update/'.length).split('?').first;
@@ -614,21 +677,117 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
               // the URL. Authorisation is untouched: every destination screen
               // still gates on its own RPCs.
               if (name.startsWith('/admin/go/')) {
-                final key = name
-                    .substring('/admin/go/'.length)
-                    .split('?')
-                    .first
-                    .replaceAll('/', '');
+                // CMD #421 — the path may carry a SUBJECT after the route key:
+                // `/admin/go/customer_360/<pharmacy id>`. This used to
+                // `replaceAll('/', '')` the whole tail, which welded the id
+                // onto the key and produced a route nothing recognises. Split
+                // on the separator instead: the first segment is the key, the
+                // rest is the subject (rejoined, so an id that contains a
+                // slash survives), and dropping empty segments keeps a
+                // trailing slash harmless exactly as the old replaceAll did.
+                final link = AdminGoLink.parse(name);
+                final key = link?.route ?? '';
+                final seed = link?.seed;
                 if (key.isNotEmpty) {
-                  PendingAdminNav.route = key;
+                  PendingAdminNav.park(key, seed);
                   try {
-                    RenderLog.write('c325_deep_link', key);
+                    RenderLog.write(
+                        'c325_deep_link', seed == null ? key : '$key/$seed');
                   } catch (_) {}
                   return MaterialPageRoute(
                     settings: settings,
                     builder: (_) => _AppRoot(auth: _auth),
                   );
                 }
+              }
+              // CMD #407 — the delivery programme gets a real URL of its own,
+              // the same shape as /admin/cron-health: a direct route, so the
+              // screen is reachable from a link without waiting on the shell's
+              // first frame. The dashboard tile reaches it through the shell's
+              // route table as well.
+              if (name.split('?').first == '/admin/delivery-programme') {
+                // ?tab=<tab_key> deep-links one tab. The key is passed
+                // through untouched — admin_delivery_extras() decides whether
+                // it means anything, and an unknown one renders empty.
+                final q = Uri.tryParse(name)?.queryParameters['tab'];
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => AdminDeliveryExtrasScreen(initialTab: q),
+                );
+              }
+              // CMD #413 — the pharmacy shop-management pair gets real URLs
+              // for the same reason /admin/cron-health has one: Flutter canvas
+              // cannot be clicked headlessly, so without a URL the post-deploy
+              // verifier can never prove either screen painted. It is also the
+              // pharmacy OWNER's own way in while the profile sheet that will
+              // carry the tiles is being written elsewhere.
+              //
+              // Authorisation stays entirely in the backend: pharmacy_expiry_home()
+              // answers "Expiry watch is available on a pharmacy account." and
+              // pharmacy_variance_report() answers "This is an owner-only report."
+              // in their own words, and each screen renders that refusal. Opening
+              // the URL as the wrong role therefore shows the backend's sentence,
+              // never a blank page and never a Dart role test.
+              // CHANGE #441 — /pharmacy/owner?tab=2. The bare path is a
+              // named route above; the query form lands here because a routes
+              // map only matches an exact name. A TabBarView paints only the
+              // page in the viewport, so this is how a headless proof reaches
+              // the benchmark and the radar without tapping a canvas.
+              if (name.split('?').first == '/pharmacy/owner') {
+                final tab = int.tryParse(
+                        Uri.tryParse(name)?.queryParameters['tab'] ?? '') ??
+                    0;
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => PharmacyOwnerScreen(initialTab: tab),
+                );
+              }
+              if (name.split('?').first == '/pharmacy/expiry') {
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => const PharmacyExpiryScreen(),
+                );
+              }
+              // CMD #425 — the expiry radar, ranked by expected loss. Same
+              // reason for a real URL as its sibling above, and the same
+              // authorisation story: pharmacy_radar_home() answers "This screen
+              // is for a pharmacy account." in its own words and the screen
+              // prints that, so opening this URL as the wrong role shows the
+              // backend's sentence rather than a blank page.
+              if (name.split('?').first == '/pharmacy/radar') {
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => const PharmacyRadarScreen(),
+                );
+              }
+              // CMD #418 — the prescription scanner, at a real URL for the
+              // same reason as the pair above. Authorisation is the backend's:
+              // rx_scan_recent() answers "The prescription scanner is available
+              // on a pharmacy account." itself and the screen prints it.
+              if (name.split('?').first == '/pharmacy/prescription') {
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => const RxScanScreen(),
+                );
+              }
+              if (name.split('?').first == '/pharmacy/stock-check') {
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => const PharmacyVarianceScreen(),
+                );
+              }
+              // CMD #447 — the stock audit (#430). It shipped reachable only
+              // from the shelf app bar, which left it the one #430 surface the
+              // post-deploy verifier could not paint: that verifier drives the
+              // app by URL. Same authorisation story as the four routes above
+              // and no role test here — pharmacy_audit_home() resolves the
+              // caller's OWN shop and answers _c430_denied() for anyone else,
+              // so this URL grants nothing it did not already have.
+              if (name.split('?').first == '/pharmacy/audit') {
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => const PharmacyAuditScreen(),
+                );
               }
               if (name == '/admin/cron-health') {
                 return MaterialPageRoute(
@@ -748,6 +907,10 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
               // authorisation lives in the backend where it belongs. The
               // tappable way in is still the Delivery tab's own entry row.
               '/admin/delivery-ops': (_) => const AdminDeliveryOpsScreen(),
+              // CHANGE #405 — the wave planner. Registered in feature_registry
+              // with this exact deep_link, so the admin dashboard tile pushes it
+              // straight onto the navigator (CHANGE #395) with no shell edit.
+              '/admin/delivery-waves': (_) => const AdminDeliveryWavesScreen(),
               // CHANGE #312 — the feature_gaps register, at a real URL for the
               // same reason /admin/delivery-ops has one: a headless admin
               // session can open it and PROVE it painted. It guards nothing —
@@ -761,6 +924,15 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
               // backend — partner_home() answers `is_partner:false` with its
               // own copy for anyone else, so this route guards nothing.
               '/partner':      (_) => const PartnerHomeScreen(),
+              // CHANGE #438 — the pharmacy's own staff logins (CHANGE #408) at
+              // a real URL, for the same reason /partner has one: a headless
+              // session can open it and PROVE the screen painted, and the
+              // owner can bookmark it. It guards nothing —
+              // customer_staff_list() answers not_authorized with its own copy
+              // for anyone who is not on that pharmacy, so authorisation stays
+              // in the backend. The tappable way in is still Profile ▸ Staff
+              // logins.
+              '/customer/staff': (_) => const CustomerStaffScreen(),
               '/register':     (_) => const LoginScreen(),
               // CHANGE #631 (PART A) — the delivery-partner registration form.
               // delivery_partner_register() stamps auth.uid() itself, so the
@@ -824,6 +996,27 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
               // guards nothing. It is also reachable without a URL, from the
               // dashboard's quick-navigation tile.
               '/admin/reorder': (_) => const ReorderAdminScreen(),
+              // CHANGE #395 — Returns, refunds & cancellation. Same shape as
+              // the templates route above: returns_orders_list() /
+              // order_returns_panel() enforce _returns_guard() themselves, so
+              // the screen renders the backend's own not-authorized copy
+              // rather than the route guessing a role.
+              '/admin/returns': (_) => const ReturnsRefundsScreen(),
+              // CMD #431 — count an arrived parcel against its bill. Same
+              // shape as the routes above: pharmacy_parcel_home() resolves the
+              // caller's own pharmacy and renders its own refusal, so the route
+              // guards nothing. It is also reachable without a URL, from the
+              // "Count parcel" tile on the pharmacy's own account screen.
+              '/pharmacy/parcel-count': (_) => const ParcelCountHomeScreen(),
+              // CHANGE #441 — the owner's night screens (CHANGE #419) at a real
+              // URL, for the same reason /partner and /admin/delivery-ops
+              // have one: a headless session can open it and PROVE the screen
+              // painted, and the owner can bookmark it. It guards nothing:
+              // pharmacy_owner_dashboard()
+              // answers not_a_pharmacy with its own copy for anyone off that
+              // pharmacy, so authorisation stays in the backend. The tappable
+              // way in is still the counter's Owner dashboard tile (#906).
+              '/pharmacy/owner': (_) => const PharmacyOwnerScreen(),
               '/about-app':    (_) => const AboutScreen(),
               '/contact':      (_) => const ContactScreen(),
               '/terms':        (_) => const TermsScreen(),

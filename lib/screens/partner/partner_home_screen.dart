@@ -16,9 +16,17 @@ import '../../services/partner_state.dart';
 import '../../services/ui_copy.dart';
 import '../../user_state.dart';
 import '../../utils/render_log.dart';
+import '../../services/order_alert_service.dart';
+import '../../services/masked_call_service.dart';
+import '../../widgets/masked_call_button.dart';
 import '../admin/admin_fulfillment_screen_web.dart';
 import '../admin/admin_supplier_screen_web.dart';
+import '../admin/order_alerts_screen.dart' show OrderAlertCard;
 import 'partner_statement_screen.dart';
+import 'partner_expense_screen.dart';
+import 'partner_staff_screen.dart';
+import 'partner_workers_screen.dart';
+import 'partner_supplier_payment_screen.dart';
 
 /// Backend `icon_key` -> a glyph. The KEY is the backend's; only the glyph is
 /// local, because an IconData cannot travel in JSON. An unknown key renders the
@@ -34,6 +42,7 @@ IconData partnerIcon(String key) {
     case 'bag':       return Icons.shopping_bag_outlined;
     case 'package':   return Icons.local_shipping_outlined;
     case 'truck':     return Icons.local_shipping_outlined;
+    case 'people':    return Icons.groups_outlined;
     default:          return Icons.widgets_outlined;
   }
 }
@@ -49,8 +58,18 @@ Widget? partnerDestination(String routeKey) {
   switch (routeKey) {
     case 'inquiry':
     case 'supplier_orders':
-    case 'supplier_payment':
       return AdminSupplierScreen();
+    // CHANGE #399 — supplier payment gets its OWN partner surface. It used to
+    // land on AdminSupplierScreen, whose pay panel calls sup_record_payment,
+    // which raises for anyone but a super_admin: a partner could open the
+    // screen and never record anything. partner_sup_record_payment is the
+    // partner's door onto the same writer, zone-clamped, so the row it writes
+    // is the row the office's own path writes.
+    case 'supplier_payment': return const PartnerSupplierPaymentScreen();
+    // CHANGE #399 — the partner's own staff, and its own expenses.
+    case 'partner_staff':    return const PartnerStaffScreen();
+    case 'partner_expenses': return const PartnerExpenseScreen();
+    case 'partner_workers':  return const PartnerWorkersScreen();
     case 'collect':         return AdminFulfillmentScreen(initialTab: 0);
     case 'count':           return AdminFulfillmentScreen(initialTab: 1);
     case 'bag_mapping':     return AdminFulfillmentScreen(initialTab: 2);
@@ -76,6 +95,12 @@ class PartnerHomeScreen extends StatefulWidget {
 
 class _PartnerHomeScreenState extends State<PartnerHomeScreen> {
   Map<String, dynamic>? _payload;
+
+  /// CHANGE #398 — partner_work_queue(): what is WAITING, as opposed to what
+  /// this partner is allowed to open. Fetched beside partner_home() and
+  /// rendered above it; a board that fails to load simply does not draw, so a
+  /// queue outage can never cost the partner the feature list underneath it.
+  Map<String, dynamic>? _queue;
   bool _loading = true;
 
   /// CHANGE #326 — explicit absence. `_payload = {}` on a thrown RPC used to be
@@ -85,10 +110,57 @@ class _PartnerHomeScreenState extends State<PartnerHomeScreen> {
 
   PartnerRpc get _rpc => widget.rpc ?? PartnerApi.call;
 
+  /// CHANGE #398 — the ring, on the phone that has to answer it.
+  ///
+  /// #306 addressed the new-order alert to admin devices. The partner is the
+  /// one who sources, collects, counts and packs the order, so order_alert_push
+  /// now rings the partner's own staff devices first and escalates to admin
+  /// only when nobody accepts inside the window. That is the push half; this is
+  /// the in-app half — the same OrderAlertService the admin shell runs, feeding
+  /// the same OrderAlertCard, with order_alert_feed() zone-clamped so a partner
+  /// only ever sees their own zone's alerts.
+  bool _ringBusy = false;
+
   @override
   void initState() {
     super.initState();
     _load();
+    _startRing();
+  }
+
+  Future<void> _startRing() async {
+    try {
+      OrderAlertService.instance.addListener(_onRing);
+      await OrderAlertService.instance.start();
+      _onRing();
+    } catch (_) {}
+  }
+
+  void _onRing() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _ringAct(String orderId, String action) async {
+    if (_ringBusy) return;
+    setState(() => _ringBusy = true);
+    try {
+      final r = await OrderAlertService.instance.act(orderId, action);
+      final msg = (r['message'] ?? '').toString();
+      if (mounted && msg.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      }
+      // The queue this partner is working on just changed shape.
+      await _load();
+    } catch (_) {
+    } finally {
+      if (mounted) setState(() => _ringBusy = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    OrderAlertService.instance.removeListener(_onRing);
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -104,9 +176,16 @@ class _PartnerHomeScreenState extends State<PartnerHomeScreen> {
       p = <String, dynamic>{};
       failed = true;
     }
+    Map<String, dynamic>? q;
+    try {
+      q = await _rpc('partner_work_queue', const {'p_limit': 5});
+    } catch (_) {
+      q = null;
+    }
     if (!mounted) return;
     setState(() {
       _payload = p;
+      _queue = q;
       _failed = failed;
       _loading = false;
     });
@@ -145,6 +224,11 @@ class _PartnerHomeScreenState extends State<PartnerHomeScreen> {
     if (_loading) return const PartnerHomeSkeleton();
     return PartnerHomeView(
       payload: _payload ?? const {},
+      queue: _queue,
+      ring: OrderAlertService.instance.items,
+      ringBadge: OrderAlertService.instance.badgeLabel,
+      ringBusy: _ringBusy,
+      onRingAct: _ringAct,
       onOpen: _open,
       failed: _failed,
       onRetry: _load,
@@ -186,12 +270,33 @@ class PartnerHomeView extends StatelessWidget {
     super.key,
     required this.payload,
     required this.onOpen,
+    this.queue,
+    this.ring = const [],
+    this.ringBadge = '',
+    this.ringBusy = false,
+    this.onRingAct,
     this.failed = false,
     this.onRetry,
     this.onSignOut,
   });
 
   final Map<String, dynamic> payload;
+
+  /// CHANGE #398 — partner_work_queue()'s payload, or null when the board did
+  /// not answer. Null draws nothing: absence is explicit, never an empty board
+  /// that reads as "no work".
+  final Map<String, dynamic>? queue;
+
+  /// CHANGE #398 — order_alert_feed()'s ringing items for THIS partner's zone.
+  /// Empty is the normal state; every word on the card, including whether
+  /// Accept may be offered at all, is the backend's.
+  final List<Map<String, dynamic>> ring;
+
+  /// order_alert_feed().badge_label — the backend's own count sentence. Empty
+  /// when nothing is ringing, and never assembled from ring.length here.
+  final String ringBadge;
+  final bool ringBusy;
+  final void Function(String orderId, String action)? onRingAct;
   final void Function(String featureKey) onOpen;
 
   /// CHANGE #326 — the partner_home() call itself threw. Distinct from a clean
@@ -241,11 +346,20 @@ class PartnerHomeView extends StatelessWidget {
       subtitle: _s('subtitle'),
       zoneChip: _s('zone_chip'),
       partnerName: _s('partner_name'),
+      ringBadge: ringBadge,
       onSignOut: onSignOut,
       child: payload['has_features'] == true
           ? Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                if (ring.isNotEmpty)
+                  PartnerRing(
+                    items: ring,
+                    busy: ringBusy,
+                    onAct: onRingAct,
+                  ),
+                if (queue != null && queue!['ok'] == true)
+                  PartnerWorkQueue(payload: queue!, onOpen: onOpen),
                 for (final g in groups)
                   _Group(group: Map<String, dynamic>.from(g as Map), onOpen: onOpen),
               ],
@@ -262,10 +376,11 @@ class _Shell extends StatelessWidget {
     required this.child,
     this.subtitle = '',
     this.partnerName = '',
+    this.ringBadge = '',
     this.onSignOut,
   });
 
-  final String title, subtitle, zoneChip, partnerName;
+  final String title, subtitle, zoneChip, partnerName, ringBadge;
   final Widget child;
 
   /// CHANGE #326 — a partner never reaches the customer shell's profile menu,
@@ -312,9 +427,18 @@ class _Shell extends StatelessWidget {
                 SizedBox(height: Ds.space.x4),
                 Text(subtitle, style: Ds.t.caption),
               ],
-              if (zoneChip.isNotEmpty) ...[
+              if (zoneChip.isNotEmpty || ringBadge.isNotEmpty) ...[
                 SizedBox(height: Ds.space.x12),
-                _Chip(label: zoneChip),
+                Wrap(
+                  spacing: Ds.space.x8,
+                  runSpacing: Ds.space.x8,
+                  children: [
+                    if (zoneChip.isNotEmpty) _Chip(label: zoneChip),
+                    // CHANGE #398 — the ring badge, in the backend's words.
+                    if (ringBadge.isNotEmpty)
+                      _Chip(label: ringBadge, tone: 'danger'),
+                  ],
+                ),
               ],
               SizedBox(height: Ds.space.x24),
               child,
@@ -330,19 +454,22 @@ class _Shell extends StatelessWidget {
 }
 
 class _Chip extends StatelessWidget {
-  const _Chip({required this.label});
+  const _Chip({required this.label, this.tone = ''});
   final String label;
+  final String tone;
 
   @override
   Widget build(BuildContext context) {
+    final t = partnerTone(tone);
     return Container(
       padding: EdgeInsets.symmetric(
           horizontal: Ds.space.x12, vertical: Ds.space.x8),
       decoration: BoxDecoration(
-        color: Ds.c.brandSoft,
+        color: t.bg,
         borderRadius: Ds.r.rChip,
       ),
-      child: Text(label, style: Ds.t.caption),
+      child: Text(label,
+          style: tone.isEmpty ? Ds.t.caption : Ds.t.caption.copyWith(color: t.fg)),
     );
   }
 }
@@ -487,6 +614,326 @@ class PartnerFeaturePage extends StatelessWidget {
       backgroundColor: Ds.c.bg,
       appBar: AppBar(title: Text(title, style: Ds.t.subtitle)),
       body: SafeArea(child: child),
+    );
+  }
+}
+
+// ── CHANGE #398 — THE WORK QUEUE BOARD ──────────────────────────────────────
+//
+// partner_home() answers "what may I open?". This answers "what is waiting?" —
+// today's zone, every fulfilment stage, its count, its oldest orders and the
+// next action for each. Nothing here is computed: the stage list, its order,
+// the counts, the plural forms, the money, the ages and the action words are
+// all fields of partner_work_queue(). A stage the partner has no permission
+// for is not in the payload, so it cannot be drawn.
+
+/// Backend `tone` -> a colour pair. Same contract as [partnerIcon]: the WORD is
+/// the backend's, only the swatch is local, because a Color cannot travel in
+/// JSON. An unknown tone renders neutral rather than nothing.
+({Color bg, Color fg}) partnerTone(String tone) {
+  switch (tone) {
+    case 'success': return (bg: Ds.c.successSoft, fg: Ds.c.success);
+    case 'warning': return (bg: Ds.c.warningSoft, fg: Ds.c.warning);
+    case 'danger':  return (bg: Ds.c.dangerSoft,  fg: Ds.c.danger);
+    case 'info':    return (bg: Ds.c.infoSoft,    fg: Ds.c.info);
+    default:        return (bg: Ds.c.brandSoft,   fg: Ds.c.brand);
+  }
+}
+
+class PartnerWorkQueue extends StatefulWidget {
+  const PartnerWorkQueue({super.key, required this.payload, required this.onOpen});
+
+  final Map<String, dynamic> payload;
+  final void Function(String featureKey) onOpen;
+
+  @override
+  State<PartnerWorkQueue> createState() => _PartnerWorkQueueState();
+}
+
+class _PartnerWorkQueueState extends State<PartnerWorkQueue> {
+  // CHANGE #404 — order_id -> the masked-call buttons this partner gets.
+  // A partner may reach the pharmacy and the supplier on an order they are
+  // fulfilling; the allow matrix says which, and it says it in SQL. Nothing on
+  // this screen holds a phone number.
+  Map<String, List<MaskedCallTarget>> _callTargets = const {};
+
+  Map<String, dynamic> get payload => widget.payload;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCallTargets();
+  }
+
+  @override
+  void didUpdateWidget(covariant PartnerWorkQueue old) {
+    super.didUpdateWidget(old);
+    if (!identical(old.payload, widget.payload)) _loadCallTargets();
+  }
+
+  Future<void> _loadCallTargets() async {
+    final ids = <String>{};
+    for (final st in (payload['stages'] as List?) ?? const []) {
+      if (st is! Map) continue;
+      for (final o in (st['orders'] as List?) ?? const []) {
+        if (o is! Map) continue;
+        final id = (o['order_id'] ?? '').toString();
+        if (id.isNotEmpty) ids.add(id);
+      }
+    }
+    if (ids.isEmpty) {
+      if (mounted) setState(() => _callTargets = const {});
+      return;
+    }
+    try {
+      final t = await MaskedCallService.targets(ids.toList());
+      if (!mounted) return;
+      setState(() => _callTargets = t);
+    } catch (e) {
+      // The queue is the partner's whole console. A masking layer that is down
+      // costs them the call buttons, never the work list.
+      try {
+        RenderLog.write('c404_masked_call_err', e.toString());
+      } catch (_) {}
+    }
+  }
+
+  String _s(String k) => (payload[k] ?? '').toString();
+
+  @override
+  Widget build(BuildContext context) {
+    final stages = (payload['stages'] as List?) ?? const [];
+    try {
+      RenderLog.write('c398_partner_queue',
+          'stages=${stages.length},total=${payload['total'] ?? 0},zone=${payload['zone_id'] ?? ''}');
+    } catch (_) {}
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: Ds.space.x24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(child: Text(_s('title'), style: Ds.t.subtitle)),
+              if (_s('total_label').isNotEmpty)
+                Text(_s('total_label'), style: Ds.t.caption),
+            ],
+          ),
+          if (_s('subtitle').isNotEmpty) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(_s('subtitle'), style: Ds.t.caption),
+          ],
+          if (_s('today_label').isNotEmpty) ...[
+            SizedBox(height: Ds.space.x8),
+            Text(_s('today_label'), style: Ds.t.caption),
+          ],
+          SizedBox(height: Ds.space.x12),
+          if (payload['has_any'] == true)
+            for (final s in stages)
+              _StageCard(
+                stage: Map<String, dynamic>.from(s as Map),
+                onOpen: widget.onOpen,
+                callTargets: _callTargets,
+              )
+          else
+            _Empty(title: _s('empty_title'), message: _s('empty_message')),
+        ],
+      ),
+    );
+  }
+}
+
+/// One stage: its count chip, its oldest orders and the way in. A stage with
+/// nothing in it still shows — an empty Pack queue is information — but it
+/// carries no rows and no button.
+class _StageCard extends StatelessWidget {
+  const _StageCard({
+    required this.stage,
+    required this.onOpen,
+    required this.callTargets,
+  });
+
+  final Map<String, dynamic> stage;
+  final void Function(String featureKey) onOpen;
+  final Map<String, List<MaskedCallTarget>> callTargets;
+
+  @override
+  Widget build(BuildContext context) {
+    final orders = (stage['orders'] as List?) ?? const [];
+    final feature = (stage['feature_key'] ?? '').toString();
+    final tone = partnerTone((stage['tone'] ?? '').toString());
+    final hasAny = stage['has_any'] == true;
+    final canOpen = stage['can_open'] == true && feature.isNotEmpty;
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: Ds.space.x12),
+      child: Container(
+        padding: EdgeInsets.all(Ds.space.x16),
+        decoration: BoxDecoration(
+          color: Ds.c.surface,
+          borderRadius: Ds.r.rCard,
+          boxShadow: Ds.elevation.e1,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                    child: Text((stage['label'] ?? '').toString(),
+                        style: Ds.t.bodyStrong)),
+                Container(
+                  padding: EdgeInsets.symmetric(
+                      horizontal: Ds.space.x12, vertical: Ds.space.x4),
+                  decoration: BoxDecoration(
+                      color: hasAny ? tone.bg : Ds.c.bg,
+                      borderRadius: Ds.r.rChip),
+                  child: Text((stage['count_label'] ?? '').toString(),
+                      style: Ds.t.caption.copyWith(
+                          color: hasAny ? tone.fg : Ds.c.textSecondary)),
+                ),
+              ],
+            ),
+            for (final o in orders)
+              _OrderRow(
+                order: Map<String, dynamic>.from(o as Map),
+                callTargets:
+                    callTargets[(o as Map?)?['order_id']?.toString() ?? ''] ??
+                        const [],
+              ),
+            if ((stage['more_label'] ?? '').toString().isNotEmpty) ...[
+              SizedBox(height: Ds.space.x8),
+              Text((stage['more_label'] ?? '').toString(), style: Ds.t.caption),
+            ],
+            if (hasAny && canOpen) ...[
+              SizedBox(height: Ds.space.x12),
+              SizedBox(
+                width: double.infinity,
+                height: Ds.touch.minTarget,
+                child: OutlinedButton(
+                  onPressed: () => onOpen(feature),
+                  child: Text((stage['open_label'] ?? '').toString()),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// One waiting order. Every field is printed: the money is the backend's ₹
+/// string, the age is the backend's phrase, and the next action is the stage's
+/// own sentence rather than a word this widget picked.
+class _OrderRow extends StatelessWidget {
+  const _OrderRow({required this.order, this.callTargets = const []});
+
+  final Map<String, dynamic> order;
+
+  /// CHANGE #404 — the masked-call buttons for THIS order, decided by
+  /// call_mask_targets. Empty means nobody on this order is callable by this
+  /// partner, and an empty row draws nothing.
+  final List<MaskedCallTarget> callTargets;
+
+  String _s(String k) => (order[k] ?? '').toString();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: BoxConstraints(minHeight: Ds.touch.listRowMinHeight),
+      padding: EdgeInsets.only(top: Ds.space.x12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(_s('order_code'), style: Ds.t.body),
+                if (_s('customer').isNotEmpty)
+                  Text(_s('customer'), style: Ds.t.caption),
+                if (_s('next_action').isNotEmpty)
+                  Text(_s('next_action'), style: Ds.t.caption),
+                if (callTargets.isNotEmpty) ...[
+                  SizedBox(height: Ds.space.x8),
+                  MaskedCallRow(targets: callTargets, dense: true),
+                ],
+              ],
+            ),
+          ),
+          SizedBox(width: Ds.space.x12),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(_s('amount_display'), style: Ds.t.bodyStrong),
+              Text(_s('age_label'), style: Ds.t.caption),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── CHANGE #398 — THE RING, ON THE PARTNER'S OWN PHONE ──────────────────────
+//
+// #306 built the full-screen new-order alert and addressed it to admin devices.
+// The admin does not fulfil the order; the zone partner does. order_alert_push
+// now rings the partner's own staff devices first (resolved through
+// partner_users, never through push_tokens.role — get_my_role() deliberately
+// calls a partner 'admin', so the token's word cannot tell them apart) and
+// escalates to admin only when nobody accepts inside the escalation window.
+//
+// This is the in-app half of that ring: the SAME OrderAlertCard the admin
+// screen draws, fed by the SAME order_alert_feed() — which is now zone-clamped,
+// so a partner is shown their own zone's alerts and nothing else. The prepaid
+// rule is unchanged and lives where it always did: a paid order never rings.
+class PartnerRing extends StatelessWidget {
+  const PartnerRing({
+    super.key,
+    required this.items,
+    this.busy = false,
+    this.onAct,
+  });
+
+  final List<Map<String, dynamic>> items;
+  final bool busy;
+  final void Function(String orderId, String action)? onAct;
+
+  @override
+  Widget build(BuildContext context) {
+    if (items.isEmpty) return const SizedBox.shrink();
+    try {
+      RenderLog.write('c398_partner_ring', '${items.length}');
+    } catch (_) {}
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: Ds.space.x24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final raw in items)
+            Padding(
+              padding: EdgeInsets.only(bottom: Ds.space.x12),
+              child: Builder(builder: (_) {
+                final item = Map<String, dynamic>.from(raw);
+                final orderId = (item['order_id'] ?? '').toString();
+                return OrderAlertCard(
+                  item: item,
+                  busy: busy,
+                  onAccept: item['can_accept'] == true && onAct != null
+                      ? () => onAct!(orderId, 'accept')
+                      : null,
+                  onReject: item['can_reject'] == true && onAct != null
+                      ? () => onAct!(orderId, 'reject')
+                      : null,
+                );
+              }),
+            ),
+        ],
+      ),
     );
   }
 }

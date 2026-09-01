@@ -1,5 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+import '../pharmacy/khata_screen.dart'; // CMD #415 — the khata book
+import '../pharmacy/pharmacy_refill_screen.dart'; // CMD #417 — refills & counter
+import '../pharmacy/pharmacy_variance_screen.dart';
+import '../pharmacy/rx_scan_screen.dart'; // CMD #418
+import '../pharmacy/pharmacy_parcel_count_screen.dart'; // CMD #431
 import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/widgets/admin_date_picker.dart';
 import 'package:pharma_b2b/widgets/admin_zone_picker.dart'; // CHANGE #609
@@ -7,8 +13,13 @@ import 'package:pharma_b2b/widgets/order_hours_card.dart';
 import 'package:pharma_b2b/widgets/notifications_card.dart';
 import '../../design_tokens.dart';
 import '../../services/ui_copy.dart';
+import 'admin_ops_board_screen.dart';
 import 'command_palette.dart';   // CHANGE #325
 import 'nav_registry_view.dart'; // CHANGE #325
+import 'dev_queue/dev_queue_screen.dart'; // CHANGE #349 — openDevTool
+import 'admin_customer_360_screen.dart';  // CHANGE #396
+import 'admin_stock_on_hand_screen.dart'; // CHANGE #396
+import 'admin_support_inbox_screen.dart'; // CMD #452 — feature_gaps #132
 
 class AdminDashboardScreen extends StatefulWidget {
   const AdminDashboardScreen({super.key});
@@ -27,11 +38,17 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   // renders them and nothing else.
   Map<String, dynamic> _nav = const {};
 
+  // #58 — the stuck board's headline, read straight from admin_ops_board().
+  // Six counts with no age could never get worse by being ignored; this one
+  // does, so it sits FIRST on the admin home and carries its own wording.
+  Map<String, dynamic> _ops = const {};
+
   @override
   void initState() {
     super.initState();
     _loadStats();
     _loadNav();
+    _loadOpsBoard();
   }
 
   Future<void> _loadStats() async {
@@ -86,8 +103,115 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           .rpc('nav_open', params: {'p_feature_key': featureKey})
           .catchError((_) => null);
     }
+    // CHANGE #349 — a Dev Queue tool is a registry row now, so the palette
+    // finds it by name like any screen. It does not go through the shell's
+    // route table: these tools are pushed directly, which is also why the
+    // palette can reach them without the Dev Queue screen being open.
+    final toolKey = (tile['tool_key'] ?? '').toString();
+    if (toolKey.isNotEmpty) {
+      if (!openDevTool(context, toolKey)) {
+        final message = c('dev_tools.not_registered');
+        if (message.isNotEmpty) {
+          ScaffoldMessenger.maybeOf(context)
+              ?.showSnackBar(SnackBar(content: Text(message)));
+        }
+      }
+      return;
+    }
+    // CHANGE #395 — a registry row may name a REAL named route instead of a
+    // shell route key. `_handleAdminNav`'s switch has no default branch, so a
+    // key it has never heard of renders a perfect tile that does nothing on
+    // tap — the #645/#646 bug, and the reason every new screen used to need an
+    // edit in home_shell.dart before its tile worked. A deep_link that is an
+    // ordinary path is pushed straight onto the navigator, so registering a
+    // screen that already has a route in main.dart is now a pure INSERT.
+    //
+    // `/admin/go/<key>` is excluded on purpose: that form is the shell's own
+    // parking route and must keep going through the switch.
+    final deep = (tile['deep_link'] ?? '').toString();
+    if (deep.startsWith('/') && !deep.startsWith('/admin/go/')) {
+      Navigator.of(context).pushNamed(deep);
+      return;
+    }
     final route = (tile['route_key'] ?? '').toString();
     if (route.isEmpty) return;
+    // CHANGE #396 — the two screens that carry a subject with them. Like a Dev
+    // Queue tool they are PUSHED rather than swapped into the shell's tab
+    // table, because the palette hands the subject down in `seed` (a customer
+    // id) and a tab index cannot carry one.
+    if (route == 'customer_360') {
+      final seed = (tile['seed'] ?? '').toString();
+      if (seed.isEmpty) {
+        // No subject: the registry tile itself. Ask for one the way the rest
+        // of the app does — through the palette.
+        _openPalette();
+        return;
+      }
+      Navigator.push(
+          context,
+          MaterialPageRoute(
+              builder: (_) => AdminCustomer360Screen(customerId: seed)));
+      return;
+    }
+    if (route == 'stock_on_hand') {
+      Navigator.push(context,
+          MaterialPageRoute(builder: (_) => const AdminStockOnHandScreen()));
+      return;
+    }
+    // CMD #413 — the two pharmacy shop-management screens. Pushed rather than
+    // swapped into the shell's tab table for the same reason as the two above:
+    // they are a pharmacy's own surfaces reached from the admin console, not
+    // admin tabs. Who may actually see what inside them is the backend's
+    // answer — pharmacy_expiry_home() and pharmacy_variance_report() each
+    // refuse in their own words, and the screen renders that refusal.
+    {
+      final shield = PharmacyShieldTiles.screenFor(route);
+      if (shield != null) {
+        Navigator.push(context, MaterialPageRoute(builder: (_) => shield));
+        return;
+      }
+    }
+    // CMD #415 — the pharmacy's khata book. Pushed rather than swapped into the
+    // shell's tab table for the same reason as the pharmacy screens above: it
+    // is a shop's own ledger reached from the admin console, not an admin tab.
+    // khata_home() gates on the caller's own pharmacy and renders its own
+    // refusal, so there is no role test here.
+    if (route == 'khata') {
+      Navigator.push(
+          context, MaterialPageRoute(builder: (_) => const KhataScreen()));
+      return;
+    }
+    // CMD #417 — the refill console (reminders, storefront, AI counter).
+    // Same push, same reason as the khata book above: refill_home() gates on
+    // the caller's own pharmacy and renders its own refusal.
+    if (route == 'refill') {
+      Navigator.push(context,
+          MaterialPageRoute(builder: (_) => const PharmacyRefillScreen()));
+      return;
+    }
+    // CMD #431 — counting an arrived parcel against its bill. Same push, same
+    // reason: pharmacy_parcel_home() resolves the caller's own pharmacy and
+    // refuses in its own words, so there is no role test here either.
+    if (route == 'pharmacy_parcel') {
+      Navigator.push(context,
+          MaterialPageRoute(builder: (_) => const ParcelCountHomeScreen()));
+      return;
+    }
+    // CMD #452 — the customer support inbox (feature_gaps #132). Pushed, not
+    // swapped into the shell's tab table, for the same reason as the screens
+    // above: support_inbox() refuses a non-admin in its own words and the
+    // screen renders that refusal, so there is no role test here.
+    if (route == 'support_inbox') {
+      Navigator.push(context,
+          MaterialPageRoute(builder: (_) => const AdminSupportInboxScreen()));
+      return;
+    }
+    // CMD #418 — the prescription scanner, same push, same reason.
+    if (route == 'rx_scan') {
+      Navigator.push(context,
+          MaterialPageRoute(builder: (_) => const RxScanScreen()));
+      return;
+    }
     QuickLinkNavigator.of(context)?.navigate(route);
   }
 
@@ -146,6 +270,22 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   /// under each number ("10 bills to review") are all `nav_registry()`'s
   /// `action_tiles`; there is no hand-written card here any more, and a tile
   /// only exists while its badge_source has something to answer.
+  /// The board is a separate read so a slow scan never delays the counts, and
+  /// a failure leaves the rest of the home intact — the card simply does not
+  /// appear. Nothing here is computed: the RPC hands over every string.
+  Future<void> _loadOpsBoard() async {
+    try {
+      final raw = await Supabase.instance.client
+          .rpc('admin_ops_board', params: {'p_top': 0});
+      final m = (raw is List ? raw.first : raw);
+      if (mounted && m is Map && m['ok'] == true) {
+        setState(() => _ops = Map<String, dynamic>.from(m));
+      }
+    } catch (_) {
+      // No card rather than a broken one.
+    }
+  }
+
   Widget _buildActionRequired() {
     return NavActionTiles(
       tiles: _list('action_tiles'),
@@ -247,6 +387,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   _PaletteButton(
                       label: _label('search_button'), onTap: _openPalette),
                   SizedBox(height: Ds.space.x16),
+                  // #58 — "what is stuck right now", first thing on the
+                  // admin home and one tap from the full board.
+                  if (_ops.isNotEmpty) _OpsBoardCard(payload: _ops),
                   const OrderHoursCard(),
                   const NotificationsCard(),
                   _sectionLabel(_label('action_required')),
@@ -279,6 +422,99 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         ),
       );
     });
+  }
+}
+
+// ── #58 — the stuck-work card ────────────────────────────────────────────────
+//
+// The register row asked for a worst-first board of every stuck object to BE
+// the admin home. This is its head: the backend's own headline, the worst
+// queue named, and one tap into AdminOpsBoardScreen for the full list. It reads
+// admin_ops_board() with p_top: 0 — the counts, none of the example rows —
+// because the home only needs the verdict, and the board screen is where the
+// objects live.
+//
+// Every string is the payload's. There is no count assembled here, no age
+// computed here and no ranking decided here.
+class _OpsBoardCard extends StatelessWidget {
+  final Map<String, dynamic> payload;
+  const _OpsBoardCard({required this.payload});
+
+  @override
+  Widget build(BuildContext context) {
+    String s(String k) => (payload[k] ?? '').toString();
+    final tone = s('headline_tone');
+    final ink = switch (tone) {
+      'good' => Ds.c.success,
+      'warn' => Ds.c.warning,
+      'bad' => Ds.c.danger,
+      _ => Ds.c.info,
+    };
+    final wash = switch (tone) {
+      'good' => Ds.c.successSoft,
+      'warn' => Ds.c.warningSoft,
+      'bad' => Ds.c.dangerSoft,
+      _ => Ds.c.infoSoft,
+    };
+
+    // Boot-time proof (same pattern as #325's profile surface): a string in the
+    // bundle only proves the code compiled. This key is written when the card
+    // actually paints on the admin home, so render_verify.js can assert the
+    // entry point exists on the live build rather than in the source.
+    try {
+      RenderLog.write('c356_ops_board',
+          'headline=${s('headline_label')};classes=${payload['items'] is List ? (payload['items'] as List).length : 0}');
+    } catch (_) {}
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: Ds.space.x16),
+      child: InkWell(
+        key: const Key('admin_home_ops_board'),
+        borderRadius: Ds.r.rCard,
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => AdminOpsBoardScreen(
+              onNavigate: (route) =>
+                  QuickLinkNavigator.of(context)?.navigate(route),
+            ),
+          ),
+        ),
+        child: Container(
+          width: double.infinity,
+          padding: EdgeInsets.all(Ds.space.x16),
+          decoration: BoxDecoration(
+            color: wash,
+            borderRadius: Ds.r.rCard,
+            border: Border.all(color: ink.withValues(alpha: 0.30)),
+          ),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(s('title'), style: Ds.t.subtitle),
+                  SizedBox(height: Ds.space.x4),
+                  Text(s('headline_label'),
+                      key: const Key('admin_home_ops_headline'),
+                      style: Ds.t.display.copyWith(color: ink)),
+                  SizedBox(height: Ds.space.x4),
+                  Text(s('subtitle'), style: Ds.t.caption),
+                  if (s('worst_label').isNotEmpty) ...[
+                    SizedBox(height: Ds.space.x8),
+                    Text(s('worst_label'),
+                        style: Ds.t.caption
+                            .copyWith(color: ink, fontWeight: FontWeight.w600)),
+                  ],
+                ],
+              ),
+            ),
+            Icon(Icons.chevron_right, color: ink),
+          ]),
+        ),
+      ),
+    );
   }
 }
 
@@ -341,7 +577,12 @@ class _StatCard extends StatelessWidget {
 // ── Inherited widget — tiles/cards trigger navigation in AdminShell ────────────
 
 class QuickLinkNavigator extends InheritedWidget {
-  final void Function(String route) navigate;
+  /// CMD #421 — [seed] is the SUBJECT the route carries, when it has one: the
+  /// pharmacy id on a `customer_360` link, the same value nav_search puts on a
+  /// palette result. It is optional because most routes are a whole
+  /// destination by themselves, and the shell's route table is the one place
+  /// that has to know which is which.
+  final void Function(String route, [String? seed]) navigate;
 
   const QuickLinkNavigator({
     super.key,

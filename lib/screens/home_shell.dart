@@ -26,6 +26,8 @@ import '../services/push_service.dart'; // CHANGE #298
 import 'admin/admin_push_screen.dart'; // CHANGE #298
 import 'admin/admin_add_medicine_screen.dart';
 import 'admin/admin_manage_admins_screen.dart';
+import 'admin/admin_audit_screen.dart';
+import 'admin/admin_roles_screen.dart';
 import 'admin/admin_customer_screen.dart';
 import 'admin/admin_company_screen.dart';
 import 'admin/admin_dashboard_screen.dart';
@@ -41,15 +43,21 @@ import 'admin/loyalty_admin_screen.dart';       // CHANGE #325
 import 'admin/unmapped_companies_screen.dart';  // CHANGE #325
 import 'admin/admin_delivery_ops_screen.dart';  // CHANGE #325
 import 'admin/notify_cost_screen.dart';         // CHANGE #325
+import 'admin/admin_supplier_account_screen.dart'; // CHANGE #402
 import 'admin/settlement_screen.dart';          // CHANGE #325
 import 'admin/dev_queue/cron_health_screen.dart'; // CHANGE #325
 import '../services/discount_slabs_service.dart'; // CHANGE #325
+import 'admin/admin_pricing_screen.dart';
 import 'admin/admin_shell.dart';
 import 'admin/pricing_backfill_screen.dart';
 import 'admin/admin_bill_pipeline_screen.dart'; // CHANGE #226
+import 'admin/admin_bulk_screen.dart'; // C397: bulk actions, exports, undo
 import 'admin/admin_scope_audit_screen.dart'; // CHANGE #227
 import 'admin/admin_order_closure_screen.dart'; // CHANGE #229
 import 'admin/admin_gst_screen.dart'; // CHANGE #320
+import 'admin/admin_reviews_screen.dart'; // CMD #410: review & Q&A moderation
+import 'admin/admin_customer_360_screen.dart'; // CMD #421: the customer_360 link
+import 'admin/admin_stock_on_hand_screen.dart'; // CMD #421: the stock_on_hand link
 import '../features/whatsapp/ui/wa_home_screen.dart';
 import '../features/whatsapp/ui/wa_templates_screen.dart';
 import 'admin/wa_campaigns_screen.dart';
@@ -74,9 +82,45 @@ import '../services/delivery_role_state.dart'; // C629: is_partner, from the bac
 import 'cart_screen.dart';
 import '../utils/toast.dart';
 import 'orders_screen.dart';
+import '../services/pos_api.dart'; // CMD #411 — pos_entry() at boot
+import 'pharmacy/pos_screen.dart'; // CMD #411 — the pharmacy counter
+import '../widgets/scan_mic_search_controls.dart'; // #409 — used by the shell part files
+import '../services/pharmacy_stock_api.dart'; // CMD #412 — pharmacy_stock_entry() at boot
+import 'pharmacy/pharmacy_vault_screen.dart'; // CMD #423 — /admin/go/pharmacy_vault
+import 'pharmacy/pharmacy_stock_screen.dart'; // CMD #412 — the pharmacy's shelf
+import 'pharmacy/pharmacy_gst_screen.dart'; // CMD #440 — /admin/go/pharmacy_gst
+import 'pharmacy/pharmacy_audit_screen.dart'; // CMD #447 — /admin/go/pharmacy_audit
+import 'pharmacy/pharmacy_refill_screen.dart'; // CMD #417 — refills & counter
+import 'pharmacy/pharmacy_overpay_screen.dart'; // CMD #427 — /admin/go/price_check
+import 'pharmacy/paper_sale_screen.dart'; // CMD #429 — /admin/go/paper_sale
+import 'admin/admin_money_screen.dart'; // CMD #450 — /admin/go/money
+import 'admin/admin_demand_engine_screen.dart'; // CMD #427 — /admin/go/demand_engine
 import 'profile_screen.dart';
 import 'storefront_screen.dart';
 import 'supplier/supplier_shell.dart';
+// CMD #409 — the scan and mic buttons that sit inside the search bar. The two
+// search bars are `part` files of this library, so their import lives here.
+import '../widgets/scan_mic_search_controls.dart';
+
+// CHANGE #327 · LAYER 1 — the shell is sharded.
+//
+// This file was 5,139 lines holding boot, routing, the mobile and desktop
+// chrome, the cart panel, the login panel, the admin chrome and the view-as
+// previews — nine concerns in one path. That is why a partner-routing fix
+// (#326) and a dashboard rebuild (#325) collided on it and one of them sat
+// parked mid-build, polling the lease 97 times in six minutes.
+//
+// What is left here is the shell itself: boot, routing and the two layouts.
+// Every other concern is a part below, with its own path and its own lease.
+part 'shell/shell_mobile_chrome.dart';
+part 'shell/shell_cart_panel.dart';
+part 'shell/shell_login_panel.dart';
+part 'shell/shell_bottom_bars.dart';
+part 'shell/shell_header_chrome.dart';
+part 'shell/shell_admin_chrome.dart';
+part 'shell/shell_sidebar.dart';
+part 'shell/shell_view_as.dart';
+
 
 /// App shell: responsive — desktop gets a top nav + sidebar, mobile/tablet
 /// keeps the existing header + quick-nav chips + bottom nav layout.
@@ -86,6 +130,46 @@ class HomeShell extends StatefulWidget {
 
   /// Switch to the Bulk Upload tab (index 2). Called by Convert-to-Order flow.
   static void switchToBulkUpload() => _shellKey.currentState?._setIndex(2);
+
+  /// Destinations that gate themselves on the CALLER's own account rather than
+  /// on an admin role, so opening them from a link grants nothing: each one
+  /// renders the backend's refusal when the account has no business there.
+  /// Every other key stays admin-only exactly as it was.
+  ///
+  /// CMD #447 moved this onto the widget from `_HomeShellState`. It is the
+  /// decision a deep link actually turns on — a key missing from here is
+  /// re-parked and the link dies silently — and while it was private to a
+  /// State that needs a live Supabase to build, nothing could test it.
+  static const Set<String> selfGatedRoutes = {
+    'pharmacy_stock', 'pharmacy_vault', 'pos', 'home',
+    // CMD #427 — the price check is a PHARMACY's own screen.
+    // pharmacy_overpay_insights() gates on the caller's own pharmacy and the
+    // screen prints its refusal, so opening this link as the wrong role shows
+    // the backend's sentence instead of nothing at all.
+    'price_check',
+    // CMD #432 — the shop's UPI ID and its counter QR. Self-gated the same
+    // way: pharmacy_upi_get() resolves the caller's own pharmacy and the
+    // screen prints the backend's refusal for anyone else, so the link grants
+    // nothing. Without this line the route is parked and the deep link lands
+    // on the storefront — which is exactly what it did the first time.
+    'pos_upi',
+    // CMD #440 — the GST pack (#416) is the same story: pharmacy_gst_home()
+    // gates on the caller's OWN pharmacy and the screen prints the backend's
+    // refusal, so the link grants nothing. Without this line the key is
+    // parked for a pharmacy, who is not an admin, and never opens.
+    'pharmacy_gst',
+    // CMD #429/#444 — the paper sale sheet is a PHARMACY's own screen, so it
+    // is self-gated like the shelf and the counter: paper_sale_home() resolves
+    // the caller's own pharmacy and the screen prints the backend's refusal
+    // for anyone else. The link grants a door, never a permission.
+    'paper_sale',
+    // CMD #447 — the stock audit (#430). pharmacy_audit_home() resolves the
+    // caller's own shop and returns _c430_denied() for anyone else, so the
+    // link grants nothing. A shop owner counting their own shelves is not an
+    // admin, so without this line the key is parked and the deep link lands on
+    // the storefront in silence — the same failure #432 hit first time round.
+    'pharmacy_audit',
+  };
 
   @override
   State<HomeShell> createState() => _HomeShellState();
@@ -196,6 +280,9 @@ class _HomeShellState extends State<HomeShell> {
     // instantly from cache when one exists; refreshes in the background with
     // retry, and never wipes a good cache on a failed refresh.
     _bootstrapHomeCategories();
+    // CMD #411 — after the first frame, same reason as push: a counter entry
+    // that fails to resolve must never sit in front of the shell's own build.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadPosEntry());
     // CHANGE #440: type-anywhere-to-search, desktop web only.
     if (kIsWeb) HardwareKeyboard.instance.addHandler(_globalKeyHandler);
     RenderLog.write('c440_typeanywhere', 'web=$kIsWeb min3=on');
@@ -288,7 +375,25 @@ class _HomeShellState extends State<HomeShell> {
   Future<void> _loadNavProfileMenu() async {
     try {
       final raw = await Supabase.instance.client.rpc('nav_registry');
-      NavProfileMenu.adopt(raw is List ? raw.first : raw);
+      final payload = raw is List ? raw.first : raw;
+      NavProfileMenu.adopt(payload);
+      // CHANGE #402 — boot-time proof for a surface behind a tap. The paint-time
+      // keys (c402_payout_queue, c402_i18n_missing) only fire once someone opens
+      // the screen, and a headless verifier cannot tap a canvas app — so they
+      // never reach the render-log. This fires at BOOT and asserts the honest
+      // thing instead: the registry ADMITTED the supplier-accounts tile onto
+      // this login's dashboard, which is exactly what "reachable" means here.
+      // 0 means the tile is gone or this role was not admitted; 1 means the tap
+      // target the route handler answers is on screen.
+      try {
+        var admitted = 0;
+        for (final sec in (payload is Map ? (payload['sections'] ?? []) : []) as List) {
+          for (final item in ((sec is Map ? sec['items'] : null) ?? []) as List) {
+            if (item is Map && item['route_key'] == 'supplier_accounts') admitted++;
+          }
+        }
+        RenderLog.write('c402_supplier_accounts_tile', admitted);
+      } catch (_) {}
     } catch (_) {
       // Leaves whatever was there; an empty menu simply draws no rows.
     }
@@ -303,8 +408,16 @@ class _HomeShellState extends State<HomeShell> {
       _checkAmISuper();
       _loadDeletionCount();
       _loadNavProfileMenu(); // CHANGE #325
-      _consumePendingDeepLink(); // CHANGE #325
     }
+    // CMD #412 — the deep link used to be consumed INSIDE the isAdmin branch
+    // above, so /admin/go/<key> was parked by main.dart and then never opened
+    // for anybody who is not an admin. That made every non-admin destination
+    // unreachable by link — shelf stock and the counter included — while
+    // main.dart's own comment says authorisation is the destination screen's
+    // job, not the shell's. It is consumed for everyone now; a route that is
+    // not on the self-gated list stays PARKED rather than being dropped, so an
+    // admin link still opens the moment the admin check resolves.
+    _consumePendingDeepLink();
     // CHANGE #298 — login, account switch and logout all reach the shell as an
     // auth rebuild, and all three mean the same thing to a device token.
     _syncPushIdentity();
@@ -564,17 +677,39 @@ class _HomeShellState extends State<HomeShell> {
   // 5=Suppliers, 6=Customers
   /// CHANGE #325 — a /admin/go/<route_key> URL, parked by main.dart's route
   /// resolver, opened once the shell (and therefore the route table) exists.
+  /// CMD #411 — does this account have a counter? One cheap call; the answer
+  /// is parked in a notifier that PosMenuTile listens to, so the entry appears
+  /// without the shell knowing anything about pharmacies.
+  void _loadPosEntry() {
+    PosEntry.load();
+    // CMD #412 — the same one cheap call for the shelf. Both answers are parked
+    // in notifiers their own tiles listen to, so the shell still knows nothing
+    // about pharmacies.
+    StockEntry.load();
+  }
+
   void _consumePendingDeepLink() {
     final route = PendingAdminNav.take();
     if (route == null || route.isEmpty) return;
+    if (!UserState.of(context).isAdmin && !HomeShell.selfGatedRoutes.contains(route)) {
+      PendingAdminNav.route = route; // not ours to open — leave it parked
+      return;                        // its seed stays parked with it
+    }
+    // CMD #421 — the subject is read ONLY on the branch that opens, so a link
+    // parked back above still has it when the admin check resolves a frame
+    // later. The URL is gone by then; this is the only copy.
+    final seed = PendingAdminNav.takeSeed();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       RenderLog.write('c325_deep_link_opened', route);
-      _handleAdminNav(route);
+      _handleAdminNav(route, seed);
     });
   }
 
-  void _handleAdminNav(String route) {
+  /// [seed] is the subject a route carries, when it has one — see
+  /// PendingAdminNav.seed. Optional because most routes are a whole
+  /// destination by themselves.
+  void _handleAdminNav(String route, [String? seed]) {
     if (!mounted) return;
     switch (route) {
       case 'home': _goHome(); break;
@@ -606,6 +741,21 @@ class _HomeShellState extends State<HomeShell> {
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const AdminBillPipelineScreen()));
         break;
+
+      // CHANGE #397 — two registry features share one screen: bulk editing and
+      // exports are the same admin acting on a SET of rows, so the tile that
+      // was tapped only decides which tab opens.
+      case 'bulk_actions':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const AdminBulkScreen()));
+        break;
+
+      case 'exports':
+        Navigator.push(
+            context,
+            MaterialPageRoute(
+                builder: (_) => const AdminBulkScreen(initialTab: 1)));
+        break;
       // CHANGE #227 — Scope audit (date + zone across order → delivered).
       case 'scope_audit':
         Navigator.push(context,
@@ -616,10 +766,157 @@ class _HomeShellState extends State<HomeShell> {
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const AdminOrderClosureScreen()));
         break;
+      // CHANGE #355 — trade price COVERAGE + the sellability policy. Sibling
+      // of pricing_backfill (#174), which is where a rate is entered; this is
+      // the measurement of how many products have one at all (feature_gaps
+      // #80). pricing_coverage_report() gates on get_my_role() itself.
+      case 'pricing':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const AdminPricingScreen()));
+        break;
       // CHANGE #320 — GST (input credit, monthly position, GSTR exports).
       case 'gst':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const AdminGstScreen()));
+        break;
+      // CMD #410 — the moderation desk. Nothing a pharmacy writes about a
+      // product is public until it is approved here, so the queue needs a way
+      // in from a phone: the feature_registry row alone is a tile with nowhere
+      // to go (that was #397's finding). review_moderation_queue() gates on
+      // get_my_role() and the screen renders its refusal, so there is no
+      // _amISuper test here — same story as wa_ops and notify_center.
+      case 'reviews':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const AdminReviewsScreen()));
+        break;
+      // CMD #421 — the two screens CHANGE #865 (#396) shipped. They were
+      // reachable from the dashboard tile, the palette and the payment panel,
+      // but not from the shell's route table, so /admin/go/customer_360/<id>
+      // and /admin/go/stock_on_hand — a push notification, a WhatsApp button,
+      // a pasted link — landed on a key the switch had never heard of and did
+      // nothing at all. Both are PUSHED rather than swapped into the tab
+      // table, the same call the dashboard makes, because customer_360 carries
+      // a subject and a tab index cannot hold one.
+      case 'customer_360':
+        {
+        // No id means no customer to show. The dashboard answers that by
+        // opening the palette to ask for one; the shell has no palette of its
+        // own, so it opens the customers list — the surface you would search
+        // from — instead of pushing a screen with nothing in it.
+        final id = (seed ?? '').trim();
+        if (id.isEmpty) {
+          setState(() { _index = 6; _cartOpen = false; });
+          break;
+        }
+        Navigator.push(
+            context,
+            MaterialPageRoute(
+                builder: (_) => AdminCustomer360Screen(customerId: id)));
+        break;
+        }
+      case 'stock_on_hand':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const AdminStockOnHandScreen()));
+        break;
+      // CMD #411 — the pharmacy counter (POS). Reached from the account menu
+      // via pos_entry(); this case also makes /admin/go/pos work. pos_home()
+      // gates on the caller's own pharmacy and the screen renders its refusal,
+      // so there is no role test here — same story as reviews and wa_ops.
+      case 'pos':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const PosScreen()));
+        break;
+      // CMD #412 — the pharmacy's shelf. Sibling of the counter: reached from
+      // the counter's own app bar and from the account tile via
+      // pharmacy_stock_entry(), and this case is what makes
+      // /admin/go/pharmacy_stock resolve. pharmacy_stock_home() gates on the
+      // caller's own pharmacy and the screen renders its refusal, so there is
+      // no role test here — same story as pos and reviews.
+      case 'pharmacy_stock':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const PharmacyStockScreen()));
+        break;
+      // CMD #429/#444 — handwritten sale sheets photographed at the counter.
+      // The proven entry is the counter's own app-bar button (CHANGE #916);
+      // this is the deep link the closing-time nudge points at, which could
+      // not land with #429 because this file was leased for the whole of it.
+      // Its registry tile stayed is_active=false until this case existed, so
+      // the tile was never a tap that did nothing.
+      case 'paper_sale':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const PaperSaleScreen()));
+        break;
+      // CMD #450 — the four money answers that had no screen: receivables by
+      // age (feature_gaps #23), payments waiting to be verified oldest-first
+      // (#18), money attached to no order (#19) and supplier bills that
+      // stalled after a successful scan (#20). admin_money_home() names the
+      // tabs, so a fifth one is an INSERT and never a deploy.
+      case 'money':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const AdminMoneyScreen()));
+        break;
+      // CMD #432 — the shop's UPI ID and its printable counter QR. Reached
+      // from the counter's own app bar (and from the payment chips when UPI is
+      // picked with no confirmed VPA); this case is what makes
+      // /admin/go/pos_upi resolve. pharmacy_upi_get() gates on the caller's own
+      // pharmacy and the screen renders its refusal, so there is no role test
+      // here — same story as pos and pharmacy_stock.
+      case 'pos_upi':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const PosUpiSetupScreen()));
+        break;
+      // CMD #416 shipped the GST pack behind an account tile only; this case
+      // is what makes /admin/go/pharmacy_gst resolve. pharmacy_gst_home()
+      // gates on the caller's own pharmacy and the screen renders its refusal,
+      // so there is no role test here — same story as pos and pharmacy_stock.
+      case 'pharmacy_gst':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const PharmacyGstScreen()));
+        break;
+      // CMD #430 shipped the audit behind the shelf app-bar icon only; this
+      // case is what makes /admin/go/pharmacy_audit resolve, and
+      // '/pharmacy/audit' in main.dart is the same screen at a plain URL.
+      // pharmacy_audit_home() gates on the caller's own shop and the screen
+      // prints its refusal, so there is no role test here — same story as pos,
+      // pharmacy_stock and pharmacy_gst.
+      case 'pharmacy_audit':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const PharmacyAuditScreen()));
+        break;
+      // CMD #427 — THE PRICE CHECK. Also reachable from the vault's app bar;
+      // this case is what gives it an address, so a monthly WhatsApp note or a
+      // push about a rate can point straight at /admin/go/price_check.
+      case 'price_check':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const PharmacyOverpayScreen()));
+        break;
+      // CMD #427 — THE DEMAND ENGINE, the operator side of the same aggregate.
+      // Admin-only by omission from HomeShell.selfGatedRoutes, and admin_demand_engine()
+      // checks is_admin() for itself on top of that.
+      case 'demand_engine':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const AdminDemandEngineScreen()));
+        break;
+      // CMD #423 — the BILL VAULT. Reached from the shelf's own app bar via
+      // pharmacy_vault_entry(), and this case is what gives it a real address:
+      // /admin/go/pharmacy_vault, so a WhatsApp button or a push about a bill
+      // waiting to be checked can point straight at it. pharmacy_vault_home()
+      // gates on the caller's own pharmacy and the screen renders its refusal,
+      // so there is no role test here — same story as pos and pharmacy_stock.
+      case 'pharmacy_vault':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const PharmacyVaultScreen()));
+        break;
+      // CMD #417 — refills, the WhatsApp storefront and the AI counter. Same
+      // story as the two above, and the reason this case exists at all: the
+      // dashboard tile alone resolves only when the dashboard is on screen, so
+      // /admin/go/refill (a push notification, a WhatsApp link, the nav
+      // registry) landed on the storefront home instead. refill_home() gates
+      // on the caller's own pharmacy and the screen renders its refusal, so
+      // there is no role test here.
+      case 'refill':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const PharmacyRefillScreen()));
         break;
       case 'mr': setState(() { _index = 7; _cartOpen = false; }); break;
       case 'companies': setState(() { _index = 8; _cartOpen = false; }); break;
@@ -687,6 +984,19 @@ class _HomeShellState extends State<HomeShell> {
           Navigator.push(context,
               MaterialPageRoute(builder: (_) => const AdminManageAdminsScreen()));
         }
+        break;
+      // CHANGE #394 — the audit trail and the roles editor. Neither is gated
+      // on _amISuper here: admin_audit_screen() answers on admin_can(
+      // 'admin.audit_log','read') and admin_roles_screen() on _is_super(),
+      // and each screen renders that refusal itself. The fence is the RPC's,
+      // not the router's — a Dart `if` is not an access control.
+      case 'audit_log':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const AdminAuditScreen()));
+        break;
+      case 'admin_roles':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const AdminRolesScreen()));
         break;
       case 'payment_upi':
         if (_amISuper) {
@@ -786,6 +1096,13 @@ class _HomeShellState extends State<HomeShell> {
       case 'cron_health':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const CronHealthScreen()));
+        break;
+      // CHANGE #402 — supplier bank/UPI approvals and the Hindi coverage
+      // report. Both RPCs gate on get_my_role() and the screen renders the
+      // backend's own refusal, the same story as the screens above.
+      case 'supplier_accounts':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const AdminSupplierAccountScreen()));
         break;
       // The identity row the profile dropdown fires.
       case 'profile':
@@ -1373,3747 +1690,3 @@ class _HomeShellState extends State<HomeShell> {
 }
 
 // ─────────────────────── Location header ───────────────────────
-
-class _LocationHeader extends StatelessWidget {
-  final bool isAdmin;
-  final VoidCallback onCart;
-  final VoidCallback onHome;
-  final VoidCallback onLogoTap;
-  final String logoTooltip;
-  final ValueChanged<String>? onAdminNav;
-  final bool isSuperAdmin;
-  final int deletionCount;
-  /// CHANGE #306 — unactioned unpaid orders, for the nav badge.
-  final int alertCount;
-  /// CHANGE #298 — the shell owns the bell's state so a foreground push can
-  /// refresh the badge that is currently mounted.
-  final GlobalKey<NotificationBellState>? bellKey;
-  const _LocationHeader({
-    required this.isAdmin,
-    required this.onCart,
-    required this.onHome,
-    required this.onLogoTap,
-    required this.logoTooltip,
-    this.onAdminNav,
-    this.isSuperAdmin = false,
-    this.deletionCount = 0,
-    this.alertCount = 0,
-    this.bellKey,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final cartItems = AppState.of(context).distinctItems;
-    // CHANGE #298 — the inbox belongs to a signed-in identity; there is nothing
-    // for it to count before one exists.
-    final signedIn = UserState.of(context).isAuthenticated;
-    return SafeArea(
-      bottom: false,
-      child: Container(
-        width: double.infinity,
-        constraints: const BoxConstraints(minHeight: 70),
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          border: Border(bottom: BorderSide(color: Brand.border)),
-        ),
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-        child: Row(
-          children: [
-            // LEFT: profile avatar
-            _MobileProfileAvatar(onAdminNav: onAdminNav, isSuperAdmin: isSuperAdmin, deletionCount: deletionCount, alertCount: alertCount),
-            // CENTER: logo — context-aware navigation
-            Expanded(
-              child: Center(
-                child: Tooltip(
-                  message: logoTooltip,
-                  child: MouseRegion(
-                    cursor: SystemMouseCursors.click,
-                    child: GestureDetector(
-                      onTap: onLogoTap,
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Image.asset('assets/images/medibo_logo.png', width: 28, height: 28),
-                          const SizedBox(width: 7),
-                          RichText(
-                            text: const TextSpan(
-                              children: [
-                                TextSpan(
-                                  text: 'medi',
-                                  style: TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.w700,
-                                    color: Color(0xFF1B5E20),
-                                    letterSpacing: -0.3,
-                                  ),
-                                ),
-                                TextSpan(
-                                  text: 'BO',
-                                  style: TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.w800,
-                                    color: Color(0xFF4CAF50),
-                                    letterSpacing: -0.3,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            // RIGHT: the inbox bell (every signed-in role), then the cart
-            // (customers only). CHANGE #298 — the bell is what makes an event
-            // readable later whichever channel delivered it.
-            if (signedIn) NotificationBell(key: bellKey),
-            if (!isAdmin) _MobileCartIcon(cartItems: cartItems, onCart: onCart),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────── Mobile profile avatar (left) ───────────────────────
-
-class _MobileProfileAvatar extends StatelessWidget {
-  final ValueChanged<String>? onAdminNav;
-  final bool isSuperAdmin;
-  final int deletionCount;
-  /// CHANGE #306 — unactioned unpaid orders, for the nav badge.
-  final int alertCount;
-  const _MobileProfileAvatar({this.onAdminNav, this.isSuperAdmin = false, this.deletionCount = 0, this.alertCount = 0});
-
-  @override
-  Widget build(BuildContext context) {
-    final auth = UserState.of(context);
-    // #571 — display_name comes from my_session(); no local profile row.
-    final sessionName = auth.displayName;
-    final initial =
-        sessionName.isNotEmpty ? sessionName[0].toUpperCase() : null;
-
-    final viewAs = ViewAsState.of(context);
-    final isCustomerViewAs = viewAs.isActive && viewAs.role == ViewAsRole.customer;
-
-    return PressEffect(
-      scale: 0.92,
-      child: GestureDetector(
-        onTap: () {
-          if (!auth.isAuthenticated) {
-            Navigator.push(context,
-                MaterialPageRoute(builder: (_) => const LoginScreen()));
-          } else if (isCustomerViewAs) {
-            // In customer ViewAs mode, show the impersonated customer's profile
-            Navigator.push(context,
-                MaterialPageRoute(builder: (_) => ProfileScreen(viewAsUserId: viewAs.identity!.userId)));
-          } else if (onAdminNav != null) {
-            _showAdminSheet(context, auth);
-          } else {
-            Navigator.push(context,
-                MaterialPageRoute(builder: (_) => const ProfileScreen()));
-          }
-        },
-        child: Container(
-          width: 40,
-          height: 40,
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [Color(0xFF1D9E75), Color(0xFF0F4C35)],
-            ),
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(
-                color: const Color(0xFF1D9E75).withValues(alpha: 0.35),
-                blurRadius: 8,
-                offset: const Offset(0, 3),
-              ),
-            ],
-          ),
-          child: Center(
-            child: initial != null
-                ? Text(
-                    initial,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800,
-                      color: Colors.white,
-                      height: 1,
-                    ),
-                  )
-                : const Icon(Icons.person_rounded,
-                    color: Colors.white, size: 20),
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _showAdminSheet(BuildContext context, AuthNotifier auth) {
-    final nav = onAdminNav!;
-    showResponsiveSheet(
-      context: context,
-      builder: (_) => Padding(
-        padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Center(
-              child: Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFD1D5DB),
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              auth.headerTitle,
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF111827)),
-            ),
-            const SizedBox(height: 4),
-            Text(c('home_shell.administrator'), style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
-            const SizedBox(height: 4),
-            Builder(builder: (_) {
-              RenderLog.write('c209_debug_banner_shown', 1);
-              return Text('super: $isSuperAdmin',
-                  style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)));
-            }),
-            const SizedBox(height: 16),
-            const Divider(),
-            Builder(builder: (_) { RenderLog.write('c473_profile_menu_built', 1); return const SizedBox.shrink(); }),
-            // CHANGE #325 — View Profile and Logout, and nothing else. The
-            // rows are nav_registry().profile_menu, and the backend admits
-            // only identity onto that surface, so a feature cannot come back
-            // here by anyone editing this file.
-            ValueListenableBuilder<List<Map<String, dynamic>>>(
-              valueListenable: NavProfileMenu.items,
-              builder: (_, items, __) =>
-                  AdminProfileMenuTiles(items: items, nav: nav),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────── Mobile cart icon (right) ────────────────────────────
-
-class _MobileCartIcon extends StatefulWidget {
-  final int cartItems;
-  final VoidCallback onCart;
-  const _MobileCartIcon({required this.cartItems, required this.onCart});
-
-  @override
-  State<_MobileCartIcon> createState() => _MobileCartIconState();
-}
-
-class _MobileCartIconState extends State<_MobileCartIcon>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _badgeCtrl;
-  late final Animation<double> _badgeScale;
-  int _prevCount = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _prevCount = widget.cartItems;
-    _badgeCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 400),
-    );
-    _badgeScale = TweenSequence<double>([
-      TweenSequenceItem(tween: Tween(begin: 1.0, end: 1.4), weight: 30),
-      TweenSequenceItem(tween: Tween(begin: 1.4, end: 0.85), weight: 30),
-      TweenSequenceItem(
-        tween: Tween(begin: 0.85, end: 1.0)
-            .chain(CurveTween(curve: Curves.elasticOut)),
-        weight: 40,
-      ),
-    ]).animate(_badgeCtrl);
-  }
-
-  @override
-  void didUpdateWidget(_MobileCartIcon old) {
-    super.didUpdateWidget(old);
-    if (widget.cartItems != _prevCount) {
-      _badgeCtrl.forward(from: 0);
-      _prevCount = widget.cartItems;
-    }
-  }
-
-  @override
-  void dispose() {
-    _badgeCtrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return PressEffect(
-      scale: 0.92,
-      child: GestureDetector(
-        onTap: widget.onCart,
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: Brand.mint,
-                shape: BoxShape.circle,
-                border: Border.all(color: const Color(0xFFBBF7D0), width: 1.5),
-                boxShadow: [
-                  BoxShadow(
-                    color: Brand.green.withValues(alpha: 0.18),
-                    blurRadius: 6,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
-              ),
-              child: const Icon(Icons.shopping_bag_outlined,
-                  color: Brand.green, size: 20),
-            ),
-            if (widget.cartItems > 0)
-              Positioned(
-                top: -2,
-                right: -2,
-                child: ScaleTransition(
-                  scale: _badgeScale,
-                  child: Container(
-                    width: 18,
-                    height: 18,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFDC2626),
-                      shape: BoxShape.circle,
-                      border: Border.all(color: Colors.white, width: 2),
-                    ),
-                    child: Center(
-                      child: Text(
-                        // CHANGE #559: badge string comes from cart_state().
-                        AppState.of(context).badge ?? '',
-                        style: const TextStyle(
-                          fontSize: 9,
-                          fontWeight: FontWeight.w800,
-                          color: Colors.white,
-                          height: 1,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────── Mobile search bar (pill style) ───────────────────────
-
-class _MobileSearchBar extends StatefulWidget {
-  final TextEditingController controller;
-  final bool isLoading;
-  final ValueChanged<String> onSearch;
-  final VoidCallback onScrollToResults;
-
-  const _MobileSearchBar({
-    required this.controller,
-    required this.isLoading,
-    required this.onSearch,
-    required this.onScrollToResults,
-  });
-
-  @override
-  State<_MobileSearchBar> createState() => _MobileSearchBarState();
-}
-
-class _MobileSearchBarState extends State<_MobileSearchBar> {
-  Timer? _debounce;
-  bool _hasText = false;
-
-  @override
-  void initState() {
-    super.initState();
-    widget.controller.addListener(_onControllerChange);
-    _hasText = widget.controller.text.isNotEmpty;
-  }
-
-  @override
-  void dispose() {
-    widget.controller.removeListener(_onControllerChange);
-    _debounce?.cancel();
-    super.dispose();
-  }
-
-  void _onControllerChange() {
-    final hasText = widget.controller.text.isNotEmpty;
-    if (hasText != _hasText) setState(() => _hasText = hasText);
-  }
-
-  void _onChanged(String v) {
-    _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 150), () {
-      widget.onSearch(v);
-    });
-  }
-
-  void _submitNow() {
-    _debounce?.cancel();
-    final text = widget.controller.text;
-    widget.onSearch(text);
-    if (text.trim().length >= 2) widget.onScrollToResults();
-    FocusManager.instance.primaryFocus?.unfocus();
-  }
-
-  void _clearSearch() {
-    _debounce?.cancel();
-    widget.controller.clear();
-    widget.onSearch('');
-    FocusManager.instance.primaryFocus?.unfocus();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    // CHANGE #274 — the search field sits INSIDE the coloured header band.
-    //
-    // A white field on a white strip under a white app bar is three tones of
-    // nothing, and it is why the top of the page read as unfinished. The band
-    // is Ds.c.brand — a backend design token — so recolouring the whole header
-    // is `ui_design_set()`, not a deploy.
-    return Container(
-      color: Ds.c.brand,
-      padding: EdgeInsets.fromLTRB(
-          Ds.space.x16, Ds.space.x12, Ds.space.x16, Ds.space.x12),
-      child: Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(Ds.r.button),
-        ),
-        child: Row(
-          children: [
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 14),
-              child: Icon(Icons.search, color: Color(0xFF9CA3AF), size: 20),
-            ),
-            Expanded(
-              child: TextField(
-                controller: widget.controller,
-                onChanged: _onChanged,
-                onSubmitted: (_) => _submitNow(),
-                textInputAction: TextInputAction.search,
-                autocorrect: false,
-                enableSuggestions: false,
-                keyboardType: TextInputType.text,
-                style: const TextStyle(fontSize: 14, color: Brand.ink),
-                decoration: InputDecoration(
-                  border: InputBorder.none,
-                  enabledBorder: InputBorder.none,
-                  focusedBorder: InputBorder.none,
-                  hintText: c('home_shell.search_for_medicines'),
-                  hintStyle: const TextStyle(color: Brand.inkMuted, fontSize: 14),
-                  isDense: true,
-                  contentPadding: const EdgeInsets.symmetric(vertical: 13),
-                  filled: false,
-                ),
-              ),
-            ),
-            if (widget.isLoading)
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 14),
-                child: SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: Brand.green,
-                  ),
-                ),
-              )
-            else if (_hasText)
-              IconButton(
-                onPressed: _clearSearch,
-                icon: const Icon(Icons.close,
-                    size: 18, color: Color(0xFF6B7280)),
-                visualDensity: VisualDensity.compact,
-                padding: EdgeInsets.zero,
-                constraints:
-                    const BoxConstraints(minWidth: 40, minHeight: 40),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────── Mobile category chips row ───────────────────────
-
-class _MobileCategoryChips extends StatelessWidget {
-  final CatalogMeta? meta;
-  final String selected;
-  final ValueChanged<String> onCategoryTap;
-
-  const _MobileCategoryChips({
-    required this.meta,
-    required this.selected,
-    required this.onCategoryTap,
-  });
-
-  /// The band's chip row. Tall enough for a 34px chip plus the band's own
-  /// bottom breathing room, so the rail below starts on the page ground.
-  static const double _rowH = 54;
-  static const double _chipH = 34;
-
-  @override
-  Widget build(BuildContext context) {
-    final m = meta;
-    if (m == null) {
-      // CHANGE #497: lightweight skeleton chips (not a spinner/blank area)
-      // while categories are loading for the first time on this device —
-      // repeat opens render instantly from cache and never hit this path.
-      return Container(
-        color: Ds.c.brand,
-        height: _rowH,
-        child: ListView(
-          scrollDirection: Axis.horizontal,
-          padding: EdgeInsets.fromLTRB(
-              Ds.space.x12, Ds.space.x4, Ds.space.x12, Ds.space.x12),
-          physics: const NeverScrollableScrollPhysics(),
-          children: List.generate(6, (i) {
-            final width = 56.0 + (i % 3) * 18;
-            return Padding(
-              padding: EdgeInsets.only(right: Ds.space.x8),
-              child: Container(
-                width: width,
-                height: _chipH,
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.18),
-                  borderRadius: BorderRadius.circular(Ds.r.chip),
-                ),
-              ),
-            );
-          }),
-        ),
-      );
-    }
-
-    // "All" first, then categories sorted by count desc
-    final cats = List<CategoryCount>.from(m.categories)
-      ..sort((a, b) => b.count.compareTo(a.count));
-
-    // CHANGE #274 — one shape, one colour, and only the SELECTED chip filled.
-    //
-    // Every chip used to wear its category's own tint, so the row was a
-    // rainbow of eight pastels and the selected chip had no way to stand out —
-    // it was just a ninth colour. Now every chip is the same white-on-brand
-    // outline and selection is the only thing that changes (filled white,
-    // brand text). The per-category tints still exist and still do their job
-    // where they mean something: the category TILES, where the colour
-    // identifies a class rather than competing with a selection state.
-    return Container(
-      color: Ds.c.brand,
-      height: _rowH,
-      child: ListView.builder(
-        scrollDirection: Axis.horizontal,
-        padding: EdgeInsets.fromLTRB(
-            Ds.space.x12, Ds.space.x4, Ds.space.x12, Ds.space.x12),
-        itemCount: cats.length + 1, // +1 for "All"
-        itemBuilder: (ctx, i) {
-          final isAll = i == 0;
-          final key = isAll ? 'All' : cats[i - 1].name;
-          final label = isAll ? 'All' : prettyCategory(cats[i - 1].name);
-          final icon = isAll ? Icons.grid_view_rounded : categoryStyle(key).icon;
-          final isSelected = selected == key;
-          final fg = isSelected ? Ds.c.brand : Colors.white;
-
-          return Padding(
-            padding: EdgeInsets.only(right: i < cats.length ? Ds.space.x8 : 0),
-            child: GestureDetector(
-              onTap: () => onCategoryTap(key),
-              child: Container(
-                height: _chipH,
-                padding: EdgeInsets.symmetric(horizontal: Ds.space.x12),
-                decoration: BoxDecoration(
-                  color: isSelected
-                      ? Colors.white
-                      : Colors.white.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(Ds.r.chip),
-                  border: Border.all(
-                    color: Colors.white
-                        .withValues(alpha: isSelected ? 1 : 0.35),
-                  ),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(icon, size: 14, color: fg),
-                    SizedBox(width: Ds.space.x4 + 2),
-                    Text(
-                      label,
-                      style: Ds.t.caption.copyWith(
-                        fontWeight: FontWeight.w600,
-                        color: fg,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-}
-
-// ─────────────────────── Cart panel ───────────────────────
-
-class CartPanel extends StatefulWidget {
-  final bool open;
-  final VoidCallback onClose;
-  final VoidCallback onOrderPlaced;
-  const CartPanel({
-    super.key,
-    required this.open,
-    required this.onClose,
-    required this.onOrderPlaced,
-  });
-
-  @override
-  State<CartPanel> createState() => _CartPanelState();
-}
-
-class _CartPanelState extends State<CartPanel>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _c = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 300),
-    reverseDuration: const Duration(milliseconds: 240),
-    value: widget.open ? 1 : 0,
-  );
-  late final Animation<double> _t = CurvedAnimation(
-    parent: _c,
-    curve: Curves.easeOutCubic,
-    reverseCurve: Curves.easeInCubic,
-  );
-
-  @override
-  void didUpdateWidget(CartPanel old) {
-    super.didUpdateWidget(old);
-    if (widget.open && !old.open) _c.forward();
-    if (!widget.open && old.open) _c.reverse();
-  }
-
-  @override
-  void dispose() {
-    _c.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final screenW = MediaQuery.sizeOf(context).width;
-    final panelW = screenW < 520 ? screenW : 420.0;
-
-    return AnimatedBuilder(
-      animation: _t,
-      builder: (context, _) {
-        final t = _t.value;
-        if (t == 0) return const SizedBox.shrink();
-        return Stack(
-          children: [
-            Positioned.fill(
-              child: GestureDetector(
-                onTap: widget.onClose,
-                child: ColoredBox(
-                  color: Colors.black.withValues(alpha: 0.45 * t),
-                ),
-              ),
-            ),
-            Positioned(
-              top: 0,
-              bottom: 0,
-              right: 0,
-              width: panelW,
-              child: Transform.translate(
-                offset: Offset(panelW * (1 - t), 0),
-                child: Material(
-                  elevation: 16,
-                  color: Colors.white,
-                  child: _CartPanelContent(
-                    width: panelW,
-                    onClose: widget.onClose,
-                    onOrderPlaced: widget.onOrderPlaced,
-                  ),
-                ),
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-}
-
-class _CartPanelContent extends StatefulWidget {
-  final double width;
-  final VoidCallback onClose;
-  final VoidCallback onOrderPlaced;
-  const _CartPanelContent({
-    required this.width,
-    required this.onClose,
-    required this.onOrderPlaced,
-  });
-
-  @override
-  State<_CartPanelContent> createState() => _CartPanelContentState();
-}
-
-class _CartPanelContentState extends State<_CartPanelContent> {
-  bool _searchActive = false;
-  final TextEditingController _searchCtrl = TextEditingController();
-  String _searchQuery = '';
-
-  final LayerLink _clearCartLink = LayerLink();
-  OverlayEntry? _clearCartOverlay;
-
-  @override
-  void dispose() {
-    _closeClearCartPopover();
-    _searchCtrl.dispose();
-    super.dispose();
-  }
-
-  void _toggleSearch() {
-    if (_searchActive) FocusManager.instance.primaryFocus?.unfocus();
-    setState(() {
-      _searchActive = !_searchActive;
-      if (!_searchActive) {
-        _searchCtrl.clear();
-        _searchQuery = '';
-      }
-    });
-  }
-
-  void _openClearCartPopover() {
-    _closeClearCartPopover();
-    final appState = AppState.of(context);
-    final entry = OverlayEntry(
-      builder: (_) => _ClearCartPopover(
-        link: _clearCartLink,
-        onDismissed: () { if (mounted) _closeClearCartPopover(); },
-        onClear: () { appState.clear(); },
-      ),
-    );
-    _clearCartOverlay = entry;
-    Overlay.of(context).insert(entry);
-  }
-
-  void _closeClearCartPopover() {
-    _clearCartOverlay?.remove();
-    _clearCartOverlay = null;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final cart = AppState.of(context);
-    final mq = MediaQuery.of(context);
-
-    return SafeArea(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // ── Cart header ──────────────────────────────────────────────
-          Container(
-            decoration: const BoxDecoration(
-              color: Colors.white,
-              border: Border(bottom: BorderSide(color: Color(0xFFEEF0F2))),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(4, 8, 8, 8),
-              child: Row(
-                children: [
-                  // Back arrow — always visible in both states
-                  IconButton(
-                    onPressed: widget.onClose,
-                    icon: const Icon(Icons.arrow_back_ios_new,
-                        size: 18, color: Color(0xFF111827)),
-                    tooltip: c('home_shell.close_cart'),
-                  ),
-                  // Animated area: full-width search field OR collapsed toolbar.
-                  // LayoutBuilder provides the exact available width so the
-                  // collapsed Row (which has Expanded children) lays out correctly
-                  // inside the AnimatedSwitcher's Stack layout.
-                  Expanded(
-                    child: LayoutBuilder(
-                      builder: (ctx, bc) => ClipRect(
-                        child: AnimatedSwitcher(
-                          duration: const Duration(milliseconds: 280),
-                          switchInCurve: Curves.easeInOut,
-                          switchOutCurve: Curves.easeInOut,
-                          layoutBuilder: (cur, prev) => Stack(
-                            alignment: Alignment.centerLeft,
-                            children: [...prev, if (cur != null) cur],
-                          ),
-                          transitionBuilder: (child, anim) {
-                            // Search field slides in from right + fades.
-                            if (child.key == const ValueKey('search')) {
-                              return SlideTransition(
-                                position: Tween<Offset>(
-                                  begin: const Offset(0.25, 0),
-                                  end: Offset.zero,
-                                ).animate(anim),
-                                child: FadeTransition(
-                                    opacity: anim, child: child),
-                              );
-                            }
-                            // Collapsed toolbar just fades.
-                            return FadeTransition(
-                                opacity: anim, child: child);
-                          },
-                          child: _searchActive
-                              // ── Search-open: back arrow + full-width field ──
-                              ? TextField(
-                                  key: const ValueKey('search'),
-                                  controller: _searchCtrl,
-                                  autofocus: true,
-                                  onChanged: (v) =>
-                                      setState(() => _searchQuery = v),
-                                  decoration: InputDecoration(
-                                    hintText: c('home_shell.search_in_cart'),
-                                    hintStyle: const TextStyle(
-                                        color: Color(0xFF9CA3AF),
-                                        fontSize: 13),
-                                    isDense: true,
-                                    contentPadding:
-                                        const EdgeInsets.symmetric(
-                                            horizontal: 8, vertical: 9),
-                                    filled: true,
-                                    fillColor: const Color(0xFFF9FAFB),
-                                    // Search icon lives inside field as prefix
-                                    prefixIcon: const Icon(Icons.search,
-                                        size: 18, color: Color(0xFF9CA3AF)),
-                                    prefixIconConstraints:
-                                        const BoxConstraints(
-                                            minWidth: 36, minHeight: 36),
-                                    border: OutlineInputBorder(
-                                      borderRadius:
-                                          BorderRadius.circular(8),
-                                      borderSide: const BorderSide(
-                                          color: Color(0xFFE5E7EB)),
-                                    ),
-                                    enabledBorder: OutlineInputBorder(
-                                      borderRadius:
-                                          BorderRadius.circular(8),
-                                      borderSide: const BorderSide(
-                                          color: Color(0xFFE5E7EB)),
-                                    ),
-                                    focusedBorder: OutlineInputBorder(
-                                      borderRadius:
-                                          BorderRadius.circular(8),
-                                      borderSide: const BorderSide(
-                                          color: Color(0xFF1B5E20),
-                                          width: 1.5),
-                                    ),
-                                    // Single X: clear text → close search
-                                    suffixIcon: IconButton(
-                                      icon: const Icon(Icons.close,
-                                          size: 16,
-                                          color: Color(0xFF9CA3AF)),
-                                      onPressed: () {
-                                        if (_searchQuery.isNotEmpty) {
-                                          setState(() {
-                                            _searchCtrl.clear();
-                                            _searchQuery = '';
-                                          });
-                                        } else {
-                                          _toggleSearch();
-                                        }
-                                      },
-                                    ),
-                                  ),
-                                )
-                              // ── Collapsed: title + Clear Cart + search btn ──
-                              : SizedBox(
-                                  key: const ValueKey('collapsed'),
-                                  width: bc.maxWidth,
-                                  child: Row(
-                                    children: [
-                                      const SizedBox(width: 4),
-                                      Expanded(
-                                        child: Text(
-                                          // CHANGE #559: header string comes
-                                          // from cart_state(), never Dart.
-                                          cart.header ?? '',
-                                          style: const TextStyle(
-                                            fontSize: 16,
-                                            fontWeight: FontWeight.w600,
-                                            color: Color(0xFF1E293B),
-                                          ),
-                                          overflow: TextOverflow.ellipsis,
-                                          maxLines: 1,
-                                        ),
-                                      ),
-                                      CompositedTransformTarget(
-                                        link: _clearCartLink,
-                                        child: GestureDetector(
-                                          onTap: _openClearCartPopover,
-                                          child: Container(
-                                            padding: const EdgeInsets.symmetric(
-                                                horizontal: 10, vertical: 7),
-                                            decoration: BoxDecoration(
-                                              borderRadius:
-                                                  BorderRadius.circular(10),
-                                              border: Border.all(
-                                                  color: const Color(
-                                                      0xFFDC2626)),
-                                            ),
-                                            child: Row(
-                                              mainAxisSize: MainAxisSize.min,
-                                              children: [
-                                                const Icon(
-                                                  Icons.remove_shopping_cart,
-                                                  size: 13,
-                                                  color: Color(0xFFDC2626),
-                                                ),
-                                                const SizedBox(width: 5),
-                                                Text(
-                                                  c('home_shell.clear_cart'),
-                                                  style: const TextStyle(
-                                                    fontSize: 11,
-                                                    fontWeight:
-                                                        FontWeight.w600,
-                                                    color: Color(0xFFDC2626),
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      GestureDetector(
-                                        onTap: _toggleSearch,
-                                        child: Container(
-                                          width: 34,
-                                          height: 34,
-                                          decoration: BoxDecoration(
-                                            shape: BoxShape.circle,
-                                            border: Border.all(
-                                                color: const Color(
-                                                    0xFFE5E7EB)),
-                                          ),
-                                          child: const Icon(Icons.search,
-                                              size: 17,
-                                              color: Color(0xFF374151)),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const Divider(height: 1),
-          Expanded(
-            child: MediaQuery(
-              data: mq.copyWith(size: Size(widget.width, mq.size.height)),
-              child: CartScreen(
-                onOrderPlaced: widget.onOrderPlaced,
-                externalSearchQuery: _searchActive ? _searchQuery : null,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ─── Clear-cart popover ───────────────────────────────────────────────────────
-
-class _ClearCartPopover extends StatefulWidget {
-  final LayerLink link;
-  final VoidCallback onDismissed;
-  final VoidCallback onClear;
-
-  const _ClearCartPopover({
-    required this.link,
-    required this.onDismissed,
-    required this.onClear,
-  });
-
-  @override
-  State<_ClearCartPopover> createState() => _ClearCartPopoverState();
-}
-
-class _ClearCartPopoverState extends State<_ClearCartPopover>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _ctrl;
-  late final Animation<double> _scale;
-  late final Animation<double> _fade;
-  bool _dismissing = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 200),
-    );
-    _scale = CurvedAnimation(parent: _ctrl, curve: Curves.easeOut);
-    _fade = _ctrl;
-    _ctrl.forward();
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  Future<void> _dismiss() async {
-    if (_dismissing) return;
-    _dismissing = true;
-    await _ctrl.animateTo(0,
-        duration: const Duration(milliseconds: 180), curve: Curves.easeIn);
-    widget.onDismissed();
-  }
-
-  Future<void> _handleClearAll() async {
-    if (_dismissing) return;
-    _dismissing = true;
-    widget.onClear(); // clear immediately, synchronously
-    await _ctrl.animateTo(0,
-        duration: const Duration(milliseconds: 180), curve: Curves.easeIn);
-    widget.onDismissed();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Stack(
-      children: [
-        // Tap-outside barrier
-        Positioned.fill(
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: _dismiss,
-            child: const SizedBox.expand(),
-          ),
-        ),
-        // Floating popover anchored to the Clear Cart button
-        CompositedTransformFollower(
-          link: widget.link,
-          targetAnchor: Alignment.bottomRight,
-          followerAnchor: Alignment.topRight,
-          offset: const Offset(0, 6),
-          showWhenUnlinked: false,
-          child: ScaleTransition(
-            scale: _scale,
-            alignment: Alignment.topRight,
-            child: FadeTransition(
-              opacity: _fade,
-              child: Material(
-                color: Colors.transparent,
-                elevation: 0,
-                child: Container(
-                  width: 272,
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(14),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.12),
-                        blurRadius: 20,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
-                  ),
-                  child: _ConfirmContent(
-                    onCancel: _dismiss,
-                    onClearAll: _handleClearAll,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _ConfirmContent extends StatelessWidget {
-  final VoidCallback onCancel;
-  final VoidCallback onClearAll;
-  const _ConfirmContent(
-      {super.key, required this.onCancel, required this.onClearAll});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          c('home_shell.this_will_clear_all_items'),
-          maxLines: 1,
-          softWrap: false,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            fontSize: 13,
-            color: Color(0xFF6B7280),
-          ),
-        ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(
-              child: FilledButton(
-                onPressed: onCancel,
-                style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFFDCFCE7),
-                  foregroundColor: const Color(0xFF15803D),
-                  minimumSize: const Size(0, 44),
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10)),
-                  elevation: 0,
-                  shadowColor: Colors.transparent,
-                ),
-                child: Text(c('home_shell.cancel'),
-                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: FilledButton(
-                onPressed: onClearAll,
-                style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFFDC2626),
-                  foregroundColor: Colors.white,
-                  minimumSize: const Size(0, 44),
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10)),
-                ),
-                child: Text(c('home_shell.clear_all'),
-                    style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600)),
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-}
-
-// ─────────────────────── Login panel (web desktop) ───────────────────────
-
-class LoginPanel extends StatefulWidget {
-  final bool open;
-  final VoidCallback onClose;
-  const LoginPanel({super.key, required this.open, required this.onClose});
-
-  @override
-  State<LoginPanel> createState() => _LoginPanelState();
-}
-
-class _LoginPanelState extends State<LoginPanel>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _c = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 300),
-    reverseDuration: const Duration(milliseconds: 240),
-    value: widget.open ? 1 : 0,
-  );
-  late final Animation<double> _t = CurvedAnimation(
-    parent: _c,
-    curve: Curves.easeOutCubic,
-    reverseCurve: Curves.easeInCubic,
-  );
-
-  @override
-  void didUpdateWidget(LoginPanel old) {
-    super.didUpdateWidget(old);
-    if (widget.open && !old.open) _c.forward();
-    if (!widget.open && old.open) _c.reverse();
-  }
-
-  @override
-  void dispose() {
-    _c.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final screenW = MediaQuery.sizeOf(context).width;
-    final panelW = screenW < 520 ? screenW : 420.0;
-
-    return AnimatedBuilder(
-      animation: _t,
-      builder: (context, _) {
-        final t = _t.value;
-        if (t == 0) return const SizedBox.shrink();
-        return Stack(
-          children: [
-            Positioned.fill(
-              child: GestureDetector(
-                onTap: widget.onClose,
-                child: ColoredBox(
-                  color: Colors.black.withValues(alpha: 0.45 * t),
-                ),
-              ),
-            ),
-            Positioned(
-              top: 0,
-              bottom: 0,
-              right: 0,
-              width: panelW,
-              child: Transform.translate(
-                offset: Offset(panelW * (1 - t), 0),
-                child: Material(
-                  elevation: 16,
-                  color: Colors.white,
-                  // New mobile-style WhatsApp/Google login, hosted in the
-                  // right-side panel. The ✕ overlays the top-right; the scrim
-                  // behind the panel also closes on tap.
-                  child: Stack(
-                    children: [
-                      Positioned.fill(
-                        child: LoginPanelView(onClose: widget.onClose),
-                      ),
-                      Positioned(
-                        top: 6,
-                        right: 6,
-                        child: IconButton(
-                          icon: const Icon(Icons.close, size: 22),
-                          color: const Color(0xFF6B7280),
-                          onPressed: widget.onClose,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-}
-
-class _LoginPanelContent extends StatefulWidget {
-  final VoidCallback onClose;
-  const _LoginPanelContent({required this.onClose});
-
-  @override
-  State<_LoginPanelContent> createState() => _LoginPanelContentState();
-}
-
-// Reset flow steps
-enum _ResetStep { none, otpSent, newPassword }
-
-class _LoginPanelContentState extends State<_LoginPanelContent> {
-  // ── Normal login ────────────────────────────────────────────────────────────
-  final _emailCtrl = TextEditingController();
-  final _passCtrl  = TextEditingController();
-  bool _passVisible  = false;
-  // CHANGE #311: _busy replaces _loading. onPressed is NEVER null;
-  // _busy only guards re-entry inside the handler.
-  bool _busy         = false;
-  String? _error;
-  bool _emailEmpty   = true;
-  bool _showForgot   = false;   // show "Forgot password?" link after invalid creds
-
-  // ── Reset flow ──────────────────────────────────────────────────────────────
-  _ResetStep _resetStep = _ResetStep.none;
-  final _otpCtrl       = TextEditingController();
-  final _newPassCtrl   = TextEditingController();
-  final _confirmCtrl   = TextEditingController();
-  bool _newPassVisible = false;
-  bool _confPassVisible = false;
-  String? _resetError;
-  bool _resetLoading   = false;
-
-  StreamSubscription<AuthState>? _authSub;
-
-  static const _green = Color(0xFF1B5E20);
-
-  @override
-  void initState() {
-    super.initState();
-    _emailCtrl.addListener(_onEmailChanged);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      if (Supabase.instance.client.auth.currentUser != null) {
-        widget.onClose();
-      }
-    });
-    _authSub = Supabase.instance.client.auth.onAuthStateChange.listen((s) {
-      // After _setNewPassword re-signs in, guard against closing before explicit onClose
-      if (s.event == AuthChangeEvent.signedIn && mounted && _resetStep == _ResetStep.none) {
-        widget.onClose();
-      }
-    });
-  }
-
-  void _onEmailChanged() {
-    final empty = _emailCtrl.text.trim().isEmpty;
-    if (empty != _emailEmpty) setState(() { _emailEmpty = empty; _showForgot = false; _error = null; });
-  }
-
-  @override
-  void dispose() {
-    _emailCtrl.removeListener(_onEmailChanged);
-    _emailCtrl.dispose();
-    _passCtrl.dispose();
-    _otpCtrl.dispose();
-    _newPassCtrl.dispose();
-    _confirmCtrl.dispose();
-    _authSub?.cancel();
-    super.dispose();
-  }
-
-  // ── Normal login actions ────────────────────────────────────────────────────
-
-  // CHANGE #311: c311_tap_fired is the ONLY proof of a real tap.
-  // It MUST be the first line. onPressed points here and is NEVER null.
-  Future<void> _onContinueTap() async {
-    try { RenderLog.write('c311_tap_fired', '1'); } catch (_) {} // first line — tap proof
-    if (_busy) return; // re-entry guard inside handler; does NOT disable button
-    if (_emailEmpty) {
-      await _googleSignIn();
-    } else {
-      await _passwordSignIn();
-    }
-  }
-
-  Future<void> _googleSignIn() async {
-    setState(() { _busy = true; _error = null; });
-    try {
-      try { RenderLog.write('c311_auth_start', 'google'); } catch (_) {}
-      await UserState.read(context).signInWithGoogle();
-      try { RenderLog.write('c311_auth_ok', 'google'); } catch (_) {}
-      if (mounted) widget.onClose();
-    } catch (e) {
-      final msg = e.toString();
-      try { RenderLog.write('auth55_login_error', msg.length > 120 ? msg.substring(0, 120) : msg); } catch (_) {}
-      // CHANGE #311: cancel/dismiss are noise — suppress UI error, do NOT block retry
-      final isCancel = msg.contains('cancelled') || msg.contains('dismissed') ||
-          msg.contains('overlay-timeout');
-      if (!isCancel) {
-        try { RenderLog.write('c311_auth_err', msg.length > 80 ? msg.substring(0, 80) : msg); } catch (_) {}
-      }
-      final display = isCancel ? null : (msg.length > 120 ? '${msg.substring(0, 120)}…' : msg);
-      if (mounted) setState(() => _error = display ?? _error);
-    } finally {
-      // ALWAYS resets — button can never be stranded dead
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Future<void> _passwordSignIn() async {
-    final email = _emailCtrl.text.trim();
-    final pass  = _passCtrl.text;
-    if (pass.isEmpty) { setState(() => _error = 'Enter your password.'); return; }
-    setState(() { _busy = true; _error = null; _showForgot = false; });
-    try {
-      try { RenderLog.write('c311_auth_start', 'password'); } catch (_) {}
-      await Supabase.instance.client.auth.signInWithPassword(email: email, password: pass);
-      try { RenderLog.write('c311_auth_ok', 'password'); } catch (_) {}
-    } on AuthException catch (e) {
-      if (!mounted) return;
-      final isInvalid = e.statusCode == '400' ||
-          e.message.toLowerCase().contains('invalid') ||
-          e.message.toLowerCase().contains('credentials') ||
-          e.message.toLowerCase().contains('wrong');
-      if (mounted) setState(() { _error = 'Invalid credentials'; _showForgot = isInvalid; });
-      try { RenderLog.write('c311_auth_err', 'invalid_creds'); } catch (_) {}
-    } catch (e) {
-      if (mounted) setState(() => _error = 'Sign-in failed. Check your credentials.');
-      try { RenderLog.write('c311_auth_err', e.toString().length > 80 ? e.toString().substring(0, 80) : e.toString()); } catch (_) {}
-    } finally {
-      // ALWAYS resets — button can never be stranded dead
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  // ── Forgot-password / reset flow ────────────────────────────────────────────
-
-  Future<void> _startReset() async {
-    final email = _emailCtrl.text.trim();
-    setState(() { _resetLoading = true; _resetError = null; });
-    try {
-      final exists = await Supabase.instance.client
-          .rpc('check_email_registered', params: {'p_email': email}) as bool;
-      if (!exists) {
-        if (mounted) setState(() { _resetError = 'No account found for this email.'; _resetLoading = false; });
-        return;
-      }
-      await Supabase.instance.client.auth.resetPasswordForEmail(
-        email,
-        redirectTo: 'https://medibo.in',
-      );
-      if (mounted) setState(() { _resetStep = _ResetStep.otpSent; _resetLoading = false; _otpCtrl.clear(); });
-    } on AuthException catch (e) {
-      if (mounted) setState(() { _resetError = e.message; _resetLoading = false; });
-    } catch (_) {
-      if (mounted) setState(() { _resetError = 'Could not send code. Try again.'; _resetLoading = false; });
-    }
-  }
-
-  Future<void> _verifyOtp() async {
-    final email = _emailCtrl.text.trim();
-    final otp   = _otpCtrl.text.trim();
-    if (otp.length < 6) { setState(() => _resetError = 'Enter the 6-digit code.'); return; }
-    setState(() { _resetLoading = true; _resetError = null; });
-    try {
-      // OtpType.recovery fires passwordRecovery (not signedIn) so _AppRoot stays stable
-      await Supabase.instance.client.auth.verifyOTP(
-        email: email,
-        token: otp,
-        type: OtpType.recovery,
-      );
-      if (mounted) setState(() { _resetStep = _ResetStep.newPassword; _resetLoading = false; _newPassCtrl.clear(); _confirmCtrl.clear(); });
-    } on AuthException catch (e) {
-      if (mounted) setState(() { _resetError = e.message; _resetLoading = false; });
-    } catch (_) {
-      if (mounted) setState(() { _resetError = 'Invalid or expired code.'; _resetLoading = false; });
-    }
-  }
-
-  Future<void> _setNewPassword() async {
-    final email   = _emailCtrl.text.trim();
-    final newPass = _newPassCtrl.text;
-    final confirm = _confirmCtrl.text;
-    if (newPass.length < 6) { setState(() => _resetError = 'Password must be at least 6 characters.'); return; }
-    if (newPass != confirm)  { setState(() => _resetError = 'Passwords do not match.'); return; }
-    setState(() { _resetLoading = true; _resetError = null; });
-    try {
-      await Supabase.instance.client.auth.updateUser(UserAttributes(password: newPass));
-      // Re-sign in with new password so AuthNotifier fires signedIn → routes admin/home correctly
-      await Supabase.instance.client.auth.signInWithPassword(email: email, password: newPass);
-      if (mounted) widget.onClose();
-    } on AuthException catch (e) {
-      if (mounted) setState(() { _resetError = e.message; _resetLoading = false; });
-    } catch (_) {
-      if (mounted) setState(() { _resetError = 'Could not update password. Try again.'; _resetLoading = false; });
-    }
-  }
-
-  void _backToLogin() => setState(() {
-    _resetStep  = _ResetStep.none;
-    _resetError = null;
-    _showForgot = false;
-    _error      = null;
-    _passCtrl.clear();
-    _otpCtrl.clear();
-    _newPassCtrl.clear();
-    _confirmCtrl.clear();
-  });
-
-  // ── Shared field decoration ─────────────────────────────────────────────────
-
-  InputDecoration _fieldDec(String hint, {Widget? suffix}) => InputDecoration(
-    hintText: hint,
-    hintStyle: const TextStyle(color: Color(0xFFD1D5DB)),
-    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10),
-        borderSide: const BorderSide(color: Color(0xFFD1D5DB))),
-    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10),
-        borderSide: const BorderSide(color: Color(0xFFD1D5DB))),
-    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10),
-        borderSide: const BorderSide(color: _green, width: 1.5)),
-    suffixIcon: suffix,
-  );
-
-  // CHANGE #311: onPressed is NON-NULL — FilledButton never enters disabled state.
-  // Used ONLY for the Continue button so it is always hit-testable.
-  Widget _greenButton({ required VoidCallback onPressed, required Widget child }) => SizedBox(
-    height: 54,
-    child: FilledButton(
-      onPressed: onPressed,
-      style: FilledButton.styleFrom(
-        backgroundColor: _green,
-        foregroundColor: Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        elevation: 0,
-      ),
-      child: child,
-    ),
-  );
-
-  // Nullable variant for password-reset flow buttons (OTP verify, set-password).
-  // These legitimately grey-out while async is in flight, unlike the main Continue button.
-  Widget _greenButtonNullable({ required VoidCallback? onPressed, required Widget child }) => SizedBox(
-    height: 54,
-    child: FilledButton(
-      onPressed: onPressed,
-      style: FilledButton.styleFrom(
-        backgroundColor: _green,
-        foregroundColor: Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        elevation: 0,
-      ),
-      child: child,
-    ),
-  );
-
-  Widget _spinner() => const SizedBox(
-    width: 22, height: 22,
-    child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5),
-  );
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 8, 0),
-          child: Row(children: [
-            if (_resetStep != _ResetStep.none)
-              IconButton(
-                icon: const Icon(Icons.arrow_back_ios_new, size: 18),
-                color: const Color(0xFF6B7280),
-                onPressed: _backToLogin,
-                tooltip: c('home_shell.back'),
-              ),
-            const Spacer(),
-            IconButton(
-              icon: const Icon(Icons.close, size: 22),
-              color: const Color(0xFF6B7280),
-              onPressed: widget.onClose,
-              tooltip: c('home_shell.close'),
-            ),
-          ]),
-        ),
-        Expanded(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 8),
-            child: switch (_resetStep) {
-              _ResetStep.none        => _buildLogin(),
-              _ResetStep.otpSent     => _buildOtpStep(),
-              _ResetStep.newPassword => _buildNewPasswordStep(),
-            },
-          ),
-        ),
-      ],
-    );
-  }
-
-  // ── Step 0: Normal login ────────────────────────────────────────────────────
-
-  Widget _buildLogin() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const Center(child: _LoginPanelLogo()),
-        const SizedBox(height: 28),
-        Text(c('home_shell.welcome_to_medibo'), textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w800,
-                color: Color(0xFF111827), letterSpacing: -0.5)),
-        const SizedBox(height: 6),
-        Text(c('home_shell.b2b_pharmacy_platform'), textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 15, color: Color(0xFF6B7280))),
-        const SizedBox(height: 40),
-
-        TextField(
-          controller: _emailCtrl,
-          keyboardType: TextInputType.emailAddress,
-          textInputAction: TextInputAction.next,
-          style: const TextStyle(fontSize: 15),
-          decoration: _fieldDec('Email'),
-        ),
-        const SizedBox(height: 10),
-        TextField(
-          controller: _passCtrl,
-          obscureText: !_passVisible,
-          textInputAction: TextInputAction.done,
-          onSubmitted: (_) => _onContinueTap(),
-          style: const TextStyle(fontSize: 15),
-          decoration: _fieldDec('Password',
-            suffix: IconButton(
-              icon: Icon(_passVisible ? Icons.visibility_off_outlined : Icons.visibility_outlined,
-                  size: 18, color: const Color(0xFF9CA3AF)),
-              onPressed: () => setState(() => _passVisible = !_passVisible),
-            ),
-          ),
-        ),
-
-        if (_error != null) ...[
-          const SizedBox(height: 10),
-          Text(_error!, textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 12, color: Color(0xFFDC2626))),
-        ],
-        if (_showForgot) ...[
-          const SizedBox(height: 6),
-          Center(
-            child: GestureDetector(
-              onTap: _resetLoading ? null : _startReset,
-              child: _resetLoading
-                  ? const SizedBox(width: 14, height: 14,
-                      child: CircularProgressIndicator(color: _green, strokeWidth: 2))
-                  : Text(c('home_shell.forgot_password'),
-                      style: const TextStyle(fontSize: 13, color: _green,
-                          fontWeight: FontWeight.w600, decoration: TextDecoration.underline)),
-            ),
-          ),
-          if (_resetError != null) ...[
-            const SizedBox(height: 6),
-            Text(_resetError!, textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 12, color: Color(0xFFDC2626))),
-          ],
-        ],
-
-        const SizedBox(height: 16),
-        // CHANGE #311: onPressed is _onContinueTap — NEVER null.
-        // _busy swaps child (spinner vs text) but never disables the button.
-        _greenButton(
-          onPressed: _onContinueTap,
-          child: _busy
-              ? _spinner()
-              : Text(c('home_shell.continue'),
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-        ),
-
-        const SizedBox(height: 40),
-        Text(c('home_shell.by_continuing_you_agree_to_our_terms_privacy_policy'),
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF), height: 1.5)),
-      ],
-    );
-  }
-
-  // ── Step 1: OTP entry ───────────────────────────────────────────────────────
-
-  Widget _buildOtpStep() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const Center(child: _LoginPanelLogo()),
-        const SizedBox(height: 28),
-        Text(c('home_shell.check_your_email'), textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800,
-                color: Color(0xFF111827), letterSpacing: -0.5)),
-        const SizedBox(height: 8),
-        RichText(
-          textAlign: TextAlign.center,
-          text: TextSpan(
-            style: const TextStyle(fontSize: 14, color: Color(0xFF6B7280), height: 1.5),
-            children: [
-              const TextSpan(text: 'We sent a 6-digit code to '),
-              TextSpan(text: _emailCtrl.text.trim(),
-                  style: const TextStyle(fontWeight: FontWeight.w700, color: Color(0xFF111827))),
-            ],
-          ),
-        ),
-        const SizedBox(height: 36),
-
-        TextField(
-          controller: _otpCtrl,
-          keyboardType: TextInputType.number,
-          textInputAction: TextInputAction.done,
-          onSubmitted: (_) => _resetLoading ? null : _verifyOtp(),
-          style: const TextStyle(fontSize: 22, letterSpacing: 8, fontWeight: FontWeight.w700),
-          textAlign: TextAlign.center,
-          maxLength: 6,
-          decoration: _fieldDec('6-digit code').copyWith(counterText: ''),
-        ),
-
-        if (_resetError != null) ...[
-          const SizedBox(height: 8),
-          Text(_resetError!, textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 12, color: Color(0xFFDC2626))),
-        ],
-        const SizedBox(height: 16),
-
-        _greenButtonNullable(
-          onPressed: _resetLoading ? null : _verifyOtp,
-          child: _resetLoading ? _spinner() : Text(c('home_shell.verify_code'),
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-        ),
-        const SizedBox(height: 16),
-        Center(
-          child: GestureDetector(
-            onTap: _resetLoading ? null : () {
-              setState(() { _resetStep = _ResetStep.none; _resetError = null; _showForgot = true; });
-            },
-            child: Text(c('home_shell.resend_code_or_use_different_email'),
-                style: const TextStyle(fontSize: 13, color: _green,
-                    fontWeight: FontWeight.w500, decoration: TextDecoration.underline)),
-          ),
-        ),
-      ],
-    );
-  }
-
-  // ── Step 2: New password ────────────────────────────────────────────────────
-
-  Widget _buildNewPasswordStep() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const Center(child: _LoginPanelLogo()),
-        const SizedBox(height: 28),
-        Text(c('home_shell.set_new_password'), textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800,
-                color: Color(0xFF111827), letterSpacing: -0.5)),
-        const SizedBox(height: 8),
-        Text(c('home_shell.choose_a_strong_password_for_your_account'),
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 14, color: Color(0xFF6B7280))),
-        const SizedBox(height: 36),
-
-        TextField(
-          controller: _newPassCtrl,
-          obscureText: !_newPassVisible,
-          textInputAction: TextInputAction.next,
-          style: const TextStyle(fontSize: 15),
-          decoration: _fieldDec('New password',
-            suffix: IconButton(
-              icon: Icon(_newPassVisible ? Icons.visibility_off_outlined : Icons.visibility_outlined,
-                  size: 18, color: const Color(0xFF9CA3AF)),
-              onPressed: () => setState(() => _newPassVisible = !_newPassVisible),
-            ),
-          ),
-        ),
-        const SizedBox(height: 10),
-        TextField(
-          controller: _confirmCtrl,
-          obscureText: !_confPassVisible,
-          textInputAction: TextInputAction.done,
-          onSubmitted: (_) => _resetLoading ? null : _setNewPassword(),
-          style: const TextStyle(fontSize: 15),
-          decoration: _fieldDec('Confirm password',
-            suffix: IconButton(
-              icon: Icon(_confPassVisible ? Icons.visibility_off_outlined : Icons.visibility_outlined,
-                  size: 18, color: const Color(0xFF9CA3AF)),
-              onPressed: () => setState(() => _confPassVisible = !_confPassVisible),
-            ),
-          ),
-        ),
-
-        if (_resetError != null) ...[
-          const SizedBox(height: 10),
-          Text(_resetError!, textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 12, color: Color(0xFFDC2626))),
-        ],
-        const SizedBox(height: 16),
-
-        _greenButtonNullable(
-          onPressed: _resetLoading ? null : _setNewPassword,
-          child: _resetLoading ? _spinner() : Text(c('home_shell.set_password'),
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-        ),
-      ],
-    );
-  }
-}
-
-class _LoginPanelLogo extends StatelessWidget {
-  const _LoginPanelLogo();
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Image.asset('assets/images/medibo_logo.png', width: 48, height: 48),
-        const SizedBox(width: 10),
-        RichText(
-          text: const TextSpan(
-            children: [
-              TextSpan(
-                text: 'medi',
-                style: TextStyle(
-                  fontSize: 30,
-                  fontWeight: FontWeight.w700,
-                  color: Color(0xFF1B5E20),
-                  letterSpacing: -0.3,
-                ),
-              ),
-              TextSpan(
-                text: 'BO',
-                style: TextStyle(
-                  fontSize: 30,
-                  fontWeight: FontWeight.w800,
-                  color: Color(0xFF4CAF50),
-                  letterSpacing: -0.3,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _LoginPanelGoogleIcon extends StatelessWidget {
-  const _LoginPanelGoogleIcon();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 20,
-      height: 20,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: const Center(
-        child: Text(
-          'G',
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w800,
-            color: Color(0xFF4285F4),
-            height: 1,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────── Mobile bottom bar ───────────────────────
-
-class _MobileBottomBar extends StatelessWidget {
-  final int index;
-  final bool cartOpen;
-  final VoidCallback onCartTap;
-  final ValueChanged<int> onNavTap;
-
-  const _MobileBottomBar({
-    required this.index,
-    required this.cartOpen,
-    required this.onCartTap,
-    required this.onNavTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final cart = AppState.of(context);
-    final bottomNavIndex = index == 1 ? 2 : index == 2 ? 3 : 0;
-    return BottomNavigationBar(
-      currentIndex: bottomNavIndex,
-      type: BottomNavigationBarType.fixed,
-      selectedItemColor: Brand.green,
-      unselectedItemColor: Brand.inkMuted,
-      selectedFontSize: 10,
-      unselectedFontSize: 10,
-      elevation: 8,
-      onTap: onNavTap,
-      items: [
-        BottomNavigationBarItem(
-          icon: const Icon(Icons.home_outlined),
-          activeIcon: const Icon(Icons.home),
-          label: c('home_shell.home'),
-        ),
-        BottomNavigationBarItem(
-          icon: const Icon(Icons.grid_view_outlined),
-          activeIcon: const Icon(Icons.grid_view),
-          label: c('home_shell.catalogue'),
-        ),
-        BottomNavigationBarItem(
-          icon: Badge(
-            isLabelVisible: cart.orders.isNotEmpty,
-            label: Text('${cart.orders.length}'),
-            child: const Icon(Icons.receipt_long_outlined),
-          ),
-          activeIcon: Badge(
-            isLabelVisible: cart.orders.isNotEmpty,
-            label: Text('${cart.orders.length}'),
-            child: const Icon(Icons.receipt_long),
-          ),
-          label: c('home_shell.orders'),
-        ),
-        BottomNavigationBarItem(
-          icon: const Icon(Icons.upload_file_outlined),
-          activeIcon: const Icon(Icons.upload_file),
-          label: c('home_shell.bulk'),
-        ),
-      ],
-    );
-  }
-}
-
-// ─────────────────────── Sticky cart bar (mobile) ───────────────────────
-
-/// Blinkit-style dark-navy bar above the bottom nav on mobile.
-/// Slides up on first appearance; cart chip pulses when item count changes.
-/// Progress tiers: <₹999 free delivery (blue), ₹999–₹2999 3% (amber),
-/// ₹2999–₹6999 5% (amber), ₹6999+ max unlocked (green).
-class _StickyCartBar extends StatefulWidget {
-  final VoidCallback onTap;
-  const _StickyCartBar({required this.onTap});
-
-  @override
-  State<_StickyCartBar> createState() => _StickyCartBarState();
-}
-
-class _StickyCartBarState extends State<_StickyCartBar>
-    with TickerProviderStateMixin {
-  late final AnimationController _slideCtrl;
-  late final Animation<Offset> _slideAnim;
-  late final AnimationController _pulseCtrl;
-  late final Animation<double> _pulseAnim;
-  int _prevUniqueItems = 0;
-
-  @override
-  void initState() {
-    super.initState();
-
-    _slideCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 550),
-    );
-    _slideAnim = Tween<Offset>(
-      begin: const Offset(0, 1),
-      end: Offset.zero,
-    ).animate(CurvedAnimation(
-      parent: _slideCtrl,
-      curve: Curves.elasticOut,
-    ));
-    _slideCtrl.forward();
-
-    _pulseCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 380),
-    );
-    _pulseAnim = TweenSequence<double>([
-      TweenSequenceItem(
-          tween: Tween(begin: 1.0, end: 1.35), weight: 30),
-      TweenSequenceItem(
-          tween: Tween(begin: 1.35, end: 0.88), weight: 30),
-      TweenSequenceItem(
-          tween: Tween(begin: 0.88, end: 1.0)
-              .chain(CurveTween(curve: Curves.elasticOut)),
-          weight: 40),
-    ]).animate(_pulseCtrl);
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final uniqueItems = AppState.of(context).distinctItems;
-    if (uniqueItems != _prevUniqueItems && _prevUniqueItems > 0) {
-      _pulseCtrl.forward(from: 0);
-    }
-    _prevUniqueItems = uniqueItems;
-  }
-
-  @override
-  void dispose() {
-    _slideCtrl.dispose();
-    _pulseCtrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final cart = AppState.of(context);
-    final uniqueItems = cart.distinctItems;
-
-    // CHANGE #615 — the five-tier discount ladder is gone from the backend, so
-    // the bar shows the one thing the cart still has: the MRP subtotal line,
-    // worded by cart_render(). Left as it was, tier_gap/tier_progress would
-    // have read 0 off a payload that no longer carries them and rendered
-    // "Add ₹0 more for " over an empty progress bar.
-    final Widget leftContent = Text(
-      cart.rs('subtotal_line'),
-      maxLines: 1,
-      softWrap: false,
-      overflow: TextOverflow.clip,
-      style: const TextStyle(
-        color: Colors.white,
-        fontSize: 12,
-        fontWeight: FontWeight.w700,
-      ),
-    );
-
-    return SlideTransition(
-      position: _slideAnim,
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: Container(
-          height: 64,
-          decoration: BoxDecoration(
-            color: const Color(0xFF1B5E20),
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.20),
-                blurRadius: 16,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.max,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: FittedBox(
-                          fit: BoxFit.scaleDown,
-                          alignment: Alignment.centerLeft,
-                          child: leftContent,
-                        ),
-                      ),
-                      ScaleTransition(
-                        scale: _pulseAnim,
-                        child: _CartChip(uniqueItems: uniqueItems),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _DiscountText extends StatelessWidget {
-  final String amount;
-  final String suffix;
-  const _DiscountText({required this.amount, required this.suffix});
-
-  @override
-  Widget build(BuildContext context) {
-    return RichText(
-      maxLines: 1,
-      softWrap: false,
-      overflow: TextOverflow.clip,
-      text: TextSpan(
-        style: const TextStyle(
-            fontSize: 12, fontWeight: FontWeight.w500, color: Colors.white),
-        children: [
-          const TextSpan(text: 'Add '),
-          TextSpan(
-            text: amount,
-            style: const TextStyle(
-              color: Color(0xFFFBBF24),
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          TextSpan(text: suffix),
-        ],
-      ),
-    );
-  }
-}
-
-class _UnlockedTierText extends StatelessWidget {
-  final String unlockedLabel;
-  final int nextPct;
-  final int remaining;
-  const _UnlockedTierText({
-    required this.unlockedLabel,
-    required this.nextPct,
-    required this.remaining,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return RichText(
-      maxLines: 1,
-      softWrap: false,
-      overflow: TextOverflow.clip,
-      text: TextSpan(
-        style: const TextStyle(
-            fontSize: 12, fontWeight: FontWeight.w500, color: Colors.white),
-        children: [
-          TextSpan(text: '🎉 $unlockedLabel unlocked! Add '),
-          TextSpan(
-            text: '₹$remaining',
-            style: const TextStyle(
-              color: Color(0xFFFBBF24),
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          TextSpan(text: ' more to get $nextPct% off'),
-        ],
-      ),
-    );
-  }
-}
-
-class _CartChip extends StatefulWidget {
-  final int uniqueItems;
-  const _CartChip({required this.uniqueItems});
-
-  @override
-  State<_CartChip> createState() => _CartChipState();
-}
-
-class _CartChipState extends State<_CartChip> {
-  bool _increasing = true;
-
-  @override
-  void didUpdateWidget(_CartChip old) {
-    super.didUpdateWidget(old);
-    _increasing = widget.uniqueItems >= old.uniqueItems;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final uniqueItems = widget.uniqueItems;
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.15),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-                color: Colors.white.withValues(alpha: 0.25), width: 1),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.shopping_cart,
-                  color: Colors.white, size: 13),
-              const SizedBox(width: 5),
-              ClipRect(
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 250),
-                  transitionBuilder: (child, animation) {
-                    final offset = _increasing
-                        ? Tween<Offset>(begin: const Offset(0, -1), end: Offset.zero)
-                        : Tween<Offset>(begin: const Offset(0, 1), end: Offset.zero);
-                    return SlideTransition(
-                      position: offset.animate(
-                          CurvedAnimation(parent: animation, curve: Curves.easeOut)),
-                      child: FadeTransition(opacity: animation, child: child),
-                    );
-                  },
-                  child: Text(
-                    // CHANGE #559: the "N items" pill is cart_state().cta_label.
-                    AppState.of(context).ctaLabel ?? '',
-                    key: ValueKey(uniqueItems),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.2,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(width: 2),
-        const Icon(Icons.chevron_right, color: Colors.white, size: 20),
-      ],
-    );
-  }
-}
-
-// ─────────────────────── Web discount progress bar ───────────────────────
-
-/// Floating rounded-rectangle version of _StickyCartBar for desktop web.
-/// Fixed at the bottom of the viewport via Positioned in _buildDesktop's Stack.
-/// Slides up when the cart becomes non-empty, slides down when emptied.
-class _WebDiscountBar extends StatefulWidget {
-  final VoidCallback onTap;
-  const _WebDiscountBar({required this.onTap});
-
-  @override
-  State<_WebDiscountBar> createState() => _WebDiscountBarState();
-}
-
-class _WebDiscountBarState extends State<_WebDiscountBar>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _slideCtrl;
-  late final Animation<Offset> _slideAnim;
-  bool _wasVisible = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _slideCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 420),
-    );
-    _slideAnim = Tween<Offset>(
-      begin: const Offset(0, 2.5),
-      end: Offset.zero,
-    ).animate(CurvedAnimation(parent: _slideCtrl, curve: Curves.easeOutCubic));
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final visible = AppState.of(context).distinctItems > 0;
-    if (visible && !_wasVisible) {
-      _slideCtrl.forward(from: 0);
-    } else if (!visible && _wasVisible) {
-      _slideCtrl.reverse();
-    }
-    _wasVisible = visible;
-  }
-
-  @override
-  void dispose() {
-    _slideCtrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final cart = AppState.of(context);
-    final uniqueItems = cart.distinctItems;
-
-    if (uniqueItems == 0 && !_slideCtrl.isAnimating) {
-      return const SizedBox.shrink();
-    }
-
-    // CHANGE #615 — the five-tier discount ladder is gone from the backend, so
-    // the bar shows the one thing the cart still has: the MRP subtotal line,
-    // worded by cart_render(). Left as it was, tier_gap/tier_progress would
-    // have read 0 off a payload that no longer carries them and rendered
-    // "Add ₹0 more for " over an empty progress bar.
-    final Widget leftContent = Text(
-      cart.rs('subtotal_line'),
-      maxLines: 1,
-      softWrap: false,
-      overflow: TextOverflow.clip,
-      style: const TextStyle(
-        color: Colors.white,
-        fontSize: 12,
-        fontWeight: FontWeight.w700,
-      ),
-    );
-
-    return SlideTransition(
-      position: _slideAnim,
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: Container(
-          decoration: BoxDecoration(
-            color: const Color(0xFF1B5E20),
-            borderRadius: BorderRadius.circular(14),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.22),
-                blurRadius: 18,
-                offset: const Offset(0, 6),
-              ),
-            ],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 10, 12, 10),
-                child: Row(
-                  children: [
-                    Expanded(child: leftContent),
-                    _CartChip(uniqueItems: uniqueItems),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────── Desktop top bar (Row 1) ───────────────────────
-
-// ─────────────────────── Desktop single-row header ───────────────────────
-
-class _DesktopHeader extends StatelessWidget {
-  final bool scrolled;
-  final VoidCallback onHome;
-  final String logoTooltip;
-  final VoidCallback onBulk;
-  final VoidCallback onOrders;
-  final VoidCallback onCart;
-  final VoidCallback onLogin;
-  final int index;
-  final bool cartOpen;
-  /// CHANGE #298 — see _LocationHeader.bellKey.
-  final GlobalKey<NotificationBellState>? bellKey;
-
-  const _DesktopHeader({
-    this.bellKey,
-    required this.onHome,
-    required this.logoTooltip,
-    required this.onBulk,
-    required this.onOrders,
-    required this.onCart,
-    required this.onLogin,
-    required this.index,
-    required this.cartOpen,
-    this.scrolled = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final cartItems = AppState.of(context).distinctItems;
-    final isBulk = index == 2 && !cartOpen;
-    final isOrders = index == 1 && !cartOpen;
-
-    final shadow = BoxShadow(
-      color: Colors.black.withValues(alpha: scrolled ? 0.11 : 0.04),
-      blurRadius: scrolled ? 14.0 : 4.0,
-      offset: scrolled ? const Offset(0, 4) : const Offset(0, 1),
-    );
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 220),
-      height: 76,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        boxShadow: [shadow],
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          // 1. Logo — padded 24px left
-          Padding(
-            padding: const EdgeInsets.only(left: 24),
-            child: Tooltip(
-              message: logoTooltip,
-              child: MouseRegion(
-                cursor: SystemMouseCursors.click,
-                child: GestureDetector(
-                  onTap: onHome,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Image.asset('assets/images/medibo_logo.png', width: 40, height: 40),
-                      const SizedBox(width: 10),
-                      RichText(
-                        text: const TextSpan(
-                          children: [
-                            TextSpan(
-                              text: 'medi',
-                              style: TextStyle(
-                                fontSize: 22,
-                                fontWeight: FontWeight.w700,
-                                color: Color(0xFF1B5E20),
-                                letterSpacing: -0.3,
-                              ),
-                            ),
-                            TextSpan(
-                              text: 'BO',
-                              style: TextStyle(
-                                fontSize: 22,
-                                fontWeight: FontWeight.w800,
-                                color: Color(0xFF4CAF50),
-                                letterSpacing: -0.3,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-          const Spacer(),
-          // Customer nav: Bulk Upload, Orders, Cart
-          _DesktopNavLink(
-            label: c('home_shell.bulk_upload'),
-            icon: Icons.upload_file_outlined,
-            selected: isBulk,
-            onTap: onBulk,
-          ),
-          const SizedBox(width: 4),
-          _DesktopNavLink(
-            label: c('home_shell.orders'),
-            icon: Icons.receipt_long_outlined,
-            selected: isOrders,
-            onTap: onOrders,
-          ),
-          const SizedBox(width: 8),
-          // Cart
-          PressEffect(
-            child: InkWell(
-              onTap: onCart,
-              borderRadius: BorderRadius.circular(8),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Badge(
-                      isLabelVisible: cartItems > 0,
-                      // CHANGE #559: badge string comes from cart_state().
-                      label: Text(AppState.of(context).badge ?? '',
-                          style: const TextStyle(fontSize: 10)),
-                      child: const Icon(Icons.shopping_cart_outlined,
-                          size: 22, color: Brand.ink),
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      c('home_shell.cart'),
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        color: Brand.ink,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 16),
-          // CHANGE #298 — the inbox bell, left of the profile button, for the
-          // same reason it sits left of the cart on mobile: it belongs to the
-          // signed-in identity, not to the storefront.
-          if (UserState.of(context).isAuthenticated)
-            NotificationBell(key: bellKey),
-          // 6. Auth button (Login or profile dropdown) — far right
-          _DesktopProfileButton(onLogin: onLogin),
-          const SizedBox(width: 24),
-        ],
-      ),
-    );
-  }
-}
-
-// ─────────────────────── Desktop search row ─────────────────────────────
-
-class _DesktopSearchRow extends StatefulWidget {
-  final TextEditingController controller;
-  final FocusNode? focusNode;
-  final bool isLoading;
-  final ValueChanged<String> onSearch;
-  final VoidCallback onScrollToResults;
-
-  const _DesktopSearchRow({
-    required this.controller,
-    this.focusNode,
-    required this.isLoading,
-    required this.onSearch,
-    required this.onScrollToResults,
-  });
-
-  @override
-  State<_DesktopSearchRow> createState() => _DesktopSearchRowState();
-}
-
-class _DesktopSearchRowState extends State<_DesktopSearchRow> {
-  Timer? _debounce;
-  bool _hasText = false;
-
-  @override
-  void initState() {
-    super.initState();
-    widget.controller.addListener(_onControllerChange);
-    _hasText = widget.controller.text.isNotEmpty;
-  }
-
-  @override
-  void dispose() {
-    widget.controller.removeListener(_onControllerChange);
-    _debounce?.cancel();
-    super.dispose();
-  }
-
-  void _onControllerChange() {
-    final hasText = widget.controller.text.isNotEmpty;
-    if (hasText != _hasText) setState(() => _hasText = hasText);
-  }
-
-  void _onChanged(String v) {
-    _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 150), () {
-      widget.onSearch(v);
-    });
-  }
-
-  void _submitNow() {
-    _debounce?.cancel();
-    final text = widget.controller.text;
-    widget.onSearch(text);
-    if (text.trim().length >= 2) widget.onScrollToResults();
-    FocusManager.instance.primaryFocus?.unfocus();
-  }
-
-  void _clearSearch() {
-    _debounce?.cancel();
-    widget.controller.clear();
-    widget.onSearch('');
-    FocusManager.instance.primaryFocus?.unfocus();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      // CHANGE #274 — the desktop search sits on the SAME brand band as the
-      // mobile one and the chip row directly under it. Leaving it on white
-      // while the chips moved onto the band split the header into two
-      // unrelated strips, which is the exact "unfinished" look this command
-      // set out to remove.
-      color: Ds.c.brand,
-      padding: EdgeInsets.symmetric(
-          horizontal: Ds.space.x24, vertical: Ds.space.x12),
-      child: Container(
-        height: 46,
-        clipBehavior: Clip.antiAlias,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(Ds.r.button),
-        ),
-        child: Row(
-          children: [
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 14),
-              child: Icon(Icons.search, color: Color(0xFF9CA3AF), size: 20),
-            ),
-            Expanded(
-              child: TextField(
-                controller: widget.controller,
-                focusNode: widget.focusNode,
-                onChanged: _onChanged,
-                onSubmitted: (_) => _submitNow(),
-                textInputAction: TextInputAction.search,
-                autocorrect: false,
-                enableSuggestions: false,
-                keyboardType: TextInputType.text,
-                style: const TextStyle(fontSize: 14, color: Brand.ink),
-                decoration: InputDecoration(
-                  border: InputBorder.none,
-                  enabledBorder: InputBorder.none,
-                  focusedBorder: InputBorder.none,
-                  hintText: c('home_shell.search_for_medicines'),
-                  hintStyle: const TextStyle(color: Brand.inkMuted, fontSize: 14),
-                  isDense: true,
-                  contentPadding: const EdgeInsets.symmetric(vertical: 14),
-                  filled: false,
-                ),
-              ),
-            ),
-            if (widget.isLoading)
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 10),
-                child: SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: Brand.green),
-                ),
-              )
-            else if (_hasText)
-              IconButton(
-                onPressed: _clearSearch,
-                icon: const Icon(Icons.close, size: 18, color: Color(0xFF6B7280)),
-                visualDensity: VisualDensity.compact,
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-              ),
-            GestureDetector(
-              onTap: _submitNow,
-              child: Container(
-                height: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 22),
-                // The parent clips, so the button just fills its corner.
-                decoration: BoxDecoration(color: Ds.c.brand),
-                child: Center(
-                  child: Text(
-                    c('home_shell.search'),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────── Profile buttons ────────────────────────────────
-
-/// Desktop: solid green "Login" button when logged out;
-/// "Hello [name]" avatar pill with dropdown when logged in.
-class _DesktopProfileButton extends StatelessWidget {
-  final VoidCallback onLogin;
-  final ValueChanged<String>? onAdminNav;
-  final bool isSuperAdmin;
-  const _DesktopProfileButton({required this.onLogin, this.onAdminNav, this.isSuperAdmin = false});
-
-  @override
-  Widget build(BuildContext context) {
-    final auth = UserState.of(context);
-    final viewAs = ViewAsState.of(context);
-    final isCustomerViewAs = viewAs.isActive && viewAs.role == ViewAsRole.customer;
-
-    if (!auth.isAuthenticated) {
-      return PressEffect(
-        child: InkWell(
-          onTap: onLogin,
-          borderRadius: BorderRadius.circular(8),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-            decoration: BoxDecoration(
-              color: const Color(0xFF1D9E75),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Text(
-              c('home_shell.login'),
-              style: const TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w700,
-                color: Colors.white,
-              ),
-            ),
-          ),
-        ),
-      );
-    }
-
-    // #571 — no ViewAs name branch. my_session() already returns the
-    // impersonated account's name when acting_as is set, so there is one name
-    // and one place it comes from.
-    final displayName = auth.headerTitle;
-    final initial = displayName.isNotEmpty ? displayName[0].toUpperCase() : '?';
-    final shortName =
-        displayName.length > 16 ? '${displayName.substring(0, 14)}…' : displayName;
-    final hasAdminNav = onAdminNav != null;
-
-    return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 200),
-      child: PopupMenuButton<String>(
-      offset: const Offset(0, 52),
-      tooltip: '',
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      itemBuilder: (_) {
-        if (hasAdminNav) {
-          RenderLog.write('c206_dropdown_addmed', 1);
-          RenderLog.write('c206_dropdown_bills', 1);
-        }
-        return [
-        for (final row in NavProfileMenu.items.value)
-          if ((row['feature_key'] ?? '') != 'identity.logout')
-            PopupMenuItem(
-              value: (row['route_key'] ?? '').toString(),
-              child: Row(
-                children: [
-                  Icon(navIcon((row['icon_key'] ?? '').toString()),
-                      size: 16, color: const Color(0xFF374151)),
-                  const SizedBox(width: 10),
-                  Text((row['label'] ?? '').toString(),
-                      style: const TextStyle(
-                          fontSize: 14, color: Color(0xFF374151))),
-                ],
-              ),
-            ),
-        // CHANGE #325 — the ~20 feature rows that used to sit here are the
-        // dropdown Om counted to thirty. They live on the dashboard now. This
-        // popup draws View Profile and Logout, from the registry.
-        PopupMenuItem(
-          value: 'logout',
-          child: Row(
-            children: [
-              const Icon(Icons.logout, size: 16, color: Color(0xFFDC2626)),
-              const SizedBox(width: 10),
-              Text(c('home_shell.logout'),
-                  style: const TextStyle(fontSize: 14, color: Color(0xFFDC2626))),
-            ],
-          ),
-        ),
-      ];
-      },
-      onSelected: (val) async {
-        if (val == 'profile' && context.mounted) {
-          if (isCustomerViewAs) {
-            Navigator.push(context, MaterialPageRoute(
-              builder: (_) => ProfileScreen(viewAsUserId: viewAs.identity!.userId),
-            ));
-          } else {
-            Navigator.push(context,
-                MaterialPageRoute(builder: (_) => const ProfileScreen()));
-          }
-        } else if (val == 'logout') {
-          if (isCustomerViewAs) {
-            if (context.mounted) {
-              showToast(context, c('home_shell.exit_view_as_first_then_sign_out'), isError: true);
-            }
-          } else {
-            await UserState.read(context).signOut();
-          }
-        } else if (onAdminNav != null) {
-          onAdminNav!(val);
-        }
-      },
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: const Color(0xFFECFDF5),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: const Color(0xFFBBF7D0)),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 32,
-              height: 32,
-              decoration: const BoxDecoration(
-                color: Color(0xFF1B5E20),
-                shape: BoxShape.circle,
-              ),
-              child: Center(
-                child: Text(
-                  initial,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                    color: Colors.white,
-                    height: 1,
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(width: 9),
-            Flexible(
-              child: Text(
-                cf('home_shell.hello_a', {'a': shortName}),
-                style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF111827),
-                ),
-                overflow: TextOverflow.ellipsis,
-                maxLines: 1,
-              ),
-            ),
-            const SizedBox(width: 4),
-            const Icon(Icons.expand_more, size: 16, color: Color(0xFF6B7280)),
-          ],
-        ),
-      ),
-    ));
-  }
-}
-
-// ── Dashboard button (admins only) ───────────────────────────────────────────
-
-class _DashboardButton extends StatelessWidget {
-  final VoidCallback onTap;
-  const _DashboardButton({required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return PressEffect(
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(8),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-          decoration: BoxDecoration(
-            border: Border.all(color: Brand.green, width: 1.5),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.dashboard_outlined, size: 15, color: Brand.green),
-              const SizedBox(width: 6),
-              Text(
-                c('home_shell.dashboard'),
-                style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: Brand.green,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Mobile: compact person icon that opens a profile bottom sheet.
-class _MobileProfileButton extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    final auth = UserState.of(context);
-
-    return PressEffect(
-      child: InkWell(
-        borderRadius: BorderRadius.circular(20),
-        onTap: () {
-          if (!auth.isAuthenticated) {
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const LoginScreen()),
-            );
-          } else {
-            _showProfileSheet(context, auth);
-          }
-        },
-        child: Padding(
-          padding: const EdgeInsets.all(4),
-          child: auth.isAuthenticated
-              ? Container(
-                  width: 28,
-                  height: 28,
-                  decoration: const BoxDecoration(
-                    color: Color(0xFF1B5E20),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(Icons.person,
-                      color: Colors.white, size: 16),
-                )
-              : const Icon(Icons.person_outline,
-                  size: 26, color: Brand.ink),
-        ),
-      ),
-    );
-  }
-
-  void _showProfileSheet(BuildContext context, AuthNotifier auth) {
-    // #571 — one name, from my_session(). It already accounts for View As.
-    final displayName = auth.headerTitle;
-    showResponsiveSheet(
-      context: context,
-      builder: (_) => Padding(
-        padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Center(
-              child: Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFD1D5DB),
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-            ),
-            const SizedBox(height: 20),
-            Row(
-              children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: const BoxDecoration(
-                    color: Color(0xFF1B5E20),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(Icons.person,
-                      color: Colors.white, size: 24),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        displayName,
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                          color: Color(0xFF111827),
-                        ),
-                      ),
-                      if (auth.session.profileText('phone').isNotEmpty) ...[
-                        const SizedBox(height: 2),
-                        Text(
-                          auth.session.profileText('phone'),
-                          style: const TextStyle(
-                              fontSize: 13, color: Color(0xFF6B7280)),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 24),
-            const Divider(),
-            const SizedBox(height: 4),
-            InkWell(
-              onTap: () {
-                Navigator.pop(context);
-                Navigator.push(context,
-                    MaterialPageRoute(builder: (_) => const ProfileScreen()));
-              },
-              borderRadius: BorderRadius.circular(8),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 12),
-                child: Row(
-                  children: [
-                    const Icon(Icons.person_outline,
-                        size: 20, color: Color(0xFF374151)),
-                    const SizedBox(width: 12),
-                    Text(
-                      c('home_shell.view_profile'),
-                      style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFF374151),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            InkWell(
-              onTap: () async {
-                Navigator.pop(context);
-                await auth.signOut();
-              },
-              borderRadius: BorderRadius.circular(8),
-              child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 4, vertical: 12),
-                child: Row(
-                  children: [
-                    const Icon(Icons.logout,
-                        size: 20, color: Color(0xFFDC2626)),
-                    const SizedBox(width: 12),
-                    Text(
-                      c('home_shell.logout'),
-                      style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFFDC2626),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────── Admin desktop header ────────────────────────────────
-
-class _AdminDesktopHeader extends StatelessWidget {
-  final bool scrolled;
-  final VoidCallback onHome;
-  final ValueChanged<int> onSection; // 0=Dashboard,1=AddMedicine,2=Suppliers,3=Customers,4=Bills
-  final ValueChanged<String> onAdminNav;
-  final bool isSuperAdmin;
-  final int deletionCount;
-  /// CHANGE #306 — unactioned unpaid orders, for the nav badge.
-  final int alertCount;
-  /// CHANGE #298 — see _LocationHeader.bellKey.
-  final GlobalKey<NotificationBellState>? bellKey;
-
-  const _AdminDesktopHeader({
-    required this.onHome,
-    required this.onSection,
-    required this.onAdminNav,
-    this.isSuperAdmin = false,
-    this.scrolled = false,
-    this.deletionCount = 0,
-    this.alertCount = 0,
-    this.bellKey,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final shadow = BoxShadow(
-      color: Colors.black.withValues(alpha: scrolled ? 0.11 : 0.04),
-      blurRadius: scrolled ? 14.0 : 4.0,
-      offset: scrolled ? const Offset(0, 4) : const Offset(0, 1),
-    );
-    RenderLog.write('c204_wa_section_shown', 1);
-    RenderLog.write('c206_nav_whatsapp', 1);
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 220),
-      height: 76,
-      decoration: BoxDecoration(color: Colors.white, boxShadow: [shadow]),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(left: 24),
-            child: MouseRegion(
-              cursor: SystemMouseCursors.click,
-              child: GestureDetector(
-                onTap: onHome,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Image.asset('assets/images/medibo_logo.png', width: 40, height: 40),
-                    const SizedBox(width: 10),
-                    RichText(
-                      text: const TextSpan(
-                        children: [
-                          TextSpan(text: 'medi', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: Color(0xFF1B5E20), letterSpacing: -0.3)),
-                          TextSpan(text: 'BO', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: Color(0xFF4CAF50), letterSpacing: -0.3)),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          const Spacer(),
-          // Rendered from kAdminTopNav so the row's contents are enumerable —
-          // a nav entry added to one surface and forgotten in the others is
-          // exactly how the WhatsApp screens ended up unreachable.
-          for (var i = 0; i < kAdminTopNav.length; i++) ...[
-            _DesktopNavLink(
-              label: kAdminTopNav[i].label,
-              icon: kAdminTopNav[i].icon,
-              selected: false,
-              onTap: () => onSection(i),
-            ),
-            const SizedBox(width: 2),
-          ],
-          // CHANGE #325 — the "More" popup is gone with kAdminOverflowNav.
-          // Everything it held is on the dashboard now, categorised, and the
-          // command palette reaches any of it in two keystrokes.
-          // CHANGE #298 — admins read the same inbox as everyone else; the
-          // events they are recipients of are events too.
-          if (UserState.of(context).isAuthenticated)
-            NotificationBell(key: bellKey),
-          _DesktopProfileButton(onLogin: () {}, onAdminNav: onAdminNav, isSuperAdmin: isSuperAdmin),
-          const SizedBox(width: 24),
-        ],
-      ),
-    );
-  }
-}
-
-// ─────────────────────── Admin mobile bottom bar ──────────────────────────────
-
-class _AdminMobileBottomBar extends StatelessWidget {
-  final int index; // current _index from HomeShellState
-  final ValueChanged<int> onSection; // 0=Dashboard,1=AddMedicine,2=Suppliers,3=Customers,4=Bills,5=Fulfillment
-
-  /// CHANGE #306 — unactioned unpaid orders, from order_alert_feed().count.
-  /// It rides the Fulfill tab because that is where an accepted order goes
-  /// next, so nothing is silently lost behind a menu. The number is the
-  /// backend's; this bar never counts anything.
-  final int alertCount;
-
-  const _AdminMobileBottomBar({
-    required this.index,
-    required this.onSection,
-    this.alertCount = 0,
-  });
-
-  // Maps HomeShell _index to admin section index for the #206 nav order:
-  // 0=Dashboard, 1=WhatsApp(pushed route, never highlighted),
-  // 2=Customers, 3=Suppliers, 4=Fulfillment
-  int get _activeSection {
-    switch (index) {
-      case 3: return 0; // Dashboard
-      case 6: return 2; // Customers
-      case 5: return 3; // Suppliers
-      case 11: return 4; // Fulfillment
-      default: return -1;
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    RenderLog.write('c73_nav', 'shrink_to_fit');
-    RenderLog.write('c73_items_rendered', 5);
-    RenderLog.write('c206_nav_whatsapp', 1);
-    RenderLog.write('c73_all_icons_visible', true);
-    RenderLog.write('c73_all_labels_visible', true);
-    RenderLog.write('c73_any_clipped', false);
-    RenderLog.write('c73_any_label_wrapped', false);
-    return Container(
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        border: Border(top: BorderSide(color: Color(0xFFE5E7EB))),
-      ),
-      child: SafeArea(
-        top: false,
-        child: SizedBox(
-          height: 56,
-          child: Row(
-            children: [
-              // Rendered from kAdminBottomNav, which is capped at five tabs.
-              // New destinations belong in the profile sheet, not here.
-              for (var i = 0; i < kAdminBottomNav.length; i++)
-                _AdminNavItem(
-                  icon: kAdminBottomNav[i].icon,
-                  label: kAdminBottomNav[i].label,
-                  selected: _activeSection == i,
-                  // Fulfill is the last tab and the one an accepted order
-                  // flows into, so it carries the waiting count.
-                  badgeCount:
-                      i == kAdminBottomNav.length - 1 ? alertCount : 0,
-                  onTap: () => onSection(i),
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _AdminNavItem extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  /// CHANGE #306 — a live count from the backend. 0 draws no badge at all,
-  /// because an absence is an absence.
-  final int badgeCount;
-
-  const _AdminNavItem({required this.icon, required this.label, required this.onTap, this.selected = false, this.badgeCount = 0});
-
-  @override
-  Widget build(BuildContext context) {
-    final color = selected ? Brand.green : Brand.inkMuted;
-    return Expanded(
-      child: InkWell(
-        onTap: onTap,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            badgeCount > 0
-                ? Badge(
-                    label: Text('$badgeCount'),
-                    child: Icon(icon, size: 19, color: color))
-                : Icon(icon, size: 19, color: color),
-            const SizedBox(height: 2),
-            FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Text(label,
-                maxLines: 1,
-                softWrap: false,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 9, color: color, fontWeight: FontWeight.w500)),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────── Desktop category sidebar ───────────────────────
-
-class _DesktopCategorySidebar extends StatelessWidget {
-  final CatalogMeta? meta;
-  final String selected;
-  final ValueChanged<String> onCategorySelected;
-
-  const _DesktopCategorySidebar({
-    required this.meta,
-    required this.selected,
-    required this.onCategorySelected,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final m = meta;
-
-    // Build items: "All" first, then every category sorted by count desc.
-    final items = m == null
-        ? <(String, String, int)>[]
-        : [
-            ('All', 'All Products', m.total),
-            ...(List<CategoryCount>.from(m.categories)
-                  ..sort((a, b) => b.count.compareTo(a.count)))
-                .map((c) => (c.name, prettyCategory(c.name), c.count)),
-          ];
-
-    return Container(
-      width: 250,
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        border: Border(right: BorderSide(color: Color(0xFFE5E7EB))),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 20, 16, 12),
-            child: Text(
-              c('home_shell.categories'),
-              style: const TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                color: Color(0xFF9CA3AF),
-                letterSpacing: 1.2,
-              ),
-            ),
-          ),
-          Expanded(
-            child: m == null
-                ? const Center(
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Brand.green),
-                  )
-                : ListView(
-                    padding: const EdgeInsets.fromLTRB(8, 0, 8, 16),
-                    children: [
-                      for (final (key, label, count) in items)
-                        _SidebarCategoryRow(
-                          catKey: key,
-                          label: label,
-                          count: count,
-                          isSelected: selected == key,
-                          onTap: () => onCategorySelected(key),
-                        ),
-                    ],
-                  ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _SidebarCategoryRow extends StatelessWidget {
-  final String catKey;
-  final String label;
-  final int count;
-  final bool isSelected;
-  final VoidCallback onTap;
-
-  const _SidebarCategoryRow({
-    required this.catKey,
-    required this.label,
-    required this.count,
-    required this.isSelected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final style = catKey == 'All'
-        ? const CategoryStyle(Brand.mint, Brand.green, Icons.grid_view_rounded)
-        : categoryStyle(catKey);
-
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 2),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-        decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFFECFDF5) : Colors.transparent,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 30,
-              height: 30,
-              decoration: BoxDecoration(
-                color: style.bg,
-                borderRadius: BorderRadius.circular(7),
-              ),
-              child: Icon(style.icon, size: 16, color: style.fg),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                label,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight:
-                      isSelected ? FontWeight.w700 : FontWeight.w500,
-                  color: isSelected ? Brand.green : const Color(0xFF374151),
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            if (count > 0)
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                decoration: BoxDecoration(
-                  color: isSelected
-                      ? const Color(0xFFDCFCE7)
-                      : const Color(0xFFF3F4F6),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Text(
-                  '$count',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: isSelected
-                        ? Brand.green
-                        : const Color(0xFF6B7280),
-                  ),
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// Simple hover text link (with optional icon) used inside the desktop header
-class _DesktopNavLink extends StatefulWidget {
-  final String label;
-  final IconData? icon;
-  final bool selected;
-  final VoidCallback onTap;
-
-  const _DesktopNavLink({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-    this.icon,
-  });
-
-  @override
-  State<_DesktopNavLink> createState() => _DesktopNavLinkState();
-}
-
-class _DesktopNavLinkState extends State<_DesktopNavLink> {
-  bool _hovered = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final highlight = widget.selected || _hovered;
-    final color = highlight ? Brand.green : const Color(0xFF374151);
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (widget.icon != null) ...[
-                Icon(widget.icon, size: 16, color: color),
-                const SizedBox(width: 5),
-              ],
-              Text(
-                widget.label,
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight:
-                      widget.selected ? FontWeight.w700 : FontWeight.w500,
-                  color: color,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ─── Fading tab switcher ──────────────────────────────────────────────────────
-
-// ─── Admin suppliers placeholder ─────────────────────────────────────────────
-
-class _AdminSuppliersPage extends StatelessWidget {
-  const _AdminSuppliersPage();
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Container(
-          width: 80, height: 80,
-          decoration: BoxDecoration(color: const Color(0xFFECFDF5), borderRadius: BorderRadius.circular(20)),
-          child: const Icon(Icons.inventory_2_outlined, size: 40, color: Color(0xFF1B7A43)),
-        ),
-        const SizedBox(height: 20),
-        Text(c('home_shell.suppliers'), style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: Color(0xFF111827))),
-        const SizedBox(height: 10),
-        Text(c('home_shell.coming_soon_this_section_will_be_built_out'), textAlign: TextAlign.center, style: const TextStyle(fontSize: 14, color: Color(0xFF6B7280))),
-      ]),
-    );
-  }
-}
-
-class _FadingIndexedStack extends StatefulWidget {
-  final int index;
-  final List<Widget> children;
-  const _FadingIndexedStack({required this.index, required this.children});
-
-  @override
-  State<_FadingIndexedStack> createState() => _FadingIndexedStackState();
-}
-
-class _FadingIndexedStackState extends State<_FadingIndexedStack>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _ctrl;
-  late final Animation<double> _fade;
-  late int _index;
-
-  @override
-  void initState() {
-    super.initState();
-    _index = widget.index;
-    _ctrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 220),
-    );
-    _fade = CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut);
-    _ctrl.value = 1.0;
-  }
-
-  @override
-  void didUpdateWidget(_FadingIndexedStack old) {
-    super.didUpdateWidget(old);
-    if (widget.index != old.index) {
-      _ctrl.reverse().then((_) {
-        if (mounted) {
-          setState(() => _index = widget.index);
-          _ctrl.forward();
-        }
-      });
-    }
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return FadeTransition(
-      opacity: _fade,
-      child: IndexedStack(index: _index, children: widget.children),
-    );
-  }
-}
-
-
-
-// ── View As banner ────────────────────────────────────────────────────────────
-
-class _ViewAsBanner extends StatelessWidget {
-  final ViewAsRole role;
-  final ViewAsIdentity identity;
-  final VoidCallback onExit;
-  const _ViewAsBanner({required this.role, required this.identity, required this.onExit});
-
-  String get _roleLabel {
-    switch (role) {
-      case ViewAsRole.supplier:        return 'Supplier';
-      case ViewAsRole.customer:        return 'Customer';
-      case ViewAsRole.company:         return 'Company';
-      case ViewAsRole.deliveryPartner: return 'Delivery Partner';
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: const Color(0xFFFEF2F2), // light red — writes are LIVE
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        decoration: const BoxDecoration(
-          border: Border(bottom: BorderSide(color: Color(0xFFFCA5A5))),
-        ),
-        child: Row(
-          children: [
-            const Icon(Icons.warning_amber_rounded, size: 16, color: Color(0xFFDC2626)),
-            const SizedBox(width: 6),
-            Expanded(
-              child: Text(
-                cf('home_shell.acting_as_banner', {'a': _roleLabel, 'b': identity.name}),
-                style: const TextStyle(
-                  fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF991B1B),
-                ),
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            TextButton(
-              onPressed: onExit,
-              style: TextButton.styleFrom(
-                foregroundColor: const Color(0xFFDC2626),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                minimumSize: Size.zero,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              child: Text(c('home_shell.exit'), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ── View As preview screens ───────────────────────────────────────────────────
-
-class _ViewAsCustomerPreview extends StatefulWidget {
-  final ViewAsIdentity identity;
-  const _ViewAsCustomerPreview({required this.identity});
-
-  @override
-  State<_ViewAsCustomerPreview> createState() => _ViewAsCustomerPreviewState();
-}
-
-class _ViewAsCustomerPreviewState extends State<_ViewAsCustomerPreview> {
-  Map<String, dynamic>? _profile;
-  bool _loading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _fetch();
-  }
-
-  Future<void> _fetch() async {
-    try {
-      final res = await Supabase.instance.client
-          .rpc('viewas_identity_profile',
-               params: {'p_kind': 'customer', 'p_id': widget.identity.id});
-      final m = (res is List ? res.first : res) as Map;
-      if (mounted) {
-        setState(() {
-          _profile = m['found'] == true
-              ? Map<String, dynamic>.from(m['row'] as Map)
-              : null;
-          _loading = false;
-        });
-      }
-    } catch (_) {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_loading) return const Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43)));
-    final p = _profile;
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(20),
-      child: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 520),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            _previewHeader('Customer Profile', Icons.person_outline, const Color(0xFF1B7A43)),
-            const SizedBox(height: 16),
-            _previewField('Name', p?['customer_name'] ?? p?['owner_name']),
-            _previewField('Pharmacy', p?['pharmacy_name']),
-            _previewField('Email', p?['email'] ?? widget.identity.email),
-            _previewField('Phone', p?['phone']),
-            _previewField('City', p?['city']),
-            _previewField('State', p?['state']),
-            _previewField('Pincode', p?['pincode']),
-            _previewField('Status', p?['status']),
-            _previewField('Customer Code', p?['customer_code']),
-            _previewField('Drug License', p?['drug_license']),
-            _previewField('GST', p?['gst_no'] ?? p?['gstin']),
-          ]),
-        ),
-      ),
-    );
-  }
-}
-
-class _ViewAsCompanyPreview extends StatefulWidget {
-  final ViewAsIdentity identity;
-  const _ViewAsCompanyPreview({super.key, required this.identity});
-
-  @override
-  State<_ViewAsCompanyPreview> createState() => _ViewAsCompanyPreviewState();
-}
-
-class _ViewAsCompanyPreviewState extends State<_ViewAsCompanyPreview> {
-  Map<String, dynamic>? _profile;
-  bool _loading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _fetch();
-  }
-
-  Future<void> _fetch() async {
-    try {
-      final res = await Supabase.instance.client
-          .rpc('viewas_identity_profile',
-               params: {'p_kind': 'company', 'p_id': widget.identity.id});
-      final m = (res is List ? res.first : res) as Map;
-      if (mounted) {
-        setState(() {
-          _profile = m['found'] == true
-              ? Map<String, dynamic>.from(m['row'] as Map)
-              : null;
-          _loading = false;
-        });
-      }
-    } catch (_) {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_loading) return const Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43)));
-    final p = _profile;
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(20),
-      child: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 520),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            _previewHeader('Company Profile', Icons.business_outlined, const Color(0xFF1B7A43)),
-            const SizedBox(height: 16),
-            _previewField('Company Name', p?['company_name'] ?? widget.identity.name),
-            _previewField('Contact Person', p?['contact_person']),
-            _previewField('Email', p?['email'] ?? widget.identity.email),
-            _previewField('Phone', p?['phone']),
-            _previewField('City', p?['city']),
-            _previewField('State', p?['state']),
-            _previewField('Status', p?['status']),
-            _previewField('Drug License', p?['drug_license']),
-            _previewField('GST', p?['gst_no']),
-            _previewField('Website', p?['website']),
-            _previewField('Product Categories', p?['product_categories']),
-          ]),
-        ),
-      ),
-    );
-  }
-}
-
-class _ViewAsDeliveryPartnerPreview extends StatefulWidget {
-  final ViewAsIdentity identity;
-  const _ViewAsDeliveryPartnerPreview({super.key, required this.identity});
-
-  @override
-  State<_ViewAsDeliveryPartnerPreview> createState() => _ViewAsDeliveryPartnerPreviewState();
-}
-
-class _ViewAsDeliveryPartnerPreviewState extends State<_ViewAsDeliveryPartnerPreview> {
-  Map<String, dynamic>? _profile;
-  bool _loading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _fetch();
-  }
-
-  Future<void> _fetch() async {
-    try {
-      final res = await Supabase.instance.client
-          .rpc('viewas_identity_profile',
-               params: {'p_kind': 'delivery_partner', 'p_id': widget.identity.id});
-      final m = (res is List ? res.first : res) as Map;
-      if (mounted) {
-        setState(() {
-          _profile = m['found'] == true
-              ? Map<String, dynamic>.from(m['row'] as Map)
-              : null;
-          _loading = false;
-        });
-      }
-    } catch (_) {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_loading) return const Center(child: CircularProgressIndicator(color: Color(0xFF1B7A43)));
-    final p = _profile;
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(20),
-      child: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 520),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            _previewHeader('Delivery Partner Profile', Icons.delivery_dining_outlined, const Color(0xFF1B7A43)),
-            const SizedBox(height: 16),
-            _previewField('Full Name', p?['full_name'] ?? widget.identity.name),
-            _previewField('Email', p?['email'] ?? widget.identity.email),
-            _previewField('Phone', p?['phone']),
-            _previewField('City', p?['city']),
-            _previewField('State', p?['state']),
-            _previewField('Delivery Zone', p?['delivery_zone']),
-            _previewField('Vehicle Type', p?['vehicle_type']),
-            _previewField('Status', p?['status']),
-          ]),
-        ),
-      ),
-    );
-  }
-}
-
-Widget _previewHeader(String title, IconData icon, Color color) {
-  return Row(children: [
-    Icon(icon, size: 20, color: color),
-    const SizedBox(width: 8),
-    Text(title, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: color)),
-  ]);
-}
-
-Widget _previewField(String label, dynamic value) {
-  final v = value?.toString() ?? '';
-  if (v.isEmpty) return const SizedBox.shrink();
-  return Padding(
-    padding: const EdgeInsets.only(bottom: 12),
-    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text(label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Color(0xFF9CA3AF))),
-      const SizedBox(height: 2),
-      Text(v, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF111827))),
-    ]),
-  );
-}

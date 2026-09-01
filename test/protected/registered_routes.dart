@@ -37,6 +37,18 @@ const kRegisteredAdminRoutes = <String>[
   'bill_pipeline', 'gst', 'pnl', 'settlement', 'payment_upi',
   // Admin & System
   'manage_admins', 'dev_queue', 'scope_audit', 'feature_gaps', 'cron_health',
+  // CHANGE #397 — bulk editing and exports; both open AdminBulkScreen, the
+  // second on its Exports tab.
+  'bulk_actions', 'exports',
+  // CMD #410 — the reviews & Q&A moderation desk. Nothing a pharmacy writes
+  // about a product is public until it is approved there, so the queue must be
+  // reachable from a phone, not only from a registry row.
+  'reviews',
   // Identity — the only two rows the dropdown may hold
   'profile', 'logout',
+  // CMD #429/#444 — the paper sale sheet.
+  'paper_sale',
+  // CMD #450 — the money screen (receivables, verification queue, unattached
+  // money, stalled supplier bills).
+  'money',
 ];

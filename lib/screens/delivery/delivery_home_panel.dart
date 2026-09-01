@@ -27,9 +27,14 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../design_tokens.dart';
 import '../../fulfill/fulfill_lookups.dart';
+import 'rider_extras_sheets.dart';
+import '../../design_tokens.dart';
 import '../../services/device_location.dart';
 import '../../utils/render_log.dart';
+import 'delivery_sos_button.dart';
+import 'rider_leaderboard_sheet.dart';
 
 Color get _kGreen => FulfillLookups.instance.color('c_ff1b7a43', const Color(0xFF1B7A43));
 Color get _kBorder => FulfillLookups.instance.color('c_ffe5e7eb', const Color(0xFFE5E7EB));
@@ -57,6 +62,12 @@ class DeliveryHomePanel extends StatelessWidget {
     required this.home,
     required this.onChanged,
   });
+
+  /// `my_delivery_home().extras` — the labels for the two programme sheets,
+  /// and the training block message when the gate is holding this rider.
+  Map<String, dynamic> get _extras => home['extras'] is Map
+      ? Map<String, dynamic>.from(home['extras'] as Map)
+      : const <String, dynamic>{};
 
   List<Map<String, dynamic>> get _tiles {
     final v = home['tiles'];
@@ -149,10 +160,30 @@ class DeliveryHomePanel extends StatelessWidget {
           ),
         ],
 
+        // CMD #407 — the delivery programme, on the home the rider already
+        // opens: today's targets, and the two sheets (training, vehicle) whose
+        // labels arrive on this same payload. All three render nothing when
+        // the backend sent nothing.
+        if (home['incentives'] is Map) ...[
+          const SizedBox(height: 12),
+          RiderIncentiveProgress(
+              data: Map<String, dynamic>.from(home['incentives'] as Map)),
+        ],
+        if (_extras['training_note']?.toString().isNotEmpty ?? false)
+          Padding(
+            padding: EdgeInsets.only(bottom: Ds.space.x12),
+            child: Text(_extras['training_note'].toString(),
+                style: Ds.t.caption.copyWith(color: Ds.c.danger)),
+          ),
+        if ((_extras['training_label']?.toString() ?? '').isNotEmpty)
+          RiderExtrasButtons(
+            trainingLabel: _extras['training_label'].toString(),
+            vehicleLabel: _extras['vehicle_label']?.toString() ?? '',
+          ),
+
         const SizedBox(height: 10),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: TextButton.icon(
+        Row(children: [
+          TextButton.icon(
             style: TextButton.styleFrom(
               visualDensity: VisualDensity.compact,
               foregroundColor: _kSub,
@@ -160,9 +191,37 @@ class DeliveryHomePanel extends StatelessWidget {
             ),
             onPressed: () => showDeliveryHistorySheet(context),
             icon: const Icon(Icons.history, size: 16),
-            label: Text(_ui('dlv_history'), style: const TextStyle(fontSize: 12.5)),
+            // Both buttons in this row moved onto Ds.t.caption in #406: they
+            // sit side by side, so one of them keeping a hand-written 12.5
+            // would read as a mistake. Baseline ratcheted DOWN, never up.
+            label: Text(_ui('dlv_history'), style: Ds.t.caption),
           ),
-        ),
+          SizedBox(width: Ds.space.x16),
+          // CHANGE #406 (PART 3) — the rider's own standing. The label is
+          // ui_copy; the sheet decides for itself whether there is a board to
+          // show, so nothing here has to know about the agency opt-out.
+          TextButton.icon(
+            style: TextButton.styleFrom(
+              visualDensity: VisualDensity.compact,
+              foregroundColor: _kSub,
+              padding: EdgeInsets.zero,
+            ),
+            onPressed: () => showRiderLeaderboard(context),
+            icon: const Icon(Icons.leaderboard_outlined, size: 16),
+            label: Text(_ui('dlv_leaderboard'), style: Ds.t.caption),
+          ),
+        ]),
+
+        // CHANGE #406 (PART 2) — SOS. Drawn only while the rider is ON SHIFT:
+        // an emergency button on a rider who is off duty and at home is noise,
+        // and delivery_sos_state() is still the thing that decides whether the
+        // feature is on at all.
+        if (onShift) const DeliverySosButton(),
+
+        // CHANGE #406 (PART 3) — the agency's switch, on the agency's own home.
+        // The rider inherits it; only an agency login is offered the toggle,
+        // and delivery_leaderboard_optout_get() is what says so.
+        if (home['is_agency'] == true) const _AgencyLeaderboardToggle(),
       ]),
     );
   }
@@ -416,4 +475,80 @@ class _HistorySheetState extends State<_HistorySheet> {
         '$label ${(value as num?)?.toInt() ?? 0}',
         style: TextStyle(fontSize: 11.5, color: c),
       );
+}
+
+
+/// CHANGE #406 — "Opt-out flag per agency if an agency does not want ranking
+/// shown." It is a switch on the agency's own home rather than an admin
+/// setting, because the agency is the one with the opinion about whether its
+/// riders should see each other ranked.
+///
+/// Both sentences under the switch are backend copy: the ON one and the OFF one
+/// are different sentences, not one string with a negation stuck on it in Dart.
+class _AgencyLeaderboardToggle extends StatefulWidget {
+  const _AgencyLeaderboardToggle();
+
+  @override
+  State<_AgencyLeaderboardToggle> createState() => _AgencyLeaderboardToggleState();
+}
+
+class _AgencyLeaderboardToggleState extends State<_AgencyLeaderboardToggle> {
+  Map<String, dynamic> _p = const {};
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final res =
+          await Supabase.instance.client.rpc('delivery_leaderboard_optout_get');
+      if (!mounted || res is! Map) return;
+      setState(() => _p = Map<String, dynamic>.from(res));
+    } catch (_) {}
+  }
+
+  Future<void> _set(bool showToTeam) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      // The switch reads "show the leaderboard to my team", so ON means
+      // opt_out=false. The inversion lives here, once, next to the label it
+      // belongs to.
+      final res = await Supabase.instance.client
+          .rpc('delivery_leaderboard_optout_set', params: {'p_opt_out': !showToTeam});
+      if (!mounted) return;
+      setState(() {
+        if (res is Map) _p = {..._p, ...Map<String, dynamic>.from(res)};
+        _busy = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_p['is_agency'] != true) return const SizedBox.shrink();
+    final showToTeam = _p['opt_out'] != true;
+    return Padding(
+      padding: EdgeInsets.only(top: Ds.space.x12),
+      child: Row(children: [
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(_p['title']?.toString() ?? '', style: Ds.t.bodyStrong),
+            Text(_p['message']?.toString() ?? '', style: Ds.t.caption),
+          ]),
+        ),
+        Switch(
+          value: showToTeam,
+          activeThumbColor: Ds.c.brand,
+          onChanged: _busy ? null : (v) => _set(v),
+        ),
+      ]),
+    );
+  }
 }

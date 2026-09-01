@@ -8,6 +8,7 @@ import '../../../services/ui_copy.dart';
 import '../../../utils/toast.dart';
 import '../../../widgets/payment_proof_image.dart';
 import 'dev_queue_common.dart';
+import 'restart_safety.dart';
 import 'dev_queue_image_tray.dart';
 import 'dev_queue_qa.dart';
 import 'dev_queue_service.dart';
@@ -1152,9 +1153,35 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
     final header = (_row['steps_chip'] ?? '').toString();
     final resumed = (_row['resume_chip'] ?? '').toString();
     final branch = (_row['resume_branch'] ?? '').toString();
+    // CHANGE #350 — when the backend says this checklist stopped being
+    // reported, say so ABOVE the list rather than letting Om read a stale
+    // "Step 0 of 7" as fact. Both strings are the backend's; absent is silence.
+    final live = RowLiveness(_row);
+    final staleChip = (_row['steps_stale_chip'] ?? '').toString();
     return _sectionRaw(
       header,
       Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (staleChip.isNotEmpty)
+          Padding(
+            padding: EdgeInsets.only(bottom: Ds.space.x12),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Icon(safetyChipIcon(SafetyChipKind.stepsStale),
+                  size: Ds.space.x16, color: Ds.c.warning),
+              SizedBox(width: Ds.space.x8),
+              Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(staleChip,
+                          style: Ds.t.caption.copyWith(color: Ds.c.warning)),
+                      if (live.stepsStaleHint.isNotEmpty)
+                        Text(live.stepsStaleHint,
+                            style: Ds.t.caption
+                                .copyWith(color: Ds.c.textSecondary)),
+                    ]),
+              ),
+            ]),
+          ),
         for (final st in steps)
           Padding(
             padding: EdgeInsets.only(bottom: Ds.space.x8),

@@ -8,6 +8,14 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 // through wa_notify_event() first, which sends the approved template unless the
 // customer's 24h window is genuinely open. `out_one` exists because the 24h
 // window is per customer: the run-level blast made one decision for everybody.
+//
+// CHANGE #354 (register row 89) — the OTP no longer lives on deliveries.otp_code.
+// That column is readable by the assigned rider (RLS deliveries_read grants the
+// rider the whole row), so the rider could read the customer's code and sign for
+// them. The code now lives in delivery_otp, a table with RLS on and no policies:
+// only the service role (this function) and SECURITY DEFINER functions can read
+// it. Never put the code back on the deliveries row — a CHECK constraint on
+// deliveries.otp_code enforces that from the database side.
 
 const NOTIFY_SECRET = 'medibo_order_notify_2027';
 const WA_TOKEN_HARDCODED='EAARb70T6u7sBR775DNCsEMQLBZBxQbZAVXFtOs5ZBZAAp1NezedqnFzeZAOWN4puSZCVXZBmSj5OWDHAb3ko2IwX96ocuK7HUnDcgvh2XqMwGJG1LutM4ayrN2ZCsAIlVdfZCt8Tpzof0QvWlzpIaHPFmG2qGZA6ItJODC9BLe60ZArqG3y4xzVZBjFvc2bXVtF7ZA9GjZAEmrnev4NwaCH23HZBBLN130UfCZC7hgVK2X4jM2q8VuQc7mMZBsnRpSWHoWen1qZCXBiZCRBKm2z2ZB34eqMhtc3dJ8nG06rC3XI8rXWFtSIZD';
@@ -68,10 +76,10 @@ async function tmpl(key: string, fallback: string): Promise<string> {
   return fallback;
 }
 
-// one delivery -> { phone, pharmacy, order_code, otp, qr_token }
+// one delivery -> { phone, pharmacy, order_code, qr_token, rider }
 async function loadDelivery(id: string) {
   const { data: d } = await supabase.from('deliveries')
-    .select('id, order_id, otp_code, qr_token, delivered_at, proof_method, partner_id')
+    .select('id, order_id, qr_token, delivered_at, proof_method, partner_id')
     .eq('id', id).maybeSingle();
   if (!d) return null;
   const { data: o } = await supabase.from('orders')
@@ -89,6 +97,14 @@ async function loadDelivery(id: string) {
     rider = String(rp?.full_name ?? '');
   }
   return { d, o, phone: ph, rider };
+}
+
+// CHANGE #354 (row 89): the code, read from the protected side table. Only the
+// service role can see this — the rider cannot, which is the entire point.
+async function loadOtp(deliveryId: string): Promise<string> {
+  const { data } = await supabase.from('delivery_otp')
+    .select('code').eq('delivery_id', deliveryId).maybeSingle();
+  return String(data?.code ?? '');
 }
 
 async function sendOutForDelivery(ctx: any, body: string): Promise<boolean> {
@@ -116,11 +132,13 @@ Deno.serve(async (req) => {
     const ctx = await loadDelivery(String(body?.delivery_id || ''));
     if (!ctx) return new Response(JSON.stringify({ skipped: 'not_found' }), { status: 200 });
     if (!ctx.phone) return new Response(JSON.stringify({ skipped: 'no_phone' }), { status: 200 });
+    const otp = await loadOtp(ctx.d.id);
+    if (!otp) return new Response(JSON.stringify({ skipped: 'no_otp' }), { status: 200 });
     const t = await tmpl('delivery_otp_message',
       'Namaste {pharmacy}, aapke order {code} ki delivery ke liye OTP hai: *{otp}*\n\nYe OTP sirf delivery partner ko batayein.');
     const text = t.replace(/\{pharmacy\}/g, String(ctx.o?.pharmacy_name ?? ''))
                   .replace(/\{code\}/g, String(ctx.o?.order_code ?? ''))
-                  .replace(/\{otp\}/g, String(ctx.d.otp_code ?? ''))
+                  .replace(/\{otp\}/g, otp)
                   .replace(/\{rider\}/g, ctx.rider);
     const sent = await sendText('91' + ctx.phone, text);
     await log('91' + ctx.phone, text, sent, 'delivery_otp');

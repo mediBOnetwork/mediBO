@@ -28,15 +28,16 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../design_tokens.dart';
+import '../../widgets/pos_upi_qr_card.dart';
 import 'pharmacy_owner_screen.dart';  // CHANGE #419
 import 'pharmacy_reorder_screen.dart';  // CHANGE #414
 import 'pharmacy_stock_screen.dart';
-import 'pos_margin_strip.dart';  // CHANGE #414
-import '../../services/khata_api.dart';  // CMD #415 — khata_nav_entry()
+import 'pos_margin_strip.dart'; // CHANGE #414
+import '../../services/khata_api.dart'; // CMD #415 — khata_nav_entry()
 import '../../services/paper_sale_api.dart'; // CMD #429 — paper_sale_entry()
-import '../../services/pharmacy_refill_api.dart';  // CMD #417 — refill_nav_entry()
-import 'pharmacy_refill_screen.dart';  // CMD #417 — refills & counter
-import 'khata_screen.dart';  // CMD #415 — the counter's credit book
+import '../../services/pharmacy_refill_api.dart'; // CMD #417 — refill_nav_entry()
+import 'pharmacy_refill_screen.dart'; // CMD #417 — refills & counter
+import 'khata_screen.dart'; // CMD #415 — the counter's credit book
 import 'paper_sale_screen.dart'; // CMD #429 — the paper sale pad
 import '../../services/pharmacy_stock_api.dart';
 import '../../services/pos_api.dart';
@@ -102,8 +103,10 @@ class PosScreen extends StatefulWidget {
 
 class _PosScreenState extends State<PosScreen> {
   Map<String, dynamic>? _home;
+
   /// The backend's own refusal copy. Permanent — a retry cannot change it.
   String? _bootRefusal;
+
   /// The request never landed. That IS retryable, and it must never put a Dart
   /// exception string on screen.
   bool _bootFailed = false;
@@ -263,8 +266,10 @@ class _PosScreenState extends State<PosScreen> {
       return;
     }
     try {
-      final res = await _call('pos_margin_options',
-          {'p_medicine_id': medicineId, 'p_limit': 5});
+      final res = await _call('pos_margin_options', {
+        'p_medicine_id': medicineId,
+        'p_limit': 5,
+      });
       if (!mounted) return;
       setState(() => _margin = res);
     } catch (_) {
@@ -285,14 +290,18 @@ class _PosScreenState extends State<PosScreen> {
     final at = _cart.indexWhere((l) => l.medicineId == from);
     if (at < 0) return;
 
-    final res = await _call('pos_margin_swap',
-        {'p_from': from, 'p_to': to, 'p_qty': _cart[at].qty});
+    final res = await _call('pos_margin_swap', {
+      'p_from': from,
+      'p_to': to,
+      'p_qty': _cart[at].qty,
+    });
     if (!mounted) return;
     if (res['ok'] != true) {
       final msg = _s(res['message']);
       if (msg.isNotEmpty) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(msg)));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(msg)));
       }
       return;
     }
@@ -461,6 +470,20 @@ class _PosScreenState extends State<PosScreen> {
           ],
         ),
         actions: [
+          // CMD #432 — the door to the shop's UPI ID and its printable counter
+          // QR. Present for every pharmacy: a shop with no VPA yet needs this
+          // MORE than one that has it, so the button is not conditional — what
+          // is inside it is (pharmacy_upi_get() decides what can be edited).
+          IconButton(
+            icon: Icon(Icons.qr_code_2_outlined, color: Ds.c.brand),
+            tooltip: _s(_m(_home?['upi'])['tile_label']),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) => PosUpiSetupScreen(rpc: widget.rpc),
+              ),
+            ),
+          ),
           // CMD #412 — the shelf, from the counter. The two are one shop: what
           // is sold here comes off there (FEFO, on pos_sale_event), so the way
           // between them is a tap. Icon and tooltip come from
@@ -847,6 +870,44 @@ class _PosScreenState extends State<PosScreen> {
               ),
           ],
         ),
+        // CMD #432 — UPI is selected but the shop has no CONFIRMED VPA, so the
+        // bill would print without a QR. Say it here, at the moment the choice
+        // is made, rather than letting the receipt come up empty.
+        if (_payMode == 'upi' && _m(_home?['upi'])['confirmed'] != true) ...[
+          SizedBox(height: Ds.space.x12),
+          InkWell(
+            borderRadius: Ds.r.rButton,
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) => PosUpiSetupScreen(rpc: widget.rpc),
+              ),
+            ),
+            child: Container(
+              width: double.infinity,
+              padding: EdgeInsets.all(Ds.space.x12),
+              decoration: BoxDecoration(
+                color: Ds.c.warningSoft,
+                borderRadius: Ds.r.rButton,
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _s(_m(_home?['upi'])['state_label']),
+                      style: Ds.t.caption.copyWith(color: Ds.c.warning),
+                    ),
+                  ),
+                  Icon(
+                    Icons.chevron_right,
+                    size: Ds.t.bodySize,
+                    color: Ds.c.warning,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ],
     ),
   );
@@ -1048,7 +1109,12 @@ class _PosReceiptSheetState extends State<PosReceiptSheet> {
     final receipt = _m(_sale['receipt']);
     final ready = receipt['is_ready'] == true;
 
-    return Padding(
+    // CMD #432 — the UPI panel. `show` is the backend's: a cash bill has no QR
+    // and no confirm button, and this screen does not test the payment mode to
+    // find that out.
+    final upi = _m(_sale['upi']);
+
+    return SingleChildScrollView(
       padding: EdgeInsets.all(Ds.space.x24),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -1073,6 +1139,15 @@ class _PosReceiptSheetState extends State<PosReceiptSheet> {
           if (_s(totals['net_words']).isNotEmpty) ...[
             SizedBox(height: Ds.space.x4),
             Text(_s(totals['net_words']), style: Ds.t.caption),
+          ],
+          if (upi['show'] == true) ...[
+            SizedBox(height: Ds.space.x24),
+            PosUpiPanel(
+              upi: upi,
+              onConfirm: () => _call('pos_payment_confirm', {
+                'p_sale_id': _s(_sale['sale_id']),
+              }),
+            ),
           ],
           SizedBox(height: Ds.space.x24),
           Text(_s(receipt['message']), style: Ds.t.bodySecondary),
@@ -1198,17 +1273,36 @@ class _PosDayCloseScreenState extends State<PosDayCloseScreen> {
                 for (final split in _rows(day['splits']))
                   Padding(
                     padding: EdgeInsets.symmetric(vertical: Ds.space.x8),
-                    child: Row(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Expanded(
-                          child: Text(_s(split['label']), style: Ds.t.body),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(_s(split['label']), style: Ds.t.body),
+                            ),
+                            Text(_s(split['bills_label']), style: Ds.t.caption),
+                            SizedBox(width: Ds.space.x12),
+                            Text(
+                              _s(split['amount_display']),
+                              style: Ds.t.bodyStrong,
+                            ),
+                          ],
                         ),
-                        Text(_s(split['bills_label']), style: Ds.t.caption),
-                        SizedBox(width: Ds.space.x12),
-                        Text(
-                          _s(split['amount_display']),
-                          style: Ds.t.bodyStrong,
-                        ),
+                        // CMD #432 — UPI money is what STAFF said arrived, and
+                        // the day-close says so in the backend's own words. A
+                        // row with nothing to add sends neither string.
+                        if (_s(split['sub_label']).isNotEmpty) ...[
+                          SizedBox(height: Ds.space.x4),
+                          Text(_s(split['sub_label']), style: Ds.t.caption),
+                        ],
+                        if (_s(split['warn_label']).isNotEmpty) ...[
+                          SizedBox(height: Ds.space.x4),
+                          Text(
+                            _s(split['warn_label']),
+                            style: Ds.t.caption.copyWith(color: Ds.c.warning),
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -1251,6 +1345,13 @@ class _PosDayCloseScreenState extends State<PosDayCloseScreen> {
                                   '${_s(r['time_label'])} · ${_s(r['payment_label'])}',
                                   style: Ds.t.caption,
                                 ),
+                                if (_s(r['upi_pending_label']).isNotEmpty)
+                                  Text(
+                                    _s(r['upi_pending_label']),
+                                    style: Ds.t.caption.copyWith(
+                                      color: Ds.c.warning,
+                                    ),
+                                  ),
                               ],
                             ),
                           ),
@@ -1262,6 +1363,90 @@ class _PosDayCloseScreenState extends State<PosDayCloseScreen> {
               ),
             ),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CMD #432 — UPI FOR THE COUNTER
+// The shop's own UPI ID, its change history, and the printable counter QR.
+// One screen, because there is one VPA: the khata reminders in #415 deeplink to
+// the same column this saves, so a pharmacy that sets it up here has set it up
+// everywhere. Editing is the OWNER's — pharmacy_upi_save() refuses a staff
+// login outright, and `can_edit` is what greys the fields out before it has to.
+// ═══════════════════════════════════════════════════════════════════════════
+class PosUpiSetupScreen extends StatefulWidget {
+  final PosRpc? rpc;
+  const PosUpiSetupScreen({super.key, this.rpc});
+
+  @override
+  State<PosUpiSetupScreen> createState() => _PosUpiSetupScreenState();
+}
+
+class _PosUpiSetupScreenState extends State<PosUpiSetupScreen> {
+  Map<String, dynamic>? _data;
+  String? _refusal;
+  bool _failed = false;
+
+  Future<Map<String, dynamic>> _call(String fn, Map<String, dynamic> p) =>
+      widget.rpc != null ? widget.rpc!(fn, p) : PosApi.call(fn, p);
+
+  @override
+  void initState() {
+    super.initState();
+    _boot();
+  }
+
+  Future<void> _boot() async {
+    try {
+      final res = await _call('pharmacy_upi_get', const {});
+      if (!mounted) return;
+      if (res['ok'] != true) {
+        setState(() => _refusal = _s(res['message']));
+        return;
+      }
+      setState(() => _data = res);
+      RenderLog.write('c432_upi_setup', 1);
+    } catch (_) {
+      if (mounted) setState(() => _failed = true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_refusal != null) return _Refusal(message: _refusal!);
+    if (_failed) {
+      return _Refusal(
+        message: c('pos.boot_failed'),
+        retryLabel: c('pos.retry'),
+        onRetry: () {
+          setState(() => _failed = false);
+          _boot();
+        },
+      );
+    }
+    if (_data == null) return const _BootSkeleton();
+
+    final setup = _m(_data!['setup']);
+    return Scaffold(
+      backgroundColor: Ds.c.bg,
+      appBar: AppBar(
+        backgroundColor: Ds.c.surface,
+        surfaceTintColor: Ds.c.surface,
+        title: Text(_s(setup['title']), style: Ds.t.subtitle),
+      ),
+      body: ListView(
+        padding: EdgeInsets.all(Ds.space.x16),
+        children: [
+          PharmacyUpiSetupCard(
+            data: _data!,
+            onSave: (vpa, name) =>
+                _call('pharmacy_upi_save', {'p_vpa': vpa, 'p_name': name}),
+            onConfirm: (vpa) => _call('pharmacy_upi_confirm', {'p_vpa': vpa}),
+          ),
+          SizedBox(height: Ds.space.x32),
         ],
       ),
     );
@@ -1352,9 +1537,7 @@ class _Refusal extends StatelessWidget {
                   style: OutlinedButton.styleFrom(
                     foregroundColor: Ds.c.brand,
                     side: BorderSide(color: Ds.c.brand),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: Ds.r.rButton,
-                    ),
+                    shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
                   ),
                   child: Text(retryLabel!),
                 ),
@@ -1455,8 +1638,11 @@ class _ReorderEntryTile extends StatelessWidget {
             Icon(Icons.trending_up, size: Ds.space.x24, color: Ds.c.brand),
             SizedBox(width: Ds.space.x12),
             Expanded(child: Text(label, style: Ds.t.bodyStrong)),
-            Icon(Icons.chevron_right, size: Ds.space.x24,
-                color: Ds.c.textSecondary),
+            Icon(
+              Icons.chevron_right,
+              size: Ds.space.x24,
+              color: Ds.c.textSecondary,
+            ),
           ],
         ),
       ),

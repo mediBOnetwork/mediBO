@@ -108,10 +108,6 @@ class _MyShopScreenState extends State<MyShopScreen> {
           _open.add(_s(sections.first['key']));
         }
       });
-      RenderLog.write(
-        'c536_my_shop',
-        'sections:${sections.length};tiles:${sections.fold<int>(0, (n, s) => n + _rows(s['items']).length)}',
-      );
     } catch (_) {
       if (!mounted) return;
       setState(() {
@@ -147,6 +143,18 @@ class _MyShopScreenState extends State<MyShopScreen> {
     if (sections.isEmpty) {
       return _Centered(message: _s(res['empty_message']));
     }
+
+    // Written HERE, on the paint, not in _load() after the RPC returns.
+    // CHANGE #536 QA round 1 taught the difference: while the page loaded
+    // eagerly at boot the key was written whether or not anyone ever reached
+    // the tab, so a green render-log proved the RPC ran and NOT that the tab
+    // was reachable — a proof that would have stayed green through the desktop
+    // regression QA actually found. A key on the paint cannot be true unless
+    // the widget is on screen.
+    RenderLog.write(
+      'c536_my_shop',
+      'sections:${sections.length};tiles:${sections.fold<int>(0, (n, s) => n + _rows(s['items']).length)}',
+    );
 
     return RefreshIndicator(
       onRefresh: _load,

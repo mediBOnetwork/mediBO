@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../../design_tokens.dart';
 import '../../pages/supplier_disputes_page.dart';
+import '../../services/supplier_account_state.dart';
 import '../../services/ui_copy.dart';
 import '../../user_state.dart';
 import '../../utils/render_log.dart';
@@ -8,6 +10,8 @@ import 'supplier_add_medicine_screen.dart';
 import 'supplier_home_screen.dart';
 import 'supplier_inquiry_screen.dart';
 import 'supplier_orders_screen.dart';
+import 'supplier_payout_screen.dart';
+import 'supplier_staff_screen.dart';
 
 class SupplierShell extends StatefulWidget {
   // When set, the shell runs in View-As preview mode using admin preview RPCs.
@@ -28,6 +32,12 @@ class SupplierShell extends StatefulWidget {
 
 class _SupplierShellState extends State<SupplierShell> {
   int _index = 0;
+
+  /// CHANGE #402 — `supplier_session()`: who this login is, which surfaces it
+  /// may open, and which language it reads. Null until it lands, and while it
+  /// is null the shell shows exactly what it showed before this change — a
+  /// slow session must never take a tab away from the owner.
+  Map<String, dynamic>? _session;
   int _pendingInquiryCount = 0;
   int _activeDisputeCount = 0;
   bool _bannerDismissed = false;
@@ -35,18 +45,76 @@ class _SupplierShellState extends State<SupplierShell> {
   // Keys to allow deep-linking into child screens
   final GlobalKey<SupplierInquiryScreenState> _inquiryKey = GlobalKey();
 
-  List<_NavItem> get _navItems => [
-    _NavItem(icon: Icons.store_outlined,           label: c('supplier_shell.tab_home')),
-    _NavItem(icon: Icons.add_circle_outline,       label: c('supplier_shell.tab_add_medicine')),
-    _NavItem(icon: Icons.question_answer_outlined, label: c('supplier_shell.tab_inquiry')),
-    _NavItem(icon: Icons.receipt_long_outlined,    label: c('supplier_shell.tab_orders')),
-    _NavItem(icon: Icons.gavel_outlined,           label: c('supplier_shell.tab_disputes')),
+  static const List<IconData> _tabIcons = [
+    Icons.store_outlined,
+    Icons.add_circle_outline,
+    Icons.question_answer_outlined,
+    Icons.receipt_long_outlined,
+    Icons.gavel_outlined,
   ];
+
+  List<String> get _tabLabels => [
+    c('supplier_shell.tab_home'),
+    c('supplier_shell.tab_add_medicine'),
+    c('supplier_shell.tab_inquiry'),
+    c('supplier_shell.tab_orders'),
+    c('supplier_shell.tab_disputes'),
+  ];
+
+  /// The bar is the tabs this login may READ, in their original order. The
+  /// grade is the backend's; this file only asks.
+  List<_NavItem> get _navItems => [
+    for (var slot = 0; slot < _tabIcons.length; slot++)
+      if (_tabFeature[slot] == null || _canRead(_tabFeature[slot]!))
+        _NavItem(icon: _tabIcons[slot], label: _tabLabels[slot], slot: slot),
+  ];
+
+  /// The feature key each tab index needs. Home is the shell itself and is
+  /// never gated; the other four are the four surfaces the backend grades.
+  static const Map<int, String> _tabFeature = {
+    1: 'supplier.catalog',
+    2: 'supplier.inquiry',
+    3: 'supplier.orders',
+    4: 'supplier.disputes',
+  };
+
+  /// The backend's grade for one feature. Absent session => 'write', i.e. the
+  /// behaviour that existed before staff logins did.
+  String _access(String featureKey) {
+    final s = _session;
+    if (s == null) return 'write';
+    for (final f in supplierRows(s['features'])) {
+      if (supplierStr(f, 'feature_key') == featureKey) {
+        return supplierStr(f, 'access');
+      }
+    }
+    return 'none';
+  }
+
+  bool _canRead(String featureKey) => _access(featureKey) != 'none';
 
   @override
   void initState() {
     super.initState();
     RenderLog.write('supplier_shell', 'init');
+    if (!widget.isViewAs) _loadSession();
+  }
+
+  Future<void> _loadSession() async {
+    try {
+      final s = await SupplierApi.session();
+      if (!mounted || s['ok'] != true) return;
+      setState(() {
+        _session = s;
+        // A tab this login may not open must not stay selected.
+        final need = _tabFeature[_index];
+        if (need != null && !_canRead(need)) _index = 0;
+      });
+      RenderLog.write('c402_supplier_session',
+          supplierRows(s['features']).length);
+    } catch (_) {
+      // The shell keeps working on its pre-#402 behaviour.
+    }
   }
 
   void _onPendingCount(int count) {
@@ -84,6 +152,126 @@ class _SupplierShellState extends State<SupplierShell> {
     }
   }
 
+  /// CHANGE #402 — the three self-service surfaces, behind the header's menu.
+  /// Each row appears only when the backend graded that feature readable, and
+  /// each row's LABEL is the backend's own (so it is Hindi in Hindi).
+  void _openAccountSheet() {
+    final s = _session;
+    final language = supplierMap(s?['language']);
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(Ds.r.sheet)),
+      ),
+      builder: (sheetCtx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (_canRead('supplier.staff'))
+              ListTile(
+                leading: Icon(Icons.people_outline, color: Ds.c.text),
+                title: Text(c('supplier_staff.feature_label'), style: Ds.t.body),
+                onTap: () {
+                  Navigator.pop(sheetCtx);
+                  Navigator.push(context, MaterialPageRoute<void>(
+                      builder: (_) => const SupplierStaffScreen()));
+                },
+              ),
+            if (_canRead('supplier.payouts'))
+              ListTile(
+                leading: Icon(Icons.account_balance_outlined, color: Ds.c.text),
+                title: Text(c('supplier_payout.feature_label'), style: Ds.t.body),
+                onTap: () {
+                  Navigator.pop(sheetCtx);
+                  Navigator.push(context, MaterialPageRoute<void>(
+                      builder: (_) => const SupplierPayoutScreen()));
+                },
+              ),
+            ListTile(
+              leading: Icon(Icons.language, color: Ds.c.text),
+              title: Text(
+                language['title'] is String && (language['title'] as String).isNotEmpty
+                    ? language['title'] as String
+                    : c('supplier_lang.title'),
+                style: Ds.t.body,
+              ),
+              subtitle: Text(supplierStr(language, 'label'), style: Ds.t.caption),
+              onTap: () {
+                Navigator.pop(sheetCtx);
+                _openLanguageSheet();
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// The options are `language.options` from the session — this file never
+  /// names a language, so adding Marathi is one INSERT and no deploy.
+  void _openLanguageSheet() {
+    final language = supplierMap(_session?['language']);
+    final options = supplierRows(language['options']);
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(Ds.r.sheet)),
+      ),
+      builder: (sheetCtx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: EdgeInsets.fromLTRB(
+                  Ds.space.x16, Ds.space.x16, Ds.space.x16, Ds.space.x8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(supplierStr(language, 'title'), style: Ds.t.subtitle),
+                  SizedBox(height: Ds.space.x4),
+                  Text(supplierStr(language, 'subtitle'), style: Ds.t.caption),
+                ],
+              ),
+            ),
+            for (final o in options)
+              ListTile(
+                title: Text(supplierStr(o, 'label'), style: Ds.t.body),
+                subtitle: Text(supplierStr(o, 'sub_label'), style: Ds.t.caption),
+                trailing: o['selected'] == true
+                    ? Icon(Icons.check, color: Ds.c.brand)
+                    : null,
+                onTap: () {
+                  Navigator.pop(sheetCtx);
+                  _setLanguage(supplierStr(o, 'code'));
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _setLanguage(String code) async {
+    final r = await SupplierApi.languageSet(code);
+    if (!mounted) return;
+    final msg = supplierStr(r, 'message');
+    if (msg.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(msg),
+        backgroundColor: supplierTone(r['tone']),
+      ));
+    }
+    if (r['ok'] != true) return;
+    // The whole app's words come from ONE payload, so one refetch repaints
+    // every screen in the new language — there is nothing else to reload.
+    await UiCopy.refresh();
+    await _loadSession();
+    if (mounted) setState(() {});
+  }
+
   @override
   Widget build(BuildContext context) {
     final supplierName = widget.viewAsSupplierName
@@ -117,6 +305,8 @@ class _SupplierShellState extends State<SupplierShell> {
         _SupplierHeader(
           supplierName: supplierName,
           isDesktop: isDesktop,
+          staffLabel: supplierStr(supplierMap(_session), 'actor_label'),
+          onMenu: viewAsSupplierId == null ? _openAccountSheet : null,
           onLogout: viewAsSupplierId == null
               ? () => UserState.read(context).signOut()
               : null, // no logout in preview mode
@@ -154,7 +344,12 @@ class _SupplierShellState extends State<SupplierShell> {
 class _NavItem {
   final IconData icon;
   final String label;
-  const _NavItem({required this.icon, required this.label});
+
+  /// CHANGE #402 — the tab's position in the FULL five, kept even when the bar
+  /// draws fewer of them. The badges key off this, so hiding a tab a staff
+  /// login may not open can never move a badge onto the wrong icon.
+  final int slot;
+  const _NavItem({required this.icon, required this.label, required this.slot});
 }
 
 // ── Header ────────────────────────────────────────────────────────────────────
@@ -164,10 +359,17 @@ class _SupplierHeader extends StatelessWidget {
   final bool isDesktop;
   final VoidCallback? onLogout;
 
+  /// CHANGE #402 — the backend's own "who is signed in" line for a STAFF
+  /// login, empty for the owner. Never composed here.
+  final String staffLabel;
+  final VoidCallback? onMenu;
+
   const _SupplierHeader({
     required this.supplierName,
     required this.isDesktop,
     required this.onLogout,
+    this.staffLabel = '',
+    this.onMenu,
   });
 
   @override
@@ -196,11 +398,25 @@ class _SupplierHeader extends StatelessWidget {
           )),
         ),
         const Spacer(),
-        Text(cf('supplier_shell.greeting', {'name': supplierName}),
-          style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500),
-          overflow: TextOverflow.ellipsis,
+        Flexible(
+          child: Text(
+            staffLabel.isNotEmpty
+                ? staffLabel
+                : cf('supplier_shell.greeting', {'name': supplierName}),
+            style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500),
+            overflow: TextOverflow.ellipsis,
+          ),
         ),
         const SizedBox(width: 12),
+        if (onMenu != null)
+          InkWell(
+            onTap: onMenu,
+            borderRadius: Ds.r.rButton,
+            child: Padding(
+              padding: EdgeInsets.all(Ds.space.x4),
+              child: const Icon(Icons.more_vert, color: Colors.white, size: 20),
+            ),
+          ),
         if (onLogout != null)
           InkWell(
             onTap: onLogout,
@@ -283,9 +499,9 @@ class _DesktopTabBar extends StatelessWidget {
       child: Row(
         children: List.generate(items.length, (i) {
           final item = items[i];
-          final selected = i == index;
+          final selected = item.slot == index;
           return InkWell(
-            onTap: () => onTap(i),
+            onTap: () => onTap(item.slot),
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
               decoration: BoxDecoration(
@@ -300,7 +516,8 @@ class _DesktopTabBar extends StatelessWidget {
                     size: 18,
                     color: selected ? const Color(0xFF1B7A43) : const Color(0xFF6B7280),
                   ),
-                  if ((i == 2 && pendingInquiry > 0) || (i == 4 && activeDisputes > 0))
+                  if ((item.slot == 2 && pendingInquiry > 0) ||
+                      (item.slot == 4 && activeDisputes > 0))
                     Positioned(
                       right: -5, top: -3,
                       child: Container(
@@ -359,12 +576,12 @@ class _MobileBottomNav extends StatelessWidget {
           child: Row(
             children: List.generate(items.length, (i) {
               final item = items[i];
-              final selected = i == index;
-              final showBadge = (i == 2 && pendingInquiry > 0) ||
-                               (i == 4 && activeDisputes > 0);
+              final selected = item.slot == index;
+              final showBadge = (item.slot == 2 && pendingInquiry > 0) ||
+                               (item.slot == 4 && activeDisputes > 0);
               return Expanded(
                 child: InkWell(
-                  onTap: () => onTap(i),
+                  onTap: () => onTap(item.slot),
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
@@ -383,7 +600,7 @@ class _MobileBottomNav extends StatelessWidget {
                                 shape: BoxShape.circle,
                               ),
                               child: Text(
-                                i == 4 ? '$activeDisputes' : '$pendingInquiry',
+                                item.slot == 4 ? '$activeDisputes' : '$pendingInquiry',
                                 style: const TextStyle(color: Colors.white, fontSize: 9,
                                     fontWeight: FontWeight.w700),
                               ),

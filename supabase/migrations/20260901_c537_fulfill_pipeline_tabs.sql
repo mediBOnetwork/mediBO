@@ -295,3 +295,124 @@ grant execute on function public.fulfill_tabs() to authenticated;
 insert into public.partner_rpc_allow (proname, clamp_ok)
 values ('fulfill_tabs', true), ('fulfill_stage_counts', true)
 on conflict (proname) do update set clamp_ok = excluded.clamp_ok;
+
+-- ── 8. Where is this order, right now? ──────────────────────────────────────
+-- The bar is only half of "readable start-to-end". The other half is tapping
+-- an order and landing on the tab where its work actually sits.
+--
+-- Resolution walks the pipeline BACKWARDS and stops at the furthest evidence
+-- the order has left behind, because the furthest thing that happened is where
+-- the order is. An ACTIVE dispute outranks all of it: a disputed line is
+-- blocked, and the tab that can unblock it is Dispute.
+--
+-- Every predicate reads a mark the pipeline itself writes, and specifically
+-- the mark the matching TAB reads. The first cut of this function used
+-- order_items.bag_no for the Bag stage and put all 34 orders in Bag —
+-- bag_no is stamped on every line at order time (293 of 293). The Bag tab
+-- reads bag_item_counts (fw_list_bags_core), so this reads bag_item_counts,
+-- and the two cannot disagree. Same reasoning for the Delivery hand-off:
+-- orders.dispatch_ready is what pack_set_dispatch_ready writes, and an order
+-- waiting to be assigned is already AT Delivery — that is the tab that
+-- assigns it.
+create or replace function public.fulfill_order_stage(p_order_id uuid)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path to 'public'
+as $fn$
+declare
+  v_role  text := coalesce(public.get_my_role(), 'none');
+  v_stage text;
+  v_row   record;
+begin
+  if auth.uid() is null or v_role not in ('admin', 'super_admin') then
+    return jsonb_build_object('ok', false, 'error', 'not_authorized', 'has', false);
+  end if;
+
+  if p_order_id is null or not exists (select 1 from orders o where o.id = p_order_id) then
+    return jsonb_build_object('ok', false, 'error', 'order_not_found', 'has', false);
+  end if;
+
+  -- 9 · an active dispute blocks everything downstream of it
+  if exists (
+       select 1 from supplier_disputes d
+       join order_items oi on oi.id = d.order_item_id
+      where oi.order_id = p_order_id
+        and coalesce(d.status, 'open') not in ('resolved', 'cancelled'))
+  then
+    v_stage := 'dispute';
+
+  -- 8 · handed to delivery, or ready to be
+  elsif exists (select 1 from deliveries dl where dl.order_id = p_order_id)
+     or exists (select 1 from orders o
+                 where o.id = p_order_id and coalesce(o.dispatch_ready, false))
+  then
+    v_stage := 'delivery';
+
+  -- 7 · packing has begun
+  elsif exists (select 1 from order_items oi
+                 where oi.order_id = p_order_id
+                   and (coalesce(oi.packed, false) or coalesce(oi.packed_qty, 0) > 0))
+  then
+    v_stage := 'pack';
+
+  -- 6 · counted into a bag — the mark the Bag tab itself reads
+  elsif exists (
+          select 1 from order_items oi
+           where oi.order_id = p_order_id
+             and exists (select 1 from bag_item_counts b
+                          where b.assigned_supplier = oi.assigned_supplier
+                            and b.product_id = oi.product_id
+                            and b.qty > 0))
+  then
+    v_stage := 'bag';
+
+  -- 5 · arrived in the warehouse
+  elsif exists (select 1 from order_items oi
+                 where oi.order_id = p_order_id and coalesce(oi.at_warehouse, false)) then
+    v_stage := 'warehouse';
+
+  -- 4 · counted at the supplier's shop
+  elsif exists (select 1 from order_items oi
+                 where oi.order_id = p_order_id
+                   and (oi.shop_qty is not null or coalesce(oi.collect_locked, false))) then
+    v_stage := 'supplier_shop';
+
+  -- 3 · an order was placed on a supplier
+  elsif exists (select 1 from supplier_orders so where so.order_id = p_order_id) then
+    v_stage := 'supplier_order';
+
+  -- 2 · the inquiry engine is still asking
+  elsif exists (select 1 from order_items oi
+                 where oi.order_id = p_order_id and oi.inquiry_id is not null) then
+    v_stage := 'supplier_inquiry';
+
+  -- 1 · placed, nothing has happened to it yet
+  else
+    v_stage := 'customer_order';
+  end if;
+
+  -- The label and the deep link are the registry's, not this function's, so a
+  -- renamed stage renames here too with no deploy.
+  select f.label, f.deep_link, f.feature_key
+    into v_row
+    from feature_registry f
+   where f.surface = 'fulfill_tab' and f.route_key = v_stage and f.is_active;
+
+  return jsonb_build_object(
+    'ok', true,
+    'has', true,
+    'order_id', p_order_id,
+    'stage_key', v_stage,
+    'feature_key', coalesce(v_row.feature_key, ''),
+    'label', coalesce(v_row.label, ''),
+    'deep_link', coalesce(v_row.deep_link, ''));
+end
+$fn$;
+
+grant execute on function public.fulfill_order_stage(uuid) to authenticated;
+
+insert into public.partner_rpc_allow (proname, clamp_ok)
+values ('fulfill_order_stage', true)
+on conflict (proname) do update set clamp_ok = excluded.clamp_ok;

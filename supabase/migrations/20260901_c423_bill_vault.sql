@@ -1468,6 +1468,14 @@ returns jsonb language sql stable security definer set search_path = public as $
                              jsonb_build_object('no', b.invoice_no)) end,
     'date_label', case when b.invoice_date is null then public.ui_text('phvault.date_unknown')
                        else to_char(b.invoice_date, 'DD Mon YYYY') end,
+    -- The identity line, joined HERE. A separator is a display decision, and
+    -- display decisions do not belong in Dart — the screen prints this string.
+    'meta', (case when b.invoice_no is null then public.ui_text('phvault.invoice_unknown')
+                  else public._phv_fmt('phvault.invoice_line',
+                         jsonb_build_object('no', b.invoice_no)) end)
+            || ' · ' ||
+            (case when b.invoice_date is null then public.ui_text('phvault.date_unknown')
+                  else to_char(b.invoice_date, 'DD Mon YYYY') end),
     'month_key', b.month_key,
     'month_label', public._phv_month_label(b.month_key),
     'amount',    public._phv_money(b.total_amount),
@@ -1583,6 +1591,8 @@ begin
       'qty', l.qty, 'qty_label', coalesce(l.qty::text, '—'),
       'batch', coalesce(l.batch_no, public.ui_text('phvault.batch_unknown')),
       'expiry', coalesce(l.expiry, public.ui_text('phvault.expiry_unknown')),
+      'meta', coalesce(l.batch_no, public.ui_text('phvault.batch_unknown'))
+              || ' · ' || coalesce(l.expiry, public.ui_text('phvault.expiry_unknown')),
       'cost', public._phv_money(l.unit_cost), 'has_cost', l.unit_cost is not null,
       'mrp', public._phv_money(l.mrp), 'has_mrp', l.mrp is not null,
       'flag', l.flag,

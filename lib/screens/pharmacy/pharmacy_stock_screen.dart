@@ -23,7 +23,9 @@ import 'package:flutter/material.dart';
 import '../../design_tokens.dart';
 import '../../services/pharmacy_stock_api.dart';
 import '../../services/px_api.dart';  // CMD #420 — px_nav_entry()
+import '../../services/pharmacy_vault_api.dart';  // CMD #423 — pharmacy_vault_entry()
 import 'px_screen.dart';  // CMD #420 — the exchange, from the shelf
+import 'pharmacy_vault_screen.dart';  // CMD #423 — the bills this shelf is built from
 import '../../utils/render_log.dart';
 
 String _s(Object? v) => v == null ? '' : v.toString();
@@ -131,6 +133,7 @@ class _PharmacyStockScreenState extends State<PharmacyStockScreen> {
       // CMD #420 — the exchange entry, loaded where it is used. A failure
       // leaves the button undrawn; it never stops the shelf loading.
       if (widget.rpc == null) unawaited(PxEntry.load());
+      if (widget.rpc == null) unawaited(VaultEntry.load());
       RenderLog.write('c412_stock_rows', _rows(res['rows']).length);
       if (_s(res['negative_note']).isNotEmpty) {
         RenderLog.write('c412_stock_negative', 1);
@@ -167,6 +170,40 @@ class _PharmacyStockScreenState extends State<PharmacyStockScreen> {
       appBar: AppBar(
         title: Text(_s(_data['title']).isEmpty ? ' ' : _s(_data['title'])),
         actions: [
+          // CMD #423 — the BILL VAULT, from the shelf. This is the right door
+          // for it: every lot on this screen was born from a bill, and the
+          // vault is where the bills that have not become lots yet are waiting.
+          // The icon carries the backend's own review count as a badge — a
+          // pharmacist who has three bills to check sees three, and a shop with
+          // nothing waiting sees a plain icon. Label, badge and whether the
+          // button exists at all are pharmacy_vault_entry()'s call, never a
+          // role test here.
+          ValueListenableBuilder<Map<String, dynamic>>(
+            valueListenable: VaultEntry.value,
+            builder: (context, entry, _) {
+              if (entry['show'] != true) return const SizedBox.shrink();
+              final badge = _s(entry['badge']);
+              return IconButton(
+                icon: badge.isEmpty
+                    ? Icon(Icons.receipt_long_outlined, color: Ds.c.brand)
+                    : Badge(
+                        label: Text(badge),
+                        backgroundColor: Ds.c.warning,
+                        child: Icon(
+                          Icons.receipt_long_outlined,
+                          color: Ds.c.brand,
+                        ),
+                      ),
+                tooltip: _s(entry['label']),
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute<void>(
+                    builder: (_) => const PharmacyVaultScreen(),
+                  ),
+                ),
+              );
+            },
+          ),
           // CMD #420 — the exchange, from the shelf. This is the screen where a
           // pharmacist is already looking at the box that will expire before it
           // sells, so it is where the way to trade it belongs. Icon, tooltip

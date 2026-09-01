@@ -104,6 +104,93 @@ class _AdminPartnerConsoleScreenState extends State<AdminPartnerConsoleScreen> {
     });
   }
 
+  /// CMD #466 row 154 — suspend / resume. The reason is typed by the admin;
+  /// every other word on the sheet, and the refusal when the reason is blank,
+  /// is the backend's.
+  Future<void> _lifecycle(bool suspend, String reason) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      _toast(await (suspend
+          ? _rpc('partner_suspend',
+              {'p_partner_id': widget.partnerId, 'p_reason': reason})
+          : _rpc('partner_resume', {'p_partner_id': widget.partnerId})));
+    } catch (_) {
+      _toastFailure();
+    }
+    if (!mounted) return;
+    setState(() => _busy = false);
+    await _load();
+  }
+
+  /// CMD #466 row 153 — set one licence's expiry. The date comes from the
+  /// picker; the kind and the label came from the payload.
+  Future<void> _setLicence(String kind, DateTime? date) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      _toast(await _rpc('partner_licence_set', {
+        'p_partner_id': widget.partnerId,
+        'p_kind': kind,
+        'p_expiry': date?.toIso8601String().split('T').first,
+      }));
+    } catch (_) {
+      _toastFailure();
+    }
+    if (!mounted) return;
+    setState(() => _busy = false);
+    await _load();
+  }
+
+  Future<void> _askSuspendReason(Map<String, dynamic> life) async {
+    final ctrl = TextEditingController();
+    final go = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.fromLTRB(Ds.space.x16, Ds.space.x16, Ds.space.x16,
+            Ds.space.x16 + MediaQuery.of(ctx).viewInsets.bottom),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text((life['suspend_label'] ?? '').toString(), style: Ds.t.subtitle),
+            SizedBox(height: Ds.space.x16),
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              decoration: InputDecoration(
+                  hintText: (life['reason_hint'] ?? '').toString()),
+            ),
+            SizedBox(height: Ds.space.x16),
+            SizedBox(
+              height: Ds.touch.minTarget,
+              child: FilledButton(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: Text((life['suspend_label'] ?? '').toString()),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (go == true) await _lifecycle(true, ctrl.text);
+    ctrl.dispose();
+  }
+
+  Future<void> _pickLicenceDate(Map<String, dynamic> row) async {
+    final iso = (row['expiry_iso'] ?? '').toString();
+    final initial = DateTime.tryParse(iso) ?? DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2040),
+    );
+    if (picked == null) return;
+    await _setLicence((row['kind'] ?? '').toString(), picked);
+  }
+
   Future<void> _setAccess(String featureKey, String access) async {
     if (_busy) return;
     setState(() => _busy = true);
@@ -211,6 +298,9 @@ class _AdminPartnerConsoleScreenState extends State<AdminPartnerConsoleScreen> {
               onAccess: _setAccess,
               fenceResult: _fence,
               onVerifyFence: _verifyFence,
+              onSuspend: _askSuspendReason,
+              onResume: () => _lifecycle(false, ''),
+              onLicence: _pickLicenceDate,
             ),
     );
   }
@@ -250,6 +340,9 @@ class PartnerConsoleView extends StatelessWidget {
     this.busy = false,
     this.fenceResult,
     this.onVerifyFence,
+    this.onSuspend,
+    this.onResume,
+    this.onLicence,
   });
 
   final Map<String, dynamic> payload;
@@ -265,6 +358,12 @@ class PartnerConsoleView extends StatelessWidget {
   final Map<String, dynamic>? fenceResult;
   final VoidCallback? onVerifyFence;
 
+  /// CMD #466 rows 153 + 154. Null in a read-only render (and on any build
+  /// whose payload carried no such block) -> the cards simply do not appear.
+  final void Function(Map<String, dynamic> lifecycle)? onSuspend;
+  final VoidCallback? onResume;
+  final void Function(Map<String, dynamic> licenceRow)? onLicence;
+
   String _s(String k) => (payload[k] ?? '').toString();
 
   @override
@@ -275,6 +374,12 @@ class PartnerConsoleView extends StatelessWidget {
     final fence = (payload['fence'] as Map?) == null
         ? const <String, dynamic>{}
         : Map<String, dynamic>.from(payload['fence'] as Map);
+    final lifecycle = (payload['lifecycle'] as Map?) == null
+        ? const <String, dynamic>{}
+        : Map<String, dynamic>.from(payload['lifecycle'] as Map);
+    final licences = (payload['licences'] as Map?) == null
+        ? const <String, dynamic>{}
+        : Map<String, dynamic>.from(payload['licences'] as Map);
     // Written BEFORE the refusal branch on purpose: the render-log has to prove
     // the screen painted even when the backend said no, otherwise a headless
     // non-super session can never verify the route exists at all.
@@ -283,6 +388,14 @@ class PartnerConsoleView extends StatelessWidget {
           'ok=${payload['ok'] == true},users=${users.length},features=${features.length}');
       // CHANGE #352 — the fence card is its own render key, so "the backend
       // fenced it" and "a super-admin can see that it did" are separate proofs.
+      // CMD #466 — the two new cards prove themselves separately, so
+      // "the backend sent it" and "the console drew it" stay distinct.
+      RenderLog.write('c466_partner_lifecycle',
+          'card=${lifecycle['ok'] == true},status=${(lifecycle['status'] ?? '').toString()},'
+          'blocks=${(lifecycle['blocks'] as List?)?.length ?? 0}');
+      RenderLog.write('c466_partner_licences',
+          'card=${licences['ok'] == true},rows=${(licences['rows'] as List?)?.length ?? 0},'
+          'alert=${(licences['alert_tone'] ?? '').toString()}');
       RenderLog.write('c352_partner_fence',
           'card=${fence.isNotEmpty},rows=${(fence['rows'] as List?)?.length ?? 0},'
           'status=${(fence['status_label'] ?? '').toString()}');
@@ -351,6 +464,23 @@ class PartnerConsoleView extends StatelessWidget {
               ),
           ],
         ),
+        if (lifecycle['ok'] == true) ...[
+          SizedBox(height: Ds.space.x24),
+          _LifecycleCard(
+            life: lifecycle,
+            busy: busy,
+            onSuspend: onSuspend,
+            onResume: onResume,
+          ),
+        ],
+        if (licences['ok'] == true) ...[
+          SizedBox(height: Ds.space.x24),
+          _LicenceCard(
+            card: licences,
+            busy: busy,
+            onLicence: onLicence,
+          ),
+        ],
         if (fence.isNotEmpty) ...[
           SizedBox(height: Ds.space.x24),
           _FenceCard(
@@ -692,6 +822,219 @@ class _TonePill extends StatelessWidget {
       ),
       child: Text(label,
           style: Ds.t.caption.copyWith(color: _FenceCard.toneColor(tone))),
+    );
+  }
+}
+
+/// CMD #466 row 154 — a partner's status, and the two consequences the gap
+/// register said were undefined: what happens to work already in hand, and what
+/// happens to the open settlement balance. Every heading, sentence, count and
+/// rupee below is printed from `partner_lifecycle_card()`; nothing on this
+/// widget decides what suspension means.
+class _LifecycleCard extends StatelessWidget {
+  const _LifecycleCard({
+    required this.life,
+    required this.busy,
+    this.onSuspend,
+    this.onResume,
+  });
+
+  final Map<String, dynamic> life;
+  final bool busy;
+  final void Function(Map<String, dynamic> lifecycle)? onSuspend;
+  final VoidCallback? onResume;
+
+  @override
+  Widget build(BuildContext context) {
+    final suspended = life['is_suspended'] == true;
+    final canAct = life['can_act'] == true;
+    final since = (life['suspended_since'] ?? '').toString();
+    final reason = (life['suspend_reason'] ?? '').toString();
+    final blocks = (life['blocks'] as List?) ?? const [];
+
+    return _Card(
+      title: (life['heading'] ?? '').toString(),
+      subtitle: '',
+      children: [
+        Row(
+          children: [
+            _TonePill(
+              label: (life['status_label'] ?? '').toString(),
+              tone: (life['status_tone'] ?? '').toString(),
+            ),
+            SizedBox(width: Ds.space.x12),
+            Expanded(
+              child: Text((life['partner_name'] ?? '').toString(),
+                  style: Ds.t.body, overflow: TextOverflow.ellipsis),
+            ),
+          ],
+        ),
+        if (since.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x8),
+          Text(since, style: Ds.t.caption),
+        ],
+        if (suspended && reason.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x4),
+          Text(reason, style: Ds.t.caption),
+        ],
+        SizedBox(height: Ds.space.x16),
+        for (final b in blocks) ...[
+          _LifecycleBlock(block: Map<String, dynamic>.from(b as Map)),
+          SizedBox(height: Ds.space.x12),
+        ],
+        if (canAct) ...[
+          SizedBox(height: Ds.space.x4),
+          SizedBox(
+            width: double.infinity,
+            height: Ds.touch.minTarget,
+            child: suspended
+                ? OutlinedButton(
+                    key: const ValueKey('partner_resume'),
+                    onPressed: busy ? null : onResume,
+                    child: Text((life['resume_label'] ?? '').toString()),
+                  )
+                : OutlinedButton(
+                    key: const ValueKey('partner_suspend'),
+                    onPressed:
+                        busy || onSuspend == null ? null : () => onSuspend!(life),
+                    style: OutlinedButton.styleFrom(
+                        foregroundColor: Ds.c.danger,
+                        side: BorderSide(color: Ds.c.danger)),
+                    child: Text((life['suspend_label'] ?? '').toString()),
+                  ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _LifecycleBlock extends StatelessWidget {
+  const _LifecycleBlock({required this.block});
+  final Map<String, dynamic> block;
+
+  @override
+  Widget build(BuildContext context) {
+    final amount = (block['amount'] ?? '').toString();
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.all(Ds.space.x12),
+      decoration: BoxDecoration(
+        color: _FenceCard.toneSoft((block['tone'] ?? '').toString()),
+        borderRadius: Ds.r.rChip,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text((block['heading'] ?? '').toString(),
+                    style: Ds.t.bodySecondary),
+              ),
+              if (amount.isNotEmpty) Text(amount, style: Ds.t.subtitle),
+            ],
+          ),
+          SizedBox(height: Ds.space.x4),
+          Text((block['text'] ?? '').toString(), style: Ds.t.caption),
+        ],
+      ),
+    );
+  }
+}
+
+/// CMD #466 row 153 — the licences and when they run out. The row's words and
+/// its tone are `partner_licence_card()`'s; the only thing this widget knows is
+/// that tapping a row asks for a date.
+class _LicenceCard extends StatelessWidget {
+  const _LicenceCard({
+    required this.card,
+    required this.busy,
+    this.onLicence,
+  });
+
+  final Map<String, dynamic> card;
+  final bool busy;
+  final void Function(Map<String, dynamic> licenceRow)? onLicence;
+
+  @override
+  Widget build(BuildContext context) {
+    final rows = (card['rows'] as List?) ?? const [];
+    final canEdit = card['can_edit'] == true && onLicence != null;
+
+    return _Card(
+      title: (card['heading'] ?? '').toString(),
+      subtitle: (card['sub'] ?? '').toString(),
+      children: [
+        _TonePill(
+          label: (card['alert_label'] ?? '').toString(),
+          tone: (card['alert_tone'] ?? '').toString(),
+        ),
+        SizedBox(height: Ds.space.x16),
+        for (final r in rows.cast<Map>().map(Map<String, dynamic>.from))
+          _LicenceRow(
+            row: r,
+            setLabel: (card['set_label'] ?? '').toString(),
+            busy: busy,
+            onTap: canEdit ? () => onLicence!(r) : null,
+          ),
+      ],
+    );
+  }
+}
+
+class _LicenceRow extends StatelessWidget {
+  const _LicenceRow({
+    required this.row,
+    required this.setLabel,
+    required this.busy,
+    this.onTap,
+  });
+
+  final Map<String, dynamic> row;
+  final String setLabel;
+  final bool busy;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: Ds.space.x12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text((row['label'] ?? '').toString(), style: Ds.t.body),
+                SizedBox(height: Ds.space.x4),
+                Text((row['number'] ?? '').toString(), style: Ds.t.caption),
+              ],
+            ),
+          ),
+          SizedBox(width: Ds.space.x12),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              _TonePill(
+                label: (row['expiry_label'] ?? '').toString(),
+                tone: (row['tone'] ?? '').toString(),
+              ),
+              if (onTap != null) ...[
+                SizedBox(height: Ds.space.x4),
+                SizedBox(
+                  height: Ds.touch.minTarget,
+                  child: TextButton(
+                    onPressed: busy ? null : onTap,
+                    child: Text(setLabel),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ],
+      ),
     );
   }
 }

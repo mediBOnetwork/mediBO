@@ -20,6 +20,8 @@
 // picker of its own.
 
 import 'package:flutter/material.dart';
+import '../../design_tokens.dart';
+import '../../models/c529_admin_gaps.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -60,6 +62,13 @@ class _AdminDeliveryPartnerScreenState extends State<AdminDeliveryPartnerScreen>
   String _missingTitle = '';
   String _missingNote = '';
   List<Map<String, dynamic>> _missingRows = const [];
+  // CHANGE #529 gap 38 — 8 of 35 approved suppliers had no lat/lng, so a
+  // collect run could not map them. admin_missing_locations() now carries the
+  // supplier bucket with its OWN backend title/note; nothing is worded here.
+  int _supplierMissingCount = 0;
+  String _supplierMissingTitle = '';
+  String _supplierMissingNote = '';
+  List<Map<String, dynamic>> _supplierMissingRows = const [];
 
   final _partnersKey = GlobalKey<AdminDeliveryPartnersSectionState>();
 
@@ -114,12 +123,18 @@ class _AdminDeliveryPartnerScreenState extends State<AdminDeliveryPartnerScreen>
         _missingTitle = m['title']?.toString() ?? '';
         _missingNote = m['note']?.toString() ?? '';
         _missingRows = _list(m['rows']);
+        final ml = MissingLocationsView.from(m);
+        _supplierMissingCount = ml.supplierMissingCount;
+        _supplierMissingTitle = ml.supplierTitle;
+        _supplierMissingNote = ml.supplierNote;
+        _supplierMissingRows = ml.supplierRows;
         _loading = false;
       });
 
       RenderLog.write('c632_delivery_partners_screen',
           'allowed=$_allowed;zone=$_zoneLabel;date=${AdminDateScope.instance.dateYmd ?? ''};'
-          'riders=${_riders.length};missing=$_missingCount');
+          'riders=${_riders.length};missing=$_missingCount;'
+          'supplier_missing=$_supplierMissingCount');
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
@@ -145,6 +160,9 @@ class _AdminDeliveryPartnerScreenState extends State<AdminDeliveryPartnerScreen>
         title: _missingTitle,
         note: _missingNote,
         rows: _missingRows,
+        supplierTitle: _supplierMissingTitle,
+        supplierNote: _supplierMissingNote,
+        supplierRows: _supplierMissingRows,
       ),
     );
     await _load();
@@ -180,7 +198,9 @@ class _AdminDeliveryPartnerScreenState extends State<AdminDeliveryPartnerScreen>
                         key: _partnersKey,
                         onChanged: _load,
                       ),
-                      if (_missingCount > 0) ...[
+                      // gap 38 — the banner opens on EITHER bucket: a supplier
+                      // with no pin is as unroutable as a customer with none.
+                      if (_missingCount > 0 || _supplierMissingCount > 0) ...[
                         _missingBanner(),
                         const SizedBox(height: 12),
                       ],
@@ -232,6 +252,11 @@ class _AdminDeliveryPartnerScreenState extends State<AdminDeliveryPartnerScreen>
               if (_missingNote.isNotEmpty)
                 Text(_missingNote,
                     style: const TextStyle(fontSize: 12, color: Color(0xFF92400E))),
+              // The supplier bucket prints its OWN backend title on the banner.
+              if (_supplierMissingCount > 0)
+                Text(_supplierMissingTitle,
+                    style: Ds.t.caption.copyWith(
+                        fontWeight: FontWeight.w600, color: Ds.c.warning)),
             ]),
           ),
           const Icon(Icons.chevron_right, color: Color(0xFF92400E)),
@@ -366,11 +391,17 @@ class _MissingLocationsSheet extends StatefulWidget {
   final String title;
   final String note;
   final List<Map<String, dynamic>> rows;
+  final String supplierTitle;
+  final String supplierNote;
+  final List<Map<String, dynamic>> supplierRows;
 
   const _MissingLocationsSheet({
     required this.title,
     required this.note,
     required this.rows,
+    this.supplierTitle = '',
+    this.supplierNote = '',
+    this.supplierRows = const [],
   });
 
   @override
@@ -396,17 +427,23 @@ class _MissingLocationsSheetState extends State<_MissingLocationsSheet> {
   /// p_maps_url takes a PASTED Google Maps link and the backend extracts the
   /// coordinates. No URL is parsed here: this app has no idea what a Maps
   /// link looks like, and must not acquire one.
-  Future<void> _save(String pharmacyId) async {
+  Future<void> _save(String id, {bool isSupplier = false}) async {
     if (_busy) return;
     setState(() => _busy = true);
     try {
       final url = _urlCtrl.text.trim();
-      final res = await Supabase.instance.client.rpc('pharmacy_set_location', params: {
-        'p_pharmacy_id': pharmacyId,
-        'p_lat': double.tryParse(_latCtrl.text.trim()),
-        'p_lng': double.tryParse(_lngCtrl.text.trim()),
-        'p_maps_url': url.isEmpty ? null : url,
-      });
+      // Same two fields, two backends. The supplier RPC records the SOURCE of
+      // the point (manual vs a pasted maps link) so an OSM fallback is never
+      // mistaken for a Google hit.
+      final res = await Supabase.instance.client.rpc(
+        MissingLocationsView.rpcFor(isSupplier: isSupplier),
+        params: {
+          MissingLocationsView.idKeyFor(isSupplier: isSupplier): id,
+          'p_lat': double.tryParse(_latCtrl.text.trim()),
+          'p_lng': double.tryParse(_lngCtrl.text.trim()),
+          'p_maps_url': url.isEmpty ? null : url,
+        },
+      );
       if (!mounted) return;
       final msg = res is Map ? (res['message']?.toString() ?? '') : '';
       if (res is Map && res['ok'] == true) {
@@ -457,14 +494,26 @@ class _MissingLocationsSheetState extends State<_MissingLocationsSheet> {
             ],
             const SizedBox(height: 14),
             for (final r in widget.rows) _row(r),
+            if (widget.supplierRows.isNotEmpty) ...[
+              SizedBox(height: Ds.space.x24),
+              Text(widget.supplierTitle,
+                  style: Ds.t.subtitle.copyWith(color: Ds.c.text)),
+              if (widget.supplierNote.isNotEmpty) ...[
+                SizedBox(height: Ds.space.x4),
+                Text(widget.supplierNote,
+                    style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+              ],
+              SizedBox(height: Ds.space.x12),
+              for (final r in widget.supplierRows) _row(r, isSupplier: true),
+            ],
           ],
         ),
       ),
     );
   }
 
-  Widget _row(Map<String, dynamic> r) {
-    final id = r['pharmacy_id']?.toString() ?? '';
+  Widget _row(Map<String, dynamic> r, {bool isSupplier = false}) {
+    final id = (isSupplier ? r['supplier_id'] : r['pharmacy_id'])?.toString() ?? '';
     final isOpen = _open == id;
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
@@ -477,7 +526,7 @@ class _MissingLocationsSheetState extends State<_MissingLocationsSheet> {
         Row(children: [
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(r['pharmacy_name']?.toString() ?? '',
+              Text((isSupplier ? r['supplier_name'] : r['pharmacy_name'])?.toString() ?? '',
                   style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: _kText)),
               if ((r['address']?.toString() ?? '').isNotEmpty)
                 Text(r['address']!.toString(),
@@ -538,7 +587,7 @@ class _MissingLocationsSheetState extends State<_MissingLocationsSheet> {
               backgroundColor: _kGreen,
               foregroundColor: Colors.white,
             ),
-            onPressed: _busy ? null : () => _save(id),
+            onPressed: _busy ? null : () => _save(id, isSupplier: isSupplier),
             child: Text(_ui('dlv_save_location')),
           ),
         ],

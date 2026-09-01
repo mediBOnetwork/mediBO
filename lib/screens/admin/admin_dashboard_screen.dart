@@ -12,6 +12,7 @@ import 'package:pharma_b2b/widgets/admin_zone_picker.dart'; // CHANGE #609
 import 'package:pharma_b2b/widgets/order_hours_card.dart';
 import 'package:pharma_b2b/widgets/notifications_card.dart';
 import '../../design_tokens.dart';
+import '../../models/c529_admin_gaps.dart';
 import '../../services/ui_copy.dart';
 import 'admin_ops_board_screen.dart';
 import 'command_palette.dart';   // CHANGE #325
@@ -30,6 +31,10 @@ class AdminDashboardScreen extends StatefulWidget {
 
 class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   int _pendingBills = 0;
+  // CHANGE #529 gap 21 — a bill that resolves to no supplier can never be
+  // zoned, so a zone-scoped admin never counted it. It is its own bucket now,
+  // and its wording is the BACKEND's (never a Dart string).
+  UnresolvedBillsTile _unresolved = const UnresolvedBillsTile(count: 0, label: '');
   int _totalMedicines = 0;
   bool _loading = true;
 
@@ -61,6 +66,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         setState(() {
           _totalMedicines = n('medicines');
           _pendingBills   = n('pending_bills');
+          _unresolved     = UnresolvedBillsTile.from(Map<String, dynamic>.from(c));
           _loading = false;
         });
       }
@@ -306,6 +312,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             icon: Icons.inbox_outlined,
             color: _pendingBills > 0 ? const Color(0xFFDC2626) : const Color(0xFF6B7280),
           ),
+          if (_unresolved.show)
+            _StatCard(
+              label: _unresolved.label,
+              value: '${_unresolved.count}',
+              icon: Icons.link_off_outlined,
+              color: Ds.c.warning,
+            ),
           _StatCard(
             label: c('admin_dashboard.stat_medicines'),
             value: '$_totalMedicines',

@@ -43,6 +43,7 @@ import '../../utils/render_log.dart';
 import '../../widgets/masked_call_button.dart';
 import 'admin_delivery_ops_screen.dart';
 import 'admin_delivery_waves_screen.dart';
+import '../delivery/delivery_run_track_sheet.dart';
 import '../../services/ui_copy.dart';
 import '../../design_tokens.dart';
 
@@ -371,6 +372,56 @@ class AdminDeliveryTabState extends State<AdminDeliveryTab>
     } catch (_) {}
   }
 
+  /// One entry point for every backend-declared row action (CMD #454). The
+  /// screen never decides WHICH actions exist — only what each key does.
+  Future<void> _runAction(
+      Map<String, dynamic> action, String deliveryId, String orderId) async {
+    switch (action['key']?.toString() ?? '') {
+      case 'reassign':
+        await _reassign(deliveryId);
+        break;
+      case 'rto_receive':
+        await _rtoReceive(deliveryId);
+        break;
+      case 'redeliver':
+        await _redeliver(orderId);
+        break;
+      case 'track':
+        final runId = action['run_id']?.toString() ?? '';
+        if (runId.isNotEmpty && mounted) {
+          await DeliveryRunTrackSheet.open(context, runId);
+        }
+        break;
+    }
+  }
+
+  /// feature_gaps #100 — a finished delivery is never silently reopened by an
+  /// ordinary assign; this is the explicit path, and it clears the old proof.
+  Future<void> _redeliver(String orderId) async {
+    final picked = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(Ds.r.sheet)),
+      ),
+      builder: (ctx) => _PartnerPicker(
+        partners: _partners,
+        suggested: null,
+        zoneLabel: _zoneLabel,
+        count: 1,
+      ),
+    );
+    if (picked == null || picked.isEmpty) return;
+    try {
+      final res = await Supabase.instance.client.rpc('delivery_redeliver',
+          params: {'p_order_id': orderId, 'p_partner_id': picked});
+      if (!mounted) return;
+      await _load();
+      if (res is Map) _toast(res['message']?.toString() ?? '');
+    } catch (_) {}
+  }
+
   Future<void> _rtoReceive(String deliveryId) async {
     try {
       final res = await Supabase.instance.client
@@ -636,28 +687,32 @@ class AdminDeliveryTabState extends State<AdminDeliveryTab>
                   style: TextStyle(fontSize: 12.5, color: _kSub)),
             ),
           ]),
-          const SizedBox(height: 8),
-          Row(children: [
-            OutlinedButton(
-              style: OutlinedButton.styleFrom(
-                visualDensity: VisualDensity.compact,
-                side: BorderSide(color: _kBorder),
-                foregroundColor: _kText,
-              ),
-              onPressed: () => _reassign(delivery['delivery_id']?.toString() ?? ''),
-              child: Text(_ui('dlv_reassign'), style: const TextStyle(fontSize: 12.5)),
-            ),
-            const SizedBox(width: 8),
-            OutlinedButton(
-              style: OutlinedButton.styleFrom(
-                visualDensity: VisualDensity.compact,
-                side: BorderSide(color: _kBorder),
-                foregroundColor: _kText,
-              ),
-              onPressed: () => _rtoReceive(delivery['delivery_id']?.toString() ?? ''),
-              child: Text(_ui('dlv_rto_receive'), style: const TextStyle(fontSize: 12.5)),
-            ),
-          ]),
+          SizedBox(height: Ds.space.x8),
+          // CMD #454 — the buttons are the payload's `actions[]`, printed in
+          // its order with its labels. A state this build has never heard of
+          // simply offers nothing, instead of the screen guessing which of
+          // reassign / check-in / re-deliver / track applies.
+          Wrap(
+            spacing: Ds.space.x8,
+            runSpacing: Ds.space.x8,
+            children: [
+              for (final a in (delivery['actions'] as List? ?? const []))
+                if (a is Map)
+                  OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      side: BorderSide(color: _kBorder),
+                      foregroundColor: _kText,
+                    ),
+                    onPressed: () => _runAction(
+                      Map<String, dynamic>.from(a),
+                      delivery['delivery_id']?.toString() ?? '',
+                      orderId,
+                    ),
+                    child: Text(a['label']?.toString() ?? '', style: Ds.t.caption),
+                  ),
+            ],
+          ),
         ],
 
         // CHANGE #404 — masked calling. Ops reaches the pharmacy or the rider

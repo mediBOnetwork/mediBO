@@ -490,6 +490,16 @@ declare
   v_to    date := (public._c427_month(p_month) + interval '1 month - 1 day')::date;
   v_rows integer := 0; v_refused integer := 0;
 begin
+  -- A note the pharmacy already hid must NOT come back tonight: the copy says
+  -- "it will not come back this month", so the rebuild remembers the dismissal
+  -- before it drops the month and re-applies it afterwards.
+  create temp table if not exists _c427_hidden (
+    pharmacy_id uuid, medicine_id bigint) on commit drop;
+  delete from _c427_hidden;
+  insert into _c427_hidden
+    select pharmacy_id, medicine_id from public.pharmacy_overpay_insight
+     where month_key = v_month and status = 'dismissed';
+
   delete from public.pharmacy_overpay_insight where month_key = v_month;
 
   with raw as (
@@ -544,6 +554,12 @@ begin
          (select count(*) from gap
            where peer_shops < v_floor and delta_pct >= v_cfg.overpay_min_gap_pct)
     into v_rows, v_refused;
+
+  update public.pharmacy_overpay_insight i
+     set status = 'dismissed', dismissed_at = coalesce(i.dismissed_at, now())
+    from _c427_hidden h
+   where i.month_key = v_month
+     and i.pharmacy_id = h.pharmacy_id and i.medicine_id = h.medicine_id;
 
   return jsonb_build_object('ok', true, 'month', v_month, 'insights', v_rows,
     'refused_below_floor', v_refused, 'min_cohort', v_floor,
@@ -680,16 +696,18 @@ returns jsonb
 language plpgsql stable security definer set search_path to 'public' as $$
 declare v_shop uuid := public.pos_shop(); v_n integer := 0;
 begin
-  if v_shop is null then return jsonb_build_object('has', false); end if;
+  -- `show` (never `has`) so the app bar reads the same field it reads for the
+  -- vault and the exchange: the BACKEND decides the button exists.
+  if v_shop is null then return jsonb_build_object('ok', true, 'show', false); end if;
   select count(*) into v_n from public.pharmacy_overpay_insight
    where pharmacy_id = v_shop and status <> 'dismissed';
   return jsonb_build_object(
-    'has', true,
+    'ok', true, 'show', true,
     'label', public.ui_text('overpay427.entry'),
     'count', v_n,
     'badge', case when v_n > 0 then v_n::text else '' end);
 exception when others then
-  return jsonb_build_object('has', false);
+  return jsonb_build_object('ok', true, 'show', false);
 end $$;
 
 create or replace function public.pharmacy_overpay_insights()

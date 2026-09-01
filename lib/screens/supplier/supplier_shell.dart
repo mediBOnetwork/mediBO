@@ -10,6 +10,7 @@ import 'supplier_add_medicine_screen.dart';
 import 'supplier_home_screen.dart';
 import 'supplier_inquiry_screen.dart';
 import 'supplier_orders_screen.dart';
+import 'supplier_payments_screen.dart';
 import 'supplier_payout_screen.dart';
 import 'supplier_records_screen.dart';
 import 'supplier_staff_screen.dart';
@@ -189,6 +190,18 @@ class _SupplierShellState extends State<SupplierShell> {
                       builder: (_) => const SupplierPayoutScreen()));
                 },
               ),
+            // CHANGE #527 (#62) — the supplier's own payment statement. Before
+            // this row he could not see what was owed, what was paid or
+            // against which PO anywhere in the product.
+            ListTile(
+              leading: Icon(Icons.payments_outlined, color: Ds.c.text),
+              title: Text(c('supplier_pay.feature_label'), style: Ds.t.body),
+              onTap: () {
+                Navigator.pop(sheetCtx);
+                Navigator.push(context, MaterialPageRoute<void>(
+                    builder: (_) => const SupplierPaymentsScreen()));
+              },
+            ),
             // CHANGE #403 — one row, four record surfaces behind it. The tabs
             // inside are the backend's list, so a fifth record type never
             // grows this sheet.

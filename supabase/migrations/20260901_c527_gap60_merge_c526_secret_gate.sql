@@ -1,0 +1,19 @@
+-- c527 · feature_gaps #60, merged with cmd #526's gap-28 secret gate.
+--
+-- #526 landed its second factor on the inquiry form WHILE this command was
+-- building: it replaced submit_inquiry_form / get_inquiry_form with 3-arg
+-- versions whose bodies were copied from before #60 existed, which silently
+-- removed the part-quantity capture. Re-applying the 2-arg version would have
+-- removed #526's gate in turn. So both changes live in ONE body from here on:
+-- the gate runs first, then the answer may carry a part quantity.
+--
+-- The full applied bodies are in the migration history
+-- (c527_gap60_merge_into_c526_secret_gate). This file records the contract:
+--   submit_inquiry_form(p_token, p_answers, p_secret)
+--     · answers accept an extra `offered_qty` text field
+--     · validated as TEXT (1..asked), blank / >= asked means the whole quantity
+--     · the PO takes the offered qty; _inquiry_cascade_remainder sends only the
+--       unmet remainder to the next supplier, at ANSWER time
+--     · returns the form plus `partial_splits[]`
+--   get_inquiry_form(p_token, p_secret)
+--     · decorates every item with `partial_qty` {enabled,label,hint,asked_label,max}

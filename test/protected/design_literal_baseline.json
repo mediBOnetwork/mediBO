@@ -62,7 +62,7 @@
   "lib/screens/company_screen.dart": 15,
   "lib/screens/delivery/agency_team_section.dart": 44,
   "lib/screens/delivery/customer_track_sheet.dart": 5,
-  "lib/screens/delivery/delivery_home_panel.dart": 35,
+  "lib/screens/delivery/delivery_home_panel.dart": 34,
   "lib/screens/delivery/delivery_home_screen.dart": 37,
   "lib/screens/delivery/delivery_id_scan.dart": 29,
   "lib/screens/delivery/delivery_proof_sheet.dart": 31,

@@ -21,6 +21,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../fulfill/fulfill_lookups.dart';
 import '../../utils/render_log.dart';
 import '../delivery/delivery_tracking_view.dart';
+import '../delivery/reschedule_sheet.dart';
 
 class TrackPage extends StatefulWidget {
   final String token;
@@ -114,7 +115,22 @@ class _TrackPageState extends State<TrackPage> {
                                               fontSize: 13.5, color: Color(0xFF6B7280))),
                                   ],
                                 )
-                              : DeliveryTrackingView(data: d, onRefetch: _load),
+                              // CHANGE #406 — the customer's half of a failed
+                              // attempt, on the SAME token that authorised the
+                              // page. The card draws nothing at all unless the
+                              // backend says this delivery has failed one.
+                              : Column(
+                                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                                  children: [
+                                    DeliveryTrackingView(
+                                        data: d, onRefetch: _load),
+                                    RescheduleCard(
+                                      key_: widget.token,
+                                      door: RescheduleDoor.token,
+                                      onChanged: _load,
+                                    ),
+                                  ],
+                                ),
                     ),
                   ),
           ),

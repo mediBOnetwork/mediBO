@@ -23,6 +23,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../design_tokens.dart';
 import '../../utils/render_log.dart';
+import 'admin_sos_screen.dart';
 
 class AdminDeliveryOpsScreen extends StatefulWidget {
   const AdminDeliveryOpsScreen({super.key});
@@ -114,10 +115,19 @@ class _AdminDeliveryOpsScreenState extends State<AdminDeliveryOpsScreen> {
                         Text(_data['subtitle']!.toString(), style: Ds.t.caption),
                         SizedBox(height: Ds.space.x24),
                       ],
+                      // CHANGE #406 — an open SOS outranks everything else on
+                      // this screen, so it is drawn FIRST and before the
+                      // backend's own section list. Both panels return an
+                      // empty box when there is nothing to say.
+                      const AdminSosPanel(),
+                      SizedBox(height: Ds.space.x24),
                       for (final s in _sections) ...[
                         _section(s),
                         SizedBox(height: Ds.space.x24),
                       ],
+                      // CHANGE #406 — the stops we promised to try again. Last,
+                      // because it is a planning list rather than an alert.
+                      const AdminReattemptPanel(),
                     ],
                   ),
       ),

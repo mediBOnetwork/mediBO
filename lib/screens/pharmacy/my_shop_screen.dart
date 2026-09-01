@@ -151,7 +151,11 @@ class _MyShopScreenState extends State<MyShopScreen> {
     // was reachable — a proof that would have stayed green through the desktop
     // regression QA actually found. A key on the paint cannot be true unless
     // the widget is on screen.
-    RenderLog.write(
+    // writeNow, not write: the 800 ms debounce is useless on a surface whose
+    // whole purpose is to be navigated AWAY from into one of nineteen feature
+    // screens, and a verifier that reads the log the instant boot paints — one
+    // RPC before this tab does — sees the debounced value not at all.
+    RenderLog.writeNow(
       'c536_my_shop',
       'sections:${sections.length};tiles:${sections.fold<int>(0, (n, s) => n + _rows(s['items']).length)}',
     );

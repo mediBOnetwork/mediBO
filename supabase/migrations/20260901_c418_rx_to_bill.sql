@@ -808,3 +808,141 @@ set search_path to 'public' as $$
 $$;
 revoke all on function public.c418_qa_report() from public, anon, authenticated;
 grant execute on function public.c418_qa_report() to service_role;
+
+-- ══════════ 8. THE QA BLOCKER, RETIRED AS A CLASS (journey qa-418-233) ══════
+--
+-- The blocker QA filed was "Vertex returns 403 and every AI/OCR feature is
+-- dark". The BILLING switch is not a journey — it is a payment-config change
+-- and it is escalated. What IS a journey, and what actually bit a user, is the
+-- second half of that failure: when a model provider fails, the raw provider
+-- error reached the screen. The first live 403 put a 900-character Google
+-- billing JSON, naming a GCP project, on a pharmacy's till.
+--
+-- So this journey asserts CONTAINMENT, and it asserts it as a class rather than
+-- on the one function that leaked:
+--   1. a failed read is RECORDED (status='failed', the technical text kept for
+--      the audit) rather than swallowed — a silent failure is the other way
+--      this bug hurts, because the counter just watches a spinner;
+--   2. the payload carries the ui_copy sentence, never the provider's text;
+--   3. NO provider/vendor token appears anywhere in the rendered payload;
+--   4. no OTHER rx payload builder interpolates ocr_error either — the check is
+--      on the source of every function in the family, so the NEXT one written
+--      that pipes a provider error to the screen turns this red on the day it
+--      lands, not after it has been seen by a shop.
+-- It also REPORTS whether Vertex is currently reachable, as evidence rather
+-- than an assertion, so the open blocker stays visible on the card while the
+-- containment it caused stays green.
+create or replace function public._journey_c418_provider_error()
+returns jsonb language plpgsql security definer
+set search_path to 'public' as $function$
+declare
+  v_scan uuid;
+  v_payload jsonb;
+  v_shop uuid;
+  a_recorded boolean; a_copy boolean; a_no_leak boolean; a_family_clean boolean;
+  v_leakers text;
+  v_last record;
+begin
+  select id into v_shop from public.pharmacy_profiles
+   where coalesce(is_deleted,false) = false order by id limit 1;
+
+  -- A synthetic scan, failed with a provider error shaped exactly like the one
+  -- that leaked. Cleaned up at the end whatever happens.
+  insert into public.rx_scan (pharmacy_id, status, image_path)
+  values (v_shop, 'reading', 'journey/qa-418-233.png') returning id into v_scan;
+
+  perform public.rx_scan_report(
+    v_scan, false, 'gemini-3.5-flash', '[]'::jsonb, null,
+    'Vertex AI error 403: {"error":{"code":403,"status":"PERMISSION_DENIED",'
+    || '"details":[{"reason":"BILLING_DISABLED","metadata":{"consumer":'
+    || '"projects/project-b83d3f5f-25d0-45ef-a4e"}}]}}', 900);
+
+  select (status = 'failed' and length(coalesce(ocr_error,'')) > 100)
+    into a_recorded from public.rx_scan where id = v_scan;
+
+  v_payload := public._c418_detail(v_shop, v_scan);
+  a_copy := (v_payload->>'failed_message') = public.ui_text('rx.err_read_failed');
+
+  a_no_leak := position('BILLING_DISABLED' in v_payload::text) = 0
+           and position('PERMISSION_DENIED' in v_payload::text) = 0
+           and position('aiplatform' in v_payload::text) = 0
+           and position('Vertex' in v_payload::text) = 0
+           and position('project-b83d3f5f' in v_payload::text) = 0;
+
+  -- The class check: no rx payload builder may interpolate ocr_error.
+  --
+  -- COMMENTS ARE STRIPPED FIRST. The naive version of this scan flagged
+  -- _c418_detail on the strength of the comment that explains why it stopped
+  -- rendering ocr_error — a guard that fails on the note describing the fix is
+  -- a guard everyone learns to ignore, which is worse than no guard.
+  select string_agg(p.proname, ',' order by p.proname) into v_leakers
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public'
+     and (p.proname like 'rx\_scan\_%' or p.proname like '\_c418\_%')
+     and p.proname not in ('rx_scan_report')          -- the writer, not a renderer
+     and regexp_replace(p.prosrc, '--[^\n]*', '', 'g') like '%ocr\_error%';
+  a_family_clean := v_leakers is null;
+
+  delete from public.rx_scan where id = v_scan;
+
+  -- Evidence only: is the provider actually reachable right now?
+  select r.status, left(coalesce(r.ocr_error,''), 60) as err into v_last
+    from public.rx_scan r
+   where r.ocr_error is not null order by r.created_at desc limit 1;
+
+  -- dev_journeys_run reads `status` and `evidence`; anything else is recorded
+  -- as a NULL status and the insert fails on the not-null. Same shape as
+  -- _journey_c414_shop_fence.
+  return jsonb_build_object(
+    'status', case when a_recorded and a_copy and a_no_leak and a_family_clean
+                   then 'passed' else 'failed' end,
+    'evidence', jsonb_build_object(
+      'asserts', jsonb_build_object(
+        'failure_is_recorded_not_swallowed', a_recorded,
+        'payload_carries_ui_copy_sentence',  a_copy,
+        'no_provider_token_in_payload',      a_no_leak,
+        'no_rx_builder_interpolates_ocr_error', a_family_clean),
+      'db_proof', 'renderers leaking ocr_error=' || coalesce(v_leakers, 'none')
+        || ' | last real provider outcome=' || coalesce(v_last.status, 'none')
+        || ' | note: the Vertex BILLING_DISABLED blocker is escalated separately '
+        || '(payment config), this journey holds down its containment'));
+end $function$;
+
+revoke all on function public._journey_c418_provider_error() from public, anon, authenticated;
+grant execute on function public._journey_c418_provider_error() to service_role;
+
+-- Wire it into the ONE probe, and give the auto-created stub real steps and the
+-- right area (it was minted under 'delivery' by the generic bug->journey path).
+do $$
+declare v_src text;
+begin
+  select p.prosrc into v_src from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.proname = 'dev_journey_probe';
+  if v_src is not null and position('qa-418-233' in v_src) = 0 then
+    execute 'create or replace function public.dev_journey_probe(p_name text) '
+         || 'returns jsonb language plpgsql security definer set search_path to ''public'' as $body$'
+         || replace(v_src,
+              '  perform public._dev_guard();',
+              '  perform public._dev_guard();' || chr(10) || chr(10)
+              || '  -- CMD #418 — a model provider''s raw error reaching a pharmacy''s till,' || chr(10)
+              || '  -- retired as a class (see _journey_c418_provider_error).' || chr(10)
+              || '  if p_name = ''qa-418-233'' then return public._journey_c418_provider_error(); end if;')
+         || '$body$';
+  end if;
+end $$;
+
+update public.dev_journeys
+   set area = 'pharmacy',
+       steps = to_jsonb(array[
+         'Write a failed read onto a scan with a provider error shaped like the real Vertex 403.',
+         'Assert the failure is RECORDED (status=failed, technical text kept for the audit) and not swallowed.',
+         'Render the counter payload and assert failed_message is ui_copy''s sentence.',
+         'Assert no provider token (BILLING_DISABLED, PERMISSION_DENIED, aiplatform, Vertex, the project id) appears anywhere in the payload.',
+         'Scan the SOURCE of every rx_scan_*/_c418_* renderer, comments stripped, and assert none interpolates ocr_error — so the NEXT one written that leaks turns this red on the day it lands.']),
+       assertions = to_jsonb(array[
+         'a failed read sets status=failed and keeps the technical error on the row',
+         'the payload carries ui_copy rx.err_read_failed, never the provider text',
+         'no provider/vendor token appears in the rendered payload',
+         'no rx payload builder interpolates ocr_error (class check, not one function)',
+         'the Vertex BILLING_DISABLED blocker itself is escalated as payment config, not asserted here'])
+ where name = 'qa-418-233';

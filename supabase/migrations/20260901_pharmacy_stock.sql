@@ -702,7 +702,10 @@ create or replace function public._phs_sale_event_trg()
 returns trigger language plpgsql security definer set search_path = public as $$
 declare v_res jsonb;
 begin
-  if new.event_type <> 'sale.completed' or new.consumed is not null then
+  -- `consumed` is a MAP of consumer -> result, not one consumer's slot: #416
+  -- will stamp the register's own key on the same row. So the guard is our own
+  -- key, and the write is a merge — never an overwrite of somebody else's answer.
+  if new.event_type <> 'sale.completed' or coalesce(new.consumed, '{}'::jsonb) ? 'stock' then
     return new;
   end if;
   begin
@@ -711,7 +714,9 @@ begin
     v_res := jsonb_build_object('ok', false, 'error', 'stock_consume_failed',
                                 'detail', sqlerrm, 'at', now());
   end;
-  update public.pos_sale_event set consumed = v_res where id = new.id;
+  update public.pos_sale_event
+     set consumed = coalesce(consumed, '{}'::jsonb) || jsonb_build_object('stock', v_res)
+   where id = new.id;
   return new;
 end $$;
 
@@ -1052,7 +1057,9 @@ begin
    where id = p_import_id;
 
   return jsonb_build_object('ok', true, 'rows', v_n,
-    'message', public.ui_textf('phstock.import_applied',
+    'message', public.ui_textf(
+                 case when v_n = 1 then 'phstock.import_applied_one'
+                      else 'phstock.import_applied_many' end,
                  jsonb_build_object('n', v_n::text)));
 end $$;
 
@@ -1259,7 +1266,9 @@ begin
     'rows',      v_rows,
     'has_more',  coalesce(v_more, false),
     'negative_note', case when v_neg > 0
-                     then public.ui_textf('phstock.negative_note',
+                     then public.ui_textf(
+                            case when v_neg = 1 then 'phstock.negative_note_one'
+                                 else 'phstock.negative_note_many' end,
                             jsonb_build_object('n', v_neg::text)) else null end,
     'empty', case when jsonb_array_length(v_rows) = 0 then jsonb_build_object(
                  'title', public.ui_text(case when v_q is not null or v_f <> 'all'
@@ -1430,9 +1439,13 @@ begin
     'title',     public.ui_text('phstock.import_review_title'),
     'status_label', case v_imp.status
        when 'scanning' then public.ui_text('phstock.import_scanning')
-       when 'ready'    then public.ui_textf('phstock.import_ready',
+       when 'ready'    then public.ui_textf(
+                              case when v_imp.rows_total = 1 then 'phstock.import_ready_one'
+                                   else 'phstock.import_ready_many' end,
                               jsonb_build_object('n', v_imp.rows_total::text))
-       when 'applied'  then public.ui_textf('phstock.import_applied',
+       when 'applied'  then public.ui_textf(
+                              case when v_imp.rows_applied = 1 then 'phstock.import_applied_one'
+                                   else 'phstock.import_applied_many' end,
                               jsonb_build_object('n', v_imp.rows_applied::text))
        when 'failed'   then public.ui_text('phstock.import_failed')
        else public.ui_text('phstock.import_started') end,
@@ -1504,7 +1517,8 @@ insert into public.ui_copy (key, value) values
   ('phstock.src_outside',      to_jsonb('Outside purchase'::text)),
   ('phstock.src_adjust',       to_jsonb('Adjusted'::text)),
 
-  ('phstock.negative_note',    to_jsonb('{n} batch(es) went negative — the counter sold stock this list did not know you had. Correct them and the numbers start telling the truth.'::text)),
+  ('phstock.negative_note_one', to_jsonb('1 batch went negative — the counter sold stock this list did not know you had. Correct it and the numbers start telling the truth.'::text)),
+  ('phstock.negative_note_many', to_jsonb('{n} batches went negative — the counter sold stock this list did not know you had. Correct them and the numbers start telling the truth.'::text)),
   ('phstock.note_sold_unknown', to_jsonb('Sold at the counter with no stock on record'::text)),
 
   ('phstock.empty_title',      to_jsonb('Nothing on the shelf yet'::text)),
@@ -1560,8 +1574,10 @@ insert into public.ui_copy (key, value) values
   ('phstock.import_apply',     to_jsonb('Add to shelf'::text)),
   ('phstock.import_started',   to_jsonb('Ready for your file'::text)),
   ('phstock.import_scanning',  to_jsonb('Reading the photo…'::text)),
-  ('phstock.import_ready',     to_jsonb('{n} row(s) read — check them before saving'::text)),
-  ('phstock.import_applied',   to_jsonb('{n} row(s) added to the shelf'::text)),
+  ('phstock.import_ready_one',  to_jsonb('1 row read — check it before saving'::text)),
+  ('phstock.import_ready_many', to_jsonb('{n} rows read — check them before saving'::text)),
+  ('phstock.import_applied_one',  to_jsonb('1 row added to the shelf'::text)),
+  ('phstock.import_applied_many', to_jsonb('{n} rows added to the shelf'::text)),
   ('phstock.import_already',   to_jsonb('This list was already added'::text)),
   ('phstock.import_failed',    to_jsonb('The photo could not be read. Try a straighter, brighter shot.'::text)),
   ('phstock.import_review_title', to_jsonb('Check before saving'::text)),

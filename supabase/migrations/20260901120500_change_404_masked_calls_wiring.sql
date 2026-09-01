@@ -771,3 +771,227 @@ end $$;
 
 revoke all on function public.call_setup_status() from public, anon, authenticated;
 grant execute on function public.call_setup_status() to authenticated;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 15. A button that cannot work must not be drawn.
+--
+--     call_mask_prepare refuses with `no_number` when the CALLER has no
+--     reachable phone — the provider has to ring the caller's leg first, so
+--     there is nothing to connect. call_mask_targets was only checking the
+--     CALLEE, which meant a viewer with no number on file was offered buttons
+--     that were always going to refuse. Absence is the honest answer, and it is
+--     the same answer this layer gives everywhere else.
+-- ─────────────────────────────────────────────────────────────────────────
+create or replace function public.call_mask_targets(p_order_ids uuid[])
+returns jsonb
+language plpgsql
+stable security definer
+set search_path to 'public'
+as $$
+declare
+  v_actor jsonb := public.call_actor_party(auth.uid());
+  v_role text;
+  v_out jsonb := '{}'::jsonb;
+  v_order uuid; v_acts jsonb; v_blk jsonb; v_callee text;
+begin
+  -- Not a party, or a party with no number of their own: no buttons. Both are
+  -- the same refusal call_mask_prepare would give a moment later.
+  if coalesce((v_actor->>'ok')::boolean,false) is not true
+     or coalesce(v_actor->>'phone','') = '' then
+    return jsonb_build_object('ok', true, 'orders', '{}'::jsonb,
+                              'privacy_note', public._c('call.privacy_note'));
+  end if;
+  v_role := v_actor->>'role';
+
+  foreach v_order in array coalesce(p_order_ids, array[]::uuid[]) loop
+    v_acts := '[]'::jsonb;
+    foreach v_callee in array array['customer','delivery','partner','supplier','employee'] loop
+      if v_callee = v_role then continue; end if;
+      v_blk := public._call_action_block(v_role, v_callee, v_order);
+      if v_blk ? 'has' then v_acts := v_acts || jsonb_build_array(v_blk); end if;
+    end loop;
+    if jsonb_array_length(v_acts) > 0 then
+      v_out := v_out || jsonb_build_object(v_order::text, v_acts);
+    end if;
+  end loop;
+
+  return jsonb_build_object('ok', true, 'orders', v_out,
+                            'privacy_note', public._c('call.privacy_note'));
+end $$;
+
+revoke all on function public.call_mask_targets(uuid[]) from public, anon, authenticated;
+grant execute on function public.call_mask_targets(uuid[]) to authenticated;
+
+-- The three test logins need a number on file or the masked path is untestable
+-- on the live site: partner staff resolve their phone through user_profiles
+-- when `identity` is a login rather than a mobile. These are the same reserved
+-- 9000000xxx test range the supplier rows use — never dialled, never real.
+insert into public.user_profiles (id, full_name, phone)
+select u.id, 'Test Partner (masked-call test)', '9000000101'
+from auth.users u where u.email = 'test.partner1@medibo.in'
+on conflict (id) do update set phone = coalesce(nullif(btrim(user_profiles.phone),''), excluded.phone);
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 16. Nobody is ever bridged to themselves.
+--
+--     The ops desk is "whichever employee has a number", and a person can hold
+--     two party roles at once (a partner login that also has a user_profiles
+--     row is both 'partner' and 'employee'). Resolving 'employee' on such an
+--     order handed back the caller's OWN number — a session bridging a phone to
+--     itself, and a "Call mediBO" button that rings the person pressing it.
+--     Identity is compared on the E.164 number rather than on party ids,
+--     because the ids come from five different tables and the number is the
+--     thing the provider would actually dial.
+-- ─────────────────────────────────────────────────────────────────────────
+create or replace function public._call_action_block(
+  p_caller_role text, p_callee_role text, p_order_id uuid)
+returns jsonb
+language plpgsql
+stable security definer
+set search_path to 'public'
+as $$
+declare v_cfg public.call_config%rowtype; v_t jsonb; v_me jsonb;
+begin
+  select * into v_cfg from public.call_config where id;
+  if not coalesce(v_cfg.enabled, false) then return '{}'::jsonb; end if;
+  if not public._call_allowed(p_caller_role, p_callee_role) then return '{}'::jsonb; end if;
+
+  v_t := public._call_target(p_order_id, p_callee_role);
+  if coalesce((v_t->>'ok')::boolean, false) is not true then return '{}'::jsonb; end if;
+
+  -- A button that would ring the person pressing it is not a button.
+  v_me := public.call_actor_party(auth.uid());
+  if coalesce(v_me->>'phone','') <> ''
+     and v_me->>'phone' = v_t->>'phone' then
+    return '{}'::jsonb;
+  end if;
+
+  return jsonb_build_object(
+    'has', true,
+    'label', public._c('call.button_' || p_callee_role),
+    'target_role', p_callee_role,
+    'order_id', p_order_id,
+    'privacy_note', public._c('call.privacy_note'));
+end $$;
+
+revoke all on function public._call_action_block(text, text, uuid) from public, anon, authenticated;
+
+-- The same rule where it actually matters: a session is never minted between
+-- two identical numbers, however the two legs were resolved.
+create or replace function public.call_mask_prepare(
+  p_actor uuid, p_order_id uuid, p_target_role text)
+returns jsonb
+language plpgsql
+volatile security definer
+set search_path to 'public'
+as $$
+declare
+  v_cfg public.call_config%rowtype;
+  v_caller jsonb; v_callee jsonb;
+  v_did text; v_sess public.call_sessions%rowtype; v_ttl int;
+begin
+  select * into v_cfg from public.call_config where id;
+  if not coalesce(v_cfg.enabled,false) then
+    return jsonb_build_object('ok', false, 'error', 'calling_disabled',
+                              'message', public._c('call.disabled'));
+  end if;
+
+  v_caller := public.call_actor_party(p_actor);
+  if coalesce((v_caller->>'ok')::boolean,false) is not true then
+    return jsonb_build_object('ok', false, 'error', 'not_a_party',
+                              'message', public._c('call.not_allowed'));
+  end if;
+
+  if not public._call_allowed(v_caller->>'role', p_target_role) then
+    return jsonb_build_object('ok', false, 'error', 'not_allowed',
+                              'message', public._c('call.not_allowed'));
+  end if;
+
+  v_callee := public._call_target(p_order_id, p_target_role);
+  if coalesce((v_callee->>'ok')::boolean,false) is not true then
+    return jsonb_build_object(
+      'ok', false,
+      'error', coalesce(v_callee->>'error','no_target'),
+      'message', case when v_callee->>'error' = 'no_number'
+                      then public._c('call.no_number')
+                      else public._c('call.no_target') end);
+  end if;
+
+  if coalesce(v_caller->>'phone','') = '' then
+    return jsonb_build_object('ok', false, 'error', 'no_number',
+                              'message', public._c('call.no_number'));
+  end if;
+
+  -- Never bridge a number to itself (see _call_action_block: one person can
+  -- hold two party roles).
+  if v_caller->>'phone' = v_callee->>'phone' then
+    return jsonb_build_object('ok', false, 'error', 'no_target',
+                              'message', public._c('call.no_target'));
+  end if;
+
+  if exists (select 1 from public.orders o
+             where o.id = p_order_id and o.closed_at is not null) then
+    return jsonb_build_object('ok', false, 'error', 'order_closed',
+                              'message', public._c('call.session_closed'));
+  end if;
+
+  select * into v_sess
+  from public.call_sessions s
+  where s.order_id = p_order_id
+    and s.caller_role = v_caller->>'role' and s.caller_party_id = v_caller->>'party_id'
+    and s.callee_role = v_callee->>'role' and s.callee_party_id = v_callee->>'party_id'
+    and s.status = 'active' and s.expires_at > now()
+  order by s.created_at desc
+  limit 1;
+
+  if not found then
+    select p.did into v_did
+    from public.call_did_pool p
+    where p.is_active and p.provider = v_cfg.provider
+    order by p.last_used_at nulls first, p.id
+    limit 1;
+
+    if coalesce(v_did,'') = '' then
+      return jsonb_build_object('ok', false, 'error', 'no_did',
+                                'message', public._c('call.no_did'));
+    end if;
+
+    v_ttl := greatest(coalesce(v_cfg.session_ttl_min, 240), 1);
+
+    insert into public.call_sessions (
+      order_id, caller_role, caller_party_id, caller_phone,
+      callee_role, callee_party_id, callee_phone,
+      did, provider, expires_at, created_by)
+    values (
+      p_order_id, v_caller->>'role', v_caller->>'party_id', v_caller->>'phone',
+      v_callee->>'role', v_callee->>'party_id', v_callee->>'phone',
+      v_did, v_cfg.provider, now() + make_interval(mins => v_ttl), p_actor)
+    returning * into v_sess;
+
+    update public.call_did_pool set last_used_at = now() where did = v_did;
+  end if;
+
+  return jsonb_build_object(
+    'ok', true,
+    'session_id', v_sess.id,
+    'order_id', v_sess.order_id,
+    'provider', v_sess.provider,
+    'did', v_sess.did,
+    'caller', jsonb_build_object('role', v_sess.caller_role, 'phone', v_sess.caller_phone,
+                                 'name', v_caller->>'name'),
+    'callee', jsonb_build_object('role', v_sess.callee_role, 'phone', v_sess.callee_phone,
+                                 'name', v_callee->>'name'),
+    'expires_at', v_sess.expires_at,
+    'record_calls', coalesce(v_cfg.record_calls,false),
+    'exotel_subdomain', v_cfg.exotel_subdomain,
+    'exotel_caller_id', nullif(v_cfg.exotel_caller_id, ''),
+    'copy', jsonb_build_object(
+      'connecting',   public._c('call.connecting'),
+      'placed',       public._c('call.placed'),
+      'dial_hint',    public._c('call.dial_hint'),
+      'privacy_note', public._c('call.privacy_note'),
+      'stub_notice',  public._c('call.stub_notice'),
+      'failed',       public._c('call.provider_failed')));
+end $$;
+
+revoke all on function public.call_mask_prepare(uuid, uuid, text) from public, anon, authenticated;

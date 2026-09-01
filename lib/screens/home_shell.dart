@@ -91,6 +91,7 @@ import 'pharmacy/pharmacy_stock_screen.dart'; // CMD #412 — the pharmacy's she
 import 'pharmacy/pharmacy_gst_screen.dart'; // CMD #440 — /admin/go/pharmacy_gst
 import 'pharmacy/pharmacy_refill_screen.dart'; // CMD #417 — refills & counter
 import 'pharmacy/pharmacy_overpay_screen.dart'; // CMD #427 — /admin/go/price_check
+import 'pharmacy/paper_sale_screen.dart'; // CMD #429 — /admin/go/paper_sale
 import 'admin/admin_demand_engine_screen.dart'; // CMD #427 — /admin/go/demand_engine
 import 'profile_screen.dart';
 import 'storefront_screen.dart';
@@ -651,6 +652,11 @@ class _HomeShellState extends State<HomeShell> {
   /// Every other key stays admin-only exactly as it was.
   static const Set<String> _selfGatedRoutes = {
     'pharmacy_stock', 'pharmacy_vault', 'pos', 'home',
+    // CMD #429 — the paper sale sheet is a PHARMACY's own screen, so it is
+    // self-gated like the shelf and the counter: paper_sale_home() resolves
+    // the caller's own pharmacy and the screen prints the backend's refusal
+    // for anyone else. The link grants a door, never a permission.
+    'paper_sale',
     // CMD #427 — the price check is a PHARMACY's own screen.
     // pharmacy_overpay_insights() gates on the caller's own pharmacy and the
     // screen prints its refusal, so opening this link as the wrong role shows
@@ -816,6 +822,16 @@ class _HomeShellState extends State<HomeShell> {
       case 'pharmacy_stock':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const PharmacyStockScreen()));
+        break;
+      // CMD #429/#444 — handwritten sale sheets photographed at the counter.
+      // The proven entry is the counter's own app-bar button (CHANGE #916);
+      // this is the deep link the closing-time nudge points at, which could
+      // not land with #429 because this file was leased for the whole of it.
+      // Its registry tile stayed is_active=false until this case existed, so
+      // the tile was never a tap that did nothing.
+      case 'paper_sale':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const PaperSaleScreen()));
         break;
       // CMD #432 — the shop's UPI ID and its printable counter QR. Reached
       // from the counter's own app bar (and from the payment chips when UPI is

@@ -63,7 +63,20 @@ String _fmtRupee(dynamic v) {
 class AdminAlertOverlay extends StatefulWidget {
   final Widget child;
   final VoidCallback? onOrderTap;
-  const AdminAlertOverlay({super.key, required this.child, this.onOrderTap});
+
+  /// CHANGE #537 — the order's OWN id, handed to the host so it can ask the
+  /// backend which pipeline stage that order is actually at
+  /// (fulfill_order_stage) and open Fulfill on that tab, instead of dropping
+  /// the admin on a list to go and find it. Preferred over [onOrderTap] when
+  /// both are supplied and the alert carries an id.
+  final ValueChanged<String>? onOrderStageTap;
+
+  const AdminAlertOverlay({
+    super.key,
+    required this.child,
+    this.onOrderTap,
+    this.onOrderStageTap,
+  });
 
   @override
   State<AdminAlertOverlay> createState() => _AdminAlertOverlayState();
@@ -983,7 +996,14 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
               child: FilledButton(
                 onPressed: () {
                   _dismiss();
-                  widget.onOrderTap?.call();
+                  // CHANGE #537 — order_id is the uuid; `orderId` above is the
+                  // human-readable code (payment_id) and is not a key.
+                  final uuid = (rec['order_id'] as String?) ?? '';
+                  if (uuid.isNotEmpty && widget.onOrderStageTap != null) {
+                    widget.onOrderStageTap!(uuid);
+                  } else {
+                    widget.onOrderTap?.call();
+                  }
                 },
                 style: FilledButton.styleFrom(
                   backgroundColor: const Color(0xFF15803D),

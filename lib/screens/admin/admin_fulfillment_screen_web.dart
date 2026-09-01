@@ -35,6 +35,10 @@ import '../../services/date_labels.dart'; // C546: backend-owned date strings
 import '../../supabase_config.dart' show SupabaseConfig;
 import 'voice_receive.dart';
 import 'admin_delivery_tab.dart'; // CHANGE #629: Delivery tab (zone + date scoped)
+import 'admin_customer_screen.dart'; // CHANGE #537: pipeline stage 1 reuses this screen
+import 'admin_supplier_screen.dart'; // CHANGE #537: pipeline stages 2 and 3 reuse this screen
+import '../../fulfill/fulfill_pipeline_tabs.dart'; // CHANGE #537: the 9-stage bar
+import '../../design_tokens.dart'; // CHANGE #537: skeleton + empty state on tokens
 import 'barcode_count_screen.dart'; // CHANGE #624: barcode counting screen
 import '../../fulfill/count_voice_hooks.dart'; // COUNT MODE: voice bridge
 import '../../widgets/pinned_footer_list.dart';
@@ -8548,17 +8552,50 @@ class AdminFulfillmentScreen extends StatefulWidget {
   /// (Collect / Count / Bag / Pack / Assign to delivery), so the tab it starts
   /// on is a construction parameter rather than a second copy of the screen.
   /// Default 0 keeps every existing call site byte-identical.
+  ///
+  /// LEGACY as of CHANGE #537: this is an index into the pre-#537 six-tab bar,
+  /// and an index is exactly what stopped working once a partner's bar can be
+  /// shorter than an admin's. It is kept — the partner console's route map
+  /// still passes it — and mapped through [_legacyStages] below. New callers
+  /// pass [initialStage] instead, which is the backend's own key and cannot
+  /// mean a different screen for a different user.
   final int initialTab;
 
   /// CHANGE #528 (feature_gaps row 142) — the tab indexes this caller may see.
   /// `null` = unbounded, which is every admin/super-admin call site and keeps
   /// them byte-identical. A partner is handed the list `partner_open().tabs`
   /// returned, so ONE grant no longer opens all six tabs.
+  ///
+  /// LEGACY as of CHANGE #537, together with [initialTab]: both are INDEXES
+  /// into the pre-#537 six-tab bar, and an index is exactly what stops meaning
+  /// one thing once a partner's bar can be shorter than an admin's. Both are
+  /// kept — the partner console still passes them — and translated through
+  /// `_legacyStages` in the State. New callers name the backend's own stage
+  /// key via [initialStage], which cannot mean a different screen for a
+  /// different user.
   final Set<int>? allowedTabs;
 
-  AdminFulfillmentScreen({this.initialTab = 0, this.allowedTabs})
+  /// CHANGE #537 — the stage to open on, as a BACKEND key
+  /// (`fulfill_tabs().tabs[].stage_key` / `feature_registry.route_key`). Wins
+  /// over [initialTab]. A stage this user cannot see is ignored and the first
+  /// stage they CAN see opens instead.
+  final String? initialStage;
+
+  AdminFulfillmentScreen(
+      {this.initialTab = 0, this.allowedTabs, this.initialStage})
       : super(key: _key);
   static void triggerFocus() => _key.currentState?._onFocus();
+
+  /// CHANGE #537 — deep link straight to a pipeline stage.
+  ///
+  /// The caller passes the BACKEND's own stage key ('warehouse', 'dispute',
+  /// 'customer_order'…), which is what `fulfill_tabs().tabs[].stage_key` and
+  /// the registry's route_key both are. A key this build has never heard of,
+  /// or one the caller has no permission for (so the backend never sent that
+  /// tab), selects nothing and leaves the current tab alone — never an
+  /// exception, never a blank body.
+  static void openStage(String stageKey) =>
+      _key.currentState?._selectStage(stageKey);
 
   @override
   State<AdminFulfillmentScreen> createState() => _AdminFulfillmentScreenState();
@@ -8566,15 +8603,48 @@ class AdminFulfillmentScreen extends StatefulWidget {
 
 class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
     with WidgetsBindingObserver {
-  int _tab = 0;
-  int _disputeCount = 0; // #132C: open dispute count for tab badge
-  int _shopCount = 0;      // CHANGE #473: Supplier Shop tab badge
-  int _warehouseCount = 0; // CHANGE #473: Warehouse tab badge
+  // ── CHANGE #537: the tab bar is a payload, not nine widgets ──────────────
+  //
+  // The pipeline an order travels — Customer order → Supplier inquiry →
+  // Supplier order → Supplier shop → Warehouse → Bag → Pack → Delivery →
+  // Dispute — is NOT written down in this file. `fulfill_tabs()` sends the
+  // stages, their order, their labels and their badges; this screen renders
+  // them and maps each stage key to the body that already existed for it.
+  //
+  // That is also the whole of the partner story: a region partner calls the
+  // same RPC and is simply not sent a stage their permission matrix does not
+  // grant. The order of the rest is untouched, because the order is the
+  // backend's `sort` and never an index in Dart.
+  //
+  // The selected tab is therefore a STAGE KEY, not an index. An index would
+  // mean tab 4 is a different screen for an admin than for a partner.
+  FulfillPipelinePayload _pipeline = FulfillPipelinePayload.empty;
+  bool _pipelineLoading = true;
+  String _stage = '';
+
+  /// Stages whose body has been opened at least once. A body is built on
+  /// first visit and then kept alive — nine stages include three full consoles
+  /// (Customer orders, Supplier inquiry, Supplier orders), and building all
+  /// nine on mount would fire every one of their loads at once for tabs the
+  /// operator may never open.
+  final Set<String> _visited = <String>{};
+
+  Timer? _pipelineDebounce;
+
+  int _disputeCount = 0; // #132C: open dispute count (now also proven server-side)
+  int _shopCount = 0;      // CHANGE #473: Supplier Shop count
+  int _warehouseCount = 0; // CHANGE #473: Warehouse count
   final _collectKey   = GlobalKey<_PickToLightScreenState>();
   final _disputesKey  = GlobalKey<_DisputesScreenState>();
   final _packTabKey   = GlobalKey<_PackTabState>();
   final _bagTabKey    = GlobalKey<_BagTabState>();
   final _deliveryKey  = GlobalKey<AdminDeliveryTabState>(); // CHANGE #629
+  // CHANGE #537 — stages 1-3 reuse the existing consoles. Their own keys (not
+  // the screens' static ones) are what let an embedded instance coexist with
+  // the shell's.
+  final _customerOrderKey   = GlobalKey();
+  final _supplierInquiryKey = GlobalKey();
+  final _supplierOrderKey   = GlobalKey();
 
   // ── #187→C353: realtime now via the single FulfillRealtime channel ────────
   Timer? _collectDebounce;
@@ -8613,46 +8683,53 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
     if (!mounted) return;
     // C355: an event reached THIS device (local or from another device) and is now
     // driving a visible-tab refetch — same code path for both. This is the unify point.
-    RenderLog.write('c355_rt_refetch', 'tab=$_tab');
+    RenderLog.write('c355_rt_refetch', 'tab=$_stage');
+    // CHANGE #537 — a pipeline change moves the badges too, not just the rows.
+    _schedulePipelineReload();
     // C358 B1: proof that a refetch is triggered ONLY by a real Postgres change event
     // (never a timer). Carries the changed table(s). The refetch itself is now SILENT.
     RenderLog.write('c358_rt_only', 'tbl=${changedTables.join("+")}');
     // C358 B3: a dispute change re-renders the Supplier Shop / Warehouse rows (chips +
     // the #357 Dispute Type / Item Status columns) so resolutions reflect back here.
-    if (changedTables.contains('supplier_disputes') && (_tab == 0 || _tab == 1)) {
-      RenderLog.write('c358_line_synced', 'tab=${_tab == 0 ? 'shop' : 'warehouse'}');
+    if (changedTables.contains('supplier_disputes') &&
+        (_stage == 'supplier_shop' || _stage == 'warehouse')) {
+      RenderLog.write('c358_line_synced',
+          'tab=${_stage == 'supplier_shop' ? 'shop' : 'warehouse'}');
     }
     // C360: a realtime change (e.g. a dispute raised at confirm) silently re-renders
     // the visible counting tab — no manual refresh, no polling.
-    if (_tab == 0 || _tab == 1) {
-      RenderLog.write('c361_synced', 'tab=${_tab == 0 ? 'shop' : 'warehouse'},src=rt');
+    if (_stage == 'supplier_shop' || _stage == 'warehouse') {
+      RenderLog.write('c361_synced',
+          'tab=${_stage == 'supplier_shop' ? 'shop' : 'warehouse'},src=rt');
     }
     // C354: a dispute change alters recounts/splits/chips on EVERY tab, not just the
     // visible one. Refresh the Pack dispute index regardless of which tab is showing so
     // its read-only chips are correct the instant the packer switches to it.
-    if (changedTables.contains('supplier_disputes') && _tab != 3) {
+    if (changedTables.contains('supplier_disputes') && _stage != 'pack') {
       _packTabKey.currentState?.refreshDisputeIndex();
     }
-    switch (_tab) {
-      case 0: // Supplier Shop
+    switch (_stage) {
+      case 'supplier_shop':
         _collectKey.currentState?._refetchFromRealtime();
         break;
-      case 1: // Warehouse / Arrivals (logs c353_refetch inside)
+      case 'warehouse': // logs c353_refetch inside
         _arrivalsKey.currentState?.refreshAll();
         break;
-      case 2: // Bag
+      case 'bag':
         RenderLog.write('c353_refetch', 'src=rt,tab=bag');
         _bagTabKey.currentState?.refreshFromRealtime();
         break;
-      case 3: // Pack
+      case 'pack':
         RenderLog.write('c353_refetch', 'src=rt,tab=pack');
         _packTabKey.currentState?.refreshFromRealtime();
         break;
-      case 4: // Disputes (chips data on Collect invalidated too)
+      case 'dispute': // chips data on Collect invalidated too
         RenderLog.write('c353_refetch', 'src=rt,tab=disputes');
         _disputesKey.currentState?._load();
         _collectKey.currentState?._loadDisputes();
         break;
+      // Stages 1-3 are whole consoles that own their realtime refetch; a
+      // stage this build has never heard of falls through in silence.
     }
   }
 
@@ -8669,19 +8746,29 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
   }
   // #132A: called by _PickToLightScreenState after loading disputes.
   void _setDisputeCount(int n) {
-    if (mounted && n != _disputeCount) setState(() => _disputeCount = n);
+    if (mounted && n != _disputeCount) {
+      setState(() => _disputeCount = n);
+      _schedulePipelineReload();
+    }
   }
-  // CHANGE #473: tab badge counts for Supplier Shop / Warehouse.
+  // CHANGE #473 → #537: the tab badges are now the BACKEND's numbers
+  // (fulfill_tabs()), so a child reporting a new count is a signal that the
+  // pipeline moved, not the badge itself. Refresh the payload and let the
+  // server say what the badges are.
   void _setShopCount(int n) {
-    if (mounted && n != _shopCount) setState(() => _shopCount = n);
+    if (mounted && n != _shopCount) {
+      setState(() => _shopCount = n);
+      _schedulePipelineReload();
+    }
   }
   void _setWarehouseCount(int n) {
-    if (mounted && n != _warehouseCount) setState(() => _warehouseCount = n);
+    if (mounted && n != _warehouseCount) {
+      setState(() => _warehouseCount = n);
+      _schedulePipelineReload();
+    }
   }
-  // #132B: open Disputes tab from item popup "View dispute". (#280: Disputes is now index 4)
-  void _openDisputesTab() {
-    if (mounted && _tabAllowed(4)) setState(() => _tab = 4);
-  }
+  // #132B: open the Dispute stage from an item popup's "View dispute".
+  void _openDisputesTab() => _selectStage('dispute');
 
   // C174/B6+B15: single refresh point — call after any dispute-state-changing action.
   void _refreshDisputeState() {
@@ -8695,7 +8782,12 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
   // the 5 tab widgets listens to AdminDateScope independently for its own
   // refetch, so this listener only needs to rebuild this shell.
   void _onDateScopeChanged() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    setState(() {});
+    // CHANGE #537 — the badges are "orders at that stage on the ACTIVE date",
+    // so the date moving is a badge change. The RPC re-reads the scope itself;
+    // no date is sent from here (#545).
+    _loadPipeline();
   }
 
   // CHANGE #531: repaint when the backend lookup payloads land, so the tabs
@@ -8715,17 +8807,51 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
     return null;
   }
 
+  /// CHANGE #537 — the pre-#537 tab order, kept ONLY so the two index-based
+  /// inputs this screen still accepts keep meaning what their callers meant:
+  /// [AdminFulfillmentScreen.initialTab] (#307) and
+  /// [AdminFulfillmentScreen.allowedTabs] (#528). Note index 4 was Disputes
+  /// and 5 was Delivery — the old bar was not in pipeline order, which is the
+  /// thing this change fixes.
+  static const List<String> _legacyStages = <String>[
+    'supplier_shop', 'warehouse', 'bag', 'pack', 'dispute', 'delivery',
+  ];
+
+  String _stageForLegacyTab(int i) =>
+      (i >= 0 && i < _legacyStages.length) ? _legacyStages[i] : '';
+
+  /// #528's fence, restated in stage terms: a stage key must never WIDEN a
+  /// grant. An index-bounded caller keeps only the stages whose legacy index
+  /// it was granted; the three stages that never had an index (Customer
+  /// order, Supplier inquiry, Supplier order) are therefore unbounded-only,
+  /// which is the safe direction. An unbounded caller — every admin — is
+  /// governed by the backend payload alone.
+  bool _stageAllowed(String key) {
+    if (widget.allowedTabs == null) return true;
+    final i = _legacyStages.indexOf(key);
+    return i >= 0 && _tabAllowed(i);
+  }
+
   @override
   void initState() {
     super.initState();
-    _tab = widget.initialTab;           // CHANGE #307
+    // CHANGE #307 → #537: the requested tab is now a STAGE. A caller that
+    // named the stage outright wins; otherwise the legacy index is translated.
+    var want = widget.initialTab;
     // CHANGE #528 row 142 — a bounded caller can never land on, or reach, a
     // tab it was not granted. The clamp is here as well as on the tab row so
     // an out-of-range initialTab cannot smuggle one in.
-    if (!_tabAllowed(_tab)) {
+    if (!_tabAllowed(want)) {
       final first = _firstAllowedTab();
-      if (first != null) _tab = first;
+      if (first != null) want = first;
     }
+    final named = widget.initialStage;
+    // _loadPipeline() keeps this stage if the backend sent it and falls back
+    // to the first stage it DID send otherwise, so a caller asking for a stage
+    // they have lost lands somewhere real instead of on a blank body.
+    _stage = (named != null && named.isNotEmpty && _stageAllowed(named))
+        ? named
+        : _stageForLegacyTab(want);
     WidgetsBinding.instance.addObserver(this);
     AdminDateScope.instance.addListener(_onDateScopeChanged);
     // CHANGE #531: one fetch per session for fw_error_messages()+fw_issue_options(),
@@ -8734,6 +8860,9 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
     FulfillLookups.instance.addListener(_onLookupsChanged);
     FulfillLookups.instance.ensureLoaded();
     _subscribeRealtime();
+    // CHANGE #537 — the tab bar arrives from the backend, so it is fetched
+    // like any other payload. Until it lands there are no tabs and no body.
+    _loadPipeline();
     // C358 B1: the Fulfill area subscribes to realtime ONLY (event-driven). There is
     // NO periodic/interval refetch timer scheduled here or in any tab — refetches fire
     // solely on a real Postgres change event (debounced 400ms) or an explicit action.
@@ -8778,6 +8907,7 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
     WidgetsBinding.instance.removeObserver(this);
     _collectDebounce?.cancel();
     _disputeDebounce?.cancel();
+    _pipelineDebounce?.cancel();
     FulfillRealtime.instance.removeListener(_onRealtimeChange);
     AdminDateScope.instance.removeListener(_onDateScopeChanged);
     FulfillLookups.instance.removeListener(_onLookupsChanged);
@@ -8788,11 +8918,149 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
 
   // #137: switch to Collect tab and pre-select supplier so staff can use the voice feature.
   void _openVoiceInCollect(String supplier) {
-    if (!_tabAllowed(0)) return;   // CHANGE #528 row 142
-    setState(() => _tab = 0);
+    _selectStage('supplier_shop');
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _collectKey.currentState?.selectSupplierForVoice(supplier);
     });
+  }
+
+  // ── CHANGE #537: the pipeline payload ─────────────────────────────────────
+
+  /// One call: the stages this user may see, in the backend's order, with the
+  /// badge for each already counted from the very queries the tabs render.
+  ///
+  /// No date and no zone are sent. `fulfill_tabs()` reads the ONE admin date
+  /// (#545) and the ONE zone (#609) itself — and for a region partner
+  /// admin_active_zone() returns their own zone before anything else, which is
+  /// what makes the partner view zone-scoped without a single parameter here.
+  Future<void> _loadPipeline() async {
+    try {
+      final res = await Supabase.instance.client
+          .rpc('fulfill_tabs')
+          .timeout(const Duration(seconds: 20));
+      if (!mounted) return;
+      var payload = FulfillPipelinePayload.fromJson(
+          res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{});
+      // CHANGE #528 row 142 still applies on top of the payload: an
+      // index-bounded caller is never widened by a stage the backend sent.
+      if (widget.allowedTabs != null) {
+        payload = payload.copyWithTabs(
+            payload.tabs.where((t) => _stageAllowed(t.stageKey)).toList());
+      }
+      setState(() {
+        _pipeline = payload;
+        _pipelineLoading = false;
+        // Keep the operator where they were. Only fall back to the first
+        // stage when the current one is gone (or was never chosen) — a
+        // permission change must not silently move someone's tab.
+        if (payload.indexOfStage(_stage) < 0) {
+          _stage = payload.firstStage;
+        }
+        if (_stage.isNotEmpty) _visited.add(_stage);
+      });
+      RenderLog.write('c537_pipeline_loaded',
+          'n=${payload.tabs.length};stage=$_stage;partner=${payload.isPartner}');
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _pipelineLoading = false);
+    }
+  }
+
+  /// Badges follow the pipeline, so a mutation anywhere re-reads them — once,
+  /// after the dust settles, never per row.
+  void _schedulePipelineReload() {
+    _pipelineDebounce?.cancel();
+    _pipelineDebounce = Timer(const Duration(milliseconds: 900), () {
+      if (mounted) _loadPipeline();
+    });
+  }
+
+  /// Select a stage by the BACKEND's key. A key that is not in the payload —
+  /// unknown to this build, or one this user has no permission for — is
+  /// ignored in silence: the current tab stays, nothing throws.
+  void _selectStage(String stageKey) {
+    if (!mounted) return;
+    if (_pipeline.indexOfStage(stageKey) < 0) {
+      RenderLog.write('c537_stage_unknown', stageKey);
+      return;
+    }
+    if (_stage != stageKey) {
+      setState(() {
+        _stage = stageKey;
+        _visited.add(stageKey);
+      });
+    } else {
+      _visited.add(stageKey);
+    }
+    RenderLog.write('c537_stage_open', stageKey);
+    // Each stage refetches on open exactly as it did when it was tab N.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      switch (stageKey) {
+        case 'supplier_shop':
+          _scheduleCollectReload();
+          break;
+        case 'warehouse':
+          _arrivalsKey.currentState?.refresh();
+          break;
+        case 'bag':
+          _bagTabKey.currentState?._load();
+          break;
+        case 'pack':
+          _packTabKey.currentState?._load();
+          break;
+        case 'dispute':
+          _disputesKey.currentState?._load();
+          break;
+        case 'delivery':
+          _deliveryKey.currentState?.reload();
+          break;
+      }
+    });
+  }
+
+  /// The body behind one stage. Every one of these is the screen that ALREADY
+  /// served that stage — this change moved them under one bar, it did not
+  /// rebuild any of them. A stage key this build does not know renders
+  /// nothing, so the backend can add a tenth stage before the app ships one.
+  Widget _bodyForStage(String stageKey) {
+    switch (stageKey) {
+      case 'customer_order':
+        return AdminCustomerScreen(
+            key: _customerOrderKey,
+            initialFilter: 'customerOrders',
+            embedded: true);
+      case 'supplier_inquiry':
+        return AdminSupplierScreen(
+            key: _supplierInquiryKey, initialFilter: 'inquiry', embedded: true);
+      case 'supplier_order':
+        return AdminSupplierScreen(
+            key: _supplierOrderKey, initialFilter: 'orders', embedded: true);
+      case 'supplier_shop':
+        return _PickToLightScreen(
+            key: _collectKey, onSupplierCountChanged: _setShopCount);
+      case 'warehouse':
+        return _ArrivalsScreen(
+          key: _arrivalsKey,
+          onVoiceCount: _openVoiceInCollect,
+          onSupplierCountChanged: _setWarehouseCount,
+        );
+      case 'bag':
+        return _BagTab(key: _bagTabKey);
+      case 'pack':
+        return _PackTab(key: _packTabKey);
+      case 'delivery':
+        return AdminDeliveryTab(key: _deliveryKey);
+      case 'dispute':
+        return _DisputesScreen(
+          key: _disputesKey,
+          onCountChanged: _setDisputeCount,
+          onRefreshCollect: _refreshCollect,
+          onRefreshArrivals: _refreshArrivals,
+          onRefreshPack: _refreshPack,
+        );
+      default:
+        return const SizedBox.shrink();
+    }
   }
 
   @override
@@ -8808,151 +9076,77 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
     RenderLog.write('c334_build', '334');
     RenderLog.write('c335_build', '335');
     RenderLog.write('c113_fulfillment_tabs_top', viewport);
+    final tabs = _pipeline.tabs;
+    final selected = _pipeline.indexOfStage(_stage);
+
     return Column(children: [
       Container(
         color: _kCard,
         padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          // CHANGE #545 — the Fulfill header date chip is DELETED. All five
-          // tabs (Supplier Shop, Warehouse, Bag, Pack, Disputes) follow the ONE
-          // admin date picker on the Dashboard, above the ORDER HOURS card.
+          // CHANGE #545 — the Fulfill header date chip is DELETED. Every stage
+          // follows the ONE admin date picker on the Dashboard, above the
+          // ORDER HOURS card.
+          //
+          // CHANGE #537 — and the bar itself is now fulfill_tabs(): nine
+          // stages in the order an order physically travels, each with the
+          // backend's own label and the backend's own badge, and a partner
+          // simply not sent the stages they hold no permission for.
           const SizedBox(height: 8),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(children: [
-              // CHANGE #473: count badges — 'count' (shop) / 'warehouse_count'
-              // (warehouse) from fw_list_arrivals, muted/neutral (not an alert).
-              // CHANGE #528 row 142 — every slot below is gated on the grant.
-              if (_tabAllowed(0)) Stack(clipBehavior: Clip.none, children: [
-                _TabBtn('Supplier Shop', _tab == 0, () {
-                  setState(() => _tab = 0);
-                  _scheduleCollectReload();
-                }),
-                if (_shopCount > 0)
-                  Positioned(
-                    top: -4, right: -4,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: FulfillLookups.instance.color('c_ff6b7280'),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Text('$_shopCount',
-                          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
-                              color: Colors.white, height: 1.2)),
-                    ),
-                  ),
-              ]),
-              if (_tabAllowed(0) && _tabAllowed(1)) const SizedBox(width: 6),
-              if (_tabAllowed(1)) Stack(clipBehavior: Clip.none, children: [
-                _TabBtn('Warehouse', _tab == 1, () {
-                  setState(() => _tab = 1);
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    _arrivalsKey.currentState?.refresh();
-                  });
-                }),
-                if (_warehouseCount > 0)
-                  Positioned(
-                    top: -4, right: -4,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: FulfillLookups.instance.color('c_ff6b7280'),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Text('$_warehouseCount',
-                          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
-                              color: Colors.white, height: 1.2)),
-                    ),
-                  ),
-              ]),
-              if (_tabAllowed(2)) const SizedBox(width: 6),
-              if (_tabAllowed(2)) _TabBtn('Bag', _tab == 2, () {
-                setState(() => _tab = 2);
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  _bagTabKey.currentState?._load();
-                });
-              }),
-              if (_tabAllowed(3)) const SizedBox(width: 6),
-              if (_tabAllowed(3)) _TabBtn('Pack', _tab == 3, () {
-                setState(() => _tab = 3);
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  _packTabKey.currentState?._load();
-                });
-              }),
-              if (_tabAllowed(4)) const SizedBox(width: 6),
-              // #132C: Disputes tab with open-count badge (#280: now index 4).
-              // CHANGE #528 row 142 — 'partner.disputes' is a registered
-              // feature now, so this tab is governed like the other five.
-              if (_tabAllowed(4)) Stack(clipBehavior: Clip.none, children: [
-                _TabBtn('Disputes', _tab == 4, () {
-                  setState(() => _tab = 4);
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    _disputesKey.currentState?._load();
-                  });
-                }),
-                if (_disputeCount > 0)
-                  Positioned(
-                    top: -4, right: -4,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: FulfillLookups.instance.color('c_ff7c3aed'),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Text('$_disputeCount',
-                          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
-                              color: Colors.white, height: 1.2)),
-                    ),
-                  ),
-              ]),
-              if (_tabAllowed(5)) const SizedBox(width: 6),
-              // CHANGE #629: Delivery tab — index 5. Shares the ONE admin date
-              // picker and the ONE zone picker; the tab itself passes both to
-              // every call it makes.
-              if (_tabAllowed(5)) _TabBtn(FulfillLookups.instance.ui('dlv_admin_tab'), _tab == 5, () {
-                setState(() => _tab = 5);
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  _deliveryKey.currentState?.reload();
-                });
-              }),
-            ]),
-          ),
+          if (tabs.isNotEmpty)
+            FulfillPipelineTabBar(
+              tabs: tabs,
+              selectedStage: _stage,
+              onSelect: _selectStage,
+              selectedColor: _kGreen,
+              unselectedColor: _kSub,
+              badgeColor: FulfillLookups.instance.color('c_ff6b7280'),
+              surfaceColor: _kCard,
+            )
+          else if (_pipelineLoading)
+            // The pipeline has a known shape, so show the shape rather than a
+            // spinner — and the header does not collapse and jump when the
+            // payload lands.
+            FulfillPipelineTabBarSkeleton(color: Ds.c.divider)
+          else
+            // A refusal and an empty matrix both print the backend's own
+            // words. There is no Dart fallback copy for either.
+            SizedBox(
+              height: Ds.touch.minTarget + Ds.space.x8,
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  _pipeline.message.isNotEmpty
+                      ? _pipeline.message
+                      : _pipeline.emptyMessage,
+                  style: TextStyle(
+                      fontSize: Ds.t.captionSize,
+                      fontWeight: FontWeight.w500,
+                      color: _kSub),
+                ),
+              ),
+            ),
           const SizedBox(height: 1),
           Divider(height: 1, color: _kBorder),
         ]),
       ),
       Expanded(
         child: Builder(builder: (context) {
-          RenderLog.write('c280_fulfill_tabs_5', 5);
-          // CHANGE #629: six tabs — Delivery joined the five above.
-          RenderLog.write('c629_fulfill_tabs', 6);
+          RenderLog.write('c537_fulfill_tabs', tabs.length);
+          RenderLog.write('c537_fulfill_stage', _stage);
           // CHANGE #284: confirms Confirm-all gating removed; fires at boot for curl verify.
           RenderLog.write('c284_confirm_always_clickable', 'gating_removed=y;enabled=always');
-          // CHANGE #528 row 142 — a tab the caller was not granted is not
-          // merely unselectable, it is not built. IndexedStack indexes stay
-          // aligned, so tab 3 is still tab 3 for everyone.
+          if (tabs.isEmpty || selected < 0) return const SizedBox.shrink();
           return IndexedStack(
-            index: _tab,
+            index: selected,
             children: [
-              if (_tabAllowed(0))
-                _PickToLightScreen(key: _collectKey, onSupplierCountChanged: _setShopCount)
-              else const SizedBox.shrink(),
-              if (_tabAllowed(1))
-                _ArrivalsScreen(
-                  key: _arrivalsKey,
-                  onVoiceCount: _openVoiceInCollect,
-                  onSupplierCountChanged: _setWarehouseCount,
-                )
-              else const SizedBox.shrink(),
-              if (_tabAllowed(2)) _BagTab(key: _bagTabKey) else const SizedBox.shrink(),
-              if (_tabAllowed(3)) _PackTab(key: _packTabKey) else const SizedBox.shrink(),
-              if (_tabAllowed(4))
-                _DisputesScreen(key: _disputesKey, onCountChanged: _setDisputeCount,
-                    onRefreshCollect: _refreshCollect, onRefreshArrivals: _refreshArrivals,
-                    onRefreshPack: _refreshPack)
-              else const SizedBox.shrink(),
-              if (_tabAllowed(5)) AdminDeliveryTab(key: _deliveryKey) else const SizedBox.shrink(),
+              // Built on FIRST VISIT and kept alive from then on. Three of the
+              // nine stages are whole consoles; mounting all nine up front
+              // would fire every one of their loads for tabs nobody opened.
+              for (final t in tabs)
+                _visited.contains(t.stageKey)
+                    ? _bodyForStage(t.stageKey)
+                    : const SizedBox.shrink(),
             ],
           );
         }),

@@ -1209,3 +1209,157 @@ begin
     'intent', v_intent, 'grounded', v_grounded, 'reservation_id', v_res,
     'handoff', not v_grounded);
 end $$;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 16. THE INBOUND LOOP. Same idiom as reorder_wa_inbound (#173): a narrow
+--     handler plus an AFTER INSERT trigger that answers through wa-reply.
+--     It answers ONLY when this pharmacy asked this phone (an open offer) or
+--     the phone is bound to a storefront. A supplier or customer number is
+--     refused outright — the B2B flows are untouched.
+-- ═══════════════════════════════════════════════════════════════════════════
+insert into public.app_settings(key, value) values
+ ('refill_wa_inbound', jsonb_build_object(
+    'enabled', true,
+    'yes',  jsonb_build_array('1','yes','y','haan','han','ha','ok','okay','reserve','confirm','book'),
+    'stop', jsonb_build_array('stop','stop refill','unsubscribe','band karo','mat bhejo')))
+on conflict (key) do nothing;
+
+create or replace function public.refill_wa_inbound(p_phone text, p_text text)
+returns jsonb language plpgsql security definer set search_path to 'public' as $$
+declare
+  v_cfg jsonb; v_norm text; v_ph text; o public.refill_offer%rowtype;
+  sc public.refill_schedule%rowtype; pt public.refill_patient%rowtype;
+  sf public.pharmacy_storefront%rowtype; v_line jsonb; v_res uuid;
+  v_shop uuid; v_name text; v_tok text;
+begin
+  select value into v_cfg from public.app_settings where key = 'refill_wa_inbound';
+  if not coalesce((v_cfg->>'enabled')::boolean, false) then
+    return jsonb_build_object('handled', false, 'reason','disabled');
+  end if;
+
+  v_ph := right(regexp_replace(coalesce(p_phone,''), '\D','','g'), 10);
+  if length(v_ph) <> 10 then
+    return jsonb_build_object('handled', false, 'reason','no_phone');
+  end if;
+  -- a supplier / customer / staff number is never a patient
+  if public._c417_is_b2b_number(v_ph) then
+    return jsonb_build_object('handled', false, 'reason','b2b_number');
+  end if;
+
+  v_norm := btrim(regexp_replace(lower(coalesce(p_text,'')), '[^a-z0-9 ]', '', 'g'));
+  v_norm := regexp_replace(v_norm, '\s+', ' ', 'g');
+  if v_norm = '' then return jsonb_build_object('handled', false, 'reason','empty'); end if;
+
+  -- (a) the storefront handshake: "shop <token>" binds this phone to a shelf
+  if v_norm like 'shop %' then
+    v_tok := split_part(v_norm, ' ', 2);
+    select * into sf from public.pharmacy_storefront
+     where lower(token) = v_tok and is_active;
+    if found then
+      insert into public.storefront_session(phone, pharmacy_id, source)
+      values (v_ph, sf.pharmacy_id, 'wa')
+      on conflict (phone) do update
+        set pharmacy_id = excluded.pharmacy_id, last_seen_at = now();
+      v_name := public._c417_shop_name(sf.pharmacy_id);
+      return jsonb_build_object('handled', true, 'phone', v_ph, 'action','bound',
+        'pharmacy_id', sf.pharmacy_id,
+        'reply', public._c417_fmt('counter.greeting', jsonb_build_object('shop', v_name)));
+    end if;
+  end if;
+
+  -- (b) STOP always wins, wherever the phone stands
+  if exists (select 1 from jsonb_array_elements_text(coalesce(v_cfg->'stop','[]'::jsonb)) t
+              where t = v_norm) then
+    update public.refill_patient set opted_in = false, opted_out_at = now(), updated_at = now()
+     where phone = v_ph;
+    update public.refill_offer set status = 'declined', answered_at = now()
+     where phone = v_ph and status = 'open';
+    return jsonb_build_object('handled', true, 'phone', v_ph, 'action','stop',
+      'reply', public.ui_text('refill.wa_stopped'));
+  end if;
+
+  -- (c) "1" against an OPEN offer — the reservation the pharmacy hands over
+  if exists (select 1 from jsonb_array_elements_text(coalesce(v_cfg->'yes','[]'::jsonb)) t
+              where t = v_norm) then
+    select * into o from public.refill_offer
+     where phone = v_ph and status = 'open' and expires_at > now()
+     order by created_at desc limit 1;
+    if not found then
+      return jsonb_build_object('handled', true, 'phone', v_ph, 'action','no_offer',
+        'reply', public.ui_text('refill.wa_nothing'));
+    end if;
+    select * into sc from public.refill_schedule where id = o.schedule_id;
+    select * into pt from public.refill_patient where id = o.patient_id;
+    v_name := public._c417_shop_name(o.pharmacy_id);
+
+    v_line := public._c417_stock_line(o.pharmacy_id, sc.medicine_id, sc.product_name, 1);
+    if v_line is null then
+      -- not on the shelf right now: still reserve it against the schedule, so
+      -- the counter sees the ask instead of the patient hearing nothing.
+      v_line := jsonb_build_object('medicine_id', sc.medicine_id,
+                  'product_name', sc.product_name, 'pack_label', sc.pack_label,
+                  'qty', 1, 'in_stock', false);
+    end if;
+    v_res := public._c417_reserve(o.pharmacy_id, o.patient_id, v_ph, pt.name,
+               jsonb_build_array(v_line), 'refill', null);
+    update public.refill_offer
+       set status = 'accepted', answered_at = now(), reservation_id = v_res
+     where id = o.id;
+
+    perform public.notify('refill_reserved', v_ph, jsonb_build_object(
+      'shop', v_name, 'product', sc.product_name, 'channel','whatsapp'));
+
+    return jsonb_build_object('handled', true, 'phone', v_ph, 'action','reserved',
+      'pharmacy_id', o.pharmacy_id, 'reservation_id', v_res,
+      'reply', public._c417_fmt('refill.wa_reserved',
+                 jsonb_build_object('shop', v_name, 'product', sc.product_name)));
+  end if;
+
+  -- (d) anything else, from a phone already bound to a shelf, is the AI
+  --     counter's. The trigger routes it; nothing is answered from here.
+  select pharmacy_id into v_shop from public.storefront_session where phone = v_ph;
+  if v_shop is not null
+     and coalesce((select ai_enabled from public.refill_settings where pharmacy_id = v_shop), true)
+  then
+    update public.storefront_session set last_seen_at = now() where phone = v_ph;
+    return jsonb_build_object('handled', true, 'phone', v_ph, 'action','ai',
+      'ai', true, 'pharmacy_id', v_shop);
+  end if;
+
+  return jsonb_build_object('handled', false, 'reason','no_match');
+end $$;
+
+create or replace function public.trg_wa_refill_reply()
+returns trigger language plpgsql security definer set search_path to 'public' as $$
+declare v_res jsonb;
+begin
+  if coalesce(new.direction,'') <> 'in' then return new; end if;
+  if coalesce(new.msg_type,'') not in ('text','button','interactive') then return new; end if;
+  if coalesce(btrim(new.text_body),'') = '' then return new; end if;
+
+  v_res := public.refill_wa_inbound(new.sender_phone, new.text_body);
+  if not coalesce((v_res->>'handled')::boolean, false) then return new; end if;
+
+  if coalesce((v_res->>'ai')::boolean, false) then
+    -- the AI counter: the edge function classifies, the backend words the reply
+    perform net.http_post(
+      url := 'https://swojhmarmaijkshsbeih.supabase.co/functions/v1/storefront-ai',
+      headers := jsonb_build_object('Content-Type','application/json',
+                                    'x-notify-secret','medibo_order_notify_2027'),
+      body := jsonb_build_object('phone', v_res->>'phone', 'text', new.text_body));
+  elsif coalesce(v_res->>'reply','') <> '' then
+    perform net.http_post(
+      url := 'https://swojhmarmaijkshsbeih.supabase.co/functions/v1/wa-reply',
+      headers := jsonb_build_object('Content-Type','application/json',
+                                    'x-notify-secret','medibo_order_notify_2027'),
+      body := jsonb_build_object('to', v_res->>'phone', 'tag','refill_reply',
+                                 'text', v_res->>'reply'));
+  end if;
+  return new;
+exception when others then
+  return new;
+end $$;
+
+drop trigger if exists wa_refill_reply_trg on public.whatsapp_messages;
+create trigger wa_refill_reply_trg after insert on public.whatsapp_messages
+for each row execute function public.trg_wa_refill_reply();

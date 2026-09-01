@@ -58,7 +58,7 @@ class MaskedCallResult {
   final bool ok;
 
   /// `provider_dials` — the provider is ringing both legs; the app shows the
-  /// message and does nothing. `user_dials` — the app opens tel:<did>.
+  /// message and does nothing. `user_dials` — the app opens `tel:` on the DID.
   final String mode;
   final String did;
   final String message;

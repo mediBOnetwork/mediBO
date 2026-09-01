@@ -232,6 +232,16 @@ create table if not exists public.pharmacy_count_attribution (
 create index if not exists pharmacy_count_attr_session_idx
   on public.pharmacy_count_attribution (session_id);
 
+-- share_pct is PER LINE: this staff member's share of what was sold OF THAT
+-- PRODUCT inside the window. One staff member who rang up every sale of two
+-- products therefore holds 100 on each row, and the session's rows sum to 200.
+-- That is not a bug and it is not what the report prints: "By shift" shows a
+-- staff member's share of the SESSION's total difference value, which is what
+-- the phrase means, and is computed at read time in _c413_variance.
+comment on column public.pharmacy_count_attribution.share_pct is
+  'Per-line share of that product''s sales in the window. Session totals may '
+  'exceed 100 across lines by design; the report re-derives a session share.';
+
 alter table public.pharmacy_return_window       enable row level security;
 alter table public.pharmacy_expiry_config       enable row level security;
 alter table public.pharmacy_expiry_alert_log    enable row level security;

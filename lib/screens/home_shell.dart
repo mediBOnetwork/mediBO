@@ -88,6 +88,9 @@ import 'pharmacy/pharmacy_stock_screen.dart'; // CMD #412 — the pharmacy's she
 import 'profile_screen.dart';
 import 'storefront_screen.dart';
 import 'supplier/supplier_shell.dart';
+// CMD #409 — the scan and mic buttons that sit inside the search bar. The two
+// search bars are `part` files of this library, so their import lives here.
+import '../widgets/scan_mic_search_controls.dart';
 
 // CHANGE #327 · LAYER 1 — the shell is sharded.
 //

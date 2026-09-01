@@ -52,6 +52,8 @@ const Map<String, IconData> kNavIcons = <String, IconData>{
   'moped':            Icons.delivery_dining_outlined,
   'route':            Icons.alt_route,
   'forum':            Icons.forum_outlined,
+  // CMD #452 — the customer support inbox (feature_gaps #132).
+  'support_agent':    Icons.support_agent_outlined,
   'description':      Icons.description_outlined,
   'campaign':         Icons.campaign_outlined,
   'filter':           Icons.filter_alt_outlined,

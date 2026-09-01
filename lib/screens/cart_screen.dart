@@ -1698,15 +1698,24 @@ class _CartItemCard extends StatelessWidget {
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      line.ds('line_mrp_display'),
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w800,
-                        color: Color(0xFF111827),
-                        height: 1.1,
+                    // CMD #452 — feature_gaps #182. 19.6% of buyable products
+                    // carry no MRP. The backend now says so explicitly
+                    // (has_mrp:false, an EMPTY mrp_display and its own
+                    // mrp_note) instead of coalescing the missing ceiling to
+                    // ₹0.00, and this line prints the absence rather than a
+                    // price that was never printed on the pack.
+                    if (line.ds('line_mrp_display').isEmpty)
+                      Text(line.ds('mrp_note'), style: Ds.t.caption)
+                    else
+                      Text(
+                        line.ds('line_mrp_display'),
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                          color: Color(0xFF111827),
+                          height: 1.1,
+                        ),
                       ),
-                    ),
                     const SizedBox(height: 3),
                     Text(
                       // "4 × ₹153.30" — the backend's own wording.

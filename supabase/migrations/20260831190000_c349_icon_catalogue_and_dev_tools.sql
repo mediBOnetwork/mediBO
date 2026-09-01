@@ -46,7 +46,9 @@ insert into public.ui_icon (icon_key, label) values
   ('bug','Bug'), ('map','Map'), ('key','Key'), ('cloud','Cloud'),
   ('memory','Memory chip'), ('shop','Play store bag'), ('drafts','Drafts'),
   ('build','Spanner'), ('science','Lab flask'), ('history','History'),
-  ('dashboard','Dashboard grid'), ('tools','Toolbox')
+  ('dashboard','Dashboard grid'), ('tools','Toolbox'),
+  -- CMD #452 — the customer support inbox (feature_gaps #132).
+  ('support_agent','Support agent')
 on conflict (icon_key) do update set label = excluded.label;
 
 -- ── the dev_tools surface ───────────────────────────────────────────────────

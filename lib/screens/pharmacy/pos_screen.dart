@@ -470,20 +470,6 @@ class _PosScreenState extends State<PosScreen> {
           ],
         ),
         actions: [
-          // CMD #432 — the door to the shop's UPI ID and its printable counter
-          // QR. Present for every pharmacy: a shop with no VPA yet needs this
-          // MORE than one that has it, so the button is not conditional — what
-          // is inside it is (pharmacy_upi_get() decides what can be edited).
-          IconButton(
-            icon: Icon(Icons.qr_code_2_outlined, color: Ds.c.brand),
-            tooltip: _s(_m(_home?['upi'])['tile_label']),
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute<void>(
-                builder: (_) => PosUpiSetupScreen(rpc: widget.rpc),
-              ),
-            ),
-          ),
           // CMD #412 — the shelf, from the counter. The two are one shop: what
           // is sold here comes off there (FEFO, on pos_sale_event), so the way
           // between them is a tap. Icon and tooltip come from
@@ -607,6 +593,22 @@ class _PosScreenState extends State<PosScreen> {
                   // and the screen behind it renders its own empty state when
                   // there is nothing running low.
                   _ReorderEntryTile(rpc: widget.rpc),
+                  SizedBox(height: Ds.space.x12),
+                  // CMD #432 — the door to the shop's UPI ID and its printable
+                  // counter QR. It sits here rather than in the app bar, which
+                  // already carries four icons and a text button at 430px, and
+                  // this way it can show its own state: a shop that has not
+                  // confirmed a VPA yet is told so before it rings up a UPI
+                  // bill, not after. Label and chip are pos_home()'s.
+                  _UpiEntryTile(
+                    upi: _m(_home?['upi']),
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute<void>(
+                        builder: (_) => PosUpiSetupScreen(rpc: widget.rpc),
+                      ),
+                    ).then((_) => _boot()),
+                  ),
                   SizedBox(height: Ds.space.x12),
                   // CHANGE #419 — the owner's night screens (money, the
                   // anonymous benchmark, the zone demand radar), from the same
@@ -1606,6 +1608,66 @@ class PosMenuTile extends StatelessWidget {
 }
 
 /// CHANGE #414 — the reorder entry, on the counter screen.
+/// CMD #432 — the counter's UPI tile. Every word is pos_home()'s `upi` block:
+/// the label, the state sentence and the tone that colours it. The tile never
+/// works out whether a VPA is confirmed — it prints the answer it was given.
+class _UpiEntryTile extends StatelessWidget {
+  final Map<String, dynamic> upi;
+  final VoidCallback onTap;
+  const _UpiEntryTile({required this.upi, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final label = _s(upi['tile_label']);
+    if (label.isEmpty) return const SizedBox.shrink();
+    final state = _s(upi['state_label']);
+    final ready = upi['confirmed'] == true;
+    RenderLog.write('c432_upi_entry', 1);
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+        padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x16,
+          vertical: Ds.space.x12,
+        ),
+        decoration: BoxDecoration(
+          color: Ds.c.surface,
+          borderRadius: Ds.r.rCard,
+          boxShadow: Ds.elevation.e1,
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.qr_code_2, size: Ds.space.x24, color: Ds.c.brand),
+            SizedBox(width: Ds.space.x12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(label, style: Ds.t.bodyStrong),
+                  if (state.isNotEmpty)
+                    Text(
+                      state,
+                      style: Ds.t.caption.copyWith(
+                        color: ready ? Ds.c.textSecondary : Ds.c.warning,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            Icon(
+              Icons.chevron_right,
+              size: Ds.space.x24,
+              color: Ds.c.textSecondary,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _ReorderEntryTile extends StatelessWidget {
   final PosRpc? rpc;
   const _ReorderEntryTile({required this.rpc});

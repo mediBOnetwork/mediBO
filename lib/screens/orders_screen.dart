@@ -6,7 +6,8 @@ import 'package:flutter/material.dart';
 
 import '../fulfill/fulfill_lookups.dart'; // C629: backend-owned button copy
 import '../services/date_labels.dart';
-import 'delivery/customer_track_sheet.dart'; // C629: PART F1 — live tracking
+import 'delivery/customer_track_sheet.dart';  // C629: PART F1 — live tracking
+import 'customer/order_edit_sheet.dart';  // CHANGE #408
 import 'package:http/http.dart' as http;
 import 'package:pharma_b2b/utils/toast.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -773,12 +774,34 @@ class _OrderCardState extends State<_OrderCard> {
   // independent per-section booleans that could disagree.
   int? _tab;
 
+  // CHANGE #408 — the edit window, as the BACKEND sees it. Empty until
+  // order_edit_state() answers; `can_edit` is the only thing that draws the
+  // button, so a card never guesses the window from order.status.
+  Map<String, dynamic> _editState = const {};
+
   @override
   void initState() {
     super.initState();
     // CHANGE #298 — the ONLY card that auto-expands is the one a notification
     // named. #458's "no auto-expand" rule still holds for every other card.
     if (widget.autoOpen) _tab = 0;
+    _loadEditState();
+  }
+
+  // CHANGE #408 — one cheap read per card. It is asked for every order because
+  // only the backend knows whether a supplier has been asked yet; inferring it
+  // here from a status string is exactly the client-side logic this codebase
+  // does not allow.
+  Future<void> _loadEditState() async {
+    try {
+      final raw = await Supabase.instance.client
+          .rpc('order_edit_state', params: {'p_order_id': widget.order.id});
+      if (!mounted) return;
+      setState(() =>
+          _editState = raw is Map ? Map<String, dynamic>.from(raw) : const {});
+    } catch (_) {
+      // A card that cannot ask simply shows no edit button. It never guesses.
+    }
   }
 
   // CHANGE #458 B3: tapping the open button again closes it; tapping a different
@@ -920,6 +943,24 @@ class _OrderCardState extends State<_OrderCard> {
               ),
             ),
           ]),
+          // CHANGE #408 — edit this order, but ONLY while the backend says the
+          // window is open. OrderEditButton renders nothing at all when
+          // `can_edit` is false, so the affordance disappears the moment the
+          // waterfall starts — and the write is refused server-side too, so
+          // this is a courtesy, not the guard.
+          if (_editState['can_edit'] == true) ...[
+            SizedBox(height: Ds.space.x8),
+            SizedBox(
+              width: double.infinity,
+              child: OrderEditButton(
+                state: _editState,
+                onTap: () async {
+                  final saved = await showOrderEditSheet(context, order.id);
+                  if (saved && mounted) await _loadEditState();
+                },
+              ),
+            ),
+          ],
           // CHANGE #173 — Reorder this order. Opens the Smart Basket Diff:
           // the backend reconciles this past order against the current catalog
           // (unavailable dropped, out-of-stock swapped, price changes flagged)

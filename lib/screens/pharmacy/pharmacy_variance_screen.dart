@@ -22,6 +22,7 @@ import '../../design_tokens.dart';
 import '../../services/pharmacy_shield_api.dart';
 import '../../utils/render_log.dart';
 import 'pharmacy_expiry_screen.dart';
+import 'px_screen.dart';  // CMD #420 — the pharmacy exchange
 
 String _s(Object? v) => v == null ? '' : v.toString();
 Map<String, dynamic> _m(Object? v) =>
@@ -693,6 +694,12 @@ class PharmacyShieldTiles extends StatelessWidget {
         return PharmacyExpiryScreen(rpc: rpc);
       case 'pharmacy_variance':
         return PharmacyVarianceScreen(rpc: rpc);
+      // CMD #420 — the pharmacy exchange. Registered here rather than in the
+      // shell's own switch because it is a pharmacy's surface reached from the
+      // admin console, exactly like the two above; px_home() gates on the
+      // caller's own shop and renders its own refusal, so no role test here.
+      case 'px_exchange':
+        return PxScreen(rpc: rpc);
       default:
         return null;
     }

@@ -28,6 +28,7 @@ import 'screens/admin/settlement_screen.dart'; // /admin/settlement
 import 'screens/home_shell.dart';
 import 'screens/public/inquiry_form_screen.dart';
 import 'screens/public/stock_update_form_screen.dart'; // C639: /stock-update/<token>
+import 'screens/public/storefront_screen.dart'; // CMD #417: /shop/<token>
 import 'screens/public/substitute_token_screen.dart'; // #366: /substitute/<token>
 import 'screens/admin/returns_refunds_screen.dart'; // C395: /admin/returns
 import 'pages/dispute_token_page.dart';
@@ -565,6 +566,20 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
                 return MaterialPageRoute(
                   builder: (_) => SubstituteTokenScreen(token: token),
                 );
+              }
+              // CMD #417 — /shop/<token>: the pharmacy's own WhatsApp
+              // storefront, shared as a link or a QR. PUBLIC and anonymous by
+              // design — the token in the URL is the authorisation, exactly
+              // the way /stock-update/<token> works, and the page it opens
+              // shows MRP and availability only.
+              if (name.startsWith('/shop/')) {
+                final token = name.substring('/shop/'.length).split('?').first;
+                if (token.isNotEmpty) {
+                  return MaterialPageRoute(
+                    settings: settings,
+                    builder: (_) => StorefrontScreen(token: token),
+                  );
+                }
               }
               if (name.startsWith('/stock-update/')) {
                 final token =

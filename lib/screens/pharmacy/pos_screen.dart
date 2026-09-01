@@ -32,6 +32,8 @@ import 'pharmacy_reorder_screen.dart';  // CHANGE #414
 import 'pharmacy_stock_screen.dart';
 import 'pos_margin_strip.dart';  // CHANGE #414
 import '../../services/khata_api.dart';  // CMD #415 — khata_nav_entry()
+import '../../services/pharmacy_refill_api.dart';  // CMD #417 — refill_nav_entry()
+import 'pharmacy_refill_screen.dart';  // CMD #417 — refills & counter
 import 'khata_screen.dart';  // CMD #415 — the counter's credit book
 import '../../services/pharmacy_stock_api.dart';
 import '../../services/pos_api.dart';
@@ -160,6 +162,7 @@ class _PosScreenState extends State<PosScreen> {
       // because the counter is where it is used. A failure leaves the button
       // undrawn; it never stops a bill being written.
       if (widget.rpc == null) unawaited(KhataEntry.load());
+      if (widget.rpc == null) unawaited(RefillEntry.load());
       // Anything billed while the network was gone lands now, before the
       // operator starts a new bill on a day-close that would be wrong.
       unawaited(_replayPending());
@@ -489,6 +492,27 @@ class _PosScreenState extends State<PosScreen> {
                 onPressed: () => Navigator.push(
                   context,
                   MaterialPageRoute<void>(builder: (_) => const KhataScreen()),
+                ),
+              );
+            },
+          ),
+          // CMD #417 — refills & the AI counter, from the counter itself. Same
+          // story as the khata button above: a refill IS a sale this counter
+          // will hand over, so the way in is a tap from where it gets billed.
+          // Label, icon-worthiness and the due count come from
+          // refill_nav_entry(); the button is absent when it said nothing.
+          ValueListenableBuilder<Map<String, dynamic>>(
+            valueListenable: RefillEntry.value,
+            builder: (context, entry, _) {
+              if (entry['show'] != true) return const SizedBox.shrink();
+              return IconButton(
+                icon: Icon(Icons.autorenew, color: Ds.c.brand),
+                tooltip: _s(entry['label']),
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute<void>(
+                    builder: (_) => const PharmacyRefillScreen(),
+                  ),
                 ),
               );
             },

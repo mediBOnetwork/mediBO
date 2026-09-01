@@ -435,6 +435,51 @@ class _Pill extends StatelessWidget {
       );
 }
 
+/// Design QA: a skeleton, not a bare spinner. The screen already knows its own
+/// shape — a title, an add card, then rows — so it draws that shape greyed
+/// rather than a spinner that tells the owner nothing about what is coming.
+class _Skeleton extends StatelessWidget {
+  const _Skeleton();
+
+  @override
+  Widget build(BuildContext context) => ListView(
+        padding: EdgeInsets.all(Ds.space.x16),
+        children: [
+          _Bar(width: Ds.space.x48 * 3, height: Ds.space.x24),
+          SizedBox(height: Ds.space.x8),
+          _Bar(width: double.infinity, height: Ds.space.x16),
+          SizedBox(height: Ds.space.x24),
+          for (var i = 0; i < 3; i++) ...[
+            _Card(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _Bar(width: Ds.space.x48 * 2, height: Ds.space.x16),
+                  SizedBox(height: Ds.space.x8),
+                  _Bar(width: Ds.space.x48 * 3, height: Ds.space.x12),
+                ],
+              ),
+            ),
+            SizedBox(height: Ds.space.x12),
+          ],
+        ],
+      );
+}
+
+class _Bar extends StatelessWidget {
+  final double width;
+  final double height;
+  const _Bar({required this.width, required this.height});
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: width,
+        height: height,
+        decoration:
+            BoxDecoration(color: Ds.c.divider, borderRadius: Ds.r.rChip),
+      );
+}
+
 class _Empty extends StatelessWidget {
   final String text;
   const _Empty({required this.text});
@@ -531,7 +576,7 @@ class _CustomerStaffScreenState extends State<CustomerStaffScreen> {
         backgroundColor: Ds.c.surface,
       ),
       body: p == null
-          ? const Center(child: CircularProgressIndicator())
+          ? const _Skeleton()
           : CustomerStaffView(
               payload: p,
               busy: _busy,

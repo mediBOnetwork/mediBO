@@ -435,9 +435,19 @@ class _AddItemSheetState extends State<_AddItemSheet> {
               ),
               SizedBox(height: Ds.space.x12),
               if (_busy)
-                Padding(
-                  padding: EdgeInsets.all(Ds.space.x24),
-                  child: const CircularProgressIndicator(),
+                // Design QA: the search result shape, greyed — not a spinner.
+                Column(
+                  children: [
+                    for (var i = 0; i < 4; i++)
+                      Padding(
+                        padding: EdgeInsets.symmetric(vertical: Ds.space.x8),
+                        child: Container(
+                          height: Ds.space.x16,
+                          decoration: BoxDecoration(
+                              color: Ds.c.divider, borderRadius: Ds.r.rChip),
+                        ),
+                      ),
+                  ],
                 )
               else
                 Flexible(

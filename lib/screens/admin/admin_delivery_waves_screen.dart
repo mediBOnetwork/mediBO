@@ -27,8 +27,16 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../design_tokens.dart';
 import '../../utils/render_log.dart';
 
+/// A single RPC call. Injectable so the widget test can drive the screen with
+/// real-shaped payloads and no Supabase — the same seam the supplier records
+/// screen uses.
+typedef WaveRpc = Future<Map<String, dynamic>> Function(
+    String fn, Map<String, dynamic> params);
+
 class AdminDeliveryWavesScreen extends StatefulWidget {
-  const AdminDeliveryWavesScreen({super.key});
+  final WaveRpc? rpc;
+
+  const AdminDeliveryWavesScreen({super.key, this.rpc});
 
   @override
   State<AdminDeliveryWavesScreen> createState() =>
@@ -47,16 +55,22 @@ class _AdminDeliveryWavesScreenState extends State<AdminDeliveryWavesScreen> {
     _load();
   }
 
+  Future<Map<String, dynamic>> _call(String fn, Map<String, dynamic> p) async {
+    if (widget.rpc != null) return widget.rpc!(fn, p);
+    final res = await Supabase.instance.client.rpc(fn, params: p);
+    return res is Map ? Map<String, dynamic>.from(res) : <String, dynamic>{};
+  }
+
   Future<void> _load() async {
     setState(() {
       _loading = true;
       _failed = false;
     });
     try {
-      final res = await Supabase.instance.client.rpc('admin_delivery_waves');
+      final res = await _call('admin_delivery_waves', const {});
       if (!mounted) return;
       setState(() {
-        _data = res is Map ? Map<String, dynamic>.from(res) : const {};
+        _data = res;
         _loading = false;
       });
       RenderLog.write('c405_waves_screen', _waves.length);
@@ -108,8 +122,7 @@ class _AdminDeliveryWavesScreenState extends State<AdminDeliveryWavesScreen> {
     if (_busy) return;
     setState(() => _busy = true);
     try {
-      final res = await Supabase.instance.client.rpc(fn, params: params);
-      final m = _map(res);
+      final m = await _call(fn, params);
       final msg = _s(m, 'message');
       if (mounted && msg.isNotEmpty) {
         ScaffoldMessenger.of(context)

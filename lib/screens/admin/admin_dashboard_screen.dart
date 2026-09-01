@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../pharmacy/khata_screen.dart'; // CMD #415 — the khata book
+import '../pharmacy/pharmacy_refill_screen.dart'; // CMD #417 — refills & counter
 import '../pharmacy/pharmacy_variance_screen.dart';
 import '../pharmacy/rx_scan_screen.dart'; // CMD #418
 import 'package:pharma_b2b/utils/render_log.dart';
@@ -176,6 +177,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     if (route == 'khata') {
       Navigator.push(
           context, MaterialPageRoute(builder: (_) => const KhataScreen()));
+      return;
+    }
+    // CMD #417 — the refill console (reminders, storefront, AI counter).
+    // Same push, same reason as the khata book above: refill_home() gates on
+    // the caller's own pharmacy and renders its own refusal.
+    if (route == 'refill') {
+      Navigator.push(context,
+          MaterialPageRoute(builder: (_) => const PharmacyRefillScreen()));
       return;
     }
     // CMD #418 — the prescription scanner, same push, same reason.

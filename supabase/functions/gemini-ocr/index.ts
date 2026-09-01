@@ -7,6 +7,14 @@ const cors = {
 
 const MODEL = 'gemini-3.5-flash'
 
+// The embedding model, here for the same reason the generation model is: this
+// function is the ONE place a Vertex model, endpoint and credential are named.
+// gemini-embedding-001 is the Gemini-family embedding model on the same global
+// endpoint with the same GCP_SA_KEY auth — no second provider, no API key, and
+// no caller ever decides a model. 768 dimensions to match sku_embedding.
+const EMBED_MODEL = 'gemini-embedding-001'
+const EMBED_DIMS = 768
+
 // Shared rules appended to every company-extraction prompt.
 // VERBATIM-ONLY CONTRACT — never modify this to allow name expansion or normalization.
 const COMPANY_GRID_RULES = `
@@ -106,11 +114,52 @@ serve(async (req: Request) => {
     const body = await req.json() as {
       image_base64?: string
       mime_type?: string
+      // MULTI-SHOT (CMD #423). A metre of thermal roll or a creased carbon copy
+      // is not one frame. `images` carries the sections of ONE document, in
+      // order, so the model reads them together and never re-reads a line that
+      // straddles two photos. `image_base64` keeps working exactly as before —
+      // every existing caller is untouched.
+      images?: Array<{ base64: string; mime_type?: string }>
       prompt?: string
       mode?: string
+      texts?: string[]
     }
 
     const { image_base64 = '', mime_type = 'image/jpeg', mode } = body
+    const accessTokenEarly = mode === 'embed' ? await getAccessToken(saJson) : null
+
+    // EMBEDDINGS (CMD #423). Names only, batched, same credential.
+    if (mode === 'embed') {
+      const texts = (body.texts ?? []).filter((t) => typeof t === 'string' && t.length > 0)
+      if (texts.length === 0) {
+        return new Response(JSON.stringify({ vectors: [] }), {
+          headers: { ...cors, 'Content-Type': 'application/json' },
+        })
+      }
+      const embedEndpoint =
+        `https://aiplatform.googleapis.com/v1/projects/${projectId}/locations/global` +
+        `/publishers/google/models/${EMBED_MODEL}:predict`
+      const eres = await fetch(embedEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${accessTokenEarly}`,
+        },
+        body: JSON.stringify({
+          instances: texts.map((t) => ({ content: t, task_type: 'SEMANTIC_SIMILARITY' })),
+          parameters: { outputDimensionality: EMBED_DIMS },
+        }),
+      })
+      if (!eres.ok) throw new Error(`Vertex embed ${eres.status}: ${(await eres.text()).slice(0, 300)}`)
+      const edata = await eres.json() as {
+        predictions?: Array<{ embeddings?: { values?: number[] } }>
+      }
+      const vectors = (edata.predictions ?? []).map((p) => p.embeddings?.values ?? [])
+      return new Response(JSON.stringify({ vectors, model: EMBED_MODEL, dims: EMBED_DIMS }), {
+        headers: { ...cors, 'Content-Type': 'application/json' },
+      })
+    }
+
     const prompt = mode === 'company_list' ? COMPANY_LIST_PROMPT : (body.prompt ?? '')
 
     if (!prompt) {
@@ -128,6 +177,11 @@ serve(async (req: Request) => {
     const parts: unknown[] = []
     if (image_base64) {
       parts.push({ inlineData: { mimeType: mime_type, data: image_base64 } })
+    }
+    for (const img of body.images ?? []) {
+      if (img?.base64) {
+        parts.push({ inlineData: { mimeType: img.mime_type ?? 'image/jpeg', data: img.base64 } })
+      }
     }
     parts.push({ text: prompt })
 

@@ -22,6 +22,8 @@ import 'package:flutter/material.dart';
 
 import '../../design_tokens.dart';
 import '../../services/pharmacy_stock_api.dart';
+import '../../services/px_api.dart';  // CMD #420 — px_nav_entry()
+import 'px_screen.dart';  // CMD #420 — the exchange, from the shelf
 import '../../utils/render_log.dart';
 
 String _s(Object? v) => v == null ? '' : v.toString();
@@ -126,6 +128,9 @@ class _PharmacyStockScreenState extends State<PharmacyStockScreen> {
         _loading = false;
       });
       RenderLog.write('c412_stock_home', 1);
+      // CMD #420 — the exchange entry, loaded where it is used. A failure
+      // leaves the button undrawn; it never stops the shelf loading.
+      if (widget.rpc == null) unawaited(PxEntry.load());
       RenderLog.write('c412_stock_rows', _rows(res['rows']).length);
       if (_s(res['negative_note']).isNotEmpty) {
         RenderLog.write('c412_stock_negative', 1);
@@ -161,6 +166,28 @@ class _PharmacyStockScreenState extends State<PharmacyStockScreen> {
       backgroundColor: Ds.c.bg,
       appBar: AppBar(
         title: Text(_s(_data['title']).isEmpty ? ' ' : _s(_data['title'])),
+        actions: [
+          // CMD #420 — the exchange, from the shelf. This is the screen where a
+          // pharmacist is already looking at the box that will expire before it
+          // sells, so it is where the way to trade it belongs. Icon, tooltip
+          // and the pending-request count come from px_nav_entry(); the button
+          // is absent when it said nothing (not a pharmacy, not approved, or no
+          // zone set — the backend's call, not a role test here).
+          ValueListenableBuilder<Map<String, dynamic>>(
+            valueListenable: PxEntry.value,
+            builder: (context, entry, _) {
+              if (entry['show'] != true) return const SizedBox.shrink();
+              return IconButton(
+                icon: Icon(Icons.handshake_outlined, color: Ds.c.brand),
+                tooltip: _s(entry['label']),
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute<void>(builder: (_) => const PxScreen()),
+                ),
+              );
+            },
+          ),
+        ],
       ),
       floatingActionButton: (denied || _loading)
           ? null

@@ -39,6 +39,7 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
   Map<String, dynamic> _row = const {};
   Map<String, dynamic> _spec = const {};
   List<Map<String, dynamic>> _leases = const [];
+  Map<String, dynamic> _specItems = const {}; // CHANGE #571 — the spec checklist
   bool _loading = true;
   bool _busy = false;
   Timer? _tick; // 1s ticker for the live ATR countdown while building
@@ -76,6 +77,9 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
       final results = await Future.wait([
         _svc.spec(widget.id),
         _svc.list(limit: 500),
+        // CHANGE #571 — the spec checklist rides the same refresh as the row,
+        // so "why was this refused?" is answered on the screen, not in a log.
+        _svc.specItems(widget.id),
       ]);
       final spec = results[0];
       final rows = ((results[1]['rows'] as List?) ?? const [])
@@ -98,6 +102,7 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
         _spec = spec;
         _row = row;
         _leases = leases;
+        _specItems = Map<String, dynamic>.from(results[2]);
         _loading = false;
       });
     } catch (_) {
@@ -166,11 +171,13 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
                 _timerCard(),
                 if (asInt(_row['steps_total']) > 0) _stepsCard(),
                 if (_status == 'needs_input') _needsInputBanner(),
+                if (_row['is_waiting'] == true) _waitingBanner(),
                 const SizedBox(height: 12),
                 _targets(),
                 if (_status == 'building') _filesLocked(),
                 const SizedBox(height: 12),
                 _actions(),
+                _specChecklist(),
                 QaJourneySection(id: widget.id, svc: _svc),
                 const SizedBox(height: 12),
                 _chat(),
@@ -535,6 +542,84 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
           ],
         ]),
       );
+
+  /// CHANGE #571 — WAITING IS NOT FAILING. A parked command is not broken: its
+  /// work is committed, its session was released on purpose, and the harness
+  /// resumes it when the blocker clears. Every word here — the chip, the
+  /// reason, the reassurance — is the backend's own string, and every measure
+  /// is a Ds token.
+  Widget _waitingBanner() {
+    final w = WaitView.fromRow(_row);
+    if (!w.waiting) return const SizedBox.shrink();
+    return Container(
+      margin: EdgeInsets.only(top: Ds.space.x12),
+      padding: EdgeInsets.all(Ds.space.x12),
+      decoration: BoxDecoration(color: w.tone.bg, borderRadius: Ds.r.rButton),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Icon(Icons.pause_circle_outline,
+            size: Ds.space.x16 + Ds.space.x4, color: w.tone.fg),
+        SizedBox(width: Ds.space.x8),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(w.chip, style: Ds.t.subtitle.copyWith(color: w.tone.fg)),
+            if (w.hint.isNotEmpty) ...[
+              SizedBox(height: Ds.space.x4),
+              Text(w.hint, style: Ds.t.body.copyWith(color: w.tone.fg)),
+            ],
+          ]),
+        ),
+      ]),
+    );
+  }
+
+  /// CHANGE #571 — the command's own spec checklist. #536 declared success
+  /// with core spec items unbuilt; this is the surface that makes that
+  /// impossible to miss, and the same list the finish gate reads. Items,
+  /// status labels and tones are all the backend's — nothing is computed here.
+  Widget _specChecklist() {
+    final items = SpecItemView.listOf(_specItems);
+    if (items.isEmpty) return const SizedBox.shrink();
+    final open = SpecItemView.openCount(_specItems);
+    return _sectionRaw(
+      (_specItems['title'] ?? '').toString(),
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if ((_specItems['chip'] ?? '').toString().isNotEmpty)
+          Padding(
+            padding: EdgeInsets.only(bottom: Ds.space.x12),
+            child: ToneChip(
+                label: (_specItems['chip']).toString(),
+                tone: toneByName(open > 0 ? 'warning' : 'success'),
+                icon: Icons.checklist_rtl),
+          ),
+        for (final it in items)
+          Padding(
+            padding: EdgeInsets.only(bottom: Ds.space.x12),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Icon(
+                  it.status == 'done'
+                      ? Icons.check_circle
+                      : it.status == 'dropped'
+                          ? Icons.remove_circle_outline
+                          : Icons.radio_button_unchecked,
+                  size: Ds.space.x16 + Ds.space.x4,
+                  color: it.tone.fg),
+              SizedBox(width: Ds.space.x8),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(it.text, style: Ds.t.body),
+                  if (it.note.isNotEmpty) ...[
+                    SizedBox(height: Ds.space.x4),
+                    Text(it.note, style: Ds.t.caption),
+                  ],
+                ]),
+              ),
+              SizedBox(width: Ds.space.x8),
+              ToneChip(label: it.statusLabel, tone: it.tone),
+            ]),
+          ),
+      ]),
+    );
+  }
 
   // ── Targets ──────────────────────────────────────────────────────────────
   Widget _targets() {

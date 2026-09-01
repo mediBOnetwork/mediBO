@@ -682,6 +682,21 @@ class _Row extends StatelessWidget {
             label: (row['chain_chip']).toString(),
             tone: toneByName((row['chain_tone'] ?? 'info').toString()),
             icon: Icons.link),
+      // CHANGE #571 — a parked command is WAITING, not failed. The chip, its
+      // wording and its tone all come from dev_cmd_list; the card just prints
+      // them, so a wait can never read as a failure again.
+      if (WaitView.fromRow(row).chip.isNotEmpty)
+        ToneChip(
+            label: WaitView.fromRow(row).chip,
+            tone: WaitView.fromRow(row).tone,
+            icon: Icons.pause_circle_outline),
+      // CHANGE #571 — the command's own spec checklist, so an unbuilt spec
+      // item is visible on the queue instead of hiding inside a summary.
+      if ((row['spec_chip'] ?? '').toString().isNotEmpty)
+        ToneChip(
+            label: (row['spec_chip']).toString(),
+            tone: toneByName((row['spec_tone'] ?? 'neutral').toString()),
+            icon: Icons.checklist_rtl),
     ];
 
     return DqCard(

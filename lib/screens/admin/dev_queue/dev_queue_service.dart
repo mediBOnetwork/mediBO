@@ -41,6 +41,12 @@ class DevQueueService {
   Future<Map<String, dynamic>> spec(int id) async =>
       _asMap(await _c.rpc('dev_cmd_spec', params: {'p_id': id}));
 
+  /// CHANGE #571 — the command's OWN spec checklist. Every item, its status,
+  /// its status label and its tone are decided by the backend; the screen
+  /// prints them. An open item is why a completion was refused.
+  Future<Map<String, dynamic>> specItems(int id) async =>
+      _asMap(await _c.rpc('dev_cmd_spec_items', params: {'p_id': id}));
+
   // ── Bug-Loop Prevention: QA findings + journeys ──────────────────────────
   /// One render-ready payload for a command's QA state: findings[] (severity,
   /// tone, status all server-decided) + journey runs[] with evidence. The

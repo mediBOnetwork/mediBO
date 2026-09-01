@@ -235,3 +235,90 @@ class DqCard extends StatelessWidget {
     );
   }
 }
+
+// ── CHANGE #571 — completion integrity, on the screen ────────────────────────
+// Two states the queue previously could not show, and the reason #536 read as
+// a failure it never was. Both are PURE views over the backend payload: they
+// choose nothing, compose nothing and format nothing. Held down by
+// test/protected/completion_integrity_test.dart.
+
+/// A command that is WAITING (parked on a lease, a merge retry, a busy DB) —
+/// not failed. The chip text, the reassurance line and the tone are all the
+/// backend's own strings; absent fields mean "not waiting", never a guess.
+class WaitView {
+  final bool waiting;
+  final String chip;
+  final String hint;
+  final String reason;
+  final String kind;
+  final Tone tone;
+
+  const WaitView({
+    required this.waiting,
+    required this.chip,
+    required this.hint,
+    required this.reason,
+    required this.kind,
+    required this.tone,
+  });
+
+  factory WaitView.fromRow(Map<String, dynamic> row) {
+    final waiting = row['is_waiting'] == true;
+    return WaitView(
+      // A row is waiting only when the BACKEND says so. A `wait_chip` with no
+      // flag renders nothing: the flag is the state, the chip is the wording.
+      waiting: waiting,
+      chip: waiting ? (row['wait_chip'] ?? '').toString() : '',
+      hint: waiting ? (row['wait_hint'] ?? '').toString() : '',
+      reason: (row['wait_reason'] ?? '').toString(),
+      kind: (row['wait_kind'] ?? '').toString(),
+      tone: toneByName((row['wait_tone'] ?? 'warning').toString()),
+    );
+  }
+}
+
+/// One line of a command's own spec checklist.
+class SpecItemView {
+  final int n;
+  final String text;
+  final String status;
+  final String statusLabel;
+
+  /// The backend's evidence (why it is built) or drop reason (why it is not).
+  /// Never both, never invented — an item with neither shows neither.
+  final String note;
+  final Tone tone;
+  bool get open => status == 'open';
+
+  const SpecItemView({
+    required this.n,
+    required this.text,
+    required this.status,
+    required this.statusLabel,
+    required this.note,
+    required this.tone,
+  });
+
+  /// Items in PAYLOAD ORDER. The screen never sorts, never re-numbers and
+  /// never decides that an item is done.
+  static List<SpecItemView> listOf(Map<String, dynamic> payload) =>
+      ((payload['items'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .map((it) {
+            final drop = (it['drop_reason'] ?? '').toString();
+            return SpecItemView(
+              n: asInt(it['n']),
+              text: (it['text'] ?? '').toString(),
+              status: (it['status'] ?? '').toString(),
+              statusLabel: (it['status_label'] ?? '').toString(),
+              note: drop.isNotEmpty ? drop : (it['evidence'] ?? '').toString(),
+              tone: toneByName((it['tone'] ?? 'neutral').toString()),
+            );
+          })
+          .toList();
+
+  /// How many items are still open, as the BACKEND counts them — the same
+  /// number the finish gate refuses a completion on.
+  static int openCount(Map<String, dynamic> payload) => asInt(payload['open']);
+}

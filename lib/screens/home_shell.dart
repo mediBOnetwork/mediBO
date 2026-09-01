@@ -86,7 +86,9 @@ import '../services/pos_api.dart'; // CMD #411 — pos_entry() at boot
 import 'pharmacy/pos_screen.dart'; // CMD #411 — the pharmacy counter
 import '../widgets/scan_mic_search_controls.dart'; // #409 — used by the shell part files
 import '../services/pharmacy_stock_api.dart'; // CMD #412 — pharmacy_stock_entry() at boot
+import 'pharmacy/pharmacy_vault_screen.dart'; // CMD #423 — /admin/go/pharmacy_vault
 import 'pharmacy/pharmacy_stock_screen.dart'; // CMD #412 — the pharmacy's shelf
+import 'pharmacy/pharmacy_refill_screen.dart'; // CMD #417 — refills & counter
 import 'pharmacy/pharmacy_overpay_screen.dart'; // CMD #427 — /admin/go/price_check
 import 'admin/admin_demand_engine_screen.dart'; // CMD #427 — /admin/go/demand_engine
 import 'profile_screen.dart';
@@ -647,7 +649,7 @@ class _HomeShellState extends State<HomeShell> {
   /// renders the backend's refusal when the account has no business there.
   /// Every other key stays admin-only exactly as it was.
   static const Set<String> _selfGatedRoutes = {
-    'pharmacy_stock', 'pos', 'home',
+    'pharmacy_stock', 'pharmacy_vault', 'pos', 'home',
     // CMD #427 — the price check is a PHARMACY's own screen.
     // pharmacy_overpay_insights() gates on the caller's own pharmacy and the
     // screen prints its refusal, so opening this link as the wrong role shows
@@ -816,6 +818,27 @@ class _HomeShellState extends State<HomeShell> {
       case 'demand_engine':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const AdminDemandEngineScreen()));
+        break;
+      // CMD #423 — the BILL VAULT. Reached from the shelf's own app bar via
+      // pharmacy_vault_entry(), and this case is what gives it a real address:
+      // /admin/go/pharmacy_vault, so a WhatsApp button or a push about a bill
+      // waiting to be checked can point straight at it. pharmacy_vault_home()
+      // gates on the caller's own pharmacy and the screen renders its refusal,
+      // so there is no role test here — same story as pos and pharmacy_stock.
+      case 'pharmacy_vault':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const PharmacyVaultScreen()));
+        break;
+      // CMD #417 — refills, the WhatsApp storefront and the AI counter. Same
+      // story as the two above, and the reason this case exists at all: the
+      // dashboard tile alone resolves only when the dashboard is on screen, so
+      // /admin/go/refill (a push notification, a WhatsApp link, the nav
+      // registry) landed on the storefront home instead. refill_home() gates
+      // on the caller's own pharmacy and the screen renders its refusal, so
+      // there is no role test here.
+      case 'refill':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const PharmacyRefillScreen()));
         break;
       case 'mr': setState(() { _index = 7; _cartOpen = false; }); break;
       case 'companies': setState(() { _index = 8; _cartOpen = false; }); break;

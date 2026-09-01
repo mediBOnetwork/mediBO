@@ -63,6 +63,26 @@ create unique index if not exists pharmacy_radar_ask_dedupe_idx
 create index if not exists pharmacy_radar_ask_open_idx
   on public.pharmacy_radar_ask (pharmacy_id, status, created_at desc);
 
+-- Every radar message that went out: the frequency cap, the dedupe and the
+-- delivery result all read from here. #413's pharmacy_expiry_alert_log is left
+-- exactly as it is — its `kind` check constraint is ITS contract, and widening
+-- another command's constraint to make room for mine is how a shared table
+-- becomes nobody's.
+create table if not exists public.pharmacy_radar_send_log (
+  id          bigserial primary key,
+  pharmacy_id uuid not null references public.pharmacy_profiles(id) on delete cascade,
+  kind        text not null,
+  dedupe_key  text not null,
+  sent_on     date not null default public._c413_today(),
+  detail      jsonb not null default '{}'::jsonb,
+  created_at  timestamptz not null default now()
+);
+alter table public.pharmacy_radar_send_log enable row level security;
+create unique index if not exists pharmacy_radar_send_log_dedupe_idx
+  on public.pharmacy_radar_send_log (pharmacy_id, kind, dedupe_key);
+create index if not exists pharmacy_radar_send_log_recent_idx
+  on public.pharmacy_radar_send_log (pharmacy_id, created_at desc);
+
 -- Bill-by-WhatsApp intake ledger: one row per forwarded photo.
 create table if not exists public.pharmacy_wa_intake (
   id              uuid primary key default gen_random_uuid(),
@@ -101,8 +121,20 @@ insert into public.app_settings(key, value) values
     'digest_dom', 1,
     'ask_max_open', 3,
     'urgent_days', 21,
+    'alert_days', 60,
     'horizon_days', 120))
 on conflict (key) do nothing;
+
+-- A re-run must be able to ADD a key without clobbering what Om has edited:
+-- defaults fill in underneath the stored value, never over it.
+update public.app_settings
+   set value = jsonb_build_object(
+         'enabled', true, 'build_phase', true,
+         'test_numbers', jsonb_build_array('9111100011'),
+         'min_expected_loss', 200, 'max_msgs_per_week', 3, 'digest_dom', 1,
+         'ask_max_open', 3, 'urgent_days', 21, 'alert_days', 60,
+         'horizon_days', 120) || value
+ where key = 'expiry_radar';
 
 create or replace function public._c425_cfg()
 returns jsonb language sql stable set search_path to 'public' as $$
@@ -131,9 +163,8 @@ end $$;
 -- Frequency cap: how many radar messages has this shop had in the last 7 days.
 create or replace function public._c425_week_count(p_shop uuid)
 returns integer language sql stable set search_path to 'public' as $$
-  select count(*)::integer from public.pharmacy_expiry_alert_log
+  select count(*)::integer from public.pharmacy_radar_send_log
    where pharmacy_id = p_shop
-     and kind like 'radar_%'
      and created_at >= now() - interval '7 days';
 $$;
 
@@ -202,7 +233,7 @@ begin
   loop
     select max(case when column_name in ('stock_id','lot_id') then column_name end),
            max(case when column_name in ('inferred_left','est_left','remaining_qty','qty_left') then column_name end),
-           max(case when column_name in ('velocity_per_day','velocity','daily_velocity','vel_per_day') then column_name end)
+           max(case when column_name in ('velocity_per_day','per_day','velocity','daily_velocity','vel_per_day','sold_per_day') then column_name end)
       into v_key, v_left, v_vel
       from information_schema.columns
      where table_schema = 'public' and table_name = r.rel;
@@ -376,7 +407,12 @@ insert into public.ui_copy(key, value) values
  ('phradar.wa_read_partial',to_jsonb('Read your bill but some lines were unclear ({{lines}} items). Open mediBO to check.'::text)),
  ('phradar.wa_failed',      to_jsonb('We could not read that bill. Please send a clearer photo in daylight.'::text)),
  ('phradar.wa_urgent',      to_jsonb('{{product}} ({{batch_word}}) expires {{date}} — about {{value}} at risk. Return window closes in {{days}} days. How many are left?'::text)),
- ('phradar.wa_digest',      to_jsonb('{{shop}} — this month: {{bills}} bills captured, stock worth about {{stock}}, and {{value}} at risk of expiring. Check these {{items}} items in mediBO.'::text)),
+ ('phradar.wa_urgent_closed', to_jsonb('{{product}} ({{batch_word}}) expires {{date}} — about {{value}} at risk, and the return window has closed. How many are left?'::text)),
+ ('phradar.wa_digest',      to_jsonb('{{shop}} — this month: {{bills}} captured, stock worth about {{stock}}, and {{value}} at risk of expiring. Check {{items}} in mediBO.'::text)),
+ ('phradar.n_bills_one',    to_jsonb('1 bill'::text)),
+ ('phradar.n_bills_many',   to_jsonb('{{n}} bills'::text)),
+ ('phradar.n_items_one',    to_jsonb('1 item'::text)),
+ ('phradar.n_items_many',   to_jsonb('{{n}} items'::text)),
  ('phradar.digest_title',   to_jsonb('This month'::text)),
  ('phradar.digest_bills',   to_jsonb('Bills captured'::text)),
  ('phradar.digest_stock',   to_jsonb('Stock value'::text)),
@@ -385,9 +421,31 @@ insert into public.ui_copy(key, value) values
  ('phradar.saved',          to_jsonb('Saved'::text))
 on conflict (key) do nothing;
 
+-- The seed above deliberately does not overwrite copy Om may have edited. These
+-- two keys are the exception: this command shipped them WRONG in its own first
+-- pass ("2 bills bills captured", "these 1 item items"), so the fix belongs
+-- with the mistake rather than in a follow-up. Both now take a finished plural
+-- phrase from _c425_plural(); the sentence must not add a noun of its own.
+update public.ui_copy
+   set value = to_jsonb('{{shop}} — this month: {{bills}} captured, stock worth about {{stock}}, and {{value}} at risk of expiring. Check {{items}} in mediBO.'::text)
+ where key = 'phradar.wa_digest';
+update public.ui_copy
+   set value = to_jsonb('{{product}} ({{batch_word}}) expires {{date}} — about {{value}} at risk, and the return window has closed. How many are left?'::text)
+ where key = 'phradar.wa_urgent_closed';
+
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 6. THE ASK — question and options, composed in the backend
 -- ─────────────────────────────────────────────────────────────────────────────
+-- Plural is a language rule, so it is resolved here and shipped as a finished
+-- phrase. Nothing downstream ever appends an 's'.
+create or replace function public._c425_plural(p_base text, p_n integer)
+returns text language sql stable set search_path to 'public' as $$
+  select case when coalesce(p_n,0) = 1
+              then public.ui_text(p_base || '_one')
+              else public.ui_fmt(p_base || '_many',
+                     jsonb_build_object('n', coalesce(p_n,0)::text)) end;
+$$;
+
 create or replace function public._c425_ask_options(p_left numeric)
 returns jsonb language sql immutable set search_path to 'public' as $$
   select coalesce(jsonb_agg(distinct_opt order by distinct_opt), '[]'::jsonb)
@@ -447,12 +505,24 @@ begin
   return v_id;
 end $$;
 
--- The truth loop: an answer moves the shelf AND is left as ground truth for
--- #424's velocity to recalibrate against.
+-- The truth loop. WHERE the answer lands depends on who owns "how many are
+-- left" for this shop:
+--   * with #424's inference bound, the number is a ground-truth observation:
+--     _c424_correct() records it, moves the Bayesian velocity posterior toward
+--     what actually happened and re-pours the lots. pharmacy_stock.qty is left
+--     alone on purpose — there it means QTY PURCHASED, which is the base the
+--     inference reasons from. Overwriting it would delete the very fact the
+--     engine learns from.
+--   * with no inference (the 'recorded' basis), pharmacy_stock.qty IS the
+--     on-shelf number, so the answer adjusts it and leaves a count_correction
+--     move in the ledger like any other count.
+-- The caller never has to know which; the ask row records which happened.
 create or replace function public._c425_apply_answer(
   p_ask_id uuid, p_qty numeric, p_source text)
 returns jsonb language plpgsql security definer set search_path to 'public' as $$
-declare a public.pharmacy_radar_ask; s public.pharmacy_stock; v_delta numeric;
+declare
+  a public.pharmacy_radar_ask; s public.pharmacy_stock; v_delta numeric;
+  v_path text := 'stock'; v_learn jsonb := null;
 begin
   select * into a from public.pharmacy_radar_ask where id = p_ask_id;
   if not found then
@@ -468,25 +538,40 @@ begin
                               'message', public.ui_text('phradar.ask_bad_qty'));
   end if;
 
-  select * into s from public.pharmacy_stock where id = a.stock_id;
-  if found then
-    v_delta := p_qty - coalesce(s.qty, 0);
-    update public.pharmacy_stock set qty = p_qty, updated_at = now() where id = s.id;
-    insert into public.pharmacy_stock_move (
-      pharmacy_id, stock_id, item_key, kind, qty_delta, qty_after, unit_cost,
-      reason_code, note, actor_label, ref_kind, ref_id)
-    values (a.pharmacy_id, s.id, s.item_key, 'adjust', v_delta, p_qty, s.unit_cost,
-            'count_correction', 'expiry radar answer', coalesce(p_source,'whatsapp'),
-            'radar_ask', a.id::text);
+  if to_regprocedure('public._c424_correct(uuid,uuid,numeric)') is not null then
+    begin
+      execute 'select public._c424_correct($1,$2,$3)'
+        into v_learn using a.pharmacy_id, a.stock_id, p_qty;
+    exception when others then
+      v_learn := jsonb_build_object('ok', false, 'error', sqlerrm);
+    end;
+    if coalesce((v_learn->>'ok')::boolean, false) then
+      v_path := 'inference';
+    end if;
+  end if;
+
+  if v_path = 'stock' then
+    select * into s from public.pharmacy_stock where id = a.stock_id;
+    if found then
+      v_delta := p_qty - coalesce(s.qty, 0);
+      update public.pharmacy_stock set qty = p_qty, updated_at = now() where id = s.id;
+      insert into public.pharmacy_stock_move (
+        pharmacy_id, stock_id, item_key, kind, qty_delta, qty_after, unit_cost,
+        reason_code, note, actor_label, ref_kind, ref_id)
+      values (a.pharmacy_id, s.id, s.item_key, 'adjust', v_delta, p_qty, s.unit_cost,
+              'count_correction', 'expiry radar answer', coalesce(p_source,'whatsapp'),
+              'radar_ask', a.id::text);
+    end if;
   end if;
 
   update public.pharmacy_radar_ask
      set status = 'answered', answered_qty = p_qty, answered_at = now(),
-         answer_source = coalesce(p_source, 'whatsapp')
+         answer_source = coalesce(p_source, 'whatsapp'),
+         options = options   -- unchanged; the ask keeps the numbers it offered
    where id = a.id;
 
   return jsonb_build_object('ok', true, 'ask_id', a.id, 'qty', p_qty,
-    'product', a.product_name,
+    'product', a.product_name, 'landed', v_path, 'learn', v_learn,
     'message', case when p_qty = 0
       then public.ui_fmt('phradar.ask_saved_zero',
              jsonb_build_object('product', coalesce(a.product_name,'')))

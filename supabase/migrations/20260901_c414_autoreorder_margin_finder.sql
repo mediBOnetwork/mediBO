@@ -1453,3 +1453,43 @@ begin
   end if;
 end $function$
 
+
+-- ═════════════════════════════════════════════════════════════════════════════
+-- 10. AN ESTIMATED MARGIN IN DISGUISE.
+--
+-- _c414_stock_cost() set has_cost = true when ANY batch carried a unit_cost,
+-- and blended the cost across the costed batches only — while reporting the
+-- FULL shelf quantity. A medicine with 99 units of unrecorded cost and 1 unit
+-- bought at ₹1 therefore reported a ₹9.00 margin, as though it applied to all
+-- 100. That is an estimate for 99% of the stock wearing the clothes of a real
+-- number, and it is the number the owner would act on at the counter.
+--
+-- #366's rule is not "prefer real costs" — it is that a margin comes from real
+-- cost and is NEVER estimated. So the licence to show one now requires FULL
+-- coverage: every unit on the shelf must have a recorded cost. A shelf with a
+-- gap shows no margin and says why, and the pharmacy clears it by recording
+-- the cost — which is the behaviour worth encouraging anyway.
+-- ═════════════════════════════════════════════════════════════════════════════
+create or replace function public._c414_stock_cost(p_shop uuid, p_medicine_id bigint)
+returns jsonb language sql stable security definer set search_path to 'public' as $$
+  with b as (
+    select ps.qty, ps.unit_cost, ps.mrp
+      from pharmacy_stock ps
+     where ps.pharmacy_id = p_shop and ps.medicine_id = p_medicine_id
+       and coalesce(ps.qty,0) > 0
+  ), costed as (
+    select * from b where unit_cost is not null and unit_cost > 0
+  )
+  select jsonb_build_object(
+    'qty',          coalesce((select sum(qty) from b), 0),
+    'in_stock',     coalesce((select sum(qty) from b), 0) > 0,
+    'costed_qty',   coalesce((select sum(qty) from costed), 0),
+    -- FULL COVERAGE. Anything less is an estimate for the uncovered units.
+    'has_cost',     exists (select 1 from costed)
+                    and coalesce((select sum(qty) from costed), 0)
+                      = coalesce((select sum(qty) from b), 0),
+    'unit_cost',    (select round(sum(unit_cost * qty) / nullif(sum(qty),0), 2) from costed),
+    'mrp',          (select round(sum(mrp * qty) / nullif(sum(qty),0), 2)
+                       from b where mrp is not null and mrp > 0))
+$$;
+revoke all on function public._c414_stock_cost(uuid, bigint) from public, anon, authenticated;

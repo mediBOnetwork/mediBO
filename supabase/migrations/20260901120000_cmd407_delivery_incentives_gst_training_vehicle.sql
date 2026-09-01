@@ -430,8 +430,8 @@ begin
       'scheme_id', s.id,
       'label',       s.label,
       'metric_label',coalesce(v_m.label, s.metric),
-      'value_label', trim(to_char(v_val,'FM999999990.99')) || coalesce(v_m.value_suffix,''),
-      'target_label',trim(to_char(s.threshold,'FM999999990.99')) || coalesce(v_m.value_suffix,''),
+      'value_label', trim_scale(v_val)::text || coalesce(v_m.value_suffix,''),
+      'target_label',trim_scale(s.threshold)::text || coalesce(v_m.value_suffix,''),
       'progress',    v_pct,
       'bonus_label', public.inr_money(s.bonus_amount),
       'earned',      (v_val >= s.threshold and s.threshold > 0),
@@ -563,9 +563,9 @@ begin
   select coalesce(jsonb_agg(jsonb_build_object(
            'label',      s.label,
            'date_label', to_char(e.earn_date,'DD Mon'),
-           'hit_label',  trim(to_char(e.metric_value,'FM999999990.99'))
+           'hit_label',  trim_scale(e.metric_value)::text
                          || coalesce(m.value_suffix,'') || ' / '
-                         || trim(to_char(e.threshold,'FM999999990.99'))
+                         || trim_scale(e.threshold)::text
                          || coalesce(m.value_suffix,''),
            'amount_label', public.inr_money(e.amount)) order by e.earn_date), '[]'::jsonb)
     into v_bonus
@@ -760,7 +760,7 @@ begin
       jsonb_build_object('label', public._c('agency_invoice.lbl_drops'),   'value', public.inr_money(i.drops_amount)),
       jsonb_build_object('label', public._c('agency_invoice.lbl_bonus'),   'value', public.inr_money(i.bonus_amount)),
       jsonb_build_object('label', public._c('agency_invoice.lbl_taxable'), 'value', public.inr_money(i.taxable)),
-      jsonb_build_object('label', trim(to_char(i.rate,'FM999990.99')) || '% '
+      jsonb_build_object('label', trim_scale(i.rate)::text || '% '
                                   || case when i.is_interstate then public._c('agency_invoice.lbl_igst')
                                           else public._c('agency_invoice.lbl_cgst_sgst') end,
                          'value', public.inr_money(i.total_tax)),
@@ -1184,7 +1184,7 @@ begin
            'pass_mark_label', m.pass_mark || '%',
            'passed',    coalesce(c.passed, false),
            'score_label', case when c.id is null then ''
-                               else trim(to_char(c.score_pct,'FM990.9')) || '%' end,
+                               else trim_scale(c.score_pct)::text || '%' end,
            'status_label', case when coalesce(c.passed,false)
                                 then public._c('training.status_passed')
                                 when c.id is not null then public._c('training.status_failed')
@@ -1421,7 +1421,7 @@ begin
     last_attempt_at = now();
 
   return jsonb_build_object('ok',true,'passed',v_pass,
-    'score_label', trim(to_char(v_pct,'FM990.9')) || '%',
+    'score_label', trim_scale(v_pct)::text || '%',
     'right_label', coalesce(v_right,0) || ' / ' || v_total,
     'message', case when v_pass then public._c('training.pass_message')
                     else public._cf('training.fail_message',
@@ -1566,9 +1566,9 @@ begin
                    'date_label', to_char(e.spend_date,'DD Mon YYYY'),
                    'vehicle_label', coalesce(v.reg_number, ''),
                    'odometer_label', case when e.odometer_km is null then ''
-                        else trim(to_char(e.odometer_km,'FM999999990.9')) || ' km' end,
+                        else trim_scale(e.odometer_km)::text || ' km' end,
                    'litres_label', case when e.litres is null then ''
-                        else trim(to_char(e.litres,'FM99990.99')) || ' L' end,
+                        else trim_scale(e.litres)::text || ' L' end,
                    'has_receipt', (coalesce(e.receipt_path,'') <> ''),
                    'receipt_bucket', 'partner-receipts',
                    'receipt_path', coalesce(e.receipt_path,''),
@@ -1897,7 +1897,7 @@ begin
            'zone_id', s.zone_id, 'agency_id', s.agency_id,
            'metric', s.metric,
            'metric_label', coalesce((select m.label from public.incentive_metrics m where m.slug = s.metric), s.metric),
-           'target_label', trim(to_char(s.threshold,'FM999999990.99'))
+           'target_label', trim_scale(s.threshold)::text
                            || coalesce((select m.value_suffix from public.incentive_metrics m where m.slug = s.metric),''),
            'threshold', s.threshold,
            'bonus', s.bonus_amount,
@@ -2205,7 +2205,7 @@ begin
            'zone_id', s.zone_id, 'agency_id', s.agency_id,
            'metric', s.metric,
            'metric_label', coalesce((select m.label from public.incentive_metrics m where m.slug = s.metric), s.metric),
-           'target_label', trim(to_char(s.threshold,'FM999999990.99'))
+           'target_label', trim_scale(s.threshold)::text
                            || coalesce((select m.value_suffix from public.incentive_metrics m where m.slug = s.metric),''),
            'threshold', s.threshold,
            'bonus', s.bonus_amount,

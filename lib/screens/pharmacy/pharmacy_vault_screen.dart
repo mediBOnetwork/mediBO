@@ -22,7 +22,9 @@
 import 'package:flutter/material.dart';
 
 import '../../design_tokens.dart';
+import '../../services/demand_engine_api.dart'; // CMD #427 — pharmacy_overpay_entry()
 import '../../services/pharmacy_vault_api.dart';
+import 'pharmacy_overpay_screen.dart'; // CMD #427 — the price check
 import '../../utils/render_log.dart';
 import 'pharmacy_expiry_screen.dart' show toneColor, toneSoft;
 
@@ -59,6 +61,8 @@ class _PharmacyVaultScreenState extends State<PharmacyVaultScreen> {
   void initState() {
     super.initState();
     _load();
+    // CMD #427 — ask the backend whether this account has a price check at all.
+    if (widget.rpc == null) OverpayEntry.load();
   }
 
   Future<void> _load() async {
@@ -89,6 +93,41 @@ class _PharmacyVaultScreenState extends State<PharmacyVaultScreen> {
         title: Text(_s(_payload['title'])),
         backgroundColor: Ds.c.surface,
         elevation: 0,
+        actions: [
+          // CMD #427 — THE PRICE CHECK, from the vault. This is the right door
+          // for it: every number on that screen was read off the bills sitting
+          // on this one, so the question "was that a good rate?" belongs next
+          // to the bills that answer it. Whether the button exists, what it
+          // says and the badge count are all pharmacy_overpay_entry()'s call —
+          // there is no role test here, and a non-pharmacy account simply gets
+          // no button.
+          ValueListenableBuilder<Map<String, dynamic>>(
+            valueListenable: OverpayEntry.value,
+            builder: (context, entry, _) {
+              if (entry['show'] != true) return const SizedBox.shrink();
+              final badge = _s(entry['badge']);
+              return IconButton(
+                icon: badge.isEmpty
+                    ? Icon(Icons.compare_arrows_outlined, color: Ds.c.brand)
+                    : Badge(
+                        label: Text(badge),
+                        backgroundColor: Ds.c.warning,
+                        child: Icon(
+                          Icons.compare_arrows_outlined,
+                          color: Ds.c.brand,
+                        ),
+                      ),
+                tooltip: _s(entry['label']),
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute<void>(
+                    builder: (_) => const PharmacyOverpayScreen(),
+                  ),
+                ),
+              );
+            },
+          ),
+        ],
       ),
       body: _loading
           ? const _VaultSkeleton()

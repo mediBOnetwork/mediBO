@@ -232,6 +232,7 @@ insert into public.ui_copy (key, value) values
   ('pos.err_bad_phone',         to_jsonb('Enter a 10-digit mobile number.'::text)),
   ('pos.wa_queued',             to_jsonb('The invoice is on its way on WhatsApp.'::text)),
   ('pos.retry',                 to_jsonb('Retry'::text)),
+  ('pos.boot_failed',           to_jsonb('The counter could not be reached. Check the connection and try again.'::text)),
   ('pos.staff_label',           to_jsonb('Billed by'::text))
 on conflict (key) do nothing;
 

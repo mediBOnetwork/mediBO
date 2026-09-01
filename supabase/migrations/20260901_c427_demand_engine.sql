@@ -1061,10 +1061,20 @@ language sql stable security definer set search_path to 'public' as $$
                       where b.order_id = o.id and b.status in ('confirmed','applied'))
    group by p.zone_id, oi.product_id, o.customer_id
   union all
-  -- CMD #427 — every bill in the vault, including purchases mediBO never
-  -- supplied. The opt-out and the zone requirement live inside the reader.
+  -- CMD #427 — the vault arm, and it is deliberately a FALLBACK, not an
+  -- addition. A shop that rang the box up on its own counter has already told
+  -- the radar what moved; counting the bill it arrived on as well would count
+  -- the same box twice and quietly inflate the zone. So the bills speak for
+  -- the shops that have no counter data in this window — the Tier-0 shops with
+  -- nothing but a drawer of invoices, including invoices from distributors
+  -- mediBO has never dealt with. That is the market #419 could not see.
+  -- The opt-out and the zone requirement live inside the reader.
   select u.zone_id, u.medicine_id, max(u.product_name), u.pharmacy_id, sum(u.units)
     from public._c427_bill_units(p_from, p_to) u
+   where not exists (select 1 from public.pos_sales s
+                      where s.pharmacy_id = u.pharmacy_id
+                        and s.status = 'completed'
+                        and s.sold_on between p_from and p_to)
    group by u.zone_id, u.medicine_id, u.pharmacy_id;
 $$;
 

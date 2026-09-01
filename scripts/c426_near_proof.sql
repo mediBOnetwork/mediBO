@@ -72,11 +72,11 @@ begin
          item_key, batch_no, expiry_on, qty, source_kind, received_on)
   values
     (v_lot1, v_near,   v_med, 'C426ALPHA 500MG TABLET', 'c426alpha', 'B1',
-     current_date + 300, 100, 'bill', current_date - 20),
+     current_date + 300, 100, 'outside', current_date - 20),
     (v_lot2, v_far,    v_med, 'C426ALPHA 500MG TABLET', 'c426alpha', 'B2',
-     current_date + 300, 100, 'bill', current_date - 20),
+     current_date + 300, 100, 'outside', current_date - 20),
     (v_lot3, v_closed, v_med, 'C426ALPHA 500MG TABLET', 'c426alpha', 'B3',
-     current_date + 300, 100, 'bill', current_date - 20);
+     current_date + 300, 100, 'outside', current_date - 20);
 
   insert into public.pharmacy_lot_inference
     (lot_id, pharmacy_id, medicine_id, received_on, expiry_on, qty_in,
@@ -137,7 +137,7 @@ begin
   values (v_lot1, v_near, v_med, 0, 60, 'proof');
   v_r := public.near_search('c426alpha', c_lat, c_lng);
   perform pg_temp.chk('13 correction to 0 drops it at once',
-    (v_r->>'count')::int = 0 and v_r->'rows'::text not like '%Near Chemist%',
+    (v_r->>'count')::int = 0 and (v_r->'rows')::text not like '%Near Chemist%',
     'inference row untouched; the correction is the authority');
   delete from public.pharmacy_lot_correction where lot_id = v_lot1 and source = 'proof';
 

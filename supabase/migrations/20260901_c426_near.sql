@@ -351,7 +351,7 @@ create or replace function public.near_search(
   p_lng     double precision default null,
   p_pincode text default null,
   p_limit   integer default null)
-returns jsonb language plpgsql stable security definer
+returns jsonb language plpgsql volatile security definer
 set search_path to 'public' as $$
 declare
   c public.near_config := public._c426_cfg();
@@ -496,7 +496,7 @@ end $$;
 -- The QR target: one pharmacy's own public page. Same honesty, same silence
 -- about trade data — it names the shop and says how to reach it, nothing more.
 create or replace function public.near_pharmacy(p_token text)
-returns jsonb language plpgsql stable security definer
+returns jsonb language plpgsql volatile security definer
 set search_path to 'public' as $$
 declare v_rate jsonb; r record;
 begin

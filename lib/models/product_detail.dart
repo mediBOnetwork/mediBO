@@ -25,6 +25,24 @@ class ProductDetail {
   final String packLabel;
   final String formChip;
   final bool rxRequired;
+
+  /// CHANGE #461/#170 — the prescription class block from `rx_badge()`, and
+  /// the buyer's drug-licence state for it. Both are the backend's words:
+  /// `rx` is `{has,is_rx,label,title,note,tone}` and `rxLicence` is
+  /// `{has,reason,licence,ok_note,...}`. Absent → the PDP shows nothing.
+  final Map<String, dynamic>? rx;
+  final Map<String, dynamic>? rxLicence;
+
+  bool get hasRxBlock => rx?['has'] == true;
+  bool get isRx => rx?['is_rx'] == true;
+  String get rxLabel => (rx?['label'] ?? '').toString();
+  String get rxTitle => (rx?['title'] ?? '').toString();
+  String get rxNote => (rx?['note'] ?? '').toString();
+  Map<String, dynamic>? get rxTone => (rx?['tone'] as Map?)?.cast<String, dynamic>();
+
+  /// The licence line only exists for an Rx product AND a signed-in pharmacy.
+  bool get rxLicenceOk => rxLicence?['has'] == true;
+  String get rxLicenceNote => (rxLicence?['ok_note'] ?? '').toString();
   final List<String> images;
 
   // price
@@ -107,6 +125,8 @@ class ProductDetail {
   final int compareMax;
 
   const ProductDetail({
+    this.rx,
+    this.rxLicence,
     required this.ok,
     required this.id,
     required this.labels,
@@ -179,6 +199,8 @@ class ProductDetail {
       packLabel: _s(header['pack_label']),
       formChip: _s(header['form_chip']),
       rxRequired: header['rx_required'] == true,
+      rx: (m['rx'] as Map?)?.cast<String, dynamic>(),
+      rxLicence: (m['rx_licence'] as Map?)?.cast<String, dynamic>(),
       images: ((header['images'] as List?) ?? const [])
           .map(_s)
           .where((s) => s.isNotEmpty)

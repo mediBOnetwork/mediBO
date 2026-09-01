@@ -596,6 +596,19 @@ class _CartScreenState extends State<CartScreen> {
         return;
       }
 
+      // CHANGE #461/#170 — a basket holding prescription stock is refused when
+      // the pharmacy has no valid drug licence on file and the gate is set to
+      // 'block'. The backend's own title and message are shown verbatim; this
+      // file words nothing and never decides what "valid" means.
+      if (placed['error'] == 'rx_licence_required') {
+        RenderLog.write('c461_order_blocked_rx', '1');
+        await cart.refresh();
+        if (!mounted) return;
+        final rxMsg = (placed['message'] ?? '').toString();
+        if (rxMsg.isNotEmpty) showToast(context, rxMsg, isError: true);
+        return;
+      }
+
       final displayCode = (placed['order_code'] ?? '').toString();
       final amountDisplay = (placed['amount_display'] ?? '').toString();
 
@@ -2332,6 +2345,10 @@ class _CheckoutBar extends StatelessWidget {
                     child: Text(cart.unpricedNote,
                         style: Ds.t.caption, textAlign: TextAlign.right),
                   ),
+                // CHANGE #461 — the delivery ladder (#167) and the Rx /
+                // rewards notices (#170, #168). All verbatim from cart_render.
+                if (selectedTotal == null) C461DeliveryLines(render: cart.render),
+                if (selectedTotal == null) C461CartNotices(render: cart.render),
                 const SizedBox(height: 12),
                 // Place Order (auth-gated)
                 Builder(builder: (ctx) {
@@ -2489,6 +2506,9 @@ class _OrderSummaryPanel extends StatelessWidget {
               height: 1.1,
             ),
           ),
+          // CHANGE #461 — same three blocks in the desktop sidebar.
+          if (selectedTotal == null) C461DeliveryLines(render: cart.render),
+          if (selectedTotal == null) C461CartNotices(render: cart.render),
           const SizedBox(height: 16),
           Builder(builder: (ctx) {
             final auth = UserState.of(ctx);
@@ -2757,6 +2777,174 @@ class _CartTaxBreakup extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CHANGE #461 — three blocks the cart never showed, all of them printed
+// verbatim from cart_render().
+//
+// #167 the delivery line: the charge, its GST and the grand total that
+//      includes it are computed by delivery_charge_block() and stamped on the
+//      order by the SAME function, so the amount here is the amount billed.
+// #170 the Rx / drug-licence notice: how many prescription lines are in the
+//      basket and whether this pharmacy's licence covers them.
+// #168 the tier benefit note: whether the margin benefit can bite on THIS
+//      cart, which for a cart with no trade-priced line it cannot.
+//
+// None of the three computes anything. Every string, every count, every plural
+// and both tone colours arrive in the payload.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// One `label · amount` row in the totals ladder.
+class _C461TotalRow extends StatelessWidget {
+  final String label;
+  final String amount;
+  final bool strong;
+  const _C461TotalRow({required this.label, required this.amount, this.strong = false});
+
+  @override
+  Widget build(BuildContext context) {
+    final style = strong ? Ds.t.subtitle : Ds.t.bodySecondary;
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: Ds.space.x4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.baseline,
+        textBaseline: TextBaseline.alphabetic,
+        children: [
+          Expanded(child: Text(label, style: style, maxLines: 1, overflow: TextOverflow.ellipsis)),
+          SizedBox(width: Ds.space.x8),
+          Text(amount, style: strong ? Ds.t.subtitle : Ds.t.body, textAlign: TextAlign.right),
+        ],
+      ),
+    );
+  }
+}
+
+/// The delivery ladder: delivery, its GST when there is one, then the grand
+/// total. Absent from the payload → absent from the screen.
+class C461DeliveryLines extends StatelessWidget {
+  final Map<String, dynamic> render;
+  const C461DeliveryLines({super.key, required this.render});
+
+  @override
+  Widget build(BuildContext context) {
+    final d = (render['delivery'] as Map?)?.cast<String, dynamic>();
+    if (d == null || d['has'] != true) return const SizedBox.shrink();
+
+    final note = (d['note'] ?? '').toString();
+    final grand = (render['grand_total_display'] ?? '').toString();
+    final itemsTotal = (render['items_total_display'] ?? '').toString();
+    final labels = (render['labels'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final totalLabel = (labels['total'] ?? '').toString();
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (itemsTotal.isNotEmpty && totalLabel.isNotEmpty)
+          _C461TotalRow(label: totalLabel, amount: itemsTotal),
+        _C461TotalRow(
+          label: (d['label'] ?? '').toString(),
+          amount: (d['amount_display'] ?? '').toString(),
+        ),
+        if (d['has_gst'] == true)
+          _C461TotalRow(
+            label: (d['gst_label'] ?? '').toString(),
+            amount: (d['gst_display'] ?? '').toString(),
+          ),
+        if (grand.isNotEmpty)
+          Padding(
+            padding: EdgeInsets.only(top: Ds.space.x4),
+            child: _C461TotalRow(
+              label: (labels['grand'] ?? totalLabel).toString(),
+              amount: grand,
+              strong: true,
+            ),
+          ),
+        if (note.isNotEmpty)
+          Padding(
+            padding: EdgeInsets.only(top: Ds.space.x4),
+            child: Text(note, style: Ds.t.caption),
+          ),
+      ],
+    );
+  }
+}
+
+/// A backend notice: title, message and the tone the payload chose. Used for
+/// the Rx / drug-licence gate and for the tier-benefit note.
+class C461Notice extends StatelessWidget {
+  final String title;
+  final String message;
+  final Map<String, dynamic>? tone;
+  const C461Notice({super.key, required this.title, required this.message, this.tone});
+
+  @override
+  Widget build(BuildContext context) {
+    if (message.isEmpty && title.isEmpty) return const SizedBox.shrink();
+    final bg = Ds.hex(tone?['bg'], Ds.c.infoSoft);
+    final fg = Ds.hex(tone?['fg'], Ds.c.text);
+    return Container(
+      width: double.infinity,
+      margin: EdgeInsets.only(top: Ds.space.x12),
+      padding: EdgeInsets.all(Ds.space.x12),
+      decoration: BoxDecoration(color: bg, borderRadius: Ds.r.rCard),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (title.isNotEmpty)
+            Text(title, style: Ds.t.subtitle.copyWith(color: fg)),
+          if (title.isNotEmpty && message.isNotEmpty) SizedBox(height: Ds.space.x4),
+          if (message.isNotEmpty)
+            Text(message, style: Ds.t.body.copyWith(color: fg)),
+        ],
+      ),
+    );
+  }
+}
+
+/// The Rx / drug-licence gate (#170) and the tier-benefit note (#168), both
+/// straight out of cart_render().
+class C461CartNotices extends StatelessWidget {
+  final Map<String, dynamic> render;
+  const C461CartNotices({super.key, required this.render});
+
+  @override
+  Widget build(BuildContext context) {
+    final rx = (render['rx_gate'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final rewards = (render['rewards'] as Map?)?.cast<String, dynamic>() ?? const {};
+
+    final rxMsg = (rx['message'] ?? '').toString();
+    final rxNote = (rx['rx_note'] ?? '').toString();
+    final rewardNote = (rewards['note'] ?? '').toString();
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // The count line shows whenever the basket holds Rx stock, even when
+        // the licence is fine — that is the record the audit asked for.
+        if (rxMsg.isEmpty && rxNote.isNotEmpty)
+          Padding(
+            padding: EdgeInsets.only(top: Ds.space.x8),
+            child: Text(rxNote, style: Ds.t.caption),
+          ),
+        if (rxMsg.isNotEmpty)
+          C461Notice(
+            title: (rx['title'] ?? '').toString(),
+            message: rxMsg,
+            tone: (rx['tone'] as Map?)?.cast<String, dynamic>(),
+          ),
+        if (rewards['has'] == true && rewardNote.isNotEmpty)
+          C461Notice(
+            title: (rewards['tier_label'] ?? '').toString(),
+            message: rewardNote,
+            tone: (rewards['tone'] as Map?)?.cast<String, dynamic>(),
+          ),
+      ],
     );
   }
 }

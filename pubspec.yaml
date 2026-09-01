@@ -80,6 +80,13 @@ dependencies:
   share_plus: ^10.1.4
   path_provider: ^2.1.5
 
+  # CHANGE #473 — client crash reporting. Web + Android crash and unhandled
+  # exception capture. Every option (DSN, sample rates, scrub rules, release
+  # template) arrives from crash_config_get(); nothing about Sentry is decided
+  # in Dart. With no DSN the SDK is never initialised and CrashReporting falls
+  # back to the backend's own local queue — see lib/services/crash_reporting.dart.
+  sentry_flutter: ^9.28.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

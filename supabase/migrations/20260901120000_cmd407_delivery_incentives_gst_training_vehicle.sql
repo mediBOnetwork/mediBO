@@ -2394,3 +2394,62 @@ end $$;
 update public.feature_registry
    set deep_link = '/admin/delivery-programme'
  where feature_key = 'admin.delivery_extras';
+-- ═══════════════════════════════════════════════════════════════════════════
+-- CMD #407 · PART 12 — design QA on the live screen.
+-- The first live frame showed two unlabelled numbers: a rupee amount sitting
+-- opposite a sentence, and a bare ₹0.00 with nothing to say what it was. A
+-- number with no caption is a number the reader has to guess at — and the
+-- caption belongs here, not in Dart.
+-- ═══════════════════════════════════════════════════════════════════════════
+insert into public.ui_copy(key, value) values
+  ('incentive.bonus_caption',   to_jsonb('Bonus each time it is hit'::text)),
+  ('incentive.paid_caption',    to_jsonb('Paid out so far'::text)),
+  ('cost_report.variance_caption', to_jsonb('Against the configured rate'::text)),
+  ('agency_invoice.lbl_period', to_jsonb('Period'::text)),
+  ('agency_invoice.lbl_payout', to_jsonb('Payout'::text))
+on conflict (key) do nothing;
+
+do $$
+declare v_src text;
+begin
+  -- Add the two captions to every scheme row without restating the function.
+  select pg_get_functiondef(p.oid) into v_src from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname='public' and p.proname='admin_incentive_schemes';
+
+  v_src := replace(v_src,
+    E'           \'bonus_label\', public.inr_money(s.bonus_amount),',
+    E'           \'bonus_label\', public.inr_money(s.bonus_amount),\n'
+    '           ''bonus_caption'', public._c(''incentive.bonus_caption''),\n'
+    '           ''paid_caption'',  public._c(''incentive.paid_caption''),');
+  execute v_src;
+end $$;
+
+do $$
+declare v_src text;
+begin
+  select pg_get_functiondef(p.oid) into v_src from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname='public' and p.proname='admin_delivery_cost_report';
+
+  v_src := replace(v_src,
+    E'           \'partner_name\', coalesce(r.full_name,\'\'),',
+    E'           \'partner_name\', coalesce(r.full_name,\'\'),\n'
+    '           ''variance_caption'', public._c(''cost_report.variance_caption''),');
+  execute v_src;
+end $$;
+
+do $$
+declare v_src text;
+begin
+  select pg_get_functiondef(p.oid) into v_src from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname='public' and p.proname='admin_agency_invoices';
+
+  v_src := replace(v_src,
+    E'      \'period_label\', to_char(p.period_start,\'DD Mon\') || \' – \' || to_char(p.period_end,\'DD Mon YYYY\'),',
+    E'      \'period_caption\', public._c(\'agency_invoice.lbl_period\'),\n'
+    '      ''payout_caption'', public._c(''agency_invoice.lbl_payout''),\n'
+    '      ''period_label'', to_char(p.period_start,''DD Mon'') || '' – '' || to_char(p.period_end,''DD Mon YYYY''),');
+  execute v_src;
+end $$;

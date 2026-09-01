@@ -6,6 +6,11 @@
 --   153  no licence expiry / renewal reminder     -> expiry dates + daily sweep
 --   154  no partner suspension / offboarding      -> partner_suspend / partner_resume
 --
+-- The c466_qa1_* migrations at the end are round-1 hostile-QA fixes: the
+-- new-work router must never leave the zone, and mediBO own GST registration
+-- for a commission invoice is platform_identity, never the partner-mirrored
+-- billing_config.
+--
 -- This file is the git-committed copy of exactly what was applied, in order.
 -- Every statement is idempotent: a resumed worker re-applies it as a no-op.
 
@@ -1491,4 +1496,581 @@ begin
          lateral unnest(m.statements) with ordinality as t(s, i)
    where m.name like 'c466\_%';
   return coalesce(v, '');
+end $fn$;
+
+-- ===== c466_qa1_stamp_never_leaves_the_zone (20260901210838) =====
+-- QA round 1, BLOCKER 1. The suspension guard added to orders_stamp_partner()
+-- sat in front of a pre-existing CROSS-ZONE fallback, which until now could only
+-- fire when a zone had no active partner at all. Suspending the zone's sole
+-- partner made it reachable in the ordinary case, and a zone-1 order then
+-- stamped to the zone-2 partner — while partner_lifecycle_card correctly said
+-- there was no replacement in this zone. A zone's work must never silently
+-- cross into another zone: the whole partner model is zone-locked, and every
+-- downstream fence (partner_zone_ok, partner_scope_order) is too.
+--
+-- Order of preference now, and the SAME ZONE always beats "some other zone":
+--   1. this zone, active, not suspended        <- the normal case
+--   2. this zone, active, even if suspended    <- work stays home; the card
+--                                                 tells the admin to activate
+--                                                 a replacement IN THIS ZONE
+--   3. any active, not suspended               <- only when the zone has no
+--   4. any active                                 partner at all
+create or replace function public.orders_stamp_partner()
+returns trigger
+language plpgsql security definer set search_path to 'public'
+as $fn$
+declare v_zone smallint := COALESCE(NEW.zone_id, 1);
+BEGIN
+  IF NEW.fulfillment_partner_id IS NULL THEN
+    SELECT rp.id INTO NEW.fulfillment_partner_id
+      FROM region_partners rp
+     WHERE rp.is_active AND rp.suspended_at IS NULL AND rp.zone_id = v_zone
+     ORDER BY rp.id LIMIT 1;
+
+    IF NEW.fulfillment_partner_id IS NULL THEN
+      SELECT rp.id INTO NEW.fulfillment_partner_id
+        FROM region_partners rp
+       WHERE rp.is_active AND rp.zone_id = v_zone
+       ORDER BY rp.id LIMIT 1;
+    END IF;
+
+    IF NEW.fulfillment_partner_id IS NULL THEN
+      SELECT rp.id INTO NEW.fulfillment_partner_id
+        FROM region_partners rp
+       WHERE rp.is_active AND rp.suspended_at IS NULL
+       ORDER BY rp.id LIMIT 1;
+    END IF;
+
+    IF NEW.fulfillment_partner_id IS NULL THEN
+      SELECT rp.id INTO NEW.fulfillment_partner_id
+        FROM region_partners rp
+       WHERE rp.is_active ORDER BY rp.id LIMIT 1;
+    END IF;
+  END IF;
+  RETURN NEW;
+END $fn$;
+
+-- partner_for_district() had the same shape: its 'Raipur' fallback is a
+-- DIFFERENT district, so a suspended partner in district X could hand its work
+-- to Raipur. Prefer the district itself, suspended or not, over another one.
+create or replace function public.partner_for_district(p_district text)
+returns jsonb
+language sql stable security definer set search_path to 'public'
+as $fn$
+  with want as (select public.norm_district(p_district) as d),
+  hit as (
+    select rp.* from region_partners rp, want w
+    where rp.is_active and rp.suspended_at is null and rp.district = w.d limit 1
+  ),
+  -- the district's own partner, even suspended: its work stays in its district
+  same_district as (
+    select rp.* from region_partners rp, want w
+    where rp.is_active and rp.district = w.d limit 1
+  ),
+  fallback as (
+    select rp.* from region_partners rp
+    where rp.is_active and rp.suspended_at is null and rp.district = 'Raipur' limit 1
+  ),
+  last_resort as (
+    select rp.* from region_partners rp where rp.is_active order by rp.id limit 1
+  ),
+  chosen as (
+    select * from hit
+    union all select * from same_district where not exists (select 1 from hit)
+    union all select * from fallback
+      where not exists (select 1 from hit) and not exists (select 1 from same_district)
+    union all select * from last_resort
+      where not exists (select 1 from hit) and not exists (select 1 from same_district)
+        and not exists (select 1 from fallback)
+  )
+  select jsonb_build_object(
+    'district', c.district,
+    'partner_name', c.partner_name,
+    'address', c.address,
+    'gstin', c.gstin,
+    'dl_20b', c.dl_20b,
+    'dl_21b', c.dl_21b,
+    'state', c.state,
+    'dl_combined', concat_ws('  |  ',
+        nullif('20B: '||coalesce(c.dl_20b,''),'20B: '),
+        nullif('21B: '||coalesce(c.dl_21b,''),'21B: ')),
+    'gst_doc_path', c.gst_doc_path,
+    'dl20b_doc_path', c.dl20b_doc_path,
+    'dl21b_doc_path', c.dl21b_doc_path,
+    'suspended', c.suspended_at is not null,
+    'matched', (select w.d from want w) is not distinct from c.district
+  ) from chosen c limit 1;
+$fn$;
+
+-- QA round 1, MAJOR: btrim() strips spaces only, so a tab or a newline passed
+-- as a "reason". Collapse ALL whitespace before deciding it is empty.
+create or replace function public.partner_suspend(p_partner_id bigint, p_reason text)
+returns jsonb
+language plpgsql security definer set search_path to 'public'
+as $fn$
+declare
+  v_reason text := nullif(btrim(regexp_replace(coalesce(p_reason,''), '\s+', ' ', 'g')), '');
+begin
+  if public.role_for_medibo_only() not in ('admin','super_admin') then
+    return jsonb_build_object('ok', false, 'error','not_authorized','tone','danger',
+      'message', public._c('partner_lifecycle.err_not_authorized'));
+  end if;
+  if not exists (select 1 from region_partners where id = p_partner_id) then
+    return jsonb_build_object('ok', false, 'error','no_partner','tone','danger',
+      'message', public._c('partner_lifecycle.err_no_partner'));
+  end if;
+  if v_reason is null then
+    return jsonb_build_object('ok', false, 'error','no_reason','tone','danger',
+      'message', public._c('partner_lifecycle.err_no_reason'));
+  end if;
+
+  update region_partners
+     set suspended_at = coalesce(suspended_at, now()),
+         suspended_by = coalesce(public.my_login_email(),'admin'),
+         suspend_reason = v_reason,
+         updated_at = now()
+   where id = p_partner_id;
+
+  insert into partner_audit_log(partner_id, user_id, feature_key, action, detail)
+  values (p_partner_id, auth.uid(), 'partner.onboarding', 'partner_suspended',
+          jsonb_build_object('reason', v_reason,
+            'summary', public._c('partner_lifecycle.suspended_toast')));
+
+  return jsonb_build_object('ok', true, 'tone','success',
+    'message', public._c('partner_lifecycle.suspended_toast'),
+    'card', public.partner_lifecycle_card(p_partner_id));
+end $fn$;
+
+-- ===== c466_qa1_platform_gstin_not_the_partner_mirror (20260901210900) =====
+-- QA round 1, BLOCKER 2. billing_config is NOT mediBO's own identity: the
+-- trigger sync_active_partner_to_billing() copies the ACTIVE PARTNER's name,
+-- GSTIN, address and state into it, because a customer bill is raised by the
+-- zone's partner. Reading seller_gstin / seller_state as "mediBO" therefore
+-- printed the partner's own GSTIN as the recipient of its own commission
+-- invoice, and made the interstate test compare a state with itself — so the
+-- IGST branch could never fire. It was invisible in testing only because the
+-- one settlement period has partner_share = 0.
+--
+-- mediBO the platform already has its own row: platform_identity. Give it the
+-- two fields the commission invoice actually needs. No trigger writes here.
+alter table public.platform_identity
+  add column if not exists gstin text,
+  add column if not exists state text;
+
+-- Seed from what billing_config holds TODAY, which is the operator's own
+-- registration (the About page names Jai Mahakal Medical And Surgical, in
+-- Chhattisgarh, as the legal operator, and that is the currently active zone-1
+-- partner). Seeded once; from here it is edited, never synced.
+update public.platform_identity p
+   set gstin = coalesce(nullif(p.gstin,''), (select b.seller_gstin from public.billing_config b where b.id = 1)),
+       state = coalesce(nullif(p.state,''), (select coalesce(b.seller_state,'Chhattisgarh') from public.billing_config b where b.id = 1))
+ where p.id = 1;
+
+-- and let an admin correct it without a deploy
+do $mig$
+declare v_def text;
+begin
+  select pg_get_functiondef(pr.oid) into v_def from pg_proc pr
+    join pg_namespace n on n.oid = pr.pronamespace
+   where n.nspname='public' and pr.proname='admin_save_platform_identity';
+  if v_def is null then raise exception 'c466: admin_save_platform_identity not found'; end if;
+  if position('gstin               = coalesce' in v_def) > 0 then return; end if;
+  v_def := replace(v_def,
+    '    udyam_no            = coalesce(p->>''udyam_no'', udyam_no),',
+    '    udyam_no            = coalesce(p->>''udyam_no'', udyam_no),
+    -- CMD #466 — mediBO''s OWN GST registration, the recipient on a partner
+    -- commission invoice. Never the partner-mirrored billing_config.
+    gstin               = coalesce(p->>''gstin'', gstin),
+    state               = coalesce(p->>''state'', state),');
+  if position('gstin               = coalesce' in v_def) = 0 then
+    raise exception 'c466: could not splice gstin/state into admin_save_platform_identity';
+  end if;
+  execute v_def;
+end $mig$;
+
+insert into public.ui_copy(key, value) values
+  ('partner_doc.gst_note_self', to_jsonb('GST: this zone is fulfilled by mediBO''s own operating entity — the partner and mediBO are the same registration ({gstin}), so there is no supply between two parties and no tax invoice arises on this commission. The figure above is an internal profit share.'::text))
+on conflict (key) do nothing;
+
+-- ===== c466_qa1_statement_gst_from_platform_identity (20260901210945) =====
+-- The statement now reads mediBO's own registration from platform_identity, so
+-- the recipient GSTIN is mediBO's and the interstate test compares the PARTNER's
+-- state with MEDIBO's rather than with a copy of itself. A partner that IS the
+-- operating entity (same GSTIN) is a third case: no supply, no tax invoice.
+create or replace function public._c466_statement_payload(p_partner_id bigint, p_period_id bigint)
+returns jsonb
+language plpgsql stable security definer set search_path to 'public'
+as $fn$
+declare
+  pr public.partner_settlement_periods%rowtype;
+  rp public.region_partners%rowtype;
+  v_gst   jsonb := coalesce((select value from app_settings where key='partner_commission_gst'),
+                            jsonb_build_object('rate',18,'sac','9985'));
+  v_rate  numeric := coalesce((v_gst->>'rate')::numeric, 18);
+  v_sac   text    := coalesce(v_gst->>'sac', '9985');
+  v_me_gstin text; v_me_state text;
+  v_p_gstin  text; v_p_state  text;
+  v_reg boolean; v_self boolean; v_inter boolean;
+  v_taxable numeric; v_tax numeric; v_cgst numeric := 0; v_sgst numeric := 0; v_igst numeric := 0;
+  v_note text;
+  v_orders jsonb; v_costs jsonb; v_totals jsonb; v_period text; v_no text;
+begin
+  select * into pr from partner_settlement_periods where id = p_period_id and partner_id = p_partner_id;
+  if not found then return jsonb_build_object('ok', false, 'error','not_found'); end if;
+  select * into rp from region_partners where id = p_partner_id;
+
+  -- mediBO's OWN registration. platform_identity is never written by
+  -- sync_active_partner_to_billing(); billing_config is, so it is only a
+  -- last-resort fallback for a database seeded before this column existed.
+  select nullif(btrim(coalesce(pi.gstin,'')),''), nullif(btrim(coalesce(pi.state,'')),'')
+    into v_me_gstin, v_me_state from public.platform_identity pi where pi.id = 1;
+  if v_me_gstin is null or v_me_state is null then
+    select coalesce(v_me_gstin, nullif(btrim(coalesce(b.seller_gstin,'')),'')),
+           coalesce(v_me_state, nullif(btrim(coalesce(b.seller_state,'')),''))
+      into v_me_gstin, v_me_state from public.billing_config b where b.id = 1;
+  end if;
+
+  v_p_gstin := nullif(btrim(coalesce(rp.gstin,'')),'');
+  v_p_state := nullif(btrim(coalesce(rp.state,'')),'');
+
+  v_reg   := v_p_gstin is not null;
+  v_self  := v_reg and v_me_gstin is not null
+             and upper(v_p_gstin) = upper(v_me_gstin);
+  v_inter := v_reg and not v_self
+             and v_p_state is not null and v_me_state is not null
+             and upper(v_p_state) is distinct from upper(v_me_state);
+
+  v_taxable := coalesce(pr.partner_share, 0);
+  v_tax := case when v_reg and not v_self then round(v_taxable * v_rate / 100.0, 2) else 0 end;
+  if v_inter then v_igst := v_tax;
+  elsif v_reg and not v_self then v_cgst := round(v_tax/2, 2); v_sgst := v_tax - v_cgst;
+  end if;
+
+  v_note := case
+    when v_self then public._cf('partner_doc.gst_note_self',
+            jsonb_build_object('gstin', coalesce(v_p_gstin,'')))
+    when v_reg then public._cf('partner_doc.gst_note_registered', jsonb_build_object(
+            'gstin', coalesce(v_p_gstin,''), 'rate', trim(to_char(v_rate,'FM990.##')), 'sac', v_sac))
+    else public._c('partner_doc.gst_note_unregistered') end;
+
+  v_period := to_char(pr.period_start,'DD/MM/YYYY') || ' – ' || to_char(pr.period_end,'DD/MM/YYYY');
+  v_no := 'PS-' || p_partner_id::text || '-' || p_period_id::text;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'date_label', to_char(s.order_date, 'DD/MM/YYYY'),
+           'ref',        coalesce(s.order_code, ''),
+           'revenue',    public.inr_money(s.revenue),
+           'margin',     public.inr_money(s.gross_margin),
+           'share',      public.inr_money(s.partner_share))
+         order by s.order_date, s.id), '[]'::jsonb)
+    into v_orders
+    from partner_settlements s
+   where s.period_id = p_period_id and s.partner_id = p_partner_id;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'label',  coalesce(nullif(c.driver_label,''), c.cost_type),
+           'amount', public.inr_money(coalesce(c.override_amount, c.computed_amount)))
+         order by c.created_at), '[]'::jsonb)
+    into v_costs
+    from order_costs c
+   where c.order_id in (select s.order_id from partner_settlements s
+                         where s.period_id = p_period_id and s.partner_id = p_partner_id);
+
+  v_totals := jsonb_build_array(
+    jsonb_build_object('label', public._c('partner_doc.lbl_orders'),        'value', coalesce(pr.orders_count,0)::text),
+    jsonb_build_object('label', public._c('partner_doc.lbl_gross'),         'value', public.inr_money(pr.revenue)),
+    jsonb_build_object('label', public._c('partner_doc.lbl_margin'),        'value', public.inr_money(pr.gross_margin)),
+    jsonb_build_object('label', public._c('partner_doc.lbl_costs'),         'value', public.inr_money(pr.cost_total)),
+    jsonb_build_object('label', public._c('partner_doc.lbl_distributable'), 'value', public.inr_money(pr.distributable)),
+    jsonb_build_object('label', public._c('partner_doc.lbl_split'),         'value', trim(to_char(coalesce(pr.split_pct,0),'FM990.00')) || '%'),
+    jsonb_build_object('label', public._c('partner_doc.lbl_commission'),    'value', public.inr_money(pr.partner_share)),
+    jsonb_build_object('label', public._c('partner_doc.lbl_brought_forward'),'value', public.inr_money(pr.brought_forward)),
+    jsonb_build_object('label', public._c('partner_doc.lbl_net'),
+                       'value', public.inr_money(coalesce(pr.net_due, pr.payable, 0)), 'bold', true));
+
+  if v_reg and not v_self then
+    v_totals := v_totals
+      || jsonb_build_object('label', public._c('partner_doc.gst_taxable'), 'value', public.inr_money(v_taxable))
+      || jsonb_build_object('label', public._c('partner_doc.gst_cgst'),    'value', public.inr_money(v_cgst))
+      || jsonb_build_object('label', public._c('partner_doc.gst_sgst'),    'value', public.inr_money(v_sgst))
+      || jsonb_build_object('label', public._c('partner_doc.gst_igst'),    'value', public.inr_money(v_igst))
+      || jsonb_build_object('label', public._c('partner_doc.gst_invoice_total'),
+                            'value', public.inr_money(v_taxable + v_tax), 'bold', true);
+  end if;
+
+  return jsonb_build_object('ok', true,
+    'stamp', md5(coalesce(pr.status,'') || coalesce(pr.partner_share,0)::text
+                 || coalesce(pr.net_due,0)::text || coalesce(pr.orders_count,0)::text
+                 || coalesce(v_p_gstin,'') || coalesce(v_me_gstin,'')
+                 || coalesce(v_p_state,'') || coalesce(v_me_state,'') || v_rate::text),
+    'file_name', v_no || '.pdf',
+    'title', public._cf('partner_doc.doc_title', jsonb_build_object('period', v_period)),
+    'doc', jsonb_build_object(
+      'title', public._cf('partner_doc.doc_title', jsonb_build_object('period', v_period)),
+      'subtitle', public._cf('partner_doc.doc_subtitle',
+                    jsonb_build_object('at', public.ist_fmt(now(),'dmy_hm'))),
+      'brand', public._c('partner_doc.doc_brand'),
+      'header', jsonb_build_array(
+        jsonb_build_object('label', public._c('partner_doc.lbl_partner'),      'value', coalesce(rp.partner_name,'')),
+        jsonb_build_object('label', public._c('partner_doc.lbl_gstin'),        'value', coalesce(v_p_gstin, public._c('partner_doc.no_gstin'))),
+        jsonb_build_object('label', public._c('partner_doc.lbl_recipient'),    'value', coalesce(v_me_gstin, public._c('partner_doc.no_gstin'))),
+        jsonb_build_object('label', public._c('partner_doc.lbl_zone'),         'value', coalesce(rp.zone_id,0)::text),
+        jsonb_build_object('label', public._c('partner_doc.lbl_period'),       'value', v_period),
+        jsonb_build_object('label', public._c('partner_doc.lbl_statement_no'), 'value', v_no),
+        jsonb_build_object('label', public._c('partner_doc.lbl_date'),         'value', to_char(now() at time zone 'Asia/Kolkata','DD/MM/YYYY')),
+        jsonb_build_object('label', public._c('partner_doc.lbl_pos'),          'value', coalesce(v_p_state,'')),
+        jsonb_build_object('label', public._c('partner_doc.lbl_sac'),          'value', v_sac)),
+      'sections', jsonb_build_array(
+        jsonb_build_object(
+          'heading', public._c('partner_doc.orders_heading'),
+          'columns', jsonb_build_array(
+            jsonb_build_object('key','date_label','label',public._c('partner_doc.col_date'),   'align','left', 'width',80),
+            jsonb_build_object('key','ref',       'label',public._c('partner_doc.col_order'),  'align','left', 'width',150),
+            jsonb_build_object('key','revenue',   'label',public._c('partner_doc.col_revenue'),'align','right','width',110),
+            jsonb_build_object('key','margin',    'label',public._c('partner_doc.col_margin'), 'align','right','width',110),
+            jsonb_build_object('key','share',     'label',public._c('partner_doc.col_share'),  'align','right','width',110)),
+          'rows', v_orders,
+          'empty_label', public._c('partner_doc.orders_empty')),
+        jsonb_build_object(
+          'heading', public._c('partner_doc.costs_heading'),
+          'columns', jsonb_build_array(
+            jsonb_build_object('key','label', 'label',public._c('partner_doc.col_cost_label'), 'align','left', 'width',330),
+            jsonb_build_object('key','amount','label',public._c('partner_doc.col_cost_amount'),'align','right','width',110)),
+          'rows', v_costs,
+          'empty_label', public._c('partner_doc.costs_empty'))),
+      'totals', v_totals,
+      'notes', jsonb_build_array(v_note),
+      'footer', public._c('partner_doc.footer')),
+    'gst', jsonb_build_object(
+      'registered', (v_reg and not v_self), 'interstate', v_inter, 'self_billing', v_self,
+      'rate', v_rate, 'sac', v_sac,
+      'taxable', public.inr_money(v_taxable), 'cgst', public.inr_money(v_cgst),
+      'sgst', public.inr_money(v_sgst), 'igst', public.inr_money(v_igst),
+      'invoice_total', public.inr_money(v_taxable + v_tax),
+      'lines', case when (v_reg and not v_self)
+                    then public._c466_gst_lines(v_taxable, v_cgst, v_sgst, v_igst)
+                    else '[]'::jsonb end,
+      'heading', public._c('partner_doc.gst_head'),
+      'note', v_note));
+end $fn$;
+
+-- ===== c466_qa2_minors (20260901213911) =====
+-- QA round 2 minors.
+
+-- 1. A registered partner with NO state was silently billed CGST+SGST with a
+--    blank place of supply. Intra vs inter is undecidable without both states,
+--    and guessing "same state" is the expensive guess: it under-collects and
+--    puts the wrong tax heads on an invoice the partner then files. Say so.
+insert into public.ui_copy(key, value) values
+  ('partner_doc.gst_note_no_state', to_jsonb('GST: the commission above is the TAXABLE VALUE of a service you supply to mediBO, and you are registered ({gstin}). mediBO cannot tell whether this is an intra-state or inter-state supply because no state is recorded against your partner record, so no tax heads are shown. Give mediBO your registered state and this statement will carry the CGST/SGST or IGST split. This statement is not a tax invoice.'::text)),
+  ('partner_doc.no_state', to_jsonb('Not recorded'::text))
+on conflict (key) do nothing;
+
+do $mig$
+declare v_def text;
+begin
+  select pg_get_functiondef(p.oid) into v_def from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname='public' and p.proname='_c466_statement_payload';
+  if v_def is null then raise exception 'c466: _c466_statement_payload not found'; end if;
+  if position('v_no_state' in v_def) > 0 then return; end if;
+
+  -- a declaration for the new flag
+  v_def := replace(v_def,
+    '  v_reg boolean; v_self boolean; v_inter boolean;',
+    '  v_reg boolean; v_self boolean; v_inter boolean; v_no_state boolean;');
+
+  -- registered, not self, but no usable pair of states -> undecidable
+  v_def := replace(v_def,
+    '  v_taxable := coalesce(pr.partner_share, 0);',
+    '  v_no_state := v_reg and not v_self
+                and (v_p_state is null or v_me_state is null);
+
+  v_taxable := coalesce(pr.partner_share, 0);');
+
+  -- no tax when undecidable
+  v_def := replace(v_def,
+    'v_tax := case when v_reg and not v_self then round(v_taxable * v_rate / 100.0, 2) else 0 end;',
+    'v_tax := case when v_reg and not v_self and not v_no_state
+                   then round(v_taxable * v_rate / 100.0, 2) else 0 end;');
+  v_def := replace(v_def,
+    '  elsif v_reg and not v_self then v_cgst := round(v_tax/2, 2); v_sgst := v_tax - v_cgst;',
+    '  elsif v_reg and not v_self and not v_no_state then v_cgst := round(v_tax/2, 2); v_sgst := v_tax - v_cgst;');
+
+  -- its own note
+  v_def := replace(v_def,
+    '  v_note := case
+    when v_self then',
+    '  v_note := case
+    when v_no_state then public._cf(''partner_doc.gst_note_no_state'',
+            jsonb_build_object(''gstin'', coalesce(v_p_gstin,'''')))
+    when v_self then');
+
+  -- and no ladder, in the totals and in the card
+  v_def := replace(v_def,
+    '  if v_reg and not v_self then
+    v_totals := v_totals',
+    '  if v_reg and not v_self and not v_no_state then
+    v_totals := v_totals');
+  v_def := replace(v_def,
+    '''registered'', (v_reg and not v_self), ''interstate'', v_inter, ''self_billing'', v_self,',
+    '''registered'', (v_reg and not v_self and not v_no_state), ''interstate'', v_inter,
+      ''self_billing'', v_self, ''state_unknown'', v_no_state,');
+  v_def := replace(v_def,
+    '''lines'', case when (v_reg and not v_self)',
+    '''lines'', case when (v_reg and not v_self and not v_no_state)');
+
+  -- the place of supply says so instead of printing blank
+  v_def := replace(v_def,
+    'public._c(''partner_doc.lbl_pos''),          ''value'', coalesce(v_p_state,'''')',
+    'public._c(''partner_doc.lbl_pos''),          ''value'', coalesce(v_p_state, public._c(''partner_doc.no_state''))');
+
+  -- and the stamp must move when the state does
+  if position('|| coalesce(v_p_state,'''') || coalesce(v_me_state,'''')' in v_def) = 0 then
+    raise exception 'c466: statement stamp no longer covers the states';
+  end if;
+
+  if position('v_no_state' in v_def) = 0 then
+    raise exception 'c466: could not splice the no-state branch';
+  end if;
+  execute v_def;
+end $mig$;
+
+-- 2. partner_suspend accepted zero-width characters as a "reason". Strip the
+--    format characters too, not just whitespace.
+create or replace function public.partner_suspend(p_partner_id bigint, p_reason text)
+returns jsonb
+language plpgsql security definer set search_path to 'public'
+as $fn$
+declare
+  v_reason text := nullif(btrim(regexp_replace(
+      regexp_replace(coalesce(p_reason,''), '[­​-‏⁠-⁤﻿]', '', 'g'),
+      '\s+', ' ', 'g')), '');
+begin
+  if public.role_for_medibo_only() not in ('admin','super_admin') then
+    return jsonb_build_object('ok', false, 'error','not_authorized','tone','danger',
+      'message', public._c('partner_lifecycle.err_not_authorized'));
+  end if;
+  if not exists (select 1 from region_partners where id = p_partner_id) then
+    return jsonb_build_object('ok', false, 'error','no_partner','tone','danger',
+      'message', public._c('partner_lifecycle.err_no_partner'));
+  end if;
+  if v_reason is null then
+    return jsonb_build_object('ok', false, 'error','no_reason','tone','danger',
+      'message', public._c('partner_lifecycle.err_no_reason'));
+  end if;
+
+  update region_partners
+     set suspended_at = coalesce(suspended_at, now()),
+         suspended_by = coalesce(public.my_login_email(),'admin'),
+         suspend_reason = v_reason,
+         updated_at = now()
+   where id = p_partner_id;
+
+  insert into partner_audit_log(partner_id, user_id, feature_key, action, detail)
+  values (p_partner_id, auth.uid(), 'partner.onboarding', 'partner_suspended',
+          jsonb_build_object('reason', v_reason,
+            'summary', public._c('partner_lifecycle.suspended_toast')));
+
+  return jsonb_build_object('ok', true, 'tone','success',
+    'message', public._c('partner_lifecycle.suspended_toast'),
+    'card', public.partner_lifecycle_card(p_partner_id));
+end $fn$;
+
+-- 3. c466_row150_proof() INSERTed a real settlement period for the zone-2
+--    partner and never removed it, and left file_name='x.pdf' on partner 1's
+--    live document. A proof that mutates production and does not put it back is
+--    a landmine for whoever re-runs it. It now restores everything, in an
+--    EXCEPTION block so a failure mid-way still cleans up.
+create or replace function public.c466_row150_proof() returns jsonb
+language plpgsql security definer set search_path to 'public' as $fn$
+declare
+  v_out jsonb := '[]'::jsonb; v_j jsonb; v_doc uuid; v_p2 bigint;
+  v_period bigint; v_p2period bigint; v_p2period_made boolean := false;
+  d_before public.partner_document%rowtype; v_had_doc boolean := false;
+begin
+  perform set_config('request.jwt.claims',
+    jsonb_build_object('sub','c6233360-13df-46c7-8316-5edf927ab59b','email','test.partner1@medibo.in','role','authenticated')::text, true);
+  perform set_config('request.path','/rest/v1/rpc/partner_statement', true);
+
+  select id into v_period from partner_settlement_periods where partner_id=1 order by id desc limit 1;
+  select * into d_before from partner_document
+   where partner_id=1 and kind='statement' and ref_key=v_period::text;
+  v_had_doc := found;
+
+  v_j := public.partner_statement(v_period, 5);
+  v_out := v_out || jsonb_build_object('case','150_statement_offers_document',
+    'ok', (v_j->'document'->>'has')='true',
+    'button', v_j->'document'->>'button_label', 'ref', v_j->'document'->>'ref',
+    'gst', v_j->'gst');
+
+  v_j := public.partner_doc_request('statement', v_period::text);
+  v_doc := (v_j->>'doc_id')::uuid;
+  v_out := v_out || jsonb_build_object('case','150_request','ok',(v_j->>'ok')='true',
+    'status', v_j->>'status', 'poll_ms', v_j->>'poll_ms', 'message', v_j->>'message');
+
+  v_j := public.partner_doc_status(v_doc);
+  v_out := v_out || jsonb_build_object('case','150_status_polls','ok',(v_j->>'ok')='true','status', v_j->>'status');
+
+  v_j := public.supplier_doc_render_input(v_doc);
+  v_out := v_out || jsonb_build_object('case','150_render_input_resolves',
+    'ok', (v_j->>'ok')='true', 'bucket', v_j->>'bucket', 'path', v_j->>'path',
+    'file_name', v_j->>'file_name', 'doc_title', v_j->'document'->>'title',
+    'sections', (select jsonb_agg(s->>'heading') from jsonb_array_elements(v_j->'document'->'sections') s),
+    'totals', (select jsonb_agg((t->>'label')||' = '||(t->>'value')) from jsonb_array_elements(v_j->'document'->'totals') t),
+    'gst_note', v_j->'document'->'notes'->>0);
+
+  -- the delegation lands on the PARTNER ledger, not the supplier one
+  v_j := public.supplier_doc_report(v_doc, true, 'partner-receipts',
+           'p1/statement/'||v_period::text||'.pdf', 'PS-1-'||v_period::text||'.pdf', 1234, null);
+  v_out := v_out || jsonb_build_object('case','150_report_delegates',
+    'ok', (select status from partner_document where id=v_doc) = 'ready',
+    'row', (select jsonb_build_object('status',status,'bucket',bucket,'path',path,'bytes',bytes)
+              from partner_document where id=v_doc),
+    'supplier_ledger_untouched', not exists(select 1 from supplier_document where id=v_doc));
+
+  v_j := public.partner_doc_status(v_doc);
+  v_out := v_out || jsonb_build_object('case','150_status_ready','ok',(v_j->>'status')='ready',
+    'bucket', v_j->>'bucket','path', v_j->>'path');
+
+  -- cross-zone refusal, against a REAL zone-2 period
+  select rp.id into v_p2 from region_partners rp where rp.zone_id=2 and rp.is_active order by rp.id limit 1;
+  select p.id into v_p2period from partner_settlement_periods p where p.partner_id=v_p2 order by p.id desc limit 1;
+  if v_p2period is null then
+    insert into partner_settlement_periods(partner_id, zone_id, period_start, period_end,
+                                           cadence, due_on, split_pct, status)
+    values (v_p2, 2, current_date, current_date, 'same_day', current_date, 50, 'due')
+    returning id into v_p2period;
+    v_p2period_made := true;
+  end if;
+  v_j := public.partner_doc_request('statement', v_p2period::text);
+  v_out := v_out || jsonb_build_object('case','150_zone_scope_refuses',
+    'asked_period_of_partner', v_p2, 'period_id', v_p2period,
+    'ok', (v_j->>'ok')='false', 'error', v_j->>'error', 'message', v_j->>'message');
+
+  v_j := public.partner_doc_request('purchase_order', v_period::text);
+  v_out := v_out || jsonb_build_object('case','150_unknown_kind_refused',
+    'ok', (v_j->>'ok')='false' and (v_j->>'error')='unknown_kind', 'message', v_j->>'message');
+
+  -- ── restore. A proof must leave production exactly as it found it.
+  if v_p2period_made then delete from partner_settlement_periods where id = v_p2period; end if;
+  if v_had_doc then
+    update partner_document set status = d_before.status, bucket = d_before.bucket,
+           path = d_before.path, file_name = d_before.file_name, bytes = d_before.bytes,
+           source_stamp = d_before.source_stamp, ready_at = d_before.ready_at,
+           attempts = d_before.attempts, last_error = d_before.last_error
+     where id = d_before.id;
+  else
+    delete from partner_document where id = v_doc;
+  end if;
+
+  perform set_config('request.jwt.claims', null, true);
+  perform set_config('request.path', null, true);
+  return v_out || jsonb_build_object('case','restored',
+    'zone2_period_removed', v_p2period_made,
+    'partner1_doc', case when v_had_doc then 'restored' else 'removed' end);
+exception when others then
+  if v_p2period_made then delete from partner_settlement_periods where id = v_p2period; end if;
+  if not v_had_doc and v_doc is not null then delete from partner_document where id = v_doc; end if;
+  raise;
 end $fn$;

@@ -1016,3 +1016,17 @@ begin
        where r.is_active and coalesce(r.is_deleted,false)=false
          and public.scope_zone_ok(r.zone_id, v_zone)), '[]'::jsonb));
 end $function$;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 12. Every SECURITY DEFINER function inherits Postgres's default GRANT TO
+--     PUBLIC, so a new one is an anon endpoint until it is revoked. rg_check's
+--     privileged_rpcs_are_not_anon behaviour caught admin_delivery_geofence_clear
+--     the moment it was created; the helpers below are internal and get the same
+--     treatment. Internal calls are unaffected — a SECURITY DEFINER body runs as
+--     the owner.
+-- ─────────────────────────────────────────────────────────────────────────────
+revoke execute on function public.admin_delivery_geofence_clear(uuid) from public, anon;
+grant  execute on function public.admin_delivery_geofence_clear(uuid) to authenticated, service_role;
+revoke execute on function public._c462_geofence_section() from public, anon;
+revoke execute on function public._delivery_run_recount(uuid) from public, anon;
+revoke execute on function public._delivery_regroup_run(uuid) from public, anon;

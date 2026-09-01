@@ -79,12 +79,26 @@ select 'g105_already' proof,
        'true' want;
 
 \echo '--- GAP 108: rejecting a stop drops it out of the run count'
+-- d3 is 8 km from the others, so it is its own drop point: removing it MUST
+-- move the number. Before this change delivery_respond nulled run_id and left
+-- delivery_runs.total_stops exactly where it was.
+update public.deliveries set status='assigned' where id=(select v from t_ids where k='d3');
 select 'g108_before' proof,
-       public._delivery_run_recount((select v from t_ids where k='run')) total_stops_before_reject;
+       public._delivery_run_recount((select v from t_ids where k='run')) total_stops_before,
+       2 want;
 update public.deliveries set run_id=null, partner_id=null, status='unassigned', accept_status='rejected'
- where id=(select v from t_ids where k='d2');
+ where id=(select v from t_ids where k='d3');
 select 'g108_after_reject' proof,
-       public._delivery_run_recount((select v from t_ids where k='run')) total_stops_now;
+       public._delivery_run_recount((select v from t_ids where k='run')) total_stops_after,
+       1 want;
+select 'g108_respond_recounts' proof,
+       (select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+         where n.nspname='public' and p.proname='delivery_respond'
+           and pg_get_functiondef(p.oid) like '%_delivery_run_recount%') got, 1 want;
+select 'g108_cooldown_in_suggest' proof,
+       (select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+         where n.nspname='public' and p.proname='delivery_suggest_partner'
+           and pg_get_functiondef(p.oid) like '%reject_cooldown_min%') got, 1 want;
 
 \echo '--- GAP 104: the customer QR is gated on rider arrival'
 select 'g104_gate_present' proof,

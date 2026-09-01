@@ -48,6 +48,7 @@ import 'admin/notify_cost_screen.dart';         // CHANGE #325
 import 'admin/admin_supplier_account_screen.dart'; // CHANGE #402
 import 'admin/settlement_screen.dart';          // CHANGE #325
 import 'admin/dev_queue/cron_health_screen.dart'; // CHANGE #325
+import 'admin/test_mode_screen.dart';            // CHANGE #573
 import '../services/discount_slabs_service.dart'; // CHANGE #325
 import 'admin/admin_pricing_screen.dart';
 import 'admin/admin_shell.dart';
@@ -1185,6 +1186,13 @@ class _HomeShellState extends State<HomeShell> {
       case 'supplier_accounts':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const AdminSupplierAccountScreen()));
+        break;
+      // CHANGE #573 — the synthetic lane: what is test data right now, one tap
+      // to walk a whole order through it, one tap to purge it, and the switch
+      // that stops it being created at all.
+      case 'test_mode':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const TestModeScreen()));
         break;
       // The identity row the profile dropdown fires.
       case 'profile':

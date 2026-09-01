@@ -195,3 +195,31 @@ insert into ui_copy (key, value) values
   ('dev_queue.runner_boot_unreachable',
      to_jsonb('Runner boot could not be read right now.'::text))
 on conflict (key) do nothing;
+
+-- ── 5. anon never reaches an admin surface ─────────────────────────────────
+-- Every SECURITY DEFINER function inherits Postgres's default GRANT TO PUBLIC,
+-- and the anon key ships inside the web bundle and the APK — so a new admin_*
+-- RPC is a public endpoint until someone revokes it. `rg_check`'s
+-- `privileged_rpcs_are_not_anon` behaviour caught three of them in this tree.
+-- Idempotent by construction: it revokes whatever currently qualifies, and a
+-- second run finds nothing to do.
+revoke execute on function runner_boot_status(int) from anon, public;
+revoke execute on function runner_boot_report(text,text,text,jsonb,jsonb,int,int,text,text)
+  from anon, public;
+grant  execute on function runner_boot_status(int) to service_role, authenticated;
+grant  execute on function runner_boot_report(text,text,text,jsonb,jsonb,int,int,text,text)
+  to service_role;
+
+do $$
+declare r record;
+begin
+  for r in
+    select p.oid::regprocedure::text as sig
+      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public' and p.prosecdef
+       and has_function_privilege('anon', p.oid, 'execute')
+       and (p.proname like 'admin\_%' or p.proname like 'warehouse\_%')
+  loop
+    execute format('revoke execute on function %s from anon, public', r.sig);
+  end loop;
+end $$;

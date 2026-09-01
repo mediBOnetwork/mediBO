@@ -54,11 +54,25 @@ IconData partnerIcon(String key) {
 /// These screens are TAB BODIES: inside the admin shell they are handed a
 /// bounded box and bring no Scaffold of their own, so a partner pushes them
 /// inside [PartnerFeaturePage] rather than as a bare route.
-Widget? partnerDestination(String routeKey) {
+///
+/// CHANGE #528 (feature_gaps rows 142 + 143) — `tabs` is `partner_open().tabs`:
+/// the tab list the BACKEND says this grant opens, straight from
+/// `partner_screen_tab` joined to the caller's own permissions. The screens
+/// below render only those indexes, so one grant no longer opens all six
+/// fulfilment tabs, and `partner.inquiry` no longer hands over supplier orders.
+/// An empty/absent list means unbounded — that is the admin call path.
+Widget? partnerDestination(String routeKey, {List<dynamic>? tabs}) {
+  final allowed = (tabs == null || tabs.isEmpty)
+      ? null
+      : tabs
+          .map((t) => (t is Map) ? t['index'] : null)
+          .whereType<num>()
+          .map((n) => n.toInt())
+          .toSet();
   switch (routeKey) {
     case 'inquiry':
     case 'supplier_orders':
-      return AdminSupplierScreen();
+      return AdminSupplierScreen(allowedTabs: allowed);
     // CHANGE #399 — supplier payment gets its OWN partner surface. It used to
     // land on AdminSupplierScreen, whose pay panel calls sup_record_payment,
     // which raises for anyone but a super_admin: a partner could open the
@@ -70,14 +84,17 @@ Widget? partnerDestination(String routeKey) {
     case 'partner_staff':    return const PartnerStaffScreen();
     case 'partner_expenses': return const PartnerExpenseScreen();
     case 'partner_workers':  return const PartnerWorkersScreen();
-    case 'collect':         return AdminFulfillmentScreen(initialTab: 0);
-    case 'count':           return AdminFulfillmentScreen(initialTab: 1);
-    case 'bag_mapping':     return AdminFulfillmentScreen(initialTab: 2);
-    case 'pack':            return AdminFulfillmentScreen(initialTab: 3);
-    case 'assign_delivery': return AdminFulfillmentScreen(initialTab: 5);
+    case 'collect':         return AdminFulfillmentScreen(initialTab: 0, allowedTabs: allowed);
+    case 'count':           return AdminFulfillmentScreen(initialTab: 1, allowedTabs: allowed);
+    case 'bag_mapping':     return AdminFulfillmentScreen(initialTab: 2, allowedTabs: allowed);
+    case 'pack':            return AdminFulfillmentScreen(initialTab: 3, allowedTabs: allowed);
+    case 'assign_delivery': return AdminFulfillmentScreen(initialTab: 5, allowedTabs: allowed);
     // CHANGE #323 — the partner's own settlement statement. Zone-clamped like
     // every surface above it: partner_statement() resolves the zone from the
     // partner's own row and refuses anything else.
+    // CHANGE #528 row 142 — 'partner.disputes' is a registered feature now,
+    // so a grant can govern the tab that had no key at all.
+    case 'disputes':        return AdminFulfillmentScreen(initialTab: 4, allowedTabs: allowed);
     case 'settlement':      return const PartnerStatementScreen();
     default:                return null;
   }
@@ -208,7 +225,8 @@ class _PartnerHomeScreenState extends State<PartnerHomeScreen> {
       _load();
       return;
     }
-    final dest = partnerDestination((r['route_key'] ?? '').toString());
+    final dest = partnerDestination((r['route_key'] ?? '').toString(),
+        tabs: r['tabs'] is List ? r['tabs'] as List : null);
     if (dest == null) return;
     Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => PartnerFeaturePage(

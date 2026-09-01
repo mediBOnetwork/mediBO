@@ -203,7 +203,14 @@ enum _SupSortMode { spnDesc, nameAsc }
 class AdminSupplierScreen extends StatefulWidget {
   static final _screenKey = GlobalKey<_AdminSupplierScreenState>();
 
-  AdminSupplierScreen() : super(key: _screenKey);
+  /// CHANGE #528 (feature_gaps row 143) — three separate partner permissions
+  /// (inquiry / supplier_orders / supplier_payment) used to open this ONE
+  /// screen with no argument, so granting any of them handed over all of it.
+  /// `allowedTabs` is the tab-index set the backend said this caller may see
+  /// (`partner_open().tabs`); `null` = unbounded, i.e. every admin call site.
+  final Set<int>? allowedTabs;
+
+  AdminSupplierScreen({this.allowedTabs}) : super(key: _screenKey);
 
   /// Called by the shell when this screen becomes the active page.
   static void triggerFocus() =>
@@ -418,6 +425,18 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   bool _deletedExpanded = false;
   bool _loading = true;
   _SupFilter _filter = _SupFilter.suppliers;
+
+  /// CHANGE #528 row 143 — tab index -> filter, the same order the tab row is
+  /// drawn in and the same order `partner_screen_tab` stores for 'supplier'.
+  static const List<_SupFilter> _tabOrder = [
+    _SupFilter.suppliers, _SupFilter.inquiry, _SupFilter.orders,
+    _SupFilter.pending, _SupFilter.leads, _SupFilter.staging,
+  ];
+
+  bool _tabAllowed(int i) =>
+      widget.allowedTabs == null || widget.allowedTabs!.contains(i);
+
+  bool _filterAllowed(_SupFilter f) => _tabAllowed(_tabOrder.indexOf(f));
   _SupSortMode _sortMode = _SupSortMode.spnDesc;
   // Server-side search over the Suppliers list via admin_list_suppliers RPC
   // (matches company names, not just supplier name/code/city).
@@ -555,6 +574,13 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   @override
   void initState() {
     super.initState();
+    // CHANGE #528 row 143 — start on the first tab this caller was granted,
+    // never on 'Suppliers' just because it is index 0.
+    if (!_filterAllowed(_filter)) {
+      for (var i = 0; i < _tabOrder.length; i++) {
+        if (_tabAllowed(i)) { _filter = _tabOrder[i]; break; }
+      }
+    }
     _matchService = MatchStatusService();
     _matchServiceListener = () { if (mounted) setState(() {}); };
     _matchService.statuses.addListener(_matchServiceListener!);
@@ -1227,18 +1253,19 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Row(mainAxisSize: MainAxisSize.min, children: [
-                _tab(_SupFilter.suppliers,  'Suppliers (${_suppliers.length})'),
-                const SizedBox(width: 4),
-                _tab(_SupFilter.inquiry,    'Supplier Inquiry (${_inquiryOverview.length})'),
-                const SizedBox(width: 4),
+                // CHANGE #528 row 143 — a bounded caller sees only its own tab.
+                if (_tabAllowed(0)) _tab(_SupFilter.suppliers,  'Suppliers (${_suppliers.length})'),
+                if (_tabAllowed(1)) const SizedBox(width: 4),
+                if (_tabAllowed(1)) _tab(_SupFilter.inquiry,    'Supplier Inquiry (${_inquiryOverview.length})'),
+                if (_tabAllowed(2)) const SizedBox(width: 4),
                 // CHANGE #606 — the backend's `count`, not _orders.length.
-                _tab(_SupFilter.orders,     'Supplier Orders ($_ordersCount)'),
-                const SizedBox(width: 4),
-                _tab(_SupFilter.pending,    'Pending Approval (${_pending.length})'),
-                const SizedBox(width: 4),
-                _tab(_SupFilter.leads,      'Leads (${_leads.length})'),
-                const SizedBox(width: 4),
-                _tab(_SupFilter.staging,    'Staging (${_stagingCompanies.length + _stagingMedicines.length})'),
+                if (_tabAllowed(2)) _tab(_SupFilter.orders,     'Supplier Orders ($_ordersCount)'),
+                if (_tabAllowed(3)) const SizedBox(width: 4),
+                if (_tabAllowed(3)) _tab(_SupFilter.pending,    'Pending Approval (${_pending.length})'),
+                if (_tabAllowed(4)) const SizedBox(width: 4),
+                if (_tabAllowed(4)) _tab(_SupFilter.leads,      'Leads (${_leads.length})'),
+                if (_tabAllowed(5)) const SizedBox(width: 4),
+                if (_tabAllowed(5)) _tab(_SupFilter.staging,    'Staging (${_stagingCompanies.length + _stagingMedicines.length})'),
               ]),
             ),
           ),
@@ -1550,6 +1577,9 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   }
 
   Widget _buildContent(bool isDesktop) {
+    // CHANGE #528 row 143 — a body the caller was not granted is never built,
+    // whatever _filter happens to hold.
+    if (!_filterAllowed(_filter)) return const SizedBox.shrink();
     switch (_filter) {
       case _SupFilter.suppliers:  return _buildSuppliersView(isDesktop);
       case _SupFilter.inquiry:    return _buildInquiryView(isDesktop);
@@ -2123,6 +2153,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   // ═══════════════════════════════════════════════════════════════════════════
 
   void _selectTab(_SupFilter f) {
+    if (!_filterAllowed(f)) return;   // CHANGE #528 row 143
     _closeSendPopover();
     if (_filter == _SupFilter.inquiry && f != _SupFilter.inquiry) {
       _c458Debounce?.cancel();

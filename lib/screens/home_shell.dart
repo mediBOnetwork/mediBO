@@ -354,8 +354,16 @@ class _HomeShellState extends State<HomeShell> {
       _checkAmISuper();
       _loadDeletionCount();
       _loadNavProfileMenu(); // CHANGE #325
-      _consumePendingDeepLink(); // CHANGE #325
     }
+    // CMD #412 — the deep link used to be consumed INSIDE the isAdmin branch
+    // above, so /admin/go/<key> was parked by main.dart and then never opened
+    // for anybody who is not an admin. That made every non-admin destination
+    // unreachable by link — shelf stock and the counter included — while
+    // main.dart's own comment says authorisation is the destination screen's
+    // job, not the shell's. It is consumed for everyone now; a route that is
+    // not on the self-gated list stays PARKED rather than being dropped, so an
+    // admin link still opens the moment the admin check resolves.
+    _consumePendingDeepLink();
     // CHANGE #298 — login, account switch and logout all reach the shell as an
     // auth rebuild, and all three mean the same thing to a device token.
     _syncPushIdentity();
@@ -626,9 +634,19 @@ class _HomeShellState extends State<HomeShell> {
     StockEntry.load();
   }
 
+  /// Destinations that gate themselves on the CALLER's own account rather than
+  /// on an admin role, so opening them from a link grants nothing: each one
+  /// renders the backend's refusal when the account has no business there.
+  /// Every other key stays admin-only exactly as it was.
+  static const Set<String> _selfGatedRoutes = {'pharmacy_stock', 'pos', 'home'};
+
   void _consumePendingDeepLink() {
     final route = PendingAdminNav.take();
     if (route == null || route.isEmpty) return;
+    if (!UserState.of(context).isAdmin && !_selfGatedRoutes.contains(route)) {
+      PendingAdminNav.route = route; // not ours to open — leave it parked
+      return;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       RenderLog.write('c325_deep_link_opened', route);

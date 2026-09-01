@@ -15,6 +15,7 @@ import 'admin/view_as_picker_dialog.dart';
 import 'admin/loyalty_admin_screen.dart';
 import 'rewards_screen.dart';
 import 'wishlist_screen.dart';
+import 'pharmacy/pos_screen.dart'; // CMD #411 — the pharmacy counter
 
 class ProfileScreen extends StatefulWidget {
   // CHANGE #374 — when set (View As Customer), load the impersonated
@@ -207,6 +208,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                // CMD #411 — the pharmacy's shop-management tools. This is the
+                // surface a customer account actually reaches on a phone: the
+                // avatar opens THIS screen directly (there is no menu sheet for
+                // a non-admin), so a counter used dozens of times a day belongs
+                // at the top of it rather than behind a menu that never opens.
+                // The tile draws itself only when pos_entry() said so.
+                Container(
+                  color: Ds.c.surface,
+                  padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+                  child: const PosMenuTile(),
+                ),
                 // Avatar + pharmacy name header
                 Container(
                   color: Colors.white,

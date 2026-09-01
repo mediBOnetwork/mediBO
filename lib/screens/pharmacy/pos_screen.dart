@@ -169,11 +169,12 @@ class _PosScreenState extends State<PosScreen> {
   Future<void> _runSearch(String q) async {
     final term = q.trim();
     if (term.isEmpty) {
-      if (mounted)
+      if (mounted) {
         setState(() {
           _results = const [];
           _searchMessage = '';
         });
+      }
       return;
     }
     setState(() => _searching = true);
@@ -1121,4 +1122,59 @@ class _Refusal extends StatelessWidget {
       ),
     ),
   );
+}
+
+/// The counter's entry point, drawn wherever an account menu is shown.
+///
+/// Renders NOTHING unless `pos_entry()` said `show:true` — so a supplier, a
+/// rider or an admin never sees it, and this widget makes no role test of its
+/// own to decide that. The label and the icon are the payload's too.
+class PosMenuTile extends StatelessWidget {
+  /// Called before navigating, so a bottom sheet can close itself first.
+  final VoidCallback? onBeforeOpen;
+  const PosMenuTile({super.key, this.onBeforeOpen});
+
+  static IconData get _icon => Icons.point_of_sale_outlined;
+
+  @override
+  Widget build(BuildContext context) =>
+      ValueListenableBuilder<Map<String, dynamic>>(
+        valueListenable: PosEntry.value,
+        builder: (context, entry, _) {
+          if (entry['show'] != true) return const SizedBox.shrink();
+          RenderLog.write('c411_pos_entry_tile', 1);
+          return InkWell(
+            onTap: () {
+              onBeforeOpen?.call();
+              Navigator.push(
+                context,
+                MaterialPageRoute<void>(builder: (_) => const PosScreen()),
+              );
+            },
+            borderRadius: Ds.r.rButton,
+            child: Padding(
+              padding: EdgeInsets.symmetric(
+                horizontal: Ds.space.x4,
+                vertical: Ds.space.x12,
+              ),
+              child: Row(
+                children: [
+                  Icon(_icon, size: Ds.t.subtitleSize, color: Ds.c.brand),
+                  SizedBox(width: Ds.space.x12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(_s(entry['label']), style: Ds.t.bodyStrong),
+                        if (_s(entry['sub_label']).isNotEmpty)
+                          Text(_s(entry['sub_label']), style: Ds.t.caption),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      );
 }

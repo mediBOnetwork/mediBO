@@ -1345,3 +1345,51 @@ create or replace function public._pos_dec(p numeric)
 returns text language sql immutable as $$
   select rtrim(rtrim(to_char(coalesce(p,0), 'FM9999990.999'), '0'), '.');
 $$;
+
+-- ─────────────── 9. GRANTS: close the default PUBLIC execute ────────────────
+--
+-- Postgres grants EXECUTE on a new function to PUBLIC by default, and PUBLIC
+-- includes `anon` — whose key ships inside the web bundle and the APK. So every
+-- function above was a public endpoint the moment it was created, which is
+-- exactly what the `privileged_rpcs_are_not_anon` regression guard exists to
+-- catch. Revoke first, then grant back deliberately.
+--
+-- The behaviour was already safe (every caller-facing RPC resolves pos_shop()
+-- and refuses a null), but "safe because of a check inside the body" is one
+-- edit away from not being safe. The grant is the fence.
+--
+-- Two of these are NOT part of the caller-facing API and must never be granted
+-- to `authenticated`:
+--   * pos_invoice_render_input — takes a sale_id and returns the whole bill
+--     WITHOUT a shop check, because the edge function calls it with the service
+--     key. Exposed to a logged-in user it would read any pharmacy's invoices.
+--   * pos_invoice_report — writes the stored PDF path onto a sale.
+do $$
+declare r record;
+begin
+  for r in
+    select p.oid::regprocedure as sig
+      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public'
+       and (p.proname like 'pos\_%' or p.proname like '\_pos\_%')
+  loop
+    execute format('revoke all on function %s from public', r.sig);
+    execute format('revoke all on function %s from anon', r.sig);
+  end loop;
+end $$;
+
+-- The caller-facing API, and nothing else.
+grant execute on function public.pos_entry()                           to authenticated;
+grant execute on function public.pos_home()                            to authenticated;
+grant execute on function public.pos_search(text, integer)             to authenticated;
+grant execute on function public.pos_scan(text)                        to authenticated;
+grant execute on function public.pos_quote(jsonb, numeric)             to authenticated;
+grant execute on function public.pos_commit_sale(uuid, jsonb, numeric, text, jsonb) to authenticated;
+grant execute on function public.pos_sale_detail(uuid)                 to authenticated;
+grant execute on function public.pos_invoice_request(uuid)             to authenticated;
+grant execute on function public.pos_invoice_wa(uuid, text)            to authenticated;
+grant execute on function public.pos_day_close(date)                   to authenticated;
+
+-- Internal: the renderer's own pair, service_role only.
+grant execute on function public.pos_invoice_render_input(uuid)        to service_role;
+grant execute on function public.pos_invoice_report(uuid, boolean, text, text, text, integer, text) to service_role;

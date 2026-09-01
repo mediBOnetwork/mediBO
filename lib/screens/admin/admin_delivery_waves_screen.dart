@@ -25,6 +25,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../design_tokens.dart';
+import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 
 /// A single RPC call. Injectable so the widget test can drive the screen with
@@ -145,8 +146,12 @@ class _AdminDeliveryWavesScreenState extends State<AdminDeliveryWavesScreen> {
         body: Center(
           child: Padding(
             padding: EdgeInsets.all(Ds.space.x24),
-            child: Text(_s(_data, 'message'),
-                textAlign: TextAlign.center, style: Ds.t.body),
+            child: Text(
+                _s(_data, 'message').isNotEmpty
+                    ? _s(_data, 'message')
+                    : c('admin.delivery.waves_denied'),
+                textAlign: TextAlign.center,
+                style: Ds.t.body),
           ),
         ),
       );
@@ -452,12 +457,27 @@ class _AdminDeliveryWavesScreenState extends State<AdminDeliveryWavesScreen> {
         ],
       );
 
+  // When the fetch itself failed there is no payload to read a message out of,
+  // so the copy comes from ui_copy — still the backend's words, just fetched at
+  // boot instead of in the failed call.
   Widget _error() => ListView(
         padding: EdgeInsets.all(Ds.space.x24),
         children: [
-          Text(_s(_data, 'message'), style: Ds.t.body),
+          Text(
+              _s(_data, 'message').isNotEmpty
+                  ? _s(_data, 'message')
+                  : c('admin.delivery.waves_load_failed'),
+              style: Ds.t.body),
           SizedBox(height: Ds.space.x16),
-          OutlinedButton(onPressed: _load, child: Text(_s(_data, 'retry_label'))),
+          SizedBox(
+            height: Ds.space.x48,
+            child: OutlinedButton(
+              onPressed: _load,
+              child: Text(_s(_data, 'retry_label').isNotEmpty
+                  ? _s(_data, 'retry_label')
+                  : c('admin.delivery.waves_retry')),
+            ),
+          ),
         ],
       );
 }

@@ -480,5 +480,13 @@ on conflict (feature_key) do update
 insert into public.ui_copy(key, value) values
   ('admin.delivery.waves_entry', to_jsonb('Delivery waves'::text)),
   ('admin.delivery.waves_subtitle',
-     to_jsonb('Auto-assign packed orders across riders on shift'::text))
+     to_jsonb('Auto-assign packed orders across riders on shift'::text)),
+  -- The failure copy has to live in ui_copy rather than in the payload: when
+  -- admin_delivery_waves() is the thing that failed there IS no payload to read
+  -- a message out of, and an error card with no words in it is not a state.
+  ('admin.delivery.waves_load_failed',
+     to_jsonb('Could not load the wave plan. Check the connection and try again.'::text)),
+  ('admin.delivery.waves_retry', to_jsonb('Retry'::text)),
+  ('admin.delivery.waves_denied',
+     to_jsonb('Wave planning is for platform admins.'::text))
 on conflict (key) do update set value = excluded.value;

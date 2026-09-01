@@ -626,7 +626,22 @@ class Product {
   final bool hasOffer;
   final String offerChip;
 
+  /// CHANGE #461/#170 — the prescription class, straight from `rx_badge()` in
+  /// the payload: `{has, is_rx, label, title, note, tone}`. The app never
+  /// decides what "Rx" means, never maps a schedule to a colour and never
+  /// falls back to a locally-invented 'OTC' — an absent block renders nothing.
+  final Map<String, dynamic>? rx;
+
+  /// True only when the backend actually sent a class. Absence is absence.
+  bool get hasRxBadge => rx?['has'] == true;
+  bool get isRx => rx?['is_rx'] == true;
+  String get rxLabel => (rx?['label'] ?? '').toString();
+  String get rxTitle => (rx?['title'] ?? '').toString();
+  String get rxNote => (rx?['note'] ?? '').toString();
+  Map<String, dynamic>? get rxTone => (rx?['tone'] as Map?)?.cast<String, dynamic>();
+
   const Product({
+    this.rx,
     required this.id,
     required this.name,
     required this.genericName,
@@ -690,6 +705,7 @@ class Product {
         mrpText: mrpText,
         hasOffer: hasOffer,
         offerChip: offerChip,
+        rx: rx,
       );
 
   /// CHANGE #287 — read one backend label, honouring the difference between a
@@ -743,14 +759,16 @@ class Product {
       moq: 1,
       stock: 0,
       buyable: map['buyable'] as bool?,
-      schedule: 'OTC',
-      requiresPrescription: false,
+      // #461/#170: the class the BACKEND sent, not a hardcoded 'OTC'.
+      schedule: ((map['rx'] as Map?)?['label'] ?? '').toString(),
+      requiresPrescription: (map['rx'] as Map?)?['is_rx'] == true,
       discount: 0.0,
       availability: Availability.fromMap(map['availability']),
       pricing: pricing,
       mrpText: (map['mrp_label'] ?? '').toString(),
       hasOffer: map['has_offer'] == true,
       offerChip: (map['offer_chip'] ?? '').toString(),
+      rx: (map['rx'] as Map?)?.cast<String, dynamic>(),
     );
   }
 
@@ -822,6 +840,7 @@ class Product {
       mrpText: (map['mrp_display'] ?? '').toString(),
       hasOffer: map['has_offer'] == true,
       offerChip: (map['offer_chip'] ?? '').toString(),
+      rx: (map['rx'] as Map?)?.cast<String, dynamic>(),
     );
   }
 
@@ -852,6 +871,7 @@ class Product {
         'supplierCount': supplierCount,
         'availability': availability?.toJson(),
         'pricing': pricing?.toJson(),
+        'rx': rx,
       };
 
   factory Product.fromJson(Map<String, dynamic> map) {
@@ -916,8 +936,10 @@ class Product {
       moq: 1,
       stock: mrp > 0 ? 100 : 0,
       buyable: m['buyable'] as bool?,
-      schedule: 'OTC',
-      requiresPrescription: false,
+      // #461/#170: the class the BACKEND sent, not a hardcoded 'OTC'.
+      schedule: ((m['rx'] as Map?)?['label'] ?? '').toString(),
+      requiresPrescription: (m['rx'] as Map?)?['is_rx'] == true,
+      rx: (m['rx'] as Map?)?.cast<String, dynamic>(),
       discount: 0.0,
     );
   }
@@ -951,7 +973,8 @@ class Product {
       moq: 1,
       stock: 100,
       buyable: buyable,
-      schedule: 'OTC',
+      // fromCartData has no payload to read a class from: absence, not 'OTC'.
+      schedule: '',
       requiresPrescription: false,
       discount: 0.0,
     );

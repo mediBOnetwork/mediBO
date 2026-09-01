@@ -1049,3 +1049,22 @@ begin
   select coalesce(jsonb_object_agg(status, n), '{}') into v_counts from (select status, count(*) n from dev_commands group by status) c;
   return jsonb_build_object('rows', v_rows, 'counts', v_counts, 'screen_title', 'Dev Queue');
 end $function$;
+
+-- ── O. THE WATCHDOG MUST NOT FAIL A ROW THAT IS WAITING ───────────────────
+-- dev_cmd_watchdog re-queues a `building` row whose heartbeat is 15 minutes
+-- old, and FAILS it the second time. A parked row is deliberately silent —
+-- its session was released on purpose — so without this it would be failed by
+-- the watchdog for exactly the reason #571 exists to stop. dev_cmd_wait_sweep
+-- owns parked rows; the watchdog skips them. Patched in place (idempotent) so
+-- the rest of that 8 KB function keeps whatever it grows next.
+do $do$
+declare d text;
+begin
+  d := pg_get_functiondef('public.dev_cmd_watchdog()'::regprocedure);
+  if position('WAIT_STATE IS DISTINCT FROM ''parked''' in upper(d)) = 0 then
+    d := replace(d,
+      'FROM dev_commands WHERE status=''building'' LOOP',
+      'FROM dev_commands WHERE status=''building'' AND wait_state IS DISTINCT FROM ''parked'' LOOP');
+    execute d;
+  end if;
+end $do$;

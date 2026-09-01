@@ -16,7 +16,9 @@ import 'package:flutter/material.dart';
 
 import '../../design_tokens.dart';
 import '../../services/pos_api.dart';
+import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
+import 'pharmacy_inference_screen.dart';  // CHANGE #424
 
 String _rs(Map<String, dynamic> m, String k) => (m[k] ?? '').toString();
 
@@ -80,6 +82,11 @@ class PharmacyReorderView extends StatelessWidget {
         Text(_rs(payload, 'subtitle'), style: Ds.t.caption),
         SizedBox(height: Ds.space.x16),
         _WindowChips(payload: payload),
+        // CHANGE #424 — "what is probably left" belongs next to "what to
+        // reorder": the same purchase history answers both questions. The
+        // label is ui_copy, so clearing the copy removes the entry.
+        SizedBox(height: Ds.space.x16),
+        InferenceEntryTile(label: c('infer424.tile_label')),
         if (draft['has'] == true) ...[
           SizedBox(height: Ds.space.x24),
           _DraftCard(draft: draft, busy: busy, onAction: onDraftAction),

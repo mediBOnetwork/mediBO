@@ -283,29 +283,29 @@ insert into public.ui_copy(key, value) values
  ('refill.engine_title',     to_jsonb('Refill reminders'::text)),
  ('refill.engine_toggle',    to_jsonb('Send refill reminders'::text)),
  ('refill.engine_off',       to_jsonb('Off — no patient is messaged'::text)),
- ('refill.engine_on',        to_jsonb('On — reminder goes out {lead} days before a patient runs out'::text)),
- ('refill.cap_label',        to_jsonb('At most one reminder per patient every {gap} days'::text)),
- ('refill.daily_label',      to_jsonb('At most {n} reminders a day'::text)),
+ ('refill.engine_on',        to_jsonb('On — reminder goes out {{lead}} days before a patient runs out'::text)),
+ ('refill.cap_label',        to_jsonb('At most one reminder per patient every {{gap}} days'::text)),
+ ('refill.daily_label',      to_jsonb('At most {{n}} reminders a day'::text)),
  ('refill.quiet_label',      to_jsonb('Nothing goes out on Sunday'::text)),
- ('refill.sent_today',       to_jsonb('{n} sent today'::text)),
+ ('refill.sent_today',       to_jsonb('{{n}} sent today'::text)),
  ('refill.optin_on',         to_jsonb('Reminders on'::text)),
  ('refill.optin_off',        to_jsonb('Reminders off'::text)),
  ('refill.optin_hint',       to_jsonb('Ask the patient at the counter before you turn this on.'::text)),
- ('refill.runs_out_on',      to_jsonb('Runs out {date}'::text)),
- ('refill.ran_out_on',       to_jsonb('Ran out {date}'::text)),
+ ('refill.runs_out_on',      to_jsonb('Runs out {{date}}'::text)),
+ ('refill.ran_out_on',       to_jsonb('Ran out {{date}}'::text)),
  ('refill.runs_out_today',   to_jsonb('Runs out today'::text)),
- ('refill.days_left',        to_jsonb('{n} days left'::text)),
- ('refill.dose_label',       to_jsonb('{n} a day'::text)),
- ('refill.pack_label',       to_jsonb('{n} per pack'::text)),
- ('refill.last_bought',      to_jsonb('Last bought {date}'::text)),
+ ('refill.days_left',        to_jsonb('{{n}} days left'::text)),
+ ('refill.dose_label',       to_jsonb('{{n}} a day'::text)),
+ ('refill.pack_label',       to_jsonb('{{n}} per pack'::text)),
+ ('refill.last_bought',      to_jsonb('Last bought {{date}}'::text)),
  ('refill.nudge_label',      to_jsonb('Send reminder'::text)),
- ('refill.nudge_sent',       to_jsonb('Reminder sent to {name}'::text)),
+ ('refill.nudge_sent',       to_jsonb('Reminder sent to {{name}}'::text)),
  ('refill.err_not_found',    to_jsonb('Not found'::text)),
  ('refill.err_denied',       to_jsonb('Only the pharmacy can open this'::text)),
  ('refill.err_optin',        to_jsonb('This patient has not opted in'::text)),
  ('refill.err_engine_off',   to_jsonb('Turn refill reminders on first'::text)),
  ('refill.err_no_phone',     to_jsonb('No WhatsApp number on this patient'::text)),
- ('refill.err_too_soon',     to_jsonb('Already reminded — next reminder allowed in {n} days'::text)),
+ ('refill.err_too_soon',     to_jsonb('Already reminded — next reminder allowed in {{n}} days'::text)),
  ('refill.err_daily_cap',    to_jsonb('Daily reminder limit reached'::text)),
  ('refill.err_quiet',        to_jsonb('Quiet day — nothing goes out today'::text)),
  ('refill.empty_due',        to_jsonb('No refill is due yet. Bill a chronic medicine and a schedule builds itself.'::text)),
@@ -313,12 +313,12 @@ insert into public.ui_copy(key, value) values
  ('refill.empty_requests',   to_jsonb('No requests yet. Share your storefront link and they land here.'::text)),
  ('refill.empty_counter',    to_jsonb('No conversations yet. Patients who message your link start one.'::text)),
  ('refill.scan_label',       to_jsonb('Rebuild from bills'::text)),
- ('refill.scan_done',        to_jsonb('{n} refill schedules updated'::text)),
+ ('refill.scan_done',        to_jsonb('{{n}} refill schedules updated'::text)),
  ('refill.rules_title',      to_jsonb('Chronic medicines'::text)),
  ('refill.rules_hint',       to_jsonb('A bill line matching any of these builds a refill schedule.'::text)),
  -- the patient-facing sentence, template-shaped
- ('refill.wa_body',          to_jsonb('Namaste {patient}, your {product} from {shop} runs out on {date}. Reply 1 and we will keep it ready for pickup. Reply STOP to stop these reminders.'::text)),
- ('refill.wa_reserved',      to_jsonb('Done — {shop} has reserved {product} for you. Please collect it at the counter.'::text)),
+ ('refill.wa_body',          to_jsonb('Namaste {{patient}}, your {{product}} from {{shop}} runs out on {{date}}. Reply 1 and we will keep it ready for pickup. Reply STOP to stop these reminders.'::text)),
+ ('refill.wa_reserved',      to_jsonb('Done — {{shop}} has reserved {{product}} for you. Please collect it at the counter.'::text)),
  ('refill.wa_nothing',       to_jsonb('You have no refill waiting right now.'::text)),
  ('refill.wa_stopped',       to_jsonb('Stopped. You will not get refill reminders from this pharmacy again.'::text)),
  -- storefront
@@ -332,16 +332,16 @@ insert into public.ui_copy(key, value) values
  ('storefront.ai_hint',      to_jsonb('Answers only from your stock. Anything else is handed to you.'::text)),
  ('storefront.search_hint',  to_jsonb('Search medicines'::text)),
  ('storefront.in_stock',     to_jsonb('In stock'::text)),
- ('storefront.mrp_label',    to_jsonb('MRP {amount}'::text)),
+ ('storefront.mrp_label',    to_jsonb('MRP {{amount}}'::text)),
  ('storefront.add_label',    to_jsonb('Add'::text)),
  ('storefront.added_label',  to_jsonb('Added'::text)),
- ('storefront.cart_label',   to_jsonb('{n} item request'::text)),
+ ('storefront.cart_label',   to_jsonb('{{n}} item request'::text)),
  ('storefront.name_hint',    to_jsonb('Your name'::text)),
  ('storefront.phone_hint',   to_jsonb('WhatsApp number'::text)),
  ('storefront.note_hint',    to_jsonb('Anything else? (optional)'::text)),
  ('storefront.submit_label', to_jsonb('Ask the pharmacy to keep it ready'::text)),
  ('storefront.thanks_title', to_jsonb('Request sent'::text)),
- ('storefront.thanks_body',  to_jsonb('{shop} will keep your items ready. You will get a WhatsApp when they are.'::text)),
+ ('storefront.thanks_body',  to_jsonb('{{shop}} will keep your items ready. You will get a WhatsApp when they are.'::text)),
  ('storefront.closed_body',  to_jsonb('This storefront is closed right now. Please call the pharmacy.'::text)),
  ('storefront.not_found',    to_jsonb('This link is not valid any more.'::text)),
  ('storefront.empty',        to_jsonb('Nothing in stock matches that.'::text)),
@@ -354,22 +354,22 @@ insert into public.ui_copy(key, value) values
  ('storefront.cancel_label', to_jsonb('Cancel'::text)),
  ('storefront.reserved_toast', to_jsonb('Reserved — it is in the counter queue'::text)),
  -- AI counter
- ('counter.greeting',        to_jsonb('Namaste! This is {shop} on mediBO. Ask me about a medicine and I will tell you what we have in stock.'::text)),
- ('counter.handoff',         to_jsonb('Let me pass this to {shop} — someone from the pharmacy will reply shortly.'::text)),
- ('counter.not_stocked',     to_jsonb('Sorry, {shop} does not have that in stock right now. The pharmacy will confirm.'::text)),
- ('counter.reserved',        to_jsonb('Reserved at {shop}. Please collect at the counter.'::text)),
+ ('counter.greeting',        to_jsonb('Namaste! This is {{shop}} on mediBO. Ask me about a medicine and I will tell you what we have in stock.'::text)),
+ ('counter.handoff',         to_jsonb('Let me pass this to {{shop}} — someone from the pharmacy will reply shortly.'::text)),
+ ('counter.not_stocked',     to_jsonb('Sorry, {{shop}} does not have that in stock right now. The pharmacy will confirm.'::text)),
+ ('counter.reserved',        to_jsonb('Reserved at {{shop}}. Please collect at the counter.'::text)),
  ('counter.title',           to_jsonb('Conversations'::text)),
- ('counter.msg_count',       to_jsonb('{n} messages'::text)),
+ ('counter.msg_count',       to_jsonb('{{n}} messages'::text)),
  ('counter.handoff_label',   to_jsonb('Handed to you'::text)),
  ('counter.auto_label',      to_jsonb('Answered automatically'::text)),
  ('reservation.title',       to_jsonb('Reserved for pickup'::text)),
- ('reservation.queue_label', to_jsonb('{n} waiting'::text)),
+ ('reservation.queue_label', to_jsonb('{{n}} waiting'::text)),
  ('reservation.bill_label',  to_jsonb('Bill it'::text)),
  ('reservation.source_refill',    to_jsonb('Refill reminder'::text)),
  ('reservation.source_storefront',to_jsonb('Storefront'::text)),
  ('reservation.source_counter_ai',to_jsonb('AI counter'::text)),
  ('reservation.empty',       to_jsonb('Nothing reserved right now.'::text))
-on conflict (key) do nothing;
+on conflict (key) do update set value = excluded.value;
 
 alter table public.refill_schedule
   add column if not exists dose_edited boolean not null default false;
@@ -901,7 +901,7 @@ begin
   select * into sf from public.pharmacy_storefront where pharmacy_id = p_shop;
   if not found then
     insert into public.pharmacy_storefront(pharmacy_id, token)
-    values (p_shop, encode(gen_random_bytes(9), 'hex'))
+    values (p_shop, substr(md5(gen_random_uuid()::text || clock_timestamp()::text), 1, 18))
     on conflict (pharmacy_id) do nothing;
     select * into sf from public.pharmacy_storefront where pharmacy_id = p_shop;
   end if;
@@ -1063,11 +1063,11 @@ grant execute on function public.storefront_request_submit(text, text, text, jso
 -- The model has exactly one write action, and even that is executed here.
 -- ═══════════════════════════════════════════════════════════════════════════
 insert into public.ui_copy(key, value) values
- ('counter.available',  to_jsonb('{product} — {mrp}. In stock at {shop}. Reply RESERVE and we will keep it ready for pickup.'::text)),
- ('counter.available_many', to_jsonb('At {shop} right now: {list}. Reply RESERVE with the name and we will keep it ready.'::text)),
- ('counter.reserve_ask', to_jsonb('Which one should we keep ready? {list}'::text)),
+ ('counter.available',  to_jsonb('{{product}} — {{mrp}}. In stock at {{shop}}. Reply RESERVE and we will keep it ready for pickup.'::text)),
+ ('counter.available_many', to_jsonb('At {{shop}} right now: {{list}}. Reply RESERVE with the name and we will keep it ready.'::text)),
+ ('counter.reserve_ask', to_jsonb('Which one should we keep ready? {{list}}'::text)),
  ('counter.stop',       to_jsonb('Stopped. You will not get messages from this pharmacy again.'::text))
-on conflict (key) do nothing;
+on conflict (key) do update set value = excluded.value;
 
 create or replace function public._c417_is_b2b_number(p_phone10 text)
 returns boolean language sql stable security definer set search_path to 'public' as $$
@@ -1101,7 +1101,7 @@ begin
   select coalesce(jsonb_agg(x order by x->>'product_name'), '[]'::jsonb) into v_rows
     from (
       select jsonb_build_object(
-               'key', coalesce(st.medicine_id::text, lower(min(st.product_name))),
+               'key', coalesce(max(st.medicine_id)::text, lower(min(st.product_name))),
                'medicine_id', max(st.medicine_id),
                'product_name', min(st.product_name),
                'pack_label', min(st.pack_label),
@@ -1222,7 +1222,7 @@ insert into public.app_settings(key, value) values
     'enabled', true,
     'yes',  jsonb_build_array('1','yes','y','haan','han','ha','ok','okay','reserve','confirm','book'),
     'stop', jsonb_build_array('stop','stop refill','unsubscribe','band karo','mat bhejo')))
-on conflict (key) do nothing;
+on conflict (key) do nothing;   -- the shop may tune these words; never clobber them
 
 create or replace function public.refill_wa_inbound(p_phone text, p_text text)
 returns jsonb language plpgsql security definer set search_path to 'public' as $$
@@ -1363,3 +1363,546 @@ end $$;
 drop trigger if exists wa_refill_reply_trg on public.whatsapp_messages;
 create trigger wa_refill_reply_trg after insert on public.whatsapp_messages
 for each row execute function public.trg_wa_refill_reply();
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 17. THE PHARMACY CONSOLE. One RPC renders the whole screen; every label,
+--     date, rupee and plural below is a string, not a number Dart formats.
+-- ═══════════════════════════════════════════════════════════════════════════
+create or replace function public._c417_schedule_json(sc public.refill_schedule,
+                                                      pt public.refill_patient)
+returns jsonb language plpgsql stable security definer set search_path to 'public' as $$
+declare v_left int := sc.runs_out_on - public._c417_today();
+begin
+  return jsonb_build_object(
+    'id', sc.id,
+    'patient_id', pt.id,
+    'patient_name', coalesce(nullif(btrim(coalesce(pt.name,'')),''), pt.phone),
+    'phone', pt.phone,
+    'opted_in', pt.opted_in,
+    'optin_label', case when pt.opted_in then public.ui_text('refill.optin_on')
+                        else public.ui_text('refill.optin_off') end,
+    'product_name', sc.product_name,
+    'pack_label', sc.pack_label,
+    'rule_label', sc.rule_label,
+    'status', sc.status,
+    'paused', sc.status = 'paused',
+    'dose_per_day', sc.dose_per_day,
+    'dose_label', public._c417_fmt('refill.dose_label',
+                    jsonb_build_object('n', trim(to_char(sc.dose_per_day,'FM999990.99')))),
+    'pack_units', sc.pack_units,
+    'pack_units_label', public._c417_fmt('refill.pack_label',
+                    jsonb_build_object('n', trim(to_char(sc.pack_units,'FM999990.99')))),
+    'runs_out_on', sc.runs_out_on,
+    'runs_out_label', case
+        when v_left = 0 then public.ui_text('refill.runs_out_today')
+        when v_left < 0 then public._c417_fmt('refill.ran_out_on',
+               jsonb_build_object('date', to_char(sc.runs_out_on,'FMDD Mon')))
+        else public._c417_fmt('refill.runs_out_on',
+               jsonb_build_object('date', to_char(sc.runs_out_on,'FMDD Mon'))) end,
+    'days_left', v_left,
+    'days_left_label', case when v_left <= 0 then null
+        else public._c417_fmt('refill.days_left', jsonb_build_object('n', v_left::text)) end,
+    'tone', case when v_left < 0 then 'danger'
+                 when v_left <= 3 then 'warning' else 'info' end,
+    'last_bought_label', public._c417_fmt('refill.last_bought',
+        jsonb_build_object('date', to_char(sc.last_sold_on,'FMDD Mon'))),
+    'nudge_label', public.ui_text('refill.nudge_label'),
+    'can_nudge', pt.opted_in and sc.status = 'active' and length(coalesce(pt.phone,'')) = 10);
+end $$;
+
+create or replace function public.refill_home(p_q text default null)
+returns jsonb language plpgsql stable security definer set search_path to 'public' as $$
+declare
+  v_shop uuid := public.refill_shop(); s public.refill_settings%rowtype;
+  sf public.pharmacy_storefront%rowtype; v_name text;
+  v_due jsonb; v_pat jsonb; v_req jsonb; v_conv jsonb; v_sent int;
+begin
+  if v_shop is null then return public._c417_denied(); end if;
+  select * into s from public.refill_settings where pharmacy_id = v_shop;
+  if s.pharmacy_id is null then
+    s.enabled := false; s.lead_days := 3; s.min_gap_days := 20;
+    s.daily_cap := 30; s.quiet_dow := '{0}'; s.ai_enabled := true;
+  end if;
+  select * into sf from public.pharmacy_storefront where pharmacy_id = v_shop;
+  v_name := public._c417_shop_name(v_shop);
+
+  select count(*) into v_sent from public.refill_nudge_log
+   where pharmacy_id = v_shop and sent_on = public._c417_today();
+
+  select coalesce(jsonb_agg(public._c417_schedule_json(sc, pt)
+           order by sc.runs_out_on), '[]'::jsonb) into v_due
+    from public.refill_schedule sc
+    join public.refill_patient pt on pt.id = sc.patient_id
+   where sc.pharmacy_id = v_shop and sc.status <> 'done'
+     and sc.runs_out_on <= public._c417_today() + greatest(s.lead_days, 7)
+     and (coalesce(btrim(p_q),'') = ''
+          or sc.product_name ilike '%'||btrim(p_q)||'%'
+          or coalesce(pt.name,'') ilike '%'||btrim(p_q)||'%'
+          or pt.phone like '%'||btrim(p_q)||'%');
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'id', pt.id,
+           'name', coalesce(nullif(btrim(coalesce(pt.name,'')),''), pt.phone),
+           'phone', pt.phone,
+           'opted_in', pt.opted_in,
+           'optin_label', case when pt.opted_in then public.ui_text('refill.optin_on')
+                               else public.ui_text('refill.optin_off') end,
+           'optin_hint', public.ui_text('refill.optin_hint'),
+           'item_count', (select count(*) from public.refill_schedule x
+                           where x.patient_id = pt.id and x.status <> 'done'),
+           'items_label', (select string_agg(x.product_name, ', ')
+                             from public.refill_schedule x
+                            where x.patient_id = pt.id and x.status <> 'done'))
+           order by pt.updated_at desc), '[]'::jsonb) into v_pat
+    from public.refill_patient pt
+   where pt.pharmacy_id = v_shop
+     and (coalesce(btrim(p_q),'') = ''
+          or coalesce(pt.name,'') ilike '%'||btrim(p_q)||'%'
+          or pt.phone like '%'||btrim(p_q)||'%');
+
+  select coalesce(jsonb_agg(public._c417_reservation_json(r)
+           order by r.created_at desc), '[]'::jsonb) into v_req
+    from public.pos_reservation r
+   where r.pharmacy_id = v_shop and r.status = 'open';
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'id', c.id, 'phone', c.phone,
+           'count_label', public._c417_fmt('counter.msg_count',
+                            jsonb_build_object('n', c.message_count::text)),
+           'handoff', c.handoff,
+           'state_label', case when c.handoff then public.ui_text('counter.handoff_label')
+                               else public.ui_text('counter.auto_label') end,
+           'state_tone', case when c.handoff then 'warning' else 'success' end,
+           'last_label', to_char(c.last_at at time zone 'Asia/Kolkata','DD Mon, HH12:MI AM'),
+           'last_message', (select m.body from public.storefront_message m
+                             where m.conversation_id = c.id
+                             order by m.created_at desc limit 1))
+           order by c.last_at desc), '[]'::jsonb) into v_conv
+    from public.storefront_conversation c
+   where c.pharmacy_id = v_shop;
+
+  return jsonb_build_object('ok', true,
+    'title', public.ui_text('refill.title'),
+    'tabs', jsonb_build_array(
+      jsonb_build_object('key','due',      'label', public.ui_text('refill.tab_due'),
+                         'count', jsonb_array_length(v_due)),
+      jsonb_build_object('key','patients', 'label', public.ui_text('refill.tab_patients'),
+                         'count', jsonb_array_length(v_pat)),
+      jsonb_build_object('key','requests', 'label', public.ui_text('refill.tab_requests'),
+                         'count', jsonb_array_length(v_req)),
+      jsonb_build_object('key','counter',  'label', public.ui_text('refill.tab_counter'),
+                         'count', jsonb_array_length(v_conv))),
+    'engine', jsonb_build_object(
+      'title', public.ui_text('refill.engine_title'),
+      'enabled', s.enabled,
+      'toggle_label', public.ui_text('refill.engine_toggle'),
+      'status_label', case when s.enabled
+          then public._c417_fmt('refill.engine_on', jsonb_build_object('lead', s.lead_days::text))
+          else public.ui_text('refill.engine_off') end,
+      'status_tone', case when s.enabled then 'success' else 'info' end,
+      'lead_days', s.lead_days,
+      'min_gap_days', s.min_gap_days,
+      'daily_cap', s.daily_cap,
+      'cap_label', public._c417_fmt('refill.cap_label',
+                     jsonb_build_object('gap', s.min_gap_days::text)),
+      'daily_label', public._c417_fmt('refill.daily_label',
+                     jsonb_build_object('n', s.daily_cap::text)),
+      'quiet_label', public.ui_text('refill.quiet_label'),
+      'sent_today_label', public._c417_fmt('refill.sent_today',
+                     jsonb_build_object('n', v_sent::text)),
+      'scan_label', public.ui_text('refill.scan_label')),
+    'storefront', jsonb_build_object(
+      'title', public.ui_text('storefront.title'),
+      'hint', public.ui_text('storefront.hint'),
+      'link_label', public.ui_text('storefront.link_label'),
+      'copy_label', public.ui_text('storefront.copy_label'),
+      'has', sf.pharmacy_id is not null,
+      'token', sf.token,
+      'url', case when sf.token is null then null
+                  else public._c417_base_url() || '/shop/' || sf.token end,
+      'is_active', coalesce(sf.is_active, false),
+      'active_label', case when coalesce(sf.is_active,false)
+          then public.ui_text('storefront.active_label')
+          else public.ui_text('storefront.closed_label') end,
+      'ai_enabled', s.ai_enabled,
+      'ai_label', public.ui_text('storefront.ai_label'),
+      'ai_hint', public.ui_text('storefront.ai_hint'),
+      'shop', v_name),
+    'due', jsonb_build_object('rows', v_due,
+      'empty_label', public.ui_text('refill.empty_due')),
+    'patients', jsonb_build_object('rows', v_pat,
+      'empty_label', public.ui_text('refill.empty_patients')),
+    'requests', jsonb_build_object('rows', v_req,
+      'empty_label', public.ui_text('refill.empty_requests'),
+      'title', public.ui_text('reservation.title')),
+    'counter', jsonb_build_object('rows', v_conv,
+      'title', public.ui_text('counter.title'),
+      'empty_label', public.ui_text('refill.empty_counter')));
+end $$;
+
+create or replace function public.refill_settings_save(p_patch jsonb)
+returns jsonb language plpgsql security definer set search_path to 'public' as $$
+declare v_shop uuid := public.refill_shop(); s public.refill_settings%rowtype;
+begin
+  if v_shop is null then return public._c417_denied(); end if;
+  s := public._c417_settings(v_shop);
+  update public.refill_settings
+     set enabled      = coalesce((p_patch->>'enabled')::boolean, enabled),
+         lead_days    = greatest(least(coalesce((p_patch->>'lead_days')::int, lead_days), 30), 0),
+         min_gap_days = greatest(least(coalesce((p_patch->>'min_gap_days')::int, min_gap_days), 120), 1),
+         daily_cap    = greatest(least(coalesce((p_patch->>'daily_cap')::int, daily_cap), 200), 1),
+         ai_enabled   = coalesce((p_patch->>'ai_enabled')::boolean, ai_enabled),
+         updated_at   = now()
+   where pharmacy_id = v_shop;
+  return public.refill_home(null);
+end $$;
+
+create or replace function public.refill_patient_optin(p_patient_id uuid, p_on boolean)
+returns jsonb language plpgsql security definer set search_path to 'public' as $$
+declare v_shop uuid := public.refill_shop();
+begin
+  if v_shop is null then return public._c417_denied(); end if;
+  update public.refill_patient
+     set opted_in = coalesce(p_on,false),
+         opted_in_at  = case when coalesce(p_on,false) then now() else opted_in_at end,
+         opted_out_at = case when coalesce(p_on,false) then opted_out_at else now() end,
+         updated_at = now()
+   where id = p_patient_id and pharmacy_id = v_shop;
+  if not found then
+    return jsonb_build_object('ok', false, 'error','not_found',
+      'message', public.ui_text('refill.err_not_found'));
+  end if;
+  return jsonb_build_object('ok', true,
+    'label', case when coalesce(p_on,false) then public.ui_text('refill.optin_on')
+                  else public.ui_text('refill.optin_off') end);
+end $$;
+
+-- the dose assumption, editable per patient (the spec's own words)
+create or replace function public.refill_schedule_set(p_id uuid, p_patch jsonb)
+returns jsonb language plpgsql security definer set search_path to 'public' as $$
+declare v_shop uuid := public.refill_shop(); sc public.refill_schedule%rowtype;
+        pt public.refill_patient%rowtype; v_edit boolean := false;
+begin
+  if v_shop is null then return public._c417_denied(); end if;
+  select * into sc from public.refill_schedule where id = p_id and pharmacy_id = v_shop for update;
+  if not found then
+    return jsonb_build_object('ok', false, 'error','not_found',
+      'message', public.ui_text('refill.err_not_found'));
+  end if;
+  v_edit := (p_patch ? 'dose_per_day') or (p_patch ? 'pack_units');
+  update public.refill_schedule
+     set dose_per_day = greatest(coalesce((p_patch->>'dose_per_day')::numeric, dose_per_day), 0.25),
+         pack_units   = greatest(coalesce((p_patch->>'pack_units')::numeric, pack_units), 1),
+         status       = coalesce(nullif(p_patch->>'status',''), status),
+         dose_edited  = dose_edited or v_edit,
+         updated_at   = now()
+   where id = sc.id
+  returning * into sc;
+  update public.refill_schedule
+     set days_supply = greatest(1, floor(pack_units * qty_packs / dose_per_day)::int),
+         runs_out_on = last_sold_on + greatest(1, floor(pack_units * qty_packs / dose_per_day)::int)
+   where id = sc.id
+  returning * into sc;
+  select * into pt from public.refill_patient where id = sc.patient_id;
+  return jsonb_build_object('ok', true, 'row', public._c417_schedule_json(sc, pt));
+end $$;
+
+create or replace function public.storefront_save(p_patch jsonb)
+returns jsonb language plpgsql security definer set search_path to 'public' as $$
+declare v_shop uuid := public.refill_shop(); sf public.pharmacy_storefront%rowtype;
+begin
+  if v_shop is null then return public._c417_denied(); end if;
+  sf := public._c417_storefront(v_shop);
+  update public.pharmacy_storefront
+     set is_active    = coalesce((p_patch->>'is_active')::boolean, is_active),
+         display_name = coalesce(nullif(btrim(coalesce(p_patch->>'display_name','')),''), display_name),
+         greeting     = coalesce(nullif(btrim(coalesce(p_patch->>'greeting','')),''), greeting),
+         token        = case when coalesce((p_patch->>'rotate')::boolean,false)
+                             then substr(md5(gen_random_uuid()::text || clock_timestamp()::text), 1, 18) else token end,
+         updated_at   = now()
+   where pharmacy_id = v_shop;
+  return public.refill_home(null);
+end $$;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 18. THE CHRONIC LIST, ADMIN-EDITABLE (the spec's "maintained list").
+-- ═══════════════════════════════════════════════════════════════════════════
+insert into public.ui_copy(key, value) values
+ ('refill.rule_kind_class',    to_jsonb('Therapeutic class'::text)),
+ ('refill.rule_kind_molecule', to_jsonb('Molecule'::text)),
+ ('refill.rule_kind_name',     to_jsonb('Brand name'::text)),
+ ('refill.rule_dose',          to_jsonb('{{n}} a day'::text)),
+ ('refill.rule_saved',         to_jsonb('Saved'::text)),
+ ('refill.rule_deleted',       to_jsonb('Removed'::text))
+on conflict (key) do update set value = excluded.value;
+
+create or replace function public.refill_rules_home()
+returns jsonb language plpgsql stable security definer set search_path to 'public' as $$
+declare v_rows jsonb;
+begin
+  if public.get_my_role() not in ('admin','super_admin') then
+    return public._c417_denied();
+  end if;
+  select coalesce(jsonb_agg(jsonb_build_object(
+      'id', c.id, 'label', c.label, 'match_kind', c.match_kind,
+      'kind_label', public.ui_text('refill.rule_kind_' || c.match_kind),
+      'match_value', c.match_value,
+      'dose_per_day', c.dose_per_day,
+      'dose_label', public._c417_fmt('refill.rule_dose',
+                      jsonb_build_object('n', trim(to_char(c.dose_per_day,'FM999990.99')))),
+      'is_active', c.is_active) order by c.sort, c.id), '[]'::jsonb)
+    into v_rows from public.refill_chronic_rule c;
+  return jsonb_build_object('ok', true,
+    'title', public.ui_text('refill.rules_title'),
+    'hint', public.ui_text('refill.rules_hint'),
+    'kinds', jsonb_build_array(
+      jsonb_build_object('key','class',   'label', public.ui_text('refill.rule_kind_class')),
+      jsonb_build_object('key','molecule','label', public.ui_text('refill.rule_kind_molecule')),
+      jsonb_build_object('key','name',    'label', public.ui_text('refill.rule_kind_name'))),
+    'rows', v_rows);
+end $$;
+
+create or replace function public.refill_rule_save(p_patch jsonb)
+returns jsonb language plpgsql security definer set search_path to 'public' as $$
+declare v_id bigint;
+begin
+  if public.get_my_role() not in ('admin','super_admin') then
+    return public._c417_denied();
+  end if;
+  v_id := nullif(p_patch->>'id','')::bigint;
+  if v_id is null then
+    insert into public.refill_chronic_rule(label, match_kind, match_value, dose_per_day,
+                                           is_active, sort, updated_by)
+    values (coalesce(nullif(btrim(p_patch->>'label'),''), 'Chronic'),
+            coalesce(nullif(p_patch->>'match_kind',''), 'molecule'),
+            btrim(coalesce(p_patch->>'match_value','')),
+            greatest(coalesce((p_patch->>'dose_per_day')::numeric, 1), 0.25),
+            coalesce((p_patch->>'is_active')::boolean, true),
+            coalesce((p_patch->>'sort')::int, 100), auth.uid())
+    on conflict (match_kind, lower(match_value)) do update
+      set label = excluded.label, dose_per_day = excluded.dose_per_day,
+          is_active = excluded.is_active, updated_at = now()
+    returning id into v_id;
+  else
+    update public.refill_chronic_rule
+       set label        = coalesce(nullif(btrim(p_patch->>'label'),''), label),
+           match_kind   = coalesce(nullif(p_patch->>'match_kind',''), match_kind),
+           match_value  = coalesce(nullif(btrim(p_patch->>'match_value'),''), match_value),
+           dose_per_day = greatest(coalesce((p_patch->>'dose_per_day')::numeric, dose_per_day), 0.25),
+           is_active    = coalesce((p_patch->>'is_active')::boolean, is_active),
+           updated_by   = auth.uid(), updated_at = now()
+     where id = v_id;
+  end if;
+  return public.refill_rules_home() || jsonb_build_object(
+    'message', public.ui_text('refill.rule_saved'));
+end $$;
+
+create or replace function public.refill_rule_delete(p_id bigint)
+returns jsonb language plpgsql security definer set search_path to 'public' as $$
+begin
+  if public.get_my_role() not in ('admin','super_admin') then
+    return public._c417_denied();
+  end if;
+  update public.refill_chronic_rule set is_active = false, updated_at = now() where id = p_id;
+  return public.refill_rules_home() || jsonb_build_object(
+    'message', public.ui_text('refill.rule_deleted'));
+end $$;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 19. REACHABILITY. The button on the counter, and the dashboard row.
+-- ═══════════════════════════════════════════════════════════════════════════
+insert into public.ui_copy(key, value) values
+ ('refill.nav_label',   to_jsonb('Refills & counter'::text)),
+ ('refill.nav_due',     to_jsonb('{{n}} refills due'::text)),
+ ('refill.subtitle',    to_jsonb('Reminders, storefront and the AI counter'::text))
+on conflict (key) do update set value = excluded.value;
+
+create or replace function public.refill_nav_entry()
+returns jsonb language plpgsql stable security definer set search_path to 'public' as $$
+declare v_shop uuid := public.refill_shop(); v_due int; v_req int; s public.refill_settings%rowtype;
+begin
+  if v_shop is null then return jsonb_build_object('ok', true, 'show', false); end if;
+  select * into s from public.refill_settings where pharmacy_id = v_shop;
+  select count(*) into v_due from public.refill_schedule sc
+   where sc.pharmacy_id = v_shop and sc.status = 'active'
+     and sc.runs_out_on <= public._c417_today() + coalesce(s.lead_days, 3);
+  select count(*) into v_req from public.pos_reservation
+   where pharmacy_id = v_shop and status = 'open';
+  return jsonb_build_object('ok', true, 'show', true,
+    'route_key', 'refill',
+    'icon_key', 'autorenew',
+    'label', public.ui_text('refill.nav_label'),
+    'count', v_due + v_req,
+    'sub_label', case when v_due > 0
+        then public._c417_fmt('refill.nav_due', jsonb_build_object('n', v_due::text))
+        else public.ui_text('refill.subtitle') end);
+end $$;
+
+insert into public.feature_registry(feature_key, label, group_label, icon_key, route_key,
+                                    sort_order, owner, default_access, is_active,
+                                    category, surface, roles_allowed, description)
+values ('admin.refill', 'Refills & counter', 'Pharmacy tools', 'autorenew', 'refill',
+        4136, 'medibo', 'none', true, 'parties', 'dashboard',
+        array['admin','super_admin'],
+        'CMD #417 - chronic refill reminders, the pharmacy WhatsApp storefront and the AI counter that answers from its own shelf.')
+on conflict (feature_key) do update
+  set label = excluded.label, icon_key = excluded.icon_key, route_key = excluded.route_key,
+      is_active = true, description = excluded.description,
+      roles_allowed = excluded.roles_allowed, surface = excluded.surface;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 20. THE ACCEPTANCE PROOF — one function, run in the same command, so the
+--     three loops are demonstrated end to end rather than asserted.
+-- ═══════════════════════════════════════════════════════════════════════════
+create or replace function public.refill_proof_c417()
+returns jsonb language plpgsql security definer set search_path to 'public' as $$
+declare
+  v jsonb := '[]'::jsonb; v_pass int := 0; v_fail int := 0;
+  procedure_note text;
+  v_shop uuid; v_token text; v_page jsonb; v_ctx jsonb; v_rep jsonb;
+  v_phone text := '9000000417';           -- a TEST PATIENT number, never a supplier
+  v_patient uuid; v_sched uuid; v_offer uuid; v_in jsonb; v_res int;
+  v_med bigint; v_name text; v_pack text; v_mrp numeric;
+begin
+  -- pick a pharmacy that actually holds stock, so the storefront has a shelf
+  select st.pharmacy_id, st.medicine_id, st.product_name, st.pack_label, st.mrp
+    into v_shop, v_med, v_name, v_pack, v_mrp
+    from public.pharmacy_stock st where st.qty > 0
+    order by st.updated_at desc limit 1;
+  if v_shop is null then
+    return jsonb_build_object('ok', false, 'error','no_stock_anywhere');
+  end if;
+
+  -- 1. the chronic list is data, and it matches
+  if exists (select 1 from public.refill_chronic_rule where is_active) then
+    v_pass := v_pass + 1; v := v || jsonb_build_array(jsonb_build_object('check','chronic_list','ok',true));
+  else v_fail := v_fail + 1; v := v || jsonb_build_array(jsonb_build_object('check','chronic_list','ok',false));
+  end if;
+
+  -- 2. a patient + schedule can be built and an offer opened
+  insert into public.refill_patient(pharmacy_id, phone, name, source, opted_in, opted_in_at)
+  values (v_shop, v_phone, 'Proof Patient', 'pos', true, now())
+  on conflict (pharmacy_id, phone) do update set opted_in = true, updated_at = now()
+  returning id into v_patient;
+
+  insert into public.refill_schedule(pharmacy_id, patient_id, medicine_id, item_key,
+      product_name, pack_label, rule_label, pack_units, dose_per_day, qty_packs,
+      days_supply, last_sold_on, runs_out_on, status)
+  values (v_shop, v_patient, v_med, coalesce(v_med::text, lower(v_name)), v_name, v_pack,
+          'Proof', 30, 1, 1, 30, public._c417_today() - 28, public._c417_today() + 2, 'active')
+  on conflict (pharmacy_id, patient_id, item_key) do update
+    set runs_out_on = public._c417_today() + 2, status = 'active'
+  returning id into v_sched;
+
+  insert into public.refill_offer(pharmacy_id, patient_id, schedule_id, phone)
+  values (v_shop, v_patient, v_sched, v_phone) returning id into v_offer;
+
+  -- 3. the reply loop: "1" from the test patient reserves it
+  v_in := public.refill_wa_inbound(v_phone, '1');
+  if coalesce(v_in->>'action','') = 'reserved' then
+    v_pass := v_pass + 1;
+    v := v || jsonb_build_array(jsonb_build_object('check','reply_1_reserves','ok',true,
+             'reply', v_in->>'reply'));
+  else
+    v_fail := v_fail + 1;
+    v := v || jsonb_build_array(jsonb_build_object('check','reply_1_reserves','ok',false,'got',v_in));
+  end if;
+
+  -- 4. a supplier number is never read as a patient
+  v_in := public.refill_wa_inbound(
+            (select right(regexp_replace(coalesce(whatsapp_no, phone,''),'\D','','g'),10)
+               from public.pharmacy_profiles
+              where coalesce(is_deleted,false)=false
+                and length(right(regexp_replace(coalesce(whatsapp_no, phone,''),'\D','','g'),10))=10
+              limit 1), '1');
+  if coalesce(v_in->>'reason','') = 'b2b_number' then
+    v_pass := v_pass + 1; v := v || jsonb_build_array(jsonb_build_object('check','b2b_number_refused','ok',true));
+  else
+    v_fail := v_fail + 1; v := v || jsonb_build_array(jsonb_build_object('check','b2b_number_refused','ok',false,'got',v_in));
+  end if;
+
+  -- 5. the storefront page renders that shelf, MRP only
+  perform public._c417_storefront(v_shop);
+  select token into v_token from public.pharmacy_storefront where pharmacy_id = v_shop;
+  v_page := public.storefront_page(v_token, null, 10, 0);
+  if coalesce((v_page->>'ok')::boolean,false)
+     and jsonb_array_length(v_page->'items') > 0
+     and not (v_page::text ilike '%unit_cost%') then
+    v_pass := v_pass + 1;
+    v := v || jsonb_build_array(jsonb_build_object('check','storefront_page','ok',true,
+             'items', jsonb_array_length(v_page->'items')));
+  else
+    v_fail := v_fail + 1;
+    v := v || jsonb_build_array(jsonb_build_object('check','storefront_page','ok',false));
+  end if;
+
+  -- 6. a storefront request becomes a reservation in the counter queue
+  v_rep := public.storefront_request_submit(v_token, 'Proof Patient', v_phone,
+             jsonb_build_array(jsonb_build_object('medicine_id', v_med,
+               'product_name', v_name, 'qty', 1)), 'proof run');
+  if coalesce((v_rep->>'ok')::boolean,false) then
+    v_pass := v_pass + 1;
+    v := v || jsonb_build_array(jsonb_build_object('check','storefront_request','ok',true,
+             'reservation_id', v_rep->>'reservation_id'));
+  else
+    v_fail := v_fail + 1;
+    v := v || jsonb_build_array(jsonb_build_object('check','storefront_request','ok',false,'got',v_rep));
+  end if;
+
+  -- 7. the AI counter answers from that shelf and nothing else
+  v_ctx := public.storefront_ai_context(v_phone, v_name);
+  v_rep := public.storefront_ai_reply(v_phone, v_name, 'availability',
+             jsonb_build_array(coalesce(v_med::text, lower(v_name))), 1);
+  if coalesce((v_ctx->>'ok')::boolean,false)
+     and coalesce((v_rep->>'ok')::boolean,false)
+     and coalesce((v_rep->>'grounded')::boolean,false) then
+    v_pass := v_pass + 1;
+    v := v || jsonb_build_array(jsonb_build_object('check','ai_counter_grounded','ok',true,
+             'reply', v_rep->>'reply'));
+  else
+    v_fail := v_fail + 1;
+    v := v || jsonb_build_array(jsonb_build_object('check','ai_counter_grounded','ok',false,
+             'ctx', v_ctx, 'reply', v_rep));
+  end if;
+
+  -- 8. an unstocked ask is handed to the pharmacy, never answered from world knowledge
+  v_rep := public.storefront_ai_reply(v_phone, 'do you have zzqq tablet', 'availability',
+             jsonb_build_array('zzqq tablet'), 1);
+  if coalesce((v_rep->>'handoff')::boolean,false) then
+    v_pass := v_pass + 1;
+    v := v || jsonb_build_array(jsonb_build_object('check','ungrounded_hands_off','ok',true,
+             'reply', v_rep->>'reply'));
+  else
+    v_fail := v_fail + 1;
+    v := v || jsonb_build_array(jsonb_build_object('check','ungrounded_hands_off','ok',false,'got',v_rep));
+  end if;
+
+  -- 9. the counter queue shows what the loops produced
+  select count(*) into v_res from public.pos_reservation
+   where pharmacy_id = v_shop and status = 'open';
+  if v_res > 0 then
+    v_pass := v_pass + 1;
+    v := v || jsonb_build_array(jsonb_build_object('check','counter_queue','ok',true,'open',v_res));
+  else
+    v_fail := v_fail + 1;
+    v := v || jsonb_build_array(jsonb_build_object('check','counter_queue','ok',false));
+  end if;
+
+  return jsonb_build_object('ok', v_fail = 0, 'passed', v_pass, 'failed', v_fail,
+    'shop', v_shop, 'token', v_token, 'test_phone', v_phone, 'checks', v);
+end $$;
+
+grant execute on function public.refill_home(text) to authenticated;
+grant execute on function public.refill_nav_entry() to authenticated;
+grant execute on function public.refill_settings_save(jsonb) to authenticated;
+grant execute on function public.refill_patient_optin(uuid, boolean) to authenticated;
+grant execute on function public.refill_schedule_set(uuid, jsonb) to authenticated;
+grant execute on function public.refill_scan(integer) to authenticated;
+grant execute on function public.refill_nudge_now(uuid) to authenticated;
+grant execute on function public.storefront_save(jsonb) to authenticated;
+grant execute on function public.pos_reservations(text) to authenticated;
+grant execute on function public.pos_reservation_take(uuid) to authenticated;
+grant execute on function public.pos_reservation_close(uuid, text, uuid) to authenticated;
+grant execute on function public.refill_rules_home() to authenticated;
+grant execute on function public.refill_rule_save(jsonb) to authenticated;
+grant execute on function public.refill_rule_delete(bigint) to authenticated;

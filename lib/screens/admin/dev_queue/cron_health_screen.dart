@@ -5,6 +5,7 @@ import '../../../services/ui_copy.dart';
 import '../../../utils/render_log.dart';
 import 'build_lane_section.dart';
 import 'masked_calling_section.dart';
+import 'runner_boot_section.dart';
 import 'db_lane_section.dart';
 import 'deploy_lane_section.dart';
 import 'dev_queue_common.dart';
@@ -46,6 +47,9 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
   // CHANGE #404 — masked calling. Not a lane, but the same question the three
   // lanes answer: is this switched on right now, and what is still missing.
   Map<String, dynamic> _calls = const {};
+  // CHANGE #530 — the boot doctor's verdict per runner. Same panel contract as
+  // the lanes above: its own RPC, so a refused read never blanks the others.
+  Map<String, dynamic> _boot = const {};
   bool _loading = true;
   String? _error;
 
@@ -84,8 +88,15 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
       } catch (_) {
         // Same contract once more: a panel, never the page.
       }
+      Map<String, dynamic> rb = const {};
+      try {
+        rb = await _svc.runnerBoot();
+      } catch (_) {
+        // Same contract once more: a panel, never the page.
+      }
       if (!mounted) return;
       setState(() {
+        _boot = rb;
         _db = db;
         _lane = lane;
         _build = bl;
@@ -120,6 +131,17 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
         RenderLog.write(
           'c327_build_lane',
           _build['ok'] == true ? 'ok' : (_build.isEmpty ? 'absent' : 'refused'),
+        );
+        // CHANGE #530 — painted-proof for the runner boot section, same
+        // contract as the lanes: 'ok' only when the backend answered AND the
+        // section drew its payload.
+        RenderLog.write(
+          'c530_runner_boot',
+          _boot['ok'] == true ? 'ok' : (_boot.isEmpty ? 'absent' : 'refused'),
+        );
+        RenderLog.write(
+          'c530_runner_boot_rows',
+          '${((_boot['runners'] as List?) ?? const []).length}',
         );
         RenderLog.write('c273_cron_tasks', '${tasks.length}');
         // The before/after report is the command's deliverable, so it gets its
@@ -243,6 +265,13 @@ class _CronHealthScreenState extends State<CronHealthScreen> {
                     if (_calls.isNotEmpty) ...[
                       SizedBox(height: Ds.space.x24),
                       MaskedCallingSection(data: _calls),
+                    ],
+                    // CHANGE #530 — and its own condition again: a runner
+                    // refusing to claim after a crash is the same question the
+                    // lanes answer, in a fourth resource.
+                    if (_boot.isNotEmpty) ...[
+                      SizedBox(height: Ds.space.x24),
+                      RunnerBootSection(data: _boot),
                     ],
                     SizedBox(height: Ds.space.x16),
                     _tickCard(tick),

@@ -149,3 +149,19 @@ update dev_runner_config
           'note', 'CHANGE #428 — a chain needs a FACT: the blocker must be BUILDING and actually hold the file lease. Two predictions never chain each other; exempt surfaces and globs never chain at all; file leases are the runtime guard.'),
         true)
  where key = 'worker_pool';
+
+-- Post-deploy correction (same command): `revoke ... from anon` above does
+-- NOT remove the grant anon actually holds — that one comes from PUBLIC, which
+-- every function inherits by default. So these three helpers shipped executable
+-- by an anonymous caller, leaking repo file paths and live lease state. They
+-- are internal helpers of SECURITY DEFINER callers (which run as owner and are
+-- unaffected), so PUBLIC loses execute and service_role keeps it.
+revoke all on function public.dev_path_is_shared(text) from public, anon, authenticated;
+revoke all on function public.dev_paths_conflict(text[], text[]) from public, anon, authenticated;
+revoke all on function public.dev_cmd_leased_footprint(bigint) from public, anon, authenticated;
+revoke all on function public.dev_chain_watchdog() from public, anon, authenticated;
+
+grant execute on function public.dev_path_is_shared(text) to service_role;
+grant execute on function public.dev_paths_conflict(text[], text[]) to service_role;
+grant execute on function public.dev_cmd_leased_footprint(bigint) to service_role;
+grant execute on function public.dev_chain_watchdog() to service_role;

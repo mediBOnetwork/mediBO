@@ -22,6 +22,7 @@ import '../../design_tokens.dart';
 import '../../services/pharmacy_shield_api.dart';
 import '../../utils/render_log.dart';
 import 'pharmacy_expiry_screen.dart';
+import 'near_listing_screen.dart';
 import 'px_screen.dart';  // CMD #420 — the pharmacy exchange
 
 String _s(Object? v) => v == null ? '' : v.toString();
@@ -700,6 +701,13 @@ class PharmacyShieldTiles extends StatelessWidget {
       // caller's own shop and renders its own refusal, so no role test here.
       case 'px_exchange':
         return PxScreen(rpc: rpc);
+      // CMD #426 — the pharmacy's own side of the consumer /near listing.
+      // Registered here for the same reason as the three above: it is a
+      // pharmacy surface reached from the admin console, and near_listing_get()
+      // gates on the caller's own shop and renders its own refusal, so there
+      // is no role test in Dart.
+      case 'near_listing':
+        return NearListingScreen(rpc: rpc);
       default:
         return null;
     }

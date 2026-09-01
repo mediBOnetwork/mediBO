@@ -65,6 +65,7 @@ import 'screens/contact_screen.dart';
 import 'screens/legal_pages.dart';
 import 'screens/admin/admin_delivery_ops_screen.dart';
 import 'screens/admin/admin_delivery_waves_screen.dart';
+import 'screens/public/near_screen.dart'; // CMD #426 — /near, /near/p/<token>
 import 'services/feature_gaps_service.dart'; // CHANGE #312
 import 'services/ui_copy.dart';
 import 'supabase_config.dart';
@@ -579,6 +580,31 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
                   return MaterialPageRoute(
                     settings: settings,
                     builder: (_) => StorefrontScreen(token: token),
+                  );
+                }
+              }
+              // CMD #426 — /near and /near/p/<token>: the CONSUMER surface.
+              // PUBLIC and anonymous, and that is the whole product: a person
+              // with a prescription opens a URL, with no login, no account and
+              // no app store, and asks which pharmacy nearby is likely to have
+              // it. near_boot/near_search/near_pharmacy are the anon-granted,
+              // rate-limited RPCs behind it, and they expose availability only
+              // — never a price, a quantity or a supplier.
+              // Declared above the trailing /:code guard for the same reason
+              // /stock-update/ is: a bare token must not be mistaken for one.
+              if (name == '/near' || name.startsWith('/near?')) {
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => const NearScreen(),
+                );
+              }
+              if (name.startsWith('/near/p/')) {
+                final token =
+                    name.substring('/near/p/'.length).split('?').first;
+                if (token.isNotEmpty) {
+                  return MaterialPageRoute(
+                    settings: settings,
+                    builder: (_) => NearPharmacyScreen(token: token),
                   );
                 }
               }

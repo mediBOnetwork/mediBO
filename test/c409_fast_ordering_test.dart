@@ -285,4 +285,43 @@ void main() {
       expect(find.byType(Text), findsNothing);
     });
   });
+
+  group('the search bar the buttons live in', () {
+    // #902 shipped a VerticalDivider next to these buttons inside the MOBILE
+    // search bar, whose Container sets no height. A divider in a Row with
+    // unbounded vertical constraints throws at layout, and the whole mobile
+    // header came down with it ("Failed to load: {e}" over the search bar).
+    // This pins the shape the bar actually uses: the controls must survive an
+    // unbounded-height Row on their own.
+    testWidgets('both controls lay out inside an unbounded-height Row',
+        (t) async {
+      await t.pumpWidget(_host(
+        Align(
+          alignment: Alignment.topCenter,
+          child: Container(
+            // No height — exactly the mobile bar's constraint.
+            decoration: const BoxDecoration(color: Colors.white),
+            child: Row(
+              children: [
+                const Expanded(child: TextField()),
+                ScanSearchButton(
+                    color: Colors.grey, resolver: (_) async => const ScanResult(ok: false)),
+                VoiceSearchButton(
+                  color: Colors.grey,
+                  onQuery: (_) {},
+                  configLoader: () async => VoiceSearchConfig.none,
+                  transcriber: (_, _) async => const VoiceSearchResult(ok: false),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ));
+      await t.pump();
+
+      expect(t.takeException(), isNull);
+      expect(find.byKey(const Key('c409_scan_button')), findsOneWidget);
+      expect(find.byKey(const Key('c409_mic_button')), findsOneWidget);
+    });
+  });
 }

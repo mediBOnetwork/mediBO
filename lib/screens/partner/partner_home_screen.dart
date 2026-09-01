@@ -40,6 +40,7 @@ IconData partnerIcon(String key) {
     case 'bag':       return Icons.shopping_bag_outlined;
     case 'package':   return Icons.local_shipping_outlined;
     case 'truck':     return Icons.local_shipping_outlined;
+    case 'people':    return Icons.groups_outlined;
     default:          return Icons.widgets_outlined;
   }
 }

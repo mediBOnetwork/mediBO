@@ -82,6 +82,8 @@ import '../utils/toast.dart';
 import 'orders_screen.dart';
 import '../services/pos_api.dart'; // CMD #411 — pos_entry() at boot
 import 'pharmacy/pos_screen.dart'; // CMD #411 — the pharmacy counter
+import '../services/pharmacy_stock_api.dart'; // CMD #412 — pharmacy_stock_entry() at boot
+import 'pharmacy/pharmacy_stock_screen.dart'; // CMD #412 — the pharmacy's shelf
 import 'profile_screen.dart';
 import 'storefront_screen.dart';
 import 'supplier/supplier_shell.dart';
@@ -618,6 +620,10 @@ class _HomeShellState extends State<HomeShell> {
   /// without the shell knowing anything about pharmacies.
   void _loadPosEntry() {
     PosEntry.load();
+    // CMD #412 — the same one cheap call for the shelf. Both answers are parked
+    // in notifiers their own tiles listen to, so the shell still knows nothing
+    // about pharmacies.
+    StockEntry.load();
   }
 
   void _consumePendingDeepLink() {
@@ -717,6 +723,16 @@ class _HomeShellState extends State<HomeShell> {
       case 'pos':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const PosScreen()));
+        break;
+      // CMD #412 — the pharmacy's shelf. Sibling of the counter: reached from
+      // the counter's own app bar and from the account tile via
+      // pharmacy_stock_entry(), and this case is what makes
+      // /admin/go/pharmacy_stock resolve. pharmacy_stock_home() gates on the
+      // caller's own pharmacy and the screen renders its refusal, so there is
+      // no role test here — same story as pos and reviews.
+      case 'pharmacy_stock':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const PharmacyStockScreen()));
         break;
       case 'mr': setState(() { _index = 7; _cartOpen = false; }); break;
       case 'companies': setState(() { _index = 8; _cartOpen = false; }); break;

@@ -32,9 +32,11 @@ import 'pharmacy_reorder_screen.dart';  // CHANGE #414
 import 'pharmacy_stock_screen.dart';
 import 'pos_margin_strip.dart';  // CHANGE #414
 import '../../services/khata_api.dart';  // CMD #415 — khata_nav_entry()
+import '../../services/paper_sale_api.dart'; // CMD #429 — paper_sale_entry()
 import '../../services/pharmacy_refill_api.dart';  // CMD #417 — refill_nav_entry()
 import 'pharmacy_refill_screen.dart';  // CMD #417 — refills & counter
 import 'khata_screen.dart';  // CMD #415 — the counter's credit book
+import 'paper_sale_screen.dart'; // CMD #429 — the paper sale pad
 import '../../services/pharmacy_stock_api.dart';
 import '../../services/pos_api.dart';
 import '../../services/ui_copy.dart';
@@ -162,6 +164,7 @@ class _PosScreenState extends State<PosScreen> {
       // because the counter is where it is used. A failure leaves the button
       // undrawn; it never stops a bill being written.
       if (widget.rpc == null) unawaited(KhataEntry.load());
+      if (widget.rpc == null) unawaited(PaperSaleEntry.load());
       if (widget.rpc == null) unawaited(RefillEntry.load());
       // Anything billed while the network was gone lands now, before the
       // operator starts a new bill on a day-close that would be wrong.
@@ -472,6 +475,38 @@ class _PosScreenState extends State<PosScreen> {
                   context,
                   MaterialPageRoute<void>(
                     builder: (_) => const PharmacyStockScreen(),
+                  ),
+                ),
+              );
+            },
+          ),
+          // CMD #429 — the PAPER SALE pad, from the counter. This is the right
+          // door for it: it is the same act as billing here, done on paper in a
+          // rush hour, and it comes off the same shelf by the same FEFO rule.
+          // The badge is the backend's count of pages still waiting to be
+          // checked; label, badge and whether the button exists at all are
+          // paper_sale_entry()'s call, never a role test here.
+          ValueListenableBuilder<Map<String, dynamic>>(
+            valueListenable: PaperSaleEntry.value,
+            builder: (context, entry, _) {
+              if (entry['show'] != true) return const SizedBox.shrink();
+              final badge = _s(entry['badge']);
+              return IconButton(
+                icon: badge.isEmpty
+                    ? Icon(Icons.edit_note_outlined, color: Ds.c.brand)
+                    : Badge(
+                        label: Text(badge),
+                        backgroundColor: Ds.c.warning,
+                        child: Icon(
+                          Icons.edit_note_outlined,
+                          color: Ds.c.brand,
+                        ),
+                      ),
+                tooltip: _s(entry['label']),
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute<void>(
+                    builder: (_) => const PaperSaleScreen(),
                   ),
                 ),
               );

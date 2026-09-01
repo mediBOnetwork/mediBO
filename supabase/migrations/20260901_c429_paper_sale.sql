@@ -626,6 +626,18 @@ begin
    where id = p_sheet_id;
 end $$;
 
+-- #424's velocity posterior records WHERE its evidence came from, and its check
+-- did not know about a pad. A confirmed paper sale is a distinct and stronger
+-- kind of evidence than a lot correction, so it gets its own value rather than
+-- being filed under 'corrected' — the engine can then say, honestly, that this
+-- shop's numbers come from observed selling. Widening a CHECK is additive:
+-- every existing value stays legal and no row is touched.
+alter table public.pharmacy_sku_velocity
+  drop constraint if exists pharmacy_sku_velocity_source_check;
+alter table public.pharmacy_sku_velocity
+  add constraint pharmacy_sku_velocity_source_check
+  check (source = any (array['prior','zone','own','pos','corrected','paper_sale']));
+
 -- ═══════════════════════ 7. CONFIRM = STOCK LEAVES, AND NOTHING ELSE ═══════
 --
 -- Batch-wise FEFO, exactly as #412's POS consumer does it: earliest expiry

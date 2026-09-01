@@ -39,9 +39,22 @@ begin
   -- which is the id notif_push_send matches a token on). test.cust1 is
   -- borrowed as the credential exactly as c454 borrows the admin — it holds no
   -- device token of its own, so a fixture push can never reach a real phone.
-  select pp.user_id, pp.id into v_rider_uid, v_cust
-    from public.pharmacy_profiles pp join auth.users u on u.id = pp.user_id
-   where u.email = 'test.cust1@medibo.in' limit 1;
+  --
+  -- The id is read from auth.users DIRECTLY, never through a profile join.
+  -- The first cut of this proof resolved it through pharmacy_profiles, and
+  -- when that ambient row went away the uid came back NULL — at which point
+  -- notif_push_send matches nobody and answers 'no_active_token', so the two
+  -- refusal checks below PASSED while proving nothing at all. That is the
+  -- delivery-area lesson (a refusal reads like an empty result) landing on
+  -- this file, so the uid is asserted before anything is built on it.
+  select id into v_rider_uid from auth.users where email = 'test.cust1@medibo.in' limit 1;
+  select id into v_cust from public.pharmacy_profiles where user_id = v_rider_uid limit 1;
+  v_res := v_res || jsonb_build_array(jsonb_build_object(
+    'check','the fixture rider is a REAL auth user (a null uid would make every refusal below meaningless)',
+    'ok', v_rider_uid is not null, 'saw', coalesce(v_rider_uid::text,'(null)')));
+  if v_rider_uid is null then
+    return jsonb_build_object('ok', false, 'passed', 0, 'total', 1, 'checks', v_res);
+  end if;
 
   insert into public.delivery_partner_registrations(
     full_name, phone, status, is_active, partner_type, submitted_at,

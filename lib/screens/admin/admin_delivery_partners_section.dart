@@ -45,6 +45,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../design_tokens.dart';
 import '../../fulfill/fulfill_lookups.dart';
 import '../../services/admin_zone_scope.dart';
 import '../../utils/render_log.dart';
@@ -148,17 +149,73 @@ class AdminDeliveryPartnersSectionState
   /// accidentally activate a rider. admin_delivery_partners() itself excludes
   /// status='rejected' from the pending list, so a rejected row drops out of
   /// view on the next load without this file deciding to hide it.
+  /// CMD #453 (feature_gaps 96): a rejection now carries a REASON. The RPC
+  /// stores it on the row and puts it in the applicant's inbox, and
+  /// my_delivery_application() reads it back to them — so "rejected" stops
+  /// being a status with no explanation attached to it anywhere.
   Future<void> _reject(String partnerId) async {
+    final reason = await _askRejectReason();
+    if (reason == null) return; // dismissed — nothing is written
     try {
       final res = await Supabase.instance.client.rpc(
         'admin_review_registration',
-        params: {'p_kind': 'delivery_partner', 'p_id': partnerId, 'p_status': 'rejected'},
+        params: {
+          'p_kind': 'delivery_partner',
+          'p_id': partnerId,
+          'p_status': 'rejected',
+          'p_reason': reason,
+        },
       );
       if (!mounted) return;
       await _load();
       await widget.onChanged();
       if (res is Map) _toast(res['message']?.toString() ?? '');
     } catch (_) {}
+  }
+
+  /// Returns the typed reason, or null when the admin backed out. An empty
+  /// string is a legitimate answer — the RPC decides what an absent reason
+  /// means, and my_delivery_application() prints its own copy for that case.
+  Future<String?> _askRejectReason() async {
+    final ctrl = TextEditingController();
+    final out = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(Ds.r.sheet)),
+      ),
+      builder: (sheetCtx) => Padding(
+        padding: EdgeInsets.fromLTRB(Ds.space.x16, Ds.space.x16, Ds.space.x16,
+            Ds.space.x16 + MediaQuery.of(sheetCtx).viewInsets.bottom),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(
+            controller: ctrl,
+            autofocus: true,
+            maxLines: 3,
+            decoration: InputDecoration(
+              labelText: _ui('dlv_reject_reason'),
+              border: const OutlineInputBorder(),
+            ),
+          ),
+          SizedBox(height: Ds.space.x16),
+          SizedBox(
+            width: double.infinity,
+            height: Ds.touch.minTarget,
+            child: ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Ds.c.danger,
+                foregroundColor: Ds.c.surface,
+              ),
+              onPressed: () => Navigator.of(sheetCtx).pop(ctrl.text.trim()),
+              child: Text(_ui('dlv_reject_submit')),
+            ),
+          ),
+        ]),
+      ),
+    );
+    ctrl.dispose();
+    return out;
   }
 
   /// Deactivate. The same RPC that approves — one write path, one set of rules.

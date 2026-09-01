@@ -1031,3 +1031,11 @@ revoke all on function public.delivery_leaderboard_optout_get()         from pub
 grant execute on function public.delivery_leaderboard()                   to authenticated, service_role;
 grant execute on function public.delivery_leaderboard_optout_set(boolean) to authenticated, service_role;
 grant execute on function public.delivery_leaderboard_optout_get()        to authenticated, service_role;
+
+-- The rider home reads its labels from fw_ui_label (FulfillLookups.ui), not
+-- ui_copy, so the one label added to that screen belongs in the table that
+-- screen already reads. Two copy tables is one too many, but adding a THIRD
+-- read to a screen to avoid using the one it already has is worse.
+insert into public.fw_ui_label(key, value) values
+  ('dlv_leaderboard', 'Leaderboard')
+on conflict (key) do update set value = excluded.value;

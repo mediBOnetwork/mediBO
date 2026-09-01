@@ -36,9 +36,25 @@ List<Map<String, dynamic>> _rows(Object? v) => v is List
 /// rather than a second address that could drift from it.
 class MyShopScreen extends StatefulWidget {
   final ValueChanged<String> navigate;
+
+  /// Whether this page is the one on screen.
+  ///
+  /// CHANGE #536 QA round 1 — the shell's IndexedStack builds every child at
+  /// boot, so loading in initState fired customer_shop_home() once per visitor
+  /// including signed-out ones, who can only ever get a 401 back. On a 60-
+  /// connection instance with a documented exhaustion outage that is a round
+  /// trip nobody asked for. The tab asks for its payload when it is opened,
+  /// once, and keeps it.
+  final bool active;
+
   final CustomerShopRpc? rpc;
 
-  const MyShopScreen({super.key, required this.navigate, this.rpc});
+  const MyShopScreen({
+    super.key,
+    required this.navigate,
+    this.active = true,
+    this.rpc,
+  });
 
   @override
   State<MyShopScreen> createState() => _MyShopScreenState();
@@ -50,9 +66,25 @@ class _MyShopScreenState extends State<MyShopScreen> {
   bool _failed = false;
   final Set<String> _open = <String>{};
 
+  bool _asked = false;
+
   @override
   void initState() {
     super.initState();
+    if (widget.active) _ask();
+  }
+
+  @override
+  void didUpdateWidget(MyShopScreen old) {
+    super.didUpdateWidget(old);
+    if (widget.active) _ask();
+  }
+
+  /// The first activation loads; later ones are free. Pull-to-refresh is how a
+  /// shop asks for a fresh answer.
+  void _ask() {
+    if (_asked) return;
+    _asked = true;
     _load();
   }
 

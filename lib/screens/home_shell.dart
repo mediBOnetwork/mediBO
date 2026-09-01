@@ -194,6 +194,10 @@ class HomeShell extends StatefulWidget {
     'rx_scan', 'pharmacy_expiry', 'pharmacy_variance', 'pharmacy_parcel',
     'pharmacy_reorder', 'khata', 'px_exchange', 'pharmacy_owner',
     'pharmacy_radar', 'near_listing', 'my_shop',
+    // 'refill' predates #536 and was never listed, so /admin/go/refill — the
+    // deep link its own case comment says is the reason the case exists — was
+    // parked for every pharmacy. Found by QA round 1.
+    'refill',
   };
 
   @override
@@ -1547,7 +1551,7 @@ class _HomeShellState extends State<HomeShell> {
           // in beside the customer's other three pages because indices 3–10 are
           // addressed by number from _handleAdminNav; inserting would have
           // silently renumbered every admin section.
-          MyShopScreen(navigate: _handleAdminNav),
+          MyShopScreen(navigate: _handleAdminNav, active: _index == 11),
         ];
 
         final isAdmin = UserState.of(context).isAdmin;
@@ -1739,6 +1743,7 @@ class _HomeShellState extends State<HomeShell> {
                   logoTooltip: '',
                   onBulk: () => _setIndex(2),
                   onOrders: () => _setIndex(1),
+                  onMyShop: () => _setIndex(11),
                   onCart: () => _openCart(),
                   // Web/desktop keeps the right-side slide-in panel, but its body
                   // is now the SAME mobile WhatsApp/Google LoginView (via

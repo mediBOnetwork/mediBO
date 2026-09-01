@@ -16,6 +16,12 @@ class _DesktopHeader extends StatelessWidget {
   final String logoTooltip;
   final VoidCallback onBulk;
   final VoidCallback onOrders;
+  /// CHANGE #536 QA round 1 — the desktop door into My Shop. The mobile bar got
+  /// a fifth slot and the desktop header got nothing, while the SAME change
+  /// removed the account-menu counter row and the four profile tiles. That left
+  /// a pharmacy on a laptop with strictly fewer ways in than before, and the
+  /// counter is a laptop-at-the-till feature.
+  final VoidCallback onMyShop;
   final VoidCallback onCart;
   final VoidCallback onLogin;
   final int index;
@@ -29,6 +35,7 @@ class _DesktopHeader extends StatelessWidget {
     required this.logoTooltip,
     required this.onBulk,
     required this.onOrders,
+    required this.onMyShop,
     required this.onCart,
     required this.onLogin,
     required this.index,
@@ -41,6 +48,11 @@ class _DesktopHeader extends StatelessWidget {
     final cartItems = AppState.of(context).distinctItems;
     final isBulk = index == 2 && !cartOpen;
     final isOrders = index == 1 && !cartOpen;
+    final isMyShop = index == 11 && !cartOpen;
+    // Same rule the mobile bar uses: the suite is the CUSTOMER's, so an admin
+    // browsing the storefront is not offered it.
+    final showMyShop = UserState.of(context).isAuthenticated &&
+        !UserState.of(context).isAdmin;
 
     final shadow = BoxShadow(
       color: Colors.black.withValues(alpha: scrolled ? 0.11 : 0.04),
@@ -102,7 +114,16 @@ class _DesktopHeader extends StatelessWidget {
             ),
           ),
           const Spacer(),
-          // Customer nav: Bulk Upload, Orders, Cart
+          // Customer nav: My Shop, Bulk Upload, Orders, Cart
+          if (showMyShop) ...[
+            _DesktopNavLink(
+              label: c('home_shell.my_shop'),
+              icon: Icons.storefront_outlined,
+              selected: isMyShop,
+              onTap: onMyShop,
+            ),
+            const SizedBox(width: 4),
+          ],
           _DesktopNavLink(
             label: c('home_shell.bulk_upload'),
             icon: Icons.upload_file_outlined,

@@ -111,12 +111,18 @@ Future<void> _pump(
   WidgetTester tester, {
   required Map<String, dynamic> payload,
   List<String>? taps,
+  bool active = true,
+  List<String>? calls,
 }) async {
   await tester.pumpWidget(MaterialApp(
     home: Scaffold(
       body: MyShopScreen(
         navigate: (key) => taps?.add(key),
-        rpc: (fn, params) async => payload,
+        active: active,
+        rpc: (fn, params) async {
+          calls?.add(fn);
+          return payload;
+        },
       ),
     ),
   ));
@@ -205,6 +211,30 @@ void main() {
     expect(find.text('Counter POS'), findsNothing);
     // No wording of the screen's own is added to a refusal.
     expect(find.text('My Shop'), findsNothing);
+  });
+
+  // CHANGE #536 QA round 1. The shell's IndexedStack builds every page at boot,
+  // so an eager initState load fired this RPC once per visitor — including
+  // signed-out ones, who can only ever be refused. The tab asks when it is
+  // opened, and asks once.
+  testWidgets('an inactive tab asks the backend nothing', (t) async {
+    final calls = <String>[];
+    await _pump(t, payload: _payload(), active: false, calls: calls);
+
+    expect(calls, isEmpty);
+    expect(find.text('Khata book'), findsNothing);
+  });
+
+  testWidgets('the first activation loads exactly once', (t) async {
+    final calls = <String>[];
+    await _pump(t, payload: _payload(), calls: calls);
+
+    expect(calls, ['customer_shop_home']);
+
+    // A rebuild while still active must not ask again.
+    await t.pump();
+    await t.pumpAndSettle();
+    expect(calls, ['customer_shop_home']);
   });
 
   testWidgets('no sections is the backend empty state, never a crash',

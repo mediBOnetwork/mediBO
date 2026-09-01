@@ -913,7 +913,7 @@ returns text language sql stable security definer set search_path to 'public'
 as $$ select coalesce(nullif((select value #>> '{}' from public.app_settings
                                where key = 'public_base_url'), ''), 'https://medibo.in'); $$;
 
-create or replace function public.storefront_page(p_token text, p_q text default null,
+create or replace function public.wa_storefront_page(p_token text, p_q text default null,
                                                   p_limit integer default 40,
                                                   p_offset integer default 0)
 returns jsonb language plpgsql stable security definer set search_path to 'public' as $$
@@ -1048,7 +1048,7 @@ begin
                  jsonb_build_object('shop', v_name)));
 end $$;
 
-grant execute on function public.storefront_page(text, text, integer, integer) to anon, authenticated;
+grant execute on function public.wa_storefront_page(text, text, integer, integer) to anon, authenticated;
 grant execute on function public.storefront_cart_label(integer) to anon, authenticated;
 grant execute on function public.storefront_request_submit(text, text, text, jsonb, text) to anon, authenticated;
 
@@ -1824,7 +1824,7 @@ begin
   -- 5. the storefront page renders that shelf, MRP only
   perform public._c417_storefront(v_shop);
   select token into v_token from public.pharmacy_storefront where pharmacy_id = v_shop;
-  v_page := public.storefront_page(v_token, null, 10, 0);
+  v_page := public.wa_storefront_page(v_token, null, 10, 0);
   if coalesce((v_page->>'ok')::boolean,false)
      and jsonb_array_length(v_page->'items') > 0
      and not (v_page::text ilike '%unit_cost%') then

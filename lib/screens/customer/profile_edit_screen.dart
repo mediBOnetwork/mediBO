@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../design_tokens.dart';
 import '../../utils/render_log.dart';
+import '../../services/ui_copy.dart';
 
 /// CHANGE #460 / feature_gaps 164 — the customer edits their own details.
 ///
@@ -114,12 +115,12 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
       body: _loading
           ? const _FormSkeleton()
           : (p['ok'] != true)
-              ? Center(
-                  child: Padding(
-                    padding: EdgeInsets.all(Ds.space.x24),
-                    child: Text(_s(p, 'message'),
-                        textAlign: TextAlign.center, style: Ds.t.bodySecondary),
-                  ),
+              ? _LoadError(
+                  message: _s(p, 'message').isNotEmpty
+                      ? _s(p, 'message')
+                      : c('cust_profile.load_failed'),
+                  retryLabel: c('cust_profile.retry'),
+                  onRetry: _load,
                 )
               : ListView(
                   padding: EdgeInsets.fromLTRB(
@@ -244,6 +245,43 @@ class _FormSkeleton extends StatelessWidget {
           SizedBox(height: Ds.space.x16),
         ],
       ],
+    );
+  }
+}
+
+
+/// The one shape all three #460 screens use when their RPC refused or threw.
+/// The sentence is the backend's when there is one and boot copy when the call
+/// never got far enough to return one — never a Dart literal, and never a blank
+/// centred screen with no way out (design-QA gate, check 6).
+class _LoadError extends StatelessWidget {
+  final String message;
+  final String retryLabel;
+  final VoidCallback onRetry;
+  const _LoadError({
+    required this.message,
+    required this.retryLabel,
+    required this.onRetry,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: EdgeInsets.all(Ds.space.x24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(message,
+                textAlign: TextAlign.center, style: Ds.t.bodySecondary),
+            SizedBox(height: Ds.space.x16),
+            SizedBox(
+              height: Ds.touch.minTarget,
+              child: OutlinedButton(onPressed: onRetry, child: Text(retryLabel)),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

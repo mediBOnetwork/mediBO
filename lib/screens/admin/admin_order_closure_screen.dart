@@ -64,6 +64,50 @@ Color _toneSoft(Object? tone) {
 /// this is only used to pick the detail RPC argument.
 String _kindOf(Map row) => '${row['kind'] ?? 'order'}';
 
+/// CMD #449 — the decisions this screen makes, as a pure class the protected
+/// suite can hold down without a Supabase client (CLAUDE.md: "if a widget
+/// resists mocking, extract its decisions into a pure class and test that").
+///
+/// Every one of them is "read the payload", never "work it out":
+///   * a row opens a detail sheet only when the backend did not mark it
+///     `tappable: false` — a payables row is a supplier and a waterfall row is
+///     an inquiry, and neither has a closure detail to open;
+///   * the override RPC NAME comes from the payload, so the frontend calls
+///     admin_order_force_close / admin_supplier_order_force_settle without
+///     either name being written in Dart;
+///   * which parameter that RPC takes follows the row's own `kind`.
+class ClosureRowPolicy {
+  const ClosureRowPolicy._();
+
+  /// Absent `tappable` means openable — that is what the four original closure
+  /// tabs send, and a new tab opts OUT explicitly.
+  static bool tappable(Map row) => row['tappable'] != false;
+
+  /// The RPC the override button calls. Never a Dart literal.
+  static String? overrideRpc(Map? override) {
+    final rpc = '${(override ?? const {})['rpc'] ?? ''}';
+    return rpc.isEmpty ? null : rpc;
+  }
+
+  /// The single parameter that RPC takes, keyed off the row's backend `kind`.
+  static Map<String, dynamic> overrideParams({
+    required String kind,
+    required String id,
+    required String reason,
+  }) =>
+      kind == 'supplier_order'
+          ? {'p_supplier_order_id': id, 'p_reason': reason}
+          : {'p_order_id': id, 'p_reason': reason};
+
+  /// The backend's own `toast` outranks the machine `error` slug; there is no
+  /// Dart fallback wording.
+  static String toastFor(Map result) {
+    final toast = '${result['toast'] ?? ''}';
+    if (toast.isNotEmpty) return toast;
+    return '${result['error'] ?? ''}';
+  }
+}
+
 class _AdminOrderClosureScreenState extends State<AdminOrderClosureScreen> {
   Map<String, dynamic>? _data;
   Object? _error;
@@ -156,7 +200,13 @@ class _AdminOrderClosureScreenState extends State<AdminOrderClosureScreen> {
       );
     }
     RenderLog.write('c229_order_closure_rows', rows.length);
-    final backfill = Map<String, dynamic>.from((d?['backfill'] as Map?) ?? {});
+    // CMD #449 — the backfill card belongs to the four closure tabs. The
+    // backend omits it on the blocker tabs, and absence is the instruction.
+    final backfill = d?['backfill'] is Map
+        ? Map<String, dynamic>.from(d!['backfill'] as Map)
+        : null;
+    final headline = '${d?['headline'] ?? ''}';
+    final note = '${d?['note'] ?? ''}';
 
     return ListView(
       padding: EdgeInsets.all(Ds.space.x16),
@@ -165,7 +215,11 @@ class _AdminOrderClosureScreenState extends State<AdminOrderClosureScreen> {
           Text('${d?['subtitle']}',
               style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
         SizedBox(height: Ds.space.x16),
-        _BackfillCard(backfill: backfill, note: '${d?['auto_note'] ?? ''}'),
+        if (backfill != null)
+          _BackfillCard(backfill: backfill, note: '${d?['auto_note'] ?? ''}'),
+        // CMD #449 — the blocker tabs (payables, waterfall, pack, barcode)
+        // carry their own heading and their own explanation instead.
+        if (headline.isNotEmpty) _HeadlineCard(headline: headline, note: note),
         SizedBox(height: Ds.space.x24),
         if (rows.isEmpty)
           Padding(
@@ -175,10 +229,16 @@ class _AdminOrderClosureScreenState extends State<AdminOrderClosureScreen> {
                 style: Ds.t.body.copyWith(color: Ds.c.textSecondary)),
           )
         else
-          for (final r in rows) ...[
+          for (final Map r in rows.cast<Map>()) ...[
             _ClosureCard(
-              row: Map<String, dynamic>.from(r as Map),
-              onOpen: () => _openDetail(Map<String, dynamic>.from(r)),
+              row: Map<String, dynamic>.from(r),
+              // CMD #449 — a row is openable only when the BACKEND says so.
+              // A payables row is a supplier, a waterfall row is an inquiry;
+              // neither has a closure detail, and the screen must not guess
+              // one from the row's shape.
+              onOpen: ClosureRowPolicy.tappable(r)
+                  ? () => _openDetail(Map<String, dynamic>.from(r))
+                  : null,
             ),
             SizedBox(height: Ds.space.x12),
           ],
@@ -291,9 +351,40 @@ class _BackfillCard extends StatelessWidget {
       );
 }
 
+/// CMD #449 — the heading + one-line explanation a blocker tab carries. Both
+/// strings come from `order_closure_label`; nothing here is written in Dart.
+class _HeadlineCard extends StatelessWidget {
+  final String headline;
+  final String note;
+  const _HeadlineCard({required this.headline, required this.note});
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: double.infinity,
+        decoration: BoxDecoration(
+          color: Ds.c.surface,
+          borderRadius: BorderRadius.circular(Ds.r.card),
+          boxShadow: Ds.elevation.e1,
+        ),
+        padding: EdgeInsets.all(Ds.space.x16),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(headline,
+              style: Ds.t.body
+                  .copyWith(color: Ds.c.text, fontWeight: FontWeight.w700)),
+          if (note.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x8),
+            Text(note, style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+          ],
+        ]),
+      );
+}
+
 class _ClosureCard extends StatelessWidget {
   final Map<String, dynamic> row;
-  final VoidCallback onOpen;
+
+  /// Null when the backend marked the row `tappable: false`. InkWell renders
+  /// without a ripple in that case, which is exactly the right affordance.
+  final VoidCallback? onOpen;
   const _ClosureCard({required this.row, required this.onOpen});
 
   @override
@@ -437,12 +528,13 @@ class _ClosureDetailSheetState extends State<_ClosureDetailSheet> {
 
     setState(() => _busy = true);
     try {
-      final res = await Supabase.instance.client.rpc('${ov['rpc']}',
-          params: widget.kind == 'supplier_order'
-              ? {'p_supplier_order_id': widget.id, 'p_reason': ctrl.text}
-              : {'p_order_id': widget.id, 'p_reason': ctrl.text});
+      final rpc = ClosureRowPolicy.overrideRpc(ov);
+      if (rpc == null) return;
+      final res = await Supabase.instance.client.rpc(rpc,
+          params: ClosureRowPolicy.overrideParams(
+              kind: widget.kind, id: widget.id, reason: ctrl.text));
       final m = Map<String, dynamic>.from(res as Map);
-      final toast = '${m['error'] != null ? m['toast'] ?? m['error'] : m['toast'] ?? ''}';
+      final toast = ClosureRowPolicy.toastFor(m);
       if (mounted && toast.isNotEmpty) {
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text(toast)));

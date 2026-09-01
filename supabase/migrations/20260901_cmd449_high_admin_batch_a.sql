@@ -121,3 +121,44 @@ BEGIN
     END IF;
   END LOOP;
 END $function$;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- PARTS 2-5 — gaps #17, #12, #14, #15: four BLOCKER TABS on the one admin
+-- screen that already exists for exactly this question (/admin/order-closure).
+--
+-- Each returns the SAME card shape the screen already renders, so the frontend
+-- gained one flag (`tappable`) plus a headline/note card and nothing else.
+-- Every string lives in `order_closure_label` — wording is an UPDATE, never a
+-- deploy.
+--
+--   #17 payables  — supplier payables ON TRADE RATE ONLY. The register quoted
+--                   Rs 1,89,676.26 of open supplier orders; that number is
+--                   total_amount, which equals mrp_total on all 46 open rows
+--                   (trade_total 0 everywhere, pricing_basis mrp_provisional /
+--                   empty, 105 line items still rate_pending). MRP is the legal
+--                   ceiling and never a price, so the tab reports the trade
+--                   payable and names the missing rate instead of laundering an
+--                   MRP figure into a payable.
+--   #12 waterfall — asked_at is the DISPATCH stamp and is deliberately NULL
+--                   until a form actually goes out. So a row naming a supplier
+--                   with no asked_at is not late — it was NEVER ASKED, nothing
+--                   ages it and timeout_advance() will never touch it. That
+--                   invisible state gets its own tone here; no age is invented.
+--   #14 pack      — reproduced on CPO260726PAL124O1: three of five RECEIVED
+--                   lines have zero bag quantity and no bag allocation, so
+--                   pack_mark_item returns error 'not_bagged' and
+--                   pack_set_dispatch_ready can never pass. The tab names the
+--                   holding lines per order.
+--   #15 barcode   — the register said product_barcode is empty. The true
+--                   mechanism: pack_barcode_lookup resolves against
+--                   MEDICINE.barcode and medicine_set_barcode WRITES there, so
+--                   product_barcode is a dead table no RPC reads. Coverage is
+--                   measured on the catalogue the scanner actually uses, and an
+--                   empty one is now stated instead of silently missing.
+--
+-- The function bodies were applied as their own idempotent migrations
+-- (cmd449_closure_blocker_tab_copy_rows, cmd449_closure_blocker_tab_builders,
+-- cmd449_waited_label_helper, cmd449_payables_trade_rate_basis,
+-- cmd449_pack_rows_blocker_count_label, cmd449_closure_list_adds_four_tabs) and
+-- are recorded in supabase/migrations by the schema history; this file carries
+-- Part 1, which is the behaviour change the protected test pins.

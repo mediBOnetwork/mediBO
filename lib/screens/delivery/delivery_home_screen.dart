@@ -29,6 +29,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../fulfill/fulfill_lookups.dart';
 import '../../services/device_location.dart';
+import '../../services/masked_call_service.dart';
 import '../../user_state.dart';
 import '../../utils/render_log.dart';
 import 'agency_team_section.dart'; // C630: PART D
@@ -38,6 +39,7 @@ import 'delivery_proof_sheet.dart';
 import 'delivery_run_map_panel.dart';
 import '../../services/ui_copy.dart';
 import '../../design_tokens.dart';
+import '../../widgets/masked_call_button.dart';
 
 Color get _kGreen => FulfillLookups.instance.color('c_ff1b7a43', const Color(0xFF1B7A43));
 Color get _kBorder => FulfillLookups.instance.color('c_ffe5e7eb', const Color(0xFFE5E7EB));
@@ -740,7 +742,11 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
         (s['arrived_chip'].toString(), const {'bg': '#D1FAE5', 'fg': '#065F46'}),
     ];
 
-    final call = actions['call_number']?.toString() ?? '';
+    // CHANGE #404 — the stop no longer carries the pharmacy's real number.
+    // `call_action` is the backend's masked-call descriptor: a label, a target
+    // role and the order it belongs to. There is nothing here to dial.
+    final callAction =
+        MaskedCallTarget.from(s['order_id']?.toString() ?? '', actions['call_action']);
     final wa = actions['whatsapp_number']?.toString() ?? '';
     final dir = actions['directions_url']?.toString() ?? '';
 
@@ -853,8 +859,7 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
 
         const SizedBox(height: 10),
         Wrap(spacing: 8, runSpacing: 8, children: [
-          if (call.isNotEmpty)
-            _actionBtn(Icons.call_outlined, _ui('dlv_call'), () => _open('tel:$call')),
+          if (callAction != null) MaskedCallButton(target: callAction, dense: true),
           if (wa.isNotEmpty)
             // The 91 prefix is the wa.me URL's country segment, per the spec's
             // own contract for this action — a URL, not a label on screen.

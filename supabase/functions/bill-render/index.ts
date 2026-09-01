@@ -289,6 +289,162 @@ async function renderPdf(bill: any): Promise<Uint8Array> {
 // more column/row sections, a totals ladder and notes. It names nothing — even
 // the column widths arrive in the payload — so a fourth document kind is a
 // change in SQL and no deploy here.
+// ── CMD #411: the pharmacy's own RETAIL tax invoice ──────────────────────────
+// A counter bill is a different document from a trade invoice: it is portrait,
+// it is short, and its header is the PHARMACY's identity (its GSTIN, its drug
+// licence) rather than mediBO's. It gets its own layout for the same reason the
+// supplier documents did — renderPdf() hardcodes a trade invoice's shape.
+//
+// It computes NOTHING. Every string below — every rupee, every percentage,
+// every label, the amount in words — arrives finished from
+// pos_invoice_render_input().
+const PW = 595, PH = 842, PM = 36   // A4 portrait
+
+async function renderPosInvoice(inv: any): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create()
+  let F: any, FB: any
+  const uni = await unicodeFonts()
+  if (uni) {
+    try {
+      pdf.registerFontkit(fontkit)
+      F = await pdf.embedFont(uni.reg, { subset: true })
+      FB = await pdf.embedFont(uni.bold, { subset: true })
+      UNICODE = true
+    } catch (_) { UNICODE = false }
+  } else UNICODE = false
+  if (!F) {
+    F = await pdf.embedFont(StandardFonts.Helvetica)
+    FB = await pdf.embedFont(StandardFonts.HelveticaBold)
+  }
+
+  const ink = rgb(0.07, 0.09, 0.15), grey = rgb(0.42, 0.45, 0.5)
+  const line = rgb(0.85, 0.87, 0.9), brand = rgb(0.05, 0.42, 0.24)
+
+  let page = pdf.addPage([PW, PH])
+  let y = PH - PM
+  const txt = (s: unknown, x: number, yy: number, size = 8.5, f = F, c = ink) =>
+    page.drawText(ansi(s), { x, y: yy, size, font: f, color: c })
+  const rtxt = (s: unknown, xr: number, yy: number, size = 8.5, f = F, c = ink) => {
+    const t = ansi(s)
+    page.drawText(t, { x: xr - f.widthOfTextAtSize(t, size), y: yy, size, font: f, color: c })
+  }
+  const hr = (yy: number, c = line) => page.drawLine({
+    start: { x: PM, y: yy }, end: { x: PW - PM, y: yy }, thickness: 0.5, color: c })
+  const newPage = () => { page = pdf.addPage([PW, PH]); y = PH - PM }
+
+  const seller = inv.seller ?? {}, invo = inv.invoice ?? {}, net = inv.net ?? {}
+
+  // ── seller block: the PHARMACY, on its own licence ────────────────────────
+  txt(inv.title ?? 'TAX INVOICE', PM, y, 14, FB, brand)
+  y -= 18
+  txt(seller.name ?? '', PM, y, 11, FB)
+  y -= 12
+  for (const l of [seller.address, seller.phone, seller.gstin_label, seller.dl_label]) {
+    if (!l) continue
+    txt(l, PM, y, 8, F, grey)
+    y -= 10
+  }
+  y -= 4; hr(y); y -= 14
+
+  // ── invoice meta ──────────────────────────────────────────────────────────
+  const meta: Array<[string, unknown]> = [
+    ['Invoice No.', invo.number], ['Date', invo.date], ['Time', invo.time],
+    ['Payment', invo.payment], ['Billed by', invo.staff],
+    ['Patient', invo.patient], ['Mobile', invo.patient_phone],
+  ]
+  let col = 0
+  for (const [label, value] of meta) {
+    if (!value) continue
+    const x = PM + (col % 2) * ((PW - 2 * PM) / 2)
+    txt(label, x, y, 7.5, FB, grey)
+    txt(value, x + 62, y, 8.5)
+    if (col % 2 === 1) y -= 12
+    col++
+  }
+  if (col % 2 === 1) y -= 12
+  y -= 6; hr(y); y -= 14
+
+  // ── the line table. Column ORDER and LABELS are the payload's ─────────────
+  const PCOL: Record<string, number> = {
+    sn: 18, product: 150, pack: 44, batch_no: 46, expiry: 32, qty: 26,
+    mrp: 46, disc: 32, taxable: 50, gst_pct: 30, gst_amt: 40, amount: 52,
+  }
+  const PRIGHT = new Set(['qty', 'mrp', 'disc', 'taxable', 'gst_pct', 'gst_amt', 'amount'])
+  const cols = (Array.isArray(inv.columns) ? inv.columns : [])
+    .filter((c: any) => c && typeof c.key === 'string')
+    .map((c: any) => ({
+      key: c.key, label: String(c.label ?? ''), w: PCOL[c.key] ?? 44,
+      right: c.align ? c.align === 'right' : PRIGHT.has(c.key),
+    }))
+
+  const headRow = () => {
+    let x = PM
+    for (const c of cols) {
+      if (c.right) rtxt(c.label, x + c.w, y, 7.5, FB, grey)
+      else txt(clip(c.label, FB, 7.5, c.w - 3), x, y, 7.5, FB, grey)
+      x += c.w
+    }
+    y -= 4; hr(y); y -= 11
+  }
+  headRow()
+
+  for (const row of (Array.isArray(inv.lines) ? inv.lines : [])) {
+    if (y < PM + 150) { newPage(); headRow() }
+    let x = PM
+    for (const c of cols) {
+      const v = row[c.key]
+      if (c.right) rtxt(v ?? '', x + c.w, y, 8)
+      else txt(clip(String(v ?? ''), F, 8, c.w - 3), x, y, 8)
+      x += c.w
+    }
+    y -= 12
+  }
+  y -= 2; hr(y); y -= 16
+
+  // ── tax ladder (left) + totals (right) ────────────────────────────────────
+  const ladderTop = y
+  const slabs = Array.isArray(inv.tax_summary) ? inv.tax_summary : []
+  if (slabs.length) {
+    txt('Tax summary', PM, y, 8, FB, grey); y -= 12
+    txt('Rate', PM, y, 7.5, FB, grey)
+    txt('Taxable', PM + 44, y, 7.5, FB, grey)
+    txt('CGST', PM + 108, y, 7.5, FB, grey)
+    txt('SGST', PM + 158, y, 7.5, FB, grey)
+    y -= 11
+    for (const sl of slabs) {
+      txt(sl.rate ?? '', PM, y, 8)
+      txt(sl.taxable ?? '', PM + 44, y, 8)
+      txt(sl.cgst ?? '', PM + 108, y, 8)
+      txt(sl.sgst ?? '', PM + 158, y, 8)
+      y -= 11
+    }
+  }
+  const ladderEnd = y
+
+  let ty = ladderTop
+  for (const t of (Array.isArray(inv.totals) ? inv.totals : [])) {
+    if (!t || t.hide === true) continue
+    txt(t.label ?? '', PW - PM - 190, ty, 8.5, F, grey)
+    rtxt(t.value ?? '', PW - PM, ty, 8.5)
+    ty -= 12
+  }
+  ty -= 4
+  hr(ty + 8)
+  txt(net.label ?? '', PW - PM - 190, ty - 4, 10.5, FB)
+  rtxt(net.value ?? '', PW - PM, ty - 4, 11.5, FB, brand)
+  ty -= 20
+
+  y = Math.min(ladderEnd, ty) - 12
+  if (net.words) { txt(net.words, PM, y, 8, F, grey); y -= 14 }
+
+  const foot = inv.footer ?? {}
+  hr(y); y -= 12
+  if (foot.items) { txt(foot.items, PM, y, 7.5, F, grey) }
+  if (foot.note) { rtxt(foot.note, PW - PM, y, 7.5, F, grey) }
+
+  return await pdf.save()
+}
+
 async function renderDoc(doc: any): Promise<Uint8Array> {
   const pdf = await PDFDocument.create()
   let F: any, FB: any
@@ -445,6 +601,39 @@ Deno.serve(async (req) => {
         net_payable: sample?.totals?.net_payable ?? null,
         remaining: sample?.totals?.remaining ?? null,
       })
+    }
+
+    // ── CMD #411: pharmacy retail invoice mode ───────────────────────────
+    const posSaleId = String(body?.pos_sale_id ?? '')
+    if (posSaleId) {
+      const { data: input, error: pErr } = await supabase
+        .rpc('pos_invoice_render_input', { p_sale_id: posSaleId })
+      if (pErr) throw new Error('pos_invoice_render_input: ' + pErr.message)
+      if (!input?.ok) {
+        await supabase.rpc('pos_invoice_report', {
+          p_sale_id: posSaleId, p_ok: false,
+          p_error: 'render_input: ' + (input?.error ?? 'unknown'),
+        }).catch(() => {})
+        return json({ ok: false, reason: input?.error ?? 'no_input' })
+      }
+      try {
+        const bytes = await renderPosInvoice(input.invoice)
+        const up = await supabase.storage.from(String(input.bucket))
+          .upload(String(input.path), bytes,
+                  { contentType: 'application/pdf', upsert: true })
+        if (up.error) throw new Error('upload: ' + up.error.message)
+        const { data: rep } = await supabase.rpc('pos_invoice_report', {
+          p_sale_id: posSaleId, p_ok: true, p_bucket: input.bucket,
+          p_path: input.path, p_name: input.file_name, p_bytes: bytes.length,
+        })
+        return json({ ok: true, pos_sale_id: posSaleId, path: input.path,
+                      name: input.file_name, bytes: bytes.length, report: rep })
+      } catch (e) {
+        const m = e instanceof Error ? e.message : String(e)
+        await supabase.rpc('pos_invoice_report', {
+          p_sale_id: posSaleId, p_ok: false, p_error: m }).catch(() => {})
+        return json({ ok: false, pos_sale_id: posSaleId, error: m })
+      }
     }
 
     // ── CHANGE #403: supplier document mode ──────────────────────────────

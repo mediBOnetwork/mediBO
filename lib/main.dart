@@ -58,6 +58,7 @@ import 'screens/about_screen.dart';
 import 'screens/contact_screen.dart';
 import 'screens/legal_pages.dart';
 import 'screens/admin/admin_delivery_ops_screen.dart';
+import 'screens/admin/admin_delivery_waves_screen.dart';
 import 'services/feature_gaps_service.dart'; // CHANGE #312
 import 'services/ui_copy.dart';
 import 'supabase_config.dart';
@@ -760,6 +761,10 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
               // authorisation lives in the backend where it belongs. The
               // tappable way in is still the Delivery tab's own entry row.
               '/admin/delivery-ops': (_) => const AdminDeliveryOpsScreen(),
+              // CHANGE #405 — the wave planner. Registered in feature_registry
+              // with this exact deep_link, so the admin dashboard tile pushes it
+              // straight onto the navigator (CHANGE #395) with no shell edit.
+              '/admin/delivery-waves': (_) => const AdminDeliveryWavesScreen(),
               // CHANGE #312 — the feature_gaps register, at a real URL for the
               // same reason /admin/delivery-ops has one: a headless admin
               // session can open it and PROVE it painted. It guards nothing —

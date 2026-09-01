@@ -17,6 +17,8 @@ import '../../services/ui_copy.dart';
 import '../../user_state.dart';
 import '../../utils/render_log.dart';
 import '../../services/order_alert_service.dart';
+import '../../services/masked_call_service.dart';
+import '../../widgets/masked_call_button.dart';
 import '../admin/admin_fulfillment_screen_web.dart';
 import '../admin/admin_supplier_screen_web.dart';
 import '../admin/order_alerts_screen.dart' show OrderAlertCard;
@@ -638,11 +640,63 @@ class PartnerFeaturePage extends StatelessWidget {
   }
 }
 
-class PartnerWorkQueue extends StatelessWidget {
+class PartnerWorkQueue extends StatefulWidget {
   const PartnerWorkQueue({super.key, required this.payload, required this.onOpen});
 
   final Map<String, dynamic> payload;
   final void Function(String featureKey) onOpen;
+
+  @override
+  State<PartnerWorkQueue> createState() => _PartnerWorkQueueState();
+}
+
+class _PartnerWorkQueueState extends State<PartnerWorkQueue> {
+  // CHANGE #404 — order_id -> the masked-call buttons this partner gets.
+  // A partner may reach the pharmacy and the supplier on an order they are
+  // fulfilling; the allow matrix says which, and it says it in SQL. Nothing on
+  // this screen holds a phone number.
+  Map<String, List<MaskedCallTarget>> _callTargets = const {};
+
+  Map<String, dynamic> get payload => widget.payload;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCallTargets();
+  }
+
+  @override
+  void didUpdateWidget(covariant PartnerWorkQueue old) {
+    super.didUpdateWidget(old);
+    if (!identical(old.payload, widget.payload)) _loadCallTargets();
+  }
+
+  Future<void> _loadCallTargets() async {
+    final ids = <String>{};
+    for (final st in (payload['stages'] as List?) ?? const []) {
+      if (st is! Map) continue;
+      for (final o in (st['orders'] as List?) ?? const []) {
+        if (o is! Map) continue;
+        final id = (o['order_id'] ?? '').toString();
+        if (id.isNotEmpty) ids.add(id);
+      }
+    }
+    if (ids.isEmpty) {
+      if (mounted) setState(() => _callTargets = const {});
+      return;
+    }
+    try {
+      final t = await MaskedCallService.targets(ids.toList());
+      if (!mounted) return;
+      setState(() => _callTargets = t);
+    } catch (e) {
+      // The queue is the partner's whole console. A masking layer that is down
+      // costs them the call buttons, never the work list.
+      try {
+        RenderLog.write('c404_masked_call_err', e.toString());
+      } catch (_) {}
+    }
+  }
 
   String _s(String k) => (payload[k] ?? '').toString();
 
@@ -679,7 +733,8 @@ class PartnerWorkQueue extends StatelessWidget {
             for (final s in stages)
               _StageCard(
                 stage: Map<String, dynamic>.from(s as Map),
-                onOpen: onOpen,
+                onOpen: widget.onOpen,
+                callTargets: _callTargets,
               )
           else
             _Empty(title: _s('empty_title'), message: _s('empty_message')),
@@ -693,10 +748,15 @@ class PartnerWorkQueue extends StatelessWidget {
 /// nothing in it still shows — an empty Pack queue is information — but it
 /// carries no rows and no button.
 class _StageCard extends StatelessWidget {
-  const _StageCard({required this.stage, required this.onOpen});
+  const _StageCard({
+    required this.stage,
+    required this.onOpen,
+    required this.callTargets,
+  });
 
   final Map<String, dynamic> stage;
   final void Function(String featureKey) onOpen;
+  final Map<String, List<MaskedCallTarget>> callTargets;
 
   @override
   Widget build(BuildContext context) {
@@ -736,7 +796,12 @@ class _StageCard extends StatelessWidget {
               ],
             ),
             for (final o in orders)
-              _OrderRow(order: Map<String, dynamic>.from(o as Map)),
+              _OrderRow(
+                order: Map<String, dynamic>.from(o as Map),
+                callTargets:
+                    callTargets[(o as Map?)?['order_id']?.toString() ?? ''] ??
+                        const [],
+              ),
             if ((stage['more_label'] ?? '').toString().isNotEmpty) ...[
               SizedBox(height: Ds.space.x8),
               Text((stage['more_label'] ?? '').toString(), style: Ds.t.caption),
@@ -763,9 +828,14 @@ class _StageCard extends StatelessWidget {
 /// string, the age is the backend's phrase, and the next action is the stage's
 /// own sentence rather than a word this widget picked.
 class _OrderRow extends StatelessWidget {
-  const _OrderRow({required this.order});
+  const _OrderRow({required this.order, this.callTargets = const []});
 
   final Map<String, dynamic> order;
+
+  /// CHANGE #404 — the masked-call buttons for THIS order, decided by
+  /// call_mask_targets. Empty means nobody on this order is callable by this
+  /// partner, and an empty row draws nothing.
+  final List<MaskedCallTarget> callTargets;
 
   String _s(String k) => (order[k] ?? '').toString();
 
@@ -786,6 +856,10 @@ class _OrderRow extends StatelessWidget {
                   Text(_s('customer'), style: Ds.t.caption),
                 if (_s('next_action').isNotEmpty)
                   Text(_s('next_action'), style: Ds.t.caption),
+                if (callTargets.isNotEmpty) ...[
+                  SizedBox(height: Ds.space.x8),
+                  MaskedCallRow(targets: callTargets, dense: true),
+                ],
               ],
             ),
           ),

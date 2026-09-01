@@ -849,7 +849,7 @@ NEVER flip `bugloop.enforce=true` until the full chain (preview → journeys →
 
 
 
-## PROJECT · protected_tests  (priority 90, v2)
+## PROJECT · protected_tests  (priority 90, v5)
 
 ## PROTECTED TEST SUITE (CHANGE #635 — never remove)
 Before EVERY deploy, run `flutter test test/protected/` in addition to the
@@ -898,6 +898,32 @@ Current files and what they hold down:
   editable, prestate null arrives unselected, a submitted answer outranks the
   tick and a live tap outranks both, and items render in payload order (no
   client sort).
+- `partner_selfservice_test.dart` — the partner self-service surface: a staff
+  access dropdown offers only the options the BACKEND sent (a feature the
+  partner holds 'read' on never arrives with a 'write' option), your own login
+  offers neither Remove nor an editable dropdown, every rupee on a supplier-payment
+  row is a backend string with the payload's own due tone, a frozen settlement and
+  a read-only grant are flags rather than deductions, rows render in payload order,
+  and a route_key this build has never heard of resolves to nothing so the console
+  skips it in silence.
+- `supplier_records_test.dart` — the supplier records layer: the TAB LIST is
+  supplier_records_home()'s (an unknown tab_key renders an empty body instead
+  of throwing), nothing on the four surfaces is computed in Dart (every rupee,
+  percentage, quantity, date and plural prints verbatim - the growth tile shows
+  '-18.4%' because the BACKEND sent it), a document is asked for and then
+  polled on the backend's own `poll_ms` and opened at the backend's own
+  bucket+path (the screen never builds a URL or invents a timeout), a debit's
+  tone and its photo affordance are payload flags rather than inferences, and
+  an untouched bill-search filter is an ABSENT parameter, never an empty
+  string.
+- `masked_call_test.dart` — the number masking layer (CHANGE #404): a call
+  button is built ONLY from a backend descriptor and carries no phone number
+  (has:false, a missing label or a missing role each render nothing), the label
+  prints verbatim, `user_dials` dials the DID and only the DID, `provider_dials`
+  dials nothing at all, a refusal shows the backend's own `message` with no Dart
+  fallback wording, and an order with no permitted counterparty is absent from
+  call_mask_targets rather than a greyed-out button.
+
 - `cart_unavailable_test.dart` — the cart's red state is the backend's flag:
   per-line unavailable/qty_locked are carried through untouched,
   unavailable_badge prints verbatim (never pluralised in Dart), the badge is
@@ -930,6 +956,32 @@ What each file holds down:
 - `compact_card_test.dart` — the compact card computes nothing: price, struck MRP, ribbon and ADD label are backend strings, a ribbon appears only when the payload sent one, out-of-stock is can_add:false (never a stock number), the grid extent stays derived from the card's own constants.
 - `stock_update_form_test.dart` — the public /stock-update/<token> page renders items in payload order (fixture is deliberately non-alphabetical), draws the two buttons from buttons[] with still_oos LEFT / back_in_stock RIGHT and their own tones, keeps one answer per item, and submits [{product_id, back_in_stock}] for ANSWERED items only — an untouched item is omitted, never defaulted to "still out of stock". Expired renders the backend's copy instead of throwing.
 - `inquiry_prestate_test.dart` — the auto-tick on the ONE widget all three inquiry surfaces share: prestate 'Available' arrives pre-selected AND stays editable, prestate null arrives unselected, a submitted answer outranks the tick and a live tap outranks both, items render in payload order (no client sort).
+- `partner_selfservice_test.dart` — the partner self-service surface: a staff
+  access dropdown offers only the options the BACKEND sent (a feature the
+  partner holds 'read' on never arrives with a 'write' option), your own login
+  offers neither Remove nor an editable dropdown, every rupee on a supplier-payment
+  row is a backend string with the payload's own due tone, a frozen settlement and
+  a read-only grant are flags rather than deductions, rows render in payload order,
+  and a route_key this build has never heard of resolves to nothing so the console
+  skips it in silence.
+- `supplier_records_test.dart` — the supplier records layer: the TAB LIST is
+  supplier_records_home()'s (an unknown tab_key renders an empty body instead
+  of throwing), nothing on the four surfaces is computed in Dart (every rupee,
+  percentage, quantity, date and plural prints verbatim - the growth tile shows
+  '-18.4%' because the BACKEND sent it), a document is asked for and then
+  polled on the backend's own `poll_ms` and opened at the backend's own
+  bucket+path (the screen never builds a URL or invents a timeout), a debit's
+  tone and its photo affordance are payload flags rather than inferences, and
+  an untouched bill-search filter is an ABSENT parameter, never an empty
+  string.
+- `masked_call_test.dart` — the number masking layer (CHANGE #404): a call
+  button is built ONLY from a backend descriptor and carries no phone number
+  (has:false, a missing label or a missing role each render nothing), the label
+  prints verbatim, `user_dials` dials the DID and only the DID, `provider_dials`
+  dials nothing at all, a refusal shows the backend's own `message` with no Dart
+  fallback wording, and an order with no permitted counterparty is absent from
+  call_mask_targets rather than a greyed-out button.
+
 - `cart_unavailable_test.dart` — the cart's red state is the backend's flag: per-line unavailable/qty_locked carried through untouched, unavailable_badge printed verbatim (never pluralised in Dart), absent at count 0, cleared on re-render because the SERVER recomputed them, and CartOrderRefusal treats only error:'unavailable_in_cart' as that refusal, keeping its message verbatim.
 - `design_literal_gate_test.dart` — the style-literal baseline gate (see design).
 

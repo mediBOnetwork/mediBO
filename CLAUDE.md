@@ -260,6 +260,14 @@ Current files and what they hold down:
   tone and its photo affordance are payload flags rather than inferences, and
   an untouched bill-search filter is an ABSENT parameter, never an empty
   string.
+- `masked_call_test.dart` — the number masking layer (CHANGE #404): a call
+  button is built ONLY from a backend descriptor and carries no phone number
+  (has:false, a missing label or a missing role each render nothing), the label
+  prints verbatim, `user_dials` dials the DID and only the DID, `provider_dials`
+  dials nothing at all, a refusal shows the backend's own `message` with no Dart
+  fallback wording, and an order with no permitted counterparty is absent from
+  call_mask_targets rather than a greyed-out button.
+
 - `cart_unavailable_test.dart` — the cart's red state is the backend's flag:
   per-line unavailable/qty_locked are carried through untouched,
   unavailable_badge prints verbatim (never pluralised in Dart), the badge is

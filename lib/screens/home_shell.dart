@@ -655,6 +655,12 @@ class _HomeShellState extends State<HomeShell> {
     // screen prints its refusal, so opening this link as the wrong role shows
     // the backend's sentence instead of nothing at all.
     'price_check',
+    // CMD #432 — the shop's UPI ID and its counter QR. Self-gated the same
+    // way: pharmacy_upi_get() resolves the caller's own pharmacy and the
+    // screen prints the backend's refusal for anyone else, so the link grants
+    // nothing. Without this line the route is parked and the deep link lands
+    // on the storefront — which is exactly what it did the first time.
+    'pos_upi',
   };
 
   void _consumePendingDeepLink() {

@@ -38,6 +38,7 @@ import 'admin_delivery_tab.dart'; // CHANGE #629: Delivery tab (zone + date scop
 import 'admin_customer_screen.dart'; // CHANGE #537: pipeline stage 1 reuses this screen
 import 'admin_supplier_screen.dart'; // CHANGE #537: pipeline stages 2 and 3 reuse this screen
 import '../../fulfill/fulfill_pipeline_tabs.dart'; // CHANGE #537: the 9-stage bar
+import '../../design_tokens.dart'; // CHANGE #537: skeleton + empty state on tokens
 import 'barcode_count_screen.dart'; // CHANGE #624: barcode counting screen
 import '../../fulfill/count_voice_hooks.dart'; // COUNT MODE: voice bridge
 import '../../widgets/pinned_footer_list.dart';
@@ -9076,21 +9077,24 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
               badgeColor: FulfillLookups.instance.color('c_ff6b7280'),
               surfaceColor: _kCard,
             )
+          else if (_pipelineLoading)
+            // The pipeline has a known shape, so show the shape rather than a
+            // spinner — and the header does not collapse and jump when the
+            // payload lands.
+            FulfillPipelineTabBarSkeleton(color: Ds.c.divider)
           else
-            // Loading and refusal both render the backend's own words — there
-            // is no Dart fallback copy for either.
+            // A refusal and an empty matrix both print the backend's own
+            // words. There is no Dart fallback copy for either.
             SizedBox(
-              height: 52,
+              height: Ds.touch.minTarget + Ds.space.x8,
               child: Align(
                 alignment: Alignment.centerLeft,
                 child: Text(
-                  _pipelineLoading
-                      ? ''
-                      : (_pipeline.message.isNotEmpty
-                          ? _pipeline.message
-                          : _pipeline.emptyMessage),
+                  _pipeline.message.isNotEmpty
+                      ? _pipeline.message
+                      : _pipeline.emptyMessage,
                   style: TextStyle(
-                      fontSize: 13,
+                      fontSize: Ds.t.captionSize,
                       fontWeight: FontWeight.w500,
                       color: _kSub),
                 ),

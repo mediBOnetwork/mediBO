@@ -423,3 +423,35 @@ class _EdgeFade extends StatelessWidget {
     );
   }
 }
+
+/// While `fulfill_tabs()` is in flight the bar is a SKELETON, not a spinner and
+/// not a blank: the pipeline has a known shape, so showing that shape is more
+/// honest than a rotating circle, and it stops the header collapsing and
+/// jumping when the payload lands.
+class FulfillPipelineTabBarSkeleton extends StatelessWidget {
+  final Color color;
+  const FulfillPipelineTabBarSkeleton({super.key, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: Ds.touch.minTarget + Ds.space.x8,
+      child: ClipRect(
+        child: Row(children: [
+          for (final w in const [120.0, 140.0, 120.0, 110.0])
+            Padding(
+              padding: EdgeInsets.only(right: Ds.space.x8),
+              child: Container(
+                width: w,
+                height: Ds.touch.minTarget - Ds.space.x8,
+                decoration: BoxDecoration(
+                  color: color,
+                  borderRadius: Ds.r.rButton,
+                ),
+              ),
+            ),
+        ]),
+      ),
+    );
+  }
+}

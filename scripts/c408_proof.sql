@@ -205,6 +205,14 @@ begin
            'my_orders_screen carries the edit window on the order row — no RPC per card'
       from jsonb_array_elements(coalesce(v->'orders','[]'::jsonb)) o
      where o->>'id' = v_order::text;
+    -- The flag alone drew NOTHING on the live build: the button is built from
+    -- backend copy, so the caption has to travel with it.
+    insert into c408_log(ok, line)
+    select coalesce(o->'edit'->>'button_label','') <> '',
+           'and carries the button caption with it -> '
+             || coalesce(o->'edit'->>'button_label','(none)')
+      from jsonb_array_elements(coalesce(v->'orders','[]'::jsonb)) o
+     where o->>'id' = v_order::text;
   exception when others then
     insert into c408_log(ok, line) values
       (false, 'my_orders_screen carries the edit window -> ' || SQLERRM);

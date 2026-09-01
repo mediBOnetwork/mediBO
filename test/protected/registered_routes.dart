@@ -37,6 +37,7 @@ const kRegisteredAdminRoutes = <String>[
   'bill_pipeline', 'gst', 'pnl', 'settlement', 'payment_upi',
   // Admin & System
   'manage_admins', 'dev_queue', 'scope_audit', 'feature_gaps', 'cron_health',
+  'test_mode', // CHANGE #573 — the synthetic lane
   // CHANGE #397 — bulk editing and exports; both open AdminBulkScreen, the
   // second on its Exports tab.
   'bulk_actions', 'exports',

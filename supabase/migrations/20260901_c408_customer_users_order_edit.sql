@@ -1448,3 +1448,9 @@ begin
     'customer_id', coalesce(v_cust::text,''));
 end $function$
 
+
+-- The profile row's own label. `c()` reads ui_copy, so the entry point is a
+-- backend string like every other row on that screen.
+insert into public.ui_copy(key, value) values
+  ('profile.row_staff_logins', to_jsonb('Staff logins'::text))
+on conflict (key) do update set value = excluded.value, updated_at = now();

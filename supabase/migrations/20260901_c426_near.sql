@@ -749,6 +749,8 @@ begin
     'url', 'https://medibo.in/near/p/' || r.token,
     'headline', public.ui_text('near.title'),
     'badge', public.ui_text('near.listing_title'),
+    -- the honesty line goes on the printed sheet too
+    'footer', public.ui_text('near.disclaimer'),
     'bucket', 'near-posters', 'path', r.token || '.pdf');
 end $$;
 

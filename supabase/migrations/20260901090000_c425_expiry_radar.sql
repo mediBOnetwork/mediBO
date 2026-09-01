@@ -505,12 +505,24 @@ begin
   return v_id;
 end $$;
 
--- The truth loop: an answer moves the shelf AND is left as ground truth for
--- #424's velocity to recalibrate against.
+-- The truth loop. WHERE the answer lands depends on who owns "how many are
+-- left" for this shop:
+--   * with #424's inference bound, the number is a ground-truth observation:
+--     _c424_correct() records it, moves the Bayesian velocity posterior toward
+--     what actually happened and re-pours the lots. pharmacy_stock.qty is left
+--     alone on purpose — there it means QTY PURCHASED, which is the base the
+--     inference reasons from. Overwriting it would delete the very fact the
+--     engine learns from.
+--   * with no inference (the 'recorded' basis), pharmacy_stock.qty IS the
+--     on-shelf number, so the answer adjusts it and leaves a count_correction
+--     move in the ledger like any other count.
+-- The caller never has to know which; the ask row records which happened.
 create or replace function public._c425_apply_answer(
   p_ask_id uuid, p_qty numeric, p_source text)
 returns jsonb language plpgsql security definer set search_path to 'public' as $$
-declare a public.pharmacy_radar_ask; s public.pharmacy_stock; v_delta numeric;
+declare
+  a public.pharmacy_radar_ask; s public.pharmacy_stock; v_delta numeric;
+  v_path text := 'stock'; v_learn jsonb := null;
 begin
   select * into a from public.pharmacy_radar_ask where id = p_ask_id;
   if not found then
@@ -526,25 +538,40 @@ begin
                               'message', public.ui_text('phradar.ask_bad_qty'));
   end if;
 
-  select * into s from public.pharmacy_stock where id = a.stock_id;
-  if found then
-    v_delta := p_qty - coalesce(s.qty, 0);
-    update public.pharmacy_stock set qty = p_qty, updated_at = now() where id = s.id;
-    insert into public.pharmacy_stock_move (
-      pharmacy_id, stock_id, item_key, kind, qty_delta, qty_after, unit_cost,
-      reason_code, note, actor_label, ref_kind, ref_id)
-    values (a.pharmacy_id, s.id, s.item_key, 'adjust', v_delta, p_qty, s.unit_cost,
-            'count_correction', 'expiry radar answer', coalesce(p_source,'whatsapp'),
-            'radar_ask', a.id::text);
+  if to_regprocedure('public._c424_correct(uuid,uuid,numeric)') is not null then
+    begin
+      execute 'select public._c424_correct($1,$2,$3)'
+        into v_learn using a.pharmacy_id, a.stock_id, p_qty;
+    exception when others then
+      v_learn := jsonb_build_object('ok', false, 'error', sqlerrm);
+    end;
+    if coalesce((v_learn->>'ok')::boolean, false) then
+      v_path := 'inference';
+    end if;
+  end if;
+
+  if v_path = 'stock' then
+    select * into s from public.pharmacy_stock where id = a.stock_id;
+    if found then
+      v_delta := p_qty - coalesce(s.qty, 0);
+      update public.pharmacy_stock set qty = p_qty, updated_at = now() where id = s.id;
+      insert into public.pharmacy_stock_move (
+        pharmacy_id, stock_id, item_key, kind, qty_delta, qty_after, unit_cost,
+        reason_code, note, actor_label, ref_kind, ref_id)
+      values (a.pharmacy_id, s.id, s.item_key, 'adjust', v_delta, p_qty, s.unit_cost,
+              'count_correction', 'expiry radar answer', coalesce(p_source,'whatsapp'),
+              'radar_ask', a.id::text);
+    end if;
   end if;
 
   update public.pharmacy_radar_ask
      set status = 'answered', answered_qty = p_qty, answered_at = now(),
-         answer_source = coalesce(p_source, 'whatsapp')
+         answer_source = coalesce(p_source, 'whatsapp'),
+         options = options   -- unchanged; the ask keeps the numbers it offered
    where id = a.id;
 
   return jsonb_build_object('ok', true, 'ask_id', a.id, 'qty', p_qty,
-    'product', a.product_name,
+    'product', a.product_name, 'landed', v_path, 'learn', v_learn,
     'message', case when p_qty = 0
       then public.ui_fmt('phradar.ask_saved_zero',
              jsonb_build_object('product', coalesce(a.product_name,'')))

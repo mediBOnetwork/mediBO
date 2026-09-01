@@ -26,6 +26,8 @@ delete from pharmacy_radar_ask         where pharmacy_id = :'shop';
 delete from pharmacy_wa_intake         where pharmacy_id = :'shop';
 delete from whatsapp_messages          where wa_message_id like 'c425-proof-%';
 delete from pharmacy_purchase_bill     where pharmacy_id = :'shop' and source = 'whatsapp';
+delete from pharmacy_lot_correction   where lot_id = 'c4250000-0000-4000-8000-000000000425';
+delete from pharmacy_sku_velocity     where pharmacy_id = :'shop' and medicine_id = 312838;
 delete from pharmacy_stock             where pharmacy_id = :'shop' and batch_no = 'JAN-425';
 
 insert into pharmacy_radar_config (pharmacy_id, opt_in, max_msgs_per_week)
@@ -38,7 +40,7 @@ on conflict (pharmacy_id) do update
 insert into pharmacy_stock (id, pharmacy_id, medicine_id, product_name, pack_label,
                             item_key, batch_no, expiry, expiry_on, qty, unit_cost, mrp,
                             source_kind, supplier_label, received_on)
-values ('c4250000-0000-4000-8000-000000000425', :'shop', null,
+values ('c4250000-0000-4000-8000-000000000425', :'shop', 312838,
         'Montikop 10 Tablets', '10 tablets', 'c425-montikop', 'JAN-425',
         '10/2026', date_trunc('month', (now() at time zone 'Asia/Kolkata'))::date
                     + interval '1 month 9 days',
@@ -46,9 +48,9 @@ values ('c4250000-0000-4000-8000-000000000425', :'shop', null,
         (now() at time zone 'Asia/Kolkata')::date - 210);
 
 -- the inference engine's view of it: ten bought, barely anything sold
-insert into pharmacy_lot_inference (lot_id, pharmacy_id, expiry_on, qty_in,
+insert into pharmacy_lot_inference (lot_id, pharmacy_id, medicine_id, expiry_on, qty_in,
        inferred_sold, inferred_left, left_low, left_high, confidence, method, per_day, days_live)
-values ('c4250000-0000-4000-8000-000000000425', :'shop',
+values ('c4250000-0000-4000-8000-000000000425', :'shop', 312838,
         (date_trunc('month', (now() at time zone 'Asia/Kolkata'))::date + interval '1 month 9 days')::date,
         10, 0, 10, 8, 10, 0.6, 'inferred', 0.01, 210)
 on conflict (lot_id) do update set inferred_left = 10, per_day = 0.01, qty_in = 10;
@@ -75,10 +77,15 @@ insert into whatsapp_messages (id, sender_phone, sender_type, msg_type, text_bod
 values (gen_random_uuid(), :'phone', 'customer', 'text', '4', 'in',
         'c425-proof-answer', now());
 select status, answered_qty, answer_source from pharmacy_radar_ask where pharmacy_id = :'shop';
-select qty as stock_qty_now from pharmacy_stock where id = 'c4250000-0000-4000-8000-000000000425';
-select reason_code, qty_delta, qty_after, actor_label, ref_kind
-  from pharmacy_stock_move where stock_id = 'c4250000-0000-4000-8000-000000000425'
- order by created_at desc limit 1;
+-- the answer is ground truth for the inference engine, not a shelf edit: #424
+-- records the correction and moves the velocity posterior, and qty (what was
+-- PURCHASED) is deliberately left alone.
+select actual_left, inferred_was, source from pharmacy_lot_correction
+ where lot_id = 'c4250000-0000-4000-8000-000000000425';
+select inferred_left, per_day, method from pharmacy_lot_inference
+ where lot_id = 'c4250000-0000-4000-8000-000000000425';
+select expected_loss as expected_loss_after_the_answer
+  from _c425_rows(:'shop') where stock_id = 'c4250000-0000-4000-8000-000000000425';
 
 -- ── LOOP 3: a forwarded bill photo ──────────────────────────────────────────
 \echo '--- loop 3: a bill photo forwarded to mediBO'
@@ -121,6 +128,9 @@ select
   (select count(*) from pharmacy_radar_ask
     where pharmacy_id = :'shop' and status = 'answered' and answered_qty = 4
       and answer_source = 'whatsapp')                          as answer_applied,
+  (select count(*) from pharmacy_lot_correction
+    where lot_id = 'c4250000-0000-4000-8000-000000000425'
+      and actual_left = 4)                                     as truth_loop_fed,
   (select count(*) from pharmacy_wa_intake
     where pharmacy_id = :'shop' and status = 'read')           as bill_read,
   (select count(*) from pharmacy_radar_send_log

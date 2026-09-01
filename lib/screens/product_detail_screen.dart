@@ -10,6 +10,7 @@ import '../models/product_compare.dart';
 import '../models/product_detail.dart';
 import '../models/product_reviews.dart';
 import '../models/storefront_p3.dart';
+import '../services/storefront_fast_order.dart';
 import '../theme.dart';
 import '../utils/render_log.dart';
 import '../utils/toast.dart';
@@ -131,6 +132,11 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     });
 
     if (res.ok) unawaited(_loadReviews());
+    // CMD #409 — one product open, recorded into the customer's recently-viewed
+    // ring. Fire-and-forget by contract: a customer never waits on, and is
+    // never shown an error from, their own view history. An anonymous viewer
+    // keeps none — the backend refuses it, and that refusal is silent here.
+    if (res.ok) unawaited(StorefrontFastOrder.recordView(widget.productId));
 
     // Only ask about a subscription for a product that cannot be bought —
     // that is the only state where the control exists. Read ONCE.
@@ -231,7 +237,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
         actions: [
           if (showWishlistBtn)
             IconButton(
-              tooltip: d!.label(
+              tooltip: d.label(
                   _wishlisted ? 'pdp_wishlist_remove' : 'pdp_wishlist_add'),
               icon: Icon(
                 _wishlisted ? Icons.favorite : Icons.favorite_border,

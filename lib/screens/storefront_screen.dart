@@ -19,6 +19,7 @@ import '../util.dart';
 import '../utils/render_log.dart';
 import '../widgets/animations.dart';
 import '../widgets/compact_product_card.dart';
+import '../widgets/recently_viewed_rail.dart';
 import '../widgets/compare_tray.dart';
 import '../widgets/home_sections_view.dart'; // C637
 
@@ -1414,11 +1415,21 @@ class _ProductsSection extends StatelessWidget {
     }
     // CHANGE #553 — when the backend sent an empty_label, print it verbatim.
     if (items.isEmpty) {
-      return _EmptyResults(
-        query: query,
-        suggestions: suggestions,
-        onSuggestionTap: onSuggestionTap,
-        backendLabel: emptyLabel,
+      // CMD #409 — a search that found nothing is the one moment a customer
+      // most wants what they were just looking at. The rail draws itself only
+      // when `recently_viewed_rail()` says `has` — signed out, no history, or
+      // everything viewed gone off-sale all render as nothing.
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _EmptyResults(
+            query: query,
+            suggestions: suggestions,
+            onSuggestionTap: onSuggestionTap,
+            backendLabel: emptyLabel,
+          ),
+          const RecentlyViewedRail(),
+        ],
       );
     }
     return LayoutBuilder(

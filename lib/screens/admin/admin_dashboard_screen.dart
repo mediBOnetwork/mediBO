@@ -13,6 +13,7 @@ import 'package:pharma_b2b/widgets/order_hours_card.dart';
 import 'package:pharma_b2b/widgets/notifications_card.dart';
 import '../../design_tokens.dart';
 import '../../models/c529_admin_gaps.dart';
+import '../../widgets/crashes_card.dart'; // CHANGE #473
 import '../../services/ui_copy.dart';
 import 'admin_ops_board_screen.dart';
 import 'command_palette.dart';   // CHANGE #325
@@ -405,6 +406,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   if (_ops.isNotEmpty) _OpsBoardCard(payload: _ops),
                   const OrderHoursCard(),
                   const NotificationsCard(),
+                  // CHANGE #473 — client crashes, last 24h by release. It sits
+                  // with the other two health cards because that is what it is:
+                  // the shipped app's health, next to the platform's. It draws
+                  // nothing at all unless crash_admin_card() says visible.
+                  const CrashesCard(),
                   _sectionLabel(_label('action_required')),
                   _buildActionRequired(),
                   const SizedBox(height: 28),

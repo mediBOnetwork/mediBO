@@ -1,8 +1,14 @@
-// lib/screens/admin/dev_queue/dev_queue_crashes.dart — CHANGE #473
+// lib/widgets/crashes_card.dart — CHANGE #473
 //
 // The Crashes card: the last 24 hours of client crashes, by release, on the
-// super-admin Dev Queue screen — plus the "Send test crash" button that proves
-// the whole path end to end from a real device.
+// Admin Dashboard beside Order Hours and Notifications — plus the "Send test
+// crash" button that proves the whole path end to end from a real device.
+//
+// WHO SEES WHAT IS THE BACKEND'S ANSWER. `crash_admin_card()` returns
+// visible:false for anyone who is not an admin (the card then draws nothing at
+// all, not an access-denied box), and `test_button.enabled` is true only for a
+// super-admin. There is no role check in this file — an ordinary admin is
+// simply handed a payload with no button in it.
 //
 // THE CARD COMPUTES NOTHING. Title, subtitle, state chip, every count label,
 // every tone name, the empty state, the button's own label, its toasts, and —
@@ -22,22 +28,22 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../../../design_tokens.dart';
-import '../../../services/crash_reporting.dart';
-import '../../../utils/render_log.dart';
-import '../../../utils/toast.dart';
-import 'dev_queue_common.dart';
-import 'dev_queue_service.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
-class DevQueueCrashesCard extends StatefulWidget {
-  final DevQueueService service;
-  const DevQueueCrashesCard({super.key, required this.service});
+import '../design_tokens.dart';
+import '../screens/admin/dev_queue/dev_queue_common.dart' show ToneChip, toneByName;
+import '../services/crash_reporting.dart';
+import '../utils/render_log.dart';
+import '../utils/toast.dart';
+
+class CrashesCard extends StatefulWidget {
+  const CrashesCard({super.key});
 
   @override
-  State<DevQueueCrashesCard> createState() => _DevQueueCrashesCardState();
+  State<CrashesCard> createState() => _CrashesCardState();
 }
 
-class _DevQueueCrashesCardState extends State<DevQueueCrashesCard> {
+class _CrashesCardState extends State<CrashesCard> {
   Map<String, dynamic> _card = const <String, dynamic>{};
   bool _loading = true;
   bool _expanded = false;
@@ -57,7 +63,10 @@ class _DevQueueCrashesCardState extends State<DevQueueCrashesCard> {
       // before its own test button can raise anything. Idempotent — the boot
       // call and this one share a single future.
       await CrashReporting.ensureReady();
-      final card = await widget.service.crashCard();
+      final raw = await Supabase.instance.client.rpc('crash_admin_card');
+      final card = raw is Map
+          ? Map<String, dynamic>.from(raw)
+          : const <String, dynamic>{};
       final buffered = await CrashReporting.bufferedCount();
       if (!mounted) return;
       setState(() {
@@ -96,7 +105,11 @@ class _DevQueueCrashesCardState extends State<DevQueueCrashesCard> {
 
   @override
   Widget build(BuildContext context) {
-    if (_loading || _card['ok'] != true) return const SizedBox.shrink();
+    // visible:false is the backend saying "not for this account" — the card
+    // renders nothing rather than an access-denied box.
+    if (_loading || _card['ok'] != true || _card['visible'] != true) {
+      return const SizedBox.shrink();
+    }
     final state = _map(_card['state']);
     final tone = toneByName(_s(state['tone']));
 

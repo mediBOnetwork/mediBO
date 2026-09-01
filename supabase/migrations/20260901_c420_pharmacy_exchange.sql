@@ -23,6 +23,41 @@
 -- the zone fence both HIDES and REFUSES.
 -- Table DDL for these functions lives in the c420_px_schema migration.
 
+CREATE OR REPLACE FUNCTION public._px_book_rider(p_deal uuid)
+ RETURNS uuid
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  d public.px_deal%rowtype;
+  sp public.pharmacy_profiles%rowtype; bp public.pharmacy_profiles%rowtype;
+  cfg public.px_config%rowtype := public._px_config();
+  v_id uuid; v_min int;
+begin
+  select * into d from public.px_deal where id = p_deal;
+  if not found then return null; end if;
+  select * into sp from public.pharmacy_profiles where id = d.seller_id;
+  select * into bp from public.pharmacy_profiles where id = d.buyer_id;
+  v_min := case when d.kind = 'borrow' then cfg.borrow_promise_min
+                else cfg.exchange_promise_min end;
+
+  insert into public.px_delivery_job(
+    deal_id, zone_id, pickup_id, drop_id, pickup_label, drop_label,
+    pickup_lat, pickup_lng, drop_lat, drop_lng, distance_km,
+    promise_min, promised_at, invoice_no, note)
+  values (d.id, d.zone_id, d.seller_id, d.buyer_id,
+          coalesce(sp.pharmacy_name, sp.customer_name),
+          coalesce(bp.pharmacy_name, bp.customer_name),
+          sp.latitude, sp.longitude, bp.latitude, bp.longitude,
+          d.distance_km, v_min, coalesce(d.promise_at, now() + make_interval(mins => v_min)),
+          d.invoice_no, public.ui_text('px.kind_' || d.kind))
+  on conflict (deal_id) do nothing
+  returning id into v_id;
+  return v_id;
+end $function$
+;
+
 CREATE OR REPLACE FUNCTION public._px_borrow_search(p_shop uuid, p_q text, p_qty numeric DEFAULT 1)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -280,6 +315,48 @@ AS $function$
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public._px_job_advance(p_job_id uuid, p_to text, p_receiver text DEFAULT NULL::text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare j public.px_delivery_job%rowtype;
+begin
+  if p_to not in ('assigned','picked','delivered','cancelled') then
+    return jsonb_build_object('ok', false, 'error', 'bad_status',
+      'message', public.ui_text('px.err_bad_status'));
+  end if;
+  update public.px_delivery_job
+     set status = p_to,
+         assigned_at = case when p_to='assigned' then now() else assigned_at end,
+         picked_at   = case when p_to='picked' then now() else picked_at end,
+         delivered_at= case when p_to='delivered' then now() else delivered_at end,
+         receiver_name = coalesce(nullif(btrim(coalesce(p_receiver,'')),''), receiver_name),
+         partner_id = coalesce(partner_id, auth.uid())
+   where id = p_job_id
+  returning * into j;
+  if not found then
+    return jsonb_build_object('ok', false, 'error','not_found',
+      'message', public.ui_text('px.err_deal_not_found'));
+  end if;
+
+  -- the deal follows the job: one truth about where the goods are
+  update public.px_deal
+     set status = case p_to when 'picked' then 'dispatched'
+                            when 'delivered' then 'delivered'
+                            when 'cancelled' then 'cancelled'
+                            else status end,
+         dispatched_at = case when p_to='picked' then now() else dispatched_at end,
+         delivered_at  = case when p_to='delivered' then now() else delivered_at end
+   where id = j.deal_id;
+
+  return jsonb_build_object('ok', true, 'status', p_to,
+    'status_label', public.ui_text('px.job_' || p_to),
+    'message', public.ui_text('px.job_updated'));
+end $function$
+;
+
 CREATE OR REPLACE FUNCTION public._px_move_stock(p_pharmacy uuid, p_stock_id uuid, p_delta numeric, p_reason text, p_ref_kind text, p_ref_id text, p_note text)
  RETURNS numeric
  LANGUAGE plpgsql
@@ -348,7 +425,7 @@ declare
   v_fy text; v_seq bigint; v_no text;
   v_gst numeric; v_taxable numeric; v_total numeric; v_fee numeric;
   v_buyer_stock uuid; v_after numeric; v_seller_stock uuid;
-  v_dist jsonb; v_promise int; v_expiry_on date; v_mrp numeric;
+  v_dist jsonb; v_promise int; v_expiry_on date; v_mrp numeric; v_job uuid;
 begin
   select * into d from public.px_deal where id = p_deal for update;
   if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
@@ -366,9 +443,7 @@ begin
     return jsonb_build_object('ok', false, 'error', 'gone',
       'message', public.ui_text('px.err_listing_gone'));
   end if;
-  v_seller_stock := l.stock_id;
-  v_expiry_on := l.expiry_on;
-  v_mrp := l.mrp;
+  v_seller_stock := l.stock_id; v_expiry_on := l.expiry_on; v_mrp := l.mrp;
 
   v_gst     := coalesce(d.gst_percent, 0);
   v_taxable := round(d.qty * d.unit_price, 2);
@@ -379,7 +454,6 @@ begin
   v_seq := public._px_next_invoice(d.seller_id, v_fy);
   v_no  := cfg.invoice_prefix || '/' || v_fy || '/' || lpad(v_seq::text, 5, '0');
 
-  -- seller's shelf: a sale
   v_after := public._px_move_stock(d.seller_id, v_seller_stock, -d.qty,
                case when d.kind = 'exchange' then 'px_exchange_out' else 'px_borrow_out' end,
                'px_deal', d.id::text || ':out', v_no);
@@ -394,7 +468,6 @@ begin
          closed_at = case when qty_remaining - d.qty <= 0 then now() else closed_at end
    where id = l.id;
 
-  -- buyer's shelf: a receipt from outside, same batch, same expiry
   v_buyer_stock := public._px_buyer_stock_row(
     d.buyer_id, d.medicine_id, d.product_name, d.pack_label,
     d.batch_no, d.expiry, v_expiry_on, d.unit_price, v_mrp);
@@ -407,8 +480,7 @@ begin
                     else cfg.exchange_promise_min end;
 
   update public.px_deal
-     set status = 'accepted',
-         fy = v_fy, invoice_seq = v_seq, invoice_no = v_no,
+     set status = 'accepted', fy = v_fy, invoice_seq = v_seq, invoice_no = v_no,
          taxable = v_taxable,
          cgst = round(v_taxable * v_gst / 200.0, 2),
          sgst = round(v_taxable * v_gst / 200.0, 2),
@@ -430,9 +502,14 @@ begin
           auth.uid())
   on conflict (deal_id) do nothing;
 
+  -- the rider, in the SAME transaction: goods never leave a shelf without a
+  -- courier task that says where they are going and by when
+  v_job := public._px_book_rider(d.id);
+
   perform public.px_invoice_request(d.id);
 
   return jsonb_build_object('ok', true, 'deal_id', d.id, 'invoice_no', v_no,
+    'job_id', v_job,
     'total_display', public.inr_money(v_total),
     'promise_label', public.ui_fmt('px.promise_label',
       jsonb_build_object('min', v_promise::text)),
@@ -446,6 +523,13 @@ CREATE OR REPLACE FUNCTION public._px_today()
  LANGUAGE sql
  STABLE
 AS $function$ select (now() at time zone 'Asia/Kolkata')::date; $function$
+;
+
+CREATE OR REPLACE FUNCTION public.khata_fmt(p_key text, p_vars jsonb)
+ RETURNS text
+ LANGUAGE sql
+ STABLE
+AS $function$ select public.ui_fmt(p_key, p_vars); $function$
 ;
 
 CREATE OR REPLACE FUNCTION public.px_accept_listing(p_listing_id uuid, p_qty numeric, p_client_action_id uuid DEFAULT NULL::uuid)
@@ -716,6 +800,44 @@ begin
       'message', public.ui_text('px.declined_toast'));
   end if;
   return public._px_settle(d.id);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.px_delivery_queue(p_zone smallint DEFAULT NULL::smallint)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_rows jsonb;
+begin
+  if not public.am_i_super() and public.get_my_role() not in ('admin','delivery') then
+    return jsonb_build_object('ok', false, 'error', 'denied',
+      'message', public.ui_text('px.err_denied'));
+  end if;
+  select coalesce(jsonb_agg(jsonb_build_object(
+      'job_id', j.id, 'deal_id', j.deal_id,
+      'status_label', public.ui_text('px.job_' || j.status),
+      'status_tone', case j.status when 'delivered' then 'success'
+                                   when 'queued' then 'warning' else 'info' end,
+      'pickup', j.pickup_label, 'drop', j.drop_label,
+      'invoice_no', j.invoice_no,
+      'distance_label', case when j.distance_km is null then null
+          else public.ui_fmt('px.distance_label',
+                 jsonb_build_object('km', to_char(j.distance_km,'FM990.0'))) end,
+      'promise_label', public.ui_fmt('px.promise_by',
+          jsonb_build_object('at', to_char(j.promised_at at time zone 'Asia/Kolkata','HH24:MI'))),
+      'overdue', j.status <> 'delivered' and j.promised_at < now())
+      order by j.promised_at), '[]'::jsonb)
+    into v_rows
+    from public.px_delivery_job j
+   where j.status <> 'cancelled'
+     and (p_zone is null or j.zone_id = p_zone);
+
+  return jsonb_build_object('ok', true,
+    'title', public.ui_text('px.queue_title'),
+    'rows', v_rows,
+    'empty', jsonb_build_object('title', public.ui_text('px.queue_empty')));
 end $function$
 ;
 
@@ -1006,6 +1128,21 @@ begin
 end $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.px_job_advance(p_job_id uuid, p_to text, p_receiver text DEFAULT NULL::text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+begin
+  if not public.am_i_super() and public.get_my_role() not in ('admin','delivery') then
+    return jsonb_build_object('ok', false, 'error', 'denied',
+      'message', public.ui_text('px.err_denied'));
+  end if;
+  return public._px_job_advance(p_job_id, p_to, p_receiver);
+end $function$
+;
+
 CREATE OR REPLACE FUNCTION public.px_list_stock(p_stock_id uuid, p_qty numeric, p_unit_price numeric, p_note text DEFAULT NULL::text)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -1100,9 +1237,10 @@ declare
   A uuid; B uuid;
   v_zone smallint := 1; v_other_zone smallint := 2;
   sA uuid; sB uuid;
-  v_listing uuid; v_deal uuid; v_res jsonb; v_rows jsonb;
+  v_listing uuid; v_deal uuid; v_deal2 uuid; v_res jsonb; v_rows jsonb;
   v_steps jsonb := '[]'::jsonb; v_pass boolean := true; v_ok boolean;
   v_qA numeric; v_qB numeric; v_disc text; v_inv text; v_leak boolean;
+  v_job uuid; v_jstatus text; v_dstatus text;
 begin
   delete from public.pharmacy_profiles where customer_code in ('C420A','C420B');
 
@@ -1141,7 +1279,6 @@ begin
           public._px_today() + 400, 12, 240.00, 320.00, 'opening', public._px_today())
   returning id into sB;
 
-  -- ══ LOOP 1 — DEAD-STOCK EXCHANGE ════════════════════════════════════════
   insert into public.px_listing(
       seller_id, zone_id, stock_id, product_name, pack_label,
       batch_no, expiry, expiry_on, qty_listed, qty_remaining, unit_price,
@@ -1159,7 +1296,6 @@ begin
     'pass', v_ok, 'disclosure', v_disc);
   v_pass := v_pass and v_ok;
 
-  -- B browses A's zone and SEES it, batch and expiry on the row
   v_res := public._px_browse(B, 'C420 Amox', 20);
   v_rows := v_res->'rows';
   v_ok := coalesce((v_res->>'ok')::boolean,false)
@@ -1208,6 +1344,22 @@ begin
     'pass', v_ok, 'stored', v_disc);
   v_pass := v_pass and v_ok;
 
+  -- 6: the courier job, and the deal following it
+  select id, status into v_job, v_jstatus from public.px_delivery_job where deal_id = v_deal;
+  v_ok := v_job is not null and v_jstatus = 'queued';
+  perform public._px_job_advance(v_job, 'picked');
+  select status into v_dstatus from public.px_deal where id = v_deal;
+  v_ok := v_ok and v_dstatus = 'dispatched';
+  perform public._px_job_advance(v_job, 'delivered', 'C420 Beta counter');
+  select status into v_dstatus from public.px_deal where id = v_deal;
+  v_ok := v_ok and v_dstatus = 'delivered';
+  v_steps := v_steps || jsonb_build_object(
+    'step','6 rider job booked; deal follows it to dispatched then delivered',
+    'pass', v_ok, 'job_status_at_accept', v_jstatus, 'deal_status_at_end', v_dstatus,
+    'promise', (select to_char(promised_at at time zone 'Asia/Kolkata','HH24:MI')
+                  from public.px_delivery_job where id = v_job));
+  v_pass := v_pass and v_ok;
+
   -- ══ LOOP 2 — EMERGENCY BORROW ═══════════════════════════════════════════
   v_res := public._px_borrow_search(A, 'C420 Insulin', 1);
   v_rows := v_res->'rows';
@@ -1216,11 +1368,14 @@ begin
           and (v_rows->0->>'seller_name') = 'C420 Beta Chemists'
           and (v_rows->0->>'has_enough') = 'true'
           and (v_rows->0->>'distance_hint') is not null;
-  v_leak := coalesce((v_rows->0) ? 'qty', false)
-            or coalesce((v_rows->0) ? 'qty_remaining', false)
-            or coalesce((v_rows->0)::text like '%12%', false);
+  select exists (
+           select 1 from jsonb_each_text(coalesce(v_rows->0,'{}'::jsonb)) kv
+            where kv.key ~* '(qty|quantity|stock_level|on_hand|balance)'
+               or (kv.key <> 'stock_id' and kv.key <> 'pharmacy_id'
+                   and kv.value = '12'))
+         into v_leak;
   v_steps := v_steps || jsonb_build_object(
-    'step','6 borrow search: who + distance + ETA, and NO stock level',
+    'step','7 borrow search: who + distance + ETA, and NO stock level',
     'pass', v_ok and not v_leak, 'leaked_their_qty', v_leak,
     'seller', v_rows->0->>'seller_name', 'distance', v_rows->0->>'distance_hint',
     'promise', v_rows->0->>'promise_label', 'basis', v_rows->0->>'price_basis',
@@ -1242,43 +1397,40 @@ begin
       batch_no, expiry, qty, unit_price, line_amount, gst_percent)
   values ('borrow', v_listing, B, A, v_zone, 'C420 Insulin Pen', '1 pen',
           'N9', '11/27', 1, 320.00, 320.00, 5)
-  returning id into v_deal;
+  returning id into v_deal2;
 
-  v_res := public._px_settle(v_deal);
+  v_res := public._px_settle(v_deal2);
   select qty into v_qB from public.pharmacy_stock where id = sB;
   select coalesce(sum(qty),0) into v_qA from public.pharmacy_stock
    where pharmacy_id = A and batch_no = 'N9';
-  v_ok := coalesce((v_res->>'ok')::boolean,false) and v_qB = 11 and v_qA = 1;
+  v_ok := coalesce((v_res->>'ok')::boolean,false) and v_qB = 11 and v_qA = 1
+          and (v_res->>'job_id') is not null;
   v_steps := v_steps || jsonb_build_object(
-    'step','7 borrow accepted -> pen moves B->A, invoiced, rider promised',
+    'step','8 borrow accepted -> pen moves B->A, invoiced, rider booked',
     'pass', v_ok, 'lender_12_to_11', v_qB, 'borrower_0_to_1', v_qA,
-    'invoice', (select invoice_no from public.px_deal where id = v_deal),
+    'invoice', (select invoice_no from public.px_deal where id = v_deal2),
     'promise', v_res->>'promise_label', 'distance', v_res->'distance'->>'label');
   v_pass := v_pass and v_ok;
 
   select count(*) = 4 into v_ok from public.pharmacy_stock_move
    where ref_kind = 'px_deal' and pharmacy_id in (A,B)
      and reason_code in ('px_exchange_out','px_exchange_in','px_borrow_out','px_borrow_in');
-  v_steps := v_steps || jsonb_build_object('step','8 four ledger rows — every movement documented',
+  v_steps := v_steps || jsonb_build_object('step','9 four ledger rows — every movement documented',
     'pass', v_ok,
     'rows', (select count(*) from public.pharmacy_stock_move
               where ref_kind='px_deal' and pharmacy_id in (A,B)));
   v_pass := v_pass and v_ok;
 
-  -- ══ THE FENCE ═══════════════════════════════════════════════════════════
-  -- B moves to another zone. The search must still SUCCEED for A (ok:true) and
-  -- simply not see B — "no rows" and "refused" must not look the same.
   update public.pharmacy_profiles set zone_id = v_other_zone where id = B;
   v_res := public._px_borrow_search(A, 'C420 Insulin', 1);
   v_ok := coalesce((v_res->>'ok')::boolean,false)
           and jsonb_array_length(coalesce(v_res->'rows','[]'::jsonb)) = 0;
   v_steps := v_steps || jsonb_build_object(
-    'step','9 zone fence: search still OK, B invisible',
+    'step','10 zone fence: search still OK, B invisible',
     'pass', v_ok, 'ok', v_res->>'ok',
     'rows', jsonb_array_length(coalesce(v_res->'rows','[]'::jsonb)));
   v_pass := v_pass and v_ok;
 
-  -- and a cross-zone deal is refused outright, not merely hidden
   insert into public.px_deal(
       kind, listing_id, seller_id, buyer_id, zone_id, product_name,
       batch_no, expiry, qty, unit_price, line_amount, gst_percent)
@@ -1289,10 +1441,12 @@ begin
   v_ok := coalesce((v_res->>'ok')::boolean,true) = false
           and (v_res->>'error') = 'not_eligible';
   v_steps := v_steps || jsonb_build_object(
-    'step','10 cross-zone settlement refused, not silently allowed',
+    'step','11 cross-zone settlement refused, not silently allowed',
     'pass', v_ok, 'error', v_res->>'error', 'message', v_res->>'message');
   v_pass := v_pass and v_ok;
 
+  delete from public.px_delivery_job where deal_id in
+    (select id from public.px_deal where seller_id in (A,B) or buyer_id in (A,B));
   delete from public.px_disclosure where deal_id in
     (select id from public.px_deal where seller_id in (A,B) or buyer_id in (A,B));
   delete from public.px_deal where seller_id in (A,B) or buyer_id in (A,B);
@@ -1305,7 +1459,7 @@ begin
 
   return jsonb_build_object('ok', v_pass, 'steps', v_steps,
     'summary', case when v_pass
-      then 'two seeded pharmacies, both loops: list -> browse with batch+expiry -> buy -> invoice on both GSTINs -> both shelves move; borrow search leaks no stock level -> accept -> pen moves + invoiced; zone fence hides AND refuses'
+      then 'two seeded pharmacies, both loops: list -> browse with batch+expiry -> buy -> invoice on both GSTINs -> both shelves move -> rider booked and followed to delivered; borrow search leaks no stock level; zone fence hides AND refuses'
       else 'one or more steps failed' end);
 end $function$
 ;

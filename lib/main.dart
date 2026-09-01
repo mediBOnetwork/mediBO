@@ -631,15 +631,29 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
               // the URL. Authorisation is untouched: every destination screen
               // still gates on its own RPCs.
               if (name.startsWith('/admin/go/')) {
-                final key = name
+                // CMD #421 — the path may carry a SUBJECT after the route key:
+                // `/admin/go/customer_360/<pharmacy id>`. This used to
+                // `replaceAll('/', '')` the whole tail, which welded the id
+                // onto the key and produced a route nothing recognises. Split
+                // on the separator instead: the first segment is the key, the
+                // rest is the subject (rejoined, so an id that contains a
+                // slash survives), and dropping empty segments keeps a
+                // trailing slash harmless exactly as the old replaceAll did.
+                final segments = name
                     .substring('/admin/go/'.length)
                     .split('?')
                     .first
-                    .replaceAll('/', '');
+                    .split('/')
+                    .where((s) => s.isNotEmpty)
+                    .toList();
+                final key = segments.isEmpty ? '' : segments.first;
+                final seed =
+                    segments.length > 1 ? segments.sublist(1).join('/') : null;
                 if (key.isNotEmpty) {
-                  PendingAdminNav.route = key;
+                  PendingAdminNav.park(key, seed);
                   try {
-                    RenderLog.write('c325_deep_link', key);
+                    RenderLog.write(
+                        'c325_deep_link', seed == null ? key : '$key/$seed');
                   } catch (_) {}
                   return MaterialPageRoute(
                     settings: settings,

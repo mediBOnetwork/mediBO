@@ -56,6 +56,8 @@ import 'admin/admin_scope_audit_screen.dart'; // CHANGE #227
 import 'admin/admin_order_closure_screen.dart'; // CHANGE #229
 import 'admin/admin_gst_screen.dart'; // CHANGE #320
 import 'admin/admin_reviews_screen.dart'; // CMD #410: review & Q&A moderation
+import 'admin/admin_customer_360_screen.dart'; // CMD #421: the customer_360 link
+import 'admin/admin_stock_on_hand_screen.dart'; // CMD #421: the stock_on_hand link
 import '../features/whatsapp/ui/wa_home_screen.dart';
 import '../features/whatsapp/ui/wa_templates_screen.dart';
 import 'admin/wa_campaigns_screen.dart';
@@ -649,16 +651,23 @@ class _HomeShellState extends State<HomeShell> {
     if (route == null || route.isEmpty) return;
     if (!UserState.of(context).isAdmin && !_selfGatedRoutes.contains(route)) {
       PendingAdminNav.route = route; // not ours to open — leave it parked
-      return;
+      return;                        // its seed stays parked with it
     }
+    // CMD #421 — the subject is read ONLY on the branch that opens, so a link
+    // parked back above still has it when the admin check resolves a frame
+    // later. The URL is gone by then; this is the only copy.
+    final seed = PendingAdminNav.takeSeed();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       RenderLog.write('c325_deep_link_opened', route);
-      _handleAdminNav(route);
+      _handleAdminNav(route, seed);
     });
   }
 
-  void _handleAdminNav(String route) {
+  /// [seed] is the subject a route carries, when it has one — see
+  /// PendingAdminNav.seed. Optional because most routes are a whole
+  /// destination by themselves.
+  void _handleAdminNav(String route, [String? seed]) {
     if (!mounted) return;
     switch (route) {
       case 'home': _goHome(); break;
@@ -737,6 +746,35 @@ class _HomeShellState extends State<HomeShell> {
       case 'reviews':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const AdminReviewsScreen()));
+        break;
+      // CMD #421 — the two screens CHANGE #865 (#396) shipped. They were
+      // reachable from the dashboard tile, the palette and the payment panel,
+      // but not from the shell's route table, so /admin/go/customer_360/<id>
+      // and /admin/go/stock_on_hand — a push notification, a WhatsApp button,
+      // a pasted link — landed on a key the switch had never heard of and did
+      // nothing at all. Both are PUSHED rather than swapped into the tab
+      // table, the same call the dashboard makes, because customer_360 carries
+      // a subject and a tab index cannot hold one.
+      case 'customer_360':
+        {
+        // No id means no customer to show. The dashboard answers that by
+        // opening the palette to ask for one; the shell has no palette of its
+        // own, so it opens the customers list — the surface you would search
+        // from — instead of pushing a screen with nothing in it.
+        final id = (seed ?? '').trim();
+        if (id.isEmpty) {
+          setState(() { _index = 6; _cartOpen = false; });
+          break;
+        }
+        Navigator.push(
+            context,
+            MaterialPageRoute(
+                builder: (_) => AdminCustomer360Screen(customerId: id)));
+        break;
+        }
+      case 'stock_on_hand':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const AdminStockOnHandScreen()));
         break;
       // CMD #411 — the pharmacy counter (POS). Reached from the account menu
       // via pos_entry(); this case also makes /admin/go/pos work. pos_home()

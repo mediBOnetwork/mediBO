@@ -144,7 +144,27 @@ create policy supplier_bills_own_read on storage.objects
                       where pb.file_path = storage.objects.name
                         and pb.supplier_id = (public.my_supplier_id())::text));
 -- ═══════════════════════════════════════════════════════════════════════════
--- 6. THE DEBIT ROWS — ONE SET, TWO SOURCES
+-- 4. WHO IS ASKING
+-- ═══════════════════════════════════════════════════════════════════════════
+create or replace function public._c403_me()
+returns uuid language sql stable security definer set search_path to 'public' as $fn$
+  select case when public.supplier_can('supplier.records','read')
+              then public.my_supplier_id() end
+$fn$;
+
+create or replace function public._c403_supplier_name(p_supplier uuid)
+returns text language sql stable security definer set search_path to 'public' as $fn$
+  select coalesce(sp.supplier_name,'') from public.supplier_profiles sp where sp.id = p_supplier
+$fn$;
+
+create or replace function public._c403_denied()
+returns jsonb language sql stable security definer set search_path to 'public' as $fn$
+  select jsonb_build_object('ok', false, 'error', 'not_authorized',
+                            'message', public.ui_text('supplier_records.err_not_authorized'))
+$fn$;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 5. THE DEBIT ROWS — ONE SET, TWO SOURCES
 --    A debit against a supplier can be raised two ways today: the customer
 --    return (#395) on an item HE supplied, and the short/damage adjustment the
 --    dispute matrix already stamps onto his own supplier order. Both are the
@@ -212,27 +232,7 @@ language sql stable security definer set search_path to 'public' as $fn$
      and coalesce(d.adj_amount, 0) > 0
 $fn$;
 -- ═══════════════════════════════════════════════════════════════════════════
--- 4. WHO IS ASKING
--- ═══════════════════════════════════════════════════════════════════════════
-create or replace function public._c403_me()
-returns uuid language sql stable security definer set search_path to 'public' as $fn$
-  select case when public.supplier_can('supplier.records','read')
-              then public.my_supplier_id() end
-$fn$;
-
-create or replace function public._c403_supplier_name(p_supplier uuid)
-returns text language sql stable security definer set search_path to 'public' as $fn$
-  select coalesce(sp.supplier_name,'') from public.supplier_profiles sp where sp.id = p_supplier
-$fn$;
-
-create or replace function public._c403_denied()
-returns jsonb language sql stable security definer set search_path to 'public' as $fn$
-  select jsonb_build_object('ok', false, 'error', 'not_authorized',
-                            'message', public.ui_text('supplier_records.err_not_authorized'))
-$fn$;
-
--- ═══════════════════════════════════════════════════════════════════════════
--- 5. THE DOCUMENT PAYLOAD
+-- 6. THE DOCUMENT PAYLOAD
 --    One generic shape for all three kinds: a header block, one or more
 --    column/row sections, a totals ladder and notes. The renderer draws it and
 --    names nothing itself — every label below comes out of ui_copy.

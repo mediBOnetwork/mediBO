@@ -805,6 +805,15 @@ class _HomeShellState extends State<HomeShell> {
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const PharmacyStockScreen()));
         break;
+      // CMD #432 — the shop's UPI ID and its printable counter QR. Reached
+      // from the counter's own app bar (and from the payment chips when UPI is
+      // picked with no confirmed VPA); this case is what makes
+      // /admin/go/pos_upi resolve. pharmacy_upi_get() gates on the caller's own
+      // pharmacy and the screen renders its refusal, so there is no role test
+      // here — same story as pos and pharmacy_stock.
+      case 'pos_upi':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const PosUpiSetupScreen()));
       // CMD #427 — THE PRICE CHECK. Also reachable from the vault's app bar;
       // this case is what gives it an address, so a monthly WhatsApp note or a
       // push about a rate can point straight at /admin/go/price_check.

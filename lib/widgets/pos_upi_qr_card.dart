@@ -93,6 +93,11 @@ class UpiQrImage extends StatelessWidget {
   final double size;
   const UpiQrImage({super.key, required this.view, this.size = 200});
 
+  // White is not a theme choice here and does not follow the design tokens on
+  // purpose: a QR is only reliably scannable as dark modules on a white quiet
+  // zone, and a phone camera reading a surface-tinted code in dark mode fails.
+  // It is the one place in this file where the pixels have a job other than
+  // looking right.
   @override
   Widget build(BuildContext context) => Container(
     width: size,

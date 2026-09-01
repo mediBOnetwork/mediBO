@@ -18,6 +18,7 @@ import 'package:flutter/material.dart';
 import '../../design_tokens.dart';
 import '../../utils/render_log.dart';
 import '../../utils/toast.dart';
+import '../../widgets/backend_error_view.dart';
 
 /// `feature_gaps_list(p_surface, p_type, p_severity, p_status, p_sort)`.
 typedef FeatureGapsListRpc =
@@ -49,7 +50,14 @@ class _FeatureGapsScreenState extends State<FeatureGapsScreen> {
   Map<String, dynamic>? _data;
   bool _loading = true;
   bool _busy = false;
-  String? _error;
+
+  /// CHANGE #459 · GAP 179 — this used to be `String? _error` holding
+  /// `'$e'`, and a signed-out visit printed the driver's own sentence
+  /// ("PostgrestException(message: permission denied for function
+  /// feature_gaps_list, code: 42501, ...)") centred on the page. The RPC was
+  /// refusing correctly; the screen was the bug. Now only the CODE survives
+  /// the catch, and the copy comes from the backend.
+  BackendError? _error;
 
   @override
   void initState() {
@@ -85,7 +93,7 @@ class _FeatureGapsScreenState extends State<FeatureGapsScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = '$e';
+        _error = BackendError.from(e);
         _loading = false;
       });
     }
@@ -107,7 +115,7 @@ class _FeatureGapsScreenState extends State<FeatureGapsScreen> {
       res = await widget.statusRpc(
           (row['id'] as num?)?.toInt() ?? 0, _statusFor(action));
     } catch (e) {
-      res = <String, dynamic>{'ok': false, 'message': '$e'};
+      res = <String, dynamic>{'ok': false, 'message': BackendError.from(e).body};
     }
     if (!mounted) return;
     setState(() => _busy = false);
@@ -139,7 +147,10 @@ class _FeatureGapsScreenState extends State<FeatureGapsScreen> {
       body: _loading
           ? const _Skeleton()
           : _error != null
-              ? _ErrorState(message: _error!, onRetry: _load)
+              ? BackendErrorView(
+                  error: _error!,
+                  onAction: _error!.isRefusal ? null : _load,
+                )
               : RefreshIndicator(
                   onRefresh: _load,
                   child: ListView(
@@ -531,26 +542,3 @@ class _Skeleton extends StatelessWidget {
   }
 }
 
-class _ErrorState extends StatelessWidget {
-  final String message;
-  final VoidCallback onRetry;
-  const _ErrorState({required this.message, required this.onRetry});
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: EdgeInsets.all(Ds.space.x24),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Text(message, style: Ds.t.caption, textAlign: TextAlign.center),
-          SizedBox(height: Ds.space.x16),
-          SizedBox(
-            height: Ds.touch.minTarget,
-            child: OutlinedButton(
-                onPressed: onRetry, child: const Icon(Icons.refresh)),
-          ),
-        ]),
-      ),
-    );
-  }
-}

@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../design_tokens.dart';
+import '../utils/render_log.dart';
 
 /// Every user-visible string that has no dedicated RPC field lives in the
 /// `ui_copy` table and arrives through `ui_copy_all()`.
@@ -138,5 +139,32 @@ String cf(String key, Map<String, String> vars) {
   var s = UiCopy.t(key);
   if (s.isEmpty) return '';
   vars.forEach((k, v) => s = s.replaceAll('{$k}', v));
-  return s;
+  return _stripUnresolved(key, s);
+}
+
+/// CMD #633 — a placeholder the caller never filled must never reach a reader.
+///
+/// The bug this closes: the customer tab caught a failed load and rendered
+/// `cf('admin_customer.failed_to_load', {'a': '$e'})` while the backend
+/// template says `Failed to load: {e}`. Nothing matched, so the storefront
+/// showed a red banner reading the TEMPLATE — "Failed to load: {e}" — to
+/// anyone who opened an unknown path on medibo.in.
+///
+/// The wording still belongs entirely to the backend: this removes the
+/// unfilled slot and the separator it leaves dangling, and invents no words of
+/// its own. The miss is reported on the render log under `c633_raw_placeholder`
+/// so the permanent journey can see it happen instead of waiting for a
+/// screenshot to catch one.
+final RegExp _kPlaceholder = RegExp(r'\{[A-Za-z0-9_.]+\}');
+
+String _stripUnresolved(String key, String s) {
+  if (!_kPlaceholder.hasMatch(s)) return s;
+  try {
+    RenderLog.write('c633_raw_placeholder', key);
+  } catch (_) {}
+  var out = s.replaceAll(_kPlaceholder, '');
+  out = out.replaceAll(RegExp(r'[ \t]{2,}'), ' ').trim();
+  // "Failed to load: {e}" would otherwise end on a naked colon.
+  out = out.replaceAll(RegExp(r'[:,\-\u2013\u2014]\s*$'), '').trim();
+  return out;
 }

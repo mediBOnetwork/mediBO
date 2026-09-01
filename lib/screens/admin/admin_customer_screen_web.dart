@@ -18,6 +18,7 @@ import '../../utils/file_pick_io.dart' as filepick;
 
 import '../../utils/download_bytes.dart'; // CHANGE #463
 import '../../utils/render_log.dart';
+import '../../user_state.dart'; // CMD #633 — the session gate below
 import '../../design_tokens.dart'; // CHANGE #238 — Ds tokens for the new panel chrome
 import '../../models/order_item_panel_view.dart'; // CHANGE #238
 import '../../fulfill/fulfill_lookups.dart'; // C639: backend-owned entry label
@@ -653,9 +654,8 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     FulfillLookups.instance.ensureLoaded().then((_) {
       if (mounted) setState(() {});
     });
-    _load();
-    _subscribeRealtime();
-    _loadSLeadsTotal();
+    // CMD #633 — the first fetch moved to didChangeDependencies, where the
+    // session is actually readable. See _bootForAdminOnce below.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         RenderLog.write('c322_build', 322);
@@ -665,6 +665,35 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
         RenderLog.write('c246_single_dropdown', 'single_open_enforced=true');
       }
     });
+  }
+
+  /// CMD #633 — an admin tab must not fetch admin data for a visitor who is
+  /// not an admin.
+  ///
+  /// HomeShell builds this screen as one of an IndexedStack's children, and an
+  /// IndexedStack builds EVERY child, so initState here ran for anonymous
+  /// visitors too: admin_customer_screen_data was called on a signed-out boot,
+  /// refused, and the catch showed a red error toast on the public storefront —
+  /// which is exactly what a shopper saw on medibo.in/<anything-unknown>.
+  ///
+  /// The gate lives in didChangeDependencies rather than initState because the
+  /// session is an inherited dependency: this runs again the moment auth
+  /// resolves to an admin, so a real admin still loads on open (and loads once,
+  /// not on every rebuild).
+  bool _bootedForAdmin = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_bootedForAdmin) return;
+    if (!UserState.of(context).isAdmin) {
+      RenderLog.write('c633_anon_boot', 'admin_fetch=0');
+      return;
+    }
+    _bootedForAdmin = true;
+    _load();
+    _subscribeRealtime();
+    _loadSLeadsTotal();
   }
 
   void _onScreenFocus() {
@@ -1037,7 +1066,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
-        showToast(context, cf('admin_customer.failed_to_load', {'a': '$e'}), isError: true);
+        showToast(context, cf('admin_customer.failed_to_load', {'e': '$e'}), isError: true);
       }
     } finally {
       _loadInFlight = false;

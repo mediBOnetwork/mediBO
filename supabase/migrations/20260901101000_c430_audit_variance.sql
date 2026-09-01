@@ -742,15 +742,24 @@ end $$;
 -- ─────────────────────────────────────────────────────────────────────────────
 create or replace function public.pharmacy_audit_entry()
 returns jsonb language plpgsql security definer set search_path to 'public' as $$
-declare v_shop uuid := public._c430_shop(); v_open uuid;
+declare v_shop uuid := public._c430_shop(); v_open uuid; v_left integer;
 begin
   if v_shop is null then return jsonb_build_object('ok', true, 'show', false); end if;
   select id into v_open from public.pharmacy_count_session
    where pharmacy_id = v_shop and status = 'open' order by started_at desc limit 1;
+  if v_open is not null then
+    select count(*) into v_left from public.pharmacy_count_line
+     where session_id = v_open and counted_qty is null;
+  end if;
   return jsonb_build_object('ok', true, 'show', true,
     'label', public.ui_text('phaudit.nav_label'),
     'sub_label', public.ui_text('phaudit.nav_sub'),
-    'badge', case when v_open is not null then public.ui_text('phaudit.open_title') end,
+    -- A badge rides on an app-bar icon, so it is a NUMBER, never a sentence:
+    -- "Count in progress" printed over the neighbouring icons the first time
+    -- this shipped. How many are still uncounted is the useful number anyway.
+    'badge', case when coalesce(v_left,0) > 0 then v_left::text end,
+    'state_label', case when v_open is not null
+                        then public.ui_text('phaudit.open_title') end,
     'route_key', 'pharmacy_audit');
 end $$;
 

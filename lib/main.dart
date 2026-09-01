@@ -6,6 +6,7 @@ import 'widgets/app_update_prompt.dart';
 import 'widgets/update_bar.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -14,6 +15,7 @@ import 'app_state.dart';
 import 'order_hours_state.dart';
 import 'inquiry_lock_state.dart';
 import 'url_sync.dart' show captureInitialPath;
+import 'services/crash_reporting.dart'; // CHANGE #473
 import 'services/version_watcher.dart';
 import 'utils/render_log.dart';
 import 'view_as_state.dart';
@@ -89,6 +91,12 @@ void main() {
         final msg = details.exceptionAsString();
         RenderLog.write('flutter_error', msg.length > 120 ? msg.substring(0, 120) : msg);
       } catch (_) {}
+      // CHANGE #473 — the same error, off the device: to Sentry when a DSN
+      // exists, to the backend crash queue when it does not. Swallowed as
+      // before, so reporting can never be the thing that white-screens a boot.
+      try {
+        CrashReporting.captureFlutterError(details);
+      } catch (_) {}
     };
 
     captureInitialPath(); // must be called BEFORE usePathUrlStrategy() resets pathname
@@ -99,6 +107,11 @@ void main() {
       await Supabase.initialize(
         url: SupabaseConfig.url,
         anonKey: SupabaseConfig.anonKey,
+        // CHANGE #473 — RPC breadcrumbs. Wrapping the one client every RPC
+        // already uses records the function name, status and duration of each
+        // call with no change at a single call site. It reads the URL and the
+        // status code only: never a request body, never a response body.
+        httpClient: CrashReporting.breadcrumbHttpClient(),
         authOptions: const FlutterAuthClientOptions(
           authFlowType: AuthFlowType.pkce,
           autoRefreshToken: true,
@@ -140,6 +153,19 @@ void main() {
       if (changeNum != null) RenderLog.write('change', changeNum);
     } catch (_) {
       RenderLog.setBuildHash('unknown');
+    }
+
+    // CHANGE #473 — client crash reporting. Started here, after version.json,
+    // so the build commit can ride along as a tag; the RELEASE itself is the
+    // CHANGE number baked in at build time by deploy.sh. Crash-isolated: with
+    // no DSN this is the local-queue path, and a failure leaves the app running.
+    try {
+      await CrashReporting.init(
+        platform: kIsWeb ? 'web' : defaultTargetPlatform.name,
+        buildCommit: RenderLog.buildHash,
+      );
+    } catch (_) {
+      try { RenderLog.write('boot_error', 'crash_reporting_failed'); } catch (_) {}
     }
     // CHANGE #559: pick up anything the pre-Flutter JS instrumentation recorded
     // before/while the page left for Google, in case its keepalive write was
@@ -265,6 +291,12 @@ void main() {
       final msg = error.toString();
       RenderLog.write('boot_zone_error', msg.length > 120 ? msg.substring(0, 120) : msg);
     } catch (_) {}
+    // CHANGE #473 — and reported. This is the handler that sees the crashes
+    // nobody could see before: an uncaught async failure on a pharmacist's
+    // phone, which used to end at a swallowed log line.
+    try {
+      CrashReporting.captureError(error, stack);
+    } catch (_) {}
   });
 }
 
@@ -333,6 +365,12 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
 
   void _onAuthChanged() {
     _maybeShowForcedLogout();
+    // CHANGE #473 — the crash identity is role + uid and nothing else. The role
+    // is pushed here because it is the one place it changes; the uid is read
+    // from the live session at capture time.
+    try {
+      CrashReporting.setRole(_auth.session.role);
+    } catch (_) {}
     // Run once when auth fully resolves (loading=false means role is set too).
     if (_viewAsRestored) return;
     if (_auth.loading) return;
@@ -456,6 +494,9 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
             title: 'mediBO',
             debugShowCheckedModeBanner: false,
             scaffoldMessengerKey: VersionWatcher.instance.messengerKey,
+            // CHANGE #473 — navigation breadcrumbs. Route NAMES only; a route's
+            // arguments can carry an order id or a customer name.
+            navigatorObservers: [CrashReporting.navigatorObserver],
             theme: buildTheme(),
             scrollBehavior: const SmoothScrollBehavior(),
             // Belt-and-suspenders: clear any stray text decoration on Flutter web.

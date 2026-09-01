@@ -175,7 +175,19 @@ bash scripts/gen_repo_map.sh || echo "⚠️  REPO_MAP generation failed (contin
 # Build release — flutter clean is MANDATORY: skipping it produces a corrupt dart2js
 # bundle (different byte count, fails to boot) even with identical source code.
 flutter clean
-flutter build web --release
+# ── CHANGE #473: stamp the crash-reporting release ──────────────────────────
+# The Sentry release id is the CHANGE number, baked into the bundle at BUILD
+# time by the same script that writes it into version.json — so a crash on a
+# pharmacist's phone names the change that shipped it, with no runtime lookup
+# and no way for the two to drift. The commit is NOT part of the release id
+# (deploy.sh amends the commit AFTER building, so it is not knowable here); the
+# app attaches it separately as a `build_commit` tag read from version.json.
+SENTRY_RELEASE="medibo@${CHANGE_LABEL}"
+SENTRY_DIST="${CHANGE_LABEL}"
+echo "[crash] release=${SENTRY_RELEASE} dist=${SENTRY_DIST}"
+flutter build web --release \
+  --dart-define=SENTRY_RELEASE="${SENTRY_RELEASE}" \
+  --dart-define=SENTRY_DIST="${SENTRY_DIST}"
 # NOTE: the downloadable Android APK is NOT bundled here. At 82 MB it exceeds
 # Cloudflare Pages' 25 MB-per-file limit, so it is hosted on Supabase Storage
 # (public bucket app-releases) and its URL is published via app_release_publish

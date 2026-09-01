@@ -276,8 +276,18 @@ begin
       from scoped group by prefix, label, sort_order
   ) g;
 
+  -- A CTE lives for exactly one statement, so the scoped set is rebuilt here
+  -- rather than referenced — the first attempt referenced it and raised 42P01.
+  with scoped as (
+    select c.key, c.value #>> '{}' as english, s.label,
+           nullif((select i.value #>> '{}' from ui_copy_i18n i
+                    where i.key = c.key and i.lang = v_lang), '') as translated
+      from ui_copy c
+      join ui_i18n_scope s
+        on s.is_active and c.key like s.prefix || '%'
+  )
   select coalesce(jsonb_agg(jsonb_build_object(
-           'key', key, 'english', english, 'scope_label', label) order by key), '[]'::jsonb)
+           'key', m.key, 'english', m.english, 'scope_label', m.label) order by m.key), '[]'::jsonb)
     into v_missing
   from (select * from scoped where translated is null order by key limit greatest(p_limit,1)) m;
 

@@ -132,7 +132,13 @@ as $function$
     'ifsc', coalesce(p_row.ifsc,''),
     'bank_name', coalesce(p_row.bank_name,''),
     'upi_vpa', coalesce(p_row.upi_vpa,''),
-    'match_label', coalesce(public.ui_text('supplier_payout.match_' || coalesce(p_row.name_match,'unknown')),''),
+    -- {name} is the supplier's own name; supplier_name_match substitutes it at
+    -- submit time and the stored BAND has to be re-rendered the same way here,
+    -- or the screen prints the placeholder.
+    'match_label', replace(
+        coalesce(public.ui_text('supplier_payout.match_' || coalesce(p_row.name_match,'unknown')),''),
+        '{name}', coalesce((select sp2.supplier_name from supplier_profiles sp2
+                             where sp2.id = p_row.supplier_id), '')),
     'match_tone', case coalesce(p_row.name_match,'unknown')
                     when 'exact' then 'success' when 'close' then 'warning'
                     when 'differs' then 'danger' else 'warning' end,
@@ -359,12 +365,13 @@ begin
   insert into supplier_audit_log(supplier_id, actor_identity, actor_name, user_id,
                                  feature_key, action, detail)
   values (d.supplier_id, v_who, v_who, auth.uid(), 'supplier.payouts',
-          'payout_' || p_decision || 'd',
+          case p_decision when 'approve' then 'payout_approved' else 'payout_rejected' end,
           jsonb_build_object('payout_id', p_id,
             'summary', replace(public.ui_text('supplier_payout.audit_' || p_decision), '{who}', v_who)));
 
   return jsonb_build_object('ok', true, 'tone', 'success',
-    'message', public.ui_text('admin_payout.' || p_decision || 'd'));
+    'message', public.ui_text(case p_decision when 'approve'
+                                then 'admin_payout.approved' else 'admin_payout.rejected' end));
 exception when others then
   return jsonb_build_object('ok', false, 'error', 'exception', 'tone', 'danger',
     'message', replace(public.ui_text('supplier_payout.err_failed'), '{detail}', SQLERRM),
@@ -461,3 +468,85 @@ begin
     execute format('grant execute on function %s to authenticated, service_role', r.sig);
   end loop;
 end $g$;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 8. THE MONEY SURFACE READS THE APPROVED DETAIL
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- #399 gave the partner a supplier-payment console; its rows carried a supplier
+-- name and nothing about WHERE the money goes, so the payee was typed from
+-- memory every time. Each row now carries the APPROVED payout detail (or the
+-- backend's own "none on file" line) — the same block a future Route payout
+-- reads, so the two can never disagree.
+create or replace function public.partner_supplier_payment_console(p_limit integer default 40)
+returns jsonb
+language plpgsql stable security definer set search_path to 'public'
+as $function$
+declare v_zone smallint := public.partner_zone_id(); v_acc text; v_rows jsonb;
+begin
+  if public.my_partner_id() is null then
+    return jsonb_build_object('ok',false,'error','not_partner',
+      'message', public._pss_c('err_not_authorized'));
+  end if;
+  v_acc := public.partner_access('partner.supplier_payment');
+  if v_acc = 'none' then
+    perform public.partner_audit('partner.supplier_payment','open_denied','{}'::jsonb);
+    return jsonb_build_object('ok',false,'error','no_access','access','none',
+      'message', public._pss_c('err_not_authorized'));
+  end if;
+
+  select jsonb_agg(r order by (r->>'sort') desc) into v_rows from (
+    select jsonb_build_object(
+      'supplier_order_id', so.id,
+      'sort', to_char(so.created_at,'YYYYMMDDHH24MISS'),
+      'supplier_name', coalesce(so.supplier_name,''),
+      'order_label', coalesce(nullif(so.order_code,''), nullif(so.order_no::text,''), ''),
+      'date_label', to_char(so.created_at at time zone 'Asia/Kolkata','dd Mon, HH24:MI'),
+      'total_text', public.inr_money(coalesce(so.trade_total, so.total_amount, 0)),
+      'paid_label', public._pss_c('pay_paid_label'),
+      'paid_text',  public.inr_money(coalesce(p.paid,0)),
+      'due_label',  public._pss_c('pay_due_label'),
+      'due_text',   public.inr_money(greatest(coalesce(so.trade_total, so.total_amount, 0) - coalesce(p.paid,0), 0)),
+      'due_tone',   case when coalesce(so.trade_total, so.total_amount, 0) - coalesce(p.paid,0) > 0
+                         then 'warning' else 'success' end,
+      -- CHANGE #402 — the approved payout detail, verbatim.
+      'payout', case when so.supplier_id is null then null
+                     else public.supplier_payout_active(so.supplier_id) end,
+      'can_record', (v_acc = 'write')) as r
+      from supplier_orders so
+      left join lateral (select sum(sp.amount) paid from supplier_payments sp
+                          where sp.supplier_order_id = so.id) p on true
+     where so.zone_id is not null and so.zone_id::smallint = v_zone
+     order by so.created_at desc
+     limit greatest(coalesce(p_limit,40), 1)
+  ) s;
+
+  perform public.partner_audit('partner.supplier_payment','open',
+    jsonb_build_object('access', v_acc));
+
+  return jsonb_build_object(
+    'ok', true, 'access', v_acc, 'can_write', (v_acc='write'),
+    'zone_id', v_zone,
+    'title',        public._pss_c('pay_title'),
+    'subtitle',     public._pss_c('pay_subtitle'),
+    'order_label',  public._pss_c('pay_order_label'),
+    'amount_label', public._pss_c('pay_amount_label'),
+    'kind_label',   public._pss_c('pay_kind_label'),
+    'mode_label',   public._pss_c('pay_mode_label'),
+    'ref_label',    public._pss_c('pay_ref_label'),
+    'note_label',   public._pss_c('pay_note_label'),
+    'proof_label',  public._pss_c('pay_proof_label'),
+    'pick_label',   public._pss_c('pay_pick_label'),
+    'save_label',   public._pss_c('pay_save_label'),
+    'cancel_label', public._pss_c('cancel_label'),
+    'empty_text',   public._pss_c('pay_empty'),
+    'readonly_text',case when v_acc='write' then '' else public._pss_c('pay_readonly') end,
+    'proof_bucket', 'partner-receipts',
+    'kind_options', jsonb_build_array(
+      jsonb_build_object('value','advance','label','Advance','selected',true),
+      jsonb_build_object('value','balance','label','Balance','selected',false)),
+    'mode_options', jsonb_build_array(
+      jsonb_build_object('value','online','label','Online / UPI','selected',true),
+      jsonb_build_object('value','cash','label','Cash','selected',false)),
+    'rows', coalesce(v_rows,'[]'::jsonb));
+end $function$;

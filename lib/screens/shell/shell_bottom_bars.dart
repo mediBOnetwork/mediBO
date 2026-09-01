@@ -26,7 +26,10 @@ class _MobileBottomBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cart = AppState.of(context);
-    final bottomNavIndex = index == 1 ? 2 : index == 2 ? 3 : 0;
+    // CHANGE #536 — five slots now: Home, Catalogue, My Shop, Orders, Bulk.
+    // page 11 is My Shop, page 1 Orders, page 2 Bulk; everything else is Home.
+    final bottomNavIndex =
+        index == 11 ? 2 : index == 1 ? 3 : index == 2 ? 4 : 0;
     return BottomNavigationBar(
       currentIndex: bottomNavIndex,
       type: BottomNavigationBarType.fixed,
@@ -46,6 +49,14 @@ class _MobileBottomBar extends StatelessWidget {
           icon: const Icon(Icons.grid_view_outlined),
           activeIcon: const Icon(Icons.grid_view),
           label: c('home_shell.catalogue'),
+        ),
+        // CHANGE #536 — MY SHOP. The pharmacy suite used to hang off one row in
+        // the account dropdown; it is a first-class destination now. The label
+        // is ui_copy like every other slot, so renaming the tab is an UPDATE.
+        BottomNavigationBarItem(
+          icon: const Icon(Icons.storefront_outlined),
+          activeIcon: const Icon(Icons.storefront),
+          label: c('home_shell.my_shop'),
         ),
         BottomNavigationBarItem(
           icon: Badge(

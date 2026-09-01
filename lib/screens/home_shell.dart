@@ -95,6 +95,20 @@ import 'pharmacy/pharmacy_audit_screen.dart'; // CMD #447 — /admin/go/pharmacy
 import 'pharmacy/pharmacy_refill_screen.dart'; // CMD #417 — refills & counter
 import 'pharmacy/pharmacy_overpay_screen.dart'; // CMD #427 — /admin/go/price_check
 import 'pharmacy/paper_sale_screen.dart'; // CMD #429 — /admin/go/paper_sale
+// CHANGE #536 — the rest of the pharmacy suite. Every one of these screens was
+// already built and already routed by URL; what none of them had was a way in
+// from the account that owns the data. They are My Shop's tiles now.
+import 'pharmacy/my_shop_screen.dart';
+import 'pharmacy/rx_scan_screen.dart';
+import 'pharmacy/pharmacy_expiry_screen.dart';
+import 'pharmacy/pharmacy_variance_screen.dart';
+import 'pharmacy/pharmacy_parcel_count_screen.dart';
+import 'pharmacy/pharmacy_reorder_screen.dart';
+import 'pharmacy/khata_screen.dart';
+import 'pharmacy/px_screen.dart';
+import 'pharmacy/pharmacy_owner_screen.dart';
+import 'pharmacy/pharmacy_radar_screen.dart';
+import 'pharmacy/near_listing_screen.dart';
 import 'admin/admin_money_screen.dart'; // CMD #450 — /admin/go/money
 import 'admin/admin_demand_engine_screen.dart'; // CMD #427 — /admin/go/demand_engine
 import 'profile_screen.dart';
@@ -171,6 +185,15 @@ class HomeShell extends StatefulWidget {
     // admin, so without this line the key is parked and the deep link lands on
     // the storefront in silence — the same failure #432 hit first time round.
     'pharmacy_audit',
+    // CHANGE #536 — the remaining My Shop routes. Every screen behind them
+    // resolves the caller's OWN pharmacy and prints the backend's refusal for
+    // anyone else, so listing them here grants a door and never a permission.
+    // Without the line the key is parked for a pharmacy — who is not an admin
+    // — and the tile is a tap that does nothing, which is the failure #432 and
+    // #440 each hit once already.
+    'rx_scan', 'pharmacy_expiry', 'pharmacy_variance', 'pharmacy_parcel',
+    'pharmacy_reorder', 'khata', 'px_exchange', 'pharmacy_owner',
+    'pharmacy_radar', 'near_listing', 'my_shop',
   };
 
   @override
@@ -920,6 +943,52 @@ class _HomeShellState extends State<HomeShell> {
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const PharmacyRefillScreen()));
         break;
+      // CHANGE #536 — the ten My Shop routes that had a screen and a URL but no
+      // case here, so a registry tile could not open them. Each screen gates on
+      // the caller's own pharmacy for itself; there is no role test here.
+      case 'my_shop':
+        setState(() { _index = 11; _cartOpen = false; });
+        break;
+      case 'rx_scan':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const RxScanScreen()));
+        break;
+      case 'pharmacy_expiry':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const PharmacyExpiryScreen()));
+        break;
+      case 'pharmacy_variance':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const PharmacyVarianceScreen()));
+        break;
+      case 'pharmacy_parcel':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const ParcelCountHomeScreen()));
+        break;
+      case 'pharmacy_reorder':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const PharmacyReorderScreen()));
+        break;
+      case 'khata':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const KhataScreen()));
+        break;
+      case 'px_exchange':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const PxScreen()));
+        break;
+      case 'pharmacy_owner':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const PharmacyOwnerScreen()));
+        break;
+      case 'pharmacy_radar':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const PharmacyRadarScreen()));
+        break;
+      case 'near_listing':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const NearListingScreen()));
+        break;
       case 'mr': setState(() { _index = 7; _cartOpen = false; }); break;
       case 'companies': setState(() { _index = 8; _cartOpen = false; }); break;
       case 'delivery_partners': setState(() { _index = 9; _cartOpen = false; }); break;
@@ -1474,6 +1543,11 @@ class _HomeShellState extends State<HomeShell> {
           const AdminCompanyScreen(),
           const AdminDeliveryPartnerScreen(),
           AdminFulfillmentScreen(),
+          // CHANGE #536 — index 11, MY SHOP. It is appended rather than slotted
+          // in beside the customer's other three pages because indices 3–10 are
+          // addressed by number from _handleAdminNav; inserting would have
+          // silently renumbered every admin section.
+          MyShopScreen(navigate: _handleAdminNav),
         ];
 
         final isAdmin = UserState.of(context).isAdmin;
@@ -1530,13 +1604,17 @@ class _HomeShellState extends State<HomeShell> {
                   cartOpen: _cartOpen,
                   onCartTap: () => _openCart(),
                   onNavTap: (i) {
+                    // CHANGE #536 — slot 2 is My Shop (page 11). Orders and
+                    // Bulk keep their pages and only move one slot right.
                     switch (i) {
                       case 0:
                       case 1:
                         _setIndex(0);
                       case 2:
-                        _setIndex(1);
+                        _setIndex(11);
                       case 3:
+                        _setIndex(1);
+                      case 4:
                         _setIndex(2);
                     }
                   },

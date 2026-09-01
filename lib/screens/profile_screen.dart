@@ -19,10 +19,10 @@ import 'customer/customer_staff_screen.dart';  // CHANGE #408
 import 'customer/profile_edit_screen.dart'; // CHANGE #460 — feature_gaps 164
 import 'customer/address_book_screen.dart'; // CHANGE #460 — feature_gaps 164
 import 'wishlist_screen.dart';
-import 'pharmacy/pos_screen.dart'; // CMD #411 — the pharmacy counter
-import 'pharmacy/pharmacy_parcel_count_screen.dart'; // CMD #431 — count a parcel
-import 'pharmacy/pharmacy_stock_screen.dart'; // CMD #412 — the pharmacy's shelf
-import 'pharmacy/pharmacy_gst_screen.dart'; // CMD #416 — the pharmacy's GST pack
+// CHANGE #536 — the four pharmacy screens this file used to import are gone.
+// My Profile is profile things only now: the shop's details, its wishlist, its
+// rewards, its staff logins and Logout. Every counter, shelf, parcel and GST
+// surface is a My Shop tile, registered on surface='customer_shop'.
 
 class ProfileScreen extends StatefulWidget {
   // CHANGE #374 — when set (View As Customer), load the impersonated
@@ -215,38 +215,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // CMD #411 — the pharmacy's shop-management tools. This is the
-                // surface a customer account actually reaches on a phone: the
-                // avatar opens THIS screen directly (there is no menu sheet for
-                // a non-admin), so a counter used dozens of times a day belongs
-                // at the top of it rather than behind a menu that never opens.
-                // The tile draws itself only when pos_entry() said so.
-                Container(
-                  color: Ds.c.surface,
-                  padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
-                  child: const Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      PosMenuTile(),
-                      // CMD #412 — the shelf, beside the counter. Both tiles
-                      // draw themselves only when their own entry RPC said so,
-                      // so a supplier or an admin opening this screen sees
-                      // neither and the shell still knows nothing about what a
-                      // pharmacy is.
-                      StockMenuTile(),
-                      // CMD #416 — the month's GST paperwork. Third tile in the
-                      // same column and gated the same way: it draws only when
-                      // pharmacy_gst_entry() said so, so a supplier or an admin
-                      // opening this screen sees none of the three.
-                      GstMenuTile(),
-                      // CMD #431 — counting the box that just arrived against
-                      // the bill that came with it. Gated the same way as the
-                      // three above: pharmacy_parcel_entry() decides, and it
-                      // carries its own badge when a count is still open.
-                      ParcelMenuTile(),
-                    ],
-                  ),
-                ),
+                // CHANGE #536 — four pharmacy tiles used to sit HERE, above
+                // the avatar: the counter, the shelf, the GST pack and the
+                // parcel count, stacked as bare rows before the shop had even
+                // seen its own name. They were put at the top because a
+                // customer's avatar opens this screen directly and there was
+                // nowhere else to reach them from. There is now: My Shop, a
+                // bottom-bar tab, where all nineteen live in four named
+                // sections. My Profile is profile things only again.
                 // Avatar + pharmacy name header
                 Container(
                   color: Colors.white,

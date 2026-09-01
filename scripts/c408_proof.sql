@@ -196,6 +196,19 @@ begin
      'the sheet is given the current basket -> '
        || jsonb_array_length(coalesce(v->'lines','[]'::jsonb))::text);
 
+  -- The window travels WITH the order list, so the card asks nobody.
+  begin
+    v := public.my_orders_screen(null);
+    insert into c408_log(ok, line)
+    select coalesce(((o->'edit'->>'can_edit')::boolean), false),
+           'my_orders_screen carries the edit window on the order row — no RPC per card'
+      from jsonb_array_elements(coalesce(v->'orders','[]'::jsonb)) o
+     where o->>'id' = v_order::text;
+  exception when others then
+    insert into c408_log(ok, line) values
+      (false, 'my_orders_screen carries the edit window -> ' || SQLERRM);
+  end;
+
   -- CHANGE the basket: keep A at a new quantity, ADD B
   v := public.order_edit_apply(v_order, jsonb_build_array(
          jsonb_build_object('product_id', v_prod_a, 'quantity', 5),

@@ -64,6 +64,11 @@ class _DbOrder {
   /// Every item on the order, fulfilled or not. Counted server-side.
   final int totalItemCount;
 
+  /// CHANGE #408 — the edit window, decided by the backend and carried on the
+  /// order row. `can_edit` is the whole affordance; when it is false the
+  /// payload also names the reason and the sentence to show.
+  final Map<String, dynamic> edit;
+
   _DbOrder({
     required this.id,
     required this.number,
@@ -85,6 +90,7 @@ class _DbOrder {
     this.unfulfilledNote = '',
     this.unfulfilledCollapsed = true,
     this.totalItemCount = 0,
+    this.edit = const {},
   });
 
   /// One parser for both arrays — they carry identical row shapes, so there is
@@ -123,6 +129,9 @@ class _DbOrder {
         unfulfilledNote: (row['unfulfilled_note'] ?? '').toString(),
         unfulfilledCollapsed: row['unfulfilled_collapsed'] != false,
         totalItemCount: (row['total_item_count'] as num?)?.toInt() ?? 0,
+        edit: row['edit'] is Map
+            ? Map<String, dynamic>.from(row['edit'] as Map)
+            : const {},
       );
 }
 
@@ -774,10 +783,12 @@ class _OrderCardState extends State<_OrderCard> {
   // independent per-section booleans that could disagree.
   int? _tab;
 
-  // CHANGE #408 — the edit window, as the BACKEND sees it. Empty until
-  // order_edit_state() answers; `can_edit` is the only thing that draws the
-  // button, so a card never guesses the window from order.status.
-  Map<String, dynamic> _editState = const {};
+  // CHANGE #408 — the edit window, as the BACKEND sees it. It arrives ON the
+  // order row from my_orders_screen(), so the card asks nobody: only the
+  // backend knows whether a supplier has been asked yet, and inferring it here
+  // from a status string is exactly the client-side logic this codebase does
+  // not allow. Re-read after a save, because the server recomputed it.
+  late Map<String, dynamic> _editState = widget.order.edit;
 
   @override
   void initState() {
@@ -785,14 +796,11 @@ class _OrderCardState extends State<_OrderCard> {
     // CHANGE #298 — the ONLY card that auto-expands is the one a notification
     // named. #458's "no auto-expand" rule still holds for every other card.
     if (widget.autoOpen) _tab = 0;
-    _loadEditState();
   }
 
-  // CHANGE #408 — one cheap read per card. It is asked for every order because
-  // only the backend knows whether a supplier has been asked yet; inferring it
-  // here from a status string is exactly the client-side logic this codebase
-  // does not allow.
-  Future<void> _loadEditState() async {
+  /// After a save the basket changed, so the window is re-read rather than
+  /// assumed to still be open.
+  Future<void> _reloadEditState() async {
     try {
       final raw = await Supabase.instance.client
           .rpc('order_edit_state', params: {'p_order_id': widget.order.id});
@@ -800,7 +808,7 @@ class _OrderCardState extends State<_OrderCard> {
       setState(() =>
           _editState = raw is Map ? Map<String, dynamic>.from(raw) : const {});
     } catch (_) {
-      // A card that cannot ask simply shows no edit button. It never guesses.
+      // A card that cannot ask simply keeps what the list gave it.
     }
   }
 
@@ -956,7 +964,7 @@ class _OrderCardState extends State<_OrderCard> {
                 state: _editState,
                 onTap: () async {
                   final saved = await showOrderEditSheet(context, order.id);
-                  if (saved && mounted) await _loadEditState();
+                  if (saved && mounted) await _reloadEditState();
                 },
               ),
             ),

@@ -869,3 +869,21 @@ comment on function public.c424_montikop_proof() is
 
 grant execute on function public.pharmacy_inference_screen(integer) to authenticated;
 grant execute on function public.pharmacy_lot_correct(uuid, numeric) to authenticated;
+
+-- ─────────────────────────── 11. THE SHOP FENCE (#414's rule) ───────────────
+--
+-- Caught by journey qa-414-227 on this very command, which is what it exists
+-- for: every function here that takes a shop id as an ARGUMENT is an engine
+-- internal — the nightly recompute and the fixture call them, a client never
+-- does. Left reachable, any signed-in account could have recomputed (and
+-- overwritten) another pharmacy's inference, or read its purchase history
+-- straight out of _c424_purchases. The two client surfaces resolve the shop
+-- from the SESSION (pos_shop()) and take no shop argument at all, which is the
+-- shape the fence is asking for.
+revoke execute on function public._c424_purchases(uuid, date)        from public, anon, authenticated;
+revoke execute on function public._c424_correct(uuid, uuid, numeric) from public, anon, authenticated;
+revoke execute on function public.pharmacy_velocity_learn(uuid)      from public, anon, authenticated;
+revoke execute on function public.pharmacy_infer_lots(uuid)          from public, anon, authenticated;
+revoke execute on function public.pharmacy_zone_prior_refresh()      from public, anon, authenticated;
+revoke execute on function public.pharmacy_infer_recompute()         from public, anon, authenticated;
+revoke execute on function public.c424_montikop_proof()              from public, anon, authenticated;

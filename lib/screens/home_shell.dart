@@ -41,6 +41,7 @@ import 'admin/loyalty_admin_screen.dart';       // CHANGE #325
 import 'admin/unmapped_companies_screen.dart';  // CHANGE #325
 import 'admin/admin_delivery_ops_screen.dart';  // CHANGE #325
 import 'admin/notify_cost_screen.dart';         // CHANGE #325
+import 'admin/admin_supplier_account_screen.dart'; // CHANGE #402
 import 'admin/settlement_screen.dart';          // CHANGE #325
 import 'admin/dev_queue/cron_health_screen.dart'; // CHANGE #325
 import '../services/discount_slabs_service.dart'; // CHANGE #325
@@ -786,6 +787,13 @@ class _HomeShellState extends State<HomeShell> {
       case 'cron_health':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const CronHealthScreen()));
+        break;
+      // CHANGE #402 — supplier bank/UPI approvals and the Hindi coverage
+      // report. Both RPCs gate on get_my_role() and the screen renders the
+      // backend's own refusal, the same story as the screens above.
+      case 'supplier_accounts':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const AdminSupplierAccountScreen()));
         break;
       // The identity row the profile dropdown fires.
       case 'profile':

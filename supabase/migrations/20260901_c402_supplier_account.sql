@@ -587,3 +587,27 @@ begin
     execute format('grant execute on function %s to authenticated, service_role', r.sig);
   end loop;
 end $g$;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 8. THE ADMIN ENTRY POINT (#325's registry) — a screen nobody can reach
+--    does not exist (rule 11)
+-- ═══════════════════════════════════════════════════════════════════════════
+
+insert into public.feature_registry
+  (feature_key, label, group_label, icon_key, route_key, sort_order,
+   owner, partner_eligible, default_access, is_active, surface, category,
+   roles_allowed, description, search_terms)
+values
+  ('admin.supplier_accounts', 'Supplier accounts', 'Suppliers', 'people',
+   'supplier_accounts', 845, 'medibo', false, 'none', true, 'dashboard',
+   'parties', array['admin','super_admin'],
+   'Approve supplier bank / UPI changes and see Hindi coverage for supplier screens.',
+   'payout bank upi ifsc approval hindi language translation supplier staff')
+on conflict (feature_key) do update
+  set label = excluded.label, group_label = excluded.group_label,
+      icon_key = excluded.icon_key, route_key = excluded.route_key,
+      sort_order = excluded.sort_order, owner = excluded.owner,
+      surface = excluded.surface, category = excluded.category,
+      roles_allowed = excluded.roles_allowed,
+      description = excluded.description, search_terms = excluded.search_terms,
+      is_active = true;

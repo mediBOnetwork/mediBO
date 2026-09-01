@@ -14,6 +14,7 @@ import '../../widgets/bill_viewer.dart';
 import '../../widgets/order_item_card.dart';
 import '../../widgets/po_pricing.dart';
 import '../../widgets/sup_pay_panel.dart';
+import '../../widgets/supplier_po_ack.dart';
 
 // Parses a backend-supplied "#RRGGBB" (or "RRGGBB") hex colour string.
 Color _hexColor(String? hex, Color fallback) {
@@ -653,6 +654,30 @@ class _OrderCardState extends State<_OrderCard> {
             ]),
           ),
 
+          // ── CHANGE #527 (#50) — accept / part-accept / decline, and (#61)
+          // the batch, expiry and HSN he acknowledges with it. Both blocks are
+          // the backend's: absent payload => nothing renders, exactly as before.
+          if (widget.order['accept'] is Map)
+            SupplierPoAck(
+              accept: Map<String, dynamic>.from(widget.order['accept'] as Map),
+              items: (widget.order['items'] as List<dynamic>? ?? const [])
+                  .whereType<Map>()
+                  .map((e) => Map<String, dynamic>.from(e))
+                  .toList(),
+              orderCode: orderCode,
+              onAnswered: () async => widget.onReload(),
+            ),
+          if (widget.order['line_details'] is Map)
+            SupplierPoLineDetails(
+              block: Map<String, dynamic>.from(widget.order['line_details'] as Map),
+              items: (widget.order['items'] as List<dynamic>? ?? const [])
+                  .whereType<Map>()
+                  .map((e) => Map<String, dynamic>.from(e))
+                  .toList(),
+              orderCode: orderCode,
+              onSaved: () async => widget.onReload(),
+            ),
+
           // ── Pack button ─────────────────────────────────────────────────────
           if (widget.order['pack_button'] is Map) ...[
             Builder(builder: (_) {
@@ -661,12 +686,22 @@ class _OrderCardState extends State<_OrderCard> {
               final bg = _hexColor(packButton['bg']?.toString(), const Color(0xFF1B7A43));
               final fg = _hexColor(packButton['fg']?.toString(), Colors.white);
               final nextPacked = packButton['next_packed'] == true;
+              // #527 (#50): 'enabled' absent => the pre-change behaviour.
+              final packEnabled = PoPackGate.enabled(packButton);
+              final blockedReason = PoPackGate.blockedReason(packButton);
               return Padding(
                 padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
                 child: SizedBox(
                   width: double.infinity,
                   child: FilledButton(
-                    onPressed: _togglingPacked ? null : () => _setPacked(orderCode, nextPacked),
+                    onPressed: _togglingPacked
+                        ? null
+                        : !packEnabled
+                            ? (blockedReason.isEmpty
+                                ? null
+                                : () => showToast(context, blockedReason,
+                                    isError: true))
+                            : () => _setPacked(orderCode, nextPacked),
                     style: FilledButton.styleFrom(
                       backgroundColor: bg,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),

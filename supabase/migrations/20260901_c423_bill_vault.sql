@@ -341,6 +341,7 @@ language plpgsql stable security definer set search_path = public as $$
 declare
   v_cfg   public.pharmacy_vault_config := public._phv_cfg();
   v_key   text := public._norm_name(coalesce(p_text, ''));
+  v_short text;
   v_id    bigint;
   v_name  text;
   v_score numeric;
@@ -349,6 +350,9 @@ begin
   if length(v_key) < 2 then
     return jsonb_build_object('status', 'unmatched', 'source', 'empty', 'score', 0);
   end if;
+
+  -- The first two words, when the text has more — the second, cheap probe.
+  v_short := nullif((regexp_match(v_key, '^(\S+(?:\s\S+)?)'))[1], v_key);
 
   -- 1. ALIAS — this shop's own answer first, then anything learned globally.
   select a.medicine_id into v_id
@@ -395,7 +399,7 @@ begin
     from public.pharmacy_stock s
    where s.pharmacy_id = p_shop
      and s.medicine_id is not null
-     and (s.name_key % ('n:' || v_key) or v_key <% s.name_key)
+     and (v_key <% s.name_key or s.name_key % ('n:' || v_key))
    order by (0.6 * word_similarity(v_key, s.name_key)
            + 0.4 * similarity(s.name_key, 'n:' || v_key)) desc
    limit 1;
@@ -404,22 +408,40 @@ begin
                               'medicine_id', v_id, 'product_name', v_name);
   end if;
 
-  -- 3b. TRIGRAM over the catalogue, index-backed.
-  select c.id, c.product_name, c.sim into v_id, v_name, v_score
+  -- 3b. TRIGRAM over the catalogue.
+  --
+  -- ONE OPERATOR, ONE DIRECTION, ON PURPOSE. `_norm_name(product_name) % $1`
+  -- and `_norm_name(product_name) <% $1` both use idx_medicine_name_norm_trgm
+  -- and both take 14-23 SECONDS on this 563k-row table (measured) — a GIN scan
+  -- whose recheck touches far too much heap. `$1 <% _norm_name(product_name)`,
+  -- with the QUERY on the left, is the same index answering in ~180 ms, because
+  -- the trigrams being looked up come from the short string.
+  --
+  -- That form asks "does the bill's text appear as a run of words inside the
+  -- catalogue name?", which is the case that actually matters: a bill prints
+  -- "MONTEK-LC" where the catalogue says "Montek LC Kid Tablet". The reverse —
+  -- a bill printing MORE than the catalogue ("Montek LC 10mg strip of 15") — is
+  -- covered by probing the first two words as well, still on the fast side. Two
+  -- cheap probes beat one slow one, and the blend below ranks the union.
+  select c.id, c.product_name,
+         round((0.6 * word_similarity(v_key, public._norm_name(c.product_name))
+              + 0.4 * similarity(public._norm_name(c.product_name), v_key))::numeric, 4)
+    into v_id, v_name, v_score
     from (
-      select m.id, m.product_name,
-             round((0.6 * word_similarity(v_key, public._norm_name(m.product_name))
-                  + 0.4 * similarity(public._norm_name(m.product_name), v_key))::numeric, 4) sim,
-             coalesce(m.sales_count, 0) sc
-        from public."MEDICINE" m
-       where public._norm_name(m.product_name) % v_key
-          or v_key <% public._norm_name(m.product_name)
-       order by (0.6 * word_similarity(v_key, public._norm_name(m.product_name))
-               + 0.4 * similarity(public._norm_name(m.product_name), v_key)) desc,
-                coalesce(m.sales_count, 0) desc
-       limit v_cfg.candidates
+      (select m.id, m.product_name, coalesce(m.sales_count, 0) sc
+         from public."MEDICINE" m
+        where v_key <% public._norm_name(m.product_name)
+        limit v_cfg.candidates)
+      union
+      (select m.id, m.product_name, coalesce(m.sales_count, 0) sc
+         from public."MEDICINE" m
+        where v_short is not null
+          and v_short <% public._norm_name(m.product_name)
+        limit v_cfg.candidates)
     ) c
-   order by c.sim desc, c.sc desc
+   order by (0.6 * word_similarity(v_key, public._norm_name(c.product_name))
+           + 0.4 * similarity(public._norm_name(c.product_name), v_key)) desc,
+            c.sc desc
    limit 1;
 
   if v_id is not null and v_score >= v_cfg.match_confirm then
@@ -679,7 +701,7 @@ begin
     select count(*) into v_used from public.pharmacy_purchase_bill where batch_id = p_batch_id;
     if v_used >= v_cfg.bulk_max then
       return jsonb_build_object('ok', false, 'error', 'batch_full',
-        'message', public.ui_fmt('phvault.err_batch_full',
+        'message', public._phv_fmt('phvault.err_batch_full',
                              jsonb_build_object('max', v_cfg.bulk_max::text)));
     end if;
   end if;
@@ -737,7 +759,7 @@ begin
 
   return jsonb_build_object('ok', true, 'shot_no', v_no,
     'shots', (select count(*) from public.pharmacy_bill_shot where bill_id = p_bill_id),
-    'message', public.ui_fmt('phvault.shot_added', jsonb_build_object('n', v_no::text)));
+    'message', public._phv_fmt('phvault.shot_added', jsonb_build_object('n', v_no::text)));
 end $$;
 
 -- Hand the bill to the reader. A single counter bill is read immediately; a
@@ -772,6 +794,32 @@ begin
   return jsonb_build_object('ok', true, 'bill_id', p_bill_id, 'status', 'queued',
     'poll_ms', 2500, 'message', public.ui_text('phvault.queued'));
 end $$;
+
+-- SINGLE-BRACE INTERPOLATION. `ui_fmt` substitutes `{{name}}`; every pharmacy
+-- copy key in this project — #412's '{qty} on hand' included — is written with
+-- single braces, so using ui_fmt here printed the placeholder verbatim on the
+-- card. This is that formatter for this family of keys.
+create or replace function public._phv_fmt(p_key text, p_vars jsonb)
+returns text language plpgsql stable security definer set search_path = public as $$
+declare v_out text := public.ui_text(p_key); k text;
+begin
+  if coalesce(v_out, '') = '' then return ''; end if;
+  for k in select jsonb_object_keys(coalesce(p_vars, '{}'::jsonb)) loop
+    v_out := replace(v_out, '{' || k || '}', coalesce(p_vars ->> k, ''));
+  end loop;
+  return v_out;
+end $$;
+
+-- The vault's statuses. #416 created this table for the GST purchase register
+-- with a five-value check; the vault adds the states a photographed bill moves
+-- through before it is confirmed. Widening a CHECK is additive — every existing
+-- value stays legal and no row is touched.
+alter table public.pharmacy_purchase_bill
+  drop constraint if exists pharmacy_purchase_bill_status_check;
+alter table public.pharmacy_purchase_bill
+  add constraint pharmacy_purchase_bill_status_check check (status = any (array[
+    'draft', 'scanning', 'ready', 'confirmed', 'failed',
+    'queued', 'processing', 'read', 'review', 'duplicate']));
 
 -- A copy key whose value is a JSON array (the capture checklist), read straight
 -- out of ui_copy so the guidance is edited with an UPDATE like every other word.
@@ -955,7 +1003,7 @@ begin
          total_amount     = nullif(p_payload #>> '{totals,amount}', '')::numeric,
          read_at          = now(),
          review_reason    = case when v_rev > 0
-                                 then public.ui_fmt('phvault.reason_review',
+                                 then public._phv_fmt('phvault.reason_review',
                                         jsonb_build_object('n', v_rev::text))
                                  else null end,
          status           = case when v_n = 0 then 'failed'
@@ -1056,7 +1104,7 @@ begin
      set review_count  = v_rev,
          status        = case when status = 'review' and v_rev = 0 then 'read' else status end,
          review_reason = case when v_rev = 0 then null
-                              else public.ui_fmt('phvault.reason_review',
+                              else public._phv_fmt('phvault.reason_review',
                                      jsonb_build_object('n', v_rev::text)) end
    where id = v_bill;
 
@@ -1109,7 +1157,9 @@ begin
       p_qty_delta   => coalesce(v_l.qty, 0) + coalesce(v_l.free_qty, 0),
       p_unit_cost   => v_l.unit_cost,
       p_mrp         => v_l.mrp,
-      p_kind        => 'receipt_bill',
+      -- #412's movement vocabulary, reused rather than widened: a photographed
+      -- outside bill is a receipt_outside, exactly like one typed by hand.
+      p_kind        => 'receipt_outside',
       p_source_kind => case when v_b.source = 'shelf' then 'opening' else 'outside' end,
       p_ref_kind    => 'vault_line',
       p_ref_id      => v_l.id::text,
@@ -1149,7 +1199,7 @@ begin
 
   return jsonb_build_object('ok', true, 'bill_id', p_bill_id, 'lots', v_n,
     'skipped', v_skip,
-    'message', public.ui_fmt('phvault.confirmed', jsonb_build_object('n', v_n::text)));
+    'message', public._phv_fmt('phvault.confirmed', jsonb_build_object('n', v_n::text)));
 end $$;
 
 -- ─── COLD START (spec 6): the rack itself ───────────────────────────────────
@@ -1189,7 +1239,7 @@ begin
       p_batch       => null, p_expiry => null,
       p_qty_delta   => 0,
       p_unit_cost   => null, p_mrp => v_l.mrp,
-      p_kind        => 'shelf_seen',
+      p_kind        => 'opening',
       p_source_kind => 'opening',
       p_note        => public.ui_text('phvault.shelf_note'),
       p_ref_kind    => 'vault_shelf',
@@ -1242,7 +1292,7 @@ begin
    where id = p_bill_id;
 
   return jsonb_build_object('ok', true, 'bill_id', p_bill_id, 'seeded', v_n,
-    'message', public.ui_fmt('phvault.shelf_seeded', jsonb_build_object('n', v_n::text)));
+    'message', public._phv_fmt('phvault.shelf_seeded', jsonb_build_object('n', v_n::text)));
 end $$;
 
 -- ═══════════════════════ 9. THE ASYNC READER (spec 2c) ═════════════════════
@@ -1414,15 +1464,23 @@ returns jsonb language sql stable security definer set search_path = public as $
     'supplier',  coalesce(nullif(btrim(coalesce(b.supplier_name, '')), ''),
                           public.ui_text('phvault.supplier_unknown')),
     'invoice',   case when b.invoice_no is null then public.ui_text('phvault.invoice_unknown')
-                      else public.ui_fmt('phvault.invoice_line',
+                      else public._phv_fmt('phvault.invoice_line',
                              jsonb_build_object('no', b.invoice_no)) end,
     'date_label', case when b.invoice_date is null then public.ui_text('phvault.date_unknown')
                        else to_char(b.invoice_date, 'DD Mon YYYY') end,
+    -- The identity line, joined HERE. A separator is a display decision, and
+    -- display decisions do not belong in Dart — the screen prints this string.
+    'meta', (case when b.invoice_no is null then public.ui_text('phvault.invoice_unknown')
+                  else public._phv_fmt('phvault.invoice_line',
+                         jsonb_build_object('no', b.invoice_no)) end)
+            || ' · ' ||
+            (case when b.invoice_date is null then public.ui_text('phvault.date_unknown')
+                  else to_char(b.invoice_date, 'DD Mon YYYY') end),
     'month_key', b.month_key,
     'month_label', public._phv_month_label(b.month_key),
     'amount',    public._phv_money(b.total_amount),
     'has_amount', b.total_amount is not null,
-    'lines_label', public.ui_fmt('phvault.lines_count',
+    'lines_label', public._phv_fmt('phvault.lines_count',
                      jsonb_build_object('n', b.line_count::text)),
     'chip',      public._phv_status_chip(b.status, b.review_count),
     'status',    b.status,
@@ -1479,7 +1537,7 @@ begin
            case when bb.total = 0 then 0
                 else round(((bb.done + bb.failed + bb.review + bb.duplicate)::numeric
                             / bb.total) * 100) end as percent,
-           public.ui_fmt('phvault.batch_progress',
+           public._phv_fmt('phvault.batch_progress',
              jsonb_build_object('done', (bb.done + bb.failed + bb.review + bb.duplicate)::text,
                                 'total', bb.total::text)) as progress_label
       from public.pharmacy_bill_batch bb
@@ -1499,7 +1557,7 @@ begin
       jsonb_build_object('key', 'value',  'label', public.ui_text('phvault.tile_value'),
                          'value', public._phv_money(v_val))),
     'unquantified_label', case when v_unq > 0
-      then public.ui_fmt('phvault.unquantified', jsonb_build_object('n', v_unq::text)) end,
+      then public._phv_fmt('phvault.unquantified', jsonb_build_object('n', v_unq::text)) end,
     'actions', jsonb_build_array(
       jsonb_build_object('key', 'photo', 'label', public.ui_text('phvault.act_photo'), 'primary', true),
       jsonb_build_object('key', 'bulk',  'label', public.ui_text('phvault.act_bulk')),
@@ -1533,6 +1591,8 @@ begin
       'qty', l.qty, 'qty_label', coalesce(l.qty::text, '—'),
       'batch', coalesce(l.batch_no, public.ui_text('phvault.batch_unknown')),
       'expiry', coalesce(l.expiry, public.ui_text('phvault.expiry_unknown')),
+      'meta', coalesce(l.batch_no, public.ui_text('phvault.batch_unknown'))
+              || ' · ' || coalesce(l.expiry, public.ui_text('phvault.expiry_unknown')),
       'cost', public._phv_money(l.unit_cost), 'has_cost', l.unit_cost is not null,
       'mrp', public._phv_money(l.mrp), 'has_mrp', l.mrp is not null,
       'flag', l.flag,
@@ -1547,7 +1607,7 @@ begin
                                when 'ok' then 'success' else 'warning' end,
       'needs_review', l.flag not in ('ok', 'dropped'),
       'match_label', case when l.match_source is null then null
-                          else public.ui_fmt('phvault.match_line',
+                          else public._phv_fmt('phvault.match_line',
                                  jsonb_build_object(
                                    'source', case l.match_source
                                        when 'alias'  then public.ui_text('phvault.src_alias')
@@ -1606,12 +1666,12 @@ begin
     'total', v_b.total, 'settled', v_settled,
     'percent', case when v_b.total = 0 then 0
                     else round((v_settled::numeric / v_b.total) * 100) end,
-    'progress_label', public.ui_fmt('phvault.batch_progress',
+    'progress_label', public._phv_fmt('phvault.batch_progress',
       jsonb_build_object('done', v_settled::text, 'total', v_b.total::text)),
     'review_label', case when v_b.review > 0
-      then public.ui_fmt('phvault.batch_review', jsonb_build_object('n', v_b.review::text)) end,
+      then public._phv_fmt('phvault.batch_review', jsonb_build_object('n', v_b.review::text)) end,
     'duplicate_label', case when v_b.duplicate > 0
-      then public.ui_fmt('phvault.batch_duplicate', jsonb_build_object('n', v_b.duplicate::text)) end,
+      then public._phv_fmt('phvault.batch_duplicate', jsonb_build_object('n', v_b.duplicate::text)) end,
     'done', v_b.status = 'done',
     'poll_ms', case when v_b.status <> 'done' then 4000 else null end);
 end $$;

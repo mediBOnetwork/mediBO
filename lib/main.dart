@@ -649,10 +649,14 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
               // screen is reachable from a link without waiting on the shell's
               // first frame. The dashboard tile reaches it through the shell's
               // route table as well.
-              if (name == '/admin/delivery-programme') {
+              if (name.split('?').first == '/admin/delivery-programme') {
+                // ?tab=<tab_key> deep-links one tab. The key is passed
+                // through untouched — admin_delivery_extras() decides whether
+                // it means anything, and an unknown one renders empty.
+                final q = Uri.tryParse(name)?.queryParameters['tab'];
                 return MaterialPageRoute(
                   settings: settings,
-                  builder: (_) => const AdminDeliveryExtrasScreen(),
+                  builder: (_) => AdminDeliveryExtrasScreen(initialTab: q),
                 );
               }
               if (name == '/admin/cron-health') {

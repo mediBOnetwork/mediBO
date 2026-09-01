@@ -16,6 +16,8 @@ import 'admin/loyalty_admin_screen.dart';
 import 'delivery/delivery_register_screen.dart';
 import 'rewards_screen.dart';
 import 'customer/customer_staff_screen.dart';  // CHANGE #408
+import 'customer/profile_edit_screen.dart'; // CHANGE #460 — feature_gaps 164
+import 'customer/address_book_screen.dart'; // CHANGE #460 — feature_gaps 164
 import 'wishlist_screen.dart';
 import 'pharmacy/pos_screen.dart'; // CMD #411 — the pharmacy counter
 import 'pharmacy/pharmacy_parcel_count_screen.dart'; // CMD #431 — count a parcel
@@ -663,6 +665,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 // member opening it gets their own row and can_manage:false,
                 // which is a real answer, not an error. The screen renders
                 // that refusal in the backend's own words.
+                // CHANGE #460 (feature_gaps 164) — the two things a customer
+                // could not do: edit their own details, and keep more than one
+                // delivery address. my_session().profile still carries the old
+                // "contact support" note for the fields that ARE support's to
+                // change; my_profile_edit() decides which those are, so this
+                // entry does not need to know.
+                if (!isViewAs && isRegistered) _EditProfileEntryCard(),
+                if (!isViewAs && isRegistered) _AddressBookEntryCard(),
+
                 if (!isViewAs && isRegistered)
                   _StaffLoginsEntryCard(),
 
@@ -1113,6 +1124,30 @@ class _DeliverWithUsEntryCard extends StatelessWidget {
         icon: Icons.two_wheeler_outlined,
         copyKey: 'profile.row_deliver_with_us',
         destination: () => const DeliveryRegisterScreen(),
+      );
+}
+
+/// CHANGE #460 — the way into the customer's own profile editor.
+class _EditProfileEntryCard extends StatelessWidget {
+  const _EditProfileEntryCard();
+
+  @override
+  Widget build(BuildContext context) => _MenuEntryCard(
+        icon: Icons.edit_outlined,
+        copyKey: 'cust_profile.edit_entry',
+        destination: () => const ProfileEditScreen(),
+      );
+}
+
+/// CHANGE #460 — the way into the delivery address book.
+class _AddressBookEntryCard extends StatelessWidget {
+  const _AddressBookEntryCard();
+
+  @override
+  Widget build(BuildContext context) => _MenuEntryCard(
+        icon: Icons.location_on_outlined,
+        copyKey: 'cust_addr.entry',
+        destination: () => const AddressBookScreen(),
       );
 }
 

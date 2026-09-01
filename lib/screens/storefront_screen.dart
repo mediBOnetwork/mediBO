@@ -1737,7 +1737,6 @@ class _Footer extends StatelessWidget {
   });
 
   static const _kBg = Color(0xFF1B5E20);
-  static const _kAccent = Color(0xFF4CAF50);
   static const _kLink = Color(0xFFA5D6A7);
   static const _kHeading = TextStyle(
     color: Colors.white,
@@ -1765,14 +1764,25 @@ class _Footer extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                // CHANGE #460 — _servicesCol and _categoryCol were written in
+                // #742 and never called by either layout, so Search / Bulk
+                // Upload / My Orders / Cart and the category links were dead
+                // from birth: the four callbacks and the category list were
+                // being passed into a footer that had nowhere to draw them.
+                // They render now — services everywhere, categories only where
+                // a fifth column genuinely fits.
                 LayoutBuilder(
                   builder: (ctx, c) {
                     final wide = c.maxWidth >= 600;
+                    final roomForCategories = c.maxWidth >= 900;
                     if (wide) {
                       return Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Expanded(flex: 3, child: _brandCol()),
+                          if (roomForCategories)
+                            Expanded(flex: 2, child: _categoryCol(shown)),
+                          Expanded(flex: 2, child: _servicesCol()),
                           Expanded(flex: 2, child: _quickCol(context)),
                           Expanded(flex: 2, child: _legalCol(context)),
                         ],
@@ -1782,6 +1792,8 @@ class _Footer extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         _brandCol(),
+                        const SizedBox(height: 32),
+                        _servicesCol(),
                         const SizedBox(height: 32),
                         _quickCol(context),
                         const SizedBox(height: 32),
@@ -1882,10 +1894,10 @@ class _Footer extends StatelessWidget {
       children: [
         Text(c('storefront_screen.footer_our_services'), style: _kHeading),
         const SizedBox(height: 16),
-        _footerLink('Search Medicines', onSearch),
-        _footerLink('Bulk Upload', onBulkUpload),
-        _footerLink('My Orders', onOrders),
-        _footerLink('Cart', onCart),
+        _footerLink(c('storefront_screen.footer_search_medicines'), onSearch),
+        _footerLink(c('storefront_screen.footer_bulk_upload'), onBulkUpload),
+        _footerLink(c('storefront_screen.footer_my_orders'), onOrders),
+        _footerLink(c('storefront_screen.footer_cart'), onCart),
       ],
     );
   }
@@ -1896,9 +1908,9 @@ class _Footer extends StatelessWidget {
       children: [
         Text(c('storefront_screen.footer_quick_links'), style: _kHeading),
         const SizedBox(height: 16),
-        _footerLink('About Us',
+        _footerLink(c('storefront_screen.footer_about_us'),
             () => Navigator.pushNamed(context, '/about-app')),
-        _footerLink('Contact Us',
+        _footerLink(c('storefront_screen.footer_contact_us'),
             () => Navigator.pushNamed(context, '/contact')),
       ],
     );
@@ -1910,17 +1922,17 @@ class _Footer extends StatelessWidget {
       children: [
         Text(c('storefront_screen.footer_legal'), style: _kHeading),
         const SizedBox(height: 16),
-        _footerLink('Terms & Conditions',
+        _footerLink(c('storefront_screen.footer_terms'),
             () => Navigator.pushNamed(context, '/terms')),
-        _footerLink('Privacy Policy',
+        _footerLink(c('storefront_screen.footer_privacy'),
             () => Navigator.pushNamed(context, '/privacy')),
-        _footerLink('Delete Account & Data',
+        _footerLink(c('storefront_screen.footer_data_deletion'),
             () => Navigator.pushNamed(context, '/data-deletion')),
-        _footerLink('Refund & Return',
+        _footerLink(c('storefront_screen.footer_refund'),
             () => Navigator.pushNamed(context, '/refund')),
-        _footerLink('Shipping Policy',
+        _footerLink(c('storefront_screen.footer_shipping'),
             () => Navigator.pushNamed(context, '/shipping')),
-        _footerLink('Cancellation Policy',
+        _footerLink(c('storefront_screen.footer_cancellation'),
             () => Navigator.pushNamed(context, '/cancellation')),
       ],
     );

@@ -24,6 +24,7 @@ import '../../design_tokens.dart';
 import '../../services/pharmacy_stock_api.dart';
 import '../../services/px_api.dart';  // CMD #420 — px_nav_entry()
 import '../../services/pharmacy_vault_api.dart';  // CMD #423 — pharmacy_vault_entry()
+import 'pharmacy_audit_screen.dart';  // CMD #430 — the stock audit, from the shelf
 import 'px_screen.dart';  // CMD #420 — the exchange, from the shelf
 import 'pharmacy_vault_screen.dart';  // CMD #423 — the bills this shelf is built from
 import '../../utils/render_log.dart';
@@ -170,6 +171,11 @@ class _PharmacyStockScreenState extends State<PharmacyStockScreen> {
       appBar: AppBar(
         title: Text(_s(_data['title']).isEmpty ? ' ' : _s(_data['title'])),
         actions: [
+          // CMD #430 — the STOCK AUDIT, from the shelf. The shelf is the list
+          // this screen claims is true; the audit is how the shop finds out
+          // whether it is. Icon, tooltip and the "count in progress" badge all
+          // come from pharmacy_audit_entry().
+          const AuditNavIcon(),
           // CMD #423 — the BILL VAULT, from the shelf. This is the right door
           // for it: every lot on this screen was born from a bill, and the
           // vault is where the bills that have not become lots yet are waiting.

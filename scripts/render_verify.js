@@ -100,6 +100,35 @@ const supplierKeys    = argv.includes('--supplier-keys');
 const adminPath       = argVal('--admin-path');
 const shotPath        = argVal('--shot');
 
+// CMD #466 — a card BELOW the fold is still unphotographed evidence.
+// --admin-path proved a route paints, but --shot only ever captured the top
+// 800 px of it, so a section added to the bottom of a long admin screen (here
+// the partner console's Status and Licences cards) rendered, logged, and was
+// invisible in the proof. Flutter draws its own scroller inside the canvas, so
+// window.scrollTo does nothing: the wheel has to be sent to the page.
+// --shot-wheel <px> scrolls that many pixels before the capture.
+const shotWheel       = parseInt(argVal('--shot-wheel') || '0', 10);
+
+async function wheelBeforeShot(page) {
+  if (!shotWheel) return;
+  try {
+    const vp = page.viewportSize() || { width: 1280, height: 800 };
+    await page.mouse.move(Math.round(vp.width / 2), Math.round(vp.height / 2));
+    // In steps, because one huge wheel event can outrun a lazy ListView.
+    let done = 0;
+    while (done < shotWheel) {
+      const step = Math.min(400, shotWheel - done);
+      await page.mouse.wheel(0, step);
+      done += step;
+      await page.waitForTimeout(120);
+    }
+    await page.waitForTimeout(400);
+    console.log(`  Scrolled   : ${shotWheel}px before the capture`);
+  } catch (e) {
+    console.log(`  Scrolled   : FAILED (${e.message})`);
+  }
+}
+
 // CMD #447 — the SAME reachability proof, through the eyes the screen is built
 // for. /pharmacy/audit is a shop-owner surface: pharmacy_audit_home() resolves
 // the caller's own shop via my_customer_id() and refuses everyone else, so the
@@ -436,6 +465,7 @@ async function phaseAdmin(browser, session, expectedHash) {
       lastLog = logText;
       if (shotPath) {
         try {
+          await wheelBeforeShot(page);
           await page.screenshot({ path: shotPath, fullPage: false });
           console.log(`  Screenshot : ${shotPath}`);
         } catch (e) {

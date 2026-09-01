@@ -14,6 +14,7 @@ import 'auth/business_details_screen.dart';
 import 'admin/view_as_picker_dialog.dart';
 import 'admin/loyalty_admin_screen.dart';
 import 'rewards_screen.dart';
+import 'customer/customer_staff_screen.dart';  // CHANGE #408
 import 'wishlist_screen.dart';
 import 'pharmacy/pos_screen.dart'; // CMD #411 — the pharmacy counter
 
@@ -621,6 +622,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 if (!isViewAs && isRegistered)
                   _RewardsEntryCard(),
 
+                // Staff logins (CHANGE #408) — the pharmacy owner hands out
+                // extra logins instead of sharing their own. Shown to every
+                // registered customer because customer_staff_list() decides
+                // for itself whether the caller may manage anything: a staff
+                // member opening it gets their own row and can_manage:false,
+                // which is a real answer, not an error. The screen renders
+                // that refusal in the backend's own words.
+                if (!isViewAs && isRegistered)
+                  _StaffLoginsEntryCard(),
+
                 // Loyalty control panel (CHANGE #176) — super-admin only, and
                 // loyalty_config_get() re-checks the role server-side, so this
                 // mirrors the backend gate rather than being the only one.
@@ -1057,6 +1068,18 @@ class _MenuEntryCard extends StatelessWidget {
       ),
     );
   }
+}
+
+/// CHANGE #408 — the way into the pharmacy's staff logins.
+class _StaffLoginsEntryCard extends StatelessWidget {
+  const _StaffLoginsEntryCard();
+
+  @override
+  Widget build(BuildContext context) => _MenuEntryCard(
+        icon: Icons.badge_outlined,
+        copyKey: 'profile.row_staff_logins',
+        destination: () => const CustomerStaffScreen(),
+      );
 }
 
 class _RewardsEntryCard extends StatelessWidget {

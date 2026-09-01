@@ -702,7 +702,10 @@ create or replace function public._phs_sale_event_trg()
 returns trigger language plpgsql security definer set search_path = public as $$
 declare v_res jsonb;
 begin
-  if new.event_type <> 'sale.completed' or new.consumed is not null then
+  -- `consumed` is a MAP of consumer -> result, not one consumer's slot: #416
+  -- will stamp the register's own key on the same row. So the guard is our own
+  -- key, and the write is a merge — never an overwrite of somebody else's answer.
+  if new.event_type <> 'sale.completed' or coalesce(new.consumed, '{}'::jsonb) ? 'stock' then
     return new;
   end if;
   begin
@@ -711,7 +714,9 @@ begin
     v_res := jsonb_build_object('ok', false, 'error', 'stock_consume_failed',
                                 'detail', sqlerrm, 'at', now());
   end;
-  update public.pos_sale_event set consumed = v_res where id = new.id;
+  update public.pos_sale_event
+     set consumed = coalesce(consumed, '{}'::jsonb) || jsonb_build_object('stock', v_res)
+   where id = new.id;
   return new;
 end $$;
 
@@ -719,3 +724,952 @@ drop trigger if exists phs_sale_event_trg on public.pos_sale_event;
 create trigger phs_sale_event_trg
   after insert on public.pos_sale_event
   for each row execute function public._phs_sale_event_trg();
+
+-- ─────────────────────────── 7. THE MANUAL PATHS ────────────────────────────
+-- Everything the purchase side cannot know: the stock that was already on the
+-- shelf the day they joined, a strip bought from the shop down the road, and
+-- the corrections.
+
+-- 7a. Outside purchase — one lot, typed.
+create or replace function public.pharmacy_stock_add_purchase(p jsonb)
+returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  v_shop uuid := public._phs_shop();
+  v_qty  numeric := public._phs_num(p->>'qty');
+  v_name text := nullif(btrim(coalesce(p->>'product_name','')), '');
+  v_mid  bigint := nullif(p->>'medicine_id','')::bigint;
+  v_lot  uuid;
+begin
+  if v_shop is null then return public._phs_denied(); end if;
+  if v_mid is not null and v_name is null then
+    select m.product_name into v_name from public."MEDICINE" m where m.id = v_mid;
+  end if;
+  if v_name is null then
+    return jsonb_build_object('ok', false, 'error', 'no_product',
+      'message', public.ui_text('phstock.err_no_product'));
+  end if;
+  if v_qty <= 0 then
+    return jsonb_build_object('ok', false, 'error', 'no_qty',
+      'message', public.ui_text('phstock.err_no_qty'));
+  end if;
+
+  v_lot := public._phs_apply(
+    p_shop        => v_shop,
+    p_medicine_id => v_mid,
+    p_name        => v_name,
+    p_pack        => p->>'pack_label',
+    p_batch       => p->>'batch_no',
+    p_expiry      => p->>'expiry',
+    p_qty_delta   => v_qty,
+    p_unit_cost   => nullif(p->>'unit_cost','')::numeric,
+    p_mrp         => nullif(p->>'mrp','')::numeric,
+    p_kind        => 'receipt_outside',
+    p_source_kind => 'outside',
+    p_note        => nullif(btrim(coalesce(p->>'note','')), ''),
+    p_ref_kind    => 'outside',
+    p_ref_id      => coalesce(nullif(p->>'client_action_id',''), gen_random_uuid()::text),
+    p_supplier    => p->>'supplier_label');
+
+  return jsonb_build_object('ok', true, 'stock_id', v_lot,
+    'message', public.ui_text('phstock.added_toast'));
+end $$;
+
+-- 7b. Adjustment — a reason is NOT optional. `who` is auth.uid(), recorded on
+-- the movement, which is the audit this command has to prove.
+create or replace function public.pharmacy_stock_adjust(
+  p_stock_id uuid, p_new_qty numeric, p_reason text, p_note text default null)
+returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  v_shop  uuid := public._phs_shop();
+  v_lot   public.pharmacy_stock%rowtype;
+  v_delta numeric;
+begin
+  if v_shop is null then return public._phs_denied(); end if;
+
+  select * into v_lot from public.pharmacy_stock
+   where id = p_stock_id and pharmacy_id = v_shop;
+  if not found then
+    return jsonb_build_object('ok', false, 'error', 'no_lot',
+      'message', public.ui_text('phstock.err_no_lot'));
+  end if;
+
+  if not exists (select 1 from public.pharmacy_stock_reason
+                  where code = p_reason and is_active) then
+    return jsonb_build_object('ok', false, 'error', 'no_reason',
+      'message', public.ui_text('phstock.err_no_reason'));
+  end if;
+
+  v_delta := coalesce(p_new_qty, 0) - v_lot.qty;
+  if v_delta = 0 then
+    return jsonb_build_object('ok', false, 'error', 'no_change',
+      'message', public.ui_text('phstock.err_no_change'));
+  end if;
+
+  perform public._phs_apply(
+    p_shop        => v_shop,
+    p_medicine_id => v_lot.medicine_id,
+    p_name        => v_lot.product_name,
+    p_pack        => v_lot.pack_label,
+    p_batch       => null, p_expiry => null,
+    p_qty_delta   => v_delta,
+    p_unit_cost   => null, p_mrp => null,
+    p_kind        => 'adjust',
+    p_source_kind => null,
+    p_reason      => p_reason,
+    p_note        => nullif(btrim(coalesce(p_note,'')), ''),
+    p_ref_kind    => 'adjust',
+    p_ref_id      => gen_random_uuid()::text,
+    p_lot_id      => v_lot.id);
+
+  return jsonb_build_object('ok', true, 'stock_id', v_lot.id,
+    'message', public.ui_text('phstock.adjusted_toast'));
+end $$;
+
+-- 7c. Opening stock. Two doors into ONE review table, because the risk is the
+-- same either way: a machine read their handwriting and a human has to agree
+-- with it before the shelf believes it.
+create or replace function public.pharmacy_stock_import_start(
+  p_kind text, p_bucket text default null, p_path text default null)
+returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  v_shop uuid := public._phs_shop();
+  v_id uuid := gen_random_uuid();
+  v_bucket text; v_path text;
+begin
+  if v_shop is null then return public._phs_denied(); end if;
+  if coalesce(p_kind,'') not in ('csv','photo') then
+    return jsonb_build_object('ok', false, 'error', 'bad_kind');
+  end if;
+
+  -- The upload TARGET is decided here, not in Dart, and it always begins with
+  -- the pharmacy's own id — which is exactly what the storage policy checks, so
+  -- one shop can never write into another shop's folder.
+  if p_kind = 'photo' then
+    v_bucket := 'stock-imports';
+    v_path   := v_shop::text || '/' || v_id::text || '.jpg';
+  end if;
+
+  insert into public.pharmacy_stock_import(id, pharmacy_id, kind, bucket, path,
+                                           created_by, status)
+  values (v_id, v_shop, p_kind,
+          coalesce(v_bucket, p_bucket), coalesce(v_path, p_path), auth.uid(),
+          case when p_kind = 'photo' then 'scanning' else 'draft' end);
+
+  return jsonb_build_object('ok', true, 'import_id', v_id,
+    'bucket', coalesce(v_bucket, p_bucket),
+    'path',   coalesce(v_path, p_path),
+    'scan_function', case when p_kind = 'photo' then 'stock-ocr' else null end,
+    'message', public.ui_text(case when p_kind='photo'
+                              then 'phstock.import_scanning' else 'phstock.import_started' end));
+end $$;
+
+-- The private bucket the register photos land in. Created here so the feature
+-- ships whole; the policies below are the only way into it.
+insert into storage.buckets (id, name, public)
+values ('stock-imports', 'stock-imports', false)
+on conflict (id) do nothing;
+
+drop policy if exists phs_import_upload on storage.objects;
+create policy phs_import_upload on storage.objects
+  for insert to authenticated
+  with check (bucket_id = 'stock-imports'
+              and split_part(name, '/', 1) = public.my_customer_id()::text);
+
+drop policy if exists phs_import_read on storage.objects;
+create policy phs_import_read on storage.objects
+  for select to authenticated
+  using (bucket_id = 'stock-imports'
+         and split_part(name, '/', 1) = public.my_customer_id()::text);
+
+-- One CSV line -> fields, honouring quoted commas. Kept in SQL on purpose: Dart
+-- must not parse the file, or the parse becomes a second implementation nobody
+-- can change without a deploy.
+create or replace function public._phs_csv_cells(p_line text)
+returns text[] language sql immutable as $$
+  select array(
+    select btrim(btrim(c), '"')
+      from unnest(regexp_split_to_array(coalesce(p_line,''),
+             ',(?=(?:[^"]*"[^"]*")*[^"]*$)')) c);
+$$;
+
+create or replace function public.pharmacy_stock_import_csv(p_import_id uuid, p_text text)
+returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  v_shop  uuid := public._phs_shop();
+  v_imp   public.pharmacy_stock_import%rowtype;
+  v_line  text;
+  v_cells text[];
+  v_head  text[];
+  v_no    integer := 0;
+  v_kept  integer := 0;
+  i_name int := 1; i_batch int := 2; i_exp int := 3;
+  i_qty  int := 4; i_cost  int := 5; i_mrp int := 6;
+  k int; h text;
+  v_nm text; v_mid bigint;
+begin
+  if v_shop is null then return public._phs_denied(); end if;
+  select * into v_imp from public.pharmacy_stock_import
+   where id = p_import_id and pharmacy_id = v_shop;
+  if not found then return jsonb_build_object('ok', false, 'error', 'no_import'); end if;
+
+  delete from public.pharmacy_stock_import_row where import_id = p_import_id;
+
+  for v_line in
+    select l from regexp_split_to_table(replace(coalesce(p_text,''), E'\r', ''), E'\n') l
+  loop
+    if btrim(coalesce(v_line,'')) = '' then continue; end if;
+    v_cells := public._phs_csv_cells(v_line);
+
+    -- A header is recognised, not required. Recognised, the columns may be in
+    -- any order and named in any of the ways a pharmacy actually names them.
+    if v_no = 0 and v_kept = 0
+       and lower(array_to_string(v_cells, ',')) ~ '(product|item|medicine|name)' then
+      v_head := v_cells;
+      for k in 1 .. array_length(v_head, 1) loop
+        h := lower(btrim(coalesce(v_head[k], '')));
+        if   h ~ '(product|item|medicine|^name)' then i_name := k;
+        elsif h ~ 'batch'                        then i_batch := k;
+        elsif h ~ '(expiry|exp)'                 then i_exp  := k;
+        elsif h ~ '(qty|quantity|stock)'         then i_qty  := k;
+        elsif h ~ '(cost|rate|ptr|purchase)'     then i_cost := k;
+        elsif h ~ 'mrp'                          then i_mrp  := k;
+        end if;
+      end loop;
+      continue;
+    end if;
+
+    v_no := v_no + 1;
+    v_nm := nullif(btrim(coalesce(v_cells[i_name], '')), '');
+    if v_nm is null then continue; end if;
+
+    select m.id into v_mid from public."MEDICINE" m
+     where public._norm_name(m.product_name) = public._norm_name(v_nm)
+     limit 1;
+
+    insert into public.pharmacy_stock_import_row(
+      import_id, line_no, raw, medicine_id, product_name, batch_no, expiry,
+      qty, unit_cost, mrp, match_status)
+    values (
+      p_import_id, v_no, to_jsonb(v_cells), v_mid, v_nm,
+      nullif(btrim(coalesce(v_cells[i_batch],'')),''),
+      nullif(btrim(coalesce(v_cells[i_exp],'')),''),
+      public._phs_num(v_cells[i_qty]),
+      nullif(public._phs_num(v_cells[i_cost]), 0),
+      nullif(public._phs_num(v_cells[i_mrp]), 0),
+      case when v_mid is not null then 'matched' else 'unmatched' end);
+    v_kept := v_kept + 1;
+  end loop;
+
+  update public.pharmacy_stock_import
+     set rows_total = v_kept, status = 'ready'
+   where id = p_import_id;
+
+  return public.pharmacy_stock_import_preview(p_import_id);
+end $$;
+
+-- The photo door. The edge function does the reading and calls this with what
+-- Gemini saw — VERBATIM, exactly as the OCR rule demands. No expansion, no
+-- correction, no world knowledge; a name it cannot match stays unmatched and
+-- the human decides.
+create or replace function public.pharmacy_stock_import_ocr_report(
+  p_import_id uuid, p_rows jsonb, p_error text default null)
+returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  v_imp public.pharmacy_stock_import%rowtype;
+  v_r   jsonb; v_no integer := 0; v_nm text; v_mid bigint;
+begin
+  select * into v_imp from public.pharmacy_stock_import where id = p_import_id;
+  if not found then return jsonb_build_object('ok', false, 'error', 'no_import'); end if;
+
+  if p_error is not null then
+    update public.pharmacy_stock_import
+       set status = 'failed', ocr_error = p_error where id = p_import_id;
+    return jsonb_build_object('ok', false, 'error', 'ocr_failed');
+  end if;
+
+  delete from public.pharmacy_stock_import_row where import_id = p_import_id;
+
+  for v_r in select * from jsonb_array_elements(coalesce(p_rows, '[]'::jsonb)) loop
+    v_nm := nullif(btrim(coalesce(v_r->>'product_name','')), '');
+    if v_nm is null then continue; end if;
+    v_no := v_no + 1;
+
+    select m.id into v_mid from public."MEDICINE" m
+     where public._norm_name(m.product_name) = public._norm_name(v_nm)
+     limit 1;
+
+    insert into public.pharmacy_stock_import_row(
+      import_id, line_no, raw, medicine_id, product_name, batch_no, expiry,
+      qty, unit_cost, mrp, match_status)
+    values (p_import_id, v_no, v_r, v_mid, v_nm,
+      nullif(btrim(coalesce(v_r->>'batch_no','')),''),
+      nullif(btrim(coalesce(v_r->>'expiry','')),''),
+      public._phs_num(v_r->>'qty'),
+      nullif(public._phs_num(v_r->>'unit_cost'), 0),
+      nullif(public._phs_num(v_r->>'mrp'), 0),
+      case when v_mid is not null then 'matched' else 'unmatched' end);
+  end loop;
+
+  update public.pharmacy_stock_import
+     set rows_total = v_no, status = 'ready', ocr_error = null
+   where id = p_import_id;
+
+  return jsonb_build_object('ok', true, 'rows', v_no);
+end $$;
+
+create or replace function public.pharmacy_stock_import_row_set(p_row_id uuid, p_patch jsonb)
+returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare v_shop uuid := public._phs_shop(); v_imp uuid;
+begin
+  if v_shop is null then return public._phs_denied(); end if;
+  select r.import_id into v_imp
+    from public.pharmacy_stock_import_row r
+    join public.pharmacy_stock_import i on i.id = r.import_id
+   where r.id = p_row_id and i.pharmacy_id = v_shop;
+  if v_imp is null then return jsonb_build_object('ok', false, 'error', 'no_row'); end if;
+
+  update public.pharmacy_stock_import_row r
+     set product_name = coalesce(nullif(btrim(coalesce(p_patch->>'product_name','')),''), r.product_name),
+         batch_no  = case when p_patch ? 'batch_no' then nullif(btrim(coalesce(p_patch->>'batch_no','')),'') else r.batch_no end,
+         expiry    = case when p_patch ? 'expiry'   then nullif(btrim(coalesce(p_patch->>'expiry','')),'')   else r.expiry end,
+         qty       = case when p_patch ? 'qty'       then public._phs_num(p_patch->>'qty')                    else r.qty end,
+         unit_cost = case when p_patch ? 'unit_cost' then nullif(public._phs_num(p_patch->>'unit_cost'), 0)   else r.unit_cost end,
+         mrp       = case when p_patch ? 'mrp'       then nullif(public._phs_num(p_patch->>'mrp'), 0)         else r.mrp end,
+         keep      = case when p_patch ? 'keep'      then coalesce((p_patch->>'keep')::boolean, r.keep)       else r.keep end
+   where r.id = p_row_id;
+
+  return public.pharmacy_stock_import_preview(v_imp);
+end $$;
+
+create or replace function public.pharmacy_stock_import_apply(p_import_id uuid)
+returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  v_shop uuid := public._phs_shop();
+  v_imp  public.pharmacy_stock_import%rowtype;
+  v_r    record; v_n integer := 0;
+begin
+  if v_shop is null then return public._phs_denied(); end if;
+  select * into v_imp from public.pharmacy_stock_import
+   where id = p_import_id and pharmacy_id = v_shop;
+  if not found then return jsonb_build_object('ok', false, 'error', 'no_import'); end if;
+  if v_imp.status = 'applied' then
+    return jsonb_build_object('ok', true, 'already', true, 'rows', v_imp.rows_applied,
+      'message', public.ui_text('phstock.import_already'));
+  end if;
+
+  for v_r in
+    select * from public.pharmacy_stock_import_row
+     where import_id = p_import_id and keep and coalesce(qty,0) > 0
+     order by line_no
+  loop
+    perform public._phs_apply(
+      p_shop        => v_shop,
+      p_medicine_id => v_r.medicine_id,
+      p_name        => v_r.product_name,
+      p_pack        => v_r.pack_label,
+      p_batch       => v_r.batch_no,
+      p_expiry      => v_r.expiry,
+      p_qty_delta   => v_r.qty,
+      p_unit_cost   => v_r.unit_cost,
+      p_mrp         => v_r.mrp,
+      p_kind        => 'opening',
+      p_source_kind => 'opening',
+      p_ref_kind    => 'import_row',
+      p_ref_id      => v_r.id::text);
+    v_n := v_n + 1;
+  end loop;
+
+  update public.pharmacy_stock_import
+     set status = 'applied', rows_applied = v_n, applied_at = now()
+   where id = p_import_id;
+
+  return jsonb_build_object('ok', true, 'rows', v_n,
+    'message', public.ui_textf(
+                 case when v_n = 1 then 'phstock.import_applied_one'
+                      else 'phstock.import_applied_many' end,
+                 jsonb_build_object('n', v_n::text)));
+end $$;
+
+-- ─────────────────────────── 8. READ: THE STOCK SCREEN ──────────────────────
+-- One RPC, every string already a string. Dart adds nothing up, formats no
+-- rupee, pluralises no word and decides no badge colour.
+
+create or replace function public.pharmacy_stock_entry()
+returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare v_shop uuid := public._phs_shop();
+begin
+  if v_shop is null then return jsonb_build_object('ok', true, 'show', false); end if;
+  return jsonb_build_object(
+    'ok', true, 'show', true,
+    'route_key', 'pharmacy_stock',
+    'icon_key',  'inventory_2',
+    'label',     public.ui_text('phstock.nav_label'),
+    'sub_label', public.ui_text('phstock.subtitle'));
+end $$;
+
+-- The per-lot state machine, in ONE place. Every badge on the screen and every
+-- filter count below is this function's answer, so a lot can never be counted
+-- as "low" by the tile and drawn as "ok" by the row.
+create or replace function public._phs_lot_state(
+  p_qty numeric, p_expiry_on date, p_low numeric, p_near_days integer, p_today date)
+returns text language sql immutable as $$
+  select case
+    when coalesce(p_qty,0) < 0                                          then 'negative'
+    when p_expiry_on is not null and p_expiry_on < p_today              then 'expired'
+    when coalesce(p_qty,0) = 0                                          then 'out'
+    when p_expiry_on is not null
+     and p_expiry_on <= p_today + (coalesce(p_near_days,90) || ' days')::interval
+                                                                        then 'near_expiry'
+    when coalesce(p_qty,0) <= coalesce(p_low,5)                         then 'low'
+    else 'ok' end;
+$$;
+
+-- The rows this screen is looking at, tagged with their state, in ONE place.
+-- Both the tile counts and the row list read it, so a lot can never be counted
+-- as low by the header and drawn as fine in the list.
+create or replace function public._phs_scope(p_shop uuid, p_q text)
+returns table (id uuid, item_key text, state text)
+language sql stable security definer set search_path = public as $$
+  select s.id, s.item_key,
+         public._phs_lot_state(s.qty, s.expiry_on,
+           (public._phs_settings(p_shop)->>'low_qty')::numeric,
+           (public._phs_settings(p_shop)->>'near_expiry_days')::integer,
+           public._phs_today())
+    from public.pharmacy_stock s
+   where s.pharmacy_id = p_shop
+     and (p_q is null
+          or s.product_name ilike '%' || p_q || '%'
+          or coalesce(s.batch_no,'') ilike '%' || p_q || '%');
+$$;
+
+create or replace function public.pharmacy_stock_home(
+  p_q text default null, p_filter text default 'all',
+  p_limit integer default 40, p_offset integer default 0)
+returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  v_shop   uuid := public._phs_shop();
+  v_cfg    jsonb;
+  v_low    numeric; v_near integer; v_today date := public._phs_today();
+  v_q      text := nullif(btrim(coalesce(p_q,'')), '');
+  v_f      text := lower(coalesce(nullif(btrim(coalesce(p_filter,'')),''), 'all'));
+  v_lim    integer := least(greatest(coalesce(p_limit,40), 1), 100);
+  v_off    integer := greatest(coalesce(p_offset,0), 0);
+  v_rows   jsonb; v_items integer; v_more boolean;
+  v_val    numeric; v_neg integer; v_low_n integer; v_out_n integer;
+  v_exp_n  integer; v_near_n integer; v_lots integer;
+begin
+  if v_shop is null then return public._phs_denied(); end if;
+  v_cfg  := public._phs_settings(v_shop);
+  v_low  := (v_cfg->>'low_qty')::numeric;
+  v_near := (v_cfg->>'near_expiry_days')::integer;
+
+  -- The counts, computed once, on the same scope the rows come from.
+  select
+    coalesce(sum(case when s.qty > 0 then s.qty * coalesce(s.unit_cost,0) else 0 end), 0),
+    count(*) filter (where sc.state = 'negative'),
+    count(*) filter (where sc.state = 'low'),
+    count(*) filter (where sc.state = 'out'),
+    count(*) filter (where sc.state = 'expired'),
+    count(*) filter (where sc.state = 'near_expiry'),
+    count(*),
+    count(distinct s.item_key)
+    into v_val, v_neg, v_low_n, v_out_n, v_exp_n, v_near_n, v_lots, v_items
+    from public._phs_scope(v_shop, v_q) sc join public.pharmacy_stock s on s.id = sc.id;
+
+  select coalesce(jsonb_agg(r order by r_neg desc, r_name), '[]'::jsonb), count(*) > v_off + v_lim
+    into v_rows, v_more
+    from (
+      select jsonb_build_object(
+               'item_key',     g.item_key,
+               'medicine_id',  g.medicine_id,
+               'product_name', g.product_name,
+               'pack_label',   g.pack_label,
+               'qty_label',    public.ui_textf('phstock.on_hand',
+                                 jsonb_build_object('qty', public._phs_qty(g.qty_total))),
+               'value_label',  public._phs_money(g.value_total),
+               'badge',        case
+                 when g.n_negative > 0 then jsonb_build_object(
+                        'label', public.ui_text('phstock.badge_negative'), 'tone', 'danger')
+                 when g.qty_total = 0 then jsonb_build_object(
+                        'label', public.ui_text('phstock.badge_out'), 'tone', 'danger')
+                 when g.n_expired > 0 then jsonb_build_object(
+                        'label', public.ui_text('phstock.badge_expired'), 'tone', 'danger')
+                 when g.qty_total <= v_low then jsonb_build_object(
+                        'label', public.ui_text('phstock.badge_low'), 'tone', 'warning')
+                 when g.n_near > 0 then jsonb_build_object(
+                        'label', public.ui_text('phstock.badge_near'), 'tone', 'warning')
+                 else null end,
+               'batches',      g.batches) as r,
+             (g.n_negative > 0) as r_neg,
+             g.product_name    as r_name
+        from (
+          select s.item_key,
+                 min(s.medicine_id)                                  as medicine_id,
+                 min(s.product_name)                                 as product_name,
+                 min(s.pack_label)                                   as pack_label,
+                 sum(s.qty)                                          as qty_total,
+                 sum(case when s.qty > 0 then s.qty * coalesce(s.unit_cost,0) else 0 end) as value_total,
+                 count(*) filter (where sc.state = 'negative')       as n_negative,
+                 count(*) filter (where sc.state = 'expired')        as n_expired,
+                 count(*) filter (where sc.state = 'near_expiry')    as n_near,
+                 jsonb_agg(jsonb_build_object(
+                     'stock_id',      s.id,
+                     'batch_label',   case
+                        when nullif(btrim(coalesce(s.batch_no,'')),'') is not null
+                        then public.ui_textf('phstock.batch_line',
+                               jsonb_build_object('batch', s.batch_no))
+                        else public.ui_text('phstock.batch_unknown') end,
+                     'expiry_label',  case
+                        when nullif(btrim(coalesce(s.expiry,'')),'') is not null
+                        then public.ui_textf('phstock.expiry_line',
+                               jsonb_build_object('expiry', s.expiry))
+                        else public.ui_text('phstock.expiry_unknown') end,
+                     'qty_label',     public._phs_qty(s.qty),
+                     'qty',           s.qty,
+                     'cost_label',    case when s.unit_cost is not null
+                        then public.ui_textf('phstock.unit_cost',
+                               jsonb_build_object('amount', public._phs_money(s.unit_cost)))
+                        else public.ui_text('phstock.cost_unknown') end,
+                     'value_label',   public._phs_money(
+                                        case when s.qty > 0 then s.qty * coalesce(s.unit_cost,0) else 0 end),
+                     'state',         sc.state,
+                     'tone',          case sc.state
+                                        when 'negative'    then 'danger'
+                                        when 'expired'     then 'danger'
+                                        when 'out'         then 'muted'
+                                        when 'low'         then 'warning'
+                                        when 'near_expiry' then 'warning'
+                                        else 'ok' end,
+                     'state_label',   case sc.state
+                        when 'negative'    then public.ui_text('phstock.state_negative')
+                        when 'expired'     then public.ui_text('phstock.state_expired')
+                        when 'out'         then public.ui_text('phstock.state_out')
+                        when 'low'         then public.ui_text('phstock.state_low')
+                        when 'near_expiry' then public.ui_text('phstock.state_near')
+                        else null end,
+                     'source_label',  case s.source_kind
+                        when 'medibo_order' then public.ui_text('phstock.src_medibo')
+                        when 'opening'      then public.ui_text('phstock.src_opening')
+                        when 'outside'      then public.ui_text('phstock.src_outside')
+                        else public.ui_text('phstock.src_adjust') end)
+                   order by s.expiry_on asc nulls last, s.created_at asc)  as batches
+            from public._phs_scope(v_shop, v_q) sc
+            join public.pharmacy_stock s on s.id = sc.id
+           where v_f = 'all' or sc.state = v_f
+           group by s.item_key
+        ) g
+       order by r_neg desc, r_name
+       offset v_off limit v_lim
+    ) paged;
+
+  return jsonb_build_object(
+    'ok', true,
+    'title',       public.ui_text('phstock.title'),
+    'subtitle',    public.ui_text('phstock.subtitle'),
+    'search_hint', public.ui_text('phstock.search_hint'),
+    'tiles', jsonb_build_array(
+      jsonb_build_object('key','value','label', public.ui_text('phstock.tile_value'),
+                         'value', public._phs_money(v_val), 'tone','ok'),
+      jsonb_build_object('key','items','label', public.ui_text('phstock.tile_items'),
+                         'value', v_items::text, 'tone','ok'),
+      jsonb_build_object('key','low','label', public.ui_text('phstock.tile_low'),
+                         'value', (v_low_n + v_out_n)::text,
+                         'tone', case when (v_low_n + v_out_n) > 0 then 'warning' else 'ok' end),
+      jsonb_build_object('key','negative','label', public.ui_text('phstock.tile_negative'),
+                         'value', v_neg::text,
+                         'tone', case when v_neg > 0 then 'danger' else 'ok' end)),
+    'filters', jsonb_build_array(
+      jsonb_build_object('key','all',        'label', public.ui_text('phstock.f_all'),      'count', v_lots,   'selected', v_f='all'),
+      jsonb_build_object('key','negative',   'label', public.ui_text('phstock.f_negative'), 'count', v_neg,    'selected', v_f='negative'),
+      jsonb_build_object('key','low',        'label', public.ui_text('phstock.f_low'),      'count', v_low_n,  'selected', v_f='low'),
+      jsonb_build_object('key','out',        'label', public.ui_text('phstock.f_out'),      'count', v_out_n,  'selected', v_f='out'),
+      jsonb_build_object('key','near_expiry','label', public.ui_text('phstock.f_near'),     'count', v_near_n, 'selected', v_f='near_expiry'),
+      jsonb_build_object('key','expired',    'label', public.ui_text('phstock.f_expired'),  'count', v_exp_n,  'selected', v_f='expired')),
+    'reasons', (select coalesce(jsonb_agg(jsonb_build_object(
+                  'code', code, 'label', label, 'direction', direction) order by sort), '[]'::jsonb)
+                  from public.pharmacy_stock_reason where is_active),
+    'rows',      v_rows,
+    'has_more',  coalesce(v_more, false),
+    'negative_note', case when v_neg > 0
+                     then public.ui_textf(
+                            case when v_neg = 1 then 'phstock.negative_note_one'
+                                 else 'phstock.negative_note_many' end,
+                            jsonb_build_object('n', v_neg::text)) else null end,
+    'empty', case when jsonb_array_length(v_rows) = 0 then jsonb_build_object(
+                 'title', public.ui_text(case when v_q is not null or v_f <> 'all'
+                                          then 'phstock.empty_filtered_title'
+                                          else 'phstock.empty_title' end),
+                 'body',  public.ui_text(case when v_q is not null or v_f <> 'all'
+                                          then 'phstock.empty_filtered_body'
+                                          else 'phstock.empty_body' end)) else null end,
+    'copy', jsonb_build_object(
+      'add_button',     public.ui_text('phstock.add_button'),
+      'import_button',  public.ui_text('phstock.import_button'),
+      'adjust_button',  public.ui_text('phstock.adjust_button'),
+      'adjust_title',   public.ui_text('phstock.adjust_title'),
+      'adjust_qty',     public.ui_text('phstock.adjust_qty'),
+      'adjust_reason',  public.ui_text('phstock.adjust_reason'),
+      'adjust_note',    public.ui_text('phstock.adjust_note'),
+      'add_title',      public.ui_text('phstock.add_title'),
+      'f_product',      public.ui_text('phstock.f_product'),
+      'f_batch',        public.ui_text('phstock.f_batch'),
+      'f_expiry',       public.ui_text('phstock.f_expiry'),
+      'f_qty',          public.ui_text('phstock.f_qty'),
+      'f_cost',         public.ui_text('phstock.f_cost'),
+      'f_mrp',          public.ui_text('phstock.f_mrp'),
+      'f_supplier',     public.ui_text('phstock.f_supplier'),
+      'save',           public.ui_text('phstock.save'),
+      'saving',         public.ui_text('phstock.saving'),
+      'cancel',         public.ui_text('phstock.cancel'),
+      'history_title',  public.ui_text('phstock.history_title'),
+      'import_title',   public.ui_text('phstock.import_title'),
+      'import_body',    public.ui_text('phstock.import_body'),
+      'import_csv',     public.ui_text('phstock.import_csv'),
+      'import_photo',   public.ui_text('phstock.import_photo'),
+      'import_apply',   public.ui_text('phstock.import_apply'),
+      'retry',          public.ui_text('phstock.retry'),
+      'error_generic',  public.ui_text('phstock.error_generic')));
+end $$;
+
+-- The audit trail for one lot: who moved it, when, why, and where it stood
+-- afterwards. This is the proof the adjustment rule asks for.
+create or replace function public.pharmacy_stock_moves(
+  p_stock_id uuid, p_limit integer default 40)
+returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  v_shop uuid := public._phs_shop();
+  v_lot  public.pharmacy_stock%rowtype;
+  v_rows jsonb;
+begin
+  if v_shop is null then return public._phs_denied(); end if;
+  select * into v_lot from public.pharmacy_stock
+   where id = p_stock_id and pharmacy_id = v_shop;
+  if not found then
+    return jsonb_build_object('ok', false, 'error', 'no_lot',
+      'message', public.ui_text('phstock.err_no_lot'));
+  end if;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+      'id',        m.id,
+      'kind_label', case m.kind
+         when 'receipt_order'   then public.ui_text('phstock.mv_receipt_order')
+         when 'receipt_outside' then public.ui_text('phstock.mv_receipt_outside')
+         when 'opening'         then public.ui_text('phstock.mv_opening')
+         when 'sale'            then public.ui_text('phstock.mv_sale')
+         when 'sale_void'       then public.ui_text('phstock.mv_sale_void')
+         else public.ui_text('phstock.mv_adjust') end,
+      'qty_label', case when m.qty_delta >= 0 then '+' else '−' end
+                   || public._phs_qty(abs(m.qty_delta)),
+      'tone',      case when m.qty_delta >= 0 then 'ok' else 'muted' end,
+      'after_label', public.ui_textf('phstock.mv_after',
+                       jsonb_build_object('qty', public._phs_qty(m.qty_after))),
+      'reason_label', (select r.label from public.pharmacy_stock_reason r
+                        where r.code = m.reason_code),
+      'note',      m.note,
+      'actor',     nullif(btrim(coalesce(m.actor_label,'')), ''),
+      'when',      to_char(m.created_at at time zone 'Asia/Kolkata',
+                           'DD Mon YYYY, HH12:MI AM'))
+      order by m.created_at desc, m.id desc), '[]'::jsonb)
+    into v_rows
+    from (select * from public.pharmacy_stock_move
+           where stock_id = p_stock_id
+           order by created_at desc, id desc
+           limit least(greatest(coalesce(p_limit,40),1),200)) m;
+
+  return jsonb_build_object('ok', true,
+    'title', public.ui_text('phstock.history_title'),
+    'product_name', v_lot.product_name,
+    'rows', v_rows,
+    'empty', case when jsonb_array_length(v_rows) = 0
+             then public.ui_text('phstock.history_empty') else null end);
+end $$;
+
+-- The product picker behind "add an outside purchase". Deliberately its own
+-- function rather than a call into the POS search: the two screens are allowed
+-- to diverge without one of them breaking the other.
+create or replace function public.pharmacy_stock_product_search(
+  p_q text, p_limit integer default 20)
+returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  v_shop uuid := public._phs_shop();
+  v_q text := btrim(coalesce(p_q,''));
+  v_rows jsonb;
+begin
+  if v_shop is null then return public._phs_denied(); end if;
+  if length(v_q) < 2 then
+    return jsonb_build_object('ok', true, 'rows', '[]'::jsonb,
+      'message', public.ui_text('phstock.search_short'));
+  end if;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'medicine_id',  m.id,
+           'product_name', m.product_name,
+           'pack_label',   nullif(btrim(coalesce(m.pack_size, m.pack_type,'')),''),
+           'mrp',          m.mrp,
+           'mrp_label',    case when m.mrp is not null
+                           then public.ui_textf('phstock.mrp_line',
+                                  jsonb_build_object('amount', public._phs_money(m.mrp)))
+                           else null end) order by m.product_name), '[]'::jsonb)
+    into v_rows
+    from (select id, product_name, pack_size, pack_type, mrp
+            from public."MEDICINE"
+           where product_name ilike '%' || v_q || '%'
+           order by product_name
+           limit least(greatest(coalesce(p_limit,20),1),50)) m;
+
+  return jsonb_build_object('ok', true, 'rows', v_rows,
+    'empty', case when jsonb_array_length(v_rows) = 0
+             then public.ui_text('phstock.search_empty') else null end);
+end $$;
+
+create or replace function public.pharmacy_stock_import_preview(p_import_id uuid)
+returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  v_shop uuid := public._phs_shop();
+  v_imp  public.pharmacy_stock_import%rowtype;
+  v_rows jsonb;
+begin
+  if v_shop is null then return public._phs_denied(); end if;
+  select * into v_imp from public.pharmacy_stock_import
+   where id = p_import_id and pharmacy_id = v_shop;
+  if not found then return jsonb_build_object('ok', false, 'error', 'no_import'); end if;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'row_id',       r.id,
+           'line_no',      r.line_no,
+           'product_name', r.product_name,
+           'batch_label',  coalesce(nullif(btrim(coalesce(r.batch_no,'')),''),
+                                    public.ui_text('phstock.batch_unknown')),
+           'expiry_label', coalesce(nullif(btrim(coalesce(r.expiry,'')),''),
+                                    public.ui_text('phstock.expiry_unknown')),
+           'qty_label',    public._phs_qty(r.qty),
+           'cost_label',   case when r.unit_cost is not null
+                           then public._phs_money(r.unit_cost)
+                           else public.ui_text('phstock.cost_unknown') end,
+           'match_label',  case r.match_status
+                             when 'matched' then public.ui_text('phstock.match_ok')
+                             else public.ui_text('phstock.match_none') end,
+           'match_tone',   case r.match_status when 'matched' then 'ok' else 'warning' end,
+           'keep',         r.keep) order by r.line_no), '[]'::jsonb)
+    into v_rows
+    from public.pharmacy_stock_import_row r where r.import_id = p_import_id;
+
+  return jsonb_build_object('ok', true,
+    'import_id', v_imp.id,
+    'kind',      v_imp.kind,
+    'status',    v_imp.status,
+    'title',     public.ui_text('phstock.import_review_title'),
+    'status_label', case v_imp.status
+       when 'scanning' then public.ui_text('phstock.import_scanning')
+       when 'ready'    then public.ui_textf(
+                              case when v_imp.rows_total = 1 then 'phstock.import_ready_one'
+                                   else 'phstock.import_ready_many' end,
+                              jsonb_build_object('n', v_imp.rows_total::text))
+       when 'applied'  then public.ui_textf(
+                              case when v_imp.rows_applied = 1 then 'phstock.import_applied_one'
+                                   else 'phstock.import_applied_many' end,
+                              jsonb_build_object('n', v_imp.rows_applied::text))
+       when 'failed'   then public.ui_text('phstock.import_failed')
+       else public.ui_text('phstock.import_started') end,
+    'error',     v_imp.ocr_error,
+    'rows',      v_rows,
+    'can_apply', v_imp.status = 'ready' and jsonb_array_length(v_rows) > 0,
+    'apply_label', public.ui_text('phstock.import_apply'));
+end $$;
+
+-- The edge function's own door: it reads the image it was pointed at and hands
+-- the rows back through pharmacy_stock_import_ocr_report. service_role only.
+create or replace function public.pharmacy_stock_import_ocr_input(p_import_id uuid)
+returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare v_imp public.pharmacy_stock_import%rowtype;
+begin
+  select * into v_imp from public.pharmacy_stock_import where id = p_import_id;
+  if not found then return jsonb_build_object('ok', false, 'error', 'no_import'); end if;
+  return jsonb_build_object('ok', true, 'import_id', v_imp.id,
+    'bucket', v_imp.bucket, 'path', v_imp.path,
+    'prompt', public.ui_text('phstock.ocr_prompt'));
+end $$;
+
+-- ─────────────────────────── 9. THE WORDS ───────────────────────────────────
+-- Every string the screen can print. Changing the wording is an UPDATE here,
+-- never a deploy — which is the whole point of keeping it out of Dart.
+insert into public.ui_copy (key, value) values
+  ('phstock.nav_label',        to_jsonb('Shelf stock'::text)),
+  ('phstock.title',            to_jsonb('Shelf stock'::text)),
+  ('phstock.subtitle',         to_jsonb('Builds itself from your mediBO deliveries'::text)),
+  ('phstock.search_hint',      to_jsonb('Search a medicine or a batch'::text)),
+  ('phstock.err_not_pharmacy', to_jsonb('Shelf stock is for a pharmacy account.'::text)),
+
+  ('phstock.tile_value',       to_jsonb('Stock value'::text)),
+  ('phstock.tile_items',       to_jsonb('Medicines'::text)),
+  ('phstock.tile_low',         to_jsonb('Low or out'::text)),
+  ('phstock.tile_negative',    to_jsonb('Negative'::text)),
+
+  ('phstock.f_all',            to_jsonb('All'::text)),
+  ('phstock.f_negative',       to_jsonb('Negative'::text)),
+  ('phstock.f_low',            to_jsonb('Low'::text)),
+  ('phstock.f_out',            to_jsonb('Out of stock'::text)),
+  ('phstock.f_near',           to_jsonb('Near expiry'::text)),
+  ('phstock.f_expired',        to_jsonb('Expired'::text)),
+
+  ('phstock.on_hand',          to_jsonb('{qty} on hand'::text)),
+  ('phstock.batch_line',       to_jsonb('Batch {batch}'::text)),
+  ('phstock.batch_unknown',    to_jsonb('Batch not on the bill'::text)),
+  ('phstock.expiry_line',      to_jsonb('Exp {expiry}'::text)),
+  ('phstock.expiry_unknown',   to_jsonb('Expiry not recorded'::text)),
+  ('phstock.unit_cost',        to_jsonb('{amount} / unit'::text)),
+  ('phstock.cost_unknown',     to_jsonb('Cost not known'::text)),
+  ('phstock.mrp_line',         to_jsonb('MRP {amount}'::text)),
+
+  ('phstock.badge_negative',   to_jsonb('NEGATIVE'::text)),
+  ('phstock.badge_out',        to_jsonb('OUT'::text)),
+  ('phstock.badge_expired',    to_jsonb('EXPIRED'::text)),
+  ('phstock.badge_low',        to_jsonb('LOW'::text)),
+  ('phstock.badge_near',       to_jsonb('NEAR EXPIRY'::text)),
+
+  ('phstock.state_negative',   to_jsonb('Sold more than the shelf knew about'::text)),
+  ('phstock.state_expired',    to_jsonb('Past expiry'::text)),
+  ('phstock.state_out',        to_jsonb('Finished'::text)),
+  ('phstock.state_low',        to_jsonb('Running low'::text)),
+  ('phstock.state_near',       to_jsonb('Expiring soon'::text)),
+
+  ('phstock.src_medibo',       to_jsonb('From a mediBO delivery'::text)),
+  ('phstock.src_opening',      to_jsonb('Opening stock'::text)),
+  ('phstock.src_outside',      to_jsonb('Outside purchase'::text)),
+  ('phstock.src_adjust',       to_jsonb('Adjusted'::text)),
+
+  ('phstock.negative_note_one', to_jsonb('1 batch went negative — the counter sold stock this list did not know you had. Correct it and the numbers start telling the truth.'::text)),
+  ('phstock.negative_note_many', to_jsonb('{n} batches went negative — the counter sold stock this list did not know you had. Correct them and the numbers start telling the truth.'::text)),
+  ('phstock.note_sold_unknown', to_jsonb('Sold at the counter with no stock on record'::text)),
+
+  ('phstock.empty_title',      to_jsonb('Nothing on the shelf yet'::text)),
+  ('phstock.empty_body',       to_jsonb('Your next delivered mediBO order lands here on its own — batch, expiry and cost included. Bring your current register in with Opening stock to start from where you are.'::text)),
+  ('phstock.empty_filtered_title', to_jsonb('Nothing matches'::text)),
+  ('phstock.empty_filtered_body',  to_jsonb('Try another search, or switch back to All.'::text)),
+
+  ('phstock.add_button',       to_jsonb('Add purchase'::text)),
+  ('phstock.import_button',    to_jsonb('Opening stock'::text)),
+  ('phstock.adjust_button',    to_jsonb('Adjust'::text)),
+  ('phstock.add_title',        to_jsonb('Outside purchase'::text)),
+  ('phstock.adjust_title',     to_jsonb('Adjust this batch'::text)),
+  ('phstock.adjust_qty',       to_jsonb('Counted quantity'::text)),
+  ('phstock.adjust_reason',    to_jsonb('Reason'::text)),
+  ('phstock.adjust_note',      to_jsonb('Note (optional)'::text)),
+  ('phstock.f_product',        to_jsonb('Medicine'::text)),
+  ('phstock.f_batch',          to_jsonb('Batch'::text)),
+  ('phstock.f_expiry',         to_jsonb('Expiry (MM/YY)'::text)),
+  ('phstock.f_qty',            to_jsonb('Quantity'::text)),
+  ('phstock.f_cost',           to_jsonb('Cost per unit'::text)),
+  ('phstock.f_mrp',            to_jsonb('MRP'::text)),
+  ('phstock.f_supplier',       to_jsonb('Bought from'::text)),
+  ('phstock.save',             to_jsonb('Save'::text)),
+  ('phstock.saving',           to_jsonb('Saving…'::text)),
+  ('phstock.cancel',           to_jsonb('Cancel'::text)),
+  ('phstock.retry',            to_jsonb('Retry'::text)),
+  ('phstock.error_generic',    to_jsonb('Could not load shelf stock. Check the connection and try again.'::text)),
+  ('phstock.search_short',     to_jsonb('Type at least 2 letters to search.'::text)),
+  ('phstock.search_empty',     to_jsonb('No medicine matched that.'::text)),
+
+  ('phstock.added_toast',      to_jsonb('Added to the shelf'::text)),
+  ('phstock.adjusted_toast',   to_jsonb('Stock corrected'::text)),
+  ('phstock.err_no_product',   to_jsonb('Pick a medicine first.'::text)),
+  ('phstock.err_no_qty',       to_jsonb('Enter how many came in.'::text)),
+  ('phstock.err_no_lot',       to_jsonb('That batch is no longer on your shelf.'::text)),
+  ('phstock.err_no_reason',    to_jsonb('Choose a reason — every correction is recorded with one.'::text)),
+  ('phstock.err_no_change',    to_jsonb('That is already the counted quantity.'::text)),
+
+  ('phstock.history_title',    to_jsonb('Batch history'::text)),
+  ('phstock.history_empty',    to_jsonb('Nothing has moved yet.'::text)),
+  ('phstock.mv_receipt_order', to_jsonb('mediBO delivery'::text)),
+  ('phstock.mv_receipt_outside', to_jsonb('Outside purchase'::text)),
+  ('phstock.mv_opening',       to_jsonb('Opening stock'::text)),
+  ('phstock.mv_sale',          to_jsonb('Counter sale'::text)),
+  ('phstock.mv_sale_void',     to_jsonb('Sale cancelled'::text)),
+  ('phstock.mv_adjust',        to_jsonb('Adjustment'::text)),
+  ('phstock.mv_after',         to_jsonb('{qty} left'::text)),
+
+  ('phstock.import_title',     to_jsonb('Opening stock'::text)),
+  ('phstock.import_body',      to_jsonb('Bring in the stock you already hold, once. Upload a CSV, or photograph the pages of your register and check what was read before it is saved.'::text)),
+  ('phstock.import_csv',       to_jsonb('Upload CSV'::text)),
+  ('phstock.import_photo',     to_jsonb('Photograph the register'::text)),
+  ('phstock.import_apply',     to_jsonb('Add to shelf'::text)),
+  ('phstock.import_started',   to_jsonb('Ready for your file'::text)),
+  ('phstock.import_scanning',  to_jsonb('Reading the photo…'::text)),
+  ('phstock.import_ready_one',  to_jsonb('1 row read — check it before saving'::text)),
+  ('phstock.import_ready_many', to_jsonb('{n} rows read — check them before saving'::text)),
+  ('phstock.import_applied_one',  to_jsonb('1 row added to the shelf'::text)),
+  ('phstock.import_applied_many', to_jsonb('{n} rows added to the shelf'::text)),
+  ('phstock.import_already',   to_jsonb('This list was already added'::text)),
+  ('phstock.import_failed',    to_jsonb('The photo could not be read. Try a straighter, brighter shot.'::text)),
+  ('phstock.import_review_title', to_jsonb('Check before saving'::text)),
+  ('phstock.match_ok',         to_jsonb('In catalogue'::text)),
+  ('phstock.match_none',       to_jsonb('Not in catalogue'::text)),
+
+  -- The OCR prompt is copy too, so tuning it is an UPDATE, not a redeploy of an
+  -- edge function. VERBATIM is not a preference here — it is the OCR naming
+  -- rule: no expansion, no correction, no world knowledge, ever.
+  ('phstock.ocr_prompt', to_jsonb($ocr$You are reading a photograph of an Indian pharmacy's own handwritten or printed stock register. Return ONLY what is physically printed or written on the page.
+
+Return a JSON array. One object per stock line:
+{"product_name": "...", "batch_no": "...", "expiry": "...", "qty": "...", "unit_cost": "...", "mrp": "..."}
+
+ABSOLUTE RULES:
+- product_name is the text EXACTLY as written on the page. Never expand an abbreviation, never correct a spelling, never substitute a brand you think they meant, never use outside knowledge of medicine names.
+- A field that is not on the page is an empty string. Never guess a batch, an expiry or a price.
+- expiry exactly as written (for example "09/27", "SEP 27").
+- qty, unit_cost and mrp as digits only.
+- Skip headings, totals and page numbers.
+- Return the JSON array and nothing else — no prose, no code fence.$ocr$::text))
+on conflict (key) do nothing;
+
+-- ─────────────────────────── 10. THE FENCE ──────────────────────────────────
+-- Every function here is SECURITY DEFINER, so the grant IS the access control.
+-- Revoke the lot, then hand back only the doors a pharmacy is meant to open.
+do $$
+declare r record;
+begin
+  for r in
+    select p.oid::regprocedure as sig
+      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public'
+       and (p.proname like 'pharmacy\_stock%' or p.proname like '\_phs\_%')
+  loop
+    execute format('revoke all on function %s from public', r.sig);
+    execute format('revoke all on function %s from anon', r.sig);
+    execute format('revoke all on function %s from authenticated', r.sig);
+  end loop;
+end $$;
+
+grant execute on function public.pharmacy_stock_entry()                              to authenticated;
+grant execute on function public.pharmacy_stock_home(text, text, integer, integer)   to authenticated;
+grant execute on function public.pharmacy_stock_moves(uuid, integer)                 to authenticated;
+grant execute on function public.pharmacy_stock_product_search(text, integer)        to authenticated;
+grant execute on function public.pharmacy_stock_add_purchase(jsonb)                  to authenticated;
+grant execute on function public.pharmacy_stock_adjust(uuid, numeric, text, text)    to authenticated;
+grant execute on function public.pharmacy_stock_import_start(text, text, text)       to authenticated;
+grant execute on function public.pharmacy_stock_import_csv(uuid, text)               to authenticated;
+grant execute on function public.pharmacy_stock_import_preview(uuid)                 to authenticated;
+grant execute on function public.pharmacy_stock_import_row_set(uuid, jsonb)          to authenticated;
+grant execute on function public.pharmacy_stock_import_apply(uuid)                   to authenticated;
+
+-- The OCR pair belongs to the edge function, not to a browser.
+grant execute on function public.pharmacy_stock_import_ocr_input(uuid)               to service_role;
+grant execute on function public.pharmacy_stock_import_ocr_report(uuid, jsonb, text) to service_role;
+
+-- Intake is machine-driven: the delivery trigger runs it, and service_role can
+-- re-run it for a backfill. A pharmacy cannot conjure its own receipts.
+grant execute on function public.pharmacy_stock_ingest_order(uuid)                   to service_role;
+grant execute on function public.pharmacy_stock_consume_sale(uuid)                   to service_role;

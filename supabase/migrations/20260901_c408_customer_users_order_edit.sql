@@ -1039,3 +1039,418 @@ begin
   return jsonb_build_object('can_edit', true,
     'window_label', public.ui_text('order_edit.window_open'));
 end $$;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 13. TWO MORE THE PROOF FOUND — both about money, and the second one matters.
+--
+-- (a) `MEDICINE.mrp` is TEXT holding a rendered rupee string ('₹359.95'), not a
+--     number. Putting it into the items array raised
+--     `invalid input syntax for type numeric: "₹2597"` inside
+--     explode_order_items. `_slab_num()` is this codebase's own parser for that
+--     column, so the edit uses it rather than a second regex.
+--
+-- (b) The first version totalled the basket as MRP × quantity. That is the one
+--     thing the business context forbids outright: "MRP printed on medicine
+--     packs is reference/regulatory information only... Any build that prices,
+--     totals, or reports revenue on MRP is wrong." An order's amount is the
+--     trade/PTR total, which is exactly what `cart_pricing_block()` computes and
+--     what `_place_order_v2_core()` stores at placement. The edit now recomputes
+--     it through the SAME function, so an edited order is priced the way a
+--     placed order is — and, since the basket changed, re-runs the slab
+--     snapshot on top of it.
+-- ─────────────────────────────────────────────────────────────────────────────
+create or replace function public.order_edit_apply(p_order_id uuid, p_lines jsonb)
+returns jsonb language plpgsql security definer set search_path to 'public' as $$
+declare g jsonb; o record; v_items jsonb; v_total numeric; v_before jsonb; v_bad int;
+        v_unavail jsonb; v_cnt int; v_cu bigint; v_pricing jsonb; v_pin text;
+begin
+  g := public._order_edit_gate(p_order_id);
+  if (g->>'can_edit')::boolean is not true then
+    return jsonb_build_object('ok', false, 'error', g->>'error', 'tone','danger',
+      'message', coalesce(g->>'message',''));
+  end if;
+  if not public.customer_can('customer.orders','write')
+     and public.get_my_role() not in ('admin','super_admin') then
+    return jsonb_build_object('ok', false, 'error','not_authorized','tone','danger',
+      'message', public.ui_text('order_edit.err_not_authorized'));
+  end if;
+
+  select * into o from orders where id = p_order_id for update;
+  v_before := o.items;
+
+  if p_lines is null or jsonb_typeof(p_lines) <> 'array' or jsonb_array_length(p_lines) = 0 then
+    return jsonb_build_object('ok', false, 'error','empty_basket','tone','danger',
+      'message', public.ui_text('order_edit.empty_basket'));
+  end if;
+
+  -- (a) every quantity a whole number >= 1
+  select count(*) into v_bad from jsonb_array_elements(p_lines) l
+   where coalesce((l->>'quantity')::numeric, 0) < 1
+      or (l->>'quantity')::numeric <> floor((l->>'quantity')::numeric);
+  if v_bad > 0 then
+    return jsonb_build_object('ok', false, 'error','bad_qty','tone','danger',
+      'message', public.ui_text('order_edit.err_bad_qty'));
+  end if;
+
+  -- (b) every product still in the catalogue
+  select count(*) into v_bad from jsonb_array_elements(p_lines) l
+   where not exists (select 1 from "MEDICINE" m where m.id = (l->>'product_id')::bigint);
+  if v_bad > 0 then
+    return jsonb_build_object('ok', false, 'error','unknown_item','tone','danger',
+      'message', public.ui_text('order_edit.err_unknown_item'));
+  end if;
+
+  -- (c) availability — the same predicate _cart_unavailable_lines() uses.
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'product_id', m.id, 'product_name', m.product_name)), '[]'::jsonb)
+    into v_unavail
+    from jsonb_array_elements(p_lines) l
+    join "MEDICINE" m on m.id = (l->>'product_id')::bigint
+   where o.zone_id is not null
+     and public.medicine_zone_standby(m.id, o.zone_id) <= 0;
+  if jsonb_array_length(v_unavail) > 0 then
+    return jsonb_build_object('ok', false, 'error','unavailable','tone','danger',
+      'items', v_unavail, 'count', jsonb_array_length(v_unavail),
+      'message', public.ui_text('order_edit.err_unavailable'));
+  end if;
+
+  -- (d) serviceability — checkout_action() lets can_order=false be the ONLY
+  -- blocker; the edit window honours the same rule, not a stricter one.
+  select pp.pincode into v_pin from pharmacy_profiles pp where pp.id = o.customer_id;
+  if coalesce((public.delivery_serviceability_check(v_pin)->>'can_order')::boolean, true) is false then
+    return jsonb_build_object('ok', false, 'error','not_serviceable','tone','danger',
+      'message', coalesce(
+        public.delivery_serviceability_check(v_pin)->>'message',
+        public.ui_text('order_edit.err_unavailable')));
+  end if;
+
+  -- Rebuild the items array in the SHAPE explode_order_items reads, carrying
+  -- the catalogue's own name and its mrp PARSED OUT of the rendered string.
+  select jsonb_agg(jsonb_build_object(
+           'product_id',   m.id,
+           'product_name', m.product_name,
+           'quantity',     (l->>'quantity')::numeric,
+           'mrp',          public._slab_num(m.mrp),
+           'gst_percent',  m.gst_percent)
+         order by m.product_name)
+    into v_items
+    from jsonb_array_elements(p_lines) l
+    join "MEDICINE" m on m.id = (l->>'product_id')::bigint;
+
+  if v_items is not distinct from v_before then
+    return jsonb_build_object('ok', false, 'error','no_change','tone','info',
+      'message', public.ui_text('order_edit.no_change'));
+  end if;
+
+  -- THE TOTAL IS THE TRADE TOTAL, never MRP. Same function placement uses.
+  v_pricing := public.cart_pricing_block(v_items);
+  v_total   := coalesce((v_pricing->>'net_payable')::numeric, 0);
+
+  v_cu := public.my_customer_user_id();
+
+  update orders
+     set items = v_items,
+         total_amount = v_total,
+         acted_customer_user_id = v_cu,
+         acted_identity = coalesce((select identity from customer_users where id = v_cu),
+                                   public.my_login_email())
+   where id = p_order_id;
+
+  select count(*) into v_cnt from jsonb_array_elements(v_items);
+
+  begin
+    perform public.order_slab_snapshot(p_order_id, true);
+  exception when others then null;
+  end;
+
+  insert into order_edit_event(order_id, customer_id, customer_user_id, identity,
+                               acting_as_admin, items_before, items_after,
+                               lines_before, lines_after, total_before, total_after)
+  values (p_order_id, o.customer_id, v_cu,
+          coalesce((select identity from customer_users where id = v_cu), public.my_login_email()),
+          (public.my_acting_as() is not null),
+          v_before, v_items,
+          coalesce(jsonb_array_length(v_before), 0), v_cnt,
+          o.total_amount, v_total);
+
+  perform public.customer_action_stamp('order_edited', p_order_id,
+            jsonb_build_object('lines_before', coalesce(jsonb_array_length(v_before),0),
+                               'lines_after', v_cnt));
+
+  return jsonb_build_object('ok', true, 'tone','success',
+    'order_id', p_order_id,
+    'line_count', v_cnt,
+    'total', v_total,
+    'total_display', coalesce(v_pricing->>'net_payable_display', public.inr_money(v_total)),
+    'message', public.ui_text('order_edit.saved'));
+exception when others then
+  return jsonb_build_object('ok', false, 'error','exception','tone','danger',
+    'message', replace(public.ui_text('order_edit.err_failed'), '{detail}', SQLERRM),
+    'sqlstate', SQLSTATE);
+end $$;
+
+revoke all on function public.order_edit_apply(uuid, jsonb) from public, anon;
+grant execute on function public.order_edit_apply(uuid, jsonb) to authenticated;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 14. THE LAST ONE THE PROOF FOUND, and the most important of the lot.
+--
+-- The gate's fallback lateral matched a live inquiry row on `oi.order_date` and
+-- `oi.zone_id`. Neither is written by explode_order_items — they are stamped
+-- later, by the fulfilment path — so on a fresh order both are NULL, every
+-- comparison went NULL, and the fallback matched nothing. An order whose
+-- suppliers had already been asked still reported `can_edit: true`, which is
+-- the exact failure this feature exists to prevent: a customer changing a
+-- basket the waterfall was already working.
+--
+-- The order itself always carries both (`_set_order_date` and `_zone_set_order`
+-- are BEFORE INSERT triggers), so the gate falls back to the ORDER's date and
+-- zone whenever the item has not been stamped yet.
+-- ─────────────────────────────────────────────────────────────────────────────
+create or replace function public._order_edit_gate(p_order_id uuid)
+returns jsonb language plpgsql stable security definer set search_path to 'public' as $$
+declare o record; v_cid uuid := public.my_customer_id(); v_asked boolean; v_moved boolean;
+begin
+  select * into o from orders where id = p_order_id;
+  if o.id is null then
+    return jsonb_build_object('can_edit', false, 'error', 'not_found',
+      'message', public.ui_text('order_edit.err_not_found'));
+  end if;
+
+  if not (o.customer_id is not distinct from v_cid
+          or public.get_my_role() in ('admin','super_admin')) then
+    return jsonb_build_object('can_edit', false, 'error', 'not_authorized',
+      'message', public.ui_text('order_edit.err_not_authorized'));
+  end if;
+
+  if o.closed_at is not null
+     or lower(coalesce(o.status,'')) in ('cancelled','canceled','rejected','delivered','completed') then
+    return jsonb_build_object('can_edit', false, 'error', 'closed',
+      'reason', public.ui_text('order_edit.reason_closed'),
+      'message', public.ui_text('order_edit.err_closed'));
+  end if;
+
+  select exists (
+    select 1
+      from order_items oi
+      left join lateral (
+        select q.* from inquiry q
+         where q.id = oi.inquiry_id
+            or (oi.inquiry_id is null
+                and q.product_id = oi.product_id
+                and q.batch_date = coalesce(oi.order_date, o.order_date)
+                and (q.zone_id is not distinct from coalesce(oi.zone_id, o.zone_id)
+                     or q.zone_id is null))
+         order by (q.id = oi.inquiry_id) desc, q.id desc
+         limit 1) i on true
+     where oi.order_id = p_order_id
+       and (i.asked_at is not null or i.supplier_order_id is not null)
+  ) into v_asked;
+
+  if v_asked then
+    return jsonb_build_object('can_edit', false, 'error', 'inquiry_started',
+      'reason', public.ui_text('order_edit.reason_inquiry_started'),
+      'message', public.ui_text('order_edit.err_inquiry_started'));
+  end if;
+
+  -- Physical fulfilment having started. NOT bag_no: that is stamped at
+  -- placement by assign_order_bag_no() and means nothing has happened yet.
+  select exists (
+    select 1 from order_items oi
+     where oi.order_id = p_order_id
+       and (coalesce(oi.fulfillment_state,'pending') <> 'pending'
+            or coalesce(oi.received_qty,0) > 0
+            or coalesce(oi.at_warehouse,false)
+            or coalesce(oi.packed,false)
+            or oi.shop_qty is not null
+            or oi.assigned_supplier is not null)
+  ) into v_moved;
+
+  if v_moved or coalesce(o.fulfillment_status,'open') <> 'open' then
+    return jsonb_build_object('can_edit', false, 'error', 'not_pending',
+      'reason', public.ui_text('order_edit.reason_not_pending'),
+      'message', public.ui_text('order_edit.err_closed'));
+  end if;
+
+  return jsonb_build_object('can_edit', true,
+    'window_label', public.ui_text('order_edit.window_open'));
+end $$;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 15. THE EDIT WINDOW TRAVELS WITH THE ORDER.
+--
+-- The first wiring had each order card call order_edit_state() for itself,
+-- which is one round trip per visible card — a customer scrolling ten orders
+-- paid for ten extra RPCs to learn something the list already knew. The gate is
+-- a cheap read against rows my_orders_screen() has already joined, so it is
+-- answered there, once, and the card renders `order.edit.can_edit`.
+-- order_edit_state() stays for the sheet itself, which needs the line list.
+CREATE OR REPLACE FUNCTION public.my_orders_screen(p_view_as_user uuid DEFAULT NULL::uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_cust uuid;
+  v_admin boolean := coalesce((public.my_session()->>'is_admin')::boolean, false);
+  v_cfg  jsonb := coalesce((select value from app_settings where key='order_status_config'), '{}'::jsonb);
+  v_copy jsonb := coalesce((select value from app_settings where key='orders_screen_copy'), '{}'::jsonb);
+  v_unf  jsonb := coalesce((select value from app_settings where key='unfulfilled_copy'), '{}'::jsonb);
+  -- tone -> chip colours. Config, not code: recolouring a status is an UPDATE.
+  v_tone jsonb := coalesce((select value from app_settings where key='item_status_tones'),
+                    '{"green":{"bg":"#E1F5EE","fg":"#0F6E56"},
+                      "yellow":{"bg":"#FEF3C7","fg":"#92400E"},
+                      "red":{"bg":"#FBE9E7","fg":"#B42318"}}'::jsonb);
+  v_rows jsonb; v_title text; v_note text;
+begin
+  if p_view_as_user is not null and v_admin then
+    v_cust := coalesce(public.customer_id_for_user(p_view_as_user), p_view_as_user);
+  else
+    v_cust := public.my_customer_id();
+  end if;
+
+  select coalesce(jsonb_agg(o order by o->>'placed_at' desc), '[]'::jsonb)
+    into v_rows
+  from (
+    select jsonb_build_object(
+      'id',                coalesce(ord.id::text,''),
+      'order_code',        coalesce(ord.order_code,''),
+      'placed_at',         coalesce(ord.created_at::text,''),
+      'status',            coalesce(ord.status,'pending'),
+      'status_label',      coalesce(nullif(v_cfg->lower(coalesce(ord.status,'pending'))->>'label',''),
+                                    initcap(coalesce(ord.status,'pending'))),
+      'status_color',      coalesce(v_cfg->lower(coalesce(ord.status,'pending'))->>'color',
+                                    v_cfg->'_default'->>'color', '#F59E0B'),
+      'total',             coalesce(ord.total_amount,0),
+      'total_display',     public.inr_money(coalesce(ord.total_amount,0)),
+      'placed_by_admin',   coalesce(ord.placed_by_admin,false),
+      'unique_item_count', coalesce(g.n_ok,0),
+      'unit_count',        coalesce(g.units_ok,0),
+      'total_item_count',  coalesce(g.n_ok,0) + coalesce(g.n_bad,0),
+      'lines',             coalesce(g.ok_lines, '[]'::jsonb),
+      'has_unfulfilled',   (coalesce(g.n_bad,0) > 0),
+      'unfulfilled_count', coalesce(g.n_bad,0),
+      'unfulfilled_title', coalesce(nullif(v_unf->>'title',''),'Unfulfilled items'),
+      'unfulfilled_note',  coalesce(nullif(v_unf->>'note',''),''),
+      'unfulfilled_label', coalesce(nullif(v_unf->>'title',''),'Unfulfilled items')
+                             || ' (' || coalesce(g.n_bad,0)::text || ')',
+      'unfulfilled_collapsed', true,
+      'unfulfilled_lines', coalesce(g.bad_lines, '[]'::jsonb),
+      -- CHANGE #408 — the edit window travels WITH the order. The card used to
+      -- ask order_edit_state() itself, which is one round trip per visible
+      -- card; the gate is cheap and the screen already has the row, so it is
+      -- answered here, once, for every order in the list.
+      'edit',              public._order_edit_gate(ord.id)
+    ) as o
+    from orders ord
+    left join lateral (
+      select
+        count(*) filter (where d.unfulfillable = false)                       as n_ok,
+        count(*) filter (where d.unfulfillable)                               as n_bad,
+        coalesce(sum(d.qty) filter (where d.unfulfillable = false),0)::int     as units_ok,
+        jsonb_agg(jsonb_build_object(
+            'name', d.product_name, 'quantity', d.qty::int,
+            'price', d.unit_price, 'price_display', public.inr_money(d.unit_price),
+            'line_total', d.line_total, 'line_total_display', public.inr_money(d.line_total),
+            -- #641 rich fields (never null: '' is the explicit absence)
+            'product_id',  coalesce(d.product_id::text,''),
+            'image_url',   coalesce(d.image_url,''),
+            'company',     coalesce(d.company,''),
+            'pack_label',  coalesce(d.pack_label,''),
+            'qty_label',   d.qty_label,
+            'rate_label',  public.inr_money(d.unit_price),
+            'line_label',  public.inr_money(d.line_total),
+            'status_label', d.status_text,
+            'status_tone',  d.status_tone,
+            'status_ok',    (d.status_text = 'Available'),
+            'status_text', d.status_text,
+            'status_colors', coalesce(v_tone->d.status_tone, v_tone->'yellow'))
+          order by d.product_name) filter (where d.unfulfillable = false)      as ok_lines,
+        jsonb_agg(jsonb_build_object(
+            'name', d.product_name, 'quantity', d.qty::int,
+            'price', d.unit_price, 'price_display', public.inr_money(d.unit_price),
+            'line_total', d.line_total, 'line_total_display', public.inr_money(d.line_total),
+            'product_id',  coalesce(d.product_id::text,''),
+            'image_url',   coalesce(d.image_url,''),
+            'company',     coalesce(d.company,''),
+            'pack_label',  coalesce(d.pack_label,''),
+            'qty_label',   d.qty_label,
+            'rate_label',  public.inr_money(d.unit_price),
+            'line_label',  public.inr_money(d.line_total),
+            -- an unfulfilled line states WHY, and is always the red tone.
+            'status_label', coalesce(d.reason, d.status_text),
+            'status_tone',  'red',
+            'status_ok',    false,
+            'status_text', coalesce(d.reason, d.status_text),
+            'status_colors', coalesce(v_unf->'chip_colors', v_tone->'red'))
+          order by d.product_name) filter (where d.unfulfillable)              as bad_lines
+      from (
+        -- one row per product (deduped), carrying the inquiry status for the
+        -- order's zone, preferring the order's own date but never collapsing to
+        -- 'Processing' just because the inquiry landed on a different day.
+        select oi.product_id,
+               max(oi.product_name)                       as product_name,
+               sum(coalesce(oi.quantity,0))               as qty,
+               max(coalesce(oi.price, oi.mrp, 0))         as unit_price,
+               sum(coalesce(oi.line_total,
+                     coalesce(oi.quantity,0) * coalesce(oi.price, oi.mrp, 0))) as line_total,
+               bool_or(oi.unfulfillable)                  as unfulfillable,
+               max(oi.unfulfillable_reason)               as reason,
+               coalesce(max(inq.current_status), 'Confirmation Pending') as status_text,
+               case coalesce(max(inq.current_status), 'Confirmation Pending')
+                 when 'Available'            then 'green'
+                 when 'No Supplier Available' then 'red'
+                 else 'yellow' end                        as status_tone,
+               max(nullif(btrim(m.image_url_1),''))       as image_url,
+               max(upper(nullif(btrim(m.marketer),'')))   as company,
+               max(nullif(btrim(regexp_replace(coalesce(m.pack_qty,''),'(\d)\.0(\D)','\1\2','g')),'')) as pack_label,
+               trim_scale(sum(coalesce(oi.quantity,0)))::text || ' ' ||
+                 case when max(m.pack_type) is null
+                        then case when sum(coalesce(oi.quantity,0)) > 1 then 'Units' else 'Unit' end
+                      when sum(coalesce(oi.quantity,0)) > 1 and lower(max(m.pack_type)) ~ '(s|x|z|ch|sh)$'
+                        then max(m.pack_type) || 'es'
+                      when sum(coalesce(oi.quantity,0)) > 1 then max(m.pack_type) || 's'
+                      else max(m.pack_type) end           as qty_label
+        from order_items oi
+        left join "MEDICINE" m on m.id = oi.product_id
+        left join lateral (
+          select q.current_status from inquiry q
+           where q.product_id = oi.product_id
+             and (q.zone_id is null or coalesce(oi.zone_id, ord.zone_id) is null
+                  or q.zone_id = coalesce(oi.zone_id, ord.zone_id))
+           order by (q.batch_date = (ord.created_at at time zone 'Asia/Kolkata')::date) desc nulls last,
+                    q.batch_date desc nulls last, q.id desc limit 1) inq on true
+        where oi.order_id = ord.id
+        group by oi.product_id
+      ) d
+    ) g on true
+    where v_cust is not null and ord.customer_id = v_cust
+    order by ord.created_at desc
+  ) s;
+
+  if v_cust is null and v_admin then
+    v_title := 'Admin account';
+    v_note  := 'This login is an admin, not a pharmacy. Customer orders live in the admin Orders tab.';
+  else
+    v_title := coalesce(nullif(v_copy->>'empty_title',''), 'No purchase orders yet');
+    v_note  := coalesce(nullif(v_copy->>'empty_note',''),  'Placed orders will appear here.');
+  end if;
+
+  return jsonb_build_object(
+    'orders',      v_rows,
+    'count',       jsonb_array_length(v_rows),
+    'has_orders',  (jsonb_array_length(v_rows) > 0),
+    'is_admin_session', v_admin,
+    'no_customer_account', (v_cust is null),
+    'empty_title', v_title,
+    'empty_note',  v_note,
+    'customer_id', coalesce(v_cust::text,''));
+end $function$
+
+
+-- The profile row's own label. `c()` reads ui_copy, so the entry point is a
+-- backend string like every other row on that screen.
+insert into public.ui_copy(key, value) values
+  ('profile.row_staff_logins', to_jsonb('Staff logins'::text))
+on conflict (key) do update set value = excluded.value, updated_at = now();

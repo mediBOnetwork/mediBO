@@ -6,7 +6,8 @@ import 'package:flutter/material.dart';
 
 import '../fulfill/fulfill_lookups.dart'; // C629: backend-owned button copy
 import '../services/date_labels.dart';
-import 'delivery/customer_track_sheet.dart'; // C629: PART F1 — live tracking
+import 'delivery/customer_track_sheet.dart';  // C629: PART F1 — live tracking
+import 'customer/order_edit_sheet.dart';  // CHANGE #408
 import 'package:http/http.dart' as http;
 import 'package:pharma_b2b/utils/toast.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -63,6 +64,11 @@ class _DbOrder {
   /// Every item on the order, fulfilled or not. Counted server-side.
   final int totalItemCount;
 
+  /// CHANGE #408 — the edit window, decided by the backend and carried on the
+  /// order row. `can_edit` is the whole affordance; when it is false the
+  /// payload also names the reason and the sentence to show.
+  final Map<String, dynamic> edit;
+
   _DbOrder({
     required this.id,
     required this.number,
@@ -84,6 +90,7 @@ class _DbOrder {
     this.unfulfilledNote = '',
     this.unfulfilledCollapsed = true,
     this.totalItemCount = 0,
+    this.edit = const {},
   });
 
   /// One parser for both arrays — they carry identical row shapes, so there is
@@ -122,6 +129,9 @@ class _DbOrder {
         unfulfilledNote: (row['unfulfilled_note'] ?? '').toString(),
         unfulfilledCollapsed: row['unfulfilled_collapsed'] != false,
         totalItemCount: (row['total_item_count'] as num?)?.toInt() ?? 0,
+        edit: row['edit'] is Map
+            ? Map<String, dynamic>.from(row['edit'] as Map)
+            : const {},
       );
 }
 
@@ -773,12 +783,33 @@ class _OrderCardState extends State<_OrderCard> {
   // independent per-section booleans that could disagree.
   int? _tab;
 
+  // CHANGE #408 — the edit window, as the BACKEND sees it. It arrives ON the
+  // order row from my_orders_screen(), so the card asks nobody: only the
+  // backend knows whether a supplier has been asked yet, and inferring it here
+  // from a status string is exactly the client-side logic this codebase does
+  // not allow. Re-read after a save, because the server recomputed it.
+  late Map<String, dynamic> _editState = widget.order.edit;
+
   @override
   void initState() {
     super.initState();
     // CHANGE #298 — the ONLY card that auto-expands is the one a notification
     // named. #458's "no auto-expand" rule still holds for every other card.
     if (widget.autoOpen) _tab = 0;
+  }
+
+  /// After a save the basket changed, so the window is re-read rather than
+  /// assumed to still be open.
+  Future<void> _reloadEditState() async {
+    try {
+      final raw = await Supabase.instance.client
+          .rpc('order_edit_state', params: {'p_order_id': widget.order.id});
+      if (!mounted) return;
+      setState(() =>
+          _editState = raw is Map ? Map<String, dynamic>.from(raw) : const {});
+    } catch (_) {
+      // A card that cannot ask simply keeps what the list gave it.
+    }
   }
 
   // CHANGE #458 B3: tapping the open button again closes it; tapping a different
@@ -920,6 +951,24 @@ class _OrderCardState extends State<_OrderCard> {
               ),
             ),
           ]),
+          // CHANGE #408 — edit this order, but ONLY while the backend says the
+          // window is open. OrderEditButton renders nothing at all when
+          // `can_edit` is false, so the affordance disappears the moment the
+          // waterfall starts — and the write is refused server-side too, so
+          // this is a courtesy, not the guard.
+          if (_editState['can_edit'] == true) ...[
+            SizedBox(height: Ds.space.x8),
+            SizedBox(
+              width: double.infinity,
+              child: OrderEditButton(
+                state: _editState,
+                onTap: () async {
+                  final saved = await showOrderEditSheet(context, order.id);
+                  if (saved && mounted) await _reloadEditState();
+                },
+              ),
+            ),
+          ],
           // CHANGE #173 — Reorder this order. Opens the Smart Basket Diff:
           // the backend reconciles this past order against the current catalog
           // (unavailable dropped, out-of-stock swapped, price changes flagged)

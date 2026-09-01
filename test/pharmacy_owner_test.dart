@@ -142,6 +142,19 @@ const _radar = <String, dynamic>{
   ],
 };
 
+Future<Map<String, dynamic>> _fakeRpc(
+    String fn, Map<String, dynamic> params) async {
+  switch (fn) {
+    case 'pharmacy_owner_dashboard':
+      return _dashboard;
+    case 'pharmacy_benchmark':
+      return _benchReady;
+    case 'pharmacy_demand_radar':
+      return _radar;
+  }
+  return const <String, dynamic>{'ok': true};
+}
+
 void main() {
   setUpAll(() => RenderLog.flushEnabled = false);
 
@@ -347,5 +360,41 @@ void main() {
     await tester.pumpWidget(
         _host(const OwnerDashboardEntryTile(label: 'Owner dashboard')));
     expect(find.text('Owner dashboard'), findsOneWidget);
+  });
+
+  // CHANGE #441 — the deep link picks the tab, because a TabBarView paints
+  // only the page in the viewport: /pharmacy/owner opens the dashboard and
+  // /pharmacy/owner?tab=2 opens the radar, so the headless render proof can
+  // reach a surface no canvas click can select.
+  group('deep-linked tab', () {
+    testWidgets('no tab index opens the dashboard', (tester) async {
+      await tester.pumpWidget(
+          MaterialApp(home: PharmacyOwnerScreen(rpc: _fakeRpc)));
+      await tester.pumpAndSettle();
+
+      expect(find.text('₹11,950.00'), findsOneWidget);
+      expect(find.text('Demand radar'), findsOneWidget); // the tab label only
+      expect(find.text('SKUs to stock'), findsNothing);
+    });
+
+    testWidgets('tab 2 opens the radar itself, not just its label',
+        (tester) async {
+      await tester.pumpWidget(MaterialApp(
+          home: PharmacyOwnerScreen(rpc: _fakeRpc, initialTab: 2)));
+      await tester.pumpAndSettle();
+
+      expect(find.text('SKUs to stock'), findsOneWidget);
+      expect(find.text('Dolo 650 Tablet'), findsOneWidget);
+      expect(find.text('₹11,950.00'), findsNothing);
+    });
+
+    testWidgets('an out-of-range tab index falls back to the dashboard',
+        (tester) async {
+      await tester.pumpWidget(MaterialApp(
+          home: PharmacyOwnerScreen(rpc: _fakeRpc, initialTab: 9)));
+      await tester.pumpAndSettle();
+
+      expect(find.text('₹11,950.00'), findsOneWidget);
+    });
   });
 }

@@ -43,6 +43,7 @@ import 'screens/admin/wa_campaigns_screen.dart'; // /admin/wa-campaigns
 import 'screens/admin/admin_scope_audit_screen.dart'; // /admin/scope-audit
 import 'screens/admin/dev_queue/cron_health_screen.dart'; // /admin/cron-health
 import 'screens/admin/admin_delivery_extras_screen.dart'; // /admin/delivery-programme
+import 'screens/pharmacy/pharmacy_owner_screen.dart';
 import 'screens/pharmacy/pharmacy_expiry_screen.dart';   // CMD #413 — /pharmacy/expiry
 import 'screens/pharmacy/pharmacy_radar_screen.dart';    // CMD #425 — /pharmacy/radar
 import 'screens/pharmacy/pharmacy_parcel_count_screen.dart'; // CMD #431 — /pharmacy/parcel-count
@@ -726,6 +727,20 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
               // in their own words, and each screen renders that refusal. Opening
               // the URL as the wrong role therefore shows the backend's sentence,
               // never a blank page and never a Dart role test.
+              // CHANGE #441 — /pharmacy/owner?tab=2. The bare path is a
+              // named route above; the query form lands here because a routes
+              // map only matches an exact name. A TabBarView paints only the
+              // page in the viewport, so this is how a headless proof reaches
+              // the benchmark and the radar without tapping a canvas.
+              if (name.split('?').first == '/pharmacy/owner') {
+                final tab = int.tryParse(
+                        Uri.tryParse(name)?.queryParameters['tab'] ?? '') ??
+                    0;
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => PharmacyOwnerScreen(initialTab: tab),
+                );
+              }
               if (name.split('?').first == '/pharmacy/expiry') {
                 return MaterialPageRoute(
                   settings: settings,
@@ -979,6 +994,15 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
               // guards nothing. It is also reachable without a URL, from the
               // "Count parcel" tile on the pharmacy's own account screen.
               '/pharmacy/parcel-count': (_) => const ParcelCountHomeScreen(),
+              // CHANGE #441 — the owner's night screens (CHANGE #419) at a real
+              // URL, for the same reason /partner and /admin/delivery-ops
+              // have one: a headless session can open it and PROVE the screen
+              // painted, and the owner can bookmark it. It guards nothing:
+              // pharmacy_owner_dashboard()
+              // answers not_a_pharmacy with its own copy for anyone off that
+              // pharmacy, so authorisation stays in the backend. The tappable
+              // way in is still the counter's Owner dashboard tile (#906).
+              '/pharmacy/owner': (_) => const PharmacyOwnerScreen(),
               '/about-app':    (_) => const AboutScreen(),
               '/contact':      (_) => const ContactScreen(),
               '/terms':        (_) => const TermsScreen(),

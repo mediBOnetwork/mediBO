@@ -550,7 +550,15 @@ class _RadarRow extends StatelessWidget {
 class PharmacyOwnerScreen extends StatefulWidget {
   /// Test seam. Null in production -> the real RPCs.
   final PosRpc? rpc;
-  const PharmacyOwnerScreen({super.key, this.rpc});
+
+  /// CHANGE #441 — which tab the deep link opened. A TabBarView builds only
+  /// the page in the viewport, so the benchmark and the radar never paint
+  /// (and never report) until something selects them. A headless session
+  /// cannot tap a canvas, so /pharmacy/owner?tab=1 is how the proof reaches
+  /// them. Out-of-range values fall back to the dashboard rather than throw.
+  final int initialTab;
+
+  const PharmacyOwnerScreen({super.key, this.rpc, this.initialTab = 0});
 
   @override
   State<PharmacyOwnerScreen> createState() => _PharmacyOwnerScreenState();
@@ -625,6 +633,9 @@ class _PharmacyOwnerScreenState extends State<PharmacyOwnerScreen> {
     final d = _dash;
     return DefaultTabController(
       length: 3,
+      initialIndex: widget.initialTab >= 0 && widget.initialTab < 3
+          ? widget.initialTab
+          : 0,
       child: Scaffold(
         backgroundColor: Ds.c.bg,
         appBar: AppBar(

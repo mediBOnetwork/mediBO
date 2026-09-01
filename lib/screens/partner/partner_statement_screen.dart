@@ -12,6 +12,8 @@
 // admin's actions: `is_admin` and `can_settle` are false in their payload, so
 // Record and Settle are simply absent.
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../design_tokens.dart';
 import '../../services/partner_state.dart';
@@ -34,6 +36,11 @@ class _PartnerStatementScreenState extends State<PartnerStatementScreen> {
   Map<String, dynamic>? _payload;
   bool _loading = true;
   int? _periodId;
+
+  // CMD #466 row 150 — the statement DOCUMENT. The screen holds nothing but
+  // "am I waiting"; the kind, the ref, every label, the poll interval and the
+  // bucket + path all arrive from the backend.
+  bool _docBusy = false;
 
   PartnerRpc get _rpc => widget.rpc ?? PartnerApi.call;
 
@@ -86,6 +93,87 @@ class _PartnerStatementScreenState extends State<PartnerStatementScreen> {
     }
     await _load();
   }
+
+  /// Ask for the statement, then poll on the backend's OWN `poll_ms` until it
+  /// says ready, and open the file at the bucket and path IT named. The screen
+  /// never builds a storage URL and never invents a timeout of its own.
+  Future<void> _openDocument(Map<String, dynamic> doc) async {
+    if (_docBusy) return;
+    setState(() => _docBusy = true);
+    try {
+      var res = _asMap(await _rpc('partner_doc_request', {
+        'p_kind': (doc['kind'] ?? '').toString(),
+        'p_ref': (doc['ref'] ?? '').toString(),
+      }));
+      var guard = 0;
+      while (res['ok'] == true &&
+          res['status'] == 'building' &&
+          guard < 40 &&
+          mounted) {
+        guard++;
+        final ms = int.tryParse('${res['poll_ms'] ?? 1500}') ?? 1500;
+        await Future<void>.delayed(Duration(milliseconds: ms));
+        res = _asMap(await _rpc('partner_doc_status', {'p_id': res['doc_id']}));
+      }
+      if (!mounted) return;
+      final msg = (res['message'] ?? '').toString();
+      if (res['ok'] != true || res['status'] != 'ready') {
+        if (msg.isNotEmpty) showToast(context, msg, isError: true);
+        return;
+      }
+      final url = await Supabase.instance.client.storage
+          .from((res['bucket'] ?? '').toString())
+          .createSignedUrl((res['path'] ?? '').toString(),
+              int.tryParse('${res['expires_s'] ?? 300}') ?? 300);
+      if (!mounted) return;
+      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+      if (mounted && msg.isNotEmpty) showToast(context, msg);
+    } catch (e) {
+      if (mounted) showToast(context, e.toString(), isError: true);
+    } finally {
+      if (mounted) setState(() => _docBusy = false);
+    }
+  }
+
+  /// The GST treatment of the commission, printed exactly as the backend wrote
+  /// it. There is no Dart arithmetic and no Dart wording here — a change of
+  /// rate or of the note is an UPDATE, not a deploy.
+  Widget _gstCard(Map<String, dynamic> gst) {
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.all(Ds.space.x16),
+      decoration: BoxDecoration(
+        color: Ds.c.surface,
+        borderRadius: Ds.r.rCard,
+        boxShadow: Ds.elevation.e1,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text((gst['heading'] ?? '').toString(), style: Ds.t.subtitle),
+          SizedBox(height: Ds.space.x12),
+          if (gst['registered'] == true) ...[
+            for (final r in (gst['lines'] as List?) ?? const [])
+              _gstRow(((r as Map)['label'] ?? '').toString(),
+                  (r['value'] ?? '').toString(),
+                  bold: r['bold'] == true),
+            SizedBox(height: Ds.space.x12),
+          ],
+          Text((gst['note'] ?? '').toString(), style: Ds.t.caption),
+        ],
+      ),
+    );
+  }
+
+  Widget _gstRow(String label, String value, {bool bold = false}) => Padding(
+        padding: EdgeInsets.only(bottom: Ds.space.x8),
+        child: Row(
+          children: [
+            Expanded(child: Text(label, style: Ds.t.bodySecondary)),
+            Text(value, style: bold ? Ds.t.subtitle : Ds.t.body),
+          ],
+        ),
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -161,6 +249,26 @@ class _PartnerStatementScreenState extends State<PartnerStatementScreen> {
           ] else if (rows.isEmpty) ...[
             SizedBox(height: Ds.space.x24),
             settlementMessage((p?['empty_text'] ?? '').toString(), null),
+          ],
+          if (_asMap(p?['document'])['has'] == true) ...[
+            SizedBox(height: Ds.space.x24),
+            SizedBox(
+              width: double.infinity,
+              height: 48,
+              child: FilledButton(
+                onPressed: _docBusy
+                    ? null
+                    : () => _openDocument(_asMap(p?['document'])),
+                child: Text(_docBusy
+                    ? (_asMap(p?['document'])['building_message'] ?? '')
+                        .toString()
+                    : (_asMap(p?['document'])['button_label'] ?? '').toString()),
+              ),
+            ),
+          ],
+          if (_asMap(p?['gst']).isNotEmpty) ...[
+            SizedBox(height: Ds.space.x24),
+            _gstCard(_asMap(p?['gst'])),
           ],
           SizedBox(height: Ds.space.x24),
           Text((p?['footnote'] ?? '').toString(), style: Ds.t.caption),

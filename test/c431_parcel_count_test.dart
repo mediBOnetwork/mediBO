@@ -150,6 +150,7 @@ Future<void> _pump(WidgetTester t, Map<String, dynamic> payload) async {
 }
 
 void main() {
+  _omSteering();
   setUpAll(() => RenderLog.flushEnabled = false);
 
   testWidgets('every verdict is the backend\'s word, printed verbatim',
@@ -269,5 +270,91 @@ void main() {
     await _pump(t, _payload(rows: const [], canFinish: false));
     expect(find.text('This bill has no readable lines to count.'),
         findsOneWidget);
+  });
+}
+
+// ═══════════════════ OM'S SECOND CORRECTION (live screenshots) ══════════════
+//
+// Two things he could not do on the deployed build, and neither was a styling
+// complaint — both were the feature being unreachable.
+//
+// "in order tab to count the item which they received why the count button not
+// their" — because the chip was drawn only once a delivery was stamped or a
+// bill existed, and his pharmacy has thirteen orders with neither. A gate that
+// is defensible and hides the whole feature is still a bug.
+void _omSteering() {
+  group('the order card chip after Om could not find it', () {
+    test('an order still on its way DRAWS the chip — absence taught nothing',
+        () {
+      final v = ParcelChipVerdict.of(const {
+        'ok': true,
+        'show': true,
+        'enabled': false,
+        'label': 'Count',
+        'tone': 'muted',
+        'message': 'Count this parcel when it arrives — this order has not '
+            'been delivered yet.',
+      });
+      expect(v.show, isTrue);
+      expect(v.label, 'Count');
+      // Drawn, but it must not open a count of a box that is not in the room.
+      expect(v.canOpen, isFalse);
+      expect(
+          v.blockedMessage,
+          'Count this parcel when it arrives — this order has not been '
+          'delivered yet.');
+    });
+
+    test('the reason is the backend\'s or there is none — Dart writes no copy',
+        () {
+      final v = ParcelChipVerdict.of(const {
+        'show': true,
+        'enabled': false,
+        'label': 'Count',
+      });
+      expect(v.canOpen, isFalse);
+      // No fallback sentence invented here. Silence beats a Dart string.
+      expect(v.blockedMessage, isEmpty);
+    });
+
+    test('a parcel that has arrived opens, and carries no blocked message', () {
+      final v = ParcelChipVerdict.of(const {
+        'show': true,
+        'enabled': true,
+        'label': 'Counting',
+        'tone': 'warning',
+      });
+      expect(v.canOpen, isTrue);
+      expect(v.label, 'Counting');
+      expect(v.tone, 'warning');
+      expect(v.blockedMessage, isEmpty);
+    });
+
+    test('a payload from before enabled existed opens exactly as it always did',
+        () {
+      final v = ParcelChipVerdict.of(const {
+        'show': true,
+        'label': 'Counted',
+        'tone': 'success',
+      });
+      expect(v.canOpen, isTrue);
+      expect(v.blockedMessage, isEmpty);
+    });
+
+    test('show:false is nothing at all — never a greyed-out fifth chip', () {
+      expect(ParcelChipVerdict.of(const {'ok': true, 'show': false}).show,
+          isFalse);
+      expect(ParcelChipVerdict.of(null).show, isFalse);
+    });
+
+    test('the caption is always the payload\'s, never derived from the state',
+        () {
+      for (final label in const ['Count', 'Counting', 'Counted', 'गिनें']) {
+        expect(
+            ParcelChipVerdict.of({'show': true, 'enabled': true,
+                'label': label}).label,
+            label);
+      }
+    });
   });
 }

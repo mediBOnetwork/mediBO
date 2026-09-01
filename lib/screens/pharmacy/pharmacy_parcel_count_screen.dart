@@ -20,6 +20,7 @@ import 'package:flutter/services.dart';
 
 import '../../design_tokens.dart';
 import '../../services/pharmacy_parcel_api.dart';
+import '../../services/pharmacy_vault_api.dart';
 import '../../utils/render_log.dart';
 import '../../widgets/image_pick.dart';
 import '../admin/feature_gaps_screen.dart' show toneColor, toneSoft;
@@ -199,6 +200,151 @@ class _ParcelCountHomeScreenState extends State<ParcelCountHomeScreen>
     }
   }
 
+  /// CMD #431 (Om steering 2) — BRINGING THE OUTSIDE BILL IN.
+  ///
+  /// The empty state used to read "Photograph an outside bill in the bill
+  /// vault, then count the parcel against it" and there was no bill vault to
+  /// photograph it in: #423 built the whole intake — start a draft bill, upload
+  /// its pages, hand them to the reader — and nothing in the app had ever
+  /// called it. So the sentence pointed at a door that did not exist.
+  ///
+  /// It exists here now, and it is #423's, not a second one: the bill id, the
+  /// bucket, the path of every page and the guide are all
+  /// `pharmacy_vault_bill_start`'s. Both ways in are offered because a
+  /// pharmacist with the box open wants the camera and a pharmacist at the desk
+  /// wants the file they were emailed — `capture=environment` is the only
+  /// difference between them.
+  Future<void> _addBill(Map<String, dynamic> a) async {
+    final shots = <Uint8List>[];
+    var sending = false;
+
+    Future<void> pick(StateSetter set, {required bool camera}) async {
+      final picked = await pickImageBytes(camera: camera);
+      if (picked == null) return;
+      set(() => shots.add(picked.bytes));
+    }
+
+    final go = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, set) => Padding(
+          padding: EdgeInsets.only(
+            left: Ds.space.x16,
+            right: Ds.space.x16,
+            top: Ds.space.x16,
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + Ds.space.x24,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(_s(a['sheet_title']), style: Ds.t.title),
+              SizedBox(height: Ds.space.x8),
+              Text(
+                _s(a['sheet_hint']),
+                style: Ds.t.caption.copyWith(color: Ds.c.textSecondary),
+              ),
+              SizedBox(height: Ds.space.x24),
+              // Two doors, never one. Which is which is the backend's caption.
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed:
+                      sending ? null : () => pick(set, camera: true),
+                  icon: const Icon(Icons.photo_camera_outlined),
+                  label: Text(_s(a['camera_label'])),
+                ),
+              ),
+              SizedBox(height: Ds.space.x12),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed:
+                      sending ? null : () => pick(set, camera: false),
+                  icon: const Icon(Icons.attach_file_outlined),
+                  label: Text(_s(a['gallery_label'])),
+                ),
+              ),
+              if (shots.isNotEmpty) ...[
+                SizedBox(height: Ds.space.x16),
+                Text(
+                  // The count is the backend's sentence with the number in it.
+                  _s(a['shots_label']).replaceAll('{n}', '${shots.length}'),
+                  style: Ds.t.caption.copyWith(color: Ds.c.textSecondary),
+                ),
+                SizedBox(height: Ds.space.x12),
+                SizedBox(
+                  height: 72,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: shots.length,
+                    separatorBuilder: (_, _) => SizedBox(width: Ds.space.x8),
+                    itemBuilder: (_, i) => ClipRRect(
+                      borderRadius: Ds.r.rCard,
+                      child: Image.memory(shots[i], width: 72, height: 72,
+                          fit: BoxFit.cover),
+                    ),
+                  ),
+                ),
+                SizedBox(height: Ds.space.x24),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton(
+                    onPressed: sending
+                        ? null
+                        : () {
+                            set(() => sending = true);
+                            Navigator.pop(ctx, true);
+                          },
+                    child: Text(
+                      sending ? _s(a['working_label']) : _s(a['submit_label']),
+                    ),
+                  ),
+                ),
+              ],
+              SizedBox(height: Ds.space.x8),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (go != true || shots.isEmpty || !mounted) return;
+    setState(() => _busy = true);
+    try {
+      // #423 owns every one of these values. Dart picks no bucket, builds no
+      // path and names no file.
+      final start = await PharmacyVaultApi.billStart();
+      if (!mounted) return;
+      if (start['ok'] != true) {
+        _toast(_s(start['message']));
+        return;
+      }
+      await PharmacyVaultApi.uploadShots(
+        billId: _s(start['bill_id']),
+        bucket: _s(start['bucket']),
+        pathPrefix: _s(start['path_prefix']),
+        pathSuffix: _s(start['path_suffix']),
+        shots: shots,
+      );
+      if (!mounted) return;
+      _toast(_s(a['done_label']));
+      await _load();
+    } catch (_) {
+      if (mounted) _toast(_s(a['failed_label']));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  void _toast(String m) {
+    if (m.isEmpty || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+  }
+
   @override
   Widget build(BuildContext context) {
     final d = _data;
@@ -219,6 +365,7 @@ class _ParcelCountHomeScreenState extends State<ParcelCountHomeScreen>
     }
 
     final tabs = _rows(d['tabs']);
+    final add = _m(d['add_bill']);
     return Scaffold(
       backgroundColor: Ds.c.bg,
       appBar: AppBar(
@@ -228,6 +375,15 @@ class _ParcelCountHomeScreenState extends State<ParcelCountHomeScreen>
           tabs: [for (final t in tabs) Tab(text: _s(t['label']))],
         ),
       ),
+      // The one action this surface has. Drawn only because the backend sent
+      // it, captioned only by what the backend sent.
+      floatingActionButton: add['show'] == true
+          ? FloatingActionButton.extended(
+              onPressed: _busy ? null : () => _addBill(add),
+              icon: const Icon(Icons.add_a_photo_outlined),
+              label: Text(_s(add['label'])),
+            )
+          : null,
       body: Column(
         children: [
           if (_s(d['open_label']).isNotEmpty)
@@ -274,13 +430,29 @@ class _ParcelCountHomeScreenState extends State<ParcelCountHomeScreen>
   Widget _list(Map<String, dynamic> tab, String outsideHint) {
     final rows = _rows(tab['rows']);
     if (rows.isEmpty) {
+      // An empty state that only describes the way out is a dead end. The way
+      // out stands in it.
+      final add = _m(_m(_data)['add_bill']);
       return Center(
         child: Padding(
           padding: EdgeInsets.all(Ds.space.x24),
-          child: Text(
-            _s(tab['empty']),
-            textAlign: TextAlign.center,
-            style: Ds.t.body.copyWith(color: Ds.c.textSecondary),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                _s(tab['empty']),
+                textAlign: TextAlign.center,
+                style: Ds.t.body.copyWith(color: Ds.c.textSecondary),
+              ),
+              if (add['show'] == true) ...[
+                SizedBox(height: Ds.space.x24),
+                FilledButton.icon(
+                  onPressed: _busy ? null : () => _addBill(add),
+                  icon: const Icon(Icons.add_a_photo_outlined),
+                  label: Text(_s(add['label'])),
+                ),
+              ],
+            ],
           ),
         ),
       );
@@ -898,6 +1070,50 @@ class _ParcelMenuTileState extends State<ParcelMenuTile> {
 /// Draws nothing at all until `pharmacy_parcel_order_chip` says to — an order
 /// that has not been delivered has no parcel in the room yet, and an absent
 /// affordance is honest where a greyed-out one is just a puzzle.
+/// CMD #431 (Om steering 2) — WHAT THE ORDER CARD'S CHIP DOES WHEN TAPPED.
+///
+/// Pure, and separate from the widget, because this is the one decision on the
+/// chip that is worth pinning: an order whose parcel has not arrived now DRAWS
+/// the chip (Om could not find the feature otherwise — his pharmacy has 13
+/// orders and not one of them is delivered or billed) and must not open an
+/// empty count when it is tapped. It says why instead, in the backend's words.
+///
+/// It reads three keys and invents nothing. `enabled` absent means a payload
+/// from before this existed, which opens exactly as it always did.
+class ParcelChipVerdict {
+  final bool show;
+  final String label;
+  final String tone;
+  final bool canOpen;
+
+  /// The backend's reason the chip cannot be opened yet. Empty when it can be,
+  /// and empty when the backend sent no reason — Dart never supplies one.
+  final String blockedMessage;
+
+  const ParcelChipVerdict({
+    required this.show,
+    required this.label,
+    required this.tone,
+    required this.canOpen,
+    required this.blockedMessage,
+  });
+
+  factory ParcelChipVerdict.of(Map<String, dynamic>? chip) {
+    if (chip == null || chip['show'] != true) {
+      return const ParcelChipVerdict(
+        show: false, label: '', tone: '', canOpen: false, blockedMessage: '');
+    }
+    final blocked = chip['enabled'] == false;
+    return ParcelChipVerdict(
+      show: true,
+      label: _s(chip['label']),
+      tone: _s(chip['tone']),
+      canOpen: !blocked,
+      blockedMessage: blocked ? _s(chip['message']) : '',
+    );
+  }
+}
+
 class ParcelOrderChip extends StatefulWidget {
   final String orderId;
 
@@ -935,6 +1151,19 @@ class _ParcelOrderChipState extends State<ParcelOrderChip> {
 
   Future<void> _open() async {
     if (_busy) return;
+    // CMD #431 (Om steering 2) — the chip now stands on an order whose parcel
+    // has not arrived, so that a pharmacist learns where counting lives before
+    // there is anything to count. Tapping it then says WHY, in the backend's
+    // words, instead of opening an empty count. `enabled` absent means the
+    // payload predates this and the chip behaves exactly as it used to.
+    final v = ParcelChipVerdict.of(_chip);
+    if (!v.canOpen) {
+      if (v.blockedMessage.isNotEmpty) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(v.blockedMessage)));
+      }
+      return;
+    }
     setState(() => _busy = true);
     try {
       final r = await PharmacyParcelApi.openOrder(widget.orderId);
@@ -957,9 +1186,9 @@ class _ParcelOrderChipState extends State<ParcelOrderChip> {
 
   @override
   Widget build(BuildContext context) {
-    final c = _chip;
-    if (c == null) return const SizedBox.shrink();
+    final v = ParcelChipVerdict.of(_chip);
+    if (!v.show) return const SizedBox.shrink();
     RenderLog.write('c431_order_count_chip', 1);
-    return widget.builder(context, _s(c['label']), _open);
+    return widget.builder(context, v.label, _open);
   }
 }

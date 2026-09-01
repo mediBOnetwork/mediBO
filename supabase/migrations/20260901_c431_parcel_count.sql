@@ -89,6 +89,92 @@ as $$
      and coalesce(c.amount,0) > 0;
 $$;
 
+-- (b2) #309's own guard still only knew the three door kinds, so a parcel
+--      count's wrong-batch line came back 'bad_kind' and no claim was raised
+--      at all. The guard is widened to the same list as the constraint above;
+--      everything else in that function — the mandatory photo, the role test,
+--      the PTR-based pricing, the delivery event — is untouched.
+create or replace function public.delivery_raise_claim(
+  p_delivery_id uuid,
+  p_kind        text,
+  p_qty         numeric,
+  p_photo       text,
+  p_note        text default null,
+  p_order_item_id uuid default null)
+returns jsonb
+language plpgsql
+security definer
+set search_path to 'public'
+as $function$
+declare
+  d public.deliveries%rowtype;
+  v_role text := coalesce(public.get_my_role(),'none');
+  v_is_rider boolean; v_is_cust boolean;
+  v_amount numeric; v_id uuid; v_ptr numeric;
+begin
+  select * into d from public.deliveries where id = p_delivery_id;
+  if d.id is null then return jsonb_build_object('ok',false,'error','not_found'); end if;
+
+  if coalesce(p_kind,'') not in ('damaged','short','missing',
+                                 'excess','wrong_item','wrong_batch') then
+    return jsonb_build_object('ok',false,'error','bad_kind');
+  end if;
+
+  if nullif(btrim(coalesce(p_photo,'')),'') is null then
+    return jsonb_build_object('ok',false,'error','photo_required',
+      'message', public._c('delivery.claim_photo_required'));
+  end if;
+
+  select exists(select 1 from public.delivery_partner_registrations
+                 where id = d.partner_id and user_id = auth.uid()) into v_is_rider;
+  select exists(select 1 from public.orders o
+                  join public.pharmacy_profiles pp on pp.id = o.customer_id
+                 where o.id = d.order_id and pp.user_id = auth.uid()) into v_is_cust;
+
+  -- CMD #431 — a pharmacy STAFF sub-login (#408) counting the parcel is the
+  -- pharmacy for this purpose. Without this, the person who actually opens the
+  -- boxes could not raise the claim they are standing in front of.
+  if not v_is_cust then
+    select exists(select 1 from public.orders o
+                   where o.id = d.order_id and o.customer_id = public.my_customer_id())
+      into v_is_cust;
+  end if;
+
+  if not (v_is_rider or v_is_cust or v_role in ('admin','super_admin')) then
+    return jsonb_build_object('ok',false,'error','not_authorized');
+  end if;
+
+  -- Price the credit off the TRADE rate actually billed for that line, not off
+  -- MRP. Left null when the line is not billed yet; an admin prices it then.
+  if p_order_item_id is not null then
+    select b.ptr into v_ptr
+      from public.bill_line_allocations a
+      join public.bill_lines b on b.id = a.bill_line_id
+     where a.order_item_id = p_order_item_id and b.verified
+     order by b.id desc limit 1;
+    v_amount := round(coalesce(v_ptr,0) * coalesce(p_qty,0), 2);
+    if v_amount = 0 then v_amount := null; end if;
+  end if;
+
+  insert into public.delivery_claims(
+    delivery_id, order_id, order_item_id, kind, qty, amount, note, photo_path,
+    raised_by, raised_by_role)
+  values (d.id, d.order_id, p_order_item_id, p_kind, coalesce(p_qty,0), v_amount,
+          nullif(btrim(coalesce(p_note,'')),''), btrim(p_photo),
+          auth.uid(), case when v_is_rider then 'delivery'
+                          when v_is_cust then 'customer' else v_role end)
+  returning id into v_id;
+
+  insert into public.delivery_events(delivery_id, order_id, partner_id, event, note, actor)
+  values (d.id, d.order_id, d.partner_id, 'claim',
+          p_kind || ' x' || trim_scale(coalesce(p_qty,0))::text,
+          coalesce(auth.jwt()->>'email','rider'));
+
+  return jsonb_build_object('ok',true,'claim_id',v_id,
+    'status','open',
+    'message', public._c('delivery.claim_raised'));
+end $function$;
+
 -- (c) A lot that has been physically counted is worth more than one that was
 --     merely delivered. The flag lives on the lot so #424, the expiry radar
 --     and the exchange can all tell the difference without joining a session.
@@ -944,9 +1030,41 @@ begin
     v_lot := null;
 
     if c.kind = 'medibo' then
-      -- The shelf already holds what the bill said. Move it to what the hands
-      -- found; a matching line moves it by zero and is still stamped verified.
-      v_delta := coalesce(l.counted_qty, 0) - coalesce(l.expected_qty, 0);
+      -- A WRONG BATCH is not a quantity problem, it is two lots. The shelf was
+      -- given the batch the bill promised; what actually arrived is a
+      -- different batch entirely. So the promised lot is taken back to zero and
+      -- the batch in the box is added beside it — otherwise the expiry radar
+      -- would spend the next two years watching a batch that never existed.
+      if public._c431_batch_key(l.counted_batch) is not null
+         and public._c431_batch_key(l.expected_batch)
+             is distinct from public._c431_batch_key(l.counted_batch)
+      then
+        perform public._phs_apply(
+          p_shop        => v_shop,
+          p_medicine_id => l.medicine_id,
+          p_name        => l.product_name,
+          p_pack        => l.pack_label,
+          p_batch       => l.expected_batch,
+          p_expiry      => l.expected_expiry,
+          p_qty_delta   => -coalesce(l.expected_qty, 0),
+          p_unit_cost   => l.unit_cost,
+          p_mrp         => l.mrp,
+          p_kind        => 'count_verify',
+          p_source_kind => 'medibo_order',
+          p_reason      => 'parcel_count',
+          p_note        => public.ui_fmt('phpc.move_wrong_batch', jsonb_build_object(
+                             'exp', coalesce(l.expected_batch, '—'),
+                             'got', coalesce(l.counted_batch, '—'))),
+          p_ref_kind    => 'parcel_count_rev',
+          p_ref_id      => l.id::text,
+          p_order_id    => c.order_id,
+          p_actor       => l.counted_by);
+        v_delta := coalesce(l.counted_qty, 0);
+      else
+        -- The shelf already holds what the bill said. Move it to what the hands
+        -- found; a matching line moves it by zero and is still stamped verified.
+        v_delta := coalesce(l.counted_qty, 0) - coalesce(l.expected_qty, 0);
+      end if;
       if v_delta <> 0 then
         v_lot := public._phs_apply(
           p_shop        => v_shop,
@@ -1152,25 +1270,25 @@ insert into public.ui_copy (key, value) values
   ('phpc.src_outside',  to_jsonb('Outside supplier'::text)),
   ('phpc.sub_medibo',   to_jsonb('A mismatch is raised with mediBO straight away'::text)),
   ('phpc.sub_outside',  to_jsonb('A mismatch is recorded on your bill as evidence'::text)),
-  ('phpc.bill_sub',     to_jsonb('Bill {inv} · {n} items'::text)),
-  ('phpc.open_n',       to_jsonb('{n} count in progress'::text)),
+  ('phpc.bill_sub',     to_jsonb('Bill {{inv}} · {{n}} items'::text)),
+  ('phpc.open_n',       to_jsonb('{{n}} count in progress'::text)),
   ('phpc.cta_count',    to_jsonb('Count'::text)),
   ('phpc.cta_resume',   to_jsonb('Resume'::text)),
   ('phpc.cta_review',   to_jsonb('View'::text)),
   ('phpc.cs_none',      to_jsonb('Not counted'::text)),
   ('phpc.cs_counting',  to_jsonb('Counting'::text)),
   ('phpc.cs_counted',   to_jsonb('Counted'::text)),
-  ('phpc.expected',     to_jsonb('Bill says {n}'::text)),
-  ('phpc.counted',      to_jsonb('Counted {n}'::text)),
-  ('phpc.batch',        to_jsonb('Batch {b} · Exp {e}'::text)),
+  ('phpc.expected',     to_jsonb('Bill says {{n}}'::text)),
+  ('phpc.counted',      to_jsonb('Counted {{n}}'::text)),
+  ('phpc.batch',        to_jsonb('Batch {{b}} · Exp {{e}}'::text)),
   ('phpc.no_batch',     to_jsonb('No batch on the bill'::text)),
   ('phpc.no_expiry',    to_jsonb('no expiry'::text)),
-  ('phpc.progress',     to_jsonb('{done} of {total} counted'::text)),
-  ('phpc.n_match',      to_jsonb('{n} verified'::text)),
-  ('phpc.n_issue',      to_jsonb('{n} to sort out'::text)),
-  ('phpc.by',           to_jsonb('by {who}'::text)),
+  ('phpc.progress',     to_jsonb('{{done}} of {{total}} counted'::text)),
+  ('phpc.n_match',      to_jsonb('{{n}} verified'::text)),
+  ('phpc.n_issue',      to_jsonb('{{n}} to sort out'::text)),
+  ('phpc.by',           to_jsonb('by {{who}}'::text)),
   ('phpc.staff_heading',to_jsonb('Counted by'::text)),
-  ('phpc.staff_row',    to_jsonb('{who} · {n} items'::text)),
+  ('phpc.staff_row',    to_jsonb('{{who}} · {{n}} items'::text)),
   ('phpc.someone',      to_jsonb('Staff'::text)),
   ('phpc.m_barcode',    to_jsonb('Scan'::text)),
   ('phpc.m_voice',      to_jsonb('Speak'::text)),
@@ -1187,16 +1305,17 @@ insert into public.ui_copy (key, value) values
   ('phpc.claim_raised', to_jsonb('Claim raised with mediBO'::text)),
   ('phpc.claim_needs_photo', to_jsonb('Add a photo to raise this with mediBO'::text)),
   ('phpc.claim_no_delivery', to_jsonb('No delivery record for this parcel yet'::text)),
-  ('phpc.claim_note',   to_jsonb('Counted at the door: bill {exp}, found {got}, batch {batch} — {item}'::text)),
-  ('phpc.move_note',    to_jsonb('Counted on arrival: bill {exp}, found {got}'::text)),
+  ('phpc.claim_note',   to_jsonb('Counted at the door: bill {{exp}}, found {{got}}, batch {{batch}} — {{item}}'::text)),
+  ('phpc.move_note',    to_jsonb('Counted on arrival: bill {{exp}}, found {{got}}'::text)),
+  ('phpc.move_wrong_batch', to_jsonb('Counted on arrival: bill said batch {{exp}}, batch {{got}} arrived'::text)),
   ('phpc.extra',        to_jsonb('Add an item that is not on the bill'::text)),
-  ('phpc.pick',         to_jsonb('{n} items match — pick one'::text)),
+  ('phpc.pick',         to_jsonb('{{n}} items match — pick one'::text)),
   ('phpc.finish',       to_jsonb('Finish and update my stock'::text)),
   ('phpc.finish_partial', to_jsonb('Save what I counted and update my stock'::text)),
   ('phpc.later',        to_jsonb('Finish later'::text)),
   ('phpc.later_hint',   to_jsonb('Your count is saved. Come back to this parcel any time.'::text)),
   ('phpc.done_title',   to_jsonb('Parcel counted'::text)),
-  ('phpc.done',         to_jsonb('{n} batches verified onto your shelf · {i} to sort out'::text)),
+  ('phpc.done',         to_jsonb('{{n}} batches verified onto your shelf · {{i}} to sort out'::text)),
   ('phpc.evidence_outside', to_jsonb('The differences are saved on this bill as your evidence.'::text)),
   ('phpc.err_not_pharmacy', to_jsonb('Parcel counting is for a pharmacy account.'::text)),
   ('phpc.err_no_bill',  to_jsonb('That bill is not in your vault.'::text)),
@@ -1215,3 +1334,15 @@ insert into public.ui_copy (key, value) values
   ('delivery.claim_kind_wrong_item',  to_jsonb('Wrong item'::text)),
   ('delivery.claim_kind_wrong_batch', to_jsonb('Wrong batch'::text))
 on conflict (key) do nothing;
+
+-- ═══════════════════ 12. ONE REPAIR IN #423's WORDS ════════════════════════
+-- ui_fmt substitutes {{var}}, but the bill vault's copy was seeded with {var},
+-- so every vault message printed its own placeholder to the pharmacist —
+-- 'Confirmed {n} batches' with a literal {n}. This command calls one of those
+-- messages (bill_confirm), so it fixes the family rather than routing around
+-- it. Idempotent: a value already using {{var}} is left alone.
+update public.ui_copy
+   set value = to_jsonb(regexp_replace(value #>> '{}', '\{([a-z_]+)\}', '{{\1}}', 'g'))
+ where key like 'phvault.%'
+   and value #>> '{}' ~ '\{[a-z_]+\}'
+   and value #>> '{}' !~ '\{\{';

@@ -5,6 +5,7 @@ import '../pharmacy/khata_screen.dart'; // CMD #415 — the khata book
 import '../pharmacy/pharmacy_refill_screen.dart'; // CMD #417 — refills & counter
 import '../pharmacy/pharmacy_variance_screen.dart';
 import '../pharmacy/rx_scan_screen.dart'; // CMD #418
+import '../pharmacy/pharmacy_parcel_count_screen.dart'; // CMD #431
 import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/widgets/admin_date_picker.dart';
 import 'package:pharma_b2b/widgets/admin_zone_picker.dart'; // CHANGE #609
@@ -185,6 +186,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     if (route == 'refill') {
       Navigator.push(context,
           MaterialPageRoute(builder: (_) => const PharmacyRefillScreen()));
+      return;
+    }
+    // CMD #431 — counting an arrived parcel against its bill. Same push, same
+    // reason: pharmacy_parcel_home() resolves the caller's own pharmacy and
+    // refuses in its own words, so there is no role test here either.
+    if (route == 'pharmacy_parcel') {
+      Navigator.push(context,
+          MaterialPageRoute(builder: (_) => const ParcelCountHomeScreen()));
       return;
     }
     // CMD #418 — the prescription scanner, same push, same reason.

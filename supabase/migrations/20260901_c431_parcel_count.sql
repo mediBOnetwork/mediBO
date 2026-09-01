@@ -662,6 +662,17 @@ begin
     'staff_heading',  public.ui_text('phpc.staff_heading'),
     'rows',           v_rows,
     'empty',          public.ui_text('phpc.empty_lines'),
+    -- Every label on the counting sheet, so the form holds no word of its own.
+    'form', jsonb_build_object(
+      'search_hint',   public.ui_text('phpc.f_search'),
+      'qty',           public.ui_text('phpc.f_qty'),
+      'batch',         public.ui_text('phpc.f_batch'),
+      'expiry',        public.ui_text('phpc.f_expiry'),
+      'damaged',       public.ui_text('phpc.f_damaged'),
+      'save',          public.ui_text('phpc.f_save'),
+      'photo',         public.ui_text('phpc.f_photo'),
+      'close',         public.ui_text('phpc.f_close'),
+      'retry',         public.ui_text('phpc.f_retry')),
     'can_finish',     (c.status = 'open' and c.lines_counted > 0),
     'finish_label',   case when v_done then public.ui_text('phpc.finish')
                                        else public.ui_text('phpc.finish_partial') end,
@@ -1309,6 +1320,15 @@ insert into public.ui_copy (key, value) values
   ('phpc.move_note',    to_jsonb('Counted on arrival: bill {{exp}}, found {{got}}'::text)),
   ('phpc.move_wrong_batch', to_jsonb('Counted on arrival: bill said batch {{exp}}, batch {{got}} arrived'::text)),
   ('phpc.extra',        to_jsonb('Add an item that is not on the bill'::text)),
+  ('phpc.f_search',     to_jsonb('Scan, say or type an item'::text)),
+  ('phpc.f_qty',        to_jsonb('How many did you count?'::text)),
+  ('phpc.f_batch',      to_jsonb('Batch on the pack'::text)),
+  ('phpc.f_expiry',     to_jsonb('Expiry on the pack'::text)),
+  ('phpc.f_damaged',    to_jsonb('Of those, how many are damaged?'::text)),
+  ('phpc.f_save',       to_jsonb('Save this count'::text)),
+  ('phpc.f_photo',      to_jsonb('Photograph it'::text)),
+  ('phpc.f_close',      to_jsonb('Close'::text)),
+  ('phpc.f_retry',      to_jsonb('Try again'::text)),
   ('phpc.pick',         to_jsonb('{{n}} items match — pick one'::text)),
   ('phpc.finish',       to_jsonb('Finish and update my stock'::text)),
   ('phpc.finish_partial', to_jsonb('Save what I counted and update my stock'::text)),
@@ -1346,3 +1366,21 @@ update public.ui_copy
  where key like 'phvault.%'
    and value #>> '{}' ~ '\{[a-z_]+\}'
    and value #>> '{}' !~ '\{\{';
+
+-- ═══════════════════ 13. THE WAY IN, FOR THE OPERATOR ══════════════════════
+-- The pharmacy reaches this from its own account screen (pharmacy_parcel_entry
+-- draws the tile). The operator reaches the SAME screen from the admin
+-- dashboard, exactly as #413/#415/#417's pharmacy surfaces are reached — the
+-- RPCs still gate on the caller's own pharmacy and render their own refusal,
+-- so this row grants a door, never a permission.
+insert into public.feature_registry(feature_key, label, group_label, icon_key, route_key,
+                                    sort_order, owner, default_access, is_active,
+                                    category, surface, roles_allowed, description)
+values ('admin.parcel_count', 'Count a parcel', 'Pharmacy tools', 'inventory', 'pharmacy_parcel',
+        4139, 'medibo', 'none', true, 'parties', 'dashboard',
+        array['admin','super_admin'],
+        'CMD #431 - count an arrived parcel against its bill: a mediBO parcel raises the doorstep claim, an outside parcel records the pharmacy''s own evidence, and both write verified lots.')
+on conflict (feature_key) do update
+  set label = excluded.label, icon_key = excluded.icon_key, route_key = excluded.route_key,
+      is_active = true, description = excluded.description,
+      roles_allowed = excluded.roles_allowed, surface = excluded.surface;

@@ -203,12 +203,18 @@ $$;
 -- A prescription is written the way a doctor writes, not the way a catalogue
 -- is indexed. Reduce both sides to comparable letters-and-digits before any
 -- match is attempted: 'Tab. AZITHRAL-500' and 'Azithral 500 Tablet' must meet.
+--
+-- The token list is the whole trick and it has to cover how Indian doctors
+-- actually abbreviate. The first live run missed a syrup THE SHOP HAD IN STOCK
+-- because 'Syp.' was not in the list while 'Syr.' was: 'syp azimax 100' could
+-- not reach 'azimax 100 dry', and the counter was told to sort it out by hand.
+-- Every form here earns its place by being a way a prescription is written.
 create or replace function public._c418_norm(p text)
 returns text language sql immutable
 set search_path to 'public' as $$
   select nullif(btrim(regexp_replace(
            regexp_replace(lower(coalesce(p, '')),
-             '\y(tab|tabs|tablet|cap|caps|capsule|syr|syrup|inj|injection|susp|suspension|oint|ointment|cream|drops|drop|sos|bd|od|tds|qid|hs|stat|mg|ml|gm|g|mcg)\y',
+             '\y(tab|tabs|tablet|tablets|cap|caps|capsule|capsules|syp|syr|syrup|liq|liquid|susp|suspension|sus|inj|injection|vial|amp|ampoule|oint|ointment|cream|gel|lotion|lot|drops|drop|eye|ear|nasal|spray|inh|inhaler|neb|respules|sach|sachet|powder|kit|soln|solution|sos|bd|od|tds|tid|qid|hs|stat|prn|mg|ml|gm|g|mcg|iu)\y',
              ' ', 'g'),
            '[^a-z0-9]+', ' ', 'g')), '');
 $$;
@@ -570,9 +576,12 @@ begin
     'has_lines',   jsonb_array_length(v_lines) > 0,
     'empty',       public.ui_text('rx.empty'),
     'empty_hint',  public.ui_text('rx.empty_hint'),
+    -- The counter boy is shown the BACKEND's sentence, never the technical
+    -- error. This used to render `ocr_error` when it was set, and the first
+    -- live failure put a 900-character Google billing JSON on the till screen.
+    -- The raw text stays on the row for the audit; it never reaches a payload.
     'failed_message', case when r.status = 'failed'
-                           then coalesce(nullif(r.ocr_error, ''),
-                                         public.ui_text('rx.err_read_failed')) end,
+                           then public.ui_text('rx.err_read_failed') end,
     'confirm_button', public.ui_text('rx.confirm_button'),
     'confirming',     public.ui_text('rx.confirming'),
     'discard_button', public.ui_text('rx.discard_button'),

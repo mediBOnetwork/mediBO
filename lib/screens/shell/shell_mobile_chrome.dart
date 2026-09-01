@@ -490,7 +490,12 @@ class _MobileSearchBarState extends State<_MobileSearchBar> {
             // CMD #409 — scan and voice, in the search bar itself. Both hand
             // back a QUERY or a product the backend resolved; neither one
             // decides anything here.
-            const VerticalDivider(width: 1, indent: 10, endIndent: 10),
+            //
+            // NO VerticalDivider here, deliberately: unlike the desktop bar,
+            // this Container sets no height, so a divider inside the Row gets
+            // unbounded vertical constraints and throws at layout — which took
+            // the whole mobile header down on #902. Whitespace separates them,
+            // which is what DESIGN.md asks for anyway.
             ScanSearchButton(color: Ds.c.textSecondary),
             VoiceSearchButton(
               color: Ds.c.textSecondary,

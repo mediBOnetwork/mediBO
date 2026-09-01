@@ -238,16 +238,83 @@ class NavProfileMenu {
 /// route table but never sees the URL. One nullable string, read exactly once,
 /// is the whole handshake — and it means every registered screen has a real
 /// address that a push notification or a WhatsApp button can point at.
+/// CMD #421 — the ONE parser for an `/admin/go/...` URL.
+///
+/// It lives here rather than inside main.dart's route resolver because a
+/// closure inside `onGenerateRoute` cannot be tested, and this is exactly the
+/// kind of string handling that goes quietly wrong: the old code stripped
+/// EVERY slash out of the tail, so `/admin/go/customer_360/<id>` arrived as
+/// one welded key that no case in the shell's switch had ever heard of, and
+/// the link opened nothing at all.
+class AdminGoLink {
+  /// The route key — the first path segment after the prefix.
+  final String route;
+
+  /// The subject the link carries, when it has one. Null, never '', so a
+  /// caller can tell "no subject" from "a subject of no characters".
+  final String? seed;
+
+  const AdminGoLink(this.route, this.seed);
+
+  static const String prefix = '/admin/go/';
+
+  /// Null when [name] is not an admin-go link at all, or names no route.
+  static AdminGoLink? parse(String name) {
+    if (!name.startsWith(prefix)) return null;
+    final segments = name
+        .substring(prefix.length)
+        .split('?')
+        .first
+        .split('/')
+        .where((s) => s.isNotEmpty)
+        .toList();
+    if (segments.isEmpty) return null;
+    return AdminGoLink(
+      segments.first,
+      segments.length > 1 ? segments.sublist(1).join('/') : null,
+    );
+  }
+}
+
 class PendingAdminNav {
   PendingAdminNav._();
 
   static String? route;
 
+  /// CMD #421 — the SUBJECT the route carries, when it has one. A customer 360
+  /// link is `/admin/go/customer_360/<pharmacy id>`, and the id is the whole
+  /// point of the link: a route key on its own opens a screen that has nothing
+  /// to show. It is the same `seed` nav_search puts on a palette result, kept
+  /// beside the route rather than smuggled into it, so a route key stays a
+  /// route key and nothing has to parse one back apart.
+  static String? seed;
+
   /// Read-and-clear: a deep link fires once, never again on the next rebuild.
+  ///
+  /// This clears the ROUTE only. The shell parks a link straight back when the
+  /// account is not allowed to open it yet ("not ours to open"), and a subject
+  /// that was dropped on that first pass could never be recovered — the URL is
+  /// long gone by then. The subject is cleared by [takeSeed], which the shell
+  /// calls only when it is actually opening the screen.
   static String? take() {
     final r = route;
     route = null;
     return r;
+  }
+
+  /// Read-and-clear the subject. Call it at the moment the screen opens.
+  static String? takeSeed() {
+    final s = seed;
+    seed = null;
+    return s;
+  }
+
+  /// Park a link. [seedValue] is optional because most routes are a whole
+  /// destination by themselves; an empty string parks nothing rather than a
+  /// subject made of no characters.
+  static void park(String routeKey, [String? seedValue]) {
+    route = routeKey;
+    seed = (seedValue == null || seedValue.isEmpty) ? null : seedValue;
   }
 }
 

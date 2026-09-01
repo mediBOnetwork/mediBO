@@ -267,6 +267,7 @@ insert into public.ui_copy (key, value) values
   ('phx.items_none',        to_jsonb('Nothing'::text)),
   ('phx.empty',             to_jsonb('Nothing in this window.'::text)),
   ('phx.empty_hint',        to_jsonb('Stock that moves into this window will appear here.'::text)),
+  ('phx.more_button',       to_jsonb('Show more'::text)),
   ('phx.window_title',      to_jsonb('Return windows closing'::text)),
   ('phx.window_empty',      to_jsonb('No supplier return window closes soon.'::text)),
   ('phx.window_note',       to_jsonb('A supplier takes expiring stock back before it expires, not after.'::text)),
@@ -709,6 +710,7 @@ begin
     'count_label', public._c413_items_label(v_total),
     'empty',      public.ui_text('phx.empty'),
     'empty_hint', public.ui_text('phx.empty_hint'),
+    'more_button', public.ui_text('phx.more_button'),
     'cost_note',  public.ui_text('phx.cost_note'));
 end $function$;
 
@@ -1501,11 +1503,11 @@ insert into public.feature_registry
 values
   ('admin.pharmacy_expiry', 'Expiry watch', 'Pharmacy tools', 'schedule',
    'pharmacy_expiry', 4130, 'medibo', false, 'none', true, 'parties', 'dashboard',
-   '/admin/go/pharmacy_expiry', array['admin','super_admin'],
+   null, array['admin','super_admin'],
    'CMD #413 — 30/60/90 day expiry buckets valued at cost, supplier return windows, one-tap return list.'),
   ('admin.pharmacy_variance', 'Stock check', 'Pharmacy tools', 'fact_check',
    'pharmacy_variance', 4131, 'medibo', false, 'none', true, 'parties', 'dashboard',
-   '/admin/go/pharmacy_variance', array['admin','super_admin'],
+   null, array['admin','super_admin'],
    'CMD #413 — owner-only spot count: expected closing against counted, per shift.')
 on conflict (feature_key) do update
   set label = excluded.label, route_key = excluded.route_key,

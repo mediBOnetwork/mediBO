@@ -203,7 +203,7 @@ class _PharmacyExpiryScreenState extends State<PharmacyExpiryScreen> {
             ],
 
             SizedBox(height: Ds.space.x24),
-            Text(_s(h['window_title']), style: Ds.t.subtitle),
+            Text(_s(h['window_title']), style: Ds.t.bodyStrong),
             SizedBox(height: Ds.space.x8),
             Text(_s(h['window_note']), style: Ds.t.caption),
             SizedBox(height: Ds.space.x12),
@@ -423,7 +423,7 @@ class _PharmacyExpiryBucketScreenState
                             borderRadius: Ds.r.rButton,
                           ),
                         ),
-                        child: Text(_s(p['count_label'])),
+                        child: Text(_s(p['more_button'])),
                       ),
                     ),
                 ],
@@ -538,9 +538,9 @@ class _PharmacyReturnListSheetState extends State<PharmacyReturnListSheet> {
             Row(
               children: [
                 Expanded(
-                  child: Text(_s(_list['title']), style: Ds.t.subtitle),
+                  child: Text(_s(_list['title']), style: Ds.t.title),
                 ),
-                Text(_s(_list['value_display']), style: Ds.t.subtitle),
+                Text(_s(_list['value_display']), style: Ds.t.title),
               ],
             ),
             SizedBox(height: Ds.space.x4),

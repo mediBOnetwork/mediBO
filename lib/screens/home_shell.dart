@@ -30,6 +30,7 @@ import 'admin/admin_customer_screen.dart';
 import 'admin/admin_company_screen.dart';
 import 'admin/admin_dashboard_screen.dart';
 import 'admin/admin_deletion_request_screen.dart';
+import 'admin/admin_ops_queues_screen.dart';
 import 'admin/admin_delivery_partner_screen.dart';
 import 'admin/admin_mr_screen.dart';
 import 'admin/admin_alert_overlay.dart';
@@ -797,6 +798,42 @@ class _HomeShellState extends State<HomeShell> {
       // shell already owns.
       case 'search':
         setState(() { _index = 0; _cartOpen = false; });
+        break;
+      // CHANGE #459 — Ops queues: one screen for every stuck object of the
+      // admin register's batch B (send-failure alerts, stalled inbound scans,
+      // out-of-stock follow-ups, arrivals, count differences, inquiry->PO
+      // integrity, acting-as). The whole screen is one RPC and the four row
+      // actions share one dispatcher, so the screen never learns which queue a
+      // row came from. admin_ops_queues() gates itself and the screen renders
+      // its refusal, same story as the screens above.
+      case 'ops_queues':
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => AdminOpsQueuesScreen(
+              loadRpc: () async {
+                final raw =
+                    await Supabase.instance.client.rpc('admin_ops_queues');
+                return Map<String, dynamic>.from(
+                    (raw is List ? raw.first : raw) as Map);
+              },
+              actionRpc: (action, id) async {
+                final (fn, params) = switch (action) {
+                  'resend' => ('admin_oos_resend', {'p_id': int.tryParse(id)}),
+                  'close' => ('admin_oos_close', {'p_id': int.tryParse(id)}),
+                  'rescan' => ('admin_pending_rescan', {'p_id': id}),
+                  'ack' => ('admin_alert_ack', {'p_id': int.tryParse(id)}),
+                  _ => (null, <String, dynamic>{}),
+                };
+                if (fn == null) return const <String, dynamic>{'ok': false};
+                final raw =
+                    await Supabase.instance.client.rpc(fn, params: params);
+                return Map<String, dynamic>.from(
+                    (raw is List ? raw.first : raw) as Map);
+              },
+            ),
+          ),
+        );
         break;
       case 'logout':
         UserState.read(context).signOut(); break;

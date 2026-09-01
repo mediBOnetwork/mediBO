@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../design_tokens.dart';
+import '../../models/c529_admin_gaps.dart';
 import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 import 'bag_print.dart';
@@ -248,8 +250,14 @@ class _BagCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bagNo = bag['bag_no'] as int;
-    final bagCode = bag['bag_code'] as String;
+    // CHANGE #529 gap 16 — every word and colour on this card is the
+    // BACKEND's (bags_list().status_label / status_bg / status_fg /
+    // count_label). The old `bags.status` column read 'empty' on all 500 rows
+    // while 293 order_items carried a bag_no, so nothing here may infer a
+    // status from a count.
+    final v = BagRowView.from(bag);
+    final bagNo = v.bagNo;
+    final bagCode = v.bagCode;
 
     return Card(
       elevation: 2,
@@ -278,6 +286,26 @@ class _BagCard extends StatelessWidget {
             ),
           ),
         ),
+        if (v.hasChip)
+          Padding(
+            padding: EdgeInsets.fromLTRB(Ds.space.x8, 0, Ds.space.x8, Ds.space.x8),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Container(
+                padding: EdgeInsets.symmetric(
+                    horizontal: Ds.space.x8, vertical: Ds.space.x4),
+                decoration: BoxDecoration(
+                  color: c529Hex(v.statusBg, Ds.c.bg),
+                  borderRadius: Ds.r.rChip,
+                ),
+                child: Text(v.statusLabel,
+                    style: Ds.t.caption
+                        .copyWith(color: c529Hex(v.statusFg, Ds.c.textSecondary))),
+              ),
+              SizedBox(height: Ds.space.x4),
+              Text(v.countLabel,
+                  style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+            ]),
+          ),
       ]),
     );
   }

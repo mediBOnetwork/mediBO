@@ -242,7 +242,18 @@ class _SupplierClosureSheetState extends State<_SupplierClosureSheet> {
           padding: EdgeInsets.all(Ds.space.x16),
           child: _loading
               ? _skeleton()
-              : (_panel?['ok'] == true ? _panelBody(_panel!) : _errorBody()),
+              : (_panel?['ok'] == true
+                  ? SupplierClosurePanelView(
+                      panel: _panel!,
+                      reason: _reason,
+                      until: _until,
+                      untilDisplay: _until == null ? '' : _untilDisplay(),
+                      saving: _saving,
+                      onPickUntil: _pickUntil,
+                      onClearUntil: () => setState(() => _until = null),
+                      onSubmit: (close) => _submit(close: close),
+                    )
+                  : _errorBody()),
         ),
       ),
     );
@@ -296,7 +307,48 @@ class _SupplierClosureSheetState extends State<_SupplierClosureSheet> {
   String _retryLabel() =>
       (_panel?['retry_label'] as String? ?? c('supplier.closed_retry'));
 
-  Widget _panelBody(Map<String, dynamic> p) {
+  /// The picked instant, echoed back in the admin's own device locale until the
+  /// backend re-renders the closure in IST on the next payload. This is an
+  /// INPUT echo, never a closure time the screen composed.
+  String _untilDisplay() {
+    final d = _until!;
+    final l = MaterialLocalizations.of(context);
+    return '${l.formatFullDate(d)} ${l.formatTimeOfDay(TimeOfDay.fromDateTime(d))}';
+  }
+}
+
+/// The sheet's body, split out from the network wrapper so it can be tested
+/// against a mocked payload with no Supabase in sight. It renders the panel and
+/// nothing else: every string below arrives in [panel], and an absent string
+/// renders zero pixels rather than a Dart default.
+class SupplierClosurePanelView extends StatelessWidget {
+  final Map<String, dynamic> panel;
+  final TextEditingController reason;
+  final DateTime? until;
+
+  /// The picked instant echoed back in the device locale. An INPUT echo — the
+  /// closure time itself is only ever the backend's `status_label`.
+  final String untilDisplay;
+  final bool saving;
+  final VoidCallback onPickUntil;
+  final VoidCallback onClearUntil;
+  final void Function(bool close) onSubmit;
+
+  const SupplierClosurePanelView({
+    super.key,
+    required this.panel,
+    required this.reason,
+    required this.until,
+    required this.untilDisplay,
+    required this.saving,
+    required this.onPickUntil,
+    required this.onClearUntil,
+    required this.onSubmit,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final p = panel;
     final closed = p['closed'] == true;
     final tone = (p['status_tone'] as String? ?? '');
     final history = (p['history'] as List?) ?? const [];
@@ -319,6 +371,8 @@ class _SupplierClosureSheetState extends State<_SupplierClosureSheet> {
           SizedBox(height: Ds.space.x24),
           _text(p['intro'], Ds.t.caption),
           SizedBox(height: Ds.space.x24),
+          // Which form appears is the backend's `closed` flag, never a
+          // deduction from the presence of an end date or a reason.
           if (!closed) ..._closeForm(p) else ..._reopenForm(p),
           SizedBox(height: Ds.space.x32),
           _text(p['history_title'], Ds.t.subtitle),
@@ -326,7 +380,9 @@ class _SupplierClosureSheetState extends State<_SupplierClosureSheet> {
           if (history.isEmpty)
             _text(p['history_empty'], Ds.t.caption)
           else
-            ...history.whereType<Map>().map((h) => _historyRow(h.cast<String, dynamic>())),
+            ...history
+                .whereType<Map>()
+                .map((h) => _historyRow(h.cast<String, dynamic>())),
           SizedBox(height: Ds.space.x16),
         ],
       ),
@@ -335,7 +391,7 @@ class _SupplierClosureSheetState extends State<_SupplierClosureSheet> {
 
   List<Widget> _closeForm(Map<String, dynamic> p) => [
         TextField(
-          controller: _reason,
+          controller: reason,
           style: Ds.t.body,
           decoration: InputDecoration(
             hintText: p['reason_hint'] as String? ?? '',
@@ -350,45 +406,36 @@ class _SupplierClosureSheetState extends State<_SupplierClosureSheet> {
             child: SizedBox(
               height: Ds.touch.minTarget,
               child: OutlinedButton(
-                onPressed: _saving ? null : _pickUntil,
+                onPressed: saving ? null : onPickUntil,
                 child: Text(
-                  _until == null
+                  until == null
                       ? (p['until_pick_label'] as String? ?? '')
-                      : _untilDisplay(),
+                      : untilDisplay,
                   style: Ds.t.body,
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
             ),
           ),
-          if (_until != null) ...[
+          if (until != null) ...[
             SizedBox(width: Ds.space.x8),
             SizedBox(
               height: Ds.touch.minTarget,
               child: TextButton(
-                onPressed: _saving ? null : () => setState(() => _until = null),
-                child: Text(p['until_clear_label'] as String? ?? '',
-                    style: Ds.t.body),
+                onPressed: saving ? null : onClearUntil,
+                child:
+                    Text(p['until_clear_label'] as String? ?? '', style: Ds.t.body),
               ),
             ),
           ],
         ]),
         SizedBox(height: Ds.space.x24),
-        _primary(p['close_button'], () => _submit(close: true)),
+        _primary(p['close_button'], () => onSubmit(true)),
       ];
 
   List<Widget> _reopenForm(Map<String, dynamic> p) => [
-        _primary(p['reopen_button'], () => _submit(close: false)),
+        _primary(p['reopen_button'], () => onSubmit(false)),
       ];
-
-  // The picked instant, shown back to the admin in his own device locale until
-  // the backend re-renders it in IST on the next payload. This is an INPUT
-  // echo, never a closure time the screen composed.
-  String _untilDisplay() {
-    final d = _until!;
-    final l = MaterialLocalizations.of(context);
-    return '${l.formatFullDate(d)} ${l.formatTimeOfDay(TimeOfDay.fromDateTime(d))}';
-  }
 
   Widget _primary(Object? label, VoidCallback onTap) {
     final text = (label as String? ?? '');
@@ -397,7 +444,7 @@ class _SupplierClosureSheetState extends State<_SupplierClosureSheet> {
       width: double.infinity,
       height: Ds.touch.minTarget,
       child: ElevatedButton(
-        onPressed: _saving ? null : onTap,
+        onPressed: saving ? null : onTap,
         child: Text(text, style: Ds.t.bodyStrong.copyWith(color: Ds.c.surface)),
       ),
     );

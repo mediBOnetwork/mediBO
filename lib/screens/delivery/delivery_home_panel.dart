@@ -162,7 +162,10 @@ class DeliveryHomePanel extends StatelessWidget {
             ),
             onPressed: () => showDeliveryHistorySheet(context),
             icon: const Icon(Icons.history, size: 16),
-            label: Text(_ui('dlv_history'), style: const TextStyle(fontSize: 12.5)),
+            // Both buttons in this row moved onto Ds.t.caption in #406: they
+            // sit side by side, so one of them keeping a hand-written 12.5
+            // would read as a mistake. Baseline ratcheted DOWN, never up.
+            label: Text(_ui('dlv_history'), style: Ds.t.caption),
           ),
           SizedBox(width: Ds.space.x16),
           // CHANGE #406 (PART 3) — the rider's own standing. The label is
@@ -176,8 +179,7 @@ class DeliveryHomePanel extends StatelessWidget {
             ),
             onPressed: () => showRiderLeaderboard(context),
             icon: const Icon(Icons.leaderboard_outlined, size: 16),
-            label: Text(_ui('dlv_leaderboard'),
-                style: const TextStyle(fontSize: 12.5)),
+            label: Text(_ui('dlv_leaderboard'), style: Ds.t.caption),
           ),
         ]),
 

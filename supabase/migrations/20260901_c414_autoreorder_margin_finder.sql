@@ -701,3 +701,129 @@ grant execute on function public.pharmacy_reorder_draft_get()               to a
 grant execute on function public.pharmacy_reorder_draft_act(uuid, text)     to authenticated;
 grant execute on function public.pos_margin_options(bigint, integer)        to authenticated;
 grant execute on function public.pos_margin_swap(bigint, bigint, numeric)   to authenticated;
+
+-- ═════════════════════════════════════════════════════════════════════════════
+-- 8. THE LEAK HOSTILE QA FOUND.
+--
+-- pharmacy_velocity() takes the shop as a PARAMETER, defaulting to pos_shop().
+-- It never checked that the caller owned the shop they passed. It is granted to
+-- `authenticated` and it is SECURITY DEFINER, so any signed-in pharmacy could
+-- ask for any other pharmacy's id and read that shop's shelf quantities and its
+-- day-by-day sales velocity — a competitor's stock and turnover, from one RPC.
+-- Proven live before the fix: pharmacy A asked for B's id and got B's shelf.
+--
+-- The parameter stays, because two callers legitimately pass an id — the weekly
+-- draft sweep runs for a named pharmacy, and an admin may look at one shop —
+-- but it is now FENCED: anyone who is not that pharmacy and not an admin gets
+-- their own shop, never the one they asked for. A leak fixed by refusing the
+-- argument would have broken the sweep; this refuses the CALLER instead.
+-- ═════════════════════════════════════════════════════════════════════════════
+create or replace function public._c414_shop_for(p_shop uuid)
+returns uuid language sql stable security definer set search_path to 'public' as $$
+  select case
+           -- no argument: your own shop, which is the normal case
+           when p_shop is null then public.pos_shop()
+           -- your own shop, named explicitly
+           when p_shop = public.pos_shop() then p_shop
+           -- an admin, or the dispatcher running with no session at all
+           when public.get_my_role() in ('admin','super_admin') then p_shop
+           when auth.uid() is null then p_shop
+           -- anyone else asking about a shop that is not theirs
+           else public.pos_shop()
+         end
+$$;
+revoke all on function public._c414_shop_for(uuid) from public, anon, authenticated;
+
+create or replace function public.pharmacy_velocity(p_shop uuid default null, p_window integer default null)
+returns table(
+  medicine_id   bigint,
+  product_name  text,
+  sold_qty      numeric,
+  per_day       numeric,
+  stock_qty     numeric,
+  days_left     numeric,
+  stockout_on   date
+) language plpgsql stable security definer set search_path to 'public' as $$
+declare v_shop uuid := public._c414_shop_for(p_shop);
+        s public.pharmacy_reorder_settings;
+        v_win integer;
+begin
+  if v_shop is null then return; end if;
+  s := public._c414_settings(v_shop);
+  v_win := greatest(coalesce(p_window, s.window_days), 1);
+
+  return query
+  with sold as (
+    select l.medicine_id,
+           max(l.product_name)                as product_name,
+           sum(coalesce(l.qty,0))::numeric    as sold_qty
+      from pos_sale_lines l
+      join pos_sales sa on sa.id = l.sale_id
+     where sa.pharmacy_id = v_shop
+       and coalesce(sa.status,'completed') <> 'void'
+       and sa.sold_on >= ((now() at time zone 'Asia/Kolkata')::date - v_win)
+       and l.medicine_id is not null
+     group by l.medicine_id
+  ), stock as (
+    select ps.medicine_id,
+           max(ps.product_name)             as product_name,
+           sum(coalesce(ps.qty,0))::numeric as stock_qty
+      from pharmacy_stock ps
+     where ps.pharmacy_id = v_shop and ps.medicine_id is not null
+     group by ps.medicine_id
+  )
+  select coalesce(so.medicine_id, st.medicine_id)                         as medicine_id,
+         coalesce(so.product_name, st.product_name, '')                   as product_name,
+         coalesce(so.sold_qty, 0)                                         as sold_qty,
+         round(coalesce(so.sold_qty,0) / v_win, 4)                        as per_day,
+         coalesce(st.stock_qty, 0)                                        as stock_qty,
+         case when coalesce(so.sold_qty,0) > 0
+              then round(coalesce(st.stock_qty,0) / (coalesce(so.sold_qty,0) / v_win), 2)
+         end                                                              as days_left,
+         case when coalesce(so.sold_qty,0) > 0
+              then ((now() at time zone 'Asia/Kolkata')::date
+                    + floor(coalesce(st.stock_qty,0)
+                            / (coalesce(so.sold_qty,0) / v_win))::int)
+         end                                                              as stockout_on
+    from sold so
+    full join stock st on st.medicine_id = so.medicine_id;
+end $$;
+
+-- The draft builder took the same unchecked parameter, and building a draft
+-- reads the same shelf. Fence it identically. The sweep still works: it calls
+-- with no session, which _c414_shop_for admits by design.
+create or replace function public.pharmacy_reorder_draft_build(p_shop uuid default null)
+returns jsonb language plpgsql security definer set search_path to 'public' as $$
+declare v_shop uuid := public._c414_shop_for(p_shop);
+        v_screen jsonb; v_items jsonb; v_id uuid; v_today date;
+begin
+  if v_shop is null then return jsonb_build_object('ok', false, 'error','no_shop'); end if;
+  v_today := (now() at time zone 'Asia/Kolkata')::date;
+
+  v_screen := public.pharmacy_reorder_screen();
+  if (v_screen->>'ok')::boolean is not true then return v_screen; end if;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'medicine_id',  r->>'medicine_id',
+           'product_name', r->>'product_name',
+           'qty',          (r->>'suggest_qty')::int)), '[]'::jsonb)
+    into v_items
+    from jsonb_array_elements(coalesce(v_screen->'rows','[]'::jsonb)) r;
+
+  if jsonb_array_length(v_items) = 0 then
+    return jsonb_build_object('ok', true, 'built', false, 'line_count', 0);
+  end if;
+
+  insert into pharmacy_reorder_draft(pharmacy_id, built_on, items, line_count)
+  values (v_shop, v_today, v_items, jsonb_array_length(v_items))
+  on conflict (pharmacy_id, built_on) do update
+    set items = excluded.items, line_count = excluded.line_count
+  returning id into v_id;
+
+  return jsonb_build_object('ok', true, 'built', true, 'id', v_id,
+    'line_count', jsonb_array_length(v_items));
+end $$;
+
+revoke all on function public.pharmacy_velocity(uuid, integer)   from public, anon;
+revoke all on function public.pharmacy_reorder_draft_build(uuid) from public, anon;
+grant execute on function public.pharmacy_velocity(uuid, integer) to authenticated;

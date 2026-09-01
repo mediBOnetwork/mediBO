@@ -277,7 +277,45 @@ begin
      'returning a PRICED replacement line the backend built -> '
        || coalesce(v->'line'->>'gst_label','null'));
 
-  -- ═══ 5. A STRANGER SEES NOTHING ═════════════════════════════════════════
+  -- ═══ 5. ONE PHARMACY CANNOT READ ANOTHER'S SHELF ════════════════════════
+  -- Found by hostile QA before this shipped: pharmacy_velocity() takes the shop
+  -- as a parameter and never checked who was asking, so any signed-in pharmacy
+  -- could read a competitor's stock and turnover from one RPC.
+  declare
+    v_other uuid; v_m bigint; v_n int;
+  begin
+    select pp.id into v_other from pharmacy_profiles pp
+     where pp.id <> v_shop and coalesce(pp.approved,false)
+     order by pp.created_at limit 1;
+    select m.id into v_m from "MEDICINE" m order by m.id limit 1;
+
+    if v_other is not null then
+      insert into pharmacy_stock(pharmacy_id, medicine_id, product_name, item_key,
+                                 source_kind, qty, unit_cost, mrp)
+      values (v_other, v_m, 'SOMEONE ELSE', 'm:'||v_m::text, 'opening', 99, 4.44, 10.00);
+
+      perform set_config('request.jwt.claims',
+        json_build_object('sub', v_user, 'role','authenticated')::text, true);
+
+      select count(*) into v_n
+        from public.pharmacy_velocity(v_other, 30) x
+       where x.stock_qty = 99;
+      insert into c414_log(ok, line) values
+        (v_n = 0,
+         'asking for ANOTHER pharmacy''s id returns your own shop, never theirs -> '
+           || v_n::text || ' of their rows leaked');
+
+      -- and the same fence on the draft builder, which reads the same shelf
+      perform public.pharmacy_reorder_draft_build(v_other);
+      insert into c414_log(ok, line)
+      select count(*) = 0,
+             'and a draft can never be built against someone else''s shop -> '
+               || count(*)::text
+        from pharmacy_reorder_draft d where d.pharmacy_id = v_other;
+    end if;
+  end;
+
+  -- ═══ 6. A STRANGER SEES NOTHING ═════════════════════════════════════════
   perform set_config('request.jwt.claims',
     json_build_object('sub', gen_random_uuid(), 'role','authenticated')::text, true);
   insert into c414_log(ok, line) values

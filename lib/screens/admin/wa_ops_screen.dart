@@ -2138,6 +2138,13 @@ class _SendHealthSectionState extends State<_SendHealthSection> {
         .toList();
     final reasonsTitle = (_payload?['reasons_title'] ?? '').toString();
     final retryableLabel = (_payload?['retryable_label'] ?? '').toString();
+    // CMD #450 QA round 1. Two numbers on this screen count two different
+    // populations — the banner's total_failed unions Meta's own delivery
+    // failures with our send log, summary_label counts the log alone — and the
+    // feed is capped, so it must say what it left out. Both sentences are the
+    // backend's; neither is inferred here.
+    final totalFailedLabel = (_payload?['total_failed_label'] ?? '').toString();
+    final truncatedLabel = (_payload?['truncated_label'] ?? '').toString();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2157,6 +2164,11 @@ class _SendHealthSectionState extends State<_SendHealthSection> {
               ],
             ),
           ),
+        if (totalFailedLabel.isNotEmpty)
+          Padding(
+            padding: EdgeInsets.only(bottom: Ds.space.x4),
+            child: Text(totalFailedLabel, style: Ds.t.caption),
+          ),
         if (retryableLabel.isNotEmpty)
           Padding(
             padding: EdgeInsets.only(bottom: Ds.space.x8),
@@ -2175,6 +2187,11 @@ class _SendHealthSectionState extends State<_SendHealthSection> {
           SizedBox(height: Ds.space.x16),
         ],
         if (note.isNotEmpty) _NoteBlock(note),
+        if (truncatedLabel.isNotEmpty)
+          Padding(
+            padding: EdgeInsets.only(bottom: Ds.space.x8),
+            child: Text(truncatedLabel, style: Ds.t.caption),
+          ),
         if (rows.isEmpty)
           _NoteBlock((_payload?['empty_label'] ?? '').toString())
         else

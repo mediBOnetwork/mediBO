@@ -834,21 +834,55 @@ create or replace function public.pharmacy_stock_import_start(
   p_kind text, p_bucket text default null, p_path text default null)
 returns jsonb
 language plpgsql security definer set search_path = public as $$
-declare v_shop uuid := public._phs_shop(); v_id uuid;
+declare
+  v_shop uuid := public._phs_shop();
+  v_id uuid := gen_random_uuid();
+  v_bucket text; v_path text;
 begin
   if v_shop is null then return public._phs_denied(); end if;
   if coalesce(p_kind,'') not in ('csv','photo') then
     return jsonb_build_object('ok', false, 'error', 'bad_kind');
   end if;
-  insert into public.pharmacy_stock_import(pharmacy_id, kind, bucket, path, created_by,
-                                           status)
-  values (v_shop, p_kind, p_bucket, p_path, auth.uid(),
-          case when p_kind = 'photo' then 'scanning' else 'draft' end)
-  returning id into v_id;
+
+  -- The upload TARGET is decided here, not in Dart, and it always begins with
+  -- the pharmacy's own id — which is exactly what the storage policy checks, so
+  -- one shop can never write into another shop's folder.
+  if p_kind = 'photo' then
+    v_bucket := 'stock-imports';
+    v_path   := v_shop::text || '/' || v_id::text || '.jpg';
+  end if;
+
+  insert into public.pharmacy_stock_import(id, pharmacy_id, kind, bucket, path,
+                                           created_by, status)
+  values (v_id, v_shop, p_kind,
+          coalesce(v_bucket, p_bucket), coalesce(v_path, p_path), auth.uid(),
+          case when p_kind = 'photo' then 'scanning' else 'draft' end);
+
   return jsonb_build_object('ok', true, 'import_id', v_id,
+    'bucket', coalesce(v_bucket, p_bucket),
+    'path',   coalesce(v_path, p_path),
+    'scan_function', case when p_kind = 'photo' then 'stock-ocr' else null end,
     'message', public.ui_text(case when p_kind='photo'
                               then 'phstock.import_scanning' else 'phstock.import_started' end));
 end $$;
+
+-- The private bucket the register photos land in. Created here so the feature
+-- ships whole; the policies below are the only way into it.
+insert into storage.buckets (id, name, public)
+values ('stock-imports', 'stock-imports', false)
+on conflict (id) do nothing;
+
+drop policy if exists phs_import_upload on storage.objects;
+create policy phs_import_upload on storage.objects
+  for insert to authenticated
+  with check (bucket_id = 'stock-imports'
+              and split_part(name, '/', 1) = public.my_customer_id()::text);
+
+drop policy if exists phs_import_read on storage.objects;
+create policy phs_import_read on storage.objects
+  for select to authenticated
+  using (bucket_id = 'stock-imports'
+         and split_part(name, '/', 1) = public.my_customer_id()::text);
 
 -- One CSV line -> fields, honouring quoted commas. Kept in SQL on purpose: Dart
 -- must not parse the file, or the parse becomes a second implementation nobody

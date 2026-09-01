@@ -8,8 +8,9 @@
 //  * #170 the Rx class is the backend's badge, on the card and the PDP. No
 //    schedule is inferred, no colour is chosen here, and a pack with no class
 //    on record shows nothing rather than a locally-invented "OTC".
-//  * #168 the tier benefit note is rendered only when the payload says the
-//    benefit applies to THIS cart — never as a standing 3% promise.
+//  * #168 the tier benefit note is NOT a cart notice (CHANGE #572). The cart
+//    draws exactly one notice, `render.notice`, and the tier promise is not
+//    it — on an unpriced basket it read as a defect.
 //
 // Pure widget tests: mocked payloads inline, no network, no Supabase.
 
@@ -24,36 +25,55 @@ Future<void> _pump(WidgetTester t, Widget child) => t.pumpWidget(
       MaterialApp(home: Scaffold(body: SingleChildScrollView(child: child))),
     );
 
+// CHANGE #572 — the ladder is no longer assembled here. `summary.rows` IS the
+// ladder: which rows exist, in which order, with which amounts, is the
+// backend's answer. Delivery survives an unpriced basket because the payload
+// keeps sending it; Net payable and Total payable do not, because it does not.
 Map<String, dynamic> _renderWithDelivery({
   required bool waived,
   required bool hasGst,
 }) =>
     {
-      'items_total_display': '₹1,200.00',
-      'grand_total_display': waived ? '₹1,200.00' : '₹1,270.80',
-      'labels': {'total': 'Net payable', 'grand': 'Total payable'},
-      'delivery': {
-        'has': true,
-        'waived': waived,
-        'label': 'Delivery',
-        'amount_display': waived ? 'FREE' : '₹60.00',
-        'has_gst': hasGst,
-        'gst_label': 'GST on delivery',
-        'gst_display': '₹10.80',
-        'note': waived
+      'summary': {
+        'line': '8 items',
+        'has_amount': true,
+        'amount_display': '₹1,200.00',
+        'delivery_note': waived
             ? 'Free delivery on this order'
             : 'Add ₹3,800.00 more for free delivery',
+        'rows': [
+          {'key': 'net', 'label': 'Net payable', 'amount': '₹1,200.00', 'strong': false},
+          {
+            'key': 'delivery',
+            'label': 'Delivery',
+            'amount': waived ? 'FREE' : '₹60.00',
+            'strong': false
+          },
+          if (hasGst)
+            {
+              'key': 'delivery_gst',
+              'label': 'GST on delivery',
+              'amount': '₹10.80',
+              'strong': false
+            },
+          {
+            'key': 'grand',
+            'label': 'Total payable',
+            'amount': waived ? '₹1,200.00' : '₹1,270.80',
+            'strong': true
+          },
+        ],
       },
     };
 
 void main() {
   setUpAll(() => RenderLog.flushEnabled = false);
 
-  group('#167 — the cart delivery ladder is printed, never computed', () {
+  group('#167/#572 — the cart totals ladder is printed, never computed', () {
     testWidgets('a charged delivery prints amount, GST, grand total and nudge',
         (t) async {
       await _pump(
-          t, C461DeliveryLines(render: _renderWithDelivery(waived: false, hasGst: true)));
+          t, C572TotalsBlock(render: _renderWithDelivery(waived: false, hasGst: true)));
 
       expect(find.text('Delivery'), findsOneWidget);
       expect(find.text('₹60.00'), findsOneWidget);
@@ -68,7 +88,7 @@ void main() {
     testWidgets('a waived delivery prints the backend FREE, not a ₹0.00',
         (t) async {
       await _pump(
-          t, C461DeliveryLines(render: _renderWithDelivery(waived: true, hasGst: false)));
+          t, C572TotalsBlock(render: _renderWithDelivery(waived: true, hasGst: false)));
 
       expect(find.text('FREE'), findsOneWidget);
       expect(find.text('Free delivery on this order'), findsOneWidget);
@@ -76,26 +96,27 @@ void main() {
       expect(find.text('GST on delivery'), findsNothing);
     });
 
-    testWidgets('no delivery block in the payload draws no delivery rows',
+    testWidgets('no summary block in the payload draws no totals at all',
         (t) async {
-      await _pump(t, const C461DeliveryLines(render: {}));
+      await _pump(t, const C572TotalsBlock(render: {}));
       expect(find.text('Delivery'), findsNothing);
       expect(find.byType(Text), findsNothing);
     });
   });
 
-  group('#170 / #168 — the cart notices are the backend\'s words', () {
+  group('#170/#572 — the cart shows ONE notice, in the backend\'s words', () {
     testWidgets('an Rx basket with no licence shows the backend title+message',
         (t) async {
-      await _pump(t, const C461CartNotices(render: {
-        'rx_gate': {
+      await _pump(t, const C572CartNotice(render: {
+        'notice': {
           'has': true,
-          'rx_count': 2,
-          'rx_note': '2 prescription items in this order',
+          'blocking': false,
+          'kind': 'drug_licence',
           'title': 'Drug licence needed',
           'message': 'Add your 20B/21B drug licence to your profile to order '
               'prescription medicines. 2 items in your cart need it.',
           'tone': {'bg': '#FEF3C7', 'fg': '#92400E'},
+          'action': {'has': false},
         },
       }));
 
@@ -104,14 +125,12 @@ void main() {
           find.textContaining('2 items in your cart need it.'), findsOneWidget);
     });
 
-    testWidgets('a licensed Rx basket shows only the count line', (t) async {
-      await _pump(t, const C461CartNotices(render: {
-        'rx_gate': {
-          'has': true,
-          'rx_count': 1,
-          'rx_note': '1 prescription item in this order',
-          'message': '',
-          'title': '',
+    testWidgets('a licensed Rx basket shows only the record line', (t) async {
+      await _pump(t, const C572CartNotice(render: {
+        'notice': {
+          'has': false,
+          'note': '1 prescription item in this order',
+          'action': {'has': false},
         },
       }));
 
@@ -120,9 +139,12 @@ void main() {
       expect(find.text('Drug licence needed'), findsNothing);
     });
 
-    testWidgets('the tier benefit note renders only when the payload sends one',
-        (t) async {
-      await _pump(t, const C461CartNotices(render: {
+    testWidgets('the tier benefit note is no longer a cart notice', (t) async {
+      // #572 — "Nothing in the catalogue is trade-priced for you yet" read as
+      // a defect on a basket that is simply awaiting quotes. render.notice is
+      // the ONLY notice the cart draws, so a rewards block in the payload
+      // reaches the screen and is not printed.
+      await _pump(t, const C572CartNotice(render: {
         'rewards': {
           'has': true,
           'tier_label': 'Platinum',
@@ -131,16 +153,10 @@ void main() {
           'tone': {'bg': '#FEF3C7', 'fg': '#92400E'},
         },
       }));
-      expect(find.text('Platinum'), findsOneWidget);
+      expect(find.text('Platinum'), findsNothing);
       expect(
           find.textContaining('once your order has trade-priced items'),
-          findsOneWidget);
-
-      // has:false is absence, not an empty card.
-      await _pump(t, const C461CartNotices(render: {
-        'rewards': {'has': false, 'note': 'never shown'},
-      }));
-      expect(find.text('never shown'), findsNothing);
+          findsNothing);
     });
   });
 

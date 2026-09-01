@@ -268,17 +268,21 @@ begin
                                            public.ist_fmt(so.created_at,'dmy'))),
       jsonb_build_object('label', public.ui_text('supplier_doc.lbl_status'), 'value', coalesce(so.status,'')));
 
-    select coalesce(jsonb_agg(jsonb_build_object(
-             'sn', row_number() over ()::text,
-             'product', coalesce(it->>'product_name',''),
-             'pack', coalesce(it->>'pack_type',''),
-             'qty', coalesce(it->>'quantity',''),
-             'mrp', coalesce(it->>'mrp_display',''),
-             'rate', coalesce(it->>'rate_display',''),
-             'amount', coalesce(it->>'line_total_display',''))), '[]'::jsonb),
-           count(*), coalesce(sum((it->>'line_total')::numeric),0)
+    select coalesce(jsonb_agg(t.row order by t.ord), '[]'::jsonb),
+           count(*), coalesce(sum(t.amt),0)
       into v_rows, v_n, v_sum
-      from jsonb_array_elements(coalesce(so.items,'[]'::jsonb)) it;
+      from (select ord,
+                   coalesce((it->>'line_total')::numeric, 0) amt,
+                   jsonb_build_object(
+                     'sn', ord::text,
+                     'product', coalesce(it->>'product_name',''),
+                     'pack', coalesce(it->>'pack_type',''),
+                     'qty', coalesce(it->>'quantity',''),
+                     'mrp', coalesce(it->>'mrp_display',''),
+                     'rate', coalesce(it->>'rate_display',''),
+                     'amount', coalesce(it->>'line_total_display','')) row
+              from jsonb_array_elements(coalesce(so.items,'[]'::jsonb))
+                   with ordinality as e(it, ord)) t;
 
     v_sections := jsonb_build_array(jsonb_build_object(
       'heading', public.ui_text('supplier_doc.po_lines_heading'),
@@ -322,20 +326,24 @@ begin
       jsonb_build_object('label', public.ui_text('supplier_doc.lbl_status'), 'value', coalesce(pb.status,'')),
       jsonb_build_object('label', public.ui_text('supplier_doc.lbl_file'), 'value', coalesce(pb.file_name,'')));
 
-    select coalesce(jsonb_agg(jsonb_build_object(
-             'sn', row_number() over (order by bl.created_at)::text,
-             'product', coalesce(nullif(bl.raw_name,''),''),
-             'batch', coalesce(bl.batch_no,''),
-             'expiry', coalesce(bl.expiry,''),
-             'qty', coalesce(trim_scale(bl.qty)::text,''),
-             'free', coalesce(trim_scale(bl.free_qty)::text,''),
-             'mrp', public.inr_money(bl.mrp),
-             'ptr', public.inr_money(bl.ptr),
-             'gst', coalesce(trim_scale(bl.gst_pct)::text,'') || '%',
-             'amount', public.inr_money(bl.line_amount)) order by bl.created_at), '[]'::jsonb),
-           count(*), coalesce(sum(bl.line_amount),0)
+    select coalesce(jsonb_agg(t.row order by t.ord), '[]'::jsonb),
+           count(*), coalesce(sum(t.amt),0)
       into v_rows, v_n, v_sum
-      from public.bill_lines bl where bl.pending_bill_id = pb.id;
+      from (select row_number() over (order by bl.created_at, bl.id) ord,
+                   coalesce(bl.line_amount, 0) amt,
+                   jsonb_build_object(
+                     'sn', (row_number() over (order by bl.created_at, bl.id))::text,
+                     'product', coalesce(nullif(bl.raw_name,''),''),
+                     'batch', coalesce(bl.batch_no,''),
+                     'expiry', coalesce(bl.expiry,''),
+                     'qty', coalesce(trim_scale(bl.qty)::text,''),
+                     'free', coalesce(trim_scale(bl.free_qty)::text,''),
+                     'mrp', public.inr_money(bl.mrp),
+                     'ptr', public.inr_money(bl.ptr),
+                     'gst', coalesce(trim_scale(bl.gst_pct)::text,'') || '%',
+                     'amount', public.inr_money(bl.line_amount)) row
+              from public.bill_lines bl
+             where bl.pending_bill_id = pb.id) t;
 
     v_sections := jsonb_build_array(jsonb_build_object(
       'heading', public.ui_text('supplier_doc.bill_lines_heading'),

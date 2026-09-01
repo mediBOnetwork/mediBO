@@ -1,4 +1,15 @@
 // CHANGE #226 — the customer bill renderer for the AUTOMATIC chain.
+// CHANGE #403 — the SAME pipeline now also draws supplier documents: a purchase
+//               order, a copy of an imported bill, and a monthly statement.
+//               POST {supplier_doc_id} asks supplier_doc_render_input() for a
+//               finished payload, draws it with renderDoc(), stores it under
+//               supplier-docs/<supplier>/<kind>/<ref>.pdf and reports through
+//               supplier_doc_report(). It gets its own layout rather than the
+//               invoice one because renderPdf() hardcodes an invoice's shape —
+//               a CGST/SGST ladder, an HSN summary, "Less: Paid" — none of
+//               which belongs on a purchase order or a statement. It still
+//               computes nothing: every label, number and column below arrives
+//               in the payload.
 // CHANGE #236 — the full tax-invoice page: HSN + free quantity columns, an
 //               HSN-wise tax summary, item/quantity counts, the bank + UPI
 //               block, the jurisdiction line, a signature block, and a SAMPLE
@@ -272,6 +283,141 @@ async function renderPdf(bill: any): Promise<Uint8Array> {
   return await pdf.save()
 }
 
+
+// ── CHANGE #403: the supplier-document page ─────────────────────────────────
+// A generic document: a title, a header block of label/value pairs, one or
+// more column/row sections, a totals ladder and notes. It names nothing — even
+// the column widths arrive in the payload — so a fourth document kind is a
+// change in SQL and no deploy here.
+async function renderDoc(doc: any): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create()
+  let F: any, FB: any
+  const uni = await unicodeFonts()
+  if (uni) {
+    try {
+      pdf.registerFontkit(fontkit)
+      F = await pdf.embedFont(uni.reg, { subset: true })
+      FB = await pdf.embedFont(uni.bold, { subset: true })
+      UNICODE = true
+    } catch (_) { UNICODE = false }
+  } else UNICODE = false
+  if (!F) {
+    F = await pdf.embedFont(StandardFonts.Helvetica)
+    FB = await pdf.embedFont(StandardFonts.HelveticaBold)
+  }
+  const ink = rgb(0.1, 0.1, 0.1), grey = rgb(0.45, 0.45, 0.45)
+  const line = rgb(0.8, 0.8, 0.8), brand = rgb(0.05, 0.42, 0.24)
+
+  let page = pdf.addPage([W, H])
+  let y = H - M
+  const txt = (s: unknown, x: number, yy: number, size = 8, f = F, c = ink) =>
+    page.drawText(ansi(s), { x, y: yy, size, font: f, color: c })
+  const rtxt = (s: unknown, xRight: number, yy: number, size = 8, f = F, c = ink) => {
+    const t = ansi(s)
+    page.drawText(t, { x: xRight - f.widthOfTextAtSize(t, size), y: yy, size, font: f, color: c })
+  }
+  const hr = (yy: number) => page.drawLine({
+    start: { x: M, y: yy }, end: { x: W - M, y: yy }, thickness: 0.5, color: line })
+  const newPage = () => { page = pdf.addPage([W, H]); y = H - M - 10 }
+
+  // ── title + header ────────────────────────────────────────────────────────
+  y -= 10
+  txt(doc.title ?? '', M, y, 13, FB, brand)
+  rtxt(doc.brand ?? '', W - M, y, 9, FB, grey)
+  y -= 12
+  if (doc.subtitle) { txt(doc.subtitle, M, y, 7.5, F, grey); y -= 12 }
+
+  const header = Array.isArray(doc.header) ? doc.header : []
+  for (let i = 0; i < header.length; i += 2) {
+    const pair = (h: any, x: number) => {
+      if (!h) return
+      const label = ansi(h.label ?? '')
+      txt(label, x, y, 7.5, FB, grey)
+      txt(h.value ?? '', x + Math.max(90, F.widthOfTextAtSize(label, 7.5) + 8), y, 8)
+    }
+    pair(header[i], M)
+    pair(header[i + 1], M + (W - 2 * M) / 2)
+    y -= 11
+  }
+  y -= 2; hr(y); y -= 14
+
+  // ── sections ──────────────────────────────────────────────────────────────
+  for (const sec of (Array.isArray(doc.sections) ? doc.sections : [])) {
+    const cols = (Array.isArray(sec.columns) ? sec.columns : [])
+      .filter((c: any) => c && typeof c.key === 'string')
+      .map((c: any) => ({
+        key: c.key, label: String(c.label ?? ''),
+        w: Number(c.width) > 0 ? Number(c.width) : 70,
+        right: c.align === 'right',
+      }))
+    const rows = Array.isArray(sec.rows) ? sec.rows : []
+
+    if (y < 90) newPage()
+    if (sec.heading) { txt(sec.heading, M, y, 9, FB); y -= 12 }
+
+    const headRow = () => {
+      let x = M
+      for (const c of cols) {
+        if (c.right) rtxt(c.label, x + c.w, y, 7.5, FB, grey)
+        else txt(clip(c.label, FB, 7.5, c.w - 4), x, y, 7.5, FB, grey)
+        x += c.w
+      }
+      y -= 4; hr(y); y -= 11
+    }
+    if (cols.length) headRow()
+
+    if (!rows.length) {
+      txt(sec.empty_label ?? '', M, y, 7.5, F, grey)
+      y -= 16
+      continue
+    }
+    for (const r of rows as Record<string, string>[]) {
+      if (y < 70) { newPage(); if (cols.length) headRow() }
+      let x = M
+      for (const c of cols) {
+        const v = r[c.key] ?? ''
+        if (c.right) rtxt(clip(v, F, 7, c.w - 4), x + c.w, y, 7)
+        else txt(clip(v, F, 7, c.w - 4), x, y, 7)
+        x += c.w
+      }
+      y -= 10
+    }
+    y -= 10
+  }
+
+  // ── totals ladder, right column ───────────────────────────────────────────
+  const totals = Array.isArray(doc.totals) ? doc.totals : []
+  if (totals.length) {
+    if (y < 40 + 12 * totals.length) newPage()
+    const RX = W - M, LX = W - M - 200
+    page.drawLine({ start: { x: LX, y: y + 8 }, end: { x: RX, y: y + 8 },
+                    thickness: 0.8, color: ink })
+    for (const t of totals) {
+      const bold = t?.bold === true
+      txt(t?.label ?? '', LX, y, bold ? 9 : 8, bold ? FB : F, bold ? ink : grey)
+      rtxt(t?.value ?? '', RX, y, bold ? 9 : 8, bold ? FB : F)
+      y -= 12
+    }
+    y -= 6
+  }
+
+  // ── notes + footer ────────────────────────────────────────────────────────
+  for (const n of (Array.isArray(doc.notes) ? doc.notes : [])) {
+    if (!n) continue
+    if (y < 40) newPage()
+    txt(clip(String(n), F, 7, W - 2 * M), M, y, 7, F, grey)
+    y -= 10
+  }
+  if (doc.footer) {
+    if (y < 34) newPage()
+    y -= 4
+    hr(y); y -= 11
+    txt(clip(String(doc.footer), F, 6.5, W - 2 * M), M, y, 6.5, F, grey)
+  }
+
+  return await pdf.save()
+}
+
 Deno.serve(async (req) => {
   if (req.method !== 'POST') return json({ error: 'method_not_allowed' }, 405)
   if ((req.headers.get('x-notify-secret') ?? '') !== NOTIFY_SECRET)
@@ -299,6 +445,39 @@ Deno.serve(async (req) => {
         net_payable: sample?.totals?.net_payable ?? null,
         remaining: sample?.totals?.remaining ?? null,
       })
+    }
+
+    // ── CHANGE #403: supplier document mode ──────────────────────────────
+    const docId = String(body?.supplier_doc_id ?? '')
+    if (docId) {
+      const { data: input, error: dErr } = await supabase
+        .rpc('supplier_doc_render_input', { p_doc_id: docId })
+      if (dErr) throw new Error('supplier_doc_render_input: ' + dErr.message)
+      if (!input?.ok) {
+        await supabase.rpc('supplier_doc_report', {
+          p_doc_id: docId, p_ok: false,
+          p_error: 'render_input: ' + (input?.error ?? 'unknown'),
+        }).catch(() => {})
+        return json({ ok: false, reason: input?.error ?? 'no_input' })
+      }
+      try {
+        const bytes = await renderDoc(input.document)
+        const up = await supabase.storage.from(String(input.bucket))
+          .upload(String(input.path), bytes,
+                  { contentType: 'application/pdf', upsert: true })
+        if (up.error) throw new Error('upload: ' + up.error.message)
+        const { data: rep } = await supabase.rpc('supplier_doc_report', {
+          p_doc_id: docId, p_ok: true, p_bucket: input.bucket, p_path: input.path,
+          p_name: input.file_name, p_bytes: bytes.length,
+        })
+        return json({ ok: true, doc_id: docId, path: input.path,
+                      name: input.file_name, bytes: bytes.length, report: rep })
+      } catch (e) {
+        const m = e instanceof Error ? e.message : String(e)
+        await supabase.rpc('supplier_doc_report', {
+          p_doc_id: docId, p_ok: false, p_error: m }).catch(() => {})
+        return json({ ok: false, doc_id: docId, error: m })
+      }
     }
 
     jobId = String(body?.job_id ?? '')

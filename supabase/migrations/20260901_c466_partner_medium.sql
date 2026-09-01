@@ -1853,3 +1853,224 @@ begin
       'heading', public._c('partner_doc.gst_head'),
       'note', v_note));
 end $fn$;
+
+-- ===== c466_qa2_minors (20260901213911) =====
+-- QA round 2 minors.
+
+-- 1. A registered partner with NO state was silently billed CGST+SGST with a
+--    blank place of supply. Intra vs inter is undecidable without both states,
+--    and guessing "same state" is the expensive guess: it under-collects and
+--    puts the wrong tax heads on an invoice the partner then files. Say so.
+insert into public.ui_copy(key, value) values
+  ('partner_doc.gst_note_no_state', to_jsonb('GST: the commission above is the TAXABLE VALUE of a service you supply to mediBO, and you are registered ({gstin}). mediBO cannot tell whether this is an intra-state or inter-state supply because no state is recorded against your partner record, so no tax heads are shown. Give mediBO your registered state and this statement will carry the CGST/SGST or IGST split. This statement is not a tax invoice.'::text)),
+  ('partner_doc.no_state', to_jsonb('Not recorded'::text))
+on conflict (key) do nothing;
+
+do $mig$
+declare v_def text;
+begin
+  select pg_get_functiondef(p.oid) into v_def from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname='public' and p.proname='_c466_statement_payload';
+  if v_def is null then raise exception 'c466: _c466_statement_payload not found'; end if;
+  if position('v_no_state' in v_def) > 0 then return; end if;
+
+  -- a declaration for the new flag
+  v_def := replace(v_def,
+    '  v_reg boolean; v_self boolean; v_inter boolean;',
+    '  v_reg boolean; v_self boolean; v_inter boolean; v_no_state boolean;');
+
+  -- registered, not self, but no usable pair of states -> undecidable
+  v_def := replace(v_def,
+    '  v_taxable := coalesce(pr.partner_share, 0);',
+    '  v_no_state := v_reg and not v_self
+                and (v_p_state is null or v_me_state is null);
+
+  v_taxable := coalesce(pr.partner_share, 0);');
+
+  -- no tax when undecidable
+  v_def := replace(v_def,
+    'v_tax := case when v_reg and not v_self then round(v_taxable * v_rate / 100.0, 2) else 0 end;',
+    'v_tax := case when v_reg and not v_self and not v_no_state
+                   then round(v_taxable * v_rate / 100.0, 2) else 0 end;');
+  v_def := replace(v_def,
+    '  elsif v_reg and not v_self then v_cgst := round(v_tax/2, 2); v_sgst := v_tax - v_cgst;',
+    '  elsif v_reg and not v_self and not v_no_state then v_cgst := round(v_tax/2, 2); v_sgst := v_tax - v_cgst;');
+
+  -- its own note
+  v_def := replace(v_def,
+    '  v_note := case
+    when v_self then',
+    '  v_note := case
+    when v_no_state then public._cf(''partner_doc.gst_note_no_state'',
+            jsonb_build_object(''gstin'', coalesce(v_p_gstin,'''')))
+    when v_self then');
+
+  -- and no ladder, in the totals and in the card
+  v_def := replace(v_def,
+    '  if v_reg and not v_self then
+    v_totals := v_totals',
+    '  if v_reg and not v_self and not v_no_state then
+    v_totals := v_totals');
+  v_def := replace(v_def,
+    '''registered'', (v_reg and not v_self), ''interstate'', v_inter, ''self_billing'', v_self,',
+    '''registered'', (v_reg and not v_self and not v_no_state), ''interstate'', v_inter,
+      ''self_billing'', v_self, ''state_unknown'', v_no_state,');
+  v_def := replace(v_def,
+    '''lines'', case when (v_reg and not v_self)',
+    '''lines'', case when (v_reg and not v_self and not v_no_state)');
+
+  -- the place of supply says so instead of printing blank
+  v_def := replace(v_def,
+    'public._c(''partner_doc.lbl_pos''),          ''value'', coalesce(v_p_state,'''')',
+    'public._c(''partner_doc.lbl_pos''),          ''value'', coalesce(v_p_state, public._c(''partner_doc.no_state''))');
+
+  -- and the stamp must move when the state does
+  if position('|| coalesce(v_p_state,'''') || coalesce(v_me_state,'''')' in v_def) = 0 then
+    raise exception 'c466: statement stamp no longer covers the states';
+  end if;
+
+  if position('v_no_state' in v_def) = 0 then
+    raise exception 'c466: could not splice the no-state branch';
+  end if;
+  execute v_def;
+end $mig$;
+
+-- 2. partner_suspend accepted zero-width characters as a "reason". Strip the
+--    format characters too, not just whitespace.
+create or replace function public.partner_suspend(p_partner_id bigint, p_reason text)
+returns jsonb
+language plpgsql security definer set search_path to 'public'
+as $fn$
+declare
+  v_reason text := nullif(btrim(regexp_replace(
+      regexp_replace(coalesce(p_reason,''), '[­​-‏⁠-⁤﻿]', '', 'g'),
+      '\s+', ' ', 'g')), '');
+begin
+  if public.role_for_medibo_only() not in ('admin','super_admin') then
+    return jsonb_build_object('ok', false, 'error','not_authorized','tone','danger',
+      'message', public._c('partner_lifecycle.err_not_authorized'));
+  end if;
+  if not exists (select 1 from region_partners where id = p_partner_id) then
+    return jsonb_build_object('ok', false, 'error','no_partner','tone','danger',
+      'message', public._c('partner_lifecycle.err_no_partner'));
+  end if;
+  if v_reason is null then
+    return jsonb_build_object('ok', false, 'error','no_reason','tone','danger',
+      'message', public._c('partner_lifecycle.err_no_reason'));
+  end if;
+
+  update region_partners
+     set suspended_at = coalesce(suspended_at, now()),
+         suspended_by = coalesce(public.my_login_email(),'admin'),
+         suspend_reason = v_reason,
+         updated_at = now()
+   where id = p_partner_id;
+
+  insert into partner_audit_log(partner_id, user_id, feature_key, action, detail)
+  values (p_partner_id, auth.uid(), 'partner.onboarding', 'partner_suspended',
+          jsonb_build_object('reason', v_reason,
+            'summary', public._c('partner_lifecycle.suspended_toast')));
+
+  return jsonb_build_object('ok', true, 'tone','success',
+    'message', public._c('partner_lifecycle.suspended_toast'),
+    'card', public.partner_lifecycle_card(p_partner_id));
+end $fn$;
+
+-- 3. c466_row150_proof() INSERTed a real settlement period for the zone-2
+--    partner and never removed it, and left file_name='x.pdf' on partner 1's
+--    live document. A proof that mutates production and does not put it back is
+--    a landmine for whoever re-runs it. It now restores everything, in an
+--    EXCEPTION block so a failure mid-way still cleans up.
+create or replace function public.c466_row150_proof() returns jsonb
+language plpgsql security definer set search_path to 'public' as $fn$
+declare
+  v_out jsonb := '[]'::jsonb; v_j jsonb; v_doc uuid; v_p2 bigint;
+  v_period bigint; v_p2period bigint; v_p2period_made boolean := false;
+  d_before public.partner_document%rowtype; v_had_doc boolean := false;
+begin
+  perform set_config('request.jwt.claims',
+    jsonb_build_object('sub','c6233360-13df-46c7-8316-5edf927ab59b','email','test.partner1@medibo.in','role','authenticated')::text, true);
+  perform set_config('request.path','/rest/v1/rpc/partner_statement', true);
+
+  select id into v_period from partner_settlement_periods where partner_id=1 order by id desc limit 1;
+  select * into d_before from partner_document
+   where partner_id=1 and kind='statement' and ref_key=v_period::text;
+  v_had_doc := found;
+
+  v_j := public.partner_statement(v_period, 5);
+  v_out := v_out || jsonb_build_object('case','150_statement_offers_document',
+    'ok', (v_j->'document'->>'has')='true',
+    'button', v_j->'document'->>'button_label', 'ref', v_j->'document'->>'ref',
+    'gst', v_j->'gst');
+
+  v_j := public.partner_doc_request('statement', v_period::text);
+  v_doc := (v_j->>'doc_id')::uuid;
+  v_out := v_out || jsonb_build_object('case','150_request','ok',(v_j->>'ok')='true',
+    'status', v_j->>'status', 'poll_ms', v_j->>'poll_ms', 'message', v_j->>'message');
+
+  v_j := public.partner_doc_status(v_doc);
+  v_out := v_out || jsonb_build_object('case','150_status_polls','ok',(v_j->>'ok')='true','status', v_j->>'status');
+
+  v_j := public.supplier_doc_render_input(v_doc);
+  v_out := v_out || jsonb_build_object('case','150_render_input_resolves',
+    'ok', (v_j->>'ok')='true', 'bucket', v_j->>'bucket', 'path', v_j->>'path',
+    'file_name', v_j->>'file_name', 'doc_title', v_j->'document'->>'title',
+    'sections', (select jsonb_agg(s->>'heading') from jsonb_array_elements(v_j->'document'->'sections') s),
+    'totals', (select jsonb_agg((t->>'label')||' = '||(t->>'value')) from jsonb_array_elements(v_j->'document'->'totals') t),
+    'gst_note', v_j->'document'->'notes'->>0);
+
+  -- the delegation lands on the PARTNER ledger, not the supplier one
+  v_j := public.supplier_doc_report(v_doc, true, 'partner-receipts',
+           'p1/statement/'||v_period::text||'.pdf', 'PS-1-'||v_period::text||'.pdf', 1234, null);
+  v_out := v_out || jsonb_build_object('case','150_report_delegates',
+    'ok', (select status from partner_document where id=v_doc) = 'ready',
+    'row', (select jsonb_build_object('status',status,'bucket',bucket,'path',path,'bytes',bytes)
+              from partner_document where id=v_doc),
+    'supplier_ledger_untouched', not exists(select 1 from supplier_document where id=v_doc));
+
+  v_j := public.partner_doc_status(v_doc);
+  v_out := v_out || jsonb_build_object('case','150_status_ready','ok',(v_j->>'status')='ready',
+    'bucket', v_j->>'bucket','path', v_j->>'path');
+
+  -- cross-zone refusal, against a REAL zone-2 period
+  select rp.id into v_p2 from region_partners rp where rp.zone_id=2 and rp.is_active order by rp.id limit 1;
+  select p.id into v_p2period from partner_settlement_periods p where p.partner_id=v_p2 order by p.id desc limit 1;
+  if v_p2period is null then
+    insert into partner_settlement_periods(partner_id, zone_id, period_start, period_end,
+                                           cadence, due_on, split_pct, status)
+    values (v_p2, 2, current_date, current_date, 'same_day', current_date, 50, 'due')
+    returning id into v_p2period;
+    v_p2period_made := true;
+  end if;
+  v_j := public.partner_doc_request('statement', v_p2period::text);
+  v_out := v_out || jsonb_build_object('case','150_zone_scope_refuses',
+    'asked_period_of_partner', v_p2, 'period_id', v_p2period,
+    'ok', (v_j->>'ok')='false', 'error', v_j->>'error', 'message', v_j->>'message');
+
+  v_j := public.partner_doc_request('purchase_order', v_period::text);
+  v_out := v_out || jsonb_build_object('case','150_unknown_kind_refused',
+    'ok', (v_j->>'ok')='false' and (v_j->>'error')='unknown_kind', 'message', v_j->>'message');
+
+  -- ── restore. A proof must leave production exactly as it found it.
+  if v_p2period_made then delete from partner_settlement_periods where id = v_p2period; end if;
+  if v_had_doc then
+    update partner_document set status = d_before.status, bucket = d_before.bucket,
+           path = d_before.path, file_name = d_before.file_name, bytes = d_before.bytes,
+           source_stamp = d_before.source_stamp, ready_at = d_before.ready_at,
+           attempts = d_before.attempts, last_error = d_before.last_error
+     where id = d_before.id;
+  else
+    delete from partner_document where id = v_doc;
+  end if;
+
+  perform set_config('request.jwt.claims', null, true);
+  perform set_config('request.path', null, true);
+  return v_out || jsonb_build_object('case','restored',
+    'zone2_period_removed', v_p2period_made,
+    'partner1_doc', case when v_had_doc then 'restored' else 'removed' end);
+exception when others then
+  if v_p2period_made then delete from partner_settlement_periods where id = v_p2period; end if;
+  if not v_had_doc and v_doc is not null then delete from partner_document where id = v_doc; end if;
+  raise;
+end $fn$;

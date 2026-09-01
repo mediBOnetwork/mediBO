@@ -113,7 +113,7 @@ begin
       from pos_sale_lines l
       join pos_sales sa on sa.id = l.sale_id
      where sa.pharmacy_id = v_shop
-       and coalesce(sa.status,'final') <> 'void'
+       and coalesce(sa.status,'completed') <> 'void'
        and sa.sold_on >= ((now() at time zone 'Asia/Kolkata')::date - v_win)
        and l.medicine_id is not null
      group by l.medicine_id

@@ -93,6 +93,7 @@ import 'pharmacy/pharmacy_audit_screen.dart'; // CMD #447 — /admin/go/pharmacy
 import 'pharmacy/pharmacy_refill_screen.dart'; // CMD #417 — refills & counter
 import 'pharmacy/pharmacy_overpay_screen.dart'; // CMD #427 — /admin/go/price_check
 import 'pharmacy/paper_sale_screen.dart'; // CMD #429 — /admin/go/paper_sale
+import 'admin/admin_money_screen.dart'; // CMD #450 — /admin/go/money
 import 'admin/admin_demand_engine_screen.dart'; // CMD #427 — /admin/go/demand_engine
 import 'profile_screen.dart';
 import 'storefront_screen.dart';
@@ -844,6 +845,15 @@ class _HomeShellState extends State<HomeShell> {
       case 'paper_sale':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const PaperSaleScreen()));
+        break;
+      // CMD #450 — the four money answers that had no screen: receivables by
+      // age (feature_gaps #23), payments waiting to be verified oldest-first
+      // (#18), money attached to no order (#19) and supplier bills that
+      // stalled after a successful scan (#20). admin_money_home() names the
+      // tabs, so a fifth one is an INSERT and never a deploy.
+      case 'money':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const AdminMoneyScreen()));
         break;
       // CMD #432 — the shop's UPI ID and its printable counter QR. Reached
       // from the counter's own app bar (and from the payment chips when UPI is

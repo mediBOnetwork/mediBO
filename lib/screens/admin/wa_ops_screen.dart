@@ -468,9 +468,41 @@ class _EventRoutesSectionState extends State<_EventRoutesSection> {
       grouped[aud]!.add(r);
     }
 
+    // CMD #450 — routes that were switched on BEFORE save-time validation
+    // existed. The count and the sentence are both the backend's.
+    final blockedLabel = (_payload?['blocked_label'] ?? '').toString();
+    final blockedNote = (_payload?['blocked_note'] ?? '').toString();
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (blockedLabel.isNotEmpty)
+          Padding(
+            padding: EdgeInsets.only(bottom: Ds.space.x8),
+            child: Container(
+              padding: EdgeInsets.all(Ds.space.x12),
+              decoration: BoxDecoration(
+                color: Ds.c.dangerSoft,
+                borderRadius: Ds.r.rCard,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    blockedLabel,
+                    style: Ds.t.body.copyWith(
+                      color: _kRed,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  if (blockedNote.isNotEmpty) ...[
+                    SizedBox(height: Ds.space.x4),
+                    Text(blockedNote, style: Ds.t.caption),
+                  ],
+                ],
+              ),
+            ),
+          ),
         if (note.isNotEmpty) _NoteBlock(note),
         // The filter row: one chip per audience present, in the same order. A
         // user type with no routes never reaches this list, so it shows no chip
@@ -664,8 +696,25 @@ class _EventRouteCard extends StatelessWidget {
                 label: _s('status_label'),
                 tone: _chipTone(row['status_tone']?.toString()),
               ),
+              // CMD #450 (feature_gaps #43) — the pre-send blocker. A route can
+              // be switched ON, look live, and have every send refused: an
+              // approved template whose media header has no sample handle dies
+              // at Meta with missing_header_media, 35 times before anybody
+              // looked. wa_route_blockers() decides it; this chip prints it.
+              if (row['blocked'] == true)
+                WaToneChip(
+                  label: _s('blocker_label'),
+                  tone: _chipTone(row['blocker_tone']?.toString()),
+                ),
             ],
           ),
+          if (row['blocked'] == true && _s('blocker_detail').isNotEmpty) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(
+              _s('blocker_detail'),
+              style: Ds.t.caption.copyWith(color: _kRed),
+            ),
+          ],
           const SizedBox(height: 8),
           // The only figures on this card the backend did not pre-word.
           // sent_30d is a bare count and updated_label is already a date
@@ -2080,6 +2129,15 @@ class _SendHealthSectionState extends State<_SendHealthSection> {
     final range = (_payload?['range_label'] ?? '').toString();
     final note = (_payload?['window_note'] ?? '').toString();
     final retryLabel = (_payload?['retry_label'] ?? '').toString();
+    // CMD #450 (feature_gaps #41) — the window grouped by reason. The counts,
+    // the share, the first/last seen and "None of these carry a number to send
+    // to" are all wa_send_health()'s; this widget adds nothing to them.
+    final reasons = ((_payload?['reasons'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+    final reasonsTitle = (_payload?['reasons_title'] ?? '').toString();
+    final retryableLabel = (_payload?['retryable_label'] ?? '').toString();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2099,6 +2157,23 @@ class _SendHealthSectionState extends State<_SendHealthSection> {
               ],
             ),
           ),
+        if (retryableLabel.isNotEmpty)
+          Padding(
+            padding: EdgeInsets.only(bottom: Ds.space.x8),
+            child: WaToneChip(label: retryableLabel, tone: _chipTone('info')),
+          ),
+        if (reasons.isNotEmpty) ...[
+          if (reasonsTitle.isNotEmpty)
+            Padding(
+              padding: EdgeInsets.only(bottom: Ds.space.x8),
+              child: Text(
+                reasonsTitle,
+                style: Ds.t.body.copyWith(fontWeight: FontWeight.w700),
+              ),
+            ),
+          for (final g in reasons) _SendReasonRow(group: g),
+          SizedBox(height: Ds.space.x16),
+        ],
         if (note.isNotEmpty) _NoteBlock(note),
         if (rows.isEmpty)
           _NoteBlock((_payload?['empty_label'] ?? '').toString())
@@ -2116,6 +2191,65 @@ class _SendHealthSectionState extends State<_SendHealthSection> {
               },
             ),
       ],
+    );
+  }
+}
+
+/// CMD #450 — one grouped failure reason. Every string on it (count_label,
+/// share_label, first/last seen, the retryable sentence and the tone) is
+/// wa_send_health()'s; this widget prints them and computes nothing.
+class _SendReasonRow extends StatelessWidget {
+  final Map<String, dynamic> group;
+  const _SendReasonRow({required this.group});
+
+  String _g(String k) => (group[k] ?? '').toString();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: EdgeInsets.only(bottom: Ds.space.x8),
+      padding: EdgeInsets.all(Ds.space.x12),
+      decoration: BoxDecoration(
+        color: _kCard,
+        borderRadius: Ds.r.rCard,
+        border: Border.all(color: _kBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  _g('reason'),
+                  style: Ds.t.body.copyWith(fontWeight: FontWeight.w700),
+                ),
+              ),
+              WaToneChip(
+                label: _g('count_label'),
+                tone: _chipTone(_g('tone')),
+              ),
+            ],
+          ),
+          SizedBox(height: Ds.space.x4),
+          Text(
+            [
+              _g('event_key'),
+              _g('share_label'),
+              _g('last_label'),
+            ].where((e) => e.isNotEmpty).join(' · '),
+            style: Ds.t.caption,
+          ),
+          if (_g('detail').isNotEmpty) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(_g('detail'), style: Ds.t.caption),
+          ],
+          if (_g('retryable_label').isNotEmpty) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(_g('retryable_label'), style: Ds.t.caption),
+          ],
+        ],
+      ),
     );
   }
 }

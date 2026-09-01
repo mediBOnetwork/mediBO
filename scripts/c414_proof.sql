@@ -173,6 +173,34 @@ begin
   -- and remove B's shelf row again so the margin section below builds its own
   delete from pharmacy_stock where pharmacy_id = v_shop and medicine_id = v_b;
 
+  -- The most valuable row on the screen: something that sells and is ALREADY
+  -- at zero. It must be urgent, say so today, and suggest a full cover run
+  -- rather than being skipped for having no stock to divide by.
+  for i in 1..30 loop
+    insert into pos_sale_lines(sale_id, line_no, medicine_id, product_name, qty, mrp,
+                               disc_pct, disc_amount, gross, amount, gst_percent,
+                               taxable, cgst, sgst, igst)
+    select id, 3, v_c, 'C414 C', 4, 10,0,0,0,0,12,0,0,0,0
+      from pos_sales where invoice_no = 'C414/'||i::text and pharmacy_id = v_shop;
+  end loop;
+
+  v := public.pharmacy_reorder_screen();
+  select x into r from jsonb_array_elements(v->'rows') x where (x->>'medicine_id')::bigint = v_c;
+  insert into c414_log(ok, line) values
+    (r is not null, 'a SKU that sells and is ALREADY at zero is listed, not skipped'),
+    (r->>'group_key' = 'urgent',
+     'and it is urgent -> ' || coalesce(r->>'group_key','null')),
+    (r->>'stockout_label' = public.ui_text('reorder414.stockout_today'),
+     'with the backend''s own "out of stock today" -> '
+       || coalesce(r->>'stockout_label','null')),
+    -- 4/day x 14 cover days, nothing on the shelf to subtract
+    ((r->>'suggest_qty')::int = 56,
+     'and a full cover run is suggested -> ' || coalesce(r->>'suggest_qty','null'));
+
+  -- clear it again so the numbers below stay the ones written above
+  delete from pos_sale_lines l using pos_sales sa
+   where l.sale_id = sa.id and sa.pharmacy_id = v_shop and l.medicine_id = v_c;
+
   -- the numbers are configurable, and changing one changes the answer
   perform public.pharmacy_reorder_settings_set(jsonb_build_object('cover_days', 30));
   v := public.pharmacy_reorder_screen();
@@ -244,6 +272,29 @@ begin
     (not exists (select 1 from jsonb_array_elements(v->'rows') x
                   where (x->>'medicine_id')::bigint = v_d),
      'and a same-salt brand that is NOT on their shelf never appears at all');
+
+  -- A margin is licensed by FULL cost coverage, not by any cost at all: a
+  -- shelf of 99 uncosted units plus 1 costed unit used to report a margin
+  -- computed from that single unit, which is an estimate for the other 99%.
+  insert into pharmacy_stock(pharmacy_id, medicine_id, product_name, item_key,
+                             source_kind, qty, unit_cost, mrp)
+  values (v_shop, v_b, 'C414 B partial', 'm:'||v_b::text||':gap', 'opening', 99, null, 10.00);
+  v := public.pos_margin_options(v_a, 10);
+  insert into c414_log(ok, line) values
+    (not exists (select 1 from jsonb_array_elements(v->'rows') x
+                  where (x->>'medicine_id')::bigint = v_b),
+     'one uncosted batch withdraws the margin entirely — a blended cost drawn '
+     || 'from 1% of the shelf is an estimate, and estimates are never shown');
+  -- record the missing cost and it comes back, blended honestly
+  update pharmacy_stock set unit_cost = 5.00
+   where pharmacy_id = v_shop and medicine_id = v_b and unit_cost is null;
+  v := public.pos_margin_options(v_a, 10);
+  insert into c414_log(ok, line)
+  select coalesce(x->>'margin_display','') = public.inr_money(5.00),
+         'and recording the cost brings it back -> ' || coalesce(x->>'margin_display','(none)')
+    from jsonb_array_elements(v->'rows') x where (x->>'medicine_id')::bigint = v_b;
+  delete from pharmacy_stock
+   where pharmacy_id = v_shop and item_key = 'm:'||v_b::text||':gap';
 
   -- ranking is by margin, descending
   insert into pharmacy_stock(pharmacy_id, medicine_id, product_name, item_key,

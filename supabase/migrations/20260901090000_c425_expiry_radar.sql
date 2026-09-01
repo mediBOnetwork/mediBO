@@ -63,6 +63,26 @@ create unique index if not exists pharmacy_radar_ask_dedupe_idx
 create index if not exists pharmacy_radar_ask_open_idx
   on public.pharmacy_radar_ask (pharmacy_id, status, created_at desc);
 
+-- Every radar message that went out: the frequency cap, the dedupe and the
+-- delivery result all read from here. #413's pharmacy_expiry_alert_log is left
+-- exactly as it is — its `kind` check constraint is ITS contract, and widening
+-- another command's constraint to make room for mine is how a shared table
+-- becomes nobody's.
+create table if not exists public.pharmacy_radar_send_log (
+  id          bigserial primary key,
+  pharmacy_id uuid not null references public.pharmacy_profiles(id) on delete cascade,
+  kind        text not null,
+  dedupe_key  text not null,
+  sent_on     date not null default public._c413_today(),
+  detail      jsonb not null default '{}'::jsonb,
+  created_at  timestamptz not null default now()
+);
+alter table public.pharmacy_radar_send_log enable row level security;
+create unique index if not exists pharmacy_radar_send_log_dedupe_idx
+  on public.pharmacy_radar_send_log (pharmacy_id, kind, dedupe_key);
+create index if not exists pharmacy_radar_send_log_recent_idx
+  on public.pharmacy_radar_send_log (pharmacy_id, created_at desc);
+
 -- Bill-by-WhatsApp intake ledger: one row per forwarded photo.
 create table if not exists public.pharmacy_wa_intake (
   id              uuid primary key default gen_random_uuid(),
@@ -101,8 +121,20 @@ insert into public.app_settings(key, value) values
     'digest_dom', 1,
     'ask_max_open', 3,
     'urgent_days', 21,
+    'alert_days', 60,
     'horizon_days', 120))
 on conflict (key) do nothing;
+
+-- A re-run must be able to ADD a key without clobbering what Om has edited:
+-- defaults fill in underneath the stored value, never over it.
+update public.app_settings
+   set value = jsonb_build_object(
+         'enabled', true, 'build_phase', true,
+         'test_numbers', jsonb_build_array('9111100011'),
+         'min_expected_loss', 200, 'max_msgs_per_week', 3, 'digest_dom', 1,
+         'ask_max_open', 3, 'urgent_days', 21, 'alert_days', 60,
+         'horizon_days', 120) || value
+ where key = 'expiry_radar';
 
 create or replace function public._c425_cfg()
 returns jsonb language sql stable set search_path to 'public' as $$
@@ -131,9 +163,8 @@ end $$;
 -- Frequency cap: how many radar messages has this shop had in the last 7 days.
 create or replace function public._c425_week_count(p_shop uuid)
 returns integer language sql stable set search_path to 'public' as $$
-  select count(*)::integer from public.pharmacy_expiry_alert_log
+  select count(*)::integer from public.pharmacy_radar_send_log
    where pharmacy_id = p_shop
-     and kind like 'radar_%'
      and created_at >= now() - interval '7 days';
 $$;
 
@@ -202,7 +233,7 @@ begin
   loop
     select max(case when column_name in ('stock_id','lot_id') then column_name end),
            max(case when column_name in ('inferred_left','est_left','remaining_qty','qty_left') then column_name end),
-           max(case when column_name in ('velocity_per_day','velocity','daily_velocity','vel_per_day') then column_name end)
+           max(case when column_name in ('velocity_per_day','per_day','velocity','daily_velocity','vel_per_day','sold_per_day') then column_name end)
       into v_key, v_left, v_vel
       from information_schema.columns
      where table_schema = 'public' and table_name = r.rel;

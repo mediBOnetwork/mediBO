@@ -18,6 +18,7 @@ import 'package:flutter/material.dart';
 import '../../design_tokens.dart';
 import '../../services/pharmacy_shield_api.dart';
 import '../../utils/render_log.dart';
+import 'pharmacy_radar_screen.dart';
 import 'pharmacy_variance_screen.dart';
 
 String _s(Object? v) => v == null ? '' : v.toString();
@@ -181,6 +182,12 @@ class _PharmacyExpiryScreenState extends State<PharmacyExpiryScreen> {
                 ],
               ),
             ),
+            SizedBox(height: Ds.space.x16),
+
+            // CMD #425 — the way into the radar. Its label, its sub-label and
+            // its rupee badge all come from pharmacy_radar_entry(); when the
+            // backend says nothing, nothing is drawn.
+            RadarEntryCard(rpc: widget.rpc),
             SizedBox(height: Ds.space.x24),
 
             for (final b in buckets) ...[

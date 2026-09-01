@@ -188,7 +188,8 @@ insert into ui_copy (key, value) values
   ('supplier.closed_by_admin',           to_jsonb('Closed by the office'::text)),
   ('supplier.closed_by_supplier',        to_jsonb('Closed by the supplier'::text)),
   ('supplier.closed_until_pick',         to_jsonb('Pick a reopening date and time'::text)),
-  ('supplier.closed_until_clear',        to_jsonb('Clear'::text))
+  ('supplier.closed_until_clear',        to_jsonb('Clear'::text)),
+  ('supplier.closed_retry',              to_jsonb('Try again'::text))
 on conflict (key) do update set value = excluded.value;
 
 -- ── chip colours: data, not code ─────────────────────────────────────────────

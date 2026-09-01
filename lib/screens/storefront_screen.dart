@@ -1882,10 +1882,10 @@ class _Footer extends StatelessWidget {
       children: [
         Text(c('storefront_screen.footer_our_services'), style: _kHeading),
         const SizedBox(height: 16),
-        _footerLink('Search Medicines', onSearch),
-        _footerLink('Bulk Upload', onBulkUpload),
-        _footerLink('My Orders', onOrders),
-        _footerLink('Cart', onCart),
+        _footerLink(c('storefront_screen.footer_search_medicines'), onSearch),
+        _footerLink(c('storefront_screen.footer_bulk_upload'), onBulkUpload),
+        _footerLink(c('storefront_screen.footer_my_orders'), onOrders),
+        _footerLink(c('storefront_screen.footer_cart'), onCart),
       ],
     );
   }
@@ -1896,9 +1896,9 @@ class _Footer extends StatelessWidget {
       children: [
         Text(c('storefront_screen.footer_quick_links'), style: _kHeading),
         const SizedBox(height: 16),
-        _footerLink('About Us',
+        _footerLink(c('storefront_screen.footer_about_us'),
             () => Navigator.pushNamed(context, '/about-app')),
-        _footerLink('Contact Us',
+        _footerLink(c('storefront_screen.footer_contact_us'),
             () => Navigator.pushNamed(context, '/contact')),
       ],
     );
@@ -1910,17 +1910,17 @@ class _Footer extends StatelessWidget {
       children: [
         Text(c('storefront_screen.footer_legal'), style: _kHeading),
         const SizedBox(height: 16),
-        _footerLink('Terms & Conditions',
+        _footerLink(c('storefront_screen.footer_terms'),
             () => Navigator.pushNamed(context, '/terms')),
-        _footerLink('Privacy Policy',
+        _footerLink(c('storefront_screen.footer_privacy'),
             () => Navigator.pushNamed(context, '/privacy')),
-        _footerLink('Delete Account & Data',
+        _footerLink(c('storefront_screen.footer_data_deletion'),
             () => Navigator.pushNamed(context, '/data-deletion')),
-        _footerLink('Refund & Return',
+        _footerLink(c('storefront_screen.footer_refund'),
             () => Navigator.pushNamed(context, '/refund')),
-        _footerLink('Shipping Policy',
+        _footerLink(c('storefront_screen.footer_shipping'),
             () => Navigator.pushNamed(context, '/shipping')),
-        _footerLink('Cancellation Policy',
+        _footerLink(c('storefront_screen.footer_cancellation'),
             () => Navigator.pushNamed(context, '/cancellation')),
       ],
     );

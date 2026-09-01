@@ -942,7 +942,7 @@ begin
    where id = s.id;
 
   perform net.http_post(
-    url     := 'https://swojhmarmaijkshsbeih.supabase.co/functions/v1/bill-render',
+    url     := 'https://swojhmarmaijkshsbeih.supabase.co/functions/v1/pos-invoice',
     headers := jsonb_build_object('Content-Type','application/json',
                                   'x-notify-secret','medibo_order_notify_2027',
                                   'Authorization','Bearer ' || public._service_key()),

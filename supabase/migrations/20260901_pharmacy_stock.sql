@@ -180,11 +180,25 @@ create table if not exists public.pharmacy_stock (
   batch_key      text generated always as
                    (upper(coalesce(nullif(btrim(batch_no), ''), '~'))) stored,
   expiry_key     text generated always as
-                   (coalesce(nullif(btrim(expiry), ''), '~')) stored
+                   (coalesce(nullif(btrim(expiry), ''), '~')) stored,
+
+  -- The SECOND way a lot is found, and it is not redundant: a counter line
+  -- typed by hand carries no medicine_id, so its item_key is name-shaped while
+  -- the lot that came off a mediBO delivery is id-shaped. Matching on item_key
+  -- alone let a 9-unit sale walk straight past 6 units sitting on the shelf and
+  -- invent a negative lot beside them. Every lot therefore also carries its
+  -- normalised NAME, and a sale looks for either.
+  name_key       text generated always as ('n:' || public._norm_name(product_name)) stored
 );
+
+alter table public.pharmacy_stock add column if not exists name_key text
+  generated always as ('n:' || public._norm_name(product_name)) stored;
 
 create unique index if not exists pharmacy_stock_lot_uidx
   on public.pharmacy_stock (pharmacy_id, item_key, batch_key, expiry_key);
+
+create index if not exists pharmacy_stock_name_idx
+  on public.pharmacy_stock (pharmacy_id, name_key);
 
 -- FEFO reads this one every sale: the open lots of one item, earliest expiry
 -- first. Partial on qty <> 0 so the dead lots never widen it.
@@ -402,6 +416,21 @@ begin
   if p_shop is null then return null; end if;
   if coalesce(p_qty_delta, 0) = 0 and p_lot_id is null then return null; end if;
 
+  -- A counter line typed by hand carries no catalogue id, so a lot born from it
+  -- would group as its own medicine and show up beside the very pile it came
+  -- off. If this shop already knows this name, adopt that id and stay one item.
+  if p_medicine_id is null and v_name is not null then
+    select s.medicine_id into p_medicine_id
+      from public.pharmacy_stock s
+     where s.pharmacy_id = p_shop
+       and s.name_key    = 'n:' || public._norm_name(v_name)
+       and s.medicine_id is not null
+     limit 1;
+    if p_medicine_id is not null then
+      v_item := public._phs_item_key(p_medicine_id, v_name);
+    end if;
+  end if;
+
   -- Already applied? Answer with the lot it hit and write nothing. This is what
   -- makes the delivery trigger, the POS consumer and a resumed import safe to
   -- re-run any number of times.
@@ -420,6 +449,16 @@ begin
        and item_key    = v_item
        and batch_key   = upper(coalesce(v_batch, '~'))
        and expiry_key  = coalesce(v_exp, '~');
+
+    -- Same medicine, other key shape. A line typed by name must land on the
+    -- pile that arrived with a catalogue id, and vice versa.
+    if v_lot.id is null then
+      select * into v_lot from public.pharmacy_stock
+       where pharmacy_id = p_shop
+         and name_key    = 'n:' || public._norm_name(coalesce(v_name, ''))
+         and batch_key   = upper(coalesce(v_batch, '~'))
+         and expiry_key  = coalesce(v_exp, '~');
+    end if;
   end if;
 
   if v_lot.id is null then
@@ -571,7 +610,17 @@ begin
   if new.delivered_at is not null
      and (tg_op = 'INSERT' or old.delivered_at is distinct from new.delivered_at)
      and new.order_id is not null then
-    perform public.pharmacy_stock_ingest_order(new.order_id);
+    -- Same rule as the POS consumer: a shelf that cannot be written must NEVER
+    -- stop the fact being recorded. A rider standing at the door with proof in
+    -- hand must be able to mark the delivery whatever the inventory layer
+    -- thinks. The failure is raised as a warning and the intake stays
+    -- re-runnable — pharmacy_stock_ingest_order is idempotent, so replaying it
+    -- later costs nothing and fixes the shelf.
+    begin
+      perform public.pharmacy_stock_ingest_order(new.order_id);
+    exception when others then
+      raise warning 'pharmacy_stock: intake failed for order % — %', new.order_id, sqlerrm;
+    end;
   end if;
   return new;
 end $$;
@@ -606,6 +655,7 @@ declare
   v_need   numeric;
   v_take   numeric;
   v_item   text;
+  v_nkey   text;
   v_short  numeric := 0;
   v_neg    integer := 0;
   v_lines  integer := 0;
@@ -627,6 +677,7 @@ begin
     if v_need <= 0 then continue; end if;
     v_lines := v_lines + 1;
     v_item  := public._phs_item_key(v_line.medicine_id, v_line.product_name);
+    v_nkey  := 'n:' || public._norm_name(coalesce(v_line.product_name, ''));
 
     -- 1 + 2 in one pass: the cashier's batch is simply sorted to the front of
     -- the FEFO list, so a hand-picked batch wins and everything after it is
@@ -635,7 +686,7 @@ begin
       select s.id, s.qty
         from public.pharmacy_stock s
        where s.pharmacy_id = v_shop
-         and s.item_key    = v_item
+         and (s.item_key = v_item or s.name_key = v_nkey)
          and s.qty         > 0
        order by
          (case when nullif(btrim(coalesce(v_line.batch_no,'')),'') is not null
@@ -1138,12 +1189,17 @@ $$;
 create or replace function public._phs_scope(p_shop uuid, p_q text)
 returns table (id uuid, item_key text, state text)
 language sql stable security definer set search_path = public as $$
+  -- The thresholds are read ONCE and joined, never called per row: a scalar
+  -- helper inside a SELECT re-runs for every row, which is the anti-pattern
+  -- that turns a shelf of five thousand lots into a table scan per lot.
+  with cfg as (
+    select (public._phs_settings(p_shop)->>'low_qty')::numeric          as low_qty,
+           (public._phs_settings(p_shop)->>'near_expiry_days')::integer as near_days,
+           public._phs_today()                                         as today
+  )
   select s.id, s.item_key,
-         public._phs_lot_state(s.qty, s.expiry_on,
-           (public._phs_settings(p_shop)->>'low_qty')::numeric,
-           (public._phs_settings(p_shop)->>'near_expiry_days')::integer,
-           public._phs_today())
-    from public.pharmacy_stock s
+         public._phs_lot_state(s.qty, s.expiry_on, cfg.low_qty, cfg.near_days, cfg.today)
+    from public.pharmacy_stock s cross join cfg
    where s.pharmacy_id = p_shop
      and (p_q is null
           or s.product_name ilike '%' || p_q || '%'
@@ -1181,7 +1237,7 @@ begin
     count(*) filter (where sc.state = 'expired'),
     count(*) filter (where sc.state = 'near_expiry'),
     count(*),
-    count(distinct s.item_key)
+    count(distinct s.name_key)
     into v_val, v_neg, v_low_n, v_out_n, v_exp_n, v_near_n, v_lots, v_items
     from public._phs_scope(v_shop, v_q) sc join public.pharmacy_stock s on s.id = sc.id;
 
@@ -1212,7 +1268,7 @@ begin
              (g.n_negative > 0) as r_neg,
              g.product_name    as r_name
         from (
-          select s.item_key,
+          select min(s.item_key)                                     as item_key,
                  min(s.medicine_id)                                  as medicine_id,
                  min(s.product_name)                                 as product_name,
                  min(s.pack_label)                                   as pack_label,
@@ -1265,7 +1321,10 @@ begin
             from public._phs_scope(v_shop, v_q) sc
             join public.pharmacy_stock s on s.id = sc.id
            where v_f = 'all' or sc.state = v_f
-           group by s.item_key
+           -- Grouped by the NAME, not by the key shape: a lot that arrived with
+           -- a catalogue id and a lot typed at the counter are the same tin on
+           -- the same shelf, and must never be drawn as two medicines.
+           group by s.name_key
         ) g
        order by r_neg desc, r_name
        offset v_off limit v_lim

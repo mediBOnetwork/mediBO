@@ -178,6 +178,42 @@ begin
   end if;
   raise notice 'PROOF 3 OK — oversold by %, recorded as negative stock instead of a refusal', abs(v_neg);
 
+  -- ── 3b. A LINE TYPED BY NAME FINDS THE SHELF ─────────────────────────────
+  -- The counter prices a hand-typed line with NO medicine_id, so its key is
+  -- name-shaped while a lot that came off a mediBO delivery is id-shaped. Until
+  -- pharmacy_stock carried a name_key too, a 9-unit sale walked straight past 6
+  -- units sitting right there and invented a negative lot beside them. Caught
+  -- on the live seed; pinned here so it cannot come back.
+  select id, product_name into v_med, v_name from public."MEDICINE"
+   where product_name is not null and btrim(product_name) <> '' offset 7 limit 1;
+
+  v_lot_a := public._phs_apply(v_shop, v_med, v_name, '1x10', 'NAMEKEY-1', '06/28',
+               6, 5.00, 11.00, 'opening', 'opening', null, null, 'proof', 'namekey');
+
+  insert into public.pos_sales(pharmacy_id, fy, invoice_seq, invoice_no, sold_on,
+                               payment_mode, net_amount, client_action_id)
+  values (v_shop, '2026-27', 9003, 'PROOF/9003', public._phs_today(),
+          'cash', 0, gen_random_uuid())
+  returning id into v_sale;
+
+  -- medicine_id deliberately NULL: this is the hand-typed line.
+  insert into public.pos_sale_lines(sale_id, line_no, medicine_id, product_name,
+                                    pack_label, qty, mrp, amount)
+  values (v_sale, 1, null, v_name, '1x10', 9, 11.00, 99.00);
+
+  insert into public.pos_sale_event(sale_id, pharmacy_id, event_type, payload)
+  values (v_sale, v_shop, 'sale.completed', jsonb_build_object('proof', true));
+
+  select qty into v_qty_a from public.pharmacy_stock where id = v_lot_a;
+  if v_qty_a <> 0 then
+    raise exception 'PROOF 3b FAILED: a name-only sale line ignored the id-keyed lot (still holds %)', v_qty_a;
+  end if;
+  if (select coalesce(sum(qty),0) from public.pharmacy_stock
+       where pharmacy_id = v_shop and name_key = 'n:' || public._norm_name(v_name)) <> -3 then
+    raise exception 'PROOF 3b FAILED: the shortfall should be exactly 3';
+  end if;
+  raise notice 'PROOF 3b OK — a hand-typed line drained the id-keyed lot first, short by exactly 3';
+
   -- ── 4. THE SCREEN SEES IT, AND SAYS SO ───────────────────────────────────
   v_home := public.pharmacy_stock_home(null, 'all', 40, 0);
   if coalesce(v_home->>'ok','false') <> 'true' then

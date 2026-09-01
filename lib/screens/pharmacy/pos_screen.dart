@@ -28,6 +28,8 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../design_tokens.dart';
+import 'pharmacy_stock_screen.dart';
+import '../../services/pharmacy_stock_api.dart';
 import '../../services/pos_api.dart';
 import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
@@ -373,6 +375,26 @@ class _PosScreenState extends State<PosScreen> {
           ],
         ),
         actions: [
+          // CMD #412 — the shelf, from the counter. The two are one shop: what
+          // is sold here comes off there (FEFO, on pos_sale_event), so the way
+          // between them is a tap. Icon and tooltip come from
+          // pharmacy_stock_entry(); the button is absent when it said nothing.
+          ValueListenableBuilder<Map<String, dynamic>>(
+            valueListenable: StockEntry.value,
+            builder: (context, entry, _) {
+              if (entry['show'] != true) return const SizedBox.shrink();
+              return IconButton(
+                icon: Icon(StockMenuTile.icon, color: Ds.c.brand),
+                tooltip: _s(entry['label']),
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute<void>(
+                    builder: (_) => const PharmacyStockScreen(),
+                  ),
+                ),
+              );
+            },
+          ),
           TextButton(
             onPressed: () => Navigator.push(
               context,

@@ -271,12 +271,19 @@ class _PharmacyStockScreenState extends State<PharmacyStockScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    _s(t['value']),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Ds.t.subtitle.copyWith(
-                      color: _toneColor(_s(t['tone'])),
+                  // A stock value of ₹5,489.30 does not fit a quarter of a
+                  // 390px phone, and an ellipsis on the ONE number the screen
+                  // exists to show is worse than smaller type. Scale it down
+                  // instead of truncating it.
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      _s(t['value']),
+                      maxLines: 1,
+                      style: Ds.t.subtitle.copyWith(
+                        color: _toneColor(_s(t['tone'])),
+                      ),
                     ),
                   ),
                   SizedBox(height: Ds.space.x4),

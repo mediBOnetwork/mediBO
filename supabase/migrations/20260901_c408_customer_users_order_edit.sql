@@ -1713,3 +1713,89 @@ exception when others then
 end $$;
 
 revoke all on function public.customer_action_stamp(text, uuid, jsonb) from public, anon;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 17. THE LABEL HAS TO TRAVEL WITH THE FLAG.
+--
+-- Caught on the live build, not in a test: the order card had `can_edit: true`
+-- from my_orders_screen() and still drew nothing, because OrderEditButton also
+-- requires a label — by design, since a button whose caption Dart invented is
+-- the thing this codebase does not allow. _order_edit_gate() returned the flag
+-- and the window label but not `button_label`; that string only existed on
+-- order_edit_state(), which the card no longer calls. So the affordance was
+-- correct, the payload was incomplete, and the feature was invisible.
+--
+-- The flag and the words that render it now leave together.
+-- ─────────────────────────────────────────────────────────────────────────────
+create or replace function public._order_edit_gate(p_order_id uuid)
+returns jsonb language plpgsql stable security definer set search_path to 'public' as $$
+declare o record; v_cid uuid := public.my_customer_id(); v_asked boolean; v_moved boolean;
+begin
+  select * into o from orders where id = p_order_id;
+  if o.id is null then
+    return jsonb_build_object('can_edit', false, 'error', 'not_found',
+      'message', public.ui_text('order_edit.err_not_found'));
+  end if;
+
+  if not (o.customer_id is not distinct from v_cid
+          or public.get_my_role() in ('admin','super_admin')) then
+    return jsonb_build_object('can_edit', false, 'error', 'not_authorized',
+      'message', public.ui_text('order_edit.err_not_authorized'));
+  end if;
+
+  if o.closed_at is not null
+     or lower(coalesce(o.status,'')) in ('cancelled','canceled','rejected','delivered','completed') then
+    return jsonb_build_object('can_edit', false, 'error', 'closed',
+      'reason', public.ui_text('order_edit.reason_closed'),
+      'message', public.ui_text('order_edit.err_closed'));
+  end if;
+
+  select exists (
+    select 1
+      from order_items oi
+      left join lateral (
+        select q.* from inquiry q
+         where q.id = oi.inquiry_id
+            or (oi.inquiry_id is null
+                and q.product_id = oi.product_id
+                and q.batch_date = coalesce(oi.order_date, o.order_date)
+                and (q.zone_id is not distinct from coalesce(oi.zone_id, o.zone_id)
+                     or q.zone_id is null))
+         order by (q.id = oi.inquiry_id) desc, q.id desc
+         limit 1) i on true
+     where oi.order_id = p_order_id
+       and (i.asked_at is not null or i.supplier_order_id is not null)
+  ) into v_asked;
+
+  if v_asked then
+    return jsonb_build_object('can_edit', false, 'error', 'inquiry_started',
+      'reason', public.ui_text('order_edit.reason_inquiry_started'),
+      'message', public.ui_text('order_edit.err_inquiry_started'));
+  end if;
+
+  -- Physical fulfilment having started. NOT bag_no: that is stamped at
+  -- placement by assign_order_bag_no() and means nothing has happened yet.
+  select exists (
+    select 1 from order_items oi
+     where oi.order_id = p_order_id
+       and (coalesce(oi.fulfillment_state,'pending') <> 'pending'
+            or coalesce(oi.received_qty,0) > 0
+            or coalesce(oi.at_warehouse,false)
+            or coalesce(oi.packed,false)
+            or oi.shop_qty is not null
+            or oi.assigned_supplier is not null)
+  ) into v_moved;
+
+  if v_moved or coalesce(o.fulfillment_status,'open') <> 'open' then
+    return jsonb_build_object('can_edit', false, 'error', 'not_pending',
+      'reason', public.ui_text('order_edit.reason_not_pending'),
+      'message', public.ui_text('order_edit.err_closed'));
+  end if;
+
+  return jsonb_build_object(
+    'can_edit', true,
+    -- the caption the card draws. Without it the button renders nothing, which
+    -- is the correct behaviour and was the invisible feature.
+    'button_label', public.ui_text('order_edit.button'),
+    'window_label', public.ui_text('order_edit.window_open'));
+end $$;

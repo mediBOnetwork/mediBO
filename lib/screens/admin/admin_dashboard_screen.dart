@@ -19,6 +19,7 @@ import 'nav_registry_view.dart'; // CHANGE #325
 import 'dev_queue/dev_queue_screen.dart'; // CHANGE #349 — openDevTool
 import 'admin_customer_360_screen.dart';  // CHANGE #396
 import 'admin_stock_on_hand_screen.dart'; // CHANGE #396
+import 'admin_support_inbox_screen.dart'; // CMD #452 — feature_gaps #132
 
 class AdminDashboardScreen extends StatefulWidget {
   const AdminDashboardScreen({super.key});
@@ -194,6 +195,15 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     if (route == 'pharmacy_parcel') {
       Navigator.push(context,
           MaterialPageRoute(builder: (_) => const ParcelCountHomeScreen()));
+      return;
+    }
+    // CMD #452 — the customer support inbox (feature_gaps #132). Pushed, not
+    // swapped into the shell's tab table, for the same reason as the screens
+    // above: support_inbox() refuses a non-admin in its own words and the
+    // screen renders that refusal, so there is no role test here.
+    if (route == 'support_inbox') {
+      Navigator.push(context,
+          MaterialPageRoute(builder: (_) => const AdminSupportInboxScreen()));
       return;
     }
     // CMD #418 — the prescription scanner, same push, same reason.

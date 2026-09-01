@@ -47,7 +47,17 @@ class _AdminSupportInboxScreenState extends State<AdminSupportInboxScreen> {
       backgroundColor: Ds.c.bg,
       appBar: AppBar(title: Text(careStr(p, 'title'))),
       body: p == null
-          ? const Center(child: CircularProgressIndicator())
+          // A skeleton, not a bare spinner: the row shape is already known.
+          ? ListView.builder(
+              padding: EdgeInsets.all(Ds.space.x16),
+              itemCount: 4,
+              itemBuilder: (_, _) => Container(
+                height: Ds.space.x48 + Ds.space.x32,
+                margin: EdgeInsets.only(bottom: Ds.space.x12),
+                decoration: BoxDecoration(
+                    color: Ds.c.surface, borderRadius: Ds.r.rCard),
+              ),
+            )
           : p['ok'] != true
               ? Center(
                   child: Padding(

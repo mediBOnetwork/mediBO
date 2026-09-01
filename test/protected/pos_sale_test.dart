@@ -18,6 +18,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:pharma_b2b/screens/pharmacy/pos_screen.dart';
 import 'package:pharma_b2b/services/pos_api.dart';
+import 'package:pharma_b2b/services/ui_copy.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 
 // ── fixtures ────────────────────────────────────────────────────────────────
@@ -124,6 +125,14 @@ void main() {
     // RenderLog's 800ms debounce is a real Timer that would outlive the test
     // and try to reach Supabase.
     RenderLog.flushEnabled = false;
+    // The two strings the counter reads from ui_copy rather than from a
+    // per-screen payload: the boot-failure line (pos_home() never landed, so
+    // there is no payload to read copy from) and its Retry label.
+    UiCopy.debugSet(const {
+      'pos.boot_failed':
+          'The counter could not be reached. Check the connection and try again.',
+      'pos.retry': 'Retry',
+    });
   });
 
   group('the counter prints the backend and computes nothing', () {
@@ -185,6 +194,44 @@ void main() {
       expect(find.text('The counter is available on a pharmacy account.'),
           findsOneWidget);
       expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('a transport failure offers Retry; a refusal does NOT',
+        (tester) async {
+      // A thrown request is retryable and must never put a Dart exception
+      // string on screen. A role refusal is an ANSWER — offering to ask it
+      // again would be a lie.
+      final dead = _Rpc(const {}, throwOn: {'pos_home'});
+      await tester.pumpWidget(MaterialApp(home: PosScreen(rpc: dead.call)));
+      await tester.pumpAndSettle();
+      expect(find.byType(OutlinedButton), findsOneWidget,
+          reason: 'a request that never landed can be retried');
+      // and BOTH strings are ui_copy's, not Dart literals
+      expect(find.text('Retry'), findsOneWidget);
+      expect(
+          find.text('The counter could not be reached. '
+              'Check the connection and try again.'),
+          findsOneWidget);
+      expect(find.textContaining('Exception'), findsNothing,
+          reason: 'never print the raw error');
+
+      final refused = _Rpc({
+        'pos_home': {
+          'ok': false,
+          'error': 'not_a_pharmacy',
+          'message': 'The counter is available on a pharmacy account.',
+        }
+      });
+      // A distinct key, so Flutter builds a FRESH State rather than reusing the
+      // failed one above — otherwise this half of the test passes for the
+      // wrong reason.
+      await tester.pumpWidget(MaterialApp(
+          home: PosScreen(key: const ValueKey('refused'), rpc: refused.call)));
+      await tester.pumpAndSettle();
+      expect(find.text('The counter is available on a pharmacy account.'),
+          findsOneWidget);
+      expect(find.byType(OutlinedButton), findsNothing,
+          reason: 'a permanent answer gets no Retry');
     });
 
     testWidgets('the client never posts a price — only what the operator chose',

@@ -1340,30 +1340,33 @@ end $function$;
 -- '2.' — FM drops the trailing zeros but leaves the '.' behind, which put "2."
 -- on every quantity and "12.%" on every GST label. Every quantity, percentage
 -- and rate label on the bill and the invoice goes through this.
-drop function if exists public._pos_dec(numeric);
 create or replace function public._pos_dec(p numeric)
 returns text language sql immutable as $$
   select rtrim(rtrim(to_char(coalesce(p,0), 'FM9999990.999'), '0'), '.');
 $$;
 
--- ─────────────── 9. GRANTS: close the default PUBLIC execute ────────────────
+-- ──────────────────── 9. GRANTS: the fence, made explicit ──────────────────
 --
--- Postgres grants EXECUTE on a new function to PUBLIC by default, and PUBLIC
--- includes `anon` — whose key ships inside the web bundle and the APK. So every
--- function above was a public endpoint the moment it was created, which is
--- exactly what the `privileged_rpcs_are_not_anon` regression guard exists to
--- catch. Revoke first, then grant back deliberately.
+-- TWO defaults conspire here, and the first revoke only closed one of them:
+--   1. Postgres grants EXECUTE on a new function to PUBLIC, and PUBLIC includes
+--      `anon` — whose key ships inside the web bundle and the APK. That is what
+--      the `privileged_rpcs_are_not_anon` guard exists to catch.
+--   2. This project also carries ALTER DEFAULT PRIVILEGES granting EXECUTE to
+--      `authenticated` and `service_role` on every function created in `public`.
+--      So even after revoking PUBLIC, every internal helper was still callable
+--      by any logged-in account.
+-- Both matter. `_pos_header(uuid)` would otherwise let any signed-in user read
+-- any pharmacy's address and GSTIN, and `pos_invoice_render_input(uuid)` would
+-- hand them any pharmacy's whole invoice — it takes a sale_id and deliberately
+-- makes NO shop check, because only the renderer (service key) calls it.
 --
--- The behaviour was already safe (every caller-facing RPC resolves pos_shop()
--- and refuses a null), but "safe because of a check inside the body" is one
--- edit away from not being safe. The grant is the fence.
+-- The bodies were already safe (every caller-facing RPC resolves pos_shop() and
+-- refuses a null), but "safe because of a check inside the body" is one edit
+-- away from not being safe. The grant is the fence.
 --
--- Two of these are NOT part of the caller-facing API and must never be granted
--- to `authenticated`:
---   * pos_invoice_render_input — takes a sale_id and returns the whole bill
---     WITHOUT a shop check, because the edge function calls it with the service
---     key. Exposed to a logged-in user it would read any pharmacy's invoices.
---   * pos_invoice_report — writes the stored PDF path onto a sale.
+-- Revoking from the internals costs nothing: a SECURITY DEFINER function runs as
+-- its owner, so pos_quote() calling pos_price_bill() is checked against postgres,
+-- never against the caller.
 do $$
 declare r record;
 begin
@@ -1375,6 +1378,7 @@ begin
   loop
     execute format('revoke all on function %s from public', r.sig);
     execute format('revoke all on function %s from anon', r.sig);
+    execute format('revoke all on function %s from authenticated', r.sig);
   end loop;
 end $$;
 
@@ -1393,3 +1397,8 @@ grant execute on function public.pos_day_close(date)                   to authen
 -- Internal: the renderer's own pair, service_role only.
 grant execute on function public.pos_invoice_render_input(uuid)        to service_role;
 grant execute on function public.pos_invoice_report(uuid, boolean, text, text, text, integer, text) to service_role;
+
+-- The rename in section 8 leaves the old helper behind on a database that ran
+-- an earlier copy of this file; drop it by signature, after the grant loop has
+-- stopped iterating over it.
+drop function if exists public._pos_qty(numeric);

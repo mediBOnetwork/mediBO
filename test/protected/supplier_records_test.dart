@@ -1,4 +1,8 @@
-// CHANGE #403 — the supplier records layer.
+// PROTECTED — CHANGE #403, the supplier records layer.
+//
+// See CLAUDE.md: runs before EVERY deploy; editable only by a CHANGE that
+// deliberately changes supplier-records behaviour, never to make an unrelated
+// change go green.
 //
 // What this holds down:
 //

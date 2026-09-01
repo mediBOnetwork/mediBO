@@ -309,14 +309,33 @@ class _Plate extends StatelessWidget {
           // CHANGE #274 — the scheme badge moved onto the plate. It used to own
           // an 18px row under the price on EVERY card, which is height spent on
           // the cards that have no scheme.
-          if (hasBadge || offerText.isNotEmpty)
+          // CHANGE #461/#170 — the prescription class joins it in the same
+          // top-right stack rather than taking a row of its own: the grid's
+          // mainAxisExtent is a sum of this card's constants, and a new row
+          // would silently overflow every grid that reserves it.
+          if (hasBadge || offerText.isNotEmpty || product.hasRxBadge)
             Positioned(
               right: CompactProductCard._gapM,
               top: CompactProductCard._gapM,
-              child: _MiniChip(
-                text: hasBadge ? badge.label : offerText,
-                bg: hasBadge ? badge.bg : null,
-                fg: hasBadge ? badge.fg : null,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (hasBadge || offerText.isNotEmpty)
+                    _MiniChip(
+                      text: hasBadge ? badge.label : offerText,
+                      bg: hasBadge ? badge.bg : null,
+                      fg: hasBadge ? badge.fg : null,
+                    ),
+                  if (product.hasRxBadge) ...[
+                    if (hasBadge || offerText.isNotEmpty)
+                      SizedBox(height: Ds.space.x4),
+                    _C461RxChip(
+                      label: product.rxLabel,
+                      tone: product.rxTone,
+                    ),
+                  ],
+                ],
               ),
             ),
           // The footer strip: pack badge left, kept clear of the pill's corner.
@@ -841,4 +860,29 @@ class CompactCardSkeleton extends StatelessWidget {
       SkeletonBox(width: 88, height: CompactProductCard._ptrH),
     ],
   );
+}
+
+/// CHANGE #461/#170 — the Rx / OTC chip. One backend label in the backend's
+/// own tone; no schedule is mapped, inferred or coloured here.
+class _C461RxChip extends StatelessWidget {
+  final String label;
+  final Map<String, dynamic>? tone;
+  const _C461RxChip({required this.label, this.tone});
+
+  @override
+  Widget build(BuildContext context) {
+    if (label.isEmpty) return const SizedBox.shrink();
+    return Container(
+      padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x8, vertical: Ds.space.x4 / 2),
+      decoration: BoxDecoration(
+        color: Ds.hex(tone?['bg'], Ds.c.infoSoft),
+        borderRadius: Ds.r.rChip,
+      ),
+      child: Text(
+        label,
+        style: Ds.t.caption.copyWith(color: Ds.hex(tone?['fg'], Ds.c.text)),
+      ),
+    );
+  }
 }

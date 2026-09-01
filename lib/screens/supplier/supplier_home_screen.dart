@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
+import 'supplier_schemes_screen.dart';
 
 class SupplierHomeScreen extends StatefulWidget {
   final String? viewAsSupplierId;
@@ -103,6 +104,34 @@ class _SupplierHomeScreenState extends State<SupplierHomeScreen> {
       // cmd #401 — the two "about my shop" entry points, above the search bar
       // so a shop left marked closed is visible on the tab he lands on.
       const SupplierShopEntries(),
+      // CHANGE #461 / feature_gaps #169 — the way in to the scheme book.
+      // supplier_schemes had zero rows and no filing surface at all, so the
+      // scheme fields every buyer card already reads had never carried data.
+      // The entry sits here rather than in SupplierShell because the shell is
+      // owned by another in-flight command; the home tab is the supplier's
+      // landing screen, so this is still one tap from sign-in.
+      if (widget.viewAsSupplierId == null)
+        Container(
+          width: double.infinity,
+          color: Colors.white,
+          padding: EdgeInsets.fromLTRB(
+            isDesktop ? 24 : 16, 12, isDesktop ? 24 : 16, 0,
+          ),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              key: const ValueKey('c461_schemes_entry'),
+              onPressed: () {
+                RenderLog.write('c461_schemes_open', '1');
+                Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => const SupplierSchemesScreen(),
+                ));
+              },
+              icon: const Icon(Icons.local_offer_outlined),
+              label: Text(c('supplier_home.schemes_cta')),
+            ),
+          ),
+        ),
       // Search bar
       Container(
         padding: EdgeInsets.fromLTRB(

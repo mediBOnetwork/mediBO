@@ -381,7 +381,16 @@ class _Body extends StatelessWidget {
             fg: const Color(0xFF1D4ED8),
           ),
         ],
-        if (data.rxRequired) ...[
+        // CHANGE #461/#170 — the prescription class. header.rx_required came
+        // back false on EVERY product until this change (including packs whose
+        // "MEDICINE".rx_required reads 'Rx'), so this banner had never once
+        // fired. The block below is rx_badge()'s: title, note and both tone
+        // colours are the backend's, and an Rx product also prints whether
+        // this pharmacy's drug licence is on file for it.
+        if (data.hasRxBlock) ...[
+          const SizedBox(height: 12),
+          _C461RxBlock(data: data),
+        ] else if (data.rxRequired) ...[
           const SizedBox(height: 12),
           _RxBanner(text: data.label('pdp_rx_banner')),
         ],
@@ -1664,6 +1673,62 @@ class _TrustStrip extends StatelessWidget {
             ),
           ),
       ],
+    );
+  }
+}
+
+/// CHANGE #461/#170 — the PDP's prescription block. Class chip, the backend's
+/// title and note, and (for an Rx pack, signed in) the licence line. Nothing
+/// here decides what a schedule is or what colour it should be.
+class _C461RxBlock extends StatelessWidget {
+  final ProductDetail data;
+  const _C461RxBlock({required this.data});
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = Ds.hex(data.rxTone?['bg'], Ds.c.infoSoft);
+    final fg = Ds.hex(data.rxTone?['fg'], Ds.c.text);
+    final licenceNote = data.rxLicenceNote;
+
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.all(Ds.space.x12),
+      decoration: BoxDecoration(color: bg, borderRadius: Ds.r.rCard),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              if (data.rxLabel.isNotEmpty)
+                Container(
+                  padding: EdgeInsets.symmetric(
+                      horizontal: Ds.space.x8, vertical: Ds.space.x4 / 2),
+                  decoration: BoxDecoration(
+                      color: Ds.c.surface, borderRadius: Ds.r.rChip),
+                  child: Text(data.rxLabel,
+                      style: Ds.t.caption.copyWith(color: fg)),
+                ),
+              if (data.rxLabel.isNotEmpty) SizedBox(width: Ds.space.x8),
+              Expanded(
+                child: Text(data.rxTitle,
+                    style: Ds.t.subtitle.copyWith(color: fg),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis),
+              ),
+            ],
+          ),
+          if (data.rxNote.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(data.rxNote, style: Ds.t.body.copyWith(color: fg)),
+          ],
+          // Only an Rx pack viewed by a signed-in pharmacy carries this.
+          if (data.isRx && licenceNote.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(licenceNote, style: Ds.t.caption.copyWith(color: fg)),
+          ],
+        ],
+      ),
     );
   }
 }

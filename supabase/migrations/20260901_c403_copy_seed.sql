@@ -172,3 +172,19 @@ insert into public.ui_i18n_scope(prefix, label, sort_order, is_active) values
   ('supplier_bills.','Supplier bill archive',125,true)
 on conflict (prefix) do update
   set label = excluded.label, sort_order = excluded.sort_order, is_active = true;
+
+-- The one action a refusal on this surface can offer. Its absence on an
+-- authorization refusal is deliberate: a Retry that cannot change the answer
+-- is noise, so the screen passes onRetry only where a refetch is real.
+with seed(k, en, hi) as (values
+  ('supplier_records.retry_label', 'Try again', 'फिर कोशिश करें')
+)
+, up_en as (
+  insert into public.ui_copy(key, value, updated_at)
+  select k, to_jsonb(en), now() from seed
+  on conflict (key) do update set value = excluded.value, updated_at = now()
+  returning 1)
+insert into public.ui_copy_i18n(key, lang, value, source, updated_by, updated_at)
+select k, 'hi', to_jsonb(hi), 'seed', 'c403', now() from seed
+on conflict (key, lang) do update
+  set value = excluded.value, source = 'seed', updated_at = now();

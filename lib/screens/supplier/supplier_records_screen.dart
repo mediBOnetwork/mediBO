@@ -19,6 +19,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../design_tokens.dart';
 import '../../services/supplier_account_state.dart';
+import '../../services/ui_copy.dart';
 import '../../services/supplier_records_api.dart';
 import '../../utils/render_log.dart';
 
@@ -222,7 +223,9 @@ class SupplierDocumentsTabState extends State<SupplierDocumentsTab> {
   Widget build(BuildContext context) {
     final p = _payload;
     if (p == null) return const _Skeleton();
-    if (p['ok'] == false) return _Refusal(message: supplierStr(p, 'message'));
+    if (p['ok'] == false) {
+      return _Refusal(message: supplierStr(p, 'message'), onRetry: _load);
+    }
 
     final groups = supplierRows(p['groups']);
     return ListView(
@@ -662,7 +665,9 @@ class SupplierBillsTabState extends State<SupplierBillsTab> {
   Widget build(BuildContext context) {
     final p = _payload;
     if (p == null) return const _Skeleton();
-    if (p['ok'] == false) return _Refusal(message: supplierStr(p, 'message'));
+    if (p['ok'] == false) {
+      return _Refusal(message: supplierStr(p, 'message'), onRetry: search);
+    }
 
     final rows = supplierRows(p['rows']);
     return ListView(
@@ -793,8 +798,8 @@ class SupplierBillDetailView extends StatelessWidget {
         Row(
           children: [
             Expanded(
-                child:
-                    Text(supplierStr(payload, 'title'), style: Ds.t.title)),
+                child: Text(supplierStr(payload, 'title'),
+                    style: Ds.t.subtitle)),
             SizedBox(width: Ds.space.x12),
             _Chip(
                 label: supplierStr(payload, 'verify_label'),
@@ -802,7 +807,7 @@ class SupplierBillDetailView extends StatelessWidget {
           ],
         ),
         SizedBox(height: Ds.space.x4),
-        Text(supplierStr(payload, 'amount_label'), style: Ds.t.subtitle),
+        Text(supplierStr(payload, 'amount_label'), style: Ds.t.bodyStrong),
         SizedBox(height: Ds.space.x16),
         for (final h in supplierRows(payload['header']))
           _KeyLine(
@@ -958,7 +963,7 @@ class _KeyLine extends StatelessWidget {
         children: [
           if (label.isNotEmpty) ...[
             SizedBox(
-              width: 110,
+              width: Ds.space.x48 * 2,
               child: Text(label, style: Ds.t.caption),
             ),
             SizedBox(width: Ds.space.x8),
@@ -1011,13 +1016,32 @@ class _Empty extends StatelessWidget {
 
 class _Refusal extends StatelessWidget {
   final String message;
-  const _Refusal({required this.message});
+
+  /// Present only where retrying is a real option. An authorization refusal
+  /// gets no button — a Retry that cannot change the answer is noise.
+  final VoidCallback? onRetry;
+  const _Refusal({required this.message, this.onRetry});
 
   @override
   Widget build(BuildContext context) => Center(
         child: Padding(
           padding: EdgeInsets.all(Ds.space.x24),
-          child: Text(message, style: Ds.t.body, textAlign: TextAlign.center),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(message, style: Ds.t.body, textAlign: TextAlign.center),
+              if (onRetry != null) ...[
+                SizedBox(height: Ds.space.x16),
+                SizedBox(
+                  height: Ds.touch.minTarget,
+                  child: OutlinedButton(
+                    onPressed: onRetry,
+                    child: Text(c('supplier_records.retry_label')),
+                  ),
+                ),
+              ],
+            ],
+          ),
         ),
       );
 }

@@ -88,6 +88,7 @@ import '../widgets/scan_mic_search_controls.dart'; // #409 — used by the shell
 import '../services/pharmacy_stock_api.dart'; // CMD #412 — pharmacy_stock_entry() at boot
 import 'pharmacy/pharmacy_vault_screen.dart'; // CMD #423 — /admin/go/pharmacy_vault
 import 'pharmacy/pharmacy_stock_screen.dart'; // CMD #412 — the pharmacy's shelf
+import 'pharmacy/pharmacy_gst_screen.dart'; // CMD #440 — /admin/go/pharmacy_gst
 import 'pharmacy/pharmacy_refill_screen.dart'; // CMD #417 — refills & counter
 import 'pharmacy/pharmacy_overpay_screen.dart'; // CMD #427 — /admin/go/price_check
 import 'admin/admin_demand_engine_screen.dart'; // CMD #427 — /admin/go/demand_engine
@@ -661,6 +662,11 @@ class _HomeShellState extends State<HomeShell> {
     // nothing. Without this line the route is parked and the deep link lands
     // on the storefront — which is exactly what it did the first time.
     'pos_upi',
+    // CMD #440 — the GST pack (#416) is the same story: pharmacy_gst_home()
+    // gates on the caller's OWN pharmacy and the screen prints the backend's
+    // refusal, so the link grants nothing. Without this line the key is
+    // parked for a pharmacy, who is not an admin, and never opens.
+    'pharmacy_gst',
   };
 
   void _consumePendingDeepLink() {
@@ -820,6 +826,15 @@ class _HomeShellState extends State<HomeShell> {
       case 'pos_upi':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const PosUpiSetupScreen()));
+        break;
+      // CMD #416 shipped the GST pack behind an account tile only; this case
+      // is what makes /admin/go/pharmacy_gst resolve. pharmacy_gst_home()
+      // gates on the caller's own pharmacy and the screen renders its refusal,
+      // so there is no role test here — same story as pos and pharmacy_stock.
+      case 'pharmacy_gst':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const PharmacyGstScreen()));
+        break;
       // CMD #427 — THE PRICE CHECK. Also reachable from the vault's app bar;
       // this case is what gives it an address, so a monthly WhatsApp note or a
       // push about a rate can point straight at /admin/go/price_check.

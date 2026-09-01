@@ -657,9 +657,15 @@ begin
 
   -- The receipt carries BOTH: the QR for this exact bill, and the shop's own
   -- standing QR. A patient who walks away with the paper can still pay from it.
+  -- The bill QR is drawn only for a UPI bill. Printing "Scan to pay ₹11,297"
+  -- on a cash receipt the patient has already settled is a way to be paid
+  -- twice, and it is the same rule the on-screen panel follows (show:false).
   v := v || jsonb_build_object('qr', jsonb_build_object(
-    'bill', public._upi_qr_block(s.pharmacy_id, s.net_amount, s.invoice_no,
-              public.ui_text('pos.upi_qr_title'), public.ui_text('pos.upi_qr_sub')),
+    'bill', case when s.payment_mode = 'upi'
+                 then public._upi_qr_block(s.pharmacy_id, s.net_amount, s.invoice_no,
+                        public.ui_text('pos.upi_qr_title'),
+                        public.ui_text('pos.upi_qr_sub'))
+                 else jsonb_build_object('has', false) end,
     'shop', public._upi_qr_block(s.pharmacy_id, null, null,
               public.ui_text('pos.upi_shop_qr_title'),
               public.ui_text('pos.upi_shop_qr_sub'))));

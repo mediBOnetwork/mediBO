@@ -42,6 +42,15 @@ class PharmacyParcelApi {
   static Future<Map<String, dynamic>> open(String billId) =>
       call('pharmacy_parcel_open', {'p_bill_id': billId});
 
+  /// The chip the ORDER card draws, and the door behind it. A mediBO parcel is
+  /// counted from the order it arrived for, so these two are the whole of that
+  /// path — the standalone screen never lists a mediBO parcel.
+  static Future<Map<String, dynamic>> orderChip(String orderId) =>
+      call('pharmacy_parcel_order_chip', {'p_order_id': orderId});
+
+  static Future<Map<String, dynamic>> openOrder(String orderId) =>
+      call('pharmacy_parcel_open_order', {'p_order_id': orderId});
+
   static Future<Map<String, dynamic>> get(String sessionId) =>
       call('pharmacy_parcel_get', {'p_session_id': sessionId});
 

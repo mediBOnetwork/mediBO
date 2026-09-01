@@ -79,6 +79,20 @@ function ansi(s: unknown): string {
     .replace(/[^\x20-\x7E\xA0-\xFF]/g, '')
 }
 
+// Greedy word wrap. Same job as clip(), for text that must survive whole.
+function wrap(s: string, font: any, size: number, max: number): string[] {
+  const words = ansi(s).split(/\s+/).filter(Boolean)
+  const lines: string[] = []
+  let cur = ''
+  for (const w of words) {
+    const next = cur ? `${cur} ${w}` : w
+    if (cur && font.widthOfTextAtSize(next, size) > max) { lines.push(cur); cur = w }
+    else cur = next
+  }
+  if (cur) lines.push(cur)
+  return lines.length ? lines : ['']
+}
+
 function clip(s: string, font: any, size: number, max: number): string {
   let t = ansi(s)
   while (t.length > 1 && font.widthOfTextAtSize(t, size) > max) t = t.slice(0, -1)
@@ -259,7 +273,14 @@ async function renderPosInvoice(inv: any): Promise<Uint8Array> {
       txt(b.title ?? '', qx, y, 8.5, FB)
       qr(String(b.qr_string), qx, y - 8, side)
       let by = y - 8 - side - 10
-      txt(clip(String(b.sub ?? ''), F, 7, 210), qx, by, 7, F, grey)
+      // The caption WRAPS rather than clipping: the counter QR's line is a
+      // two-sentence instruction, and cutting it mid-word ("the payer types t")
+      // is how the first render printed it.
+      for (const ln of wrap(String(b.sub ?? ''), F, 7, 215)) {
+        txt(ln, qx, by, 7, F, grey)
+        by -= 8
+      }
+      by -= 1
       for (const row of (Array.isArray(b.rows) ? b.rows : [])) {
         by -= 9
         txt(clip(`${row.label ?? ''}: ${row.value ?? ''}`, F, 7, 210), qx, by, 7, F,

@@ -8,6 +8,7 @@ import '../fulfill/fulfill_lookups.dart'; // C629: backend-owned button copy
 import '../services/date_labels.dart';
 import 'delivery/customer_track_sheet.dart';  // C629: PART F1 — live tracking
 import 'customer/order_edit_sheet.dart';  // CHANGE #408
+import 'pharmacy/pharmacy_parcel_count_screen.dart'; // CMD #431 — Count, on the order
 import 'package:http/http.dart' as http;
 import 'package:pharma_b2b/utils/toast.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -925,32 +926,79 @@ class _OrderCardState extends State<_OrderCard> {
             ),
           ]),
           const SizedBox(height: 14),
-          Row(children: [
-            Expanded(
-              child: _TabButton(label: c('orders.tab_items'), selected: _tab == 0, onTap: () => _toggleTab(0)),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: _TabButton(label: c('orders.tab_payment'), selected: _tab == 1, onTap: () => _toggleTab(1)),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: _TabButton(label: c('orders.tab_bill'), selected: _tab == 2, onTap: () => _toggleTab(2)),
-            ),
-            const SizedBox(width: 8),
-            // CHANGE #629 (PART F1): Track. This opens a sheet rather than a
-            // fourth accordion section, because customer_track_order() answers
-            // for itself whether there is anything to track — including
-            // 'Preparing your order' when no delivery row exists yet. The card
-            // never works that out from order.status.
-            Expanded(
-              child: _TabButton(
-                label: FulfillLookups.instance.ui('dlv_track'),
-                selected: false,
-                onTap: () => showCustomerTrackSheet(context, order.id),
-              ),
-            ),
-          ]),
+          // CMD #431 — the row scrolls sideways now. It stopped being four
+          // equal columns the moment Count joined it: five Expanded chips on a
+          // 360 px phone squeeze every caption to two cramped lines, and the
+          // fifth one would be the first to go. So the chips keep a readable
+          // minimum width, share the row evenly when there IS room, and scroll
+          // when there is not — which also means a sixth chip tomorrow costs
+          // this layout nothing.
+          LayoutBuilder(builder: (context, box) {
+            const gap = 8.0;
+            const minChip = 84.0;
+            final chips = <Widget Function(double)>[
+              (w) => SizedBox(
+                    width: w,
+                    child: _TabButton(
+                        label: c('orders.tab_items'),
+                        selected: _tab == 0,
+                        onTap: () => _toggleTab(0)),
+                  ),
+              (w) => SizedBox(
+                    width: w,
+                    child: _TabButton(
+                        label: c('orders.tab_payment'),
+                        selected: _tab == 1,
+                        onTap: () => _toggleTab(1)),
+                  ),
+              (w) => SizedBox(
+                    width: w,
+                    child: _TabButton(
+                        label: c('orders.tab_bill'),
+                        selected: _tab == 2,
+                        onTap: () => _toggleTab(2)),
+                  ),
+              // CHANGE #629 (PART F1): Track. This opens a sheet rather than a
+              // fourth accordion section, because customer_track_order()
+              // answers for itself whether there is anything to track —
+              // including 'Preparing your order' when no delivery row exists
+              // yet. The card never works that out from order.status.
+              (w) => SizedBox(
+                    width: w,
+                    child: _TabButton(
+                        label: FulfillLookups.instance.ui('dlv_track'),
+                        selected: false,
+                        onTap: () => showCustomerTrackSheet(context, order.id)),
+                  ),
+              // CMD #431 — count this parcel against this order's own bill.
+              // The chip draws itself only when pharmacy_parcel_order_chip()
+              // said so, and its caption ('Count' / 'Counting' / 'Counted') is
+              // the backend's, so the card never works out where the count got
+              // to either.
+              (w) => ParcelOrderChip(
+                    orderId: order.id,
+                    builder: (ctx, label, onTap) => SizedBox(
+                      width: w,
+                      child: _TabButton(
+                          label: label, selected: false, onTap: onTap),
+                    ),
+                  ),
+            ];
+            final n = chips.length;
+            final even = (box.maxWidth - gap * (n - 1)) / n;
+            final w = even >= minChip ? even : minChip;
+            final row = [
+              for (var i = 0; i < n; i++) ...[
+                if (i > 0) const SizedBox(width: gap),
+                chips[i](w),
+              ],
+            ];
+            return SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              physics: const ClampingScrollPhysics(),
+              child: Row(children: row),
+            );
+          }),
           // CHANGE #408 — edit this order, but ONLY while the backend says the
           // window is open. OrderEditButton renders nothing at all when
           // `can_edit` is false, so the affordance disappears the moment the

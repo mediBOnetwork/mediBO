@@ -1384,3 +1384,171 @@ on conflict (feature_key) do update
   set label = excluded.label, icon_key = excluded.icon_key, route_key = excluded.route_key,
       is_active = true, description = excluded.description,
       roles_allowed = excluded.roles_allowed, surface = excluded.surface;
+
+-- ═══════════════════ 14. OM'S CORRECTION: THE mediBO COUNT LIVES ON THE ORDER
+--
+-- A mediBO parcel is not a stray box — it is THIS order, arriving. So its count
+-- belongs beside Items / Payment / Bill / Track on the order card, reached from
+-- the order it is a count of, and the standalone surface keeps only the parcels
+-- that have no order behind them: the ones from the pharmacy's other suppliers.
+--
+-- Nothing about the counting itself changes. The session still hangs off the
+-- bill, the verdicts are still the same function, a mismatch is still #309's
+-- claim. Only the door moved.
+
+-- The chip the order card draws. Absent (`show:false`) rather than greyed out
+-- when there is nothing to count: an order that has not been delivered has no
+-- parcel in the room yet.
+create or replace function public.pharmacy_parcel_order_chip(p_order_id uuid)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_shop uuid := public._c431_shop();
+  v_bill public.pharmacy_purchase_bill%rowtype;
+  v_sess public.pharmacy_parcel_count%rowtype;
+  v_delivered boolean;
+begin
+  if v_shop is null then return jsonb_build_object('ok', true, 'show', false); end if;
+  if not exists (select 1 from public.orders o
+                  where o.id = p_order_id and o.customer_id = v_shop) then
+    return jsonb_build_object('ok', true, 'show', false);
+  end if;
+
+  select exists (select 1 from public.deliveries d
+                  where d.order_id = p_order_id and d.delivered_at is not null)
+    into v_delivered;
+
+  select * into v_bill from public.pharmacy_purchase_bill
+   where pharmacy_id = v_shop and order_id = p_order_id;
+
+  -- Nothing to count against yet, and nothing delivered: no chip.
+  if not v_delivered and v_bill.id is null then
+    return jsonb_build_object('ok', true, 'show', false);
+  end if;
+
+  if v_bill.id is not null then
+    select * into v_sess from public.pharmacy_parcel_count
+     where bill_id = v_bill.id order by created_at desc limit 1;
+  end if;
+
+  return jsonb_build_object('ok', true, 'show', true,
+    'label', case
+               when v_sess.status = 'open' then public.ui_text('phpc.chip_resume')
+               when v_sess.status = 'done' then public.ui_text('phpc.chip_done')
+               else public.ui_text('phpc.chip_count') end,
+    'tone',  case when v_sess.status = 'done' then 'success'
+                  when v_sess.status = 'open' then 'warning'
+                  else 'neutral' end,
+    'session_id', case when v_sess.status = 'open' then v_sess.id else null end);
+end $$;
+
+-- Opening the count from the ORDER rather than from a bill id. The bill is
+-- #423's, and if the delivery trigger has not written it yet this asks for it
+-- by name rather than making the pharmacist wait for a background job — the
+-- ingest is idempotent, so calling it here is free when it has already run.
+create or replace function public.pharmacy_parcel_open_order(p_order_id uuid)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_shop uuid := public._c431_shop();
+  v_bill uuid;
+begin
+  if v_shop is null then return public._c431_denied(); end if;
+  if not exists (select 1 from public.orders o
+                  where o.id = p_order_id and o.customer_id = v_shop) then
+    return jsonb_build_object('ok', false, 'error', 'not_your_order',
+                              'message', public.ui_text('phpc.err_not_your_order'));
+  end if;
+
+  select id into v_bill from public.pharmacy_purchase_bill
+   where pharmacy_id = v_shop and order_id = p_order_id;
+
+  if v_bill is null then
+    perform public.pharmacy_vault_ingest_order(p_order_id);
+    select id into v_bill from public.pharmacy_purchase_bill
+     where pharmacy_id = v_shop and order_id = p_order_id;
+  end if;
+
+  if v_bill is null then
+    return jsonb_build_object('ok', false, 'error', 'no_bill_yet',
+                              'message', public.ui_text('phpc.err_no_bill_yet'));
+  end if;
+
+  return public.pharmacy_parcel_open(v_bill);
+end $$;
+
+-- The standalone surface is now the OTHER suppliers' parcels only. A mediBO
+-- parcel is reached from its order, so listing it here twice would be two
+-- doors onto one box.
+create or replace function public.pharmacy_parcel_home()
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  v_shop uuid := public._c431_shop();
+  v_out  jsonb := '[]'::jsonb;
+  b      public.pharmacy_purchase_bill%rowtype;
+  v_open integer := 0;
+begin
+  if v_shop is null then return public._c431_denied(); end if;
+
+  for b in
+    select * from public.pharmacy_purchase_bill
+     where pharmacy_id = v_shop and source <> 'medibo'
+       and status in ('read', 'review', 'confirmed')
+     order by coalesce(invoice_date, created_at::date) desc, created_at desc
+     limit 30
+  loop
+    v_out := v_out || jsonb_build_array(public._c431_bill_row(b));
+  end loop;
+
+  select count(*) into v_open from public.pharmacy_parcel_count
+   where pharmacy_id = v_shop and status = 'open' and kind = 'outside';
+
+  return jsonb_build_object(
+    'ok', true,
+    'title',    public.ui_text('phpc.title_outside'),
+    'subtitle', public.ui_text('phpc.subtitle_outside'),
+    'open_count', v_open,
+    'open_label', case when v_open > 0
+                    then public.ui_fmt('phpc.open_n', jsonb_build_object('n', v_open::text))
+                    else null end,
+    'tabs', jsonb_build_array(
+      jsonb_build_object('key', 'outside', 'label', public.ui_text('phpc.tab_outside'),
+                         'empty', public.ui_text('phpc.empty_outside'), 'rows', v_out)),
+    'photo_bucket', 'stock-imports',
+    'outside_hint', public.ui_text('phpc.outside_hint'),
+    -- Where the mediBO half went, said out loud, so nobody hunts for it.
+    'medibo_hint', public.ui_text('phpc.medibo_moved'));
+end $$;
+
+-- The nav badge counts only what this surface now holds.
+create or replace function public.pharmacy_parcel_entry()
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_shop uuid := public._c431_shop(); v_open integer;
+begin
+  if v_shop is null then return jsonb_build_object('ok', true, 'show', false); end if;
+  select count(*) into v_open from public.pharmacy_parcel_count
+   where pharmacy_id = v_shop and status = 'open' and kind = 'outside';
+  return jsonb_build_object('ok', true, 'show', true,
+    'label',     public.ui_text('phpc.nav_label_outside'),
+    'badge',     case when v_open > 0 then v_open::text else null end,
+    'route_key', 'pharmacy_parcel');
+end $$;
+
+grant execute on function public.pharmacy_parcel_order_chip(uuid) to authenticated;
+grant execute on function public.pharmacy_parcel_open_order(uuid) to authenticated;
+
+insert into public.ui_copy (key, value) values
+  ('phpc.chip_count',   to_jsonb('Count'::text)),
+  ('phpc.chip_resume',  to_jsonb('Counting'::text)),
+  ('phpc.chip_done',    to_jsonb('Counted'::text)),
+  ('phpc.nav_label_outside', to_jsonb('Count outside parcel'::text)),
+  ('phpc.title_outside',     to_jsonb('Outside supplier parcels'::text)),
+  ('phpc.subtitle_outside',  to_jsonb('Check what your other suppliers sent against their own bill'::text)),
+  ('phpc.medibo_moved',      to_jsonb('A mediBO parcel is counted from its own order — Orders › Count.'::text)),
+  ('phpc.err_not_your_order', to_jsonb('That order is not yours.'::text)),
+  ('phpc.err_no_bill_yet',   to_jsonb('This order has no bill to count against yet.'::text))
+on conflict (key) do update set value = excluded.value;
+
+-- The registry row follows the surface: it now names the outside half.
+update public.feature_registry
+   set label = 'Count outside parcel',
+       description = 'CMD #431 - count a parcel from one of the pharmacy''s OTHER suppliers against the bill they photographed. A mediBO parcel is counted from its own order card.'
+ where feature_key = 'admin.parcel_count';

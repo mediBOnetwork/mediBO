@@ -243,6 +243,21 @@ class _ParcelCountHomeScreenState extends State<ParcelCountHomeScreen>
                 style: Ds.t.caption.copyWith(color: toneColor('warning')),
               ),
             ),
+          // Where the mediBO half lives now, in the backend's own words —
+          // said out loud so nobody hunts this screen for an order's parcel.
+          if (_s(d['medibo_hint']).isNotEmpty)
+            Container(
+              width: double.infinity,
+              color: toneSoft('info'),
+              padding: EdgeInsets.symmetric(
+                horizontal: Ds.space.x16,
+                vertical: Ds.space.x12,
+              ),
+              child: Text(
+                _s(d['medibo_hint']),
+                style: Ds.t.caption.copyWith(color: toneColor('info')),
+              ),
+            ),
           Expanded(
             child: TabBarView(
               controller: _tabs,
@@ -872,5 +887,79 @@ class _ParcelMenuTileState extends State<ParcelMenuTile> {
         ),
       ),
     );
+  }
+}
+
+/// CMD #431, after Om's steering — the count of a mediBO parcel belongs ON its
+/// order, beside Items / Payment / Bill / Track, because a mediBO parcel is not
+/// a stray box: it is THIS order, arriving. The standalone screen above keeps
+/// only the parcels that have no order behind them.
+///
+/// Draws nothing at all until `pharmacy_parcel_order_chip` says to — an order
+/// that has not been delivered has no parcel in the room yet, and an absent
+/// affordance is honest where a greyed-out one is just a puzzle.
+class ParcelOrderChip extends StatefulWidget {
+  final String orderId;
+
+  /// The card hands its own chip look down, so this widget adds no styling of
+  /// its own and the five chips stay one row rather than four plus a stranger.
+  final Widget Function(BuildContext, String label, VoidCallback onTap) builder;
+
+  const ParcelOrderChip({
+    super.key,
+    required this.orderId,
+    required this.builder,
+  });
+
+  @override
+  State<ParcelOrderChip> createState() => _ParcelOrderChipState();
+}
+
+class _ParcelOrderChipState extends State<ParcelOrderChip> {
+  Map<String, dynamic>? _chip;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _ask();
+  }
+
+  void _ask() {
+    PharmacyParcelApi.orderChip(widget.orderId)
+        .then((r) {
+          if (mounted && r['show'] == true) setState(() => _chip = r);
+        })
+        .catchError((Object _) {});
+  }
+
+  Future<void> _open() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final r = await PharmacyParcelApi.openOrder(widget.orderId);
+      if (!mounted) return;
+      if (r['ok'] != true) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(_s(r['message']))));
+        return;
+      }
+      await Navigator.push(
+        context,
+        MaterialPageRoute<void>(builder: (_) => ParcelCountScreen(opened: r)),
+      );
+      // Coming back, the chip re-asks: "Count" may now read "Counted".
+      if (mounted) _ask();
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = _chip;
+    if (c == null) return const SizedBox.shrink();
+    RenderLog.write('c431_order_count_chip', 1);
+    return widget.builder(context, _s(c['label']), _open);
   }
 }

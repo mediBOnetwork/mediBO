@@ -250,6 +250,7 @@ insert into public.ui_copy (key, value) values
   ('infer424.ask_save',      to_jsonb('Save'::text)),
   ('infer424.corrected',     to_jsonb('Saved — {n} left. The estimate for this medicine just got better.'::text)),
   ('infer424.correct_failed',to_jsonb('That number could not be saved.'::text)),
+  ('infer424.err_generic',   to_jsonb('That did not load. Try again in a moment.'::text)),
   ('infer424.heading_lots',  to_jsonb('Lot by lot'::text)),
   ('infer424.recompute_note',to_jsonb('Updated every night.'::text))
 on conflict (key) do nothing;
@@ -622,8 +623,8 @@ begin
     'count', v_n,
     'rows', v_rows);
 exception when others then
-  return jsonb_build_object('ok', false, 'error', 'exception', 'tone', 'danger',
-                            'message', SQLERRM);
+  return jsonb_build_object('ok', false, 'error', SQLERRM, 'tone', 'danger',
+                            'message', public.ui_text('infer424.err_generic'));
 end $$;
 
 -- ─────────────────────────── 8. THE GROUND-TRUTH LOOP ───────────────────────
@@ -651,6 +652,13 @@ begin
     into v_lot
     from public.pharmacy_stock s
    where s.id = p_lot_id and s.pharmacy_id = v_shop;
+  -- A lot the catalogue could never match has no SKU to teach, so there is
+  -- nothing to learn from a correction on it. Refuse in the backend's own
+  -- words rather than letting a not-null constraint reach the owner.
+  if found and v_lot.medicine_id is null then
+    return jsonb_build_object('ok', false, 'tone', 'danger',
+      'message', public.ui_text('infer424.correct_failed'));
+  end if;
   if not found then
     return jsonb_build_object('ok', false, 'tone', 'danger',
       'message', public.ui_text('infer424.correct_failed'));
@@ -694,8 +702,10 @@ begin
     'message', public.ui_text_f('infer424.corrected',
                  jsonb_build_object('n', public._c424_qty(p_left))));
 exception when others then
-  return jsonb_build_object('ok', false, 'error', 'exception', 'tone', 'danger',
-                            'message', SQLERRM);
+  -- The owner reads copy, never a Postgres error. The detail stays in `error`
+  -- for the log.
+  return jsonb_build_object('ok', false, 'error', SQLERRM, 'tone', 'danger',
+                            'message', public.ui_text('infer424.correct_failed'));
 end $$;
 
 create or replace function public.pharmacy_lot_correct(p_lot_id uuid, p_left numeric)

@@ -294,6 +294,18 @@ class _DesktopSearchRowState extends State<_DesktopSearchRow> {
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
               ),
+            // CMD #409 — scan and voice, in the search bar itself. Both hand
+            // back a QUERY or a product the backend resolved; neither one
+            // decides anything here.
+            ScanSearchButton(color: Ds.c.textSecondary),
+            VoiceSearchButton(
+              color: Ds.c.textSecondary,
+              onQuery: (q) {
+                widget.controller.text = q;
+                _submitNow();
+              },
+            ),
+            SizedBox(width: Ds.space.x4),
             GestureDetector(
               onTap: _submitNow,
               child: Container(

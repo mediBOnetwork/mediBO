@@ -487,6 +487,18 @@ class _MobileSearchBarState extends State<_MobileSearchBar> {
                 constraints:
                     const BoxConstraints(minWidth: 40, minHeight: 40),
               ),
+            // CMD #409 — scan and voice, in the search bar itself. Both hand
+            // back a QUERY or a product the backend resolved; neither one
+            // decides anything here.
+            const VerticalDivider(width: 1, indent: 10, endIndent: 10),
+            ScanSearchButton(color: Ds.c.textSecondary),
+            VoiceSearchButton(
+              color: Ds.c.textSecondary,
+              onQuery: (q) {
+                widget.controller.text = q;
+                _submitNow();
+              },
+            ),
           ],
         ),
       ),

@@ -17,6 +17,7 @@ import 'rewards_screen.dart';
 import 'customer/customer_staff_screen.dart';  // CHANGE #408
 import 'wishlist_screen.dart';
 import 'pharmacy/pos_screen.dart'; // CMD #411 — the pharmacy counter
+import 'pharmacy/pharmacy_stock_screen.dart'; // CMD #412 — the pharmacy's shelf
 
 class ProfileScreen extends StatefulWidget {
   // CHANGE #374 — when set (View As Customer), load the impersonated
@@ -218,7 +219,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 Container(
                   color: Ds.c.surface,
                   padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
-                  child: const PosMenuTile(),
+                  child: const Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      PosMenuTile(),
+                      // CMD #412 — the shelf, beside the counter. Both tiles
+                      // draw themselves only when their own entry RPC said so,
+                      // so a supplier or an admin opening this screen sees
+                      // neither and the shell still knows nothing about what a
+                      // pharmacy is.
+                      StockMenuTile(),
+                    ],
+                  ),
                 ),
                 // Avatar + pharmacy name header
                 Container(

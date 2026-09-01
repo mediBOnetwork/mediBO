@@ -274,12 +274,7 @@ class _PharmacyRadarScreenState extends State<PharmacyRadarScreen> {
               )
             else
               for (final it in items) ...[
-                _RadarRow(
-                  item: it,
-                  busy: _busy,
-                  askLabel: _s(h['asks_title']),
-                  onAsk: () => _askFor(it),
-                ),
+                _RadarRow(item: it, busy: _busy, onAsk: () => _askFor(it)),
                 SizedBox(height: Ds.space.x12),
               ],
 
@@ -458,12 +453,10 @@ class _OptionButton extends StatelessWidget {
 class _RadarRow extends StatelessWidget {
   final Map<String, dynamic> item;
   final bool busy;
-  final String askLabel;
   final VoidCallback onAsk;
   const _RadarRow({
     required this.item,
     required this.busy,
-    required this.askLabel,
     required this.onAsk,
   });
 
@@ -504,25 +497,30 @@ class _RadarRow extends StatelessWidget {
             style: Ds.t.caption,
           ),
           SizedBox(height: Ds.space.x12),
-          Row(
-            children: [
-              Expanded(
-                child: ShieldChip(
-                  label: _s(item['window_label']),
-                  tone: _s(item['window_tone']),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: ShieldChip(
+              label: _s(item['window_label']),
+              tone: _s(item['window_tone']),
+            ),
+          ),
+          // The correction offer sits on its own line, under the chip, and
+          // wears the label the BACKEND gave the row — never the section
+          // heading borrowed from above it.
+          if (!hasAsk && _s(item['ask_button']).isNotEmpty) ...[
+            SizedBox(height: Ds.space.x4),
+            Align(
+              alignment: Alignment.centerRight,
+              child: SizedBox(
+                height: Ds.touch.minTarget,
+                child: TextButton(
+                  onPressed: busy ? null : onAsk,
+                  style: TextButton.styleFrom(foregroundColor: Ds.c.brand),
+                  child: Text(_s(item['ask_button']), style: Ds.t.body),
                 ),
               ),
-              if (!hasAsk)
-                SizedBox(
-                  height: Ds.touch.minTarget,
-                  child: TextButton(
-                    onPressed: busy ? null : onAsk,
-                    style: TextButton.styleFrom(foregroundColor: Ds.c.brand),
-                    child: Text(askLabel, style: Ds.t.body),
-                  ),
-                ),
-            ],
-          ),
+            ),
+          ],
         ],
       ),
     );

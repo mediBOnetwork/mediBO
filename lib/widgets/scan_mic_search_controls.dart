@@ -31,6 +31,10 @@ class ScanSearchButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Reachability proof. The search bar is canvas — no browser tool can see
+    // these buttons — so the render log is the only evidence they exist on the
+    // live build, and it is written on BUILD rather than on tap.
+    RenderLog.write('c409_search_controls', 'scan=1');
     return IconButton(
       key: const Key('c409_scan_button'),
       tooltip: c('storefront.scan_button'),
@@ -62,6 +66,7 @@ class VoiceSearchButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    RenderLog.write('c409_search_mic', 'mic=1');
     return IconButton(
       key: const Key('c409_mic_button'),
       tooltip: c('storefront.mic_button'),

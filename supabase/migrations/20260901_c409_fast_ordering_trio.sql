@@ -238,6 +238,11 @@ begin
      where not exists (
        select 1 from public.voice_vocab vv
         where vv.kind in ('form', 'unit', 'filler') and lower(vv.word) = t.tok)
+       -- The spoken quantity is noise on a search bar ("Telma 40 do strip"
+       -- searches for "telma 40"). Only the WORDS are dropped — a digit token
+       -- is a strength and survives.
+       and not exists (
+         select 1 from public.voice_number_vocab nv where lower(nv.word) = t.tok)
   )
   select string_agg(coalesce(alias, tok), ' ' order by ord),
          count(*) filter (where alias is not null)

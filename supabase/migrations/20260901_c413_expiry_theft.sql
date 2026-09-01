@@ -731,10 +731,26 @@ declare
   v_shop uuid := p_shop;
   v_list uuid;
   v_n integer; v_val numeric;
+  v_b text := coalesce(nullif(btrim(p_bucket), ''), 'window');
 begin
+  -- Ask FIRST, write second. Writing a list header and deleting it again when
+  -- it turns out empty is how a "nothing to return" answer became a foreign-key
+  -- exception for any shop id that is not a real pharmacy.
+  select count(*), coalesce(sum(r.value_at_cost), 0) into v_n, v_val
+    from public._c413_rows(v_shop) r
+   where r.window_state = 'open'
+     and (v_b in ('window', 'all')
+          or r.bucket_key = v_b
+          or (v_b = 'd90' and r.bucket_key in ('d30','d60','d90')));
 
-  insert into public.pharmacy_return_list (pharmacy_id, bucket, created_by)
-  values (v_shop, coalesce(p_bucket, 'window'), p_actor)
+  if v_n = 0 then
+    return jsonb_build_object('ok', false, 'error', 'nothing_to_return',
+                              'message', public.ui_text('phx.err_nothing'));
+  end if;
+
+  insert into public.pharmacy_return_list
+    (pharmacy_id, bucket, created_by, item_count, value_at_cost)
+  values (v_shop, v_b, p_actor, v_n, round(v_val, 2))
   returning id into v_list;
 
   insert into public.pharmacy_return_list_item
@@ -754,22 +770,9 @@ begin
          end
     from public._c413_rows(v_shop) r
    where r.window_state = 'open'
-     and (coalesce(p_bucket, 'window') in ('window', 'all')
-          or r.bucket_key = p_bucket
-          or (p_bucket = 'd90' and r.bucket_key in ('d30','d60','d90')));
-
-  select count(*), coalesce(sum(value_at_cost), 0) into v_n, v_val
-    from public.pharmacy_return_list_item where list_id = v_list;
-
-  if v_n = 0 then
-    delete from public.pharmacy_return_list where id = v_list;
-    return jsonb_build_object('ok', false, 'error', 'nothing_to_return',
-                              'message', public.ui_text('phx.err_nothing'));
-  end if;
-
-  update public.pharmacy_return_list
-     set item_count = v_n, value_at_cost = round(v_val, 2)
-   where id = v_list;
+     and (v_b in ('window', 'all')
+          or r.bucket_key = v_b
+          or (v_b = 'd90' and r.bucket_key in ('d30','d60','d90')));
 
   return public._c413_return_get(v_shop, v_list);
 end $function$;

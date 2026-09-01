@@ -868,3 +868,293 @@ grant execute on function public.pharmacy_audit_verify(uuid) to authenticated;
 grant execute on function public.pharmacy_audit_certificate(uuid) to authenticated;
 grant execute on function public.pharmacy_audit_actions(uuid) to authenticated;
 grant execute on function public.pharmacy_audit_trend(integer) to authenticated;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 10. THE SHELF PHOTO — the fourth input
+--
+-- A rack photo cannot tell you HOW MANY are behind the front strip, and any
+-- system that pretends otherwise is inventing stock. So the OCR does the half
+-- it can do honestly — reading which medicines are on that shelf — and the
+-- person standing in front of it supplies the numbers. The photo is also kept
+-- as evidence, which is what the random 10% sampling asks for anyway.
+-- ─────────────────────────────────────────────────────────────────────────────
+insert into public.ui_copy(key, value) values
+ ('phaudit.photo_matched', to_jsonb('{{n}} of these are on your count sheet'::text)),
+ ('phaudit.photo_unmatched', to_jsonb('{{n}} we could not match to your stock'::text))
+on conflict (key) do nothing;
+
+create or replace function public.pharmacy_audit_photo_add(
+  p_session_id uuid, p_bucket text, p_path text)
+returns jsonb language plpgsql security definer set search_path to 'public','net' as $$
+declare v_shop uuid := public._c430_shop(); ss public.pharmacy_count_session; v_id uuid;
+begin
+  if v_shop is null then return public._c430_denied(); end if;
+  select * into ss from public.pharmacy_count_session
+   where id = p_session_id and pharmacy_id = v_shop;
+  if not found then
+    return jsonb_build_object('ok', false, 'error','no_session',
+                              'message', public.ui_text('phaudit.err_no_session'));
+  end if;
+
+  insert into public.pharmacy_count_evidence (session_id, kind, bucket, path, created_by)
+  values (ss.id, 'shelf_photo', coalesce(nullif(btrim(p_bucket),''),'stock-imports'),
+          p_path, auth.uid())
+  returning id into v_id;
+
+  perform public.audit_log_append(v_shop, ss.id, 'shelf_photo',
+    jsonb_build_object('evidence_id', v_id, 'path', p_path));
+
+  -- The same reader the shelf import already uses (#412's stock-ocr). If it is
+  -- unavailable the count is not blocked: the photo is still evidence, and the
+  -- other three inputs still work.
+  begin
+    perform net.http_post(
+      url := 'https://swojhmarmaijkshsbeih.supabase.co/functions/v1/stock-ocr',
+      headers := jsonb_build_object('Content-Type','application/json',
+                                    'Authorization', 'Bearer ' || public._service_key()),
+      body := jsonb_build_object('audit_session_id', ss.id, 'evidence_id', v_id,
+                                 'bucket', coalesce(p_bucket,'stock-imports'), 'path', p_path),
+      timeout_milliseconds := 30000);
+  exception when others then
+    null;
+  end;
+
+  return jsonb_build_object('ok', true, 'evidence_id', v_id, 'poll_ms', 2500,
+    'title', public.ui_text('phaudit.photo_title'),
+    'note',  public.ui_text('phaudit.photo_note'),
+    'message', public.ui_text('phaudit.photo_queued'));
+end $$;
+
+-- What the reader saw, matched against THIS session's sheet. It returns the
+-- lines to put in front of the counter; it never writes a quantity, because it
+-- does not know one.
+create or replace function public.pharmacy_audit_photo_report(
+  p_session_id uuid, p_names jsonb, p_error text default null)
+returns jsonb language plpgsql security definer set search_path to 'public' as $$
+declare
+  v_shop uuid; ss public.pharmacy_count_session; n text;
+  l public.pharmacy_count_line; v_rows jsonb := '[]'::jsonb;
+  v_hit integer := 0; v_miss integer := 0;
+begin
+  select * into ss from public.pharmacy_count_session where id = p_session_id;
+  v_shop := ss.pharmacy_id;
+  if ss.id is null then
+    return jsonb_build_object('ok', false, 'error','no_session',
+                              'message', public.ui_text('phaudit.err_no_session'));
+  end if;
+
+  if coalesce(btrim(coalesce(p_error,'')),'') <> '' then
+    perform public.audit_log_append(v_shop, ss.id, 'shelf_photo_failed',
+      jsonb_build_object('error', p_error));
+    return jsonb_build_object('ok', false, 'error','ocr_failed',
+                              'message', public.ui_text('phaudit.photo_failed'));
+  end if;
+
+  for n in select value from jsonb_array_elements_text(coalesce(p_names,'[]'::jsonb)) loop
+    select * into l from public.pharmacy_count_line
+     where session_id = ss.id
+       and product_name ilike '%' || btrim(n) || '%'
+     order by (counted_qty is not null), product_name limit 1;
+    if found then
+      v_hit := v_hit + 1;
+      v_rows := v_rows || jsonb_build_array(public._c430_line_json(l, ss.blind and ss.status = 'open'));
+    else
+      v_miss := v_miss + 1;
+    end if;
+  end loop;
+
+  perform public.audit_log_append(v_shop, ss.id, 'shelf_photo_read',
+    jsonb_build_object('matched', v_hit, 'unmatched', v_miss));
+
+  return jsonb_build_object('ok', true, 'rows', v_rows,
+    'matched_label', public.ui_fmt('phaudit.photo_matched',
+       jsonb_build_object('n', v_hit::text)),
+    'unmatched_label', case when v_miss > 0
+       then public.ui_fmt('phaudit.photo_unmatched',
+              jsonb_build_object('n', v_miss::text)) end,
+    'note', public.ui_text('phaudit.photo_note'));
+end $$;
+
+grant execute on function public.pharmacy_audit_photo_add(uuid, text, text) to authenticated;
+grant execute on function public.pharmacy_audit_photo_report(uuid, jsonb, text) to service_role;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 11. THE OWNER'S PDF
+--
+-- Same request → render → report shape as #416's CA pack, and deliberately the
+-- SAME payload shape, so the audit PDF is rendered by a printer that already
+-- exists rather than a second one that can drift from it. Every heading, rupee
+-- and disclaimer below is built here; the renderer decides nothing.
+-- ─────────────────────────────────────────────────────────────────────────────
+alter table public.pharmacy_count_session
+  add column if not exists pdf_status text,
+  add column if not exists pdf_bucket text,
+  add column if not exists pdf_path   text,
+  add column if not exists pdf_bytes  integer,
+  add column if not exists pdf_error  text;
+
+insert into public.ui_copy(key, value) values
+ ('phaudit.pdf_button',  to_jsonb('Owner PDF'::text)),
+ ('phaudit.pdf_queued',  to_jsonb('Building the audit PDF — a few seconds.'::text)),
+ ('phaudit.pdf_ready',   to_jsonb('Audit PDF ready'::text)),
+ ('phaudit.pdf_failed',  to_jsonb('Could not build the PDF. Try again.'::text)),
+ ('phaudit.pdf_title',   to_jsonb('Stock audit report'::text)),
+ ('phaudit.pdf_counted', to_jsonb('Counted stock at cost'::text)),
+ ('phaudit.pdf_variance', to_jsonb('Variance at cost'::text)),
+ ('phaudit.pdf_lines',   to_jsonb('Lines counted'::text)),
+ ('phaudit.pdf_block',   to_jsonb('Counted against expected'::text)),
+ ('phaudit.pdf_col_item', to_jsonb('Item'::text)),
+ ('phaudit.pdf_col_batch', to_jsonb('Batch'::text)),
+ ('phaudit.pdf_col_counts', to_jsonb('Counted / expected'::text)),
+ ('phaudit.pdf_col_by',  to_jsonb('Counted by'::text)),
+ ('phaudit.pdf_col_value', to_jsonb('Value'::text)),
+ ('phaudit.pdf_note',    to_jsonb('Produced from a physical count recorded in a sealed, hash-chained log. This report states what was counted; it is not an audit opinion.'::text))
+on conflict (key) do nothing;
+
+create or replace function public.pharmacy_audit_pdf_request(p_session_id uuid)
+returns jsonb language plpgsql security definer set search_path to 'public','net' as $$
+declare v_shop uuid := public._c430_shop(); ss public.pharmacy_count_session;
+begin
+  if v_shop is null then return public._c430_denied(); end if;
+  select * into ss from public.pharmacy_count_session
+   where id = p_session_id and pharmacy_id = v_shop;
+  if not found then
+    return jsonb_build_object('ok', false, 'error','no_session',
+                              'message', public.ui_text('phaudit.err_no_session'));
+  end if;
+
+  update public.pharmacy_count_session
+     set pdf_status = 'queued', pdf_error = null where id = ss.id;
+
+  begin
+    perform net.http_post(
+      url := 'https://swojhmarmaijkshsbeih.supabase.co/functions/v1/audit-pdf',
+      headers := jsonb_build_object('Content-Type','application/json',
+                                    'Authorization', 'Bearer ' || public._service_key()),
+      body := jsonb_build_object('session_id', ss.id),
+      timeout_milliseconds := 30000);
+  exception when others then
+    null;
+  end;
+
+  return jsonb_build_object('ok', true, 'session_id', ss.id, 'poll_ms', 2500,
+    'message', public.ui_text('phaudit.pdf_queued'));
+end $$;
+
+create or replace function public.pharmacy_audit_pdf_input(p_session_id uuid)
+returns jsonb language plpgsql security definer set search_path to 'public' as $$
+declare
+  ss public.pharmacy_count_session; v_shop uuid; v_name text;
+  v_counted numeric; v_var numeric; v_lines integer; v_rows jsonb := '[]'::jsonb;
+  l record;
+begin
+  select * into ss from public.pharmacy_count_session where id = p_session_id;
+  if ss.id is null then
+    return jsonb_build_object('ok', false, 'error','no_session');
+  end if;
+  v_shop := ss.pharmacy_id;
+  select pharmacy_name into v_name from public.pharmacy_profiles where id = v_shop;
+
+  select coalesce(sum(coalesce(resolved_qty, counted_qty) * coalesce(unit_cost,0)),0),
+         coalesce(sum(abs(coalesce(variance_value,0))),0),
+         count(*) filter (where counted_qty is not null)
+    into v_counted, v_var, v_lines
+    from public.pharmacy_count_line where session_id = ss.id;
+
+  for l in
+    select * from public.pharmacy_count_line
+     where session_id = ss.id and counted_qty is not null
+     order by abs(coalesce(variance_value,0)) desc, product_name
+  loop
+    v_rows := v_rows || jsonb_build_array(jsonb_build_object(
+      'item',  coalesce(l.product_name,''),
+      'batch', coalesce(nullif(btrim(coalesce(l.batch_no,'')),''), '-'),
+      'counts', trim(to_char(l.counted_qty,'FM999999990.##')) || ' / ' ||
+                trim(to_char(coalesce(l.expected_qty,0),'FM999999990.##')),
+      'by',    coalesce(l.counted_label,''),
+      'value', public.inr_money(coalesce(l.variance_value,0))));
+  end loop;
+
+  return jsonb_build_object('ok', true,
+    'title', public.ui_text('phaudit.pdf_title'),
+    'period_label', to_char(coalesce(ss.submitted_at, ss.closed_at, ss.started_at)
+                              at time zone 'Asia/Kolkata', 'DD/MM/YYYY'),
+    'shop_name', coalesce(v_name,''),
+    'gstin_line', coalesce(ss.label,''),
+    'summary', jsonb_build_array(
+      jsonb_build_object('label', public.ui_text('phaudit.pdf_counted'),
+                         'value', public.inr_money(v_counted)),
+      jsonb_build_object('label', public.ui_text('phaudit.pdf_variance'),
+                         'value', public.inr_money(v_var)),
+      jsonb_build_object('label', public.ui_text('phaudit.pdf_lines'),
+                         'value', v_lines::text)),
+    'blocks', jsonb_build_array(jsonb_build_object(
+      'title', public.ui_text('phaudit.pdf_block'),
+      'columns', jsonb_build_array(
+        jsonb_build_object('key','item',  'label', public.ui_text('phaudit.pdf_col_item')),
+        jsonb_build_object('key','batch', 'label', public.ui_text('phaudit.pdf_col_batch')),
+        jsonb_build_object('key','counts','label', public.ui_text('phaudit.pdf_col_counts'), 'align','right'),
+        jsonb_build_object('key','by',    'label', public.ui_text('phaudit.pdf_col_by')),
+        jsonb_build_object('key','value', 'label', public.ui_text('phaudit.pdf_col_value'), 'align','right')),
+      'rows', v_rows)),
+    'disclaimer', public.ui_text('phaudit.pdf_note') ||
+                  case when ss.seal_hash is null then ''
+                       else ' · ' || public.ui_fmt('phaudit.cert_note', jsonb_build_object(
+                              'seq', coalesce(ss.seal_events,0)::text,
+                              'hash', left(ss.seal_hash, 16))) end,
+    'bucket', 'stock-imports',
+    'path', v_shop::text || '/audit-' || ss.id::text || '.pdf',
+    'name', 'stock-audit-' || to_char(coalesce(ss.submitted_at, now())
+                                        at time zone 'Asia/Kolkata','YYYY-MM-DD') || '.pdf');
+end $$;
+
+create or replace function public.pharmacy_audit_pdf_report(
+  p_session_id uuid, p_ok boolean, p_bucket text default null,
+  p_path text default null, p_bytes integer default null, p_error text default null)
+returns jsonb language plpgsql security definer set search_path to 'public' as $$
+declare v_shop uuid;
+begin
+  select pharmacy_id into v_shop from public.pharmacy_count_session where id = p_session_id;
+  if v_shop is null then return jsonb_build_object('ok', false, 'error','no_session'); end if;
+
+  update public.pharmacy_count_session
+     set pdf_status = case when p_ok then 'ready' else 'failed' end,
+         pdf_bucket = coalesce(p_bucket, pdf_bucket),
+         pdf_path   = coalesce(p_path, pdf_path),
+         pdf_bytes  = coalesce(p_bytes, pdf_bytes),
+         pdf_error  = p_error
+   where id = p_session_id;
+
+  perform public.audit_log_append(v_shop, p_session_id,
+    case when p_ok then 'pdf_ready' else 'pdf_failed' end,
+    jsonb_build_object('path', p_path, 'bytes', p_bytes, 'error', p_error));
+  return jsonb_build_object('ok', true);
+end $$;
+
+create or replace function public.pharmacy_audit_pdf_status(p_session_id uuid)
+returns jsonb language plpgsql security definer set search_path to 'public' as $$
+declare v_shop uuid := public._c430_shop(); ss public.pharmacy_count_session;
+begin
+  if v_shop is null then return public._c430_denied(); end if;
+  select * into ss from public.pharmacy_count_session
+   where id = p_session_id and pharmacy_id = v_shop;
+  if not found then
+    return jsonb_build_object('ok', false, 'error','no_session',
+                              'message', public.ui_text('phaudit.err_no_session'));
+  end if;
+  return jsonb_build_object('ok', true,
+    'status', coalesce(ss.pdf_status,'none'),
+    'bucket', ss.pdf_bucket, 'path', ss.pdf_path, 'poll_ms', 2500,
+    'button', public.ui_text('phaudit.pdf_button'),
+    'message', case coalesce(ss.pdf_status,'none')
+                 when 'ready'  then public.ui_text('phaudit.pdf_ready')
+                 when 'failed' then public.ui_text('phaudit.pdf_failed')
+                 when 'queued' then public.ui_text('phaudit.pdf_queued')
+                 else null end);
+end $$;
+
+grant execute on function public.pharmacy_audit_pdf_request(uuid) to authenticated;
+grant execute on function public.pharmacy_audit_pdf_status(uuid) to authenticated;
+grant execute on function public.pharmacy_audit_pdf_input(uuid) to service_role;
+grant execute on function public.pharmacy_audit_pdf_report(uuid, boolean, text, text, integer, text) to service_role;
+revoke execute on function public.pharmacy_audit_pdf_input(uuid) from authenticated, anon;

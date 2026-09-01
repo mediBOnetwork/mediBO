@@ -203,6 +203,9 @@ void main() {
       if (fn == 'pharmacy_audit_recount_sheet') {
         return {'ok': true, 'title': 'Second count', 'rows': const []};
       }
+      if (fn == 'pharmacy_audit_pdf_status') {
+        return {'ok': true, 'status': 'none', 'button': 'Owner PDF'};
+      }
       return {'ok': true, 'title': 'What to do next', 'rows': const []};
     });
 
@@ -228,6 +231,9 @@ void main() {
         return _recountSheet(blockedForMe: true);
       }
       if (fn == 'pharmacy_audit_recount') recounts++;
+      if (fn == 'pharmacy_audit_pdf_status') {
+        return {'ok': true, 'status': 'none', 'button': 'Owner PDF'};
+      }
       return {'ok': true, 'title': 'What to do next', 'rows': const []};
     });
 
@@ -248,6 +254,9 @@ void main() {
       if (fn == 'pharmacy_audit_recount_sheet') {
         return {'ok': true, 'title': 'Second count', 'rows': const []};
       }
+      if (fn == 'pharmacy_audit_pdf_status') {
+        return {'ok': true, 'status': 'none', 'button': 'Owner PDF'};
+      }
       return {'ok': true, 'title': 'What to do next', 'rows': const []};
     });
     expect(
@@ -263,6 +272,9 @@ void main() {
       if (fn == 'pharmacy_audit_variance') return _variance();
       if (fn == 'pharmacy_audit_recount_sheet') {
         return {'ok': true, 'title': 'Second count', 'rows': const []};
+      }
+      if (fn == 'pharmacy_audit_pdf_status') {
+        return {'ok': true, 'status': 'none', 'button': 'Owner PDF'};
       }
       return {
         'ok': true,
@@ -285,6 +297,22 @@ void main() {
     await tester.pumpAndSettle();
     // still on the variance screen — an unknown key resolves to nothing
     expect(find.text('Value at stake'), findsOneWidget);
+  });
+
+  testWidgets('the owner PDF button exists only when the backend names it', (
+    tester,
+  ) async {
+    await pumpVariance(tester, (fn, p) async {
+      if (fn == 'pharmacy_audit_variance') return _variance();
+      if (fn == 'pharmacy_audit_recount_sheet') {
+        return {'ok': true, 'title': 'Second count', 'rows': const []};
+      }
+      if (fn == 'pharmacy_audit_pdf_status') {
+        return {'ok': true, 'status': 'none'}; // no button word
+      }
+      return {'ok': true, 'title': 'What to do next', 'rows': const []};
+    });
+    expect(find.widgetWithText(OutlinedButton, 'Owner PDF'), findsNothing);
   });
 
   testWidgets('ok:false renders the backend refusal, never an exception', (

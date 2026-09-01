@@ -675,6 +675,7 @@ class _PharmacyAuditVarianceScreenState
   Map<String, dynamic>? _v;
   Map<String, dynamic> _actions = const {};
   Map<String, dynamic> _recount = const {};
+  Map<String, dynamic> _pdf = const {};
   String? _refusal;
   bool _busy = false;
 
@@ -704,10 +705,15 @@ class _PharmacyAuditVarianceScreenState
         'p_session_id': widget.sessionId,
       });
       if (!mounted) return;
+      final pdf = await _call('pharmacy_audit_pdf_status', {
+        'p_session_id': widget.sessionId,
+      });
+      if (!mounted) return;
       setState(() {
         _v = v;
         _actions = a;
         _recount = rc;
+        _pdf = pdf;
       });
       RenderLog.write('c430_audit_variance', _rows(v['rows']).length);
     } catch (_) {
@@ -779,6 +785,26 @@ class _PharmacyAuditVarianceScreenState
         'p_round_id': _s(row['round_id']),
         'p_qty': qty,
         'p_method': 'type',
+      });
+    } catch (_) {
+      if (mounted) setState(() => _busy = false);
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _busy = false);
+    _toast(_s(r['message']));
+    await _load();
+  }
+
+  /// The owner's copy. The backend queues the render and answers with its own
+  /// status word each time; this screen prints that word and nothing else.
+  Future<void> _ownerPdf() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    Map<String, dynamic> r;
+    try {
+      r = await _call('pharmacy_audit_pdf_request', {
+        'p_session_id': widget.sessionId,
       });
     } catch (_) {
       if (mounted) setState(() => _busy = false);
@@ -999,6 +1025,28 @@ class _PharmacyAuditVarianceScreenState
             ],
 
             SizedBox(height: Ds.space.x24),
+            if (_s(_m(_pdf)['button']).isNotEmpty) ...[
+              SizedBox(
+                height: Ds.touch.minTarget,
+                width: double.infinity,
+                child: OutlinedButton(
+                  onPressed: _busy ? null : _ownerPdf,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Ds.c.brand,
+                    side: BorderSide(color: Ds.c.brand),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: Ds.r.rButton,
+                    ),
+                  ),
+                  child: Text(_s(_m(_pdf)['button'])),
+                ),
+              ),
+              if (_s(_m(_pdf)['message']).isNotEmpty) ...[
+                SizedBox(height: Ds.space.x8),
+                Text(_s(_m(_pdf)['message']), style: Ds.t.caption),
+              ],
+              SizedBox(height: Ds.space.x16),
+            ],
             if (v['can_accept'] == true)
               SizedBox(
                 height: Ds.touch.minTarget,

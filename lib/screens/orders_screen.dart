@@ -894,7 +894,7 @@ class _ActionChip extends StatelessWidget {
             SizedBox(width: Ds.space.x8),
             Container(
               padding: EdgeInsets.symmetric(
-                  horizontal: Ds.space.x8, vertical: Ds.space.x4 / 2),
+                  horizontal: Ds.space.x8, vertical: Ds.space.x4),
               decoration: BoxDecoration(
                   color: fg.withValues(alpha: 0.12),
                   borderRadius: Ds.r.rChip),

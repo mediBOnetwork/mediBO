@@ -85,6 +85,12 @@ class DevQueueService {
   Future<Map<String, dynamic>> buildLane({int days = 7}) async =>
       _asMap(await _c.rpc('build_contention_status', params: {'p_days': days}));
 
+  /// CHANGE #404 — is masked calling actually on, and what is still missing
+  /// before real calls flow. Render-ready: every word and tone on the card is
+  /// built by this RPC.
+  Future<Map<String, dynamic>> maskedCalling() async =>
+      _asMap(await _c.rpc('call_setup_status'));
+
   /// CHANGE #275 — every Google sign-in failure recorded on a real device,
   /// newest first, already rendered by the backend.
   Future<Map<String, dynamic>> authDiagList({int limit = 50}) async =>

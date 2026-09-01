@@ -695,3 +695,79 @@ revoke all on function public.call_setup_status()                        from pu
 
 grant execute on function public.call_mask_targets(uuid[]) to authenticated;
 grant execute on function public.call_setup_status()       to authenticated;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 14. call_setup_status, RENDER-READY.
+--
+--     Every word, number, ₹-free value string and tone on the Masked calling
+--     card is built here. The Dart section is a for-loop over `rows` and a
+--     for-loop over `todo`; it computes nothing and it knows no role names, so
+--     "Exotel is live now" is an UPDATE to call_config, never a deploy.
+-- ─────────────────────────────────────────────────────────────────────────
+create or replace function public.call_setup_status()
+returns jsonb
+language plpgsql
+stable security definer
+set search_path to 'public'
+as $$
+declare
+  v_cfg public.call_config%rowtype;
+  v_exo int; v_stub int; v_emp int; v_live int; v_calls int; v_pairs int;
+  v_secrets boolean; v_todo jsonb := '[]'::jsonb;
+begin
+  if public.get_my_role() not in ('admin','super_admin') then
+    return jsonb_build_object('ok', false, 'error', public._c('call.not_allowed'));
+  end if;
+
+  select * into v_cfg from public.call_config where id;
+  select count(*) into v_exo  from public.call_did_pool where is_active and provider = 'exotel';
+  select count(*) into v_stub from public.call_did_pool where is_active and provider = 'stub';
+  select count(*) into v_emp  from public.call_parties where party_role='employee' and phone_e164 <> '';
+  select count(*) into v_live from public.call_sessions where status='active' and expires_at > now();
+  select count(*) into v_calls from public.masked_calls;
+  select count(*) into v_pairs from public.call_allow_matrix where allowed;
+
+  -- The edge function holds the Exotel credentials, not this database, so the
+  -- honest signal here is "the config still says stub", never a guess at env.
+  v_secrets := (v_cfg.provider = 'exotel');
+
+  if not v_secrets then
+    v_todo := v_todo || jsonb_build_array(
+      'Buy at least one ExoPhone (a virtual number) on the Exotel account.',
+      'Save EXOTEL_SID and EXOTEL_TOKEN as Supabase edge-function secrets.',
+      'Point the ExoPhone''s passthru/applet at the mask-call-webhook function.',
+      'Insert the ExoPhone into call_did_pool with provider = ''exotel''.',
+      'Set call_config.provider = ''exotel''. No deploy — it takes effect on the next call.');
+  end if;
+  if v_emp = 0 then
+    v_todo := v_todo || jsonb_build_array(
+      'No employee has a phone on file, so "Call mediBO" has no one to ring. Add one to user_profiles.');
+  end if;
+
+  return jsonb_build_object(
+    'ok', true,
+    'title', public._c('call.setup_title'),
+    'subtitle', case when v_secrets
+        then 'Live on Exotel. Neither side of a call sees the other''s number.'
+        else 'Running on the test provider. Every rule works; no real call is placed yet.' end,
+    'tone', case when v_secrets then 'success' else 'warning' end,
+    'rows', jsonb_build_array(
+      jsonb_build_object('label','Provider','value',v_cfg.provider,
+                         'tone', case when v_secrets then 'success' else 'warning' end),
+      jsonb_build_object('label','Masked calling','value',
+                         case when v_cfg.enabled then 'On' else 'Off' end,
+                         'tone', case when v_cfg.enabled then 'success' else 'danger' end),
+      jsonb_build_object('label','Session window','value', v_cfg.session_ttl_min || ' min','tone','info'),
+      jsonb_build_object('label','Exotel numbers','value', v_exo::text,
+                         'tone', case when v_exo > 0 then 'success' else 'warning' end),
+      jsonb_build_object('label','Test numbers','value', v_stub::text,'tone','info'),
+      jsonb_build_object('label','Role pairs allowed','value', v_pairs::text,'tone','info'),
+      jsonb_build_object('label','Live sessions','value', v_live::text,'tone','info'),
+      jsonb_build_object('label','Calls logged','value', v_calls::text,'tone','info')),
+    'todo_title', case when jsonb_array_length(v_todo) > 0
+                       then 'To switch on real calls' else '' end,
+    'todo', v_todo);
+end $$;
+
+revoke all on function public.call_setup_status() from public, anon, authenticated;
+grant execute on function public.call_setup_status() to authenticated;

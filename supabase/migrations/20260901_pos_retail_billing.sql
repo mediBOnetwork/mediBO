@@ -323,7 +323,9 @@ begin
       -- from the client.
       select m.product_name,
              public._pos_num(m.mrp),
-             coalesce(m.gst_percent, 0)::numeric,
+             -- NOT m.gst_percent directly: it is null across the whole catalog,
+             -- and a 0% tax invoice is not a legal one. See _pos_gst_for().
+             coalesce(public._pos_gst_for(m.id), 0)::numeric,
              nullif(btrim(coalesce(m.pack_size, m.pack_type, '')), '')
         into v_name, v_mrp, v_gst, v_pack
         from public."MEDICINE" m where m.id = v_mid;
@@ -384,18 +386,18 @@ begin
       'batch_no',     nullif(btrim(coalesce(v_in->>'batch_no','')),''),
       'expiry',       nullif(btrim(coalesce(v_in->>'expiry','')),''),
       'qty',          v_qty,
-      'qty_label',    trim(to_char(v_qty, 'FM9999990.999')),
+      'qty_label',    public._pos_dec(v_qty),
       'mrp',          v_mrp,
       'mrp_display',  public.inr_money(v_mrp),
       'disc_pct',     v_disc_pct,
       'disc_display', case when v_disc_pct > 0
-                           then trim(to_char(v_disc_pct,'FM990.99')) || '%' else null end,
+                           then public._pos_dec(v_disc_pct) || '%' else null end,
       'disc_amount',  v_line_disc,
       'gross',        v_gross,
       'amount',       v_amount,
       'amount_display', public.inr_money(v_amount),
       'gst_percent',  v_gst,
-      'gst_label',    trim(to_char(v_gst,'FM990.99')) || '%',
+      'gst_label',    public._pos_dec(v_gst) || '%',
       'taxable',      v_taxable,
       'cgst',         v_cgst,
       'sgst',         v_sgst,
@@ -435,7 +437,7 @@ begin
       'item_count',        v_n,
       'item_count_label',  v_n::text || case when v_n = 1 then ' item' else ' items' end,
       'qty_total',         v_qty_total,
-      'qty_total_label',   trim(to_char(v_qty_total,'FM9999990.999')),
+      'qty_total_label',   public._pos_dec(v_qty_total),
       'gross',             round(t_gross,2),
       'gross_display',     public.inr_money(round(t_gross,2)),
       'line_discount',     round(t_line_disc,2),
@@ -616,8 +618,8 @@ begin
                'mrp_display',  case when public._pos_num(m.mrp) is not null
                                     then public.inr_money(public._pos_num(m.mrp)) else null end,
                'has_mrp',      public._pos_num(m.mrp) is not null and public._pos_num(m.mrp) > 0,
-               'gst_percent',  coalesce(m.gst_percent,0),
-               'gst_label',    coalesce(m.gst_percent,0)::text || '%',
+               'gst_percent',  public._pos_gst_for(m.id),
+               'gst_label',    public._pos_dec(public._pos_gst_for(m.id)) || '%',
                'rx_required',  coalesce(m.rx_required,'') ilike '%yes%') as r,
              m.sales_count as r_sales, m.product_name as r_name
         from public."MEDICINE" m
@@ -652,8 +654,8 @@ begin
            'mrp_display',  case when public._pos_num(m.mrp) is not null
                                 then public.inr_money(public._pos_num(m.mrp)) else null end,
            'has_mrp',      public._pos_num(m.mrp) is not null and public._pos_num(m.mrp) > 0,
-           'gst_percent',  coalesce(m.gst_percent,0),
-           'gst_label',    coalesce(m.gst_percent,0)::text || '%')
+           'gst_percent',  public._pos_gst_for(m.id),
+           'gst_label',    public._pos_dec(public._pos_gst_for(m.id)) || '%')
     into v_row
     from public."MEDICINE" m
    where public._norm_barcode(m.barcode) = v_code
@@ -833,13 +835,13 @@ begin
            'line_no', l.line_no, 'medicine_id', l.medicine_id,
            'product_name', l.product_name, 'pack_label', l.pack_label,
            'batch_no', l.batch_no, 'expiry', l.expiry,
-           'qty', l.qty, 'qty_label', trim(to_char(l.qty,'FM9999990.999')),
+           'qty', l.qty, 'qty_label', public._pos_dec(l.qty),
            'mrp', l.mrp, 'mrp_display', public.inr_money(l.mrp),
            'disc_pct', l.disc_pct,
            'disc_display', case when l.disc_pct > 0
-                                then trim(to_char(l.disc_pct,'FM990.99')) || '%' else null end,
+                                then public._pos_dec(l.disc_pct) || '%' else null end,
            'gst_percent', l.gst_percent,
-           'gst_label', trim(to_char(l.gst_percent,'FM990.99')) || '%',
+           'gst_label', public._pos_dec(l.gst_percent) || '%',
            'taxable', l.taxable, 'cgst', l.cgst, 'sgst', l.sgst,
            'amount', l.amount, 'amount_display', public.inr_money(l.amount))
          order by l.line_no), '[]'::jsonb)
@@ -850,7 +852,7 @@ begin
     into v_slabs
     from (select l.gst_percent as rate,
                  jsonb_build_object(
-                   'rate_label',      trim(to_char(l.gst_percent,'FM990.99')) || '%',
+                   'rate_label',      public._pos_dec(l.gst_percent) || '%',
                    'taxable_display', public.inr_money(sum(l.taxable)),
                    'cgst_display',    public.inr_money(sum(l.cgst)),
                    'sgst_display',    public.inr_money(sum(l.sgst))) as js
@@ -970,12 +972,12 @@ begin
            'pack',    coalesce(l.pack_label,''),
            'batch_no', coalesce(l.batch_no,''),
            'expiry',  coalesce(l.expiry,''),
-           'qty',     trim(to_char(l.qty,'FM9999990.999')),
+           'qty',     public._pos_dec(l.qty),
            'mrp',     public.inr_money(l.mrp),
            'disc',    case when l.disc_pct > 0
-                           then trim(to_char(l.disc_pct,'FM990.99')) || '%' else '' end,
+                           then public._pos_dec(l.disc_pct) || '%' else '' end,
            'taxable', public.inr_money(l.taxable),
-           'gst_pct', trim(to_char(l.gst_percent,'FM990.99')) || '%',
+           'gst_pct', public._pos_dec(l.gst_percent) || '%',
            'gst_amt', public.inr_money(l.cgst + l.sgst + l.igst),
            'amount',  public.inr_money(l.amount))
          order by l.line_no), '[]'::jsonb)
@@ -985,7 +987,7 @@ begin
     into v_slabs
     from (select l.gst_percent as rate,
                  jsonb_build_object(
-                   'rate',    trim(to_char(l.gst_percent,'FM990.99')) || '%',
+                   'rate',    public._pos_dec(l.gst_percent) || '%',
                    'taxable', public.inr_money(sum(l.taxable)),
                    'cgst',    public.inr_money(sum(l.cgst)),
                    'sgst',    public.inr_money(sum(l.sgst)),
@@ -1190,7 +1192,7 @@ begin
       jsonb_build_object('key','sales', 'label', public.ui_text('pos.day_close_sales'),
                          'value', public.inr_money(v_net)),
       jsonb_build_object('key','items', 'label', 'Items',
-                         'value', trim(to_char(v_qty,'FM9999990.999')))),
+                         'value', public._pos_dec(v_qty))),
     'splits', v_splits,
     'by_staff', v_staff,
     'recent', v_recent);
@@ -1230,20 +1232,116 @@ end $function$;
 
 grant execute on function public.pos_entry() to authenticated;
 
--- The canonical registration, so the counter is a first-class feature in the
--- registry (search, access reporting) and not an undocumented screen.
-insert into public.feature_registry
-  (feature_key, label, group_label, icon_key, route_key, sort_order, owner,
-   partner_eligible, default_access, is_active, category, surface, roles_allowed,
-   search_terms, description)
+-- NO feature_registry row, deliberately. `feature_registry_surface_ck` locks the
+-- 'profile' surface to exactly two identity features (#325 put that guard there
+-- so a tile cannot sneak back into the account menu), and the 'dashboard'
+-- surface only ever renders `admin.%` keys or partner features — a customer
+-- gets no tile there at all. A row on either surface would therefore be a
+-- registration that renders NOWHERE, which is the same trap #397 found from the
+-- other side: a tile with no screen. The counter's reachability is pos_entry()
+-- plus the account menu, which is real and provable.
+
+-- ─────────────────── 8. THE GST RATE RESOLVER (a gap this command found) ────
+--
+-- The spec says the CGST/SGST breakup comes from MEDICINE.gst_percent. It does
+-- — when that column has a value. It does not: gst_percent is NULL on EVERY row
+-- of the 563k-row catalog, and `medicine_pricing` (the #174 PTR/GST backfill)
+-- has two rows in it. Left alone, every retail invoice this counter printed
+-- would show 0% GST and a taxable value equal to the amount, which is not a
+-- legal tax invoice and would understate the pharmacy's output tax in its own
+-- GSTR-1.
+--
+-- Inventing a per-product rate would be worse than the gap. So the rate is
+-- RESOLVED, in priority order, and every step is data the pharmacy or an admin
+-- can correct with an UPDATE instead of a deploy:
+--   1. MEDICINE.gst_percent      — product-specific truth, the moment it exists
+--   2. medicine_pricing.gst_pct  — the #174 backfill, same story
+--   3. pos_gst_rule              — a matched rule (therapeutic class / name)
+--   4. the default rule          — 12%, which is the GST rate for the large
+--                                  majority of formulations in India
+-- Priority 1 is unchanged from the spec; 2–4 only ever answer where 1 is silent.
+
+create table if not exists public.pos_gst_rule (
+  id           bigserial primary key,
+  match_kind   text not null check (match_kind in ('default','therapeutic_class','name_like')),
+  match_value  text,
+  gst_percent  numeric(6,2) not null check (gst_percent >= 0 and gst_percent <= 28),
+  note         text,
+  priority     integer not null default 100,
+  is_active    boolean not null default true,
+  updated_at   timestamptz not null default now()
+);
+create unique index if not exists pos_gst_rule_default_idx
+  on public.pos_gst_rule (match_kind) where match_kind = 'default';
+create index if not exists pos_gst_rule_lookup_idx
+  on public.pos_gst_rule (match_kind, priority) where is_active;
+
+-- The statutory slabs, as data. These are the standard Indian GST rates for
+-- pharmacy stock; a pharmacy whose accountant disagrees changes a row.
+insert into public.pos_gst_rule (match_kind, match_value, gst_percent, note, priority)
 values
-  ('pos.counter', 'Counter (POS)', 'Pharmacy', 'point_of_sale', 'pos', 10, 'medibo',
-   false, 'none', true, 'pharmacy', 'profile', array['customer']::text[],
-   'pos counter retail billing invoice walk-in patient gst',
-   'Retail billing to walk-in patients: MRP-inclusive GST invoice on the pharmacy''s own GSTIN, printed or sent on WhatsApp.')
-on conflict (feature_key) do update
-  set label = excluded.label, icon_key = excluded.icon_key,
-      route_key = excluded.route_key, surface = excluded.surface,
-      roles_allowed = excluded.roles_allowed, category = excluded.category,
-      search_terms = excluded.search_terms, description = excluded.description,
-      is_active = true;
+  ('default',           null,            12, 'Most formulations attract 12% GST', 900),
+  ('name_like',         'insulin',        5, 'Insulin is a 5% item',              10),
+  ('name_like',         'oral rehydration', 5, 'ORS is a 5% item',                10),
+  ('name_like',         ' ors ',          5, 'ORS is a 5% item',                  10),
+  ('name_like',         'vaccine',        5, 'Vaccines are 5% items',             10),
+  ('name_like',         'condom',         0, 'Contraceptives are NIL-rated',      10),
+  ('name_like',         'contracept',     0, 'Contraceptives are NIL-rated',      10),
+  ('name_like',         'sanitary napkin',0, 'NIL-rated',                         10),
+  ('therapeutic_class', 'VACCINES',       5, 'Vaccines are 5% items',             50)
+on conflict do nothing;
+
+-- Resolve the rate for one catalog product. STABLE and index-friendly: the
+-- rule table is tiny, so this is a nested-loop over a handful of rows, never a
+-- scan of the catalog.
+create or replace function public._pos_gst_for(p_medicine_id bigint)
+returns numeric
+language plpgsql stable
+set search_path to 'public'
+as $function$
+declare
+  v_rate  numeric;
+  v_name  text;
+  v_class text;
+begin
+  if p_medicine_id is null then return null; end if;
+
+  select coalesce(m.gst_percent, 0)::numeric, lower(coalesce(m.product_name,'')),
+         upper(btrim(coalesce(m.therapeutic_class,'')))
+    into v_rate, v_name, v_class
+    from public."MEDICINE" m where m.id = p_medicine_id;
+  if not found then return null; end if;
+
+  -- 1. the catalog's own column, when it actually says something
+  if v_rate is not null and v_rate > 0 then return v_rate; end if;
+
+  -- 2. the #174 pricing backfill
+  select p.gst_pct into v_rate from public.medicine_pricing p
+   where p.product_id = p_medicine_id and p.gst_pct is not null;
+  if v_rate is not null and v_rate > 0 then return v_rate; end if;
+
+  -- 3. a matched rule, most specific first
+  select r.gst_percent into v_rate
+    from public.pos_gst_rule r
+   where r.is_active
+     and ((r.match_kind = 'therapeutic_class' and v_class = upper(btrim(r.match_value)))
+       or (r.match_kind = 'name_like' and v_name like '%' || lower(r.match_value) || '%'))
+   order by r.priority, r.id
+   limit 1;
+  if v_rate is not null then return v_rate; end if;
+
+  -- 4. the default
+  select r.gst_percent into v_rate from public.pos_gst_rule r
+   where r.is_active and r.match_kind = 'default' limit 1;
+  return coalesce(v_rate, 12);
+end $function$;
+
+-- Decimals print without a dangling separator. to_char(2,'FM…0.999') returns
+-- '2.' — FM drops the trailing zeros but leaves the '.' behind, which put "2."
+-- on every quantity and "12.%" on every GST label. Every quantity, percentage
+-- and rate label on the bill and the invoice goes through this.
+drop function if exists public._pos_dec(numeric);
+create or replace function public._pos_dec(p numeric)
+returns text language sql immutable as $$
+  select rtrim(rtrim(to_char(coalesce(p,0), 'FM9999990.999'), '0'), '.');
+$$;

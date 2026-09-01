@@ -356,12 +356,15 @@ begin
   select id into v_partner from delivery_partner_registrations
    where user_id = auth.uid() and is_active and coalesce(is_deleted,false)=false limit 1;
 
+  -- The default run is picked by scope_date(), NOT by now() — the flow scope
+  -- contract (stage 15, "Runs") requires it, and for a rider (who is not an
+  -- admin) scope_date() returns today anyway.
   if p_run_id is not null then
     select * into v_run from delivery_runs where id = p_run_id;
   else
     select * into v_run from delivery_runs
      where partner_id = v_partner
-       and run_date = (now() at time zone 'Asia/Kolkata')::date
+       and run_date = public.scope_date(null::date)
      order by created_at desc limit 1;
   end if;
   if v_run.id is null then return jsonb_build_object('ok',true,'has_run',false); end if;
@@ -381,6 +384,11 @@ begin
                                       when 'failed' then '#B42318'
                                       when 'rto' then '#B42318' else '#F59E0B' end,
            'wave_reason', s.reason,
+           -- The pin's tooltip, composed HERE so the run map can show WHY this
+           -- rider has this stop without the panel concatenating anything.
+           'map_title', coalesce(o.pharmacy_name,'') ||
+             case when coalesce(s.reason,'') = '' then ''
+                  else ' — ' || s.reason end,
            'leg_km', d.leg_km, 'cum_km', d.cum_km, 'eta_min', d.eta_min)
          order by d.seq nulls last), '[]'::jsonb)
     into v_pts
@@ -425,6 +433,26 @@ begin
 end $function$;
 
 -- ── 6. Grants and the reachable admin tile ──────────────────────────────────
+-- Postgres grants EXECUTE to PUBLIC by default, and the anon key ships inside
+-- the web bundle and the APK — so every one of these is revoked from anon
+-- BEFORE it is granted to a signed-in user. The RPCs do their own role check on
+-- top; this is the outer door.
+revoke execute on function public.admin_delivery_waves(date, smallint) from public, anon;
+revoke execute on function public.delivery_wave_detail(uuid) from public, anon;
+revoke execute on function public.delivery_wave_mode_set(smallint, text) from public, anon;
+revoke execute on function public.delivery_wave_action(uuid, text) from public, anon;
+revoke execute on function public.delivery_wave_cut_now(smallint, text) from public, anon;
+revoke execute on function public.delivery_wave_stop_pull(uuid, text) from public, anon;
+revoke execute on function public.delivery_wave_cut(smallint, text, date, text) from public, anon, authenticated;
+revoke execute on function public.delivery_wave_plan(uuid, text) from public, anon, authenticated;
+revoke execute on function public.delivery_wave_dispatch(uuid, text) from public, anon, authenticated;
+revoke execute on function public.delivery_wave_reallocate(uuid, uuid, text, text) from public, anon, authenticated;
+revoke execute on function public.delivery_wave_tick() from public, anon, authenticated;
+revoke execute on function public.delivery_wave_due() from public, anon, authenticated;
+revoke execute on function public._wave_riders(smallint) from public, anon, authenticated;
+revoke execute on function public._wave_log(uuid, uuid, uuid, uuid, uuid, text, text, jsonb, text) from public, anon, authenticated;
+revoke execute on function public._delivery_assign_core(uuid[], uuid, text, uuid) from public, anon, authenticated;
+
 grant execute on function public.admin_delivery_waves(date, smallint) to authenticated;
 grant execute on function public.delivery_wave_detail(uuid) to authenticated;
 grant execute on function public.delivery_wave_mode_set(smallint, text) to authenticated;

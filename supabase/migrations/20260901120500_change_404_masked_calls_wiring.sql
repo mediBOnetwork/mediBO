@@ -659,3 +659,32 @@ begin
 
   execute replace(v_def, v_old, v_new);
 end $patch$;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 13. Close the PUBLIC grant every SECURITY DEFINER function inherits.
+--
+--     Postgres grants EXECUTE to PUBLIC by default, and the anon key ships
+--     inside the web bundle and the APK — so a helper that resolves a party to
+--     a phone number is a public endpoint until it is explicitly revoked. This
+--     is the same trap #25/#353/#395/#422/#436 each landed in.
+--
+--     The two exceptions are deliberate and both gate on auth.uid()/role
+--     internally: call_mask_targets (a signed-in viewer asking which of ITS own
+--     buttons to draw) and call_setup_status (admins only, by its first line).
+-- ─────────────────────────────────────────────────────────────────────────
+revoke all on function public._call_e164(text)                          from public, anon;
+revoke all on function public._call_allowed(text, text)                 from public, anon;
+revoke all on function public.call_actor_party(uuid)                    from public, anon;
+revoke all on function public._call_target(uuid, text)                  from public, anon;
+revoke all on function public._call_action_block(text, text, uuid)      from public, anon;
+revoke all on function public.call_mask_prepare(uuid, uuid, text)       from public, anon;
+revoke all on function public.call_mask_store(uuid, text, text, text, text, jsonb) from public, anon;
+revoke all on function public.call_inbound_match(text, text, text, jsonb) from public, anon;
+revoke all on function public.call_leg_log(text, text, integer, text, jsonb) from public, anon;
+revoke all on function public.call_sessions_close_for_order(uuid, text)  from public, anon;
+revoke all on function public.call_expire_sweep()                        from public, anon;
+revoke all on function public.call_mask_targets(uuid[])                  from public, anon;
+revoke all on function public.call_setup_status()                        from public, anon;
+
+grant execute on function public.call_mask_targets(uuid[]) to authenticated;
+grant execute on function public.call_setup_status()       to authenticated;

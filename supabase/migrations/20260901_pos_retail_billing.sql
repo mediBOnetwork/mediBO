@@ -929,9 +929,13 @@ begin
       'message', public.ui_text('pos.err_not_found'));
   end if;
   -- Called straight from pos_commit_sale (already scoped) and from the screen's
-  -- retry, which must be the sale's own shop.
+  -- retry, which must be the sale's own shop. Answer another shop's sale the
+  -- same way pos_sale_detail() does — "not found", not "you are not a
+  -- pharmacy", which is both untrue for a pharmacy asking and a hint that the
+  -- id exists. It also must not leak by timing: the lookup already happened.
   if public.pos_shop() is not null and s.pharmacy_id <> public.pos_shop() then
-    return public._pos_denied();
+    return jsonb_build_object('ok', false, 'error', 'not_found',
+      'message', public.ui_text('pos.err_not_found'));
   end if;
 
   if s.pdf_status = 'ready' and coalesce(s.pdf_path,'') <> '' then

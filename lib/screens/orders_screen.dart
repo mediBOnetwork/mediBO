@@ -8,6 +8,9 @@ import '../fulfill/fulfill_lookups.dart'; // C629: backend-owned button copy
 import '../services/date_labels.dart';
 import 'delivery/customer_track_sheet.dart';  // C629: PART F1 — live tracking
 import 'customer/order_edit_sheet.dart';  // CHANGE #408
+import 'customer/order_cancel_sheet.dart'; // CMD #452 — gaps #130
+import 'customer/order_help_sheet.dart';   // CMD #452 — gaps #132
+import 'customer/order_return_sheet.dart'; // CMD #452 — gaps #131
 import 'pharmacy/pharmacy_parcel_count_screen.dart'; // CMD #431 — Count, on the order
 import 'package:http/http.dart' as http;
 import 'package:pharma_b2b/utils/toast.dart';
@@ -70,6 +73,12 @@ class _DbOrder {
   /// payload also names the reason and the sentence to show.
   final Map<String, dynamic> edit;
 
+  /// CMD #452 — every door this buyer has on this order, decided server-side
+  /// and carried on the row: cancel (#130), returns (#131), help (#132). The
+  /// card renders the list in payload order, with the payload's own labels,
+  /// and never works out for itself whether an action is allowed.
+  final List<Map<String, dynamic>> actions;
+
   _DbOrder({
     required this.id,
     required this.number,
@@ -92,6 +101,7 @@ class _DbOrder {
     this.unfulfilledCollapsed = true,
     this.totalItemCount = 0,
     this.edit = const {},
+    this.actions = const [],
   });
 
   /// One parser for both arrays — they carry identical row shapes, so there is
@@ -133,6 +143,10 @@ class _DbOrder {
         edit: row['edit'] is Map
             ? Map<String, dynamic>.from(row['edit'] as Map)
             : const {},
+        actions: ((row['actions'] as List<dynamic>?) ?? const [])
+            .whereType<Map>()
+            .map((a) => Map<String, dynamic>.from(a))
+            .toList(),
       );
 }
 
@@ -611,6 +625,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
             key: focused ? _focusKey : null,
             order: o,
             autoOpen: focused,
+            onChanged: _fetch,
           );
         },
       ),
@@ -709,6 +724,20 @@ class _PurchasesAndListsEntry extends StatelessWidget {
                   MaterialPageRoute(builder: (_) => const OrderListsScreen())),
             ),
           ),
+          // CMD #452 — feature_gaps #132. Support used to be one "Contact Us"
+          // link in the storefront footer with nothing to come back to. Every
+          // help request raised from an order lives here, with its reference,
+          // its status and the thread the customer can reopen.
+          SizedBox(width: Ds.space.x12),
+          Expanded(
+            child: _EntryTile(
+              icon: Icons.support_agent_outlined,
+              title: c('support.entry_title'),
+              subtitle: c('support.entry_sub'),
+              onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => const MySupportRequestsScreen())),
+            ),
+          ),
         ],
       ),
     );
@@ -760,6 +789,124 @@ class _EntryTile extends StatelessWidget {
   }
 }
 
+/// CMD #452 — the customer's action row on an order card: cancel (#130),
+/// returns (#131) and help (#132). Every label, tone, badge and disabled
+/// explanation is the payload's; the only thing decided here is which sheet a
+/// key opens.
+class _CustomerActionsRow extends StatelessWidget {
+  final String orderId;
+  final List<Map<String, dynamic>> actions;
+  final Future<void> Function()? onChanged;
+
+  const _CustomerActionsRow({
+    required this.orderId,
+    required this.actions,
+    this.onChanged,
+  });
+
+  Future<void> _open(BuildContext context, String key) async {
+    var changed = false;
+    switch (key) {
+      case 'cancel':
+        changed = await showOrderCancelSheet(context, orderId);
+        break;
+      case 'returns':
+        changed = await showOrderReturnSheet(context, orderId);
+        break;
+      case 'help':
+        changed = await showOrderHelpSheet(context, orderId);
+        break;
+      default:
+        // Forward compatibility: a key this build does not know is not an
+        // error, it is a button a newer backend added. Skip it.
+        return;
+    }
+    if (changed && onChanged != null) await onChanged!();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    RenderLog.write('c452_order_actions', actions.length);
+    return Wrap(
+      spacing: Ds.space.x8,
+      runSpacing: Ds.space.x8,
+      children: [
+        for (final a in actions)
+          _ActionChip(
+            label: (a['label'] ?? '').toString(),
+            badge: (a['badge'] ?? '').toString(),
+            danger: (a['tone'] ?? '') == 'danger',
+            enabled: a['enabled'] == true,
+            note: (a['note'] ?? '').toString(),
+            onTap: () => _open(context, (a['key'] ?? '').toString()),
+          ),
+      ],
+    );
+  }
+}
+
+class _ActionChip extends StatelessWidget {
+  final String label;
+  final String badge;
+  final bool danger;
+  final bool enabled;
+  final String note;
+  final VoidCallback onTap;
+
+  const _ActionChip({
+    required this.label,
+    required this.badge,
+    required this.danger,
+    required this.enabled,
+    required this.note,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (label.isEmpty) return const SizedBox.shrink();
+    final fg = !enabled
+        ? Ds.c.textSecondary
+        : danger
+            ? Ds.c.danger
+            : Ds.c.brand;
+    return Tooltip(
+      // The backend's own sentence for why a closed window is closed.
+      message: enabled ? '' : note,
+      child: OutlinedButton(
+        onPressed: enabled
+            ? onTap
+            : (note.isEmpty
+                ? null
+                : () => showToast(context, note)),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: fg,
+          side: BorderSide(color: fg.withValues(alpha: 0.35)),
+          shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+          minimumSize: Size(0, Ds.touch.minTarget),
+          padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Flexible(
+              child: Text(label,
+                  overflow: TextOverflow.ellipsis, style: Ds.t.body.copyWith(color: fg))),
+          if (badge.isNotEmpty) ...[
+            SizedBox(width: Ds.space.x8),
+            Container(
+              padding: EdgeInsets.symmetric(
+                  horizontal: Ds.space.x8, vertical: Ds.space.x4 / 2),
+              decoration: BoxDecoration(
+                  color: fg.withValues(alpha: 0.12),
+                  borderRadius: Ds.r.rChip),
+              child: Text(badge, style: Ds.t.caption.copyWith(color: fg)),
+            ),
+          ],
+        ]),
+      ),
+    );
+  }
+}
+
 // ─── Order card ───────────────────────────────────────────────────────────────
 // CHANGE #446 — expands into an Items / Bill / Payment accordion, backed by
 // ONE call to cust_order_panel(order_id). The frontend only displays strings
@@ -772,7 +919,15 @@ class _OrderCard extends StatefulWidget {
   /// open, so the tap lands on the content, not on a collapsed row.
   final bool autoOpen;
 
-  const _OrderCard({super.key, required this.order, this.autoOpen = false});
+  /// CMD #452 — a self-cancel or a return changes the ORDER, not just this
+  /// card, so the screen re-fetches instead of the card patching itself.
+  final Future<void> Function()? onChanged;
+
+  const _OrderCard(
+      {super.key,
+      required this.order,
+      this.autoOpen = false,
+      this.onChanged});
 
   @override
   State<_OrderCard> createState() => _OrderCardState();
@@ -1015,6 +1170,20 @@ class _OrderCardState extends State<_OrderCard> {
                   if (saved && mounted) await _reloadEditState();
                 },
               ),
+            ),
+          ],
+          // CMD #452 — the doors a buyer has on this order. The list, the
+          // labels, whether each is enabled and the sentence shown when one is
+          // not all arrive on the order row (`actions`), so this row renders
+          // and routes; it decides nothing. An action key this build has never
+          // heard of is skipped in silence, so the backend can add one without
+          // a deploy.
+          if (order.actions.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x8),
+            _CustomerActionsRow(
+              orderId: order.id,
+              actions: order.actions,
+              onChanged: widget.onChanged,
             ),
           ],
           // CHANGE #173 — Reorder this order. Opens the Smart Basket Diff:

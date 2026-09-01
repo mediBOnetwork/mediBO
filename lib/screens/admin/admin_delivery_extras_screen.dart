@@ -259,6 +259,32 @@ class _Chip extends StatelessWidget {
   }
 }
 
+/// A full-width tinted band for a backend SENTENCE — a verdict, a refusal, a
+/// reconciliation note. A chip is for a word; this is for a line that wraps.
+class _Banner extends StatelessWidget {
+  final String text;
+  final Object? tone;
+
+  const _Banner({required this.text, this.tone});
+
+  @override
+  Widget build(BuildContext context) {
+    if (text.isEmpty) return const SizedBox.shrink();
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x12, vertical: Ds.space.x8),
+      decoration: BoxDecoration(
+        color: extrasToneSoft(tone),
+        borderRadius: BorderRadius.circular(Ds.r.chip),
+      ),
+      child: Text(text,
+          softWrap: true,
+          style: Ds.t.caption.copyWith(color: extrasToneColor(tone))),
+    );
+  }
+}
+
 class _Card extends StatelessWidget {
   final List<Widget> children;
   const _Card({required this.children});
@@ -414,16 +440,11 @@ class _InvoicesTab extends StatelessWidget {
       children: [
         for (final r in rows)
           _Card(children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                    child:
-                        Text(_s(r['partner_name']), style: Ds.t.subtitle)),
-                SizedBox(width: Ds.space.x8),
-                _Chip(label: _s(r['recon_label']), tone: r['recon_tone']),
-              ],
-            ),
+            Text(_s(r['partner_name']), style: Ds.t.subtitle),
+            SizedBox(height: Ds.space.x8),
+            // The verdict is a SENTENCE, so it gets its own full-width band
+            // rather than a chip it would overflow.
+            _Banner(text: _s(r['recon_label']), tone: r['recon_tone']),
             SizedBox(height: Ds.space.x8),
             _Pair(label: _s(r['period_label']), value: _s(r['payout_label'])),
             _Pair(label: _s(r['invoice_no']), value: _s(r['invoice_total_label'])),

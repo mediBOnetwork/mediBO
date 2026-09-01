@@ -435,13 +435,27 @@ class _RiderTrainingSheetState extends State<RiderTrainingSheet> {
         children: [
           Text(_s(q['prompt']), style: Ds.t.bodyStrong),
           for (var i = 0; i < opts.length; i++)
-            RadioListTile<int>(
-              value: i,
-              groupValue: _answers[id],
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              title: Text(_s(opts[i]), style: Ds.t.body),
-              onChanged: (v) => setState(() => _answers[id] = v ?? 0),
+            InkWell(
+              onTap: () => setState(() => _answers[id] = i),
+              child: Container(
+                constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+                alignment: Alignment.centerLeft,
+                child: Row(
+                  children: [
+                    Icon(
+                      _answers[id] == i
+                          ? Icons.radio_button_checked
+                          : Icons.radio_button_unchecked,
+                      color: _answers[id] == i
+                          ? Ds.c.brand
+                          : Ds.c.textSecondary,
+                    ),
+                    SizedBox(width: Ds.space.x12),
+                    Expanded(
+                        child: Text(_s(opts[i]), style: Ds.t.body)),
+                  ],
+                ),
+              ),
             ),
         ],
       ),

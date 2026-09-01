@@ -8552,15 +8552,37 @@ class AdminFulfillmentScreen extends StatefulWidget {
   /// (Collect / Count / Bag / Pack / Assign to delivery), so the tab it starts
   /// on is a construction parameter rather than a second copy of the screen.
   /// Default 0 keeps every existing call site byte-identical.
+  ///
+  /// LEGACY as of CHANGE #537: this is an index into the pre-#537 six-tab bar,
+  /// and an index is exactly what stopped working once a partner's bar can be
+  /// shorter than an admin's. It is kept — the partner console's route map
+  /// still passes it — and mapped through [_legacyStages] below. New callers
+  /// pass [initialStage] instead, which is the backend's own key and cannot
+  /// mean a different screen for a different user.
   final int initialTab;
 
   /// CHANGE #528 (feature_gaps row 142) — the tab indexes this caller may see.
   /// `null` = unbounded, which is every admin/super-admin call site and keeps
   /// them byte-identical. A partner is handed the list `partner_open().tabs`
   /// returned, so ONE grant no longer opens all six tabs.
+  ///
+  /// LEGACY as of CHANGE #537, together with [initialTab]: both are INDEXES
+  /// into the pre-#537 six-tab bar, and an index is exactly what stops meaning
+  /// one thing once a partner's bar can be shorter than an admin's. Both are
+  /// kept — the partner console still passes them — and translated through
+  /// `_legacyStages` in the State. New callers name the backend's own stage
+  /// key via [initialStage], which cannot mean a different screen for a
+  /// different user.
   final Set<int>? allowedTabs;
 
-  AdminFulfillmentScreen({this.initialTab = 0, this.allowedTabs})
+  /// CHANGE #537 — the stage to open on, as a BACKEND key
+  /// (`fulfill_tabs().tabs[].stage_key` / `feature_registry.route_key`). Wins
+  /// over [initialTab]. A stage this user cannot see is ignored and the first
+  /// stage they CAN see opens instead.
+  final String? initialStage;
+
+  AdminFulfillmentScreen(
+      {this.initialTab = 0, this.allowedTabs, this.initialStage})
       : super(key: _key);
   static void triggerFocus() => _key.currentState?._onFocus();
 
@@ -8813,7 +8835,8 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
   @override
   void initState() {
     super.initState();
-    // CHANGE #307 → #537: the requested tab is now a STAGE.
+    // CHANGE #307 → #537: the requested tab is now a STAGE. A caller that
+    // named the stage outright wins; otherwise the legacy index is translated.
     var want = widget.initialTab;
     // CHANGE #528 row 142 — a bounded caller can never land on, or reach, a
     // tab it was not granted. The clamp is here as well as on the tab row so
@@ -8822,10 +8845,13 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
       final first = _firstAllowedTab();
       if (first != null) want = first;
     }
+    final named = widget.initialStage;
     // _loadPipeline() keeps this stage if the backend sent it and falls back
     // to the first stage it DID send otherwise, so a caller asking for a stage
     // they have lost lands somewhere real instead of on a blank body.
-    _stage = _stageForLegacyTab(want);
+    _stage = (named != null && named.isNotEmpty && _stageAllowed(named))
+        ? named
+        : _stageForLegacyTab(want);
     WidgetsBinding.instance.addObserver(this);
     AdminDateScope.instance.addListener(_onDateScopeChanged);
     // CHANGE #531: one fetch per session for fw_error_messages()+fw_issue_options(),

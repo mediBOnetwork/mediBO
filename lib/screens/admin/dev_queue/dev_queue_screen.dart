@@ -9,6 +9,7 @@ import 'dev_queue_service.dart';
 import 'dev_queue_bulk_add.dart';
 import 'dev_queue_detail.dart';
 import 'dev_queue_control.dart';
+import 'dev_queue_crashes.dart';
 import 'dev_queue_gcp.dart';
 import 'dev_queue_qa.dart';
 import 'dev_queue_questions.dart';
@@ -316,6 +317,10 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
               // cloud icon is now the single entry point (the card was a
               // duplicate that ate screen space).
               SliverToBoxAdapter(child: DevQueueControl(service: _svc)),
+              // CHANGE #473 — client crashes, last 24h by release. Sits under
+              // the control strip because it is a health readout of the SHIPPED
+              // app, next to the health readout of the fleet that ships it.
+              SliverToBoxAdapter(child: DevQueueCrashesCard(service: _svc)),
               if (_draftBadge > 0)
                 SliverToBoxAdapter(child: _draftsStrip()),
               SliverToBoxAdapter(child: _header()),

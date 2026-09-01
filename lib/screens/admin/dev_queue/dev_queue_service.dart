@@ -333,6 +333,12 @@ class DevQueueService {
       _asMap(await _c.rpc('dev_gcp_action',
           params: {'p_action': action, 'p_pin': pin}));
 
+  /// CHANGE #473 — the Crashes card, rendered verbatim. Every label, count,
+  /// tone and setup step in the reply is the backend's; the card computes none
+  /// of them.
+  Future<Map<String, dynamic>> crashCard() async =>
+      _asMap(await _c.rpc('crash_admin_card'));
+
   Future<List<Map<String, dynamic>>> secretList() async =>
       _asList(await _c.rpc('secret_list'));
   Future<void> secretSet(String name, String value) async =>

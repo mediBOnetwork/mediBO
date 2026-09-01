@@ -48,4 +48,7 @@ const kRegisteredAdminRoutes = <String>[
   'profile', 'logout',
   // CMD #429/#444 — the paper sale sheet.
   'paper_sale',
+  // CMD #450 — the money screen (receivables, verification queue, unattached
+  // money, stalled supplier bills).
+  'money',
 ];

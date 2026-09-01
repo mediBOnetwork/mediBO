@@ -182,21 +182,27 @@ class _Picker extends StatelessWidget {
           onTap: () => onPick(key),
           borderRadius: Ds.r.rChip,
           child: Container(
+            // No `alignment:` here on purpose. A Container with an alignment
+            // and no width takes every pixel its constraints allow, which
+            // turned four chips into four full-width stacked bars. The padding
+            // centres the label on its own.
             constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
             padding: EdgeInsets.symmetric(
               horizontal: Ds.space.x16,
-              vertical: Ds.space.x8,
+              vertical: Ds.space.x12,
             ),
-            alignment: Alignment.center,
             decoration: BoxDecoration(
               color: on ? toneSoft('success') : Ds.c.surface,
               borderRadius: Ds.r.rChip,
               border: Border.all(color: on ? Ds.c.brand : Ds.c.divider),
             ),
-            child: Text(
-              _s(o['label']),
-              style: Ds.t.caption.copyWith(
-                color: on ? Ds.c.brand : Ds.c.textSecondary,
+            child: Center(
+              widthFactor: 1,
+              child: Text(
+                _s(o['label']),
+                style: Ds.t.caption.copyWith(
+                  color: on ? Ds.c.brand : Ds.c.textSecondary,
+                ),
               ),
             ),
           ),

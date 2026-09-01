@@ -18,6 +18,7 @@ import 'customer/customer_staff_screen.dart';  // CHANGE #408
 import 'wishlist_screen.dart';
 import 'pharmacy/pos_screen.dart'; // CMD #411 — the pharmacy counter
 import 'pharmacy/pharmacy_stock_screen.dart'; // CMD #412 — the pharmacy's shelf
+import 'pharmacy/pharmacy_gst_screen.dart'; // CMD #416 — the pharmacy's GST pack
 
 class ProfileScreen extends StatefulWidget {
   // CHANGE #374 — when set (View As Customer), load the impersonated
@@ -229,6 +230,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       // neither and the shell still knows nothing about what a
                       // pharmacy is.
                       StockMenuTile(),
+                      // CMD #416 — the month's GST paperwork. Third tile in the
+                      // same column and gated the same way: it draws only when
+                      // pharmacy_gst_entry() said so, so a supplier or an admin
+                      // opening this screen sees none of the three.
+                      GstMenuTile(),
                     ],
                   ),
                 ),

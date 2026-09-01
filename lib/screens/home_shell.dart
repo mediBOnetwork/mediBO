@@ -82,6 +82,7 @@ import '../utils/toast.dart';
 import 'orders_screen.dart';
 import '../services/pos_api.dart'; // CMD #411 — pos_entry() at boot
 import 'pharmacy/pos_screen.dart'; // CMD #411 — the pharmacy counter
+import '../widgets/scan_mic_search_controls.dart'; // #409 — used by the shell part files
 import '../services/pharmacy_stock_api.dart'; // CMD #412 — pharmacy_stock_entry() at boot
 import 'pharmacy/pharmacy_stock_screen.dart'; // CMD #412 — the pharmacy's shelf
 import 'profile_screen.dart';

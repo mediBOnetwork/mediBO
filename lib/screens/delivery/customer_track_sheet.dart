@@ -23,6 +23,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../fulfill/fulfill_lookups.dart';
 import '../../utils/render_log.dart';
 import 'delivery_tracking_view.dart';
+import 'reschedule_sheet.dart';
 import '../../design_tokens.dart';
 
 String _ui(String k) => FulfillLookups.instance.ui(k);
@@ -246,6 +247,15 @@ class _CustomerTrackSheetState extends State<_CustomerTrackSheet> {
               )
             else if (d != null)
               DeliveryTrackingView(data: d, onRefetch: _load),
+            // CHANGE #406 — reschedule, offered by the backend only after a
+            // failed attempt. Same widget and same payload shape as the public
+            // /track page; only the door differs.
+            if (!_loading)
+              RescheduleCard(
+                key_: widget.orderId,
+                door: RescheduleDoor.order,
+                onChanged: _load,
+              ),
             if (!_loading) _ratingCard(),
           ],
         ),

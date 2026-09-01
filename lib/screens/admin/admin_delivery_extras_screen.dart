@@ -376,14 +376,13 @@ class _IncentivesTab extends StatelessWidget {
       padding: EdgeInsets.fromLTRB(
           Ds.space.x16, Ds.space.x4, Ds.space.x16, Ds.space.x24),
       children: [
-        Align(
-          alignment: Alignment.centerLeft,
-          child: _Chip(
+        Row(mainAxisSize: MainAxisSize.min, children: [
+          _Chip(
             label: _s(data['run_label']),
             tone: 'brand',
             onTap: () => act('incentive_evaluate_day', const {}),
           ),
-        ),
+        ]),
         SizedBox(height: Ds.space.x16),
         for (final r in rows)
           _Card(children: [
@@ -398,20 +397,27 @@ class _IncentivesTab extends StatelessWidget {
             SizedBox(height: Ds.space.x8),
             _Pair(label: _s(r['metric_label']), value: _s(r['target_label'])),
             _Pair(label: _s(r['scope_label']), value: _s(r['window_label'])),
-            _Pair(label: _s(r['note']), value: _s(r['bonus_label']), bold: true),
-            _Pair(label: '', value: _s(r['paid_label'])),
+            _Pair(
+                label: _s(r['bonus_caption']),
+                value: _s(r['bonus_label']),
+                bold: true),
+            _Pair(label: _s(r['paid_caption']), value: _s(r['paid_label'])),
+            if (_s(r['note']).isNotEmpty) ...[
+              SizedBox(height: Ds.space.x8),
+              Text(_s(r['note']), style: Ds.t.caption),
+            ],
             SizedBox(height: Ds.space.x12),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: _Chip(
-                label: _s(r['toggle_label']),
-                tone: r['toggle_tone'],
-                onTap: () => act('incentive_scheme_save', {
+            SizedBox(
+              width: double.infinity,
+              height: Ds.touch.minTarget,
+              child: OutlinedButton(
+                onPressed: () => act('incentive_scheme_save', {
                   'p_patch': {
                     'scheme_id': _s(r['scheme_id']),
                     'active': !(r['active'] == true),
                   }
                 }),
+                child: Text(_s(r['toggle_label'])),
               ),
             ),
           ]),
@@ -446,7 +452,8 @@ class _InvoicesTab extends StatelessWidget {
             // rather than a chip it would overflow.
             _Banner(text: _s(r['recon_label']), tone: r['recon_tone']),
             SizedBox(height: Ds.space.x8),
-            _Pair(label: _s(r['period_label']), value: _s(r['payout_label'])),
+            _Pair(label: _s(r['period_caption']), value: _s(r['period_label'])),
+            _Pair(label: _s(r['payout_caption']), value: _s(r['payout_label'])),
             _Pair(label: _s(r['invoice_no']), value: _s(r['invoice_total_label'])),
             _Pair(label: _s(r['gstin_label']), value: _s(r['payout_status_label'])),
             SizedBox(height: Ds.space.x12),
@@ -591,7 +598,10 @@ class _CostTab extends StatelessWidget {
             _Pair(
                 label: _s(r['spend_label']),
                 value: _s(r['configured_label'])),
-            _Pair(label: '', value: _s(r['variance_label']), bold: true),
+            _Pair(
+                label: _s(r['variance_caption']),
+                value: _s(r['variance_label']),
+                bold: true),
           ]),
       ],
     );

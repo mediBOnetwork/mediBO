@@ -430,8 +430,8 @@ begin
       'scheme_id', s.id,
       'label',       s.label,
       'metric_label',coalesce(v_m.label, s.metric),
-      'value_label', trim(to_char(v_val,'FM999999990.99')) || coalesce(v_m.value_suffix,''),
-      'target_label',trim(to_char(s.threshold,'FM999999990.99')) || coalesce(v_m.value_suffix,''),
+      'value_label', trim_scale(v_val)::text || coalesce(v_m.value_suffix,''),
+      'target_label',trim_scale(s.threshold)::text || coalesce(v_m.value_suffix,''),
       'progress',    v_pct,
       'bonus_label', public.inr_money(s.bonus_amount),
       'earned',      (v_val >= s.threshold and s.threshold > 0),
@@ -563,9 +563,9 @@ begin
   select coalesce(jsonb_agg(jsonb_build_object(
            'label',      s.label,
            'date_label', to_char(e.earn_date,'DD Mon'),
-           'hit_label',  trim(to_char(e.metric_value,'FM999999990.99'))
+           'hit_label',  trim_scale(e.metric_value)::text
                          || coalesce(m.value_suffix,'') || ' / '
-                         || trim(to_char(e.threshold,'FM999999990.99'))
+                         || trim_scale(e.threshold)::text
                          || coalesce(m.value_suffix,''),
            'amount_label', public.inr_money(e.amount)) order by e.earn_date), '[]'::jsonb)
     into v_bonus
@@ -760,7 +760,7 @@ begin
       jsonb_build_object('label', public._c('agency_invoice.lbl_drops'),   'value', public.inr_money(i.drops_amount)),
       jsonb_build_object('label', public._c('agency_invoice.lbl_bonus'),   'value', public.inr_money(i.bonus_amount)),
       jsonb_build_object('label', public._c('agency_invoice.lbl_taxable'), 'value', public.inr_money(i.taxable)),
-      jsonb_build_object('label', trim(to_char(i.rate,'FM999990.99')) || '% '
+      jsonb_build_object('label', trim_scale(i.rate)::text || '% '
                                   || case when i.is_interstate then public._c('agency_invoice.lbl_igst')
                                           else public._c('agency_invoice.lbl_cgst_sgst') end,
                          'value', public.inr_money(i.total_tax)),
@@ -1184,7 +1184,7 @@ begin
            'pass_mark_label', m.pass_mark || '%',
            'passed',    coalesce(c.passed, false),
            'score_label', case when c.id is null then ''
-                               else trim(to_char(c.score_pct,'FM990.9')) || '%' end,
+                               else trim_scale(c.score_pct)::text || '%' end,
            'status_label', case when coalesce(c.passed,false)
                                 then public._c('training.status_passed')
                                 when c.id is not null then public._c('training.status_failed')
@@ -1421,7 +1421,7 @@ begin
     last_attempt_at = now();
 
   return jsonb_build_object('ok',true,'passed',v_pass,
-    'score_label', trim(to_char(v_pct,'FM990.9')) || '%',
+    'score_label', trim_scale(v_pct)::text || '%',
     'right_label', coalesce(v_right,0) || ' / ' || v_total,
     'message', case when v_pass then public._c('training.pass_message')
                     else public._cf('training.fail_message',
@@ -1566,9 +1566,9 @@ begin
                    'date_label', to_char(e.spend_date,'DD Mon YYYY'),
                    'vehicle_label', coalesce(v.reg_number, ''),
                    'odometer_label', case when e.odometer_km is null then ''
-                        else trim(to_char(e.odometer_km,'FM999999990.9')) || ' km' end,
+                        else trim_scale(e.odometer_km)::text || ' km' end,
                    'litres_label', case when e.litres is null then ''
-                        else trim(to_char(e.litres,'FM99990.99')) || ' L' end,
+                        else trim_scale(e.litres)::text || ' L' end,
                    'has_receipt', (coalesce(e.receipt_path,'') <> ''),
                    'receipt_bucket', 'partner-receipts',
                    'receipt_path', coalesce(e.receipt_path,''),
@@ -1897,7 +1897,7 @@ begin
            'zone_id', s.zone_id, 'agency_id', s.agency_id,
            'metric', s.metric,
            'metric_label', coalesce((select m.label from public.incentive_metrics m where m.slug = s.metric), s.metric),
-           'target_label', trim(to_char(s.threshold,'FM999999990.99'))
+           'target_label', trim_scale(s.threshold)::text
                            || coalesce((select m.value_suffix from public.incentive_metrics m where m.slug = s.metric),''),
            'threshold', s.threshold,
            'bonus', s.bonus_amount,
@@ -2170,3 +2170,227 @@ end $$;
 alter table public.gst_ledger drop constraint if exists gst_ledger_source_check;
 alter table public.gst_ledger add constraint gst_ledger_source_check
   check (source = any (array['supplier_bill','customer_bill','credit_note','agency_invoice']));
+-- ── PART 9 — the two labels the admin screen needs and the backend had not
+-- yet supplied. A button caption is never a Dart literal, not even a toggle.
+create or replace function public.admin_incentive_schemes()
+returns jsonb language plpgsql stable security definer set search_path to 'public' as $$
+declare v_rows jsonb; v_metrics jsonb; v_zones jsonb; v_agencies jsonb;
+begin
+  if public.role_for_medibo_only() not in ('admin','super_admin') then
+    return jsonb_build_object('ok',false,'error','not_authorized');
+  end if;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'slug', m.slug, 'label', m.label, 'value_suffix', m.value_suffix,
+           'target_hint', m.target_hint) order by m.sort_order), '[]'::jsonb)
+    into v_metrics from public.incentive_metrics m where m.active;
+
+  select coalesce(jsonb_agg(jsonb_build_object('id', z.id, 'label', z.name) order by z.id), '[]'::jsonb)
+    into v_zones from public.zones z;
+
+  select coalesce(jsonb_agg(jsonb_build_object('id', r.id, 'label', coalesce(r.full_name,''))
+           order by r.full_name), '[]'::jsonb)
+    into v_agencies from public.delivery_partner_registrations r
+   where r.partner_type = 'agency' and coalesce(r.is_deleted,false) = false;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'scheme_id', s.id, 'slug', s.slug, 'label', s.label,
+           'scope', s.scope,
+           'scope_label', case s.scope
+             when 'zone'   then public._cf('incentive.scope_zone',
+                                  jsonb_build_object('zone', coalesce((select z.name from public.zones z where z.id = s.zone_id),'')))
+             when 'agency' then public._cf('incentive.scope_agency',
+                                  jsonb_build_object('agency', coalesce((select r2.full_name from public.delivery_partner_registrations r2 where r2.id = s.agency_id),'')))
+             else public._c('incentive.scope_all') end,
+           'zone_id', s.zone_id, 'agency_id', s.agency_id,
+           'metric', s.metric,
+           'metric_label', coalesce((select m.label from public.incentive_metrics m where m.slug = s.metric), s.metric),
+           'target_label', trim_scale(s.threshold)::text
+                           || coalesce((select m.value_suffix from public.incentive_metrics m where m.slug = s.metric),''),
+           'threshold', s.threshold,
+           'bonus', s.bonus_amount,
+           'bonus_label', public.inr_money(s.bonus_amount),
+           'window_label', case when s.window_start is null and s.window_end is null
+                                then public._c('incentive.window_always')
+                                else coalesce(to_char(s.window_start,'DD Mon YYYY'), '…')
+                                     || ' – ' || coalesce(to_char(s.window_end,'DD Mon YYYY'), '…') end,
+           'window_start', s.window_start, 'window_end', s.window_end,
+           'active', s.active,
+           'status_label', case when s.active then public._c('incentive.on') else public._c('incentive.off') end,
+           'tone', case when s.active then 'success' else 'muted' end,
+           'toggle_label', case when s.active then public._c('incentive.turn_off')
+                                else public._c('incentive.turn_on') end,
+           'toggle_tone',  case when s.active then 'muted' else 'success' end,
+           'paid_label', public.inr_money(coalesce((select sum(e.amount) from public.incentive_earnings e where e.scheme_id = s.id),0)),
+           'note', coalesce(s.note,''))
+           order by s.sort_order, s.label), '[]'::jsonb)
+    into v_rows from public.incentive_schemes s;
+
+  return jsonb_build_object('ok',true,
+    'title', public._c('incentive.admin_title'),
+    'empty_note', public._c('incentive.admin_empty'),
+    'add_label', public._c('incentive.add_btn'),
+    'save_label', public._c('incentive.save_btn'),
+    'run_label', public._c('incentive.run_btn'),
+    'scope_options', jsonb_build_array(
+      jsonb_build_object('slug','all',   'label', public._c('incentive.scope_all')),
+      jsonb_build_object('slug','zone',  'label', public._c('incentive.scope_zone_opt')),
+      jsonb_build_object('slug','agency','label', public._c('incentive.scope_agency_opt'))),
+    'metrics', v_metrics, 'zones', v_zones, 'agencies', v_agencies, 'rows', v_rows);
+end $$;
+
+create or replace function public.admin_agency_invoices(p_limit int default 40)
+returns jsonb language plpgsql stable security definer set search_path to 'public' as $$
+declare v_rows jsonb;
+begin
+  if public.role_for_medibo_only() not in ('admin','super_admin') then
+    return jsonb_build_object('ok',false,'error','not_authorized');
+  end if;
+
+  select coalesce(jsonb_agg(x.row order by x.ord desc), '[]'::jsonb) into v_rows
+  from (
+    select p.period_end ord, jsonb_build_object(
+      'period_id',    p.id,
+      'invoice_id',   i.id,
+      'has_invoice',  (i.id is not null),
+      'partner_name', coalesce(r.full_name,''),
+      'partner_type', coalesce(r.partner_type,''),
+      'period_label', to_char(p.period_start,'DD Mon') || ' – ' || to_char(p.period_end,'DD Mon YYYY'),
+      'payout_label', public.inr_money(p.net_amount),
+      'payout_status_label', case when p.status = 'paid'
+                                  then public._c('admin.delivery.payout_paid_chip')
+                                  else public._c('admin.delivery.payout_unpaid_chip') end,
+      'invoice_no',   coalesce(i.invoice_no,''),
+      'invoice_total_label', case when i.id is null then '' else public.inr_money(i.total) end,
+      'gstin_label',  coalesce(nullif(i.agency_gstin,''), coalesce(nullif(r.gstin,''), public._c('agency_invoice.no_gstin'))),
+      'recon_label',  coalesce(i.recon_note, public._c('agency_invoice.recon_none')),
+      'recon_tone',   case coalesce(i.recon_status,'none')
+                        when 'matched' then 'success'
+                        when 'mismatch' then 'danger'
+                        when 'awaiting_signed' then 'warning' else 'muted' end,
+      'has_signed',   (coalesce(i.signed_path,'') <> ''),
+      'generate_label', case when i.id is null then public._c('agency_invoice.generate_btn')
+                             else public._c('agency_invoice.regenerate_btn') end) row
+    from public.delivery_payout_periods p
+    join public.delivery_partner_registrations r on r.id = p.partner_id
+    left join public.agency_invoices i on i.period_id = p.id
+    order by p.period_end desc
+    limit greatest(coalesce(p_limit,40),1)) x;
+
+  return jsonb_build_object('ok',true,
+    'title', public._c('agency_invoice.admin_title'),
+    'empty_note', public._c('agency_invoice.admin_empty'),
+    'open_label', public._c('agency_invoice.download_btn'),
+    'rows', v_rows);
+end $$;
+
+insert into public.ui_copy(key, value) values
+  ('incentive.turn_on',  to_jsonb('Switch on'::text)),
+  ('incentive.turn_off', to_jsonb('Switch off'::text))
+on conflict (key) do nothing;
+
+do $$
+declare f text;
+begin
+  for f in select p.oid::regprocedure::text from pg_proc p
+             join pg_namespace n on n.oid = p.pronamespace
+            where n.nspname='public' and p.proname in ('admin_incentive_schemes','admin_agency_invoices')
+  loop
+    execute format('revoke execute on function %s from public, anon', f);
+    execute format('grant execute on function %s to authenticated, service_role', f);
+  end loop;
+end $$;
+-- ═══════════════════════════════════════════════════════════════════════════
+-- CMD #407 · PART 10 — reachability. A feature Om cannot tap does not exist.
+-- The tile, the category, the search terms and the deep link are all DATA:
+-- feature_registry is the only list, and nav_registry() renders it.
+-- ═══════════════════════════════════════════════════════════════════════════
+insert into public.feature_registry(
+    feature_key, label, group_label, icon_key, route_key, sort_order, owner,
+    partner_eligible, default_access, is_active, category, surface,
+    roles_allowed, deep_link, search_terms, description)
+select 'admin.delivery_extras', 'Delivery programme', 'Delivery',
+       'trending_up', 'delivery_extras', 830, 'medibo',
+       false, 'none', true, 'delivery', 'dashboard',
+       array['admin','super_admin'], '/admin/go/delivery_extras',
+       'incentive bonus target rider agency invoice gst training sop quiz vehicle fuel cost per drop',
+       'Rider incentive schemes, agency GST invoices, the training gate and measured cost per drop.'
+where not exists (select 1 from public.feature_registry where feature_key = 'admin.delivery_extras');
+
+-- ── The rider's home carries the programme, so the panel renders and asks
+-- nothing extra. Same payload, three new keys.
+create or replace function public.my_delivery_home(p_date date default null)
+returns jsonb language plpgsql stable security definer set search_path to 'public' as $$
+declare
+  p delivery_partner_registrations%rowtype; v_date date; v_rate numeric;
+  v_del int; v_fail int; v_pend int; v_km numeric; v_on boolean; v_since timestamptz;
+  v_earn numeric; v_train jsonb;
+begin
+  select * into p from delivery_partner_registrations
+   where user_id = auth.uid() and is_active and coalesce(is_deleted,false)=false limit 1;
+  if p.id is null then
+    return jsonb_build_object('allowed',false,'is_partner',false,
+      'empty_title','Not a delivery account',
+      'empty_note','This login is not an active delivery partner.');
+  end if;
+  v_date := coalesce(p_date,(now() at time zone 'Asia/Kolkata')::date);
+  v_rate := public._delivery_drop_rate(p.id);
+
+  select count(*) filter (where d.status='delivered'),
+         count(*) filter (where d.status='failed'),
+         count(*) filter (where d.status in ('assigned','out_for_delivery')),
+         round(coalesce(sum(d.leg_km),0),1),
+         round(coalesce(sum(d.earning) filter (where d.status='delivered'),0),2)
+    into v_del, v_fail, v_pend, v_km, v_earn
+  from deliveries d join delivery_runs r on r.id = d.run_id
+  where d.partner_id = p.id and r.run_date = v_date;
+
+  select (s.ended_at is null), s.started_at into v_on, v_since
+  from delivery_partner_shifts s
+  where s.partner_id = p.id and s.shift_date = v_date
+  order by s.started_at desc limit 1;
+
+  v_train := public.delivery_training_state(p.id);
+
+  return jsonb_build_object(
+    'allowed', true, 'is_partner', true,
+    'partner_id', p.id, 'partner_name', coalesce(p.full_name,''),
+    'partner_type', p.partner_type, 'is_agency', (p.partner_type='agency'),
+    'zone_id', p.zone_id,
+    'zone_label', coalesce((select z.name from zones z where z.id=p.zone_id),''),
+    'the_date', v_date,
+    'on_shift', coalesce(v_on,false),
+    'shift_since', v_since,
+    'shift_button_label', case when coalesce(v_on,false) then 'End shift' else 'Start shift' end,
+    'shift_action', case when coalesce(v_on,false) then 'end' else 'start' end,
+    'tiles', jsonb_build_array(
+       jsonb_build_object('key','delivered','label','Delivered','value',coalesce(v_del,0),
+                          'colors', jsonb_build_object('bg','#E1F5EE','fg','#0F6E56')),
+       jsonb_build_object('key','pending','label','Pending','value',coalesce(v_pend,0),
+                          'colors', jsonb_build_object('bg','#FEF3C7','fg','#92400E')),
+       jsonb_build_object('key','failed','label','Failed','value',coalesce(v_fail,0),
+                          'colors', jsonb_build_object('bg','#FBE9E7','fg','#B42318')),
+       jsonb_build_object('key','distance','label','Distance','value',coalesce(v_km,0),
+                          'display', coalesce(v_km,0)::text || ' km',
+                          'colors', jsonb_build_object('bg','#E6F1FB','fg','#0C447C'))),
+    'earning_today', coalesce(v_earn,0),
+    'earning_today_display', public.inr_money(coalesce(v_earn,0)),
+    'per_drop_display', public.inr_money(v_rate) || ' per delivery',
+    -- CMD #407 — the programme, on the payload the home already reads.
+    'incentives', public.my_incentive_progress(v_date),
+    'training_pending', coalesce((v_train->>'pending_count')::int, 0),
+    'extras', jsonb_build_object(
+      'training_label', public._c('training.title'),
+      'vehicle_label',  public._c('vehicle.title'),
+      'training_note',  case when coalesce((v_train->>'blocks_assignment')::boolean,false)
+                             then v_train->>'block_message' else '' end,
+      'training_tone',  case when coalesce((v_train->>'blocks_assignment')::boolean,false)
+                             then 'danger' else 'info' end));
+end $$;
+-- ── PART 11 — the registry's deep link points at the direct route.
+-- /admin/go/<key> parks the key for the shell's route table; the delivery
+-- programme also has a route of its own in main.dart, which needs no shell
+-- frame at all, so that is the address a notification or a pasted link uses.
+update public.feature_registry
+   set deep_link = '/admin/delivery-programme'
+ where feature_key = 'admin.delivery_extras';

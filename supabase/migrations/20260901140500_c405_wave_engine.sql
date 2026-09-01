@@ -502,11 +502,12 @@ begin
   if w.status = 'dispatched' then
     update delivery_wave set status = 'approved' where id = w.id;
   end if;
+  -- delivery_wave_plan() dispatches by itself in auto mode, so calling
+  -- dispatch again here found no planned stops and logged a phantom
+  -- "0 stops sent to riders" on every auto rejection. Plan, and only plan.
   perform public.delivery_wave_plan(w.id, p_actor);
 
-  if w.mode = 'auto' then
-    perform public.delivery_wave_dispatch(w.id, p_actor);
-  else
+  if w.mode <> 'auto' then
     update delivery_wave set status = 'proposed' where id = w.id
       and status not in ('dispatched','closed','cancelled');
   end if;

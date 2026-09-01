@@ -29,6 +29,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../design_tokens.dart';
 import '../../fulfill/fulfill_lookups.dart';
+import 'rider_extras_sheets.dart';
+import '../../design_tokens.dart';
 import '../../services/device_location.dart';
 import '../../utils/render_log.dart';
 import 'delivery_sos_button.dart';
@@ -60,6 +62,12 @@ class DeliveryHomePanel extends StatelessWidget {
     required this.home,
     required this.onChanged,
   });
+
+  /// `my_delivery_home().extras` — the labels for the two programme sheets,
+  /// and the training block message when the gate is holding this rider.
+  Map<String, dynamic> get _extras => home['extras'] is Map
+      ? Map<String, dynamic>.from(home['extras'] as Map)
+      : const <String, dynamic>{};
 
   List<Map<String, dynamic>> get _tiles {
     final v = home['tiles'];
@@ -151,6 +159,27 @@ class DeliveryHomePanel extends StatelessWidget {
             ]),
           ),
         ],
+
+        // CMD #407 — the delivery programme, on the home the rider already
+        // opens: today's targets, and the two sheets (training, vehicle) whose
+        // labels arrive on this same payload. All three render nothing when
+        // the backend sent nothing.
+        if (home['incentives'] is Map) ...[
+          const SizedBox(height: 12),
+          RiderIncentiveProgress(
+              data: Map<String, dynamic>.from(home['incentives'] as Map)),
+        ],
+        if (_extras['training_note']?.toString().isNotEmpty ?? false)
+          Padding(
+            padding: EdgeInsets.only(bottom: Ds.space.x12),
+            child: Text(_extras['training_note'].toString(),
+                style: Ds.t.caption.copyWith(color: Ds.c.danger)),
+          ),
+        if ((_extras['training_label']?.toString() ?? '').isNotEmpty)
+          RiderExtrasButtons(
+            trainingLabel: _extras['training_label'].toString(),
+            vehicleLabel: _extras['vehicle_label']?.toString() ?? '',
+          ),
 
         const SizedBox(height: 10),
         Row(children: [

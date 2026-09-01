@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:pharma_b2b/design_tokens.dart';
 import 'package:pharma_b2b/services/ui_copy.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
+import 'package:pharma_b2b/screens/partner/settlement_ack_card.dart';
 
 /// CHANGE #323 — Partner settlement.
 ///
@@ -730,6 +731,14 @@ class _SettlementStatementPageState extends State<SettlementStatementPage> {
     await _load();
   }
 
+  /// CHANGE #400 — clear a partner's dispute. Only reachable when the payload's
+  /// own ack block said can_resolve.
+  Future<void> _resolve() async {
+    _toast(_asMap(await widget
+        .rpc('settlement_ack_resolve', {'p_period_id': widget.periodId})));
+    await _load();
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = _s;
@@ -749,6 +758,8 @@ class _SettlementStatementPageState extends State<SettlementStatementPage> {
                   s,
                   onRecord: (s?['is_admin'] == true) ? _record : null,
                   onSettle: (s?['can_settle'] == true) ? _settle : null,
+                  onResolveDispute:
+                      (_asMap(s?['ack'])['can_resolve'] == true) ? _resolve : null,
                 ),
     );
   }
@@ -759,6 +770,7 @@ Widget settlementStatementBody(
   Map<String, dynamic>? s, {
   VoidCallback? onRecord,
   VoidCallback? onSettle,
+  VoidCallback? onResolveDispute,
 }) {
   Map<String, dynamic> m(dynamic v) =>
       v is Map ? Map<String, dynamic>.from(v) : const <String, dynamic>{};
@@ -780,6 +792,13 @@ Widget settlementStatementBody(
         SizedBox(height: Ds.space.x16),
         settlementMessage((s?['negative_text'] ?? '').toString(), 'warning'),
       ],
+      SizedBox(height: Ds.space.x24),
+      // CHANGE #400 — the SAME ack card the partner sees, read-only here apart
+      // from Resolve. What the partner said cannot drift between the two.
+      SettlementAckCard(
+        ack: m(s?['ack']),
+        onResolve: onResolveDispute,
+      ),
       SizedBox(height: Ds.space.x24),
       settlementTiles((s?['tiles'] as List?) ?? const []),
       SizedBox(height: Ds.space.x24),

@@ -931,3 +931,111 @@ grant execute on function public.order_edit_apply(uuid, jsonb)            to aut
 grant execute on function public.customer_can(text, text)                 to authenticated;
 grant execute on function public.my_customer_user_id()                    to authenticated;
 grant execute on function public.my_customer_rank()                       to authenticated;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 12. TWO FIXES THE PROOF FOUND, both in this file so a replay carries them.
+--
+-- (a) `oi.bag_no is not null` was the wrong test for "packing has started".
+--     assign_order_bag_no() stamps a bag number at PLACEMENT, before anything
+--     physical has happened, so every fresh order looked already-fulfilled and
+--     the edit window was never open. Packing is `packed` / `pack_counted_at`;
+--     a bag number is only a label.
+--
+-- (b) my_customer_id() resolves a login through login_identities, which needs
+--     the JWT to carry the very identity the owner typed. A staff member who
+--     signs in through Google, or whose phone claim sits somewhere else, would
+--     be bound in customer_users and still resolve to nothing. The branch below
+--     is purely additive: it matches only rows in a table that did not exist
+--     before this change, so it cannot alter the answer for anyone who is not
+--     pharmacy staff.
+-- ─────────────────────────────────────────────────────────────────────────────
+create or replace function public.my_customer_id()
+returns uuid language sql stable security definer set search_path to 'public' as $$
+  with k as (select public.my_identity_keys() keys),
+  mapped as (select 1 from login_identities li, k where li.identity = any (k.keys) limit 1)
+  select pp.id
+  from pharmacy_profiles pp, k
+  where coalesce(pp.is_deleted,false) = false
+    and (
+      exists (select 1 from login_identities li
+               where li.owner_type = 'customer' and li.owner_id = pp.id::text
+                 and li.identity = any (k.keys))
+      -- CHANGE #408 — a staff login on this pharmacy, by identity or by the
+      -- auth user it was bound to.
+      or exists (select 1 from customer_users cu
+                  where cu.customer_id = pp.id
+                    and coalesce(cu.is_active, true)
+                    and (cu.identity = any (k.keys) or cu.auth_user_id = auth.uid()))
+      or (not exists (select 1 from mapped) and pp.user_id = auth.uid())
+    )
+  order by pp.id
+  limit 1
+$$;
+
+create or replace function public._order_edit_gate(p_order_id uuid)
+returns jsonb language plpgsql stable security definer set search_path to 'public' as $$
+declare o record; v_cid uuid := public.my_customer_id(); v_asked boolean; v_moved boolean;
+begin
+  select * into o from orders where id = p_order_id;
+  if o.id is null then
+    return jsonb_build_object('can_edit', false, 'error', 'not_found',
+      'message', public.ui_text('order_edit.err_not_found'));
+  end if;
+
+  if not (o.customer_id is not distinct from v_cid
+          or public.get_my_role() in ('admin','super_admin')) then
+    return jsonb_build_object('can_edit', false, 'error', 'not_authorized',
+      'message', public.ui_text('order_edit.err_not_authorized'));
+  end if;
+
+  if o.closed_at is not null
+     or lower(coalesce(o.status,'')) in ('cancelled','canceled','rejected','delivered','completed') then
+    return jsonb_build_object('can_edit', false, 'error', 'closed',
+      'reason', public.ui_text('order_edit.reason_closed'),
+      'message', public.ui_text('order_edit.err_closed'));
+  end if;
+
+  select exists (
+    select 1
+      from order_items oi
+      left join lateral (
+        select q.* from inquiry q
+         where q.id = oi.inquiry_id
+            or (oi.inquiry_id is null
+                and q.product_id = oi.product_id
+                and q.batch_date = oi.order_date
+                and (q.zone_id is not distinct from oi.zone_id or q.zone_id is null))
+         order by (q.id = oi.inquiry_id) desc, q.id desc
+         limit 1) i on true
+     where oi.order_id = p_order_id
+       and (i.asked_at is not null or i.supplier_order_id is not null)
+  ) into v_asked;
+
+  if v_asked then
+    return jsonb_build_object('can_edit', false, 'error', 'inquiry_started',
+      'reason', public.ui_text('order_edit.reason_inquiry_started'),
+      'message', public.ui_text('order_edit.err_inquiry_started'));
+  end if;
+
+  -- Physical fulfilment having started. NOT bag_no: that is stamped at
+  -- placement by assign_order_bag_no() and means nothing has happened yet.
+  select exists (
+    select 1 from order_items oi
+     where oi.order_id = p_order_id
+       and (coalesce(oi.fulfillment_state,'pending') <> 'pending'
+            or coalesce(oi.received_qty,0) > 0
+            or coalesce(oi.at_warehouse,false)
+            or coalesce(oi.packed,false)
+            or oi.shop_qty is not null
+            or oi.assigned_supplier is not null)
+  ) into v_moved;
+
+  if v_moved or coalesce(o.fulfillment_status,'open') <> 'open' then
+    return jsonb_build_object('can_edit', false, 'error', 'not_pending',
+      'reason', public.ui_text('order_edit.reason_not_pending'),
+      'message', public.ui_text('order_edit.err_closed'));
+  end if;
+
+  return jsonb_build_object('can_edit', true,
+    'window_label', public.ui_text('order_edit.window_open'));
+end $$;

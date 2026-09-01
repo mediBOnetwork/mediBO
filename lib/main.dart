@@ -40,6 +40,7 @@ import 'screens/public/wa_link_redirect_page.dart'; // /r/:code — campaign lin
 import 'screens/admin/wa_campaigns_screen.dart'; // /admin/wa-campaigns
 import 'screens/admin/admin_scope_audit_screen.dart'; // /admin/scope-audit
 import 'screens/admin/dev_queue/cron_health_screen.dart'; // /admin/cron-health
+import 'screens/admin/admin_delivery_extras_screen.dart'; // /admin/delivery-programme
 import 'screens/admin/nav_registry_view.dart'; // CHANGE #325 — deep links
 import 'screens/product_detail_screen.dart'; // C636: /product/:id
 import 'screens/reorder_screen.dart'; // #173: /reorder
@@ -642,6 +643,17 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
                     builder: (_) => _AppRoot(auth: _auth),
                   );
                 }
+              }
+              // CMD #407 — the delivery programme gets a real URL of its own,
+              // the same shape as /admin/cron-health: a direct route, so the
+              // screen is reachable from a link without waiting on the shell's
+              // first frame. The dashboard tile reaches it through the shell's
+              // route table as well.
+              if (name == '/admin/delivery-programme') {
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => const AdminDeliveryExtrasScreen(),
+                );
               }
               if (name == '/admin/cron-health') {
                 return MaterialPageRoute(

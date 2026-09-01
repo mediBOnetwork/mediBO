@@ -2387,3 +2387,10 @@ begin
       'training_tone',  case when coalesce((v_train->>'blocks_assignment')::boolean,false)
                              then 'danger' else 'info' end));
 end $$;
+-- ── PART 11 — the registry's deep link points at the direct route.
+-- /admin/go/<key> parks the key for the shell's route table; the delivery
+-- programme also has a route of its own in main.dart, which needs no shell
+-- frame at all, so that is the address a notification or a pasted link uses.
+update public.feature_registry
+   set deep_link = '/admin/delivery-programme'
+ where feature_key = 'admin.delivery_extras';

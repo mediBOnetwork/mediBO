@@ -159,6 +159,8 @@ create table if not exists public.pos_settings (
   updated_at        timestamptz not null default now()
 );
 
+-- Every pos_* table gets RLS. `pos_gst_rule` is created further down (section
+-- 8) and enables its own — see the note there for what it cost to find out.
 alter table public.pos_sales          enable row level security;
 alter table public.pos_sale_lines     enable row level security;
 alter table public.pos_invoice_counter enable row level security;
@@ -927,9 +929,13 @@ begin
       'message', public.ui_text('pos.err_not_found'));
   end if;
   -- Called straight from pos_commit_sale (already scoped) and from the screen's
-  -- retry, which must be the sale's own shop.
+  -- retry, which must be the sale's own shop. Answer another shop's sale the
+  -- same way pos_sale_detail() does — "not found", not "you are not a
+  -- pharmacy", which is both untrue for a pharmacy asking and a hint that the
+  -- id exists. It also must not leak by timing: the lookup already happened.
   if public.pos_shop() is not null and s.pharmacy_id <> public.pos_shop() then
-    return public._pos_denied();
+    return jsonb_build_object('ok', false, 'error', 'not_found',
+      'message', public.ui_text('pos.err_not_found'));
   end if;
 
   if s.pdf_status = 'ready' and coalesce(s.pdf_path,'') <> '' then
@@ -1277,6 +1283,27 @@ create unique index if not exists pos_gst_rule_default_idx
 create index if not exists pos_gst_rule_lookup_idx
   on public.pos_gst_rule (match_kind, priority) where is_active;
 
+-- A rule is identified by what it MATCHES, and that has to be a real unique
+-- constraint: `on conflict do nothing` is a no-op without one, so re-applying
+-- this migration inserted the whole seed again every time (57 rows from 9
+-- seeds before this was caught). Idempotency is mandatory here — a resumed
+-- worker re-applies the file and that must be a silent no-op.
+delete from public.pos_gst_rule a
+ using public.pos_gst_rule b
+ where a.id > b.id
+   and a.match_kind = b.match_kind
+   and coalesce(a.match_value,'') = coalesce(b.match_value,'');
+create unique index if not exists pos_gst_rule_identity_idx
+  on public.pos_gst_rule (match_kind, coalesce(match_value, ''));
+
+-- RLS, and it is NOT decoration. This table is created below section 1's
+-- blanket enable-RLS block, so it did not inherit it — and hostile QA on this
+-- very command proved what that costs: with the anon key that ships inside the
+-- web bundle and the APK, a PATCH on /rest/v1/pos_gst_rule set the default rate
+-- to 0 and every retail invoice would then have printed 0% GST. Read AND write
+-- are closed; _pos_gst_for() is SECURITY DEFINER and reads it as the owner.
+alter table public.pos_gst_rule enable row level security;
+
 -- The statutory slabs, as data. These are the standard Indian GST rates for
 -- pharmacy stock; a pharmacy whose accountant disagrees changes a row.
 insert into public.pos_gst_rule (match_kind, match_value, gst_percent, note, priority)
@@ -1290,7 +1317,7 @@ values
   ('name_like',         'contracept',     0, 'Contraceptives are NIL-rated',      10),
   ('name_like',         'sanitary napkin',0, 'NIL-rated',                         10),
   ('therapeutic_class', 'VACCINES',       5, 'Vaccines are 5% items',             50)
-on conflict do nothing;
+on conflict (match_kind, coalesce(match_value, '')) do nothing;
 
 -- Resolve the rate for one catalog product. STABLE and index-friendly: the
 -- rule table is tiny, so this is a nested-loop over a handful of rows, never a
@@ -1403,3 +1430,57 @@ grant execute on function public.pos_invoice_report(uuid, boolean, text, text, t
 -- an earlier copy of this file; drop it by signature, after the grant loop has
 -- stopped iterating over it.
 drop function if exists public._pos_qty(numeric);
+
+-- ────────── 10. THE SECURITY REPORTERS (journey qa-411-211) ────────────────
+-- Three read-only answers the proof script asserts on. They exist as RPCs so
+-- the journey can run against PRODUCTION over HTTP with the service key, the
+-- same way the other security journeys (qa-353-174, qa-395-183) do, instead of
+-- needing a psql session on the box.
+
+-- Every pos_* table must have RLS. #411 shipped pos_gst_rule without it and the
+-- anon key could rewrite the GST rate — that is the bug this reports on.
+create or replace function public.pos_qa_rls_report()
+returns text language sql stable security definer
+set search_path to 'public' as $$
+  select coalesce(
+    (select string_agg(tablename, ',' order by tablename)
+       from pg_tables
+      where schemaname = 'public' and tablename like 'pos\_%' and not rowsecurity),
+    'all_on');
+$$;
+
+-- A new function inherits Postgres's GRANT TO PUBLIC (which includes anon,
+-- whose key ships in the bundle and the APK).
+create or replace function public.pos_qa_anon_fn_report()
+returns text language sql stable security definer
+set search_path to 'public' as $$
+  select coalesce(
+    (select string_agg(p.proname, ',' order by p.proname)
+       from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public'
+        and (p.proname like 'pos\_%' or p.proname like '\_pos\_%')
+        and has_function_privilege('anon', p.oid, 'EXECUTE')),
+    'none');
+$$;
+
+-- pos_invoice_render_input takes a sale_id and makes NO shop check on purpose
+-- (only the renderer calls it, with the service key), so `authenticated` must
+-- never hold it — that would be any pharmacy's whole invoice on request.
+create or replace function public.pos_qa_internal_fn_report()
+returns text language sql stable security definer
+set search_path to 'public' as $$
+  select coalesce(
+    (select string_agg(p.proname, ',' order by p.proname)
+       from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public'
+        and p.proname in ('pos_invoice_render_input','pos_invoice_report')
+        and has_function_privilege('authenticated', p.oid, 'EXECUTE')),
+    'closed');
+$$;
+
+revoke all on function public.pos_qa_rls_report()         from public, anon, authenticated;
+revoke all on function public.pos_qa_anon_fn_report()     from public, anon, authenticated;
+revoke all on function public.pos_qa_internal_fn_report() from public, anon, authenticated;
+grant execute on function public.pos_qa_rls_report()         to service_role;
+grant execute on function public.pos_qa_anon_fn_report()     to service_role;
+grant execute on function public.pos_qa_internal_fn_report() to service_role;

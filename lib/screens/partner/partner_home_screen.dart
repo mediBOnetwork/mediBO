@@ -23,6 +23,7 @@ import '../admin/order_alerts_screen.dart' show OrderAlertCard;
 import 'partner_statement_screen.dart';
 import 'partner_expense_screen.dart';
 import 'partner_staff_screen.dart';
+import 'partner_workers_screen.dart';
 import 'partner_supplier_payment_screen.dart';
 
 /// Backend `icon_key` -> a glyph. The KEY is the backend's; only the glyph is
@@ -65,6 +66,7 @@ Widget? partnerDestination(String routeKey) {
     // CHANGE #399 — the partner's own staff, and its own expenses.
     case 'partner_staff':    return const PartnerStaffScreen();
     case 'partner_expenses': return const PartnerExpenseScreen();
+    case 'partner_workers':  return const PartnerWorkersScreen();
     case 'collect':         return AdminFulfillmentScreen(initialTab: 0);
     case 'count':           return AdminFulfillmentScreen(initialTab: 1);
     case 'bag_mapping':     return AdminFulfillmentScreen(initialTab: 2);

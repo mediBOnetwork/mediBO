@@ -80,6 +80,8 @@ import '../services/delivery_role_state.dart'; // C629: is_partner, from the bac
 import 'cart_screen.dart';
 import '../utils/toast.dart';
 import 'orders_screen.dart';
+import '../services/pos_api.dart'; // CMD #411 — pos_entry() at boot
+import 'pharmacy/pos_screen.dart'; // CMD #411 — the pharmacy counter
 import 'profile_screen.dart';
 import 'storefront_screen.dart';
 import 'supplier/supplier_shell.dart';
@@ -222,6 +224,9 @@ class _HomeShellState extends State<HomeShell> {
     // instantly from cache when one exists; refreshes in the background with
     // retry, and never wipes a good cache on a failed refresh.
     _bootstrapHomeCategories();
+    // CMD #411 — after the first frame, same reason as push: a counter entry
+    // that fails to resolve must never sit in front of the shell's own build.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadPosEntry());
     // CHANGE #440: type-anywhere-to-search, desktop web only.
     if (kIsWeb) HardwareKeyboard.instance.addHandler(_globalKeyHandler);
     RenderLog.write('c440_typeanywhere', 'web=$kIsWeb min3=on');
@@ -608,6 +613,13 @@ class _HomeShellState extends State<HomeShell> {
   // 5=Suppliers, 6=Customers
   /// CHANGE #325 — a /admin/go/<route_key> URL, parked by main.dart's route
   /// resolver, opened once the shell (and therefore the route table) exists.
+  /// CMD #411 — does this account have a counter? One cheap call; the answer
+  /// is parked in a notifier that PosMenuTile listens to, so the entry appears
+  /// without the shell knowing anything about pharmacies.
+  void _loadPosEntry() {
+    PosEntry.load();
+  }
+
   void _consumePendingDeepLink() {
     final route = PendingAdminNav.take();
     if (route == null || route.isEmpty) return;
@@ -697,6 +709,14 @@ class _HomeShellState extends State<HomeShell> {
       case 'reviews':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const AdminReviewsScreen()));
+        break;
+      // CMD #411 — the pharmacy counter (POS). Reached from the account menu
+      // via pos_entry(); this case also makes /admin/go/pos work. pos_home()
+      // gates on the caller's own pharmacy and the screen renders its refusal,
+      // so there is no role test here — same story as reviews and wa_ops.
+      case 'pos':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const PosScreen()));
         break;
       case 'mr': setState(() { _index = 7; _cartOpen = false; }); break;
       case 'companies': setState(() { _index = 8; _cartOpen = false; }); break;

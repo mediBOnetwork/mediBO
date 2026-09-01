@@ -942,7 +942,7 @@ begin
    where id = s.id;
 
   perform net.http_post(
-    url     := 'https://swojhmarmaijkshsbeih.supabase.co/functions/v1/bill-render',
+    url     := 'https://swojhmarmaijkshsbeih.supabase.co/functions/v1/pos-invoice',
     headers := jsonb_build_object('Content-Type','application/json',
                                   'x-notify-secret','medibo_order_notify_2027',
                                   'Authorization','Bearer ' || public._service_key()),
@@ -1340,8 +1340,65 @@ end $function$;
 -- '2.' — FM drops the trailing zeros but leaves the '.' behind, which put "2."
 -- on every quantity and "12.%" on every GST label. Every quantity, percentage
 -- and rate label on the bill and the invoice goes through this.
-drop function if exists public._pos_dec(numeric);
 create or replace function public._pos_dec(p numeric)
 returns text language sql immutable as $$
   select rtrim(rtrim(to_char(coalesce(p,0), 'FM9999990.999'), '0'), '.');
 $$;
+
+-- ──────────────────── 9. GRANTS: the fence, made explicit ──────────────────
+--
+-- TWO defaults conspire here, and the first revoke only closed one of them:
+--   1. Postgres grants EXECUTE on a new function to PUBLIC, and PUBLIC includes
+--      `anon` — whose key ships inside the web bundle and the APK. That is what
+--      the `privileged_rpcs_are_not_anon` guard exists to catch.
+--   2. This project also carries ALTER DEFAULT PRIVILEGES granting EXECUTE to
+--      `authenticated` and `service_role` on every function created in `public`.
+--      So even after revoking PUBLIC, every internal helper was still callable
+--      by any logged-in account.
+-- Both matter. `_pos_header(uuid)` would otherwise let any signed-in user read
+-- any pharmacy's address and GSTIN, and `pos_invoice_render_input(uuid)` would
+-- hand them any pharmacy's whole invoice — it takes a sale_id and deliberately
+-- makes NO shop check, because only the renderer (service key) calls it.
+--
+-- The bodies were already safe (every caller-facing RPC resolves pos_shop() and
+-- refuses a null), but "safe because of a check inside the body" is one edit
+-- away from not being safe. The grant is the fence.
+--
+-- Revoking from the internals costs nothing: a SECURITY DEFINER function runs as
+-- its owner, so pos_quote() calling pos_price_bill() is checked against postgres,
+-- never against the caller.
+do $$
+declare r record;
+begin
+  for r in
+    select p.oid::regprocedure as sig
+      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public'
+       and (p.proname like 'pos\_%' or p.proname like '\_pos\_%')
+  loop
+    execute format('revoke all on function %s from public', r.sig);
+    execute format('revoke all on function %s from anon', r.sig);
+    execute format('revoke all on function %s from authenticated', r.sig);
+  end loop;
+end $$;
+
+-- The caller-facing API, and nothing else.
+grant execute on function public.pos_entry()                           to authenticated;
+grant execute on function public.pos_home()                            to authenticated;
+grant execute on function public.pos_search(text, integer)             to authenticated;
+grant execute on function public.pos_scan(text)                        to authenticated;
+grant execute on function public.pos_quote(jsonb, numeric)             to authenticated;
+grant execute on function public.pos_commit_sale(uuid, jsonb, numeric, text, jsonb) to authenticated;
+grant execute on function public.pos_sale_detail(uuid)                 to authenticated;
+grant execute on function public.pos_invoice_request(uuid)             to authenticated;
+grant execute on function public.pos_invoice_wa(uuid, text)            to authenticated;
+grant execute on function public.pos_day_close(date)                   to authenticated;
+
+-- Internal: the renderer's own pair, service_role only.
+grant execute on function public.pos_invoice_render_input(uuid)        to service_role;
+grant execute on function public.pos_invoice_report(uuid, boolean, text, text, text, integer, text) to service_role;
+
+-- The rename in section 8 leaves the old helper behind on a database that ran
+-- an earlier copy of this file; drop it by signature, after the grant loop has
+-- stopped iterating over it.
+drop function if exists public._pos_qty(numeric);

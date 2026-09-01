@@ -11,6 +11,8 @@
 // replays it byte-for-byte until the backend acknowledges it.
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -89,6 +91,34 @@ class PosApi {
     return Supabase.instance.client.storage
         .from(bucket)
         .createSignedUrl(path, expiresIn);
+  }
+}
+
+/// Whether THIS account gets a counter, and what its menu entry says.
+///
+/// Loaded once at boot and parked in a notifier, exactly the way the nav
+/// registry's profile menu is: the shell holds no label, no icon and no role
+/// test — `pos_entry()` decides all three, and an account that is not a
+/// pharmacy simply gets `show:false` and no entry is drawn.
+class PosEntry {
+  PosEntry._();
+
+  static final ValueNotifier<Map<String, dynamic>> value =
+      ValueNotifier<Map<String, dynamic>>(const {});
+
+  static bool get show => value.value['show'] == true;
+
+  static Future<void> load({PosRpc? rpc}) async {
+    try {
+      final res = await (rpc != null
+          ? rpc('pos_entry', const {})
+          : PosApi.entry());
+      value.value = res['ok'] == true ? res : const {};
+    } catch (_) {
+      // A counter entry that fails to load is simply not drawn. It must never
+      // be the reason the shell fails to boot.
+      value.value = const {};
+    }
   }
 }
 

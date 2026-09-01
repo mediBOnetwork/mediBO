@@ -399,6 +399,19 @@ class _DesktopProfileButton extends StatelessWidget {
         // CHANGE #325 — the ~20 feature rows that used to sit here are the
         // dropdown Om counted to thirty. They live on the dashboard now. This
         // popup draws View Profile and Logout, from the registry.
+        // CMD #411 — the pharmacy counter, from pos_entry().
+        if (PosEntry.show)
+          PopupMenuItem(
+            value: 'pos',
+            child: Row(
+              children: [
+                Icon(Icons.point_of_sale_outlined, size: 16, color: Ds.c.brand),
+                SizedBox(width: Ds.space.x8),
+                Text((PosEntry.value.value['label'] ?? '').toString(),
+                    style: Ds.t.body),
+              ],
+            ),
+          ),
         PopupMenuItem(
           value: 'logout',
           child: Row(
@@ -413,6 +426,11 @@ class _DesktopProfileButton extends StatelessWidget {
       ];
       },
       onSelected: (val) async {
+        if (val == 'pos' && context.mounted) {
+          Navigator.push(context,
+              MaterialPageRoute<void>(builder: (_) => const PosScreen()));
+          return;
+        }
         if (val == 'profile' && context.mounted) {
           if (isCustomerViewAs) {
             Navigator.push(context, MaterialPageRoute(

@@ -1454,3 +1454,262 @@ end $function$
 insert into public.ui_copy(key, value) values
   ('profile.row_staff_logins', to_jsonb('Staff logins'::text))
 on conflict (key) do update set value = excluded.value, updated_at = now();
+
+-- ═════════════════════════════════════════════════════════════════════════════
+-- 16. THE BUG THE PROOF EXISTS FOR.
+--
+-- customer_staff_add() bound a staff member into login_identities as
+-- owner_type='customer' — the same kind of row the pharmacy OWNER has, because
+-- until this change one pharmacy meant one login. login_bind_owner() runs on
+-- every sign-in and switches on exactly that field:
+--
+--     if r.owner_type = 'customer' then
+--       update pharmacy_profiles set user_id = p_user_id where id = r.owner_id;
+--       update orders set user_id = p_user_id where user_id = any(...);
+--       update cart_items ...
+--
+-- So the FIRST time a counter person signed in, they became the pharmacy's
+-- `user_id` — displacing the owner — and every past order of that pharmacy was
+-- re-stamped as authored by them. The owner could then no longer revoke them,
+-- because removing the customer_users row left the hijacked
+-- pharmacy_profiles.user_id behind and my_customer_id() still resolved them
+-- through its `pp.user_id = auth.uid()` branch. The proof caught it on the
+-- assertion "removal actually revokes".
+--
+-- The fix is in the DATA, not in a new exception inside the login path: staff
+-- get their own binding kind. login_bind_owner() already switches on
+-- owner_type, so a kind it has never heard of falls through every branch and
+-- takes nothing over — no special case, no new way for that function to be
+-- wrong. get_my_role() still answers 'customer' for them, because 'customer'
+-- is its default for any identity that is not one of the named other roles.
+--
+-- Two customer resolvers then have to learn about the new kind, and they are
+-- the only two: my_customer_id() (already carries its customer_users branch,
+-- added in section 12) and customer_id_for_user(), which is what the CART and
+-- _stamp_customer_id() use — without it a staff member's order would be
+-- written with a null customer_id and disappear from everyone's order list.
+-- ═════════════════════════════════════════════════════════════════════════════
+
+-- login_identities constrains owner_type to a fixed list, so the new kind has
+-- to be admitted before anything can be bound as it. Widening a CHECK is
+-- additive: every existing row still satisfies it.
+alter table public.login_identities
+  drop constraint if exists login_identities_owner_type_check;
+alter table public.login_identities
+  add constraint login_identities_owner_type_check
+  check (owner_type = any (array['supplier','customer','customer_staff','admin',
+                                 'company','mr','delivery','worker','partner']));
+
+-- Heal anything the earlier form of this migration already bound.
+update public.login_identities li
+   set owner_type = 'customer_staff'
+ where li.owner_type = 'customer'
+   and exists (select 1 from public.customer_users cu
+                where cu.identity = li.identity
+                  and cu.customer_id::text = li.owner_id);
+
+create or replace function public.customer_id_for_user(p_uid uuid)
+returns uuid language sql stable security definer set search_path to 'public' as $$
+  select coalesce(
+    -- the pharmacy's own owner login
+    (select li.owner_id::uuid
+       from auth.users u
+       join login_identities li
+         on li.owner_type = 'customer'
+        and (li.identity = identity_norm(u.email) or li.identity = identity_norm(u.phone))
+      where u.id = p_uid
+      limit 1),
+    -- CHANGE #408 — or a staff login on that pharmacy. Without this the cart
+    -- and _stamp_customer_id() would not scope a staff member's order to the
+    -- pharmacy at all.
+    (select cu.customer_id
+       from auth.users u
+       join customer_users cu
+         on coalesce(cu.is_active, true)
+        and (cu.identity = identity_norm(u.email)
+             or cu.identity = identity_norm(u.phone)
+             or cu.auth_user_id = u.id)
+      where u.id = p_uid
+      limit 1))
+$$;
+
+create or replace function public.customer_staff_add(
+  p_identity text, p_name text default null, p_access_key text default 'order_only')
+returns jsonb language plpgsql security definer set search_path to 'public' as $$
+declare v_cid uuid := public.my_customer_id(); k text; own record; v_id bigint;
+        v_existing record; v_rank integer; v_want integer;
+begin
+  if v_cid is null or not public.customer_can('customer.staff','write') then
+    return jsonb_build_object('ok',false,'error','not_authorized','tone','danger',
+      'message', public.ui_text('customer_staff.err_not_authorized'));
+  end if;
+  k := public.identity_norm(p_identity);
+  if k is null then
+    return jsonb_build_object('ok',false,'error','bad_identity','tone','danger',
+      'message', public.ui_text('customer_staff.err_bad_identity'));
+  end if;
+
+  select rank into v_want from customer_access_preset
+   where access_key = coalesce(p_access_key,'order_only') and is_active;
+  if v_want is null then
+    return jsonb_build_object('ok',false,'error','bad_access','tone','danger',
+      'message', public.ui_text('customer_staff.err_bad_access'));
+  end if;
+  v_rank := public.my_customer_rank();
+  if v_want > v_rank then
+    return jsonb_build_object('ok',false,'error','above_own','tone','danger',
+      'message', public.ui_text('customer_staff.err_above_own'));
+  end if;
+
+  -- Global identity uniqueness is UNCHANGED: a login that belongs to anyone
+  -- else — any role, any pharmacy — is never adopted.
+  select li.owner_type, li.owner_id into own from login_identities li where li.identity = k;
+  if own.owner_type is not null
+     and (own.owner_type not in ('customer','customer_staff')
+          or own.owner_id is distinct from v_cid::text) then
+    return jsonb_build_object('ok',false,'error','identity_taken','tone','danger',
+      'message', public.ui_text('customer_staff.err_identity_taken'));
+  end if;
+  -- The pharmacy's OWN owner login can never be demoted into a staff row.
+  if own.owner_type = 'customer' and own.owner_id = v_cid::text then
+    return jsonb_build_object('ok',false,'error','already_owner','tone','danger',
+      'message', public.ui_text('customer_staff.err_already_owner'));
+  end if;
+
+  select * into v_existing from customer_users where identity = k;
+  if v_existing.id is not null and v_existing.customer_id <> v_cid then
+    return jsonb_build_object('ok',false,'error','identity_taken','tone','danger',
+      'message', public.ui_text('customer_staff.err_identity_taken'));
+  end if;
+
+  insert into customer_users(customer_id, identity, display_name, access_key, created_by)
+  values (v_cid, k, nullif(btrim(coalesce(p_name,'')),''), coalesce(p_access_key,'order_only'),
+          coalesce(public.my_login_email(),'customer'))
+  on conflict (identity) do update
+    set customer_id = excluded.customer_id, is_active = true,
+        access_key  = excluded.access_key,
+        display_name = coalesce(excluded.display_name, customer_users.display_name),
+        updated_at = now()
+  returning id into v_id;
+
+  -- 'customer_staff', NOT 'customer'. See the block comment above: the second
+  -- one hands this person the pharmacy record and its order history.
+  insert into login_identities(identity, kind, owner_type, owner_id)
+  values (k, case when position('@' in k) > 0 then 'email' else 'phone' end,
+          'customer_staff', v_cid::text)
+  on conflict (identity) do update
+    set owner_type = 'customer_staff', owner_id = v_cid::text;
+
+  return jsonb_build_object('ok',true,'id',v_id,'identity',k,'tone','success',
+    'message', public.ui_text('customer_staff.added'));
+exception when others then
+  return jsonb_build_object('ok',false,'error','exception','tone','danger',
+    'message', replace(public.ui_text('customer_staff.err_failed'), '{detail}', SQLERRM),
+    'sqlstate', SQLSTATE);
+end $$;
+
+create or replace function public.customer_staff_remove(p_id bigint)
+returns jsonb language plpgsql security definer set search_path to 'public' as $$
+declare v_cid uuid := public.my_customer_id(); r record; v_rank integer; v_their integer;
+begin
+  if v_cid is null or not public.customer_can('customer.staff','write') then
+    return jsonb_build_object('ok',false,'error','not_authorized','tone','danger',
+      'message', public.ui_text('customer_staff.err_not_authorized'));
+  end if;
+  select * into r from customer_users where id = p_id and customer_id = v_cid;
+  if r.id is null then
+    return jsonb_build_object('ok',false,'error','not_found','tone','danger',
+      'message', public.ui_text('customer_staff.err_not_found'));
+  end if;
+  if r.id = public.my_customer_user_id() then
+    return jsonb_build_object('ok',false,'error','self','tone','danger',
+      'message', public.ui_text('customer_staff.err_self'));
+  end if;
+  v_rank := public.my_customer_rank();
+  select rank into v_their from customer_access_preset where access_key = r.access_key;
+  if coalesce(v_their,0) > v_rank then
+    return jsonb_build_object('ok',false,'error','above_own','tone','danger',
+      'message', public.ui_text('customer_staff.err_above_own'));
+  end if;
+
+  delete from customer_users where id = r.id;
+  -- Everything that made that login resolve to this pharmacy goes with it, or
+  -- "remove" is a button that does not remove:
+  --   the binding …
+  delete from login_identities
+   where identity = r.identity
+     and owner_type in ('customer','customer_staff')
+     and owner_id = v_cid::text;
+  --   … and any owner slot a PREVIOUS build's binding let them take over.
+  --   `nil` is what login_bind_owner() itself parks a vacated profile at.
+  if r.auth_user_id is not null then
+    update pharmacy_profiles
+       set user_id = '00000000-0000-0000-0000-000000000000'::uuid
+     where id = v_cid and user_id = r.auth_user_id;
+  end if;
+
+  return jsonb_build_object('ok',true,'tone','success',
+    'message', public.ui_text('customer_staff.removed'));
+exception when others then
+  return jsonb_build_object('ok',false,'error','exception','tone','danger',
+    'message', replace(public.ui_text('customer_staff.err_failed'), '{detail}', SQLERRM),
+    'sqlstate', SQLSTATE);
+end $$;
+
+-- customer_users.auth_user_id stops being a forward hook and becomes the thing
+-- that makes removal complete: it is stamped the first time a staff member is
+-- actually seen, from the one call every authenticated screen already makes.
+create or replace function public.customer_staff_touch()
+returns bigint language plpgsql security definer set search_path to 'public' as $$
+declare v_id bigint := public.my_customer_user_id();
+begin
+  if v_id is null or auth.uid() is null then return null; end if;
+  update customer_users
+     set auth_user_id = auth.uid(), updated_at = now()
+   where id = v_id and auth_user_id is distinct from auth.uid();
+  return v_id;
+exception when others then
+  return v_id;
+end $$;
+
+revoke all on function public.customer_id_for_user(uuid)  from public, anon;
+revoke all on function public.customer_staff_touch()      from public, anon;
+grant execute on function public.customer_staff_touch()   to authenticated;
+
+-- customer_staff_touch() was a new RPC for the client to call so auth_user_id
+-- would get stamped. It does not need to exist: customer_action_stamp() ALREADY
+-- runs as the acting person on every placement and every edit, and it is
+-- volatile. Folding the stamp in there means the binding is learned by using
+-- the app, with no new call for a screen to remember to make.
+drop function if exists public.customer_staff_touch();
+
+create or replace function public.customer_action_stamp(
+  p_action_key text, p_order_id uuid default null, p_detail jsonb default '{}'::jsonb)
+returns bigint language plpgsql security definer set search_path to 'public' as $$
+declare v_id bigint; v_cu bigint; v_ident text;
+begin
+  v_cu := public.my_customer_user_id();
+
+  -- Learn the auth user behind this staff row the first time we see them, so
+  -- that removing them later can also vacate anything they were bound to.
+  if v_cu is not null and auth.uid() is not null then
+    begin
+      update customer_users
+         set auth_user_id = auth.uid(), updated_at = now()
+       where id = v_cu and auth_user_id is distinct from auth.uid();
+    exception when others then null;
+    end;
+  end if;
+
+  select coalesce((select identity from customer_users where id = v_cu),
+                  public.my_login_email())
+    into v_ident;
+  insert into customer_action_log(customer_id, customer_user_id, identity, action_key, order_id, detail)
+  values (public.my_customer_id(), v_cu, v_ident, p_action_key, p_order_id, coalesce(p_detail,'{}'::jsonb))
+  returning id into v_id;
+  return v_id;
+exception when others then
+  return null;
+end $$;
+
+revoke all on function public.customer_action_stamp(text, uuid, jsonb) from public, anon;

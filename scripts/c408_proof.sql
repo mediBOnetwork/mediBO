@@ -23,6 +23,7 @@ declare
   v           jsonb;
   v_staff_id  bigint;
   v_n         int;
+  v_real_uid  uuid; v_real_email text;
   v_fail      int := 0; v_pass int := 0;
   r           record;
 begin
@@ -101,9 +102,9 @@ begin
     (v_staff_id is not null, 'a customer_users row exists for the new staff member');
 
   insert into c408_log(ok, line)
-  select li.owner_type = 'customer' and li.owner_id = v_cust_id::text,
-         'the SAME login_identities binding every customer login uses -> owner_type='
-         || coalesce(li.owner_type,'null')
+  select li.owner_type = 'customer_staff' and li.owner_id = v_cust_id::text,
+         'bound as customer_staff, NOT customer — login_bind_owner must not hand '
+         || 'this person the pharmacy -> owner_type=' || coalesce(li.owner_type,'null')
     from login_identities li where li.identity = public.identity_norm('9812340408');
 
   -- the identity uniqueness rule is UNCHANGED
@@ -319,6 +320,77 @@ begin
       ((v->'rows'->0->>'who') <> '' and (v->'rows'->0->>'what') <> '',
        'each line names a person and an action, both backend strings');
   end if;
+
+  -- ── THE REALISTIC PATH runs LAST on purpose: my_session() calls
+  --    login_sync_current_user(), which REBINDS pharmacy_profiles.user_id to
+  --    whoever is asking. Run earlier, it moved the fixture's owner out from
+  --    under enforce_order_approval() and the order insert failed. Nothing is
+  --    wrong with the product; the proof simply must not re-bind the account
+  --    it is still using.
+  -- ── THE REALISTIC PATH: a real auth user, added by the email they sign
+  --    in with. The synthetic JWT above proves the auth_user_id branch; this
+  --    proves the one production actually uses, end to end — because "the
+  --    counter person can sign in and place an order" IS the feature, and a
+  --    staff row that resolves to nothing would be a login that does nothing.
+  perform set_config('request.jwt.claims',
+    json_build_object('sub', v_cust_user, 'role','authenticated')::text, true);
+  select u.id, lower(btrim(u.email)) into v_real_uid, v_real_email
+    from auth.users u
+   where u.email is not null
+     and not exists (select 1 from login_identities li
+                      where li.identity = public.identity_norm(u.email))
+     and not exists (select 1 from admins a
+                      where lower(btrim(a.email)) = lower(btrim(u.email)))
+     and not exists (select 1 from pharmacy_profiles p where p.user_id = u.id)
+   limit 1;
+
+  if v_real_uid is not null then
+    v := public.customer_staff_add(v_real_email, 'Counter Sunita', 'order_only');
+    insert into c408_log(ok, line) values
+      (coalesce((v->>'ok')::boolean,false), 'a real unbound login is added as staff');
+
+    perform set_config('request.jwt.claims',
+      json_build_object('sub', v_real_uid, 'role','authenticated')::text, true);
+    insert into c408_log(ok, line) values
+      (public.my_customer_id() = v_cust_id,
+       'they resolve to the pharmacy through the ordinary identity path'),
+      (public.get_my_role() = 'customer',
+       'and the app sees them as a CUSTOMER, not a stranger -> '
+         || coalesce(public.get_my_role(),'null')),
+      (coalesce((public.my_session()->>'can_place_order')::boolean,false),
+       'so they can actually place an order — the whole point of the login'),
+      (public.customer_can('customer.payments','write') is false,
+       'while their order_only grade still keeps them out of payments'),
+      (public.customer_id_for_user(v_real_uid) = v_cust_id,
+       'the CART resolver scopes them to the pharmacy too — without this their '
+       || 'order would be written with no customer_id and vanish from the list');
+    insert into c408_log(ok, line)
+    select count(*) = 0,
+           'and signing in re-stamped NONE of the pharmacy''s order history to them'
+      from orders o where o.user_id = v_real_uid;
+
+    -- and removing them takes the login away again
+    perform set_config('request.jwt.claims',
+      json_build_object('sub', v_cust_user, 'role','authenticated')::text, true);
+    v := public.customer_staff_remove(
+           (select id from customer_users where identity = public.identity_norm(v_real_email)));
+    insert into c408_log(ok, line) values
+      (coalesce((v->>'ok')::boolean,false), 'the owner removes them');
+
+    perform set_config('request.jwt.claims',
+      json_build_object('sub', v_real_uid, 'role','authenticated')::text, true);
+    insert into c408_log(ok, line)
+    select pp.user_id is distinct from v_real_uid,
+           'signing in NEVER handed them the pharmacy record — user_id is still '
+           || 'the owner''s'
+      from pharmacy_profiles pp where pp.id = v_cust_id;
+    insert into c408_log(ok, line) values
+      (public.my_customer_id() is null,
+       'and the login stops resolving to the pharmacy — removal actually revokes'),
+      (coalesce((public.customer_staff_list()->>'ok')::boolean, true) is false,
+       'a removed staff member can no longer open the console');
+  end if;
+
 
   -- ── a stranger reads nothing ─────────────────────────────────────────
   perform set_config('request.jwt.claims',

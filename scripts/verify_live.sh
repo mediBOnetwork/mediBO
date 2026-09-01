@@ -119,6 +119,48 @@ if [ "$LIVE_COMMIT" != "$COMMIT" ]; then
 fi
 echo "   OK: version.json commit=${LIVE_COMMIT}"
 
+# ── Step 2b: the CHANGE NUMBER, when the caller named one ───────────────────
+#
+# CHANGE #459 — the false green that made this necessary. On 2026-09-01 the
+# merge worker ran batch 163 for CHANGE #948; deploy.sh aborted at its
+# pre-build self-test gate (a red focused test) and exited 1 WITHOUT building
+# or uploading anything. The worker deliberately treats deploy.sh's exit code
+# as non-authoritative and defers the verdict here — but this script was called
+# with no argument, so it auto-detected its target commit from
+# build/web/version.json, which was a LEFTOVER artifact from the previous
+# deploy (commit 52e56c4e / CHANGE #947). It then proved that commit was live
+# and painted, because it was: it had shipped fifteen minutes earlier. Exit 0.
+# The batch was stamped deployed, deploy_queue recorded change_no 948, and
+# #459's whole frontend shipped nothing while the register said it was live.
+#
+# A commit check alone cannot catch that, because the stale artifact IS live.
+# The caller is the only one who knows which CHANGE it meant to publish, so
+# when it tells us, we hold the deploy to that number.
+if [ -n "${EXPECT_CHANGE:-}" ]; then
+  # Same retry shape as the commit check above: a transient empty read must
+  # never be reported as the wrong build, or this guard cries wolf and the
+  # next person to see it ignores it (#590's lesson, applied here).
+  LIVE_CHANGE=""
+  for cattempt in 1 2 3 4 5 6; do
+    LIVE_CHANGE=$(curl -s -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+                    "${BASE_URL}/version.json?cb=${RANDOM}${cattempt}c" \
+                  | python3 -c "import json,sys; print(json.load(sys.stdin).get('change',''))" 2>/dev/null || echo "")
+    [ "$LIVE_CHANGE" = "${EXPECT_CHANGE}" ] && break
+    echo "   poll ${cattempt}/6: live change='${LIVE_CHANGE}' want='${EXPECT_CHANGE}' — edge may still be propagating…"
+    sleep 10
+  done
+  if [ "$LIVE_CHANGE" != "${EXPECT_CHANGE}" ]; then
+    echo "   FAIL: live version.json says CHANGE #${LIVE_CHANGE}, caller expected #${EXPECT_CHANGE}"
+    echo "          The build that is live is NOT the one this run meant to publish."
+    echo "          Usual cause: the deploy aborted before building and an older"
+    echo "          build/web/version.json was mistaken for this run's artifact."
+    echo ""
+    echo "=== RESULT: BROKEN (a different CHANGE is live) ==="
+    exit 1
+  fi
+  echo "   OK: version.json change=#${LIVE_CHANGE}"
+fi
+
 # ── Step 3: poll render-log for build=COMMIT + boot_status=painted ──────────
 echo "→ [3/3] polling render-log (12 × 15 s = 3 min max)..."
 MAX_POLLS=12

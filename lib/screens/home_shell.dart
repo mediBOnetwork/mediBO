@@ -24,6 +24,7 @@ import '../widgets/cart_pill.dart'; // C636
 import '../widgets/notification_bell.dart'; // CHANGE #298
 import '../services/push_service.dart'; // CHANGE #298
 import 'admin/admin_push_screen.dart'; // CHANGE #298
+import 'admin/catalogue_health_screen.dart'; // CHANGE #460
 import 'admin/admin_add_medicine_screen.dart';
 import 'admin/admin_manage_admins_screen.dart';
 import 'admin/admin_audit_screen.dart';
@@ -990,6 +991,13 @@ class _HomeShellState extends State<HomeShell> {
       // 'admin.audit_log','read') and admin_roles_screen() on _is_super(),
       // and each screen renders that refusal itself. The fence is the RPC's,
       // not the router's — a Dart `if` is not an access control.
+      // CHANGE #460 — Catalogue health (feature_gaps 161). catalogue_health()
+      // gates on get_my_role() and the screen renders its refusal, same story
+      // as wa_ops above: the fence is the RPC's, not the router's.
+      case 'catalogue_health':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const CatalogueHealthScreen()));
+        break;
       case 'audit_log':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const AdminAuditScreen()));

@@ -58,6 +58,8 @@ const Map<String, IconData> kNavIcons = <String, IconData>{
   'campaign':         Icons.campaign_outlined,
   'filter':           Icons.filter_alt_outlined,
   'timeline':         Icons.timeline_outlined,
+  // CHANGE #460 — Catalogue health (feature_gaps 161).
+  'image':            Icons.image_outlined,
   'settings_suggest': Icons.settings_suggest_outlined,
   'fact_check':       Icons.fact_check_outlined,
   'notifications':    Icons.notifications_outlined,

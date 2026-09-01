@@ -42,6 +42,7 @@ import '../../services/masked_call_service.dart';
 import '../../utils/render_log.dart';
 import '../../widgets/masked_call_button.dart';
 import 'admin_delivery_ops_screen.dart';
+import 'admin_delivery_waves_screen.dart';
 import '../../services/ui_copy.dart';
 import '../../design_tokens.dart';
 
@@ -406,7 +407,13 @@ class AdminDeliveryTabState extends State<AdminDeliveryTab>
             // admin nav because this tab is already "delivery", and an admin
             // looking for a payout is looking at deliveries.
             _opsEntry(),
-            const SizedBox(height: 16),
+            SizedBox(height: Ds.space.x12),
+            // CHANGE #405 follow-up — the SECOND door into wave planning. The
+            // screen, its /admin/delivery-waves route and its dashboard tile
+            // shipped already; an admin standing on the Delivery tab should
+            // not have to go back to the dashboard to plan a wave.
+            _wavesEntry(),
+            SizedBox(height: Ds.space.x24),
             if (_orders.isEmpty)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 32),
@@ -456,6 +463,42 @@ class AdminDeliveryTabState extends State<AdminDeliveryTab>
                   style: Ds.t.body.copyWith(fontWeight: FontWeight.w700)),
               SizedBox(height: Ds.space.x4),
               Text(c('admin.delivery.ops_subtitle'), style: Ds.t.caption),
+            ]),
+          ),
+          Icon(Icons.chevron_right, size: 20, color: _kSub),
+        ]),
+      ),
+    );
+  }
+
+  /// CHANGE #405 follow-up — entry point to the delivery waves screen, built
+  /// exactly like _opsEntry() above: two ui_copy keys and a push, so the row
+  /// carries no display literal of its own.
+  Widget _wavesEntry() {
+    // Reachability proof for the second door: a canvas app cannot be clicked
+    // by a headless verifier, so the render-log is how the live build proves
+    // this card actually painted next to the operations card.
+    RenderLog.write('c405_waves_entry', 1);
+    return InkWell(
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => const AdminDeliveryWavesScreen()),
+      ),
+      child: Container(
+        padding: EdgeInsets.all(Ds.space.x16),
+        decoration: BoxDecoration(
+          color: Ds.c.surface,
+          border: Border.all(color: _kBorder),
+          borderRadius: Ds.r.rCard,
+        ),
+        child: Row(children: [
+          Icon(Icons.schedule_outlined, size: 20, color: _kGreen),
+          SizedBox(width: Ds.space.x12),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(c('admin.delivery.waves_entry'),
+                  style: Ds.t.body.copyWith(fontWeight: FontWeight.w700)),
+              SizedBox(height: Ds.space.x4),
+              Text(c('admin.delivery.waves_subtitle'), style: Ds.t.caption),
             ]),
           ),
           Icon(Icons.chevron_right, size: 20, color: _kSub),

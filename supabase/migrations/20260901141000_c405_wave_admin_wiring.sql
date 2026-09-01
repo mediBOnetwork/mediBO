@@ -12,6 +12,15 @@ as $function$
 declare w delivery_wave%rowtype; v_stops jsonb; v_riders jsonb; v_dec jsonb;
         v_status_label text; v_tone text; v_actions jsonb;
 begin
+  -- QA (#405): this is granted to `authenticated` and a wave uuid is not a
+  -- secret — without this check any signed-in customer holding one could read
+  -- pharmacy names, rider names and the whole decision trail. Exactly the leak
+  -- delivery_run_map carried until #354. The engine calls this internally with
+  -- no JWT and simply discards the refusal.
+  if public.get_my_role() not in ('admin','super_admin') then
+    return jsonb_build_object('ok',false,'error','not_authorized');
+  end if;
+
   select * into w from delivery_wave where id = p_wave_id;
   if w.id is null then return jsonb_build_object('ok',false,'error','wave_not_found'); end if;
 

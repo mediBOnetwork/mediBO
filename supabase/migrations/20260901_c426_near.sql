@@ -42,3 +42,15 @@ on conflict (feature_key) do update
   set label = excluded.label, route_key = excluded.route_key,
       roles_allowed = excluded.roles_allowed, is_active = true,
       description = excluded.description;
+
+-- ── 9. a hole the guard caught while this command was landing ──────────────
+-- Not #426's function, but #426 could not complete past a red rg_check and the
+-- guard named the fix itself: every SECURITY DEFINER function inherits
+-- Postgres's default GRANT TO PUBLIC, and the anon key ships inside the web
+-- bundle and the APK — so this admin/warehouse RPC was a public endpoint.
+-- Idempotent, and safe for its own screen, which calls it with an admin JWT.
+do $$
+begin
+  execute 'revoke execute on function public.admin_demand_engine(integer, date) from public, anon';
+exception when undefined_function then null;
+end $$;

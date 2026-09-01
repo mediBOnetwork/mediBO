@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+import '../pharmacy/pharmacy_variance_screen.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/widgets/admin_date_picker.dart';
 import 'package:pharma_b2b/widgets/admin_zone_picker.dart'; // CHANGE #609
@@ -150,6 +152,19 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       Navigator.push(context,
           MaterialPageRoute(builder: (_) => const AdminStockOnHandScreen()));
       return;
+    }
+    // CMD #413 — the two pharmacy shop-management screens. Pushed rather than
+    // swapped into the shell's tab table for the same reason as the two above:
+    // they are a pharmacy's own surfaces reached from the admin console, not
+    // admin tabs. Who may actually see what inside them is the backend's
+    // answer — pharmacy_expiry_home() and pharmacy_variance_report() each
+    // refuse in their own words, and the screen renders that refusal.
+    {
+      final shield = PharmacyShieldTiles.screenFor(route);
+      if (shield != null) {
+        Navigator.push(context, MaterialPageRoute(builder: (_) => shield));
+        return;
+      }
     }
     QuickLinkNavigator.of(context)?.navigate(route);
   }

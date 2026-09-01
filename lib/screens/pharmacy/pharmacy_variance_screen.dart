@@ -303,7 +303,7 @@ class _PharmacyVarianceScreenState extends State<PharmacyVarianceScreen> {
               ],
 
             SizedBox(height: Ds.space.x24),
-            Text(_s(r['staff_title']), style: Ds.t.subtitle),
+            Text(_s(r['staff_title']), style: Ds.t.bodyStrong),
             SizedBox(height: Ds.space.x8),
             Text(_s(r['staff_note']), style: Ds.t.caption),
             SizedBox(height: Ds.space.x12),
@@ -487,7 +487,7 @@ class _PharmacyCountSheetScreenState extends State<PharmacyCountSheetScreen> {
 
           if (!open && staff.isNotEmpty) ...[
             SizedBox(height: Ds.space.x24),
-            Text(_s(_sheet['staff_title']), style: Ds.t.subtitle),
+            Text(_s(_sheet['staff_title']), style: Ds.t.bodyStrong),
             SizedBox(height: Ds.space.x8),
             Text(_s(_sheet['staff_note']), style: Ds.t.caption),
             SizedBox(height: Ds.space.x12),

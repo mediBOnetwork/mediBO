@@ -923,6 +923,7 @@ create or replace function public.pharmacy_demand_add(p_items jsonb)
 returns jsonb
 language plpgsql security definer set search_path to 'public' as $$
 declare v_shop uuid := public.pos_shop(); it jsonb; v_n integer := 0; v_qty integer;
+        v_res jsonb;
 begin
   if v_shop is null then return public._c419_denied(); end if;
   if p_items is null or jsonb_typeof(p_items) <> 'array' then
@@ -933,8 +934,12 @@ begin
   for it in select value from jsonb_array_elements(p_items) loop
     v_qty := greatest(1, coalesce((it->>'qty')::numeric, 1)::int);
     begin
-      perform public.cart_set_item((it->>'medicine_id')::text, v_qty, null);
-      v_n := v_n + 1;
+      -- Count what the CART accepted, not what we sent it. cart_set_item
+      -- refuses an unknown id, an unstocked one or a guest with 'ok':false and
+      -- writes nothing — counting the attempt would put a number in the toast
+      -- that never reached the cart.
+      v_res := public.cart_set_item((it->>'medicine_id')::text, v_qty, null);
+      if coalesce((v_res->>'ok')::boolean, false) then v_n := v_n + 1; end if;
     exception when others then null;   -- one bad line never sinks the rest
     end;
   end loop;

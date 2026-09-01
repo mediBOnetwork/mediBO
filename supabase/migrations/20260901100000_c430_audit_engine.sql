@@ -57,6 +57,17 @@ alter table public.pharmacy_count_line
   add column if not exists resolved_by   uuid,
   add column if not exists resolved_at   timestamptz;
 
+-- #413 only ever had two states (open → submitted). An audit has a third: the
+-- count is in, the variance is computed, and NOTHING has moved yet because the
+-- second count and the owner's decision come first. Widening the constraint is
+-- the honest way to add it — a session that is closed but not accepted must not
+-- be able to masquerade as submitted.
+alter table public.pharmacy_count_session
+  drop constraint if exists pharmacy_count_session_status_check;
+alter table public.pharmacy_count_session
+  add constraint pharmacy_count_session_status_check
+  check (status = any (array['open','closed','submitted','cancelled']));
+
 create index if not exists pharmacy_count_line_session_idx
   on public.pharmacy_count_line (session_id, status);
 create index if not exists pharmacy_count_line_stock_idx
@@ -186,7 +197,10 @@ begin
     into v_seq, v_prev
     from public.pharmacy_audit_log where pharmacy_id = p_shop;
 
-  v_hash := encode(digest(
+  -- pgcrypto lives in `extensions` on this project, and every function here
+  -- pins search_path to 'public' — so the schema is named explicitly rather
+  -- than trusted to a path.
+  v_hash := encode(extensions.digest(
     coalesce(v_prev,'') || '|' || v_seq::text || '|' || p_event || '|' ||
     coalesce(p_session::text,'') || '|' ||
     coalesce(p_payload::text,'{}') || '|' || to_char(v_at, 'YYYY-MM-DD"T"HH24:MI:SS.USOF'),

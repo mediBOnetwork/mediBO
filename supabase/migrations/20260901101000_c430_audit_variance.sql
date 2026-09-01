@@ -568,7 +568,7 @@ begin
     select * from public.pharmacy_audit_log
      where pharmacy_id = v_shop order by seq
   loop
-    v_calc := encode(digest(
+    v_calc := encode(extensions.digest(
       coalesce(v_prev,'') || '|' || r.seq::text || '|' || r.event || '|' ||
       coalesce(r.session_id::text,'') || '|' || coalesce(r.payload::text,'{}') || '|' ||
       to_char(r.at, 'YYYY-MM-DD"T"HH24:MI:SS.USOF'), 'sha256'), 'hex');
@@ -818,9 +818,12 @@ create or replace function public.trg_c430_session_sealed()
 returns trigger language plpgsql security definer set search_path to 'public' as $$
 begin
   if tg_op = 'INSERT' then
+    -- The audit's own RPCs append their entries themselves, so this only picks
+    -- up sessions born elsewhere — #413's spot check.
+    if coalesce(new.kind, 'spot') <> 'spot' then return new; end if;
     perform public.audit_log_append(new.pharmacy_id, new.id, 'session_started',
       jsonb_build_object('kind', new.kind, 'sku_count', new.sku_count,
-                         'source', 'trigger'));
+                         'source', 'spot_check'));
   elsif tg_op = 'UPDATE' and coalesce(old.status,'') <> 'submitted'
         and new.status = 'submitted' then
     perform public.audit_log_append(new.pharmacy_id, new.id, 'session_submitted',
@@ -830,15 +833,6 @@ begin
   return new;
 exception when others then
   return new;   -- the log must never block a count
-end $$;
-
--- The audit's own RPCs already append their entries, so the trigger only covers
--- sessions born elsewhere (#413's spot check).
-create or replace function public.trg_c430_session_sealed_gate()
-returns trigger language plpgsql security definer set search_path to 'public' as $$
-begin
-  if tg_op = 'INSERT' and coalesce(new.kind,'spot') <> 'spot' then return new; end if;
-  return public.trg_c430_session_sealed();
 end $$;
 
 drop trigger if exists c430_session_seal_trg on public.pharmacy_count_session;

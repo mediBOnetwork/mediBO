@@ -46,4 +46,6 @@ const kRegisteredAdminRoutes = <String>[
   'reviews',
   // Identity — the only two rows the dropdown may hold
   'profile', 'logout',
+  // CMD #429/#444 — the paper sale sheet.
+  'paper_sale',
 ];

@@ -43,6 +43,7 @@ import 'screens/admin/dev_queue/cron_health_screen.dart'; // /admin/cron-health
 import 'screens/admin/admin_delivery_extras_screen.dart'; // /admin/delivery-programme
 import 'screens/pharmacy/pharmacy_expiry_screen.dart';   // CMD #413 — /pharmacy/expiry
 import 'screens/pharmacy/pharmacy_variance_screen.dart'; // CMD #413 — /pharmacy/stock-check
+import 'screens/pharmacy/rx_scan_screen.dart';           // CMD #418 — /pharmacy/prescription
 import 'screens/admin/nav_registry_view.dart'; // CHANGE #325 — deep links
 import 'screens/product_detail_screen.dart'; // C636: /product/:id
 import 'screens/reorder_screen.dart'; // #173: /reorder
@@ -678,6 +679,16 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
                 return MaterialPageRoute(
                   settings: settings,
                   builder: (_) => const PharmacyExpiryScreen(),
+                );
+              }
+              // CMD #418 — the prescription scanner, at a real URL for the
+              // same reason as the pair above. Authorisation is the backend's:
+              // rx_scan_recent() answers "The prescription scanner is available
+              // on a pharmacy account." itself and the screen prints it.
+              if (name.split('?').first == '/pharmacy/prescription') {
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => const RxScanScreen(),
                 );
               }
               if (name.split('?').first == '/pharmacy/stock-check') {

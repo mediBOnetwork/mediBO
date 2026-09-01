@@ -31,6 +31,8 @@ import '../../design_tokens.dart';
 import 'pharmacy_reorder_screen.dart';  // CHANGE #414
 import 'pharmacy_stock_screen.dart';
 import 'pos_margin_strip.dart';  // CHANGE #414
+import '../../services/khata_api.dart';  // CMD #415 — khata_nav_entry()
+import 'khata_screen.dart';  // CMD #415 — the counter's credit book
 import '../../services/pharmacy_stock_api.dart';
 import '../../services/pos_api.dart';
 import '../../services/ui_copy.dart';
@@ -154,6 +156,10 @@ class _PosScreenState extends State<PosScreen> {
         _payMode = _s(home['default_payment']);
       });
       RenderLog.write('c411_pos_home', 1);
+      // CMD #415 — the book's own entry, loaded here rather than at shell boot
+      // because the counter is where it is used. A failure leaves the button
+      // undrawn; it never stops a bill being written.
+      if (widget.rpc == null) unawaited(KhataEntry.load());
       // Anything billed while the network was gone lands now, before the
       // operator starts a new bill on a day-close that would be wrong.
       unawaited(_replayPending());
@@ -464,6 +470,25 @@ class _PosScreenState extends State<PosScreen> {
                   MaterialPageRoute<void>(
                     builder: (_) => const PharmacyStockScreen(),
                   ),
+                ),
+              );
+            },
+          ),
+          // CMD #415 — the khata book, from the counter. Same reason as the
+          // shelf above: a bill saved "on khata" IS a line in that book, so
+          // the way to it is a tap from where the bill was written. Icon,
+          // tooltip and the outstanding figure come from khata_nav_entry();
+          // the button is absent when it said nothing.
+          ValueListenableBuilder<Map<String, dynamic>>(
+            valueListenable: KhataEntry.value,
+            builder: (context, entry, _) {
+              if (entry['show'] != true) return const SizedBox.shrink();
+              return IconButton(
+                icon: Icon(Icons.menu_book_outlined, color: Ds.c.brand),
+                tooltip: _s(entry['label']),
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute<void>(builder: (_) => const KhataScreen()),
                 ),
               );
             },

@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../pharmacy/khata_screen.dart'; // CMD #415 — the khata book
 import '../pharmacy/pharmacy_variance_screen.dart';
+import '../pharmacy/rx_scan_screen.dart'; // CMD #418
 import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/widgets/admin_date_picker.dart';
 import 'package:pharma_b2b/widgets/admin_zone_picker.dart'; // CHANGE #609
@@ -165,6 +167,22 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         Navigator.push(context, MaterialPageRoute(builder: (_) => shield));
         return;
       }
+    }
+    // CMD #415 — the pharmacy's khata book. Pushed rather than swapped into the
+    // shell's tab table for the same reason as the pharmacy screens above: it
+    // is a shop's own ledger reached from the admin console, not an admin tab.
+    // khata_home() gates on the caller's own pharmacy and renders its own
+    // refusal, so there is no role test here.
+    if (route == 'khata') {
+      Navigator.push(
+          context, MaterialPageRoute(builder: (_) => const KhataScreen()));
+      return;
+    }
+    // CMD #418 — the prescription scanner, same push, same reason.
+    if (route == 'rx_scan') {
+      Navigator.push(context,
+          MaterialPageRoute(builder: (_) => const RxScanScreen()));
+      return;
     }
     QuickLinkNavigator.of(context)?.navigate(route);
   }

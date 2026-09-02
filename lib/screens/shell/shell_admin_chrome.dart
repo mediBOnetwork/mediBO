@@ -13,7 +13,10 @@ part of '../home_shell.dart';
 class _AdminDesktopHeader extends StatelessWidget {
   final bool scrolled;
   final VoidCallback onHome;
-  final ValueChanged<int> onSection; // 0=Dashboard,1=AddMedicine,2=Suppliers,3=Customers,4=Bills
+  /// CHANGE #653 — the top row's entries AFTER the View matrix has filtered
+  /// them. The row no longer knows the five section names: it renders what it
+  /// is given and hands back each entry's own route key.
+  final List<AdminNavEntry> entries;
   final ValueChanged<String> onAdminNav;
   final bool isSuperAdmin;
   final int deletionCount;
@@ -24,7 +27,7 @@ class _AdminDesktopHeader extends StatelessWidget {
 
   const _AdminDesktopHeader({
     required this.onHome,
-    required this.onSection,
+    required this.entries,
     required this.onAdminNav,
     this.isSuperAdmin = false,
     this.scrolled = false,
@@ -77,12 +80,21 @@ class _AdminDesktopHeader extends StatelessWidget {
           // Rendered from kAdminTopNav so the row's contents are enumerable —
           // a nav entry added to one surface and forgotten in the others is
           // exactly how the WhatsApp screens ended up unreachable.
-          for (var i = 0; i < kAdminTopNav.length; i++) ...[
+          // CHANGE #653 — the proof the shell is drawing from the matrix:
+          // how many nav entries survived it, and which role it resolved.
+          Builder(builder: (_) {
+            RenderLog.write('c653_nav_items', entries.length);
+            RenderLog.write('c653_access_role', Access.instance.matrix.role);
+            RenderLog.write('c653_access_resolved',
+                Access.instance.matrix.resolved.toString());
+            return const SizedBox.shrink();
+          }),
+          for (final e in entries) ...[
             _DesktopNavLink(
-              label: kAdminTopNav[i].label,
-              icon: kAdminTopNav[i].icon,
+              label: e.label,
+              icon: e.icon,
               selected: false,
-              onTap: () => onSection(i),
+              onTap: () => onAdminNav(e.route ?? ''),
             ),
             const SizedBox(width: 2),
           ],
@@ -105,7 +117,12 @@ class _AdminDesktopHeader extends StatelessWidget {
 
 class _AdminMobileBottomBar extends StatelessWidget {
   final int index; // current _index from HomeShellState
-  final ValueChanged<int> onSection; // 0=Dashboard,1=AddMedicine,2=Suppliers,3=Customers,4=Bills,5=Fulfillment
+
+  /// CHANGE #653 — the entries the View matrix left visible, in order, and the
+  /// route key each one fires. Positions move the moment a screen is toggled
+  /// off, so nothing here is addressed by index any more.
+  final List<AdminNavEntry> entries;
+  final ValueChanged<String> onRoute;
 
   /// CHANGE #306 — unactioned unpaid orders, from order_alert_feed().count.
   /// It rides the Fulfill tab because that is where an accepted order goes
@@ -115,27 +132,29 @@ class _AdminMobileBottomBar extends StatelessWidget {
 
   const _AdminMobileBottomBar({
     required this.index,
-    required this.onSection,
+    required this.entries,
+    required this.onRoute,
     this.alertCount = 0,
   });
 
-  // Maps HomeShell _index to admin section index for the #206 nav order:
-  // 0=Dashboard, 1=WhatsApp(pushed route, never highlighted),
-  // 2=Customers, 3=Suppliers, 4=Fulfillment
-  int get _activeSection {
+  // Maps HomeShell _index to the ROUTE KEY that is currently open, so the
+  // highlight follows the destination rather than a position in the row —
+  // positions move the moment a screen is toggled off (CHANGE #653).
+  String get _activeRoute {
     switch (index) {
-      case 3: return 0; // Dashboard
-      case 6: return 2; // Customers
-      case 5: return 3; // Suppliers
-      case 11: return 4; // Fulfillment
-      default: return -1;
+      case 3: return 'dashboard';
+      case 6: return 'customers';
+      case 5: return 'suppliers';
+      case 11: return 'fulfillment';
+      default: return '';
     }
   }
 
   @override
   Widget build(BuildContext context) {
     RenderLog.write('c73_nav', 'shrink_to_fit');
-    RenderLog.write('c73_items_rendered', 5);
+    RenderLog.write('c73_items_rendered', entries.length);
+    RenderLog.write('c653_nav_items', entries.length);
     RenderLog.write('c206_nav_whatsapp', 1);
     RenderLog.write('c73_all_icons_visible', true);
     RenderLog.write('c73_all_labels_visible', true);
@@ -154,16 +173,18 @@ class _AdminMobileBottomBar extends StatelessWidget {
             children: [
               // Rendered from kAdminBottomNav, which is capped at five tabs.
               // New destinations belong in the profile sheet, not here.
-              for (var i = 0; i < kAdminBottomNav.length; i++)
+              for (var i = 0; i < entries.length; i++)
                 _AdminNavItem(
-                  icon: kAdminBottomNav[i].icon,
-                  label: kAdminBottomNav[i].label,
-                  selected: _activeSection == i,
-                  // Fulfill is the last tab and the one an accepted order
-                  // flows into, so it carries the waiting count.
+                  icon: entries[i].icon,
+                  label: entries[i].label,
+                  selected: _activeRoute.isNotEmpty &&
+                      _activeRoute == (entries[i].route ?? ''),
+                  // Fulfill is the tab an accepted order flows into, so it
+                  // carries the waiting count — found by its own route key,
+                  // never by being last in a row the matrix may have shortened.
                   badgeCount:
-                      i == kAdminBottomNav.length - 1 ? alertCount : 0,
-                  onTap: () => onSection(i),
+                      entries[i].route == 'fulfillment' ? alertCount : 0,
+                  onTap: () => onRoute(entries[i].route ?? ''),
                 ),
             ],
           ),

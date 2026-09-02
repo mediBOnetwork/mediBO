@@ -20,6 +20,7 @@
 import 'package:flutter/material.dart';
 
 import '../design_tokens.dart';
+import '../widgets/access_readonly_chip.dart';
 import '../utils/render_log.dart';
 
 /// One stage of the pipeline, exactly as `fulfill_tabs().tabs[]` sent it.
@@ -99,6 +100,11 @@ class FulfillPipelinePayload {
   final bool isPartner;
   final String zoneLabel;
 
+  /// CHANGE #653 — the backend's word for a tab this login may open but not
+  /// change (`access.readonly_badge`). Empty means the backend sent none, and
+  /// the chip then renders nothing.
+  final String readonlyBadge;
+
   const FulfillPipelinePayload({
     required this.ok,
     required this.tabs,
@@ -107,6 +113,7 @@ class FulfillPipelinePayload {
     required this.emptyMessage,
     required this.isPartner,
     required this.zoneLabel,
+    this.readonlyBadge = '',
   });
 
   static const FulfillPipelinePayload empty = FulfillPipelinePayload(
@@ -134,6 +141,7 @@ class FulfillPipelinePayload {
         emptyMessage: emptyMessage,
         isPartner: isPartner,
         zoneLabel: zoneLabel,
+        readonlyBadge: readonlyBadge,
       );
 
   static FulfillPipelinePayload fromJson(Map<String, dynamic> m) {
@@ -150,6 +158,7 @@ class FulfillPipelinePayload {
       emptyMessage: (m['empty_message'] ?? '').toString(),
       isPartner: m['is_partner'] == true,
       zoneLabel: (m['zone_label'] ?? '').toString(),
+      readonlyBadge: (m['readonly_badge'] ?? '').toString(),
     );
   }
 
@@ -194,6 +203,10 @@ class FulfillPipelineTabBar extends StatefulWidget {
   final Color badgeColor;
   final Color surfaceColor;
 
+  /// CHANGE #653 — `fulfill_tabs().readonly_badge`, printed verbatim on any
+  /// tab whose `can_write` is false. The bar never words it itself.
+  final String readonlyBadge;
+
   const FulfillPipelineTabBar({
     super.key,
     required this.tabs,
@@ -203,6 +216,7 @@ class FulfillPipelineTabBar extends StatefulWidget {
     required this.unselectedColor,
     required this.badgeColor,
     required this.surfaceColor,
+    this.readonlyBadge = '',
   });
 
   @override
@@ -298,6 +312,7 @@ class _FulfillPipelineTabBarState extends State<FulfillPipelineTabBar> {
                 selectedColor: widget.selectedColor,
                 unselectedColor: widget.unselectedColor,
                 badgeColor: widget.badgeColor,
+                readonlyBadge: widget.readonlyBadge,
               ),
             ),
           ],
@@ -335,6 +350,9 @@ class _PipelineTabChip extends StatelessWidget {
   final Color unselectedColor;
   final Color badgeColor;
 
+  /// CHANGE #653 — backend copy for the View-only state, printed verbatim.
+  final String readonlyBadge;
+
   const _PipelineTabChip({
     required this.tab,
     required this.selected,
@@ -342,6 +360,7 @@ class _PipelineTabChip extends StatelessWidget {
     required this.selectedColor,
     required this.unselectedColor,
     required this.badgeColor,
+    this.readonlyBadge = '',
   });
 
   @override
@@ -363,16 +382,23 @@ class _PipelineTabChip extends StatelessWidget {
               color: selected ? selectedColor : Colors.transparent,
               borderRadius: Ds.r.rButton,
             ),
-            child: Text(
-              tab.label,
-              maxLines: 1,
-              softWrap: false,
-              style: TextStyle(
-                fontSize: Ds.t.bodySize,
-                fontWeight: FontWeight.w700,
-                color: selected ? Colors.white : unselectedColor,
+            // CHANGE #653 — ONE interface. `can_write` already arrived on this
+            // tab from fulfill_tabs(), which reads the same View/Write matrix
+            // every other surface reads. View on + Write off is a real state,
+            // so the tab says so — in the backend's own word.
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Text(
+                tab.label,
+                maxLines: 1,
+                softWrap: false,
+                style: TextStyle(
+                  fontSize: Ds.t.bodySize,
+                  fontWeight: FontWeight.w700,
+                  color: selected ? Colors.white : unselectedColor,
+                ),
               ),
-            ),
+              if (!tab.canWrite) AccessReadOnlyChip(label: readonlyBadge),
+            ]),
           ),
           if (badge != null)
             Positioned(

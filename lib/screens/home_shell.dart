@@ -37,6 +37,8 @@ import 'admin/admin_ops_queues_screen.dart';
 import 'admin/admin_delivery_partner_screen.dart';
 import 'admin/admin_mr_screen.dart';
 import 'admin/admin_alert_overlay.dart';
+import '../services/access.dart'; // C653: the ONE View/Write matrix
+import 'admin/admin_users_access_screen.dart'; // C653
 import 'admin/admin_nav_entries.dart';
 import 'admin/nav_registry_view.dart';          // CHANGE #325
 import 'admin/reorder_admin_screen.dart';       // CHANGE #325
@@ -314,6 +316,7 @@ class _HomeShellState extends State<HomeShell> {
     // a session is fetched); this only listens so the shell repaints when it
     // answers.
     DeliveryRoleState.instance.addListener(_onDeliveryRoleChanged);
+    Access.instance.addListener(_onAccessChanged); // C653
     // CHANGE #497: categories are public data — fetch them immediately, in
     // parallel with auth/session resolution below, never behind it. Renders
     // instantly from cache when one exists; refreshes in the background with
@@ -759,6 +762,19 @@ class _HomeShellState extends State<HomeShell> {
   /// destination by themselves.
   void _handleAdminNav(String route, [String? seed]) {
     if (!mounted) return;
+    // CHANGE #653 — ONE interface: super admin, admin and partner share these
+    // routes, and the per-feature View toggle is the only differentiator. A
+    // route the matrix says View=off is refused HERE too, so a deep link or a
+    // stale nav row cannot walk in behind a hidden entry. The wording is the
+    // backend's; 'home' and 'logout' are the shell itself, never features.
+    if (route != 'home' &&
+        route != 'logout' &&
+        !Access.instance.routeCanView(route)) {
+      RenderLog.write('c653_nav_denied', route);
+      final msg = Access.instance.deniedViewMessage;
+      if (msg.isNotEmpty) showToast(context, msg, isError: true);
+      return;
+    }
     switch (route) {
       case 'home': _goHome(); break;
       case 'dashboard': setState(() { _index = 3; _cartOpen = false; }); break;
@@ -1119,6 +1135,16 @@ class _HomeShellState extends State<HomeShell> {
               MaterialPageRoute(builder: (_) => const DevQueueScreen()));
         }
         break;
+      // CHANGE #653 — Users & access: the one screen that edits the matrix
+      // every other screen is drawn from. Super admin only, by definition.
+      case 'users_access':
+        if (_amISuper) {
+          Navigator.push(
+              context,
+              MaterialPageRoute(
+                  builder: (_) => const AdminUsersAccessScreen()));
+        }
+        break;
       // CHANGE #306 — New-order alerts: what is waiting for a decision, the
       // escalation config, per-customer credit limits and the purchase gate.
       // order_alert_settings() gates on get_my_role() and the screen renders
@@ -1276,9 +1302,16 @@ class _HomeShellState extends State<HomeShell> {
     if (BulkUploadScreen.navToBulkUpload != null) BulkUploadScreen.navToBulkUpload = null;
     if (kIsWeb) HardwareKeyboard.instance.removeHandler(_globalKeyHandler);
     DeliveryRoleState.instance.removeListener(_onDeliveryRoleChanged); // C629
+    Access.instance.removeListener(_onAccessChanged); // C653
     _searchFocus.dispose();
     _searchCtrl.dispose();
     super.dispose();
+  }
+
+  /// CHANGE #653 — the View/Write matrix arrived (or was cleared by a
+  /// sign-out). Rebuild so the nav re-reads it; nothing is decided here.
+  void _onAccessChanged() {
+    if (mounted) setState(() {});
   }
 
   /// CHANGE #629 — the delivery probe settled (or was cleared by a sign-out).
@@ -1650,9 +1683,12 @@ class _HomeShellState extends State<HomeShell> {
           ? _AdminMobileBottomBar(
               index: _index,
               alertCount: _alertCount,
-              onSection: (i) => _handleAdminNav(const [
-                'dashboard', 'whatsapp', 'customers', 'suppliers', 'fulfillment'
-              ][i]),
+              // CHANGE #653 — the bar renders the entries the matrix left
+              // visible, and each tap carries that entry's OWN route key, so
+              // hiding one can never shift another tab's destination.
+              entries: visibleNavEntries(
+                  kAdminBottomNav, Access.instance.routeCanView),
+              onRoute: _handleAdminNav,
             )
           : (_cartOpen
               ? null
@@ -1779,9 +1815,11 @@ class _HomeShellState extends State<HomeShell> {
                 _AdminDesktopHeader(
                   scrolled: _desktopScrolled,
                   onHome: onLogoTap,
-                  onSection: (i) => _handleAdminNav(const [
-                    'dashboard', 'whatsapp', 'customers', 'suppliers', 'fulfillment'
-                  ][i]),
+                  // CHANGE #653 — the top row is the matrix's answer, not a
+                  // fixed five: it renders what survived the View toggles and
+                  // hands back each entry's own route key.
+                  entries: visibleNavEntries(
+                      kAdminTopNav, Access.instance.routeCanView),
                   onAdminNav: _handleAdminNav,
                   isSuperAdmin: _amISuper,
                   deletionCount: _deletionCount,

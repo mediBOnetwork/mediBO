@@ -19,6 +19,8 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../utils/file_pick_io.dart' as filepick;
 import '../../models/order_hours_model.dart';
 import '../../order_hours_state.dart';
+import '../../services/access.dart';
+import '../../widgets/access_readonly_chip.dart';
 import '../../services/match_status_service.dart';
 import '../../services/spn_options.dart';
 import '../../design_tokens.dart'; // cmd #435 — Ds tokens, no new literals
@@ -458,8 +460,13 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     _SupFilter.pending, _SupFilter.leads, _SupFilter.staging,
   ];
 
+  /// CHANGE #653 — ONE interface. The bounded caller's own list (#528) AND
+  /// the per-feature View toggle both have to say yes, and the matrix is the
+  /// backend's answer for whichever login is signed in — super admin, admin or
+  /// partner. The screen decides nothing by role.
   bool _tabAllowed(int i) =>
-      widget.allowedTabs == null || widget.allowedTabs!.contains(i);
+      (widget.allowedTabs == null || widget.allowedTabs!.contains(i)) &&
+      _tabOn(_tabKeys[_tabOrder[i]] ?? '');
 
   bool _filterAllowed(_SupFilter f) => _tabAllowed(_tabOrder.indexOf(f));
   _SupSortMode _sortMode = _SupSortMode.spnDesc;
@@ -1215,6 +1222,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   @override
   Widget build(BuildContext context) {
+    _redirectIfTabHidden();
     return LayoutBuilder(builder: (ctx, box) {
       final isDesktop = box.maxWidth >= 900;
       // #110: write ACTUAL measured viewport width so Phase 9 can prove narrow layout
@@ -1559,8 +1567,40 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     );
   }
 
+  /// CHANGE #653 — is this tab turned on for the signed-in login? Asked of
+  /// the backend matrix, never decided by role.
+  bool _tabOn(String tabKey) => Access.instance.tabCanView('supplier', tabKey);
+
+  /// The backend's tab key for each filter, in the tab row's own order.
+  static const Map<_SupFilter, String> _tabKeys = {
+    _SupFilter.suppliers: 'suppliers',
+    _SupFilter.inquiry: 'inquiry',
+    _SupFilter.orders: 'orders',
+    _SupFilter.pending: 'pending',
+    _SupFilter.leads: 'leads',
+    _SupFilter.staging: 'staging',
+  };
+
+  /// CHANGE #653 — see the Customer screen: a hidden tab must not stay open,
+  /// because its button is gone and there is no way back to another one.
+  void _redirectIfTabHidden() {
+    if (_tabOn(_tabKeys[_filter] ?? '')) return;
+    for (final e in _tabKeys.entries) {
+      if (_tabOn(e.value)) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && !_tabOn(_tabKeys[_filter] ?? '')) {
+            setState(() => _filter = e.key);
+          }
+        });
+        return;
+      }
+    }
+  }
+
   Widget _tab(_SupFilter f, String label) {
     final active = _filter == f;
+    // CHANGE #653 — see the Customer screen: View on + Write off says so.
+    final readOnly = !Access.instance.tabCanWrite('supplier', _tabKeys[f] ?? '');
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       child: GestureDetector(
@@ -1576,11 +1616,15 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
             borderRadius: BorderRadius.circular(20),
             border: Border.all(color: active ? const Color(0xFF1B7A43) : const Color(0xFFD1D5DB)),
           ),
-          child: Text(label,
-              style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-                  color: active ? Colors.white : const Color(0xFF6B7280))),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Text(label,
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+                    color: active ? Colors.white : const Color(0xFF6B7280))),
+            if (readOnly)
+              AccessReadOnlyChip(label: Access.instance.readonlyBadge),
+          ]),
         ),
       ),
     );

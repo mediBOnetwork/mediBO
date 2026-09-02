@@ -16,6 +16,21 @@ class AdminNavEntry {
   const AdminNavEntry(this.label, this.icon, {this.route});
 }
 
+/// CHANGE #653 — the ONE interface. Super admin, admin and partner share this
+/// nav; the only differentiator is the per-feature View/Write matrix, so every
+/// surface that renders a nav list renders it through here.
+///
+/// Pure on purpose (no Supabase, no BuildContext): [canView] is the caller's
+/// `Access.routeCanView`, which is a straight read of the `access_boot()`
+/// payload. An entry with no route is left in — a destination the registry has
+/// not catalogued yet must not silently disappear from the shell.
+List<AdminNavEntry> visibleNavEntries(
+    List<AdminNavEntry> entries, bool Function(String routeKey) canView) {
+  return entries
+      .where((e) => e.route == null || e.route!.isEmpty || canView(e.route!))
+      .toList(growable: false);
+}
+
 /// The five primary sections of the WIDE shell's top row, in render order.
 ///
 /// The wide shell starts at 900 px, and at that width this row plus the logo
@@ -28,12 +43,17 @@ class AdminNavEntry {
 /// these five tabs belongs to a dashboard category, and the command palette
 /// reaches it in two keystrokes.
 List<AdminNavEntry> get kAdminTopNav => <AdminNavEntry>[
-      AdminNavEntry(c('admin_nav.top_dashboard'), Icons.dashboard_outlined),
-      AdminNavEntry(c('admin_nav.top_whatsapp'), Icons.forum_outlined),
-      AdminNavEntry(c('admin_nav.top_customers'), Icons.people_outline),
-      AdminNavEntry(c('admin_nav.top_suppliers'), Icons.inventory_2_outlined),
+      AdminNavEntry(c('admin_nav.top_dashboard'), Icons.dashboard_outlined,
+          route: 'dashboard'),
+      AdminNavEntry(c('admin_nav.top_whatsapp'), Icons.forum_outlined,
+          route: 'whatsapp'),
+      AdminNavEntry(c('admin_nav.top_customers'), Icons.people_outline,
+          route: 'customers'),
+      AdminNavEntry(c('admin_nav.top_suppliers'), Icons.inventory_2_outlined,
+          route: 'suppliers'),
       AdminNavEntry(
-          c('admin_nav.top_fulfillment'), Icons.local_shipping_outlined),
+          c('admin_nav.top_fulfillment'), Icons.local_shipping_outlined,
+          route: 'fulfillment'),
     ];
 
 /// The NARROW shell's bottom bar, in render order. Five tabs is the ceiling —
@@ -44,12 +64,17 @@ List<AdminNavEntry> get kAdminTopNav => <AdminNavEntry>[
 /// fits the narrow tab. That is why this list is separate from [kAdminTopNav]
 /// rather than shared.
 List<AdminNavEntry> get kAdminBottomNav => <AdminNavEntry>[
-      AdminNavEntry(c('admin_nav.bottom_dashboard'), Icons.dashboard_outlined),
-      AdminNavEntry(c('admin_nav.bottom_whatsapp'), Icons.forum_outlined),
-      AdminNavEntry(c('admin_nav.bottom_customers'), Icons.people_outline),
-      AdminNavEntry(c('admin_nav.bottom_suppliers'), Icons.inventory_2_outlined),
+      AdminNavEntry(c('admin_nav.bottom_dashboard'), Icons.dashboard_outlined,
+          route: 'dashboard'),
+      AdminNavEntry(c('admin_nav.bottom_whatsapp'), Icons.forum_outlined,
+          route: 'whatsapp'),
+      AdminNavEntry(c('admin_nav.bottom_customers'), Icons.people_outline,
+          route: 'customers'),
+      AdminNavEntry(c('admin_nav.bottom_suppliers'), Icons.inventory_2_outlined,
+          route: 'suppliers'),
       AdminNavEntry(
-          c('admin_nav.bottom_fulfill'), Icons.local_shipping_outlined),
+          c('admin_nav.bottom_fulfill'), Icons.local_shipping_outlined,
+          route: 'fulfillment'),
     ];
 
 /// CHANGE #325 — the profile dropdown, and NOTHING but the profile dropdown.

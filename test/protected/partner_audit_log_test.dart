@@ -112,6 +112,10 @@ Future<void> _pump(
   void Function(int)? onRange,
   VoidCallback? onMore,
 }) async {
+  // A tall surface: the three filter rows plus the banner push the entries
+  // past 600 px, and a ListView never builds what it has not laid out.
+  await tester.binding.setSurfaceSize(const Size(600, 2600));
+  addTearDown(() => tester.binding.setSurfaceSize(null));
   await tester.pumpWidget(MaterialApp(
     home: Scaffold(
       body: PartnerAuditLogView(

@@ -30,6 +30,7 @@ import 'admin/admin_add_medicine_screen.dart';
 import 'admin/admin_manage_admins_screen.dart';
 import 'admin/admin_audit_screen.dart';
 import 'admin/admin_roles_screen.dart';
+import 'shell/shell_extra_routes.dart';             // CHANGE #570 — four doors
 import 'admin/admin_customer_screen.dart';
 import 'admin/admin_company_screen.dart';
 import 'admin/admin_dashboard_screen.dart';
@@ -1211,6 +1212,13 @@ class _HomeShellState extends State<HomeShell> {
       case 'feature_gaps':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => buildFeatureGapsScreen()));
+        break;
+      // CHANGE #570 — four doors the registry had already promised, in
+      // shell/shell_extra_routes.dart. Null means "not mine", so an unknown
+      // route still reaches the backend-worded default branch below.
+      case _ when shellExtraRouteScreen(route) != null:
+        Navigator.push(context, MaterialPageRoute(
+            builder: (_) => shellExtraRouteScreen(route)!));
         break;
       case 'deletion_requests':
         Navigator.push(

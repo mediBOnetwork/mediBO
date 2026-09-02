@@ -482,7 +482,7 @@ comment on function public.inquiry_demand_qty_map(text, boolean) is
 
 revoke all on function public.inquiry_demand_qty_map(text, boolean) from public, anon, authenticated;
 
-create or replace function public._get_inquiry_form_core(p_token text, p_secret text)
+create or replace function public._get_inquiry_form_core(p_token text, p_secret text default null)
 returns jsonb
 language plpgsql
 security definer
@@ -527,10 +527,12 @@ BEGIN
     SELECT i.id, i.product_id, i.product_name, i.supplier_order_id, i.batch_date,
            i.current_supplier, s.slot_n, s.as_val
     FROM inquiry i
+    -- the composite is turned into jsonb ONCE per row, not once per slot
+    CROSS JOIN LATERAL (SELECT to_jsonb(i) AS j) ij
     CROSS JOIN LATERAL (
-      SELECT g AS slot_n, (to_jsonb(i) ->> ('AS'||g)) AS as_val
+      SELECT g AS slot_n, (ij.j ->> ('AS'||g)) AS as_val
       FROM generate_series(1,30) g
-      WHERE (to_jsonb(i) ->> ('PS'||g)) = v_supplier
+      WHERE (ij.j ->> ('PS'||g)) = v_supplier
       ORDER BY g
       LIMIT 1
     ) s
@@ -684,7 +686,8 @@ $$;
 -- ui_copy keys the screen reads with c().
 -- ─────────────────────────────────────────────────────────────────────────────
 
-insert into public.ui_copy (key, value) values
+insert into public.ui_copy (key, value)
+select k, to_jsonb(v) from (values
   ('inquiry_form_screen.expired_title',   'This inquiry link has expired'),
   ('inquiry_form_screen.expired_body',    'Please contact mediBO for a new link.'),
   ('inquiry_form_screen.invalid_title',   'This link is no longer valid'),
@@ -693,4 +696,34 @@ insert into public.ui_copy (key, value) values
   ('inquiry_form.memory_hint_oos',        'You were out of stock last time'),
   ('inquiry_form.prefill_note',           '{a} item(s) pre-filled from your last reply — check and submit.'),
   ('inquiry_form.dont_stock_warning',     'Choosing "We don''t stock this product" removes it permanently — you will not be asked about it again.')
+) as t(k, v)
 on conflict (key) do nothing;
+
+-- GAP 47, second half: the 30 AS-slot CHECK constraints only admitted the four
+-- answers a SUPPLIER can give. 'Short supplied' is not one of those — it is a
+-- cascade fact mediBO records about a delivery — so writing it raised
+-- inquiry_ASn_chk and the re-inquiry would have failed outright. Each slot's
+-- constraint is rebuilt with the new state added, and only if it is not already
+-- there, so a re-applied migration is a no-op.
+do $mig$
+declare
+  i int;
+  v_short text := public.inquiry_short_supply_answer();
+  v_def text;
+begin
+  for i in 1..30 loop
+    select pg_get_constraintdef(c.oid) into v_def
+      from pg_constraint c
+     where c.conrelid = 'public.inquiry'::regclass
+       and c.conname  = format('inquiry_AS%s_chk', i);
+    if v_def is null then continue; end if;
+    if position(v_short in v_def) > 0 then continue; end if;
+
+    execute format('alter table public.inquiry drop constraint %I', format('inquiry_AS%s_chk', i));
+    execute format(
+      'alter table public.inquiry add constraint %I check (%I is null or %I = any (array[%L,%L,%L,%L,%L]))',
+      format('inquiry_AS%s_chk', i), format('AS%s', i), format('AS%s', i),
+      'Available', 'Out of Stock', 'We don''t stock this product', 'No response', v_short);
+  end loop;
+end
+$mig$;

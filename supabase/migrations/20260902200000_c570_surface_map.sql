@@ -909,3 +909,287 @@ $rg$, true,
  'CHANGE #570 — the surface map: no drift, and the three leaks (palette past admin_access, screen tabs to non-admins, My Shop on a non-pharmacy bottom bar) stay shut.')
 on conflict (name) do update
   set body = excluded.body, enabled = true, note = excluded.note;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 9. THE PARTNER FENCE, RE-VERIFIED (spec item 3).
+--    partner_fence_verify() read 12 / 14 when this command started, and both
+--    failures were the same stale fixture rather than a fence: row 141 hard-
+--    coded partner.pack as "the one fulfilment feature this partner was never
+--    granted", and the zone-1 partner has since been granted write on all
+--    fourteen. The feature under test is derived now, so the property survives
+--    any future grant. Everything the spec asked about was already sound and
+--    is proven again below: no other zone (rows 137-140), no payment surface
+--    (136 payment_collection_summary, 145 rzp_webhook_log_recent), no P&L /
+--    margin (134 pnl_dashboard), and the access matrix enforced (141).
+--    After this: 14 / 14.
+-- ─────────────────────────────────────────────────────────────────────────
+create or replace function public.c352_partner_fence_proof()
+ returns jsonb
+ language plpgsql
+ security definer
+ set search_path to 'public'
+as $c570fence$
+
+declare
+  v_out jsonb := '[]'::jsonb;
+  v_claims text;
+  v_uid uuid;
+  v_actual text;
+  v_deny_feat text;  -- CHANGE #570
+  v_txt text;
+  v_order uuid;
+  v_delivery uuid;
+  v_zone2 text := 'nikhat pharma';
+
+  procedure_marker text := 'c352_rollback_marker';
+begin
+  -- super-admin, or the runner's service_role JWT (the protected suite and the
+  -- deploy gate call this headlessly).
+  if coalesce(nullif(current_setting('request.jwt.claims', true),'')::jsonb ->> 'role','') <> 'service_role'
+     and public.role_for_medibo_only() not in ('admin','super_admin') then
+    raise exception 'not_authorized';
+  end if;
+
+  select pu.auth_user_id into v_uid
+    from partner_users pu join region_partners rp on rp.id = pu.partner_id
+   where coalesce(pu.is_active,true) and coalesce(rp.is_active,true)
+     and pu.auth_user_id is not null and rp.zone_id = 1
+   order by pu.id desc limit 1;
+  if v_uid is null then
+    return jsonb_build_object('ok', false, 'error', 'no_zone1_partner_user');
+  end if;
+
+  select o.id into v_order from orders o where o.zone_id = 1 order by o.order_date desc nulls last limit 1;
+  select d.id into v_delivery from deliveries d join orders o on o.id = d.order_id where o.zone_id = 1 order by d.id desc limit 1;
+
+  v_claims := current_setting('request.jwt.claims', true);
+  perform set_config('request.jwt.claims',
+    jsonb_build_object('sub', v_uid, 'role', 'authenticated')::text, true);
+
+  -- ---- row 134: the inversion -------------------------------------------
+  perform set_config('request.path', '/rpc/pnl_dashboard', true);
+  v_out := v_out || jsonb_build_array(jsonb_build_object(
+    'gap_row', 134, 'probe', 'get_my_role() on an rpc that is NOT allow-listed (/rpc/pnl_dashboard)',
+    'expect', 'partner', 'actual', public.get_my_role(),
+    'pass', public.get_my_role() = 'partner'));
+
+  perform set_config('request.path', '/rpc/fw_get_state', true);
+  v_out := v_out || jsonb_build_array(jsonb_build_object(
+    'gap_row', 134, 'probe', 'get_my_role() on an allow-listed fulfilment rpc (/rpc/fw_get_state)',
+    'expect', 'admin', 'actual', public.get_my_role(),
+    'pass', public.get_my_role() = 'admin'));
+
+  -- ---- row 136: customer payment collection ------------------------------
+  perform set_config('request.path', '/rpc/payment_collection_summary', true);
+  begin
+    perform public.payment_collection_summary();
+    v_actual := 'ANSWERED';
+  exception when others then v_actual := 'RAISED: ' || sqlerrm;
+  end;
+  v_out := v_out || jsonb_build_array(jsonb_build_object(
+    'gap_row', 136, 'probe', 'payment_collection_summary() as the zone-1 partner',
+    'expect', 'RAISED: not_authorized', 'actual', v_actual,
+    'pass', v_actual like 'RAISED: not_authorized%'));
+
+  -- ---- row 145: razorpay webhook log -------------------------------------
+  perform set_config('request.path', '/rpc/rzp_webhook_log_recent', true);
+  begin
+    perform public.rzp_webhook_log_recent(5);
+    v_actual := 'ANSWERED';
+  exception when others then v_actual := 'RAISED: ' || sqlerrm;
+  end;
+  v_out := v_out || jsonb_build_array(jsonb_build_object(
+    'gap_row', 145, 'probe', 'rzp_webhook_log_recent(5) as the zone-1 partner',
+    'expect', 'RAISED: not_authorized', 'actual', v_actual,
+    'pass', v_actual like 'RAISED: not_authorized%'));
+
+  -- ---- row 137: cross-zone read ------------------------------------------
+  perform set_config('request.path', '/rpc/fw_get_state', true);
+  begin
+    perform public.fw_get_state(v_zone2, 'shop', current_date, false);
+    v_actual := 'ANSWERED';
+  exception when others then v_actual := 'RAISED: ' || sqlerrm;
+  end;
+  v_out := v_out || jsonb_build_array(jsonb_build_object(
+    'gap_row', 137, 'probe', 'fw_get_state(''' || v_zone2 || ''') — a ZONE-2 supplier — as the zone-1 partner',
+    'expect', 'RAISED: not_authorized_zone', 'actual', v_actual,
+    'pass', v_actual like 'RAISED: not_authorized_zone%'));
+
+  -- and the same call for an in-zone supplier must still work (no regression)
+  begin
+    perform public.fw_get_state((select lower(btrim(sp.supplier_name)) from supplier_profiles sp
+                                  where sp.zone_id = 1 and btrim(coalesce(sp.supplier_name,'')) <> ''
+                                  order by sp.supplier_name limit 1), 'shop', current_date, false);
+    v_actual := 'ANSWERED';
+  exception when others then v_actual := 'RAISED: ' || sqlerrm;
+  end;
+  v_out := v_out || jsonb_build_array(jsonb_build_object(
+    'gap_row', 137, 'probe', 'fw_get_state(<a ZONE-1 supplier>) still answers the zone-1 partner',
+    'expect', 'ANSWERED', 'actual', v_actual, 'pass', v_actual = 'ANSWERED'));
+
+  -- ---- row 138: cross-zone enumeration -----------------------------------
+  perform set_config('request.path', '/rpc/zone_supplier_names', true);
+  v_txt := array_to_string(public.zone_supplier_names(2::smallint), ',');
+  v_out := v_out || jsonb_build_array(jsonb_build_object(
+    'gap_row', 138, 'probe', 'zone_supplier_names(2) as the zone-1 partner',
+    'expect', 'zone-2 names absent', 'actual', 'returned ' || coalesce(nullif(v_txt,''),'<empty>'),
+    'pass', position(v_zone2 in coalesce(v_txt,'')) = 0));
+
+  -- ---- row 139: cross-zone WRITE (bag + count ledger) --------------------
+  perform set_config('request.path', '/rpc/bag_attach', true);
+  begin
+    perform public.bag_attach(v_zone2, 'C352-PROOF');
+    raise exception '%', procedure_marker;      -- undo anything the call wrote
+  exception when others then
+    v_actual := case when sqlerrm = procedure_marker then 'ANSWERED (rolled back)'
+                     else 'RAISED: ' || sqlerrm end;
+  end;
+  v_out := v_out || jsonb_build_array(jsonb_build_object(
+    'gap_row', 139, 'probe', 'bag_attach(''' || v_zone2 || ''',''C352-PROOF'') as the zone-1 partner',
+    'expect', 'RAISED: not_authorized_zone', 'actual', v_actual,
+    'pass', v_actual like 'RAISED: not_authorized_zone%'));
+
+  perform set_config('request.path', '/rpc/fw_confirm_all_received', true);
+  begin
+    perform public.fw_confirm_all_received(v_zone2, current_date);
+    raise exception '%', procedure_marker;
+  exception when others then
+    v_actual := case when sqlerrm = procedure_marker then 'ANSWERED (rolled back)'
+                     else 'RAISED: ' || sqlerrm end;
+  end;
+  v_out := v_out || jsonb_build_array(jsonb_build_object(
+    'gap_row', 139, 'probe', 'fw_confirm_all_received(''' || v_zone2 || ''') as the zone-1 partner',
+    'expect', 'RAISED: not_authorized_zone', 'actual', v_actual,
+    'pass', v_actual like 'RAISED: not_authorized_zone%'));
+
+  -- ---- row 140: cross-zone delivery WRITE --------------------------------
+  -- The register recorded this one as STRUCTURAL only, because every order in
+  -- the database is zone 1. The probe below borrows one, flips it to zone 2
+  -- inside a subtransaction, calls the RPC, and rolls the whole thing back.
+  perform set_config('request.path', '/rpc/delivery_assign', true);
+  if v_order is null then
+    v_actual := 'SKIPPED: no order rows';
+  else
+    begin
+      update orders set zone_id = 2 where id = v_order;
+      begin
+        perform public.delivery_assign(array[v_order]::uuid[], null::uuid);
+        v_actual := 'ANSWERED';
+      exception when others then v_actual := 'RAISED: ' || sqlerrm;
+      end;
+      raise exception '%', procedure_marker;    -- always undo the zone flip
+    exception when others then
+      if sqlerrm <> procedure_marker then v_actual := 'RAISED: ' || sqlerrm; end if;
+    end;
+  end if;
+  v_out := v_out || jsonb_build_array(jsonb_build_object(
+    'gap_row', 140, 'probe', 'delivery_assign([a ZONE-2 order]) as the zone-1 partner (order flipped and rolled back)',
+    'expect', 'RAISED: not_authorized_zone', 'actual', v_actual,
+    'pass', v_actual like 'RAISED: not_authorized_zone%'));
+
+  perform set_config('request.path', '/rpc/delivery_rto_receive', true);
+  if v_delivery is null then
+    -- no delivery rows exist yet: probe an id the partner cannot own, which is
+    -- the same predicate (the helper resolves no zone and refuses).
+    begin
+      perform public.delivery_rto_receive(gen_random_uuid());
+      v_actual := 'ANSWERED';
+    exception when others then v_actual := 'RAISED: ' || sqlerrm;
+    end;
+  else
+    begin
+      update orders set zone_id = 2 where id = (select order_id from deliveries where id = v_delivery);
+      update deliveries set zone_id = 2 where id = v_delivery;
+      begin
+        perform public.delivery_rto_receive(v_delivery);
+        v_actual := 'ANSWERED';
+      exception when others then v_actual := 'RAISED: ' || sqlerrm;
+      end;
+      raise exception '%', procedure_marker;
+    exception when others then
+      if sqlerrm <> procedure_marker then v_actual := 'RAISED: ' || sqlerrm; end if;
+    end;
+  end if;
+  v_out := v_out || jsonb_build_array(jsonb_build_object(
+    'gap_row', 140, 'probe', case when v_delivery is null
+        then 'delivery_rto_receive(<an id outside the partner''s zone>) as the zone-1 partner'
+        else 'delivery_rto_receive(<a ZONE-2 delivery>) as the zone-1 partner (flipped and rolled back)' end,
+    'expect', 'RAISED: not_authorized_zone', 'actual', v_actual,
+    'pass', v_actual like 'RAISED: not_authorized_zone%'));
+
+  -- positive control: an IN-ZONE order still assigns, so the clamp refused the
+  -- zone and not the partner.
+  perform set_config('request.path', '/rpc/delivery_assign', true);
+  if v_order is not null then
+    begin
+      v_actual := public.partner_scope_orders(array[v_order]::uuid[], 'partner.assign_delivery', 'write');
+    exception when others then v_actual := 'RAISED: ' || sqlerrm;
+    end;
+    v_out := v_out || jsonb_build_array(jsonb_build_object(
+      'gap_row', 140, 'probe', 'partner_scope_orders([a ZONE-1 order]) still admits the zone-1 partner',
+      'expect', 'admin', 'actual', v_actual, 'pass', v_actual = 'admin'));
+  end if;
+
+  -- ---- row 141: the matrix is enforced, not decorative -------------------
+  -- CHANGE #570 — this probe used to hardcode partner.pack as "the one
+  -- fulfilment feature this partner was never granted". It later WAS granted
+  -- (the zone-1 partner now holds write on all fourteen), so the assertion
+  -- failed on a fixture rather than on a fence: 12 of 14 red for a reason that
+  -- had nothing to do with zones, margin or payment. The feature is derived
+  -- now — the first partner-eligible one the matrix actually denies, and if
+  -- the partner holds every one of those, an admin-only feature, which a
+  -- partner can never be granted. The property under test is unchanged and it
+  -- can no longer go stale.
+  select coalesce(
+    (select f.feature_key from public.feature_registry f
+      where f.is_active and f.partner_eligible and f.surface = 'dashboard'
+        and coalesce(public.partner_access(f.feature_key), 'none') = 'none'
+      order by f.feature_key limit 1),
+    (select f.feature_key from public.feature_registry f
+      where f.is_active and not f.partner_eligible and f.surface = 'dashboard'
+        and f.route_key <> ''
+      order by f.feature_key limit 1))
+    into v_deny_feat;
+
+  perform set_config('request.path', '/rpc/bag_attach', true);
+  v_out := v_out || jsonb_build_array(jsonb_build_object(
+    'gap_row', 141, 'probe', 'partner_can(''' || v_deny_feat || ''',''write'') for the zone-1 partner (the matrix denies it)',
+    'expect', 'false', 'actual', public.partner_can(v_deny_feat,'write')::text,
+    'pass', public.partner_can(v_deny_feat,'write') = false));
+
+  begin
+    perform public.partner_scope_supplier(
+      (select lower(btrim(sp.supplier_name)) from supplier_profiles sp where sp.zone_id = 1
+        and btrim(coalesce(sp.supplier_name,'')) <> '' order by sp.supplier_name limit 1),
+      v_deny_feat,'write');
+    v_actual := 'ANSWERED';
+  exception when others then v_actual := 'RAISED: ' || sqlerrm;
+  end;
+  v_out := v_out || jsonb_build_array(jsonb_build_object(
+    'gap_row', 141, 'probe', 'an in-zone supplier under a feature the matrix says ''none'' (' || v_deny_feat || ')',
+    'expect', 'RAISED: not_authorized_feature', 'actual', v_actual,
+    'pass', v_actual like 'RAISED: not_authorized_feature%'));
+
+  -- restore the session
+  perform set_config('request.path', '', true);
+  if v_claims is null then
+    perform set_config('request.jwt.claims', '', true);
+  else
+    perform set_config('request.jwt.claims', v_claims, true);
+  end if;
+
+  return jsonb_build_object(
+    'ok', not exists (select 1 from jsonb_array_elements(v_out) e where (e->>'pass')::boolean is not true),
+    'ran_at', now(),
+    'partner_user', v_uid,
+    'checks', v_out,
+    'passed', (select count(*) from jsonb_array_elements(v_out) e where (e->>'pass')::boolean),
+    'total', jsonb_array_length(v_out)
+  );
+exception when others then
+  if v_claims is not null then perform set_config('request.jwt.claims', v_claims, true); end if;
+  perform set_config('request.path', '', true);
+  raise;
+end 
+
+$c570fence$;

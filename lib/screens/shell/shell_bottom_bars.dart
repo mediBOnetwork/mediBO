@@ -14,7 +14,20 @@ class _MobileBottomBar extends StatelessWidget {
   final int index;
   final bool cartOpen;
   final VoidCallback onCartTap;
-  final ValueChanged<int> onNavTap;
+
+  /// CHANGE #536 QA round 3 (finding 301) — the bar hands back the PAGE, not
+  /// the slot it was tapped at.
+  ///
+  /// It used to hand back the slot index, which forced the shell to map it
+  /// through `pagesFor(showMyShop)` a SECOND time. Two call sites of one map
+  /// is a drift waiting to happen, and QA proved it: setting the bar's
+  /// `showMyShop:` prop to `true` while the shell's own `slots` kept the real
+  /// value left every test green, and a signed-out visitor tapping the fourth
+  /// tab landed on Bulk upload. `pagesFor` is now read in exactly one place —
+  /// four lines below, next to the `if (showMyShop)` that draws the slot — so
+  /// the list that decides which items exist IS the list that decides where
+  /// they go, and there is no second copy left to disagree with it.
+  final ValueChanged<int> onPageTap;
 
   /// CHANGE #536 QA round 2 — whether the My Shop slot is offered at all.
   ///
@@ -30,7 +43,7 @@ class _MobileBottomBar extends StatelessWidget {
     required this.index,
     required this.cartOpen,
     required this.onCartTap,
-    required this.onNavTap,
+    required this.onPageTap,
     required this.showMyShop,
   });
 
@@ -76,7 +89,13 @@ class _MobileBottomBar extends StatelessWidget {
       selectedFontSize: 10,
       unselectedFontSize: 10,
       elevation: 8,
-      onTap: onNavTap,
+      // The one map, read once, used for both halves of the question: which
+      // slots exist (below) and where each one goes (here). QA round 3
+      // finding 301 — a second copy of this list in the shell could be made
+      // to disagree with this one without a single test going red.
+      onTap: (i) {
+        if (i >= 0 && i < slots.length) onPageTap(slots[i]);
+      },
       items: [
         BottomNavigationBarItem(
           icon: const Icon(Icons.home_outlined),

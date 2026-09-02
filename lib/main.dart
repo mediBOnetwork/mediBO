@@ -4,6 +4,8 @@ import 'dart:convert';
 import 'boot_env.dart' as boot;
 import 'widgets/app_update_prompt.dart';
 import 'widgets/update_bar.dart';
+import 'widgets/test_mode_banner.dart';
+import 'services/test_session.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform;
@@ -43,6 +45,7 @@ import 'screens/public/wa_link_redirect_page.dart'; // /r/:code — campaign lin
 import 'screens/admin/wa_campaigns_screen.dart'; // /admin/wa-campaigns
 import 'screens/admin/admin_scope_audit_screen.dart'; // /admin/scope-audit
 import 'screens/admin/dev_queue/cron_health_screen.dart'; // /admin/cron-health
+import 'screens/admin/test_mode_screen.dart';  // /admin/test-mode (#573)
 import 'screens/admin/admin_delivery_extras_screen.dart'; // /admin/delivery-programme
 import 'screens/pharmacy/pharmacy_owner_screen.dart';
 import 'screens/pharmacy/pharmacy_expiry_screen.dart';   // CMD #413 — /pharmacy/expiry
@@ -505,9 +508,15 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
               // route, so it can sit over the bottom nav and the floating cart
               // pill without any screen knowing about it. It overlays: it
               // reflows nothing and it only takes taps inside its own bar.
-              child: UpdateBarHost(
-                controller: VersionWatcher.instance.updateBar,
-                child: child!,
+              // CHANGE #573 — the TEST MODE strip sits above every route of
+              // every role, for the same reason the update bar does: Om walks
+              // the flow from five different logins and none of those screens
+              // should have to know test mode exists.
+              child: TestModeBannerHost(
+                child: UpdateBarHost(
+                  controller: VersionWatcher.instance.updateBar,
+                  child: child!,
+                ),
               ),
             ),
             home: _AppRoot(auth: _auth),
@@ -851,6 +860,19 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
                   builder: (_) => const CronHealthScreen(),
                 );
               }
+              // CHANGE #573 — the synthetic lane's console, at a real URL for
+              // the same reason /admin/cron-health has one: Flutter renders to
+              // canvas, so without a URL no headless verifier can ever prove
+              // this screen painted. It is still reached by tapping
+              // Admin & System -> Test mode; the URL adds no privilege of its
+              // own — test_mode_screen() answers {ok:false, not_authorized} for
+              // anyone who is not an admin and the screen renders that reply.
+              if (name.split('?').first == '/admin/test-mode') {
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => const TestModeScreen(),
+                );
+              }
               // CHANGE #323 — partner settlement, at a real URL for the same
               // reason /admin/cron-health has one: Flutter canvas cannot be
               // clicked headlessly, so without a URL the post-deploy verifier
@@ -1161,6 +1183,11 @@ class _AppRootState extends State<_AppRoot> {
               await VersionWatcher.instance.init();
               VersionWatcher.instance.start();
             } catch (_) {}
+            // CHANGE #573 — poll the test-session banner. Its own interval
+            // comes from the payload (poll_ms), so the cadence is tunable
+            // without a deploy, and a failed read keeps the last state: losing
+            // the network must never make a live test session look real.
+            try { TestSessionState.instance.start(); } catch (_) {}
             // CHANGE #282 — Android update prompt (no-op on web/iOS; own
             // try/catch inside). The BACKEND decides the destination from the
             // install source, so a Play install is sent to the Play listing and

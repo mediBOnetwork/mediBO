@@ -28,8 +28,13 @@
 //      client-side sort, so the backend can reorder any of them without a
 //      deploy.
 //
-//   5. An unknown action key is a silent no-op, never a crash. A future backend
-//      that ships a fourth action to an older build must not break this screen.
+//   5. There is ONE door. Om's scope change (#573, live reply) grew the action
+//      set from three keys to six — start a session, end it, purge it — and a
+//      Dart switch that named each key would have needed a deploy for the
+//      seventh. Every button posts its key back through `test_mode_action`
+//      verbatim, INCLUDING a key this build has never heard of: the backend
+//      answers `unknown_action` and the screen prints that. This is the rule
+//      that changed in this file, and it changed deliberately.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -111,6 +116,7 @@ class _FakeService implements TestModeService {
   Map<String, dynamic> _screen;
   final List<String> calls = <String>[];
   Map<String, dynamic>? lastPatch;
+  Map<String, dynamic>? lastArg;
 
   @override
   Future<Map<String, dynamic>> screen() async {
@@ -126,15 +132,14 @@ class _FakeService implements TestModeService {
   }
 
   @override
-  Future<Map<String, dynamic>> runFull() async {
-    calls.add('run_full');
-    return <String, dynamic>{'ok': true, 'message': 'PAYLOAD RUN MESSAGE'};
-  }
-
-  @override
-  Future<Map<String, dynamic>> purge({required bool includeFixtures}) async {
-    calls.add('purge:$includeFixtures');
-    return <String, dynamic>{'ok': true, 'message': 'PAYLOAD PURGE MESSAGE'};
+  Future<Map<String, dynamic>> act(String key,
+      {Map<String, dynamic> arg = const {}}) async {
+    calls.add('act:$key');
+    lastArg = arg;
+    return <String, dynamic>{
+      'ok': true,
+      'message': key == 'purge' ? 'PAYLOAD PURGE MESSAGE' : 'PAYLOAD RUN MESSAGE',
+    };
   }
 
   @override
@@ -226,7 +231,7 @@ void main() {
     final svc = await _pump(tester);
     await tester.tap(find.text('PAYLOAD RUN'));
     await tester.pumpAndSettle();
-    expect(svc.calls, contains('run_full'));
+    expect(svc.calls, contains('act:run_full'));
     expect(find.text('PAYLOAD RUN MESSAGE'), findsOneWidget,
         reason: 'the RPC message was not shown verbatim');
   });
@@ -238,23 +243,42 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('PAYLOAD PURGE CONFIRM'), findsOneWidget);
-    expect(svc.calls, isNot(contains('purge:false')),
+    expect(svc.calls, isNot(contains('act:purge')),
         reason: 'the purge ran before the confirmation was answered');
 
     // the sheet's own button carries the action's label
     await tester.tap(find.text('PAYLOAD PURGE').last);
     await tester.pumpAndSettle();
-    expect(svc.calls, contains('purge:false'));
+    expect(svc.calls, contains('act:purge'));
   });
 
-  testWidgets('an action key this build has never heard of does nothing',
+  testWidgets('an action key this build has never heard of is posted verbatim',
       (tester) async {
     final svc = await _pump(tester);
-    final before = List<String>.from(svc.calls);
     await tester.tap(find.text('PAYLOAD FUTURE'));
     await tester.pumpAndSettle();
-    expect(svc.calls, equals(before),
-        reason: 'an unknown action key must be a silent no-op, not a crash');
+    expect(svc.calls, contains('act:nonsense_future_action'),
+        reason: 'the screen renamed, dropped or decided about an action key');
+  });
+
+  testWidgets('an action carries the payload arg it was given, unchanged',
+      (tester) async {
+    final withArg = _payload();
+    withArg['actions'] = <dynamic>[
+      ...(withArg['actions'] as List),
+      <String, dynamic>{
+        'key': 'session_purge',
+        'label': 'PAYLOAD SESSION PURGE',
+        'tone': 'danger',
+        'confirm': null,
+        'arg': <String, dynamic>{'session_id': '42'},
+      },
+    ];
+    final svc = await _pump(tester, payload: withArg);
+    await tester.tap(find.text('PAYLOAD SESSION PURGE'));
+    await tester.pumpAndSettle();
+    expect(svc.calls, contains('act:session_purge'));
+    expect(svc.lastArg, equals(<String, dynamic>{'session_id': '42'}));
   });
 
   testWidgets('flipping the kill switch sends exactly that patch',

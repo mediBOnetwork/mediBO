@@ -123,6 +123,43 @@ void main() {
           reason: 'deep links silently dead-end for a pharmacy: $missing');
     });
 
+    // CHANGE #536 QA round 3 — the registry can outrun the build.
+    //
+    // The two tests above read THIS checkout's migrations, so they were green
+    // while three cshop_buying rows another command wrote at 15:56 UTC drew
+    // three live tiles with no case in the shell. feature_registry is data: it
+    // moves without a deploy, and no test of this repo can promise a deployed
+    // build knows every key it will one day be handed. What the build CAN
+    // promise is that an unknown key says so.
+    test('an unrecognised route says so instead of falling through in silence',
+        () {
+      final src = _shellSource();
+      expect(src.contains('default:'), isTrue,
+          reason: 'the deep-link router must have a default arm — without one '
+              'a registry row this build has never heard of is a tap that '
+              'does nothing');
+      final tail = src.substring(src.indexOf('default:'));
+      expect(tail.contains("c('home_shell.route_unavailable')"), isTrue,
+          reason: 'the sentence belongs to ui_copy, not to Dart');
+      expect(tail.contains("RenderLog.write('c536_route_unknown'"), isTrue,
+          reason: 'the render-log must name the key that had no door');
+    });
+
+    test('the cshop_buying trio is routed and self-gated', () {
+      // Found live on CHANGE #983: registered onto customer_shop, drawn by the
+      // tab, and every one of the three was a tap that did nothing.
+      final src = _shellSource();
+      for (final r in const [
+        'cust_reorder_due',
+        'cust_saved_lists',
+        'cust_help_requests'
+      ]) {
+        expect(src.contains("case '$r':"), isTrue, reason: '$r has no case');
+        expect(HomeShell.selfGatedRoutes.contains(r), isTrue,
+            reason: '$r is parked for a pharmacy');
+      }
+    });
+
     test('my_shop itself is both routed and self-gated', () {
       expect(_shellSource(), contains("case 'my_shop':"));
       expect(HomeShell.selfGatedRoutes, contains('my_shop'));

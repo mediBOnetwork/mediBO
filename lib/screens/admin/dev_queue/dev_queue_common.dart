@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../design_tokens.dart';
 import '../../../services/ui_copy.dart';
 import 'restart_safety.dart';
 
@@ -57,6 +58,10 @@ Tone toneByName(String name) {
     case 'warning':
       return _warning;
     case 'error':
+    // 'danger' is the design-token name for the destructive tone and it is what
+    // _dev_breaker_badge() sends. Without this case an auto-pause rendered grey,
+    // which reads as "fine" — the one thing that badge must never look like.
+    case 'danger':
       return _error;
     case 'info':
       return _info;
@@ -321,4 +326,49 @@ class SpecItemView {
   /// How many items are still open, as the BACKEND counts them — the same
   /// number the finish gate refuses a completion on.
   static int openCount(Map<String, dynamic> payload) => asInt(payload['open']);
+}
+
+/// CHANGE #641 — the DB circuit breaker, drawn from `dev_ctl_get().breaker`.
+///
+/// When ten database timeouts land inside five minutes the BACKEND switches
+/// Workflow off by itself and composes this badge (`_dev_breaker_badge()`):
+/// the label, the sentence explaining what happened, the IST timestamp inside
+/// it and the tone name are all server-side. Nothing here decides when the
+/// badge appears, what it says, or what colour it wears — `tripped` is the
+/// only question this widget asks, and it asks it of the payload.
+class BreakerBanner extends StatelessWidget {
+  final Map<String, dynamic> breaker;
+  const BreakerBanner({super.key, required this.breaker});
+
+  static bool tripped(Map<String, dynamic>? b) =>
+      (b?['tripped'] ?? false) == true &&
+      ((b?['label'] ?? '').toString().isNotEmpty);
+
+  @override
+  Widget build(BuildContext context) {
+    if (!tripped(breaker)) return const SizedBox.shrink();
+    final tone = toneByName((breaker['tone'] ?? 'error').toString());
+    final label = (breaker['label'] ?? '').toString();
+    final detail = (breaker['detail'] ?? '').toString();
+    return Container(
+      margin: EdgeInsets.only(top: Ds.space.x8),
+      width: double.infinity,
+      padding:
+          EdgeInsets.symmetric(horizontal: Ds.space.x12, vertical: Ds.space.x12),
+      decoration: BoxDecoration(color: tone.bg, borderRadius: Ds.r.rButton),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Icon(Icons.pause_circle_filled, size: Ds.t.subtitleSize, color: tone.fg),
+        SizedBox(width: Ds.space.x8),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(label, style: Ds.t.bodyStrong.copyWith(color: tone.fg)),
+            if (detail.isNotEmpty) ...[
+              SizedBox(height: Ds.space.x4),
+              Text(detail, style: Ds.t.caption.copyWith(color: tone.fg)),
+            ],
+          ]),
+        ),
+      ]),
+    );
+  }
 }

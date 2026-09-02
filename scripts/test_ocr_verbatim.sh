@@ -36,7 +36,7 @@ check() {
 
   # Send a text-only prompt (no image) to test the prompt contract
   local resp
-  resp=$(curl -s -X POST "$OCR_URL" \
+  resp=$(curl --max-time 60 -s -X POST "$OCR_URL" \
     -H "Authorization: Bearer $KEY" \
     -H "Content-Type: application/json" \
     -d "{\"prompt\": \"Return a JSON array: [{\\\"seen\\\": \\\"${input}\\\", \\\"confidence\\\": \\\"high\\\"}]. Do not modify the text.\"}" \

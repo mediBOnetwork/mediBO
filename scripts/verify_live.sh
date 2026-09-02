@@ -47,7 +47,7 @@ echo "→ [1/3] checking main.${COMMIT}.dart.js..."
 # verifier that fails on healthy deploys trains you to ignore it.
 HTTP_CODE=""; SIZE=0
 for attempt in 1 2 3 4 5 6; do
-  RESULT=$(curl -s -H 'Cache-Control: no-cache' -o /dev/null \
+  RESULT=$(curl --max-time 60 -s -H 'Cache-Control: no-cache' -o /dev/null \
              -w "%{http_code} %{size_download}" \
              "${BASE_URL}/main.${COMMIT}.dart.js?cb=${RANDOM}${attempt}" || echo "000 0")
   HTTP_CODE=$(echo "$RESULT" | cut -d' ' -f1)
@@ -67,12 +67,12 @@ if [ "$HTTP_CODE" != "200" ] || [ "${SIZE:-0}" -lt 1000000 ]; then
   # verifier people stop reading. Only after the propagation retries are
   # exhausted do we ask what IS live, and only a bundle that is genuinely
   # healthy on another commit downgrades the verdict.
-  LIVE_OTHER=$(curl -s -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+  LIVE_OTHER=$(curl --max-time 60 -s -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
                  "${BASE_URL}/version.json?cb=${RANDOM}" 2>/dev/null \
                | python3 -c "import json,sys; print(json.load(sys.stdin).get('commit',''))" \
                2>/dev/null || true)
   if [ -n "$LIVE_OTHER" ] && [ "$LIVE_OTHER" != "$COMMIT" ]; then
-    OTHER=$(curl -s -H 'Cache-Control: no-cache' -o /dev/null \
+    OTHER=$(curl --max-time 60 -s -H 'Cache-Control: no-cache' -o /dev/null \
               -w "%{http_code} %{size_download}" \
               "${BASE_URL}/main.${LIVE_OTHER}.dart.js?cb=${RANDOM}" || echo "000 0")
     OTHER_CODE=$(echo "$OTHER" | cut -d' ' -f1)
@@ -104,7 +104,7 @@ echo "   OK: http=${HTTP_CODE} size=${SIZE}b"
 echo "→ [2/3] checking version.json..."
 LIVE_COMMIT=""
 for attempt in 1 2 3 4 5 6; do
-  LIVE_COMMIT=$(curl -s -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+  LIVE_COMMIT=$(curl --max-time 60 -s -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
                   "${BASE_URL}/version.json?cb=${RANDOM}${attempt}" \
                 | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('commit',''))" 2>/dev/null || echo "")
   [ "$LIVE_COMMIT" = "$COMMIT" ] && break
@@ -142,7 +142,7 @@ if [ -n "${EXPECT_CHANGE:-}" ]; then
   # next person to see it ignores it (#590's lesson, applied here).
   LIVE_CHANGE=""
   for cattempt in 1 2 3 4 5 6; do
-    LIVE_CHANGE=$(curl -s -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+    LIVE_CHANGE=$(curl --max-time 60 -s -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
                     "${BASE_URL}/version.json?cb=${RANDOM}${cattempt}c" \
                   | python3 -c "import json,sys; print(json.load(sys.stdin).get('change',''))" 2>/dev/null || echo "")
     [ "$LIVE_CHANGE" = "${EXPECT_CHANGE}" ] && break
@@ -166,7 +166,7 @@ echo "→ [3/3] polling render-log (12 × 15 s = 3 min max)..."
 MAX_POLLS=12
 POLL=0
 while [ $POLL -lt $MAX_POLLS ]; do
-  LOG=$(curl -s "${BASE_URL}/render-log" 2>/dev/null || echo "")
+  LOG=$(curl --max-time 60 -s "${BASE_URL}/render-log" 2>/dev/null || echo "")
   BUILD_IN_LOG=$(echo "$LOG" | grep "^build=" | head -1 | cut -d= -f2- | tr -d '[:space:]' || true)
   BOOT_STATUS=$(echo "$LOG" | grep "^boot_status=" | head -1 | cut -d= -f2- | tr -d '[:space:]' || true)
 

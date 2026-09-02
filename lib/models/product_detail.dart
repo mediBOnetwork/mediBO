@@ -65,6 +65,19 @@ class ProductDetail {
   final Pricing? pricing;
 
   // stock
+  /// CHANGE #640 — `stock.buyable` is now DERIVED, not read.
+  ///
+  /// The live bug this closes: product 252328 had `supplier_count = 11` and
+  /// `buyable = false` on the same row, so the storefront listed it, the cart
+  /// accepted it, and the cart then called it unavailable. Three surfaces, three
+  /// different fields, three different answers.
+  ///
+  /// There is now exactly ONE availability answer in this payload — the
+  /// [availability] verdict `storefront_cta()` renders — and every surface reads
+  /// it. This field is that verdict's `is_available`, so nothing on the page can
+  /// disagree with the button at the bottom of it. `stock.buyable` is consulted
+  /// only when the payload carried no verdict at all (an outage fallback), which
+  /// is the one case where there is nothing better to read.
   final bool buyable;
   final bool hasSupplierLabel;
   final String supplierLabel;
@@ -169,6 +182,14 @@ class ProductDetail {
   /// a Dart-side default, which would be the app writing user-facing copy.
   String label(String key) => labels[key] ?? '';
 
+  /// CHANGE #640 — the ONE add decision for this page.
+  ///
+  /// Every "can this be bought?" question on the product page resolves here:
+  /// the appbar's out-of-stock probe, the stock chip and the bottom bar. They
+  /// used to ask three times and could get three answers ([availability] when
+  /// present, the raw `stock.buyable` column when not). One getter, one answer.
+  bool get canAdd => availability?.canAdd ?? buyable;
+
   static String _s(Object? v) => v?.toString() ?? '';
 
   static Map<String, String> _labels(Object? raw) {
@@ -190,6 +211,10 @@ class ProductDetail {
     final stock = (m['stock'] as Map?)?.cast<String, dynamic>() ?? const {};
     final hist = (m['my_history'] as Map?)?.cast<String, dynamic>() ?? const {};
 
+    // CHANGE #640 — parsed ONCE, so the page cannot end up holding two
+    // availability answers for one product.
+    final av = Availability.fromMap(m['availability']);
+
     return ProductDetail(
       ok: true,
       id: _s(m['id']),
@@ -210,9 +235,11 @@ class ProductDetail {
       mrpNote: _s(price['mrp_note']),
       hasGst: price['has_gst'] == true,
       gstLabel: _s(price['gst_label']),
-      availability: Availability.fromMap(m['availability']),
+      availability: av,
       pricing: Pricing.fromMap(m['pricing']),
-      buyable: stock['buyable'] == true,
+      // CHANGE #640 — one source. The verdict wins whenever there is one; the
+      // legacy column is the outage fallback, never a second opinion.
+      buyable: av?.isAvailable ?? (stock['buyable'] == true),
       blockedByStatus: stock['blocked_by_status'] == true,
       statusLabel: _s((stock['status_block'] is Map
           ? (stock['status_block'] as Map)['label']

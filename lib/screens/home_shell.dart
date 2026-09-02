@@ -1746,17 +1746,25 @@ class _HomeShellState extends State<HomeShell> {
                   // are not offered a tab whose RPC would refuse them. The bar
                   // owns the slot->page map; the shell only obeys it, so the
                   // two cannot drift apart when a slot is hidden.
+                  // QA round 3 (finding 301) — the shell no longer keeps its
+                  // own copy of the slot->page map. It used to read
+                  // `_MobileBottomBar.pagesFor(showMyShop)` here and index it
+                  // in onNavTap, which meant the map that decided WHICH slots
+                  // exist (inside the bar) and the map that decided WHERE a
+                  // tap goes (here) were two reads that could be made to
+                  // disagree: forcing the bar's prop to true while this local
+                  // kept the real value drew a My Shop tab whose tap opened
+                  // Bulk upload, with every test still green. The bar hands
+                  // back the PAGE now, so there is one map, in one place, and
+                  // the shell's only job is to go there.
                   final showMyShop = UserState.of(ctx).isAuthenticated &&
                       !UserState.of(ctx).isAdmin;
-                  final slots = _MobileBottomBar.pagesFor(showMyShop);
                   return _MobileBottomBar(
                     index: _index,
                     cartOpen: _cartOpen,
                     showMyShop: showMyShop,
                     onCartTap: () => _openCart(),
-                    onNavTap: (i) {
-                      if (i >= 0 && i < slots.length) _setIndex(slots[i]);
-                    },
+                    onPageTap: _setIndex,
                   );
                 })),
       body: Stack(

@@ -85,6 +85,17 @@ String _barsSource() {
   return f.readAsStringSync();
 }
 
+/// Source with every `//` comment stripped.
+///
+/// CHANGE #536 QA round 3 — these files explain themselves at length, and the
+/// explanations name the very identifiers this file counts. Counting
+/// `pagesFor` over raw source would count the six times the comments say the
+/// word, so the assertion would pass no matter how many real readers existed.
+String _uncommented(String src) => src
+    .split('\n')
+    .where((l) => !l.trimLeft().startsWith('//'))
+    .join('\n');
+
 void main() {
   group('My Shop reachability — the invariant #536 broke and then fixed', () {
     test('the migrations really do register a customer_shop suite', () {
@@ -182,12 +193,28 @@ void main() {
               .hasMatch(_barsSource()),
           isTrue,
           reason: 'Om: Home - Catalogue - Orders - My Shop - Bulk');
-      expect(shell.contains('_MobileBottomBar.pagesFor('), isTrue,
-          reason: 'the shell must navigate by the bar\'s own map, not a copy');
-      expect(RegExp(r'onNavTap:\s*\(i\)\s*\{\s*\n?\s*if\s*\(i\s*>=\s*0\s*&&\s*i\s*<\s*slots\.length\)\s*_setIndex\(slots\[i\]\)')
-              .hasMatch(shell),
+      // QA round 3 (finding 301) — round 2's version of this asserted that the
+      // SHELL also read `_MobileBottomBar.pagesFor(...)`. That was the bug, not
+      // the guard: two reads of one map is a drift, and QA demonstrated it by
+      // forcing the bar's `showMyShop:` prop to true while the shell's own
+      // `slots` local kept the real value — the bar drew five tabs, the shell
+      // mapped four, tapping My Shop opened Bulk upload, and every test here
+      // stayed green because both halves matched their own regex.
+      //
+      // There is one map now. The bar resolves the tap itself and hands back a
+      // PAGE, so the assertion is that no second reader exists at all: strip
+      // the comments and `pagesFor` may appear exactly twice in the bar (its
+      // declaration and the single read in build) and not once anywhere else.
+      expect('pagesFor'.allMatches(_uncommented(_barsSource())).length, 2,
+          reason: 'the slot map is declared once and read once, in the bar');
+      expect(_uncommented(shell).contains('pagesFor'), isFalse,
+          reason: 'the shell must not keep a second copy of the slot map');
+      expect(RegExp(r'onTap:\s*\(i\)\s*\{\s*\n?\s*if\s*\(i\s*>=\s*0\s*&&\s*i\s*<\s*slots\.length\)\s*onPageTap\(slots\[i\]\)')
+              .hasMatch(_barsSource()),
           isTrue,
-          reason: 'a mobile tap must open the page its own slot map names');
+          reason: 'the bar must resolve its own tap through its own map');
+      expect(RegExp(r'onPageTap:\s*_setIndex').hasMatch(shell), isTrue,
+          reason: 'the shell obeys the page the bar names, and computes none');
 
       // Desktop: the header link added by QA round 1. Without it the desktop
       // shell rendered page 11 and offered no way to select it.

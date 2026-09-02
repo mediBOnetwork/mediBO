@@ -408,7 +408,17 @@ async function phaseCustomerPath(browser, session, expectedHash) {
       console.log(`  Deep link  : ${customerPath}`);
       await page.goto(`${TARGET}${customerPath}`,
         { waitUntil: 'domcontentloaded', timeout: 30000 });
-      await waitForFlutter(page, 10, customerPath);
+      // CHANGE #536 QA round 3 (finding 304) — wait for the KEY, not the path.
+      //
+      // This used to pass `customerPath` as the marker, and the render log is
+      // `key=value` lines: '/admin/go/my_shop' can never appear in it. So the
+      // wait never matched, every run burned the whole timeout and then
+      // sampled the log ONCE at a fixed moment — which is exactly how the same
+      // arguments against the same live build failed on one run and passed on
+      // the next. Waiting for the key the phase is about makes the phase exit
+      // the moment the widget has painted, and spend the full deadline only
+      // when it genuinely has not.
+      await waitForFlutter(page, 3, wantKeys.length ? wantKeys[0] : undefined);
 
       const logText = await readRenderLog(page);
       if (customerShot) {

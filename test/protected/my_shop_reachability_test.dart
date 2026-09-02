@@ -233,9 +233,18 @@ void main() {
         () {
       final header = _headerSource();
       // An admin browsing the storefront is not offered a suite that would
-      // refuse them, and a signed-out visitor is not offered a tab that cannot
-      // load — customer_shop_home() has no EXECUTE for anon, so that tap can
-      // only ever be a failed round trip.
+      // refuse them, and a signed-out visitor is not offered a tab whose only
+      // possible answer is "sign in first".
+      //
+      // QA round 4 — this comment used to say anon holds no EXECUTE on
+      // customer_shop_home(), so the tap "can only ever be a failed round
+      // trip". #536 itself falsified that in round 3: finding 300 was that the
+      // 42501 surfaced to a deep-linking visitor as "check your connection",
+      // which is untrue, so anon was GRANTED execute and the function now
+      // answers ok:false / not_signed_in with its own ui_copy sentence
+      // (cshop.err_signed_out). The tab is still withheld — a visitor has
+      // nothing to open — but the reason is that there is no shop to show,
+      // not that the RPC would throw.
       expect(header.contains('isAuthenticated'), isTrue);
       expect(header.contains('!UserState.of(context).isAdmin'), isTrue);
 

@@ -458,16 +458,17 @@ class _ExceptionCard extends StatelessWidget {
                 ),
               if (act['has'] == true && canClose)
                 SizedBox(width: Ds.space.x12),
+              // One filled primary per surface, and it lives in the close
+              // sheet: a list of cards each shouting a green button is a wall,
+              // not a hierarchy. Here the action leads and Close follows it.
               if (canClose)
-                Expanded(
-                  child: SizedBox(
-                    height: Ds.touch.minTarget,
-                    child: FilledButton(
-                      key: Key('exc_close_${s('id')}'),
-                      onPressed: busy ? null : () => onClose(data),
-                      child: Text(s('close_label'),
-                          maxLines: 1, overflow: TextOverflow.ellipsis),
-                    ),
+                SizedBox(
+                  height: Ds.touch.minTarget,
+                  child: TextButton(
+                    key: Key('exc_close_${s('id')}'),
+                    onPressed: busy ? null : () => onClose(data),
+                    child: Text(s('close_label'),
+                        maxLines: 1, overflow: TextOverflow.ellipsis),
                   ),
                 ),
             ]),

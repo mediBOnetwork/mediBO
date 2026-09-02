@@ -15,6 +15,8 @@ import 'dev_queue_gcp.dart';
 import 'dev_queue_qa.dart';
 import 'dev_queue_questions.dart';
 import 'cron_health_screen.dart';
+import '../admin_heartbeat_screen.dart';        // CHANGE #468
+import '../test_mode_screen.dart';             // CHANGE #573, wired #468
 import 'journey_library_screen.dart';
 import 'play_store_screen.dart';
 import 'signin_diag_screen.dart';
@@ -1065,6 +1067,8 @@ const Set<String> kDevToolKeys = <String>{
   'bug_report',
   'drafts_inbox',
   'cron_health',
+  'test_mode',
+  'heartbeat',
   'signin_diag',
   'gcp_control',
   'memory',
@@ -1098,6 +1102,18 @@ bool openDevTool(
       return true;
     case 'cron_health':
       push(CronHealthScreen(service: svc));
+      return true;
+    // CHANGE #468 — devtool.test_mode has been in the registry since #573 with
+    // no case here, so the tools sheet DROPPED it every time (an unopenable
+    // key is never drawn) and it was reachable only from the admin shell. The
+    // widened registry test found it; this is the missing door.
+    case 'test_mode':
+      push(const TestModeScreen());
+      return true;
+    // CHANGE #468 — the daily canary: one synthetic order walking the whole
+    // pipeline, every stage with its own timeout, the first failure alerting.
+    case 'heartbeat':
+      push(const AdminHeartbeatScreen());
       return true;
     case 'signin_diag':
       push(SignInDiagScreen(service: svc));

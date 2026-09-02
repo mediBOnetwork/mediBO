@@ -207,15 +207,22 @@ void main() {
   });
 
   test('every registered tool_key is one this build can open', () {
-    final sql = File(
-            'supabase/migrations/20260831190100_c349_dev_tools_registry.sql')
-        .readAsStringSync();
-    // route_key, then sort_order, then the owner — the shape of every VALUES
-    // row in the dev_tools registration block.
-    final registered = RegExp(r"'([a-z_]+)',\s*(\d+),\s*'medibo'")
-        .allMatches(sql)
-        .map((m) => m.group(1)!)
-        .toSet();
+    // CHANGE #468 — every migration, not just #349's. A tool registered in a
+    // LATER migration used to be invisible to this check, so it could ship
+    // listed-but-unopenable, which is precisely the #349 defect this test
+    // exists to retire. The row shape is unchanged: route_key, sort_order,
+    // owner — and, within the same VALUES row, the surface 'dev_tools', which
+    // is what keeps a dashboard feature of the same shape out of the set.
+    final registered = <String>{};
+    final re = RegExp(r"'([a-z_]+)',\s*(\d+),\s*'medibo'[^;]{0,160}?'dev_tools'");
+    for (final f in Directory('supabase/migrations')
+        .listSync()
+        .whereType<File>()
+        .where((f) => f.path.endsWith('.sql'))) {
+      final sql = f.readAsStringSync();
+      if (!sql.contains("'dev_tools'")) continue;
+      registered.addAll(re.allMatches(sql).map((m) => m.group(1)!));
+    }
     expect(registered.length, kDevToolKeys.length,
         reason: 'the migration registers ${registered.length} tools but this '
             'build knows ${kDevToolKeys.length}');

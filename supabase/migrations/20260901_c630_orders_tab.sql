@@ -773,7 +773,7 @@ insert into app_settings (key, value) values
 on conflict (key) do nothing;
 
 -- ── 10. The shop tools leave Orders ────────────────────────────────────────
--- PART A1. "Due for reorder" (#173), Purchases (#367 row 174), Saved lists
+-- PART A1. "Due for reorder" (#173), Saved lists
 -- (#367 row 178) and Help requests are things a pharmacy does with its own
 -- shop; none of them is an order. They were three header tiles and a help box
 -- bolted to the top of a list of orders. They become registry rows on #536's
@@ -786,12 +786,16 @@ on conflict (category_key) do update set
   sort_order = excluded.sort_order,
   is_active  = excluded.is_active;
 
+-- Purchases is NOT registered here on purpose. #536's QA round 2 already
+-- registered route_key 'purchases' on this surface (sort 25) for the same
+-- PurchasesScreen, and it is live. A second tile for one screen is a worse
+-- My Shop than the one this change is trying to clean up, so Orders simply
+-- stops carrying the tile and #536's row keeps owning it.
 insert into feature_registry (
   feature_key, label, description, group_label, icon_key, route_key, sort_order,
   owner, partner_eligible, default_access, is_active, category, surface, roles_allowed
 ) values
   ('cust.reorder_due',   'Due for reorder', 'What you usually buy about now',      'Buying', 'autorenew',  'cust_reorder_due',   10, 'medibo', false, 'read', true, 'cshop_buying', 'customer_shop', array['customer','super_admin']),
-  ('cust.purchases',     'Purchases',       'Your spend, month by month',          'Buying', 'timeline',   'cust_purchases',     20, 'medibo', false, 'read', true, 'cshop_buying', 'customer_shop', array['customer','super_admin']),
   ('cust.saved_lists',   'Saved lists',     'Named lists you reorder in one tap',  'Buying', 'task',       'cust_saved_lists',   30, 'medibo', false, 'read', true, 'cshop_buying', 'customer_shop', array['customer','super_admin']),
   ('cust.help_requests', 'Help requests',   'Questions you have raised on orders', 'Buying', 'support_agent', 'cust_help_requests', 40, 'medibo', false, 'read', true, 'cshop_buying', 'customer_shop', array['customer','super_admin'])
 on conflict (feature_key) do update set

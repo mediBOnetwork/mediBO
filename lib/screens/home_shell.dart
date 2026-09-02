@@ -91,7 +91,6 @@ import 'orders_screen.dart';
 // Orders tab. They are My Shop registry rows now, so the router needs a door
 // for each route_key the registry names.
 import 'reorder_screen.dart';
-import 'purchases_screen.dart';
 import 'order_lists_screen.dart';
 import 'customer/order_help_sheet.dart';
 import '../services/pos_api.dart'; // CMD #411 — pos_entry() at boot
@@ -227,6 +226,14 @@ class HomeShell extends StatefulWidget {
     // tiles the My Shop tab now draws was a tap that did nothing. Each screen
     // resolves the caller's own account and prints the backend's refusal for
     // anyone else, so the key is a door and never a permission.
+    // CHANGE #630 — the four shop tools that left the Orders tab. Caught by
+    // my_shop_reachability_test the moment they were registered, which is what
+    // that test is for: a route case alone is not reachability. Each screen
+    // resolves the caller's OWN account (ReorderScreen, PurchasesScreen and
+    // OrderListsScreen read the caller's order history; MySupportRequestsScreen
+    // reads my_support_tickets()), so listing them grants a door and never a
+    // permission — and without the line every one of them is parked for a
+    // pharmacy, who is not an admin, exactly as 'refill' was.
     'cust_reorder_due', 'cust_saved_lists', 'cust_help_requests',
   };
 
@@ -1295,10 +1302,6 @@ class _HomeShellState extends State<HomeShell> {
       case 'cust_reorder_due':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const ReorderScreen()));
-        break;
-      case 'cust_purchases':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const PurchasesScreen()));
         break;
       case 'cust_saved_lists':
         Navigator.push(context,

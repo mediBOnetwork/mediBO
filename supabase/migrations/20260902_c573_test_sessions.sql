@@ -97,6 +97,12 @@ begin
   loop
     execute format(
       'alter table public.%I add column if not exists test_session_id bigint', t);
+    -- PARTIAL, and that is the whole point: on every table but a test one the
+    -- column is null for every row, so the index is a few pages. Without it
+    -- test_session_residue() and the purge seq-scan fifty tables per call.
+    execute format(
+      'create index if not exists %I on public.%I (test_session_id) where test_session_id is not null',
+      t || '_test_session_idx', t);
   end loop;
 end $$;
 
@@ -146,6 +152,7 @@ end $fn$;
 create or replace function public._synthetic_inherit()
 returns trigger language plpgsql security definer set search_path to 'public' as $fn$
 declare r record; v_key text; v_hit boolean; v_sess bigint; v_j jsonb; v_parent bigint;
+        v_scope text; v_uid uuid;
 begin
   -- Once synthetic, always synthetic: only the purge removes these rows.
   if tg_op = 'UPDATE' and coalesce(old.is_synthetic,false) then
@@ -162,7 +169,27 @@ begin
   -- session into a synthetic one — and the session purge would then delete it.
   -- c573b_proof check 7 (business data byte-identical before vs after) caught
   -- exactly that. A session may create test data; it may never adopt live data.
-  v_sess := case when tg_op = 'INSERT' then public._test_session_ambient() else null end;
+  --
+  -- The lookup is INLINE rather than a call to _test_session_ambient(), and it
+  -- is guarded by tg_op first. This trigger now sits on 57 tables, several of
+  -- them hot (order_items, whatsapp_messages, notification_log,
+  -- stock_movement), so the no-session path has to cost one index probe on the
+  -- partial unique index and nothing else — no SECURITY DEFINER call per row.
+  if tg_op = 'INSERT' then
+    select id, scope into v_sess, v_scope from public.test_sessions
+     where status = 'live' and ended_at is null and now() < expires_at limit 1;
+    if v_sess is not null then
+      begin v_uid := auth.uid(); exception when others then v_uid := null; end;
+      if v_uid is not null and exists (
+           select 1 from public.test_session_exempt e where e.user_id = v_uid) then
+        v_sess := null;                    -- the escape hatch wins over the session
+      elsif v_scope = 'actors' and (v_uid is null or not exists (
+           select 1 from public.test_session_actor a
+            where a.session_id = v_sess and a.user_id = v_uid)) then
+        v_sess := null;
+      end if;
+    end if;
+  end if;
   if v_sess is not null then
     new.is_synthetic := true;
     v_j := to_jsonb(new);
@@ -249,6 +276,12 @@ begin
 exception when others then
   raise notice 'c573 rule seed: %', sqlerrm;
 end $$;
+
+-- The two voice-clip rules resolve on supplier_profiles.supplier_name, which is
+-- TEXT and was unindexed: without this, every clip row inserted during counting
+-- would seq-scan the supplier table (the scalar-helper-scan trap).
+create index if not exists supplier_profiles_name_idx
+  on public.supplier_profiles (supplier_name);
 
 ------------------------------------------------------------------ storage: where a synthetic file can hide
 -- Om's purge must take the photos, the bill PDFs, the voice clips and the QR
@@ -355,7 +388,7 @@ $fn$;
 -- would miss a swap, so each table also carries an md5 over its ordered
 -- primary keys. Synthetic rows are excluded on purpose: the fingerprint is
 -- what must NOT change, and the synthetic rows are exactly what does.
-create or replace function public.test_fingerprint()
+create or replace function public.test_fingerprint(p_hash_max bigint default 20000)
 returns jsonb language plpgsql stable security definer set search_path to 'public' as $fn$
 declare t text; v_out jsonb := '{}'::jsonb; v_n bigint; v_h text; v_pk text;
 begin
@@ -366,11 +399,26 @@ begin
       where c.table_schema='public' and c.table_name=t and c.column_name in ('id','session_key','pharmacy_id')
       order by case c.column_name when 'id' then 1 when 'session_key' then 2 else 3 end limit 1;
     if v_pk is null then continue; end if;
-    execute format(
-      'select count(*), coalesce(md5(string_agg(%I::text, '','' order by %I::text)),''-'')
-         from public.%I where not coalesce(is_synthetic,false)', v_pk, v_pk, t)
-      into v_n, v_h;
-    v_out := v_out || jsonb_build_object(t, jsonb_build_object('n', v_n, 'h', v_h));
+
+    execute format('select count(*) from public.%I where not coalesce(is_synthetic,false)', t)
+      into v_n;
+
+    -- The COUNT is taken on every table — that is the row-count half of the
+    -- proof, and a purge can only ever get it wrong by deleting. The md5 over
+    -- ordered ids is the second half, and it is taken only where it is cheap.
+    -- The first draft hashed every id of every table on both sides of every
+    -- run, including notification_log and whatsapp_messages; two of those
+    -- passes per session on a 1 GB instance is a self-inflicted outage, not a
+    -- proof. Each table says which half it got.
+    if v_n <= p_hash_max then
+      execute format(
+        'select coalesce(md5(string_agg(%I::text, '','' order by %I::text)),''-'')
+           from public.%I where not coalesce(is_synthetic,false)', v_pk, v_pk, t)
+        into v_h;
+      v_out := v_out || jsonb_build_object(t, jsonb_build_object('n', v_n, 'h', v_h, 'hashed', true));
+    else
+      v_out := v_out || jsonb_build_object(t, jsonb_build_object('n', v_n, 'hashed', false));
+    end if;
   end loop;
   return v_out;
 end $fn$;
@@ -694,14 +742,19 @@ begin
       'started_label', public.uic('test_session.started_label','Started') || ' ' ||
                        to_char(s.started_at at time zone 'Asia/Kolkata','DD Mon HH24:MI'),
       'by', coalesce(s.started_by_label,''),
-      'residue', public.test_session_residue(s.id),
+      -- A purged session's residue is the one recorded at purge time; only a
+      -- session that can still be holding something is measured live. Doing it
+      -- for every row meant fifty counts per session per screen render.
+      'residue', case when s.status = 'purged'
+                      then coalesce(s.proof->'residue', '{}'::jsonb)
+                      else public.test_session_residue(s.id) end,
       'proof', coalesce(s.proof, '{}'::jsonb),
       'can_purge', (s.status <> 'purged'),
       'can_end', (s.status = 'live')
     ) as x
     from public.test_sessions s
     order by s.id desc
-    limit greatest(1, coalesce(p_limit,20))
+    limit least(20, greatest(1, coalesce(p_limit,20)))
   ) q;
   return jsonb_build_object('ok', true,
     'title', public.uic('test_session.list_title','Sessions'),
@@ -717,7 +770,7 @@ grant execute on function public.test_session_end(bigint) to authenticated;
 grant execute on function public.test_session_purge(bigint, int) to authenticated;
 grant execute on function public.test_session_list(int) to authenticated;
 grant execute on function public.test_session_residue(bigint) to authenticated;
-grant execute on function public.test_fingerprint() to authenticated;
+grant execute on function public.test_fingerprint(bigint) to authenticated;
 grant execute on function public.test_session_expire_sweep() to authenticated, service_role;
 
 ------------------------------------------------------------------ the admin screen grows a session block

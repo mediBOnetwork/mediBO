@@ -49,6 +49,7 @@ import '../../design_tokens.dart';
 import '../../fulfill/fulfill_lookups.dart';
 import '../../services/admin_zone_scope.dart';
 import '../../utils/render_log.dart';
+import '../../user_state.dart'; // CMD #633 — the session gate below
 
 Color get _kGreen => FulfillLookups.instance.color('c_ff1b7a43', const Color(0xFF1B7A43));
 Color get _kBorder => FulfillLookups.instance.color('c_ffe5e7eb', const Color(0xFFE5E7EB));
@@ -94,13 +95,42 @@ class AdminDeliveryPartnersSectionState
   String _pendingTitle = '';
   String _pendingNote = '';
 
+  /// CMD #633 — the same session gate the host screen carries.
+  ///
+  /// This section is hosted inside AdminDeliveryPartnerScreen, which is one of
+  /// HomeShell's IndexedStack children, and an IndexedStack builds every child
+  /// — so initState here ran for anonymous visitors, called
+  /// admin_delivery_partners, and recorded the refusal on the public
+  /// storefront's render log as c630_delivery_partners_err. It is gated
+  /// independently of its host because it is a reusable widget: whoever mounts
+  /// it next inherits the gate rather than the bug.
+  bool _bootedForAdmin = false;
+
   @override
   void initState() {
     super.initState();
+    // CMD #633 — the first fetch waits for didChangeDependencies, where the
+    // session is readable.
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_bootedForAdmin) return;
+    if (!UserState.of(context).isAdmin) {
+      RenderLog.write('c633_anon_boot', 'admin_fetch=0');
+      return;
+    }
+    _bootedForAdmin = true;
     _load();
   }
 
-  Future<void> reload() => _load();
+  Future<void> reload() {
+    // CMD #633 — the host calls this on a scope change; it must not become the
+    // back door the gate was put up to close.
+    if (!_bootedForAdmin) return Future.value();
+    return _load();
+  }
 
   Future<void> _load() async {
     if (mounted) setState(() => _loading = true);

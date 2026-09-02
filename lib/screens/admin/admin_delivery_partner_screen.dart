@@ -31,6 +31,7 @@ import '../../services/admin_zone_scope.dart';
 import '../../services/map_config.dart'; // C634: map deep links come from config
 import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
+import '../../user_state.dart'; // CMD #633 — the session gate below
 import 'admin_delivery_partners_section.dart';
 
 Color get _kGreen => FulfillLookups.instance.color('c_ff1b7a43', const Color(0xFF1B7A43));
@@ -80,6 +81,38 @@ class _AdminDeliveryPartnerScreenState extends State<AdminDeliveryPartnerScreen>
     AdminZoneScope.instance.addListener(_onScopeChanged);
     AdminDateScope.instance.ensureLoaded();
     AdminZoneScope.instance.ensureLoaded();
+    // CMD #633 — the first fetch moved to didChangeDependencies, where the
+    // session is actually readable. See _bootForAdminOnce below.
+  }
+
+  /// CMD #633 — an admin tab must not fetch admin data for a visitor who is
+  /// not an admin.
+  ///
+  /// This screen is one of HomeShell's IndexedStack children (home_shell.dart),
+  /// and an IndexedStack builds EVERY child, so initState here ran for
+  /// anonymous visitors too: admin_delivery_dashboard and admin_missing_locations
+  /// were called on a signed-out boot and refused, and the refusal was written
+  /// onto the public storefront's render log as c632_delivery_partners_screen_err
+  /// ("permission denied for function admin_missing_locations"). That is the
+  /// same defect #633 fixed for the customer tab, re-shipped by #632 — so the
+  /// gate is now asserted for every admin tab by test/protected/anon_boot_test.dart
+  /// rather than left to be remembered.
+  ///
+  /// The gate lives in didChangeDependencies rather than initState because the
+  /// session is an inherited dependency: this runs again the moment auth
+  /// resolves to an admin, so a real admin still loads on open (and loads once,
+  /// not on every rebuild).
+  bool _bootedForAdmin = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_bootedForAdmin) return;
+    if (!UserState.of(context).isAdmin) {
+      RenderLog.write('c633_anon_boot', 'admin_fetch=0');
+      return;
+    }
+    _bootedForAdmin = true;
     _load();
   }
 
@@ -91,6 +124,10 @@ class _AdminDeliveryPartnerScreenState extends State<AdminDeliveryPartnerScreen>
   }
 
   void _onScopeChanged() {
+    // CMD #633 — the scopes notify every mounted listener, this screen
+    // included, so the gate has to hold here too or the fetch simply arrives
+    // by another door.
+    if (!_bootedForAdmin) return;
     _load();
     _partnersKey.currentState?.reload();
   }

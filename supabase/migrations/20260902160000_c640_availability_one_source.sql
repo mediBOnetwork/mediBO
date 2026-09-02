@@ -756,11 +756,15 @@ comment on function public.availability_contract_check(boolean) is
 -- 6. rg BEHAVIOUR TEST — the guard is checked on every rg run, for free.
 -- ─────────────────────────────────────────────────────────────────────────────
 --
--- Two claims, both catalogue-cheap, so this never turns rg_watch() into a
--- 563k-row scan:
---   a) the CHECK constraint exists AND is validated, and it actually REFUSES a
---      divergent write (proved by attempting one inside the rollback);
---   b) every cart-side availability reader resolves through
+-- Three claims, all catalogue-cheap, so this never turns rg_watch() into a
+-- 562k-row scan:
+--   a) the CHECK constraint exists AND is validated;
+--   b) the ONE WRITER is live: write a deliberately wrong `buyable` onto a row
+--      and it must come back DERIVED. (The constraint alone cannot be provoked
+--      through a normal UPDATE any more, because the trigger corrects the value
+--      before the constraint ever sees it — which is the stronger guarantee, so
+--      that is what gets asserted.)
+--   c) every cart-side availability reader resolves through
 --      storefront_effective_count(), the same call the storefront makes. This
 --      is the "no surface reads a different field than the others" half — it is
 --      what would have caught the original bug, where cart_set_item() read the
@@ -768,7 +772,7 @@ comment on function public.availability_contract_check(boolean) is
 insert into rg_behavior_tests (name, enabled, body, note)
 values ('c640_availability_one_source', true, $b$
 do $c640$
-declare v jsonb; v_missing text;
+declare v jsonb; v_missing text; v_id bigint; v_n int; v_buyable boolean;
 begin
   v := public.availability_contract_check(false);
   if not (v->>'ok')::boolean then
@@ -777,15 +781,16 @@ begin
       v::text;
   end if;
 
-  -- The constraint must actually bite, not merely exist.
-  begin
-    update public."MEDICINE" set buyable = not coalesce(buyable,false)
-     where id = (select id from public."MEDICINE" order by id limit 1);
+  -- The one writer must actually own the column.
+  select m.id, coalesce(m.supplier_count,0) into v_id, v_n
+    from public."MEDICINE" m order by m.id limit 1;
+  update public."MEDICINE" set buyable = (v_n = 0) where id = v_id;
+  select m.buyable into v_buyable from public."MEDICINE" m where m.id = v_id;
+  if coalesce(v_buyable,false) is distinct from (v_n > 0) then
     raise exception
-      'C640: a row was written with buyable disagreeing with supplier_count. The check constraint is not enforcing the contract.';
-  exception
-    when check_violation then null;   -- expected: the guard refused it
-  end;
+      'C640: buyable was written by hand and STAYED wrong on product % (supplier_count %). zz_medicine_set_buyable_trg is not deriving the three columns together.',
+      v_id, v_n;
+  end if;
 
   -- Every cart-side reader asks the SAME question the storefront asks.
   select string_agg(p.proname, ', ') into v_missing
@@ -802,7 +807,7 @@ begin
 
   raise exception 'RG_ROLLBACK';
 end $c640$;
-$b$, 'CHANGE #640 — availability had five definitions across five writers and seven readers; this pins it to one.')
+$b$, 'CHANGE #640 — availability had six writers and seven readers with three definitions between them; this pins it to one.')
 on conflict (name) do update
   set body = excluded.body, enabled = true, note = excluded.note;
 

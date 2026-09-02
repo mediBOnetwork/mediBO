@@ -1972,3 +1972,71 @@ begin
     array['therapeutic_categories','storefront_feed','medicine_companies']);
   return null;
 end $function$;
+
+-- ── K. THE SCREEN'S ENTRY POINT — one registry row, no Dart list ──────────
+-- The dev-tools sheet is drawn from feature_registry, so the Heartbeat screen
+-- becomes reachable by INSERTING a row. The only Dart that has to know the key
+-- is _handleAdminNav's case in home_shell.dart.
+insert into public.feature_registry
+  (feature_key, label, group_label, icon_key, route_key, sort_order, owner,
+   partner_eligible, default_access, is_active, category, surface,
+   roles_allowed, search_terms, description, canonical_key)
+values
+  ('devtool.heartbeat', 'Daily heartbeat', 'Runtime & health', 'timeline',
+   'heartbeat', 46, 'medibo', false, 'none', true, 'system', 'dev_tools',
+   array['super_admin']::text[],
+   'heartbeat canary daily synthetic order end to end pipeline alert drill stages',
+   'One synthetic order walks the whole pipeline every morning; the first failure alerts',
+   'devtool.heartbeat')
+on conflict (feature_key) do update
+  set label = excluded.label, group_label = excluded.group_label,
+      icon_key = excluded.icon_key, route_key = excluded.route_key,
+      sort_order = excluded.sort_order, is_active = excluded.is_active,
+      surface = excluded.surface, roles_allowed = excluded.roles_allowed,
+      search_terms = excluded.search_terms, description = excluded.description;
+
+-- ── L. THE PROTECTED PROOF, IN SQL ───────────────────────────────────────
+-- The exclusion is a database property, so its permanent test is a database
+-- test: rg_check() runs this before every command completes. It proves both
+-- halves — the ledgers REFUSE a synthetic write, and the two leaf views the
+-- whole of P&L, settlements and the demand engine read through still carry
+-- their filter. Re-creating pnl_line_v or _c427_bill_units without it turns
+-- this red in the same command that did it.
+insert into public.rg_behavior_tests (name, body, enabled, note) values
+('heartbeat_synthetic_excluded', $body$do $rg$
+declare n int; v text;
+begin
+  -- 1. the ledgers refuse a synthetic write outright
+  insert into public.order_pnl_slab (order_id, slab_pct, ptr_total, source, is_synthetic)
+  values (gen_random_uuid(), 0, 0, 'rg', true);
+  select count(*) into n from public.order_pnl_slab where source = 'rg';
+  if n > 0 then raise exception 'RG_FAIL: a synthetic row reached order_pnl_slab'; end if;
+
+  -- 2. the seven books tables all still carry the block
+  select count(*) into n
+    from pg_trigger t join pg_class c on c.oid = t.tgrelid
+    join pg_proc p on p.oid = t.tgfoid
+   where p.proname = '_synthetic_books_block' and not t.tgisinternal;
+  if n < 7 then
+    raise exception 'RG_FAIL: only % books-block triggers left (expected >= 7)', n;
+  end if;
+
+  -- 3. P&L and partner settlements read through pnl_line_v
+  select pg_get_viewdef('public.pnl_line_v'::regclass, true) into v;
+  if v !~* 'is_synthetic' then
+    raise exception 'RG_FAIL: pnl_line_v lost its synthetic filter — P&L and settlements can see a canary order';
+  end if;
+
+  -- 4. the whole demand engine reads through _c427_bill_units
+  select pg_get_functiondef(p.oid) into v from pg_proc p
+    join pg_namespace ns on ns.oid = p.pronamespace
+   where ns.nspname = 'public' and p.proname = '_c427_bill_units';
+  if v !~* 'is_synthetic' then
+    raise exception 'RG_FAIL: _c427_bill_units lost its synthetic filter — the demand engine can see a canary bill';
+  end if;
+
+  raise exception 'RG_ROLLBACK';
+end $rg$;$body$, true,
+'CHANGE #468 — a synthetic order must stay invisible to every book: the ledgers refuse the write, and pnl_line_v / _c427_bill_units keep the filter that hides it from P&L, settlements, GST and the demand engine.')
+on conflict (name) do update
+  set body = excluded.body, enabled = true, note = excluded.note;

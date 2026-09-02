@@ -71,6 +71,11 @@ as $$
   ]::text[];
 $$;
 
+-- A null and an empty string are not worth 16 bytes of key name each: with 81
+-- keys the NAMES were the biggest single item in the row. The screens already
+-- read every field as `(row['x'] ?? '')` / `?? false`, so an absent key and an
+-- empty one are the same thing to them — this is the codebase's own idiom, not
+-- a new contract.
 create or replace function public._dev_card_strip(p_row jsonb)
 returns jsonb
 language sql
@@ -79,9 +84,12 @@ as $$
   select coalesce(
     (select jsonb_object_agg(k, p_row -> k)
        from unnest(public._dev_card_keys()) k
-      where p_row ? k), '{}'::jsonb)
-    || jsonb_build_object(
-         'plain_summary', left(coalesce(p_row->>'plain_summary',''), 200));
+      where p_row ? k
+        and p_row -> k is distinct from 'null'::jsonb
+        and p_row ->> k is distinct from ''), '{}'::jsonb)
+    || case when coalesce(p_row->>'plain_summary','') = '' then '{}'::jsonb
+            else jsonb_build_object(
+                   'plain_summary', left(p_row->>'plain_summary', 200)) end;
 $$;
 
 create or replace function public.dev_cmd_list(

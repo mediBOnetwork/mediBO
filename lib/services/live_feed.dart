@@ -63,6 +63,47 @@ class LiveFeedPlan {
   static const fallback = LiveFeedPlan(<String, LiveFeedTablePlan>{}, 30);
 }
 
+/// The whole decision, with no Supabase in it: given the backend's plan and
+/// what a caller asked to watch, which tables get a live binding, which are
+/// polled, and how often. Pure so it can be held down by a protected test —
+/// this is the rule that stops a screen quietly opening 29 channels again.
+class LiveFeedRouting {
+  const LiveFeedRouting({
+    required this.live,
+    required this.polled,
+    required this.pollSeconds,
+  });
+
+  final List<String> live;
+  final List<String> polled;
+  final int pollSeconds;
+
+  /// A table is bound live only when the PLAN says live, and — when the plan
+  /// says the table may only be watched narrowed — a filter was supplied.
+  /// An unfiltered binding on a filter_required table is exactly the fan-out
+  /// the registry exists to prevent, so it is polled instead of refused: the
+  /// surface keeps working, it just stops costing.
+  static LiveFeedRouting split(
+    LiveFeedPlan plan,
+    List<String> tables,
+    Set<String> filtered,
+  ) {
+    final live = <String>[];
+    final polled = <String>[];
+    var pollSeconds = plan.defaultPollSeconds;
+    for (final t in tables) {
+      final tp = plan.forTable(t);
+      if (tp.isLive && (!tp.filterRequired || filtered.contains(t))) {
+        live.add(t);
+      } else {
+        polled.add(t);
+        if (tp.pollSeconds < pollSeconds) pollSeconds = tp.pollSeconds;
+      }
+    }
+    return LiveFeedRouting(live: live, polled: polled, pollSeconds: pollSeconds);
+  }
+}
+
 /// One watch. Dispose it when the surface goes away.
 class LiveFeedHandle {
   LiveFeedHandle._(this._dispose);
@@ -137,20 +178,14 @@ class LiveFeed {
     Duration debounce = const Duration(milliseconds: 400),
   }) async {
     final p = await plan();
-    final live = <String>[];
-    final polled = <String>[];
-    var pollSeconds = p.defaultPollSeconds;
-
-    for (final t in tables) {
-      final tp = p.forTable(t);
-      final hasFilter = filters != null && filters[t] != null;
-      if (tp.isLive && (!tp.filterRequired || hasFilter)) {
-        live.add(t);
-      } else {
-        polled.add(t);
-        if (tp.pollSeconds < pollSeconds) pollSeconds = tp.pollSeconds;
-      }
-    }
+    final r = LiveFeedRouting.split(
+      p,
+      tables,
+      {...?filters?.keys},
+    );
+    final live = r.live;
+    final polled = r.polled;
+    final pollSeconds = r.pollSeconds;
 
     Timer? debounceTimer;
     final pending = <String>{};

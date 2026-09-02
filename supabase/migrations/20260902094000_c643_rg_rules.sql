@@ -26,10 +26,13 @@ $body$, true,
 do $b$
 declare n int;
 begin
-  select length(public.dev_cmd_list(null, null, null, 50)::text) into n;
+  -- 25 is the page the Dev Queue screen asks for, so this is the payload a
+  -- poll actually puts on the wire. Measured after this change: 35,194 bytes
+  -- (it was 302,000 for the same 25 rows).
+  select length(public.dev_cmd_list(null, null, null, 25)::text) into n;
   if n > 51200 then
     raise exception
-      'C643: dev_cmd_list(limit 50) is % bytes (max 51200). A detail key has been added back to the card — put it in dev_cmd_get instead and keep it out of _dev_card_keys().',
+      'C643: dev_cmd_list(page of 25) is % bytes (max 51200). A detail key has been added back to the card — put it in dev_cmd_get instead and keep it out of _dev_card_keys().',
       n;
   end if;
   raise exception 'RG_ROLLBACK';

@@ -63,8 +63,11 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
     super.initState();
     _load();
     _loadDrafts();
-    _poll = Timer.periodic(const Duration(seconds: 5), (_) {
-      if (_hasActive) _load(silent: true);
+    // CHANGE #643 — 30 s, and a DELTA. At 5 s this screen was re-reading every
+    // command in the queue twelve times a minute; the poll is now both slower
+    // and much smaller, and a row that has not moved is not sent at all.
+    _poll = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (_hasActive) _load(silent: true, delta: true);
     });
     _draftPoll = Timer.periodic(const Duration(seconds: 8), (_) {
       _loadDrafts();
@@ -99,21 +102,44 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
     } catch (_) {}
   }
 
-  Future<void> _load({bool silent = false}) async {
+  /// The cursor the backend handed back on the last read. A delta poll asks for
+  /// "what has moved since this", and the backend answers with its own clock —
+  /// the client never invents a timestamp.
+  String? _since;
+
+  Future<void> _load({bool silent = false, bool delta = false}) async {
     if (!silent && mounted) setState(() => _loading = true);
     try {
       final p = await _svc.list(
         status: _status,
         search: _searchCtl.text.trim(),
         batch: _batch,
+        limit: _pageSize,
+        updatedSince: delta ? _since : null,
       );
       if (!mounted) return;
+      final incoming = ((p['rows'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
       setState(() {
         _title = (p['screen_title'] as String?) ?? _title;
-        _rows = ((p['rows'] as List?) ?? const [])
-            .whereType<Map>()
-            .map((e) => Map<String, dynamic>.from(e))
-            .toList();
+        _since = (p['server_time'] as String?) ?? _since;
+        if (p['is_delta'] == true) {
+          // Patch in place, in the order we already have. A row the backend
+          // did not send did not move, so it stays exactly as it was.
+          for (final r in incoming) {
+            final id = asInt(r['id']);
+            final i = _rows.indexWhere((x) => asInt(x['id']) == id);
+            if (i >= 0) {
+              _rows[i] = r;
+            } else {
+              _rows.insert(0, r);
+            }
+          }
+        } else {
+          _rows = incoming;
+        }
         _counts = ((p['counts'] as Map?) ?? const {})
             .map((k, v) => MapEntry(k.toString(), asInt(v)));
         _loading = false;
@@ -122,6 +148,11 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
       if (mounted) setState(() => _loading = false);
     }
   }
+
+  /// One page. The rg guard `c643_dev_cmd_list_payload_small` asserts this page
+  /// stays under 50 kB, so a detail field added back to the card turns the
+  /// regression guard red in the command that added it.
+  static const _pageSize = 25;
 
   void _onSearch(String _) {
     _debounce?.cancel();

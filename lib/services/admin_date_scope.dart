@@ -237,7 +237,7 @@ class AdminDateScope {
     _channel = null;
     if (ch == null) return;
     try {
-      Supabase.instance.client.removeChannel(ch);
+      ch.dispose();
     } catch (_) {}
   }
 }

@@ -16,7 +16,8 @@
 
 create or replace function public.dev_runner_tick(
   p_agent        text,
-  p_since_msg_id bigint default null)
+  p_since_msg_id bigint  default null,
+  p_want_ctl     boolean default false)
 returns jsonb
 language plpgsql
 security definer
@@ -27,7 +28,13 @@ declare v_ctl jsonb; c dev_commands%rowtype; v_msgs jsonb; v_max bigint;
 begin
   perform _dev_guard();
 
-  v_ctl := public.dev_ctl_get();
+  -- dev_ctl_get() is ~6 kB. The bridge does not need it every 12 s; the runner
+  -- loop asks for it when it is about to decide whether to claim.
+  if coalesce(p_want_ctl, false) then
+    v_ctl := public.dev_ctl_get();
+  else
+    v_ctl := null;
+  end if;
 
   -- the row THIS slot is building (newest heartbeat wins when a slot somehow
   -- holds more than one — the one it is really working is the one beating)
@@ -60,7 +67,7 @@ begin
 
   select count(*) into v_pending from dev_commands where status = 'pending';
 
-  v_active := coalesce(nullif(v_ctl #>> '{pool,config,active_host}', ''),
+  v_active := coalesce(nullif(coalesce(v_ctl,'{}'::jsonb) #>> '{pool,config,active_host}', ''),
                        (select value #>> '{active_host}'
                           from dev_runner_config where key = 'worker_pool'), '');
 
@@ -69,7 +76,9 @@ begin
     'agent', p_agent,
     'server_time', now(),
     'ctl', v_ctl,
-    'workflow', coalesce(v_ctl #>> '{desired_state,workflow}', 'on'),
+    'workflow', coalesce(v_ctl #>> '{desired_state,workflow}',
+                         (select value #>> '{workflow}' from dev_runner_config
+                           where key = 'desired_state'), 'on'),
     'active_host', v_active,
     'pending_count', v_pending,
     'building', case when c.id is null then null else jsonb_build_object(
@@ -80,8 +89,8 @@ begin
     'message_count', jsonb_array_length(v_msgs));
 end $$;
 
-grant execute on function public.dev_runner_tick(text, bigint) to service_role;
+grant execute on function public.dev_runner_tick(text, bigint, boolean) to service_role;
 
-comment on function public.dev_runner_tick(text, bigint) is
+comment on function public.dev_runner_tick(text, bigint, boolean) is
   'CHANGE #643: one read per runner tick — control switch, this slot''s building '
   'row, Om''s unseen replies and the pending depth. Replaces four REST polls.';

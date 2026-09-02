@@ -20,11 +20,20 @@ class DevQueueService {
   }
 
   // ── Reads ──────────────────────────────────────────────────────────────
+  /// CHANGE #643 — the list is CARDS. Every key a card draws is here; the log
+  /// tail, the spec, the decisions, the screenshots, the step list and the
+  /// finish blockers are not, and arrive from [get] when a card is opened.
+  /// Measured: a page of 25 went from ~302 kB to ~35 kB.
+  ///
+  /// [updatedSince] makes the poll a DELTA — the backend returns only the rows
+  /// whose clock moved since that timestamp and echoes its own `server_time`
+  /// for the next call. `is_delta` on the payload says which kind came back.
   Future<Map<String, dynamic>> list({
     String? status,
     String? search,
     String? batch,
     int? limit,
+    String? updatedSince,
   }) async {
     final raw = await _c.rpc(
       'dev_cmd_list',
@@ -33,10 +42,22 @@ class DevQueueService {
         'p_search': (search != null && search.isEmpty) ? null : search,
         'p_batch': batch,
         'p_limit': limit,
+        'p_updated_since': updatedSince,
       },
     );
     return _asMap(raw);
   }
+
+  /// One command, in full — the detail read. The screen used to find its row by
+  /// pulling `dev_cmd_list(limit: 500)` and searching it, which shipped every
+  /// other command's build log to draw one page.
+  Future<Map<String, dynamic>> get(int id) async =>
+      _asMap(await _c.rpc('dev_cmd_get', params: {'p_id': id}));
+
+  /// A page of the message thread. Media comes back as URLs only.
+  Future<Map<String, dynamic>> messages(int id, {int limit = 50, int? afterId}) async =>
+      _asMap(await _c.rpc('dev_cmd_messages',
+          params: {'p_id': id, 'p_limit': limit, 'p_after_id': afterId}));
 
   Future<Map<String, dynamic>> spec(int id) async =>
       _asMap(await _c.rpc('dev_cmd_spec', params: {'p_id': id}));

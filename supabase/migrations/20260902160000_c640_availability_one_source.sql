@@ -567,6 +567,7 @@ security definer
 set search_path to 'public'
 as $$
 DECLARE v_code text; v_last bigint; v_max bigint; v_hi bigint; v_n int;
+        v_cache_skipped boolean := false;
 BEGIN
   SELECT code INTO v_code FROM zones WHERE id = p_zone_id AND is_active;
   IF v_code IS NULL THEN RETURN jsonb_build_object('error','unknown_zone'); END IF;
@@ -585,15 +586,22 @@ BEGIN
   -- that was never happening: the cache was built once and never rebuilt after
   -- the catalogue's marketer strings were re-cased, so 561,053 of 562,549 rows
   -- stopped matching it.
-  INSERT INTO zone_marketer_key(marketer, key)
-  SELECT d.marketer, coalesce(a.group_key, d.marketer_canonical)
-    FROM (SELECT DISTINCT m.marketer, m.marketer_canonical
-            FROM public."MEDICINE" m
-           WHERE m.id > v_last AND m.id <= v_hi
-             AND m.marketer IS NOT NULL AND m.marketer_canonical IS NOT NULL) d
-    LEFT JOIN company_alias a ON a.variant_canonical = d.marketer_canonical
-  ON CONFLICT (marketer) DO UPDATE SET key = excluded.key
-   WHERE zone_marketer_key.key IS DISTINCT FROM excluded.key;
+  -- ...but it is a COURTESY, never a dependency: the sync below resolves its
+  -- own key. A lock timeout here (the cron dispatcher touches this table too)
+  -- must not cost the batch its real work, so it is swallowed and reported.
+  BEGIN
+    INSERT INTO zone_marketer_key(marketer, key)
+    SELECT d.marketer, coalesce(a.group_key, d.marketer_canonical)
+      FROM (SELECT DISTINCT m.marketer, m.marketer_canonical
+              FROM public."MEDICINE" m
+             WHERE m.id > v_last AND m.id <= v_hi
+               AND m.marketer IS NOT NULL AND m.marketer_canonical IS NOT NULL) d
+      LEFT JOIN company_alias a ON a.variant_canonical = d.marketer_canonical
+    ON CONFLICT (marketer) DO UPDATE SET key = excluded.key
+     WHERE zone_marketer_key.key IS DISTINCT FROM excluded.key;
+  EXCEPTION WHEN lock_not_available OR deadlock_detected OR query_canceled THEN
+    v_cache_skipped := true;
+  END;
 
   -- The sync resolves the key INLINE from the indexed `marketer_canonical`
   -- column instead of trusting the cache or calling
@@ -633,7 +641,8 @@ BEGIN
                              updated_at = now()
    WHERE zone_id = p_zone_id;
   RETURN jsonb_build_object('status','ok','done',(v_hi >= coalesce(v_max,0)),
-                            'from',v_last,'to',v_hi,'max',v_max,'rows_written',v_n);
+                            'from',v_last,'to',v_hi,'max',v_max,'rows_written',v_n,
+                            'key_cache_skipped', v_cache_skipped);
 END;
 $$;
 
@@ -796,3 +805,59 @@ end $c640$;
 $b$, 'CHANGE #640 — availability had five definitions across five writers and seven readers; this pins it to one.')
 on conflict (name) do update
   set body = excluded.body, enabled = true, note = excluded.note;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 7. IT MUST KEEP ITSELF FRESH — the sync had no schedule at all.
+-- ─────────────────────────────────────────────────────────────────────────────
+--
+-- zone_sync_medicine_batch() existed, worked (once the key resolution was
+-- fixed), and had NO caller: no cron.job, no cron_task row. It was run by hand
+-- when the zone model was built and never again, so the moment a company's
+-- supplier list changed for a marketer whose company row was not re-saved, the
+-- catalogue went stale and stayed stale. That is the other half of how a
+-- product ends up with 11 suppliers in the lookup and none on the row.
+--
+-- One dispatcher task, at an OFFSET minute (never a bare */N — see the
+-- 2026-08-18 connection-exhaustion outage), advancing one batch at a time and
+-- restarting the sweep once a day.
+create or replace function public.zone_sup_sync_tick()
+returns jsonb
+language plpgsql
+security definer
+set search_path to 'public'
+as $$
+declare z record; r jsonb;
+begin
+  for z in select id from zones where is_active order by id loop
+    if not coalesce((select s.done from zone_sync_state s where s.zone_id = z.id), false) then
+      r := public.zone_sync_medicine_batch(z.id::smallint, 2000);
+      return jsonb_build_object('ok', true, 'zone', z.id, 'batch', r);
+    end if;
+  end loop;
+
+  -- Every zone finished. Restart the sweep once a day so an edit that missed
+  -- its trigger cannot leave the catalogue wrong for ever — the failure mode
+  -- this whole change exists to close.
+  if coalesce((select min(s.updated_at) from zone_sync_state s), 'epoch'::timestamptz)
+       < now() - interval '20 hours' then
+    update zone_sync_state set last_id = 0, done = false, updated_at = now();
+    return jsonb_build_object('ok', true, 'restarted', true);
+  end if;
+
+  return jsonb_build_object('ok', true, 'idle', true);
+end;
+$$;
+
+insert into cron_task (name, ord, mode, gate_sql, work_sql, step_timeout_ms,
+                       enabled, base_interval_s, max_interval_s, dml, note)
+values ('zone_sup_sync', 61, 'poll', 'select true',
+        'select public.zone_sup_sync_tick()', 50000, true, 120, 900, true,
+        'CHANGE #640 — keeps z_<zone>_sup in step with zone_company_lookup. The '
+        'sync function existed but had no caller at all, so the catalogue went '
+        'stale the moment a supplier list changed and stayed stale.')
+on conflict (name) do update
+  set work_sql = excluded.work_sql, gate_sql = excluded.gate_sql,
+      step_timeout_ms = excluded.step_timeout_ms, enabled = true,
+      base_interval_s = excluded.base_interval_s,
+      max_interval_s = excluded.max_interval_s,
+      dml = excluded.dml, note = excluded.note;

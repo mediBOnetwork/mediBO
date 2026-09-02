@@ -1,5 +1,11 @@
 package `in`.medibo.app
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -70,6 +76,91 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+
+        // CHANGE #700 — the run-location foreground service. This bridge holds
+        // no policy of its own: interval, distance filter, battery threshold
+        // and every word on the notification arrive in the start payload,
+        // having come from delivery_live_config().
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "in.medibo.app/run_location")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "available" -> result.success(true)
+
+                    "hasPermission" -> result.success(hasFineLocation())
+
+                    "requestPermission" -> {
+                        if (hasFineLocation()) {
+                            result.success(true)
+                        } else {
+                            requestFineLocation()
+                            // The grant lands asynchronously in the system
+                            // dialog; Dart re-asks with hasPermission before it
+                            // starts. Never block on a permission sheet.
+                            result.success(false)
+                        }
+                    }
+
+                    "start" -> {
+                        if (!hasFineLocation()) {
+                            requestFineLocation()
+                            result.success(false)
+                        } else {
+                            val i = Intent(this, RunLocationService::class.java)
+                            i.action = RunLocationService.ACTION_START
+                            i.putExtra("supabase_url", call.argument<String>("supabase_url") ?: "")
+                            i.putExtra("anon_key", call.argument<String>("anon_key") ?: "")
+                            i.putExtra("access_token", call.argument<String>("access_token") ?: "")
+                            i.putExtra("refresh_token", call.argument<String>("refresh_token") ?: "")
+                            i.putExtra("interval_s", call.argument<Int>("interval_s") ?: 5)
+                            i.putExtra("min_move_m", call.argument<Int>("min_move_m") ?: 20)
+                            i.putExtra("battery_saver_pct", call.argument<Int>("battery_saver_pct") ?: 20)
+                            i.putExtra("battery_interval_s", call.argument<Int>("battery_interval_s") ?: 30)
+                            i.putExtra("notif_title", call.argument<String>("notif_title") ?: "")
+                            i.putExtra("notif_body", call.argument<String>("notif_body") ?: "")
+                            i.putExtra("channel_name", call.argument<String>("channel_name") ?: "")
+                            ContextCompat.startForegroundService(this, i)
+                            result.success(true)
+                        }
+                    }
+
+                    // A run outlives an access token. Dart pushes every refreshed
+                    // session through so the service never has to guess.
+                    "token" -> {
+                        val i = Intent(this, RunLocationService::class.java)
+                        i.action = RunLocationService.ACTION_TOKEN
+                        i.putExtra("access_token", call.argument<String>("access_token") ?: "")
+                        i.putExtra("refresh_token", call.argument<String>("refresh_token") ?: "")
+                        try { ContextCompat.startForegroundService(this, i) } catch (_: Throwable) { }
+                        result.success(true)
+                    }
+
+                    "stop" -> {
+                        val i = Intent(this, RunLocationService::class.java)
+                        i.action = RunLocationService.ACTION_STOP
+                        // Start-then-stop, not stopService: a service that was
+                        // never started still has to be stoppable.
+                        try { ContextCompat.startForegroundService(this, i) } catch (_: Throwable) { }
+                        result.success(true)
+                    }
+
+                    else -> result.notImplemented()
+                }
+            }
+    }
+
+    private fun hasFineLocation(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
+
+    private fun requestFineLocation() {
+        val perms = mutableListOf(
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION,
+        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            perms.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        ActivityCompat.requestPermissions(this, perms.toTypedArray(), 7002)
     }
 
     /**

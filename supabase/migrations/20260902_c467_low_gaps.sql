@@ -179,7 +179,9 @@ insert into public.ui_copy(key, value) values
   ('partner_audit.range_30',       '"Last 30 days"'::jsonb),
   ('partner_audit.range_90',       '"Last 90 days"'::jsonb),
   ('partner_audit.range_all',      '"All time"'::jsonb),
-  ('partner_audit.no_feature',     '"No feature"'::jsonb)
+  ('partner_audit.no_feature',     '"No feature"'::jsonb),
+  ('partner_audit.load_failed',    '"Could not reach the server. Nothing is shown because nothing was read."'::jsonb),
+  ('partner_audit.retry',          '"Try again"'::jsonb)
 on conflict (key) do nothing;
 
 -- The verbatim sentence for one row, and the tone that colours it. A new

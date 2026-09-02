@@ -17,6 +17,7 @@ import 'package:flutter/material.dart';
 
 import '../../design_tokens.dart';
 import '../../services/partner_state.dart';
+import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 
 /// Tone -> colour, the same mapping the console uses. A tone this build has
@@ -62,6 +63,7 @@ class _PartnerAuditLogScreenState extends State<PartnerAuditLogScreen> {
   final List<Map<String, dynamic>> _rows = [];
   bool _loading = true;
   bool _paging = false;
+  bool _failed = false;
 
   // The three filters. Their VALUES come from the payload's option lists; this
   // state only remembers which one was tapped so the next call can carry it.
@@ -101,12 +103,14 @@ class _PartnerAuditLogScreenState extends State<PartnerAuditLogScreen> {
         _rows.addAll(page);
         _loading = false;
         _paging = false;
+        _failed = false;
       });
     } catch (_) {
       if (!mounted) return;
       setState(() {
         _loading = false;
         _paging = false;
+        _failed = _payload == null;
       });
     }
   }
@@ -134,7 +138,7 @@ class _PartnerAuditLogScreenState extends State<PartnerAuditLogScreen> {
       body: _loading
           ? const _AuditSkeleton()
           : p == null
-              ? const SizedBox.shrink()
+              ? _AuditFailed(onRetry: _failed ? () => _load() : null)
               : PartnerAuditLogView(
                   payload: p,
                   rows: _rows,
@@ -284,7 +288,7 @@ class PartnerAuditLogView extends StatelessWidget {
         if (hasMore) ...[
           SizedBox(height: Ds.space.x16),
           SizedBox(
-            height: 48,
+            height: Ds.touch.listRowMinHeight,
             child: OutlinedButton(
               onPressed: paging ? null : onMore,
               child: Text(_s('more_label')),
@@ -376,7 +380,7 @@ class _FilterBlock extends StatelessWidget {
                 onTap: o.onTap,
                 borderRadius: Ds.r.rChip,
                 child: Container(
-                  constraints: const BoxConstraints(minHeight: 44),
+                  constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
                   alignment: Alignment.center,
                   padding: EdgeInsets.symmetric(
                       horizontal: Ds.space.x16, vertical: Ds.space.x8),
@@ -401,6 +405,37 @@ class _FilterBlock extends StatelessWidget {
   }
 }
 
+/// The server never answered. The words are ui_copy's; only the Retry wiring
+/// is this file's.
+class _AuditFailed extends StatelessWidget {
+  const _AuditFailed({this.onRetry});
+  final VoidCallback? onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: EdgeInsets.all(Ds.space.x24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(c('partner_audit.load_failed'),
+                style: Ds.t.body, textAlign: TextAlign.center),
+            SizedBox(height: Ds.space.x16),
+            SizedBox(
+              height: Ds.touch.listRowMinHeight,
+              child: OutlinedButton(
+                onPressed: onRetry,
+                child: Text(c('partner_audit.retry')),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _AuditSkeleton extends StatelessWidget {
   const _AuditSkeleton();
 
@@ -411,7 +446,7 @@ class _AuditSkeleton extends StatelessWidget {
       children: [
         for (var i = 0; i < 6; i++)
           Container(
-            height: 56,
+            height: Ds.touch.listRowMinHeight,
             margin: EdgeInsets.only(bottom: Ds.space.x8),
             decoration: BoxDecoration(
               color: Ds.c.surface,

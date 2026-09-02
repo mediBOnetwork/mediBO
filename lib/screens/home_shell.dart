@@ -827,6 +827,15 @@ class _HomeShellState extends State<HomeShell> {
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const BagsScreen()));
         break;
+      // CHANGE #690 — the exceptions console is a Fulfill STAGE, not a page of
+      // its own, so /admin/go/exceptions opens the fulfilment screen (index 10)
+      // and then asks it for that stage by the BACKEND's own key. A login that
+      // fulfill_tabs() never sent the stage to lands on the bar it already had.
+      case 'exceptions':
+        setState(() { _index = 10; _cartOpen = false; });
+        WidgetsBinding.instance.addPostFrameCallback(
+            (_) => AdminFulfillmentScreen.openStage('exceptions'));
+        break;
       // CHANGE #174 — PTR / GST backfill. Not gated here: admin_pricing_list()
       // and product_pricing_upsert() both check get_my_role() themselves and
       // the screen renders their answer, same story as the WhatsApp screens.

@@ -108,19 +108,19 @@ returns bigint language sql stable security definer set search_path to 'public' 
    limit 1;
 $fn$;
 
--- The ambient answer the trigger asks on every insert. Transaction-cached so a
--- multi-row statement pays for it once, and it costs nothing at all when no
--- session has ever been started (the partial unique index makes the lookup a
--- single index probe).
+-- The ambient answer the trigger asks on every insert.
+--
+-- Deliberately NOT cached per transaction. The first draft cached the answer
+-- in a transaction-local GUC to save the lookup; c573b_proof then failed with
+-- everything unstamped, because the cache was populated by a write that
+-- happened BEFORE the session opened and the whole transaction went on
+-- believing test mode was off. A session must be observable the instant it
+-- starts. The read is a single probe on the partial unique index of a table
+-- that holds a handful of rows, so there is nothing to save here anyway.
 create or replace function public._test_session_ambient()
 returns bigint language plpgsql volatile security definer set search_path to 'public' as $fn$
-declare v_cached text; v_id bigint; v_scope text; v_uid uuid;
+declare v_id bigint; v_scope text; v_uid uuid;
 begin
-  v_cached := coalesce(current_setting('medibo.test_session', true), '');
-  if v_cached <> '' then
-    return case when v_cached = '-' then null else v_cached::bigint end;
-  end if;
-
   select id, scope into v_id, v_scope
     from public.test_sessions
    where status = 'live' and ended_at is null and now() < expires_at
@@ -139,7 +139,6 @@ begin
     end if;
   end if;
 
-  perform set_config('medibo.test_session', coalesce(v_id::text, '-'), true);
   return v_id;
 end $fn$;
 
@@ -291,6 +290,45 @@ insert into public.test_storage_rule (src_table, path_col, bucket, bucket_col) v
   ('pack_clip_mentions','clip_path','voice-clips',null)
 on conflict (src_table, path_col) do update
   set bucket = excluded.bucket, bucket_col = excluded.bucket_col;
+
+------------------------------------------------------------------ deleting a file, both halves of it
+-- storage.protect_delete() refuses a direct DELETE on storage.objects and
+-- points at the Storage API instead — a deliberate guard against orphaning
+-- blobs. A test purge needs BOTH halves, so it does both:
+--   1. the object row, inside the guard's own documented escape hatch
+--      (transaction-local), which is what makes the database byte-identical;
+--   2. a best-effort Storage API call over pg_net with the vault's service
+--      key, which removes the blob itself. It is asynchronous and it is
+--      allowed to fail: the row is already gone and nothing points at it.
+create or replace function public._test_storage_delete(p_bucket text, p_names text[])
+returns int language plpgsql security definer set search_path to 'public' as $fn$
+declare n int := 0; v_key text; v_ref text; nm text;
+begin
+  if p_bucket is null or coalesce(array_length(p_names,1),0) = 0 then return 0; end if;
+
+  begin
+    select decrypted_secret into v_key from vault.decrypted_secrets where name = 'SERVICE_ROLE_KEY' limit 1;
+    select substring(current_setting('primary_conninfo', true) from 'postgres\.([a-z0-9]+)') into v_ref;
+    if v_ref is null then
+      select substring(decrypted_secret from 'postgres\.([a-z0-9]+)') into v_ref
+        from vault.decrypted_secrets where name = 'SUPABASE_DB_URL' limit 1;
+    end if;
+    if v_key is not null and v_ref is not null
+       and exists (select 1 from pg_extension where extname = 'pg_net') then
+      foreach nm in array p_names loop
+        perform net.http_delete(
+          url := 'https://' || v_ref || '.supabase.co/storage/v1/object/' || p_bucket || '/' || nm,
+          headers := jsonb_build_object('Authorization', 'Bearer ' || v_key));
+      end loop;
+    end if;
+  exception when others then null;   -- the row delete below is the guarantee
+  end;
+
+  perform set_config('storage.allow_delete_query', 'true', true);
+  delete from storage.objects o where o.bucket_id = p_bucket and o.name = any(p_names);
+  get diagnostics n = row_count;
+  return n;
+end $fn$;
 
 ------------------------------------------------------------------ the tables a session owns, in delete order
 create or replace function public._test_session_tables()
@@ -480,15 +518,13 @@ begin
       if coalesce(array_length(v_paths,1),0) = 0 then continue; end if;
 
       if r.bucket is not null then
-        delete from storage.objects o where o.bucket_id = r.bucket and o.name = any(v_paths);
-        get diagnostics n = row_count; v_files := v_files + n;
+        v_files := v_files + public._test_storage_delete(r.bucket, v_paths);
       else
         for v_bucket in
           execute format('select distinct %I from public.%I where test_session_id = $1 and %I is not null',
                          r.bucket_col, r.src_table, r.bucket_col) using v_id
         loop
-          delete from storage.objects o where o.bucket_id = v_bucket and o.name = any(v_paths);
-          get diagnostics n = row_count; v_files := v_files + n;
+          v_files := v_files + public._test_storage_delete(v_bucket, v_paths);
         end loop;
       end if;
     end loop;
@@ -793,11 +829,26 @@ declare v_checks jsonb := '[]'::jsonb; v_ok boolean := true;
         v_fp_before jsonb; v_fp_after jsonb;
         n bigint; m bigint; v_res jsonb; v_files bigint;
         v_wa bigint; v_books bigint; v_unstamped bigint; v_fixtures bigint;
+        v_real_ph uuid; v_guard uuid; v_guard_synth boolean;
+        v_ambient uuid; v_ambient_synth boolean; v_ambient_sess bigint;
+        v_clip text; v_obj bigint;
 begin
   if not public._test_guard() then return jsonb_build_object('ok',false,'error','not_authorized'); end if;
 
   perform public.test_fixtures_ensure();
   update public.test_sessions set status='ended', ended_at=coalesce(ended_at,now()) where status='live';
+
+  -- A REAL (non-synthetic) pharmacy is needed for checks 11 and 12: they have
+  -- to prove that the ambient stamp is doing the work, not the inheritance
+  -- rules, and that a real row touched mid-session is never adopted.
+  select id into v_real_ph from public.pharmacy_profiles
+   where not coalesce(is_synthetic,false) order by created_at limit 1;
+
+  if v_real_ph is not null then
+    insert into public.khata_account (pharmacy_id, kind, name, is_active)
+    values (v_real_ph, 'patient', 'c573b guard - real row', false)
+    returning id into v_guard;
+  end if;
 
   v_fp_before := public.test_fingerprint();
 
@@ -847,6 +898,45 @@ begin
     'n',5,'name','zero synthetic rows in the books',
     'ok', (v_books = 0), 'detail', jsonb_build_object('book_rows', v_books)));
 
+  -- 5b — the ambient stamp catches an ORDINARY insert on a REAL parent.
+  -- This is the check that proves Om's scope change works: the row hangs off
+  -- a real pharmacy, so no inheritance rule can explain the flag. Only the
+  -- live session can.
+  if v_real_ph is not null then
+    insert into public.khata_account (pharmacy_id, kind, name, is_active)
+    values (v_real_ph, 'patient', 'c573b ambient probe', false)
+    returning id into v_ambient;
+    select is_synthetic, test_session_id into v_ambient_synth, v_ambient_sess
+      from public.khata_account where id = v_ambient;
+  end if;
+  v_checks := v_checks || jsonb_build_array(jsonb_build_object(
+    'n',11,'name','ambient stamp catches an ordinary insert on a REAL parent',
+    'ok', (v_real_ph is null or (coalesce(v_ambient_synth,false) and v_ambient_sess = v_sess)),
+    'detail', jsonb_build_object('is_synthetic', v_ambient_synth, 'session', v_ambient_sess)));
+
+  -- 5c — REGRESSION GUARD. Ambient stamping is INSERT-only. A real row that is
+  -- merely UPDATED during a session must never become synthetic, because the
+  -- purge would then delete live business data. The first run of this proof
+  -- caught exactly that defect; this check is why it can never come back.
+  if v_guard is not null then
+    update public.khata_account set note = 'touched during session' where id = v_guard;
+    select is_synthetic into v_guard_synth from public.khata_account where id = v_guard;
+  end if;
+  v_checks := v_checks || jsonb_build_array(jsonb_build_object(
+    'n',12,'name','a REAL row updated mid-session is never adopted',
+    'ok', (v_guard is null or not coalesce(v_guard_synth,true)),
+    'detail', jsonb_build_object('is_synthetic', v_guard_synth)));
+
+  -- 5d — storage. A file created inside the session must go with it, not just
+  -- the row that pointed at it.
+  v_clip := 'c573b/' || v_sess::text || '/probe.m4a';
+  begin
+    insert into storage.objects (bucket_id, name, owner, metadata)
+    values ('voice-clips', v_clip, null, '{}'::jsonb);
+    insert into public.voice_clip_log (the_date, context, supplier_name, clip_path, seconds)
+    values (current_date, 'c573b', 'TST TEST SUPPLIER - SYNTHETIC (DO NOT USE)', v_clip, 1);
+  exception when others then null; end;
+
   -- 6 — the purge, run to completion the way the app runs it
   v_purge := public.test_session_purge(v_sess);
   while coalesce((v_purge->>'ok')::boolean,false) and not coalesce((v_purge->>'done')::boolean,true) loop
@@ -887,6 +977,16 @@ begin
     'ok', (public.test_session_live_id() is null
            and not coalesce((public.test_session_banner()->>'on')::boolean, true)),
     'detail', public.test_session_banner()));
+
+  -- 13 — the storage object itself is gone, not merely orphaned.
+  select count(*) into v_obj from storage.objects
+   where bucket_id = 'voice-clips' and name = v_clip;
+  v_checks := v_checks || jsonb_build_array(jsonb_build_object(
+    'n',13,'name','the storage object is deleted, not orphaned',
+    'ok', (v_obj = 0), 'detail', jsonb_build_object('objects_left', v_obj)));
+
+  -- The guard row is ours; it is not business data and it leaves with us.
+  if v_guard is not null then delete from public.khata_account where id = v_guard; end if;
 
   select bool_and(coalesce((x->>'ok')::boolean,false)) into v_ok
     from jsonb_array_elements(v_checks) x;

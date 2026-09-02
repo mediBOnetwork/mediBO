@@ -1716,8 +1716,17 @@ class _HomeShellState extends State<HomeShell> {
           // is handed the same bound the partner route path has always passed:
           // the tab numbers the BACKEND granted. Null — every full admin — is
           // unbounded and unchanged.
-          adminPage(() => AdminFulfillmentScreen(
-              allowedTabs: Access.instance.allowedTabIndexes('fulfillment'))),
+          // CHANGE #690 — wrapped like the dashboard is, because the
+          // exceptions console's next action can point OUT of the pipeline
+          // (Money, Bill pipeline, WhatsApp Ops, Add medicine). Without a
+          // QuickLinkNavigator above it, `.of(context)` is null inside this
+          // subtree and those buttons tap forever.
+          adminPage(() => QuickLinkNavigator(
+                navigate: _handleAdminNav,
+                child: AdminFulfillmentScreen(
+                    allowedTabs:
+                        Access.instance.allowedTabIndexes('fulfillment')),
+              )),
           // CHANGE #536 — index 11, MY SHOP. It is appended rather than slotted
           // in beside the customer's other three pages because indices 3–10 are
           // addressed by number from _handleAdminNav; inserting would have

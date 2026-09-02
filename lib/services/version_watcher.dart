@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
+import '../build_info.dart';
 import '../widgets/update_bar.dart';
 import 'page_reload.dart';
 import '../utils/render_log.dart';
@@ -64,6 +65,17 @@ class VersionWatcher {
     Duration(seconds: 2),
   ];
 
+  /// CHANGE #657 — the live build's change number, from the last successful
+  /// fetch. Compared against [kBuiltChange], which is compiled INTO this
+  /// bundle, so a stale bundle is detectable even when the whole document it
+  /// came with is stale too. Empty until the first successful fetch.
+  String _liveChange = '';
+
+  /// CHANGE #657 — set once the stale-bundle path has fired, so a reload that
+  /// does not fix the staleness (an edge node still serving the old document)
+  /// cannot become a reload loop.
+  bool _staleBundleHandled = false;
+
   Future<String?> _fetchCommit() async {
     try {
       final ts = DateTime.now().millisecondsSinceEpoch;
@@ -78,6 +90,7 @@ class VersionWatcher {
       } catch (_) {}
       if (resp.statusCode != 200) return null;
       final map = jsonDecode(resp.body) as Map<String, dynamic>;
+      _liveChange = map['change']?.toString() ?? '';
       final commit = map['commit']?.toString();
       final cleaned = (commit != null && commit.isNotEmpty && commit != 'dev')
           ? commit
@@ -151,6 +164,8 @@ class VersionWatcher {
     _pollTimer = Timer.periodic(_interval, (_) => _check());
     try {
       RenderLog.write('c241_autoupdate_ready', 'interval=45s');
+      RenderLog.write('c657_running_build',
+          hasBuiltChange ? kBuiltChange : 'unstamped');
     } catch (_) {}
   }
 
@@ -162,6 +177,32 @@ class VersionWatcher {
           'c241_vw_poll', 'live=${live ?? "null"} boot=${_bootCommit ?? "null"}');
     } catch (_) {}
     if (live == null) return;
+    // CHANGE #657 — THE RUNNING BUNDLE vs THE LIVE BUILD.
+    //
+    // Everything below compares the live commit against the commit this TAB
+    // first saw, which answers "did a deploy happen while I sat here?" — it
+    // cannot answer "did I boot on an old bundle?", because a stale document
+    // seeds a stale baseline and the two agree forever. `kBuiltChange` is
+    // compiled into main.dart.js, so this comparison is the running JavaScript
+    // against the live build, with no cached document in the path.
+    //
+    // Fires once (`_staleBundleHandled`): if the reload comes back on the same
+    // old bundle — an edge node still serving the previous document — the user
+    // gets one reload and the prompt, never a loop.
+    if (!_staleBundleHandled &&
+        hasBuiltChange &&
+        _liveChange.isNotEmpty &&
+        _liveChange != kBuiltChange) {
+      _staleBundleHandled = true;
+      _handled = true;
+      try {
+        RenderLog.write('c657_stale_bundle',
+            'running=$kBuiltChange live=$_liveChange');
+      } catch (_) {}
+      _showBanner();
+      _scheduleAutoReload();
+      return;
+    }
     // CHANGE #415: last-resort fallback — only reached if init()'s immediate
     // attempt AND every background retry (_retrySeed) failed, i.e. a
     // genuinely prolonged outage. Legitimate "no baseline yet" case, so

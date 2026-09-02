@@ -82,7 +82,6 @@ import 'admin/dev_queue/dev_queue_screen.dart';
 import 'auth/login_screen.dart';
 import 'bulk_upload_screen.dart';
 import 'delivery/delivery_home_screen.dart'; // C629: the rider/agency surface
-import 'partner/partner_home_screen.dart'; // C326: the zone partner's own home
 import '../services/delivery_role_state.dart'; // C629: is_partner, from the backend
 import 'cart_screen.dart';
 import '../utils/toast.dart';
@@ -1466,25 +1465,14 @@ class _HomeShellState extends State<HomeShell> {
       );
     }
 
-    // CHANGE #326 — a partner is not a customer, and this shell is where that
-    // used to be forgotten.
+    // CHANGE #657 — the partner branch that used to sit here is gone.
     //
-    // main.dart routes a partner at the root, but HomeShell is still reachable
-    // by a route push, an unknown route and the 5 s boot-timeout fallback — and
-    // until #326 `AccountSurface` had no 'partner' word at all, so a partner
-    // session parsed as `unresolved` and fell all the way through to the
-    // customer storefront below: Best Sellers, a Home/Catalogue/Offers/Orders/
-    // Bulk bottom nav, and a profile screen asking a zone partner to "Complete
-    // Registration" for a pharmacy she will never have.
-    //
-    // Placed ABOVE the delivery probe on purpose: a partner must not sit behind
-    // a rider probe she can never be the subject of, and must never flash the
-    // storefront while it is in flight. View As is excluded so a super-admin
-    // previewing another account is not hijacked.
-    if (!viewAs.isActive && auth.surface == AccountSurface.partner) {
-      RenderLog.write('c326_surface', 'partner');
-      return const PartnerHomeScreen();
-    }
+    // #326 put it here because `my_session()` shipped `surface:'partner'` and
+    // this shell's unresolved path is the customer storefront. #653 collapsed
+    // partner into the admin interface (`surface:'admin', is_admin:true`), so
+    // the branch no longer separated anything — it OVERRODE the backend and
+    // sent every partner login back to the old Partner page. Which shell
+    // renders is my_session().surface, and nothing else.
 
     // CHANGE #629 (PART B1) — the delivery interface is its own home, exactly
     // as the supplier interface is.

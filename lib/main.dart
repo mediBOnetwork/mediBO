@@ -23,8 +23,7 @@ import 'models/cart_model.dart';
 import 'models/order_hours_model.dart';
 import 'models/inquiry_lock_model.dart';
 import 'screens/auth/login_screen.dart';
-import 'models/app_session.dart';
-import 'screens/partner/partner_home_screen.dart';
+
 import 'screens/customer/customer_staff_screen.dart'; // CMD #438: /customer/staff
 import 'screens/admin/admin_partner_console_screen.dart';
 import 'screens/admin/settlement_screen.dart'; // /admin/settlement
@@ -975,12 +974,10 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
               // for anyone who is not an admin. The tappable way in is still
               // Admin ▸ More ▸ Feature gaps.
               '/admin/feature-gaps': (_) => buildFeatureGapsScreen(),
-              // CHANGE #307 — the fulfilment partner's home, at a real URL for
-              // the same reason /admin/cron-health has one: a headless session
-              // can open it and PROVE it painted. Authorisation stays in the
-              // backend — partner_home() answers `is_partner:false` with its
-              // own copy for anyone else, so this route guards nothing.
-              '/partner':      (_) => const PartnerHomeScreen(),
+              // CHANGE #657 — '/partner' is GONE from this map on purpose.
+              // MaterialApp checks `routes:` BEFORE `onGenerateRoute:`, so the
+              // #653 redirect below could never fire while this entry existed:
+              // the old Partner page won every time the URL was opened.
               // CHANGE #438 — the pharmacy's own staff logins (CHANGE #408) at
               // a real URL, for the same reason /partner has one: a headless
               // session can open it and PROVE the screen painted, and the
@@ -1179,18 +1176,10 @@ class _AppRootState extends State<_AppRoot> {
         if (widget.auth.isAuthenticated) {
           widget.auth.checkForcedLogout();
         }
-        // CHANGE #307 / #326 — the BACKEND names the surface. A zone-locked
-        // fulfilment partner is sent to their own home; every other surface is
-        // unchanged.
-        //
-        // #326: this used to compare the raw `surface` word here and nowhere
-        // else, so HomeShell — reachable by a route push, an unknown route or
-        // the 5 s boot-timeout fallback — had no idea what a partner was and
-        // dropped one on the customer storefront. Both call sites now read the
-        // SAME typed answer, which also applies the RULE 4 mismatch guard.
-        if (widget.auth.surface == AccountSurface.partner) {
-          return const PartnerHomeScreen();
-        }
+        // CHANGE #657 — the root renders the surface my_session() named, and
+        // there is no longer a partner branch to take. #653 made super admin,
+        // admin and partner ONE interface; the per-feature View/Write matrix
+        // and the zone lock are what differ, and both live in the backend.
         return HomeShell();
       },
     );

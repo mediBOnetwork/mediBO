@@ -42,20 +42,20 @@ enum AccountSurface {
   /// The route/worker surface.
   worker,
 
-  /// CHANGE #326 — the zone-locked fulfilment partner's own home.
+  /// CHANGE #657 — there is no partner surface any more.
   ///
-  /// A partner AUTHORISES as an admin (`get_my_role()` deliberately returns
-  /// 'admin' so the existing zone-scoped fulfilment RPCs keep working), so the
-  /// role word cannot separate the two surfaces. `my_session()` does: it ships
-  /// `surface:'partner'` and `is_partner:true` with `is_admin:false`.
+  /// #326 gave a zone partner its own word because `my_session()` shipped
+  /// `surface:'partner'`. #653 retired that: super admin, admin and partner are
+  /// ONE interface, and `_session_partner_overlay()` now returns
+  /// `surface:'admin', is_admin:true` for every partner login. Not one backend
+  /// function emits the word 'partner' as a surface any more (verified against
+  /// pg_proc on 2026-09-02).
   ///
-  /// Before this word existed, `surfaceFromName('partner')` fell to
-  /// [unresolved] — and the shell's unresolved path is the CUSTOMER storefront.
-  /// That is exactly what a real partner login landed on: Best Sellers, a
-  /// customer bottom nav, and a profile screen asking her to "Complete
-  /// Registration" for a pharmacy she does not have. A partner is not a
-  /// customer and must never be asked to register one.
-  partner,
+  /// The Dart word outlived the backend's, and that is the bug this closes: a
+  /// partner login whose payload said `surface:'admin'` was still routed to the
+  /// old Partner page because [AppSession.surface] short-circuited on
+  /// `is_partner` BEFORE reading the backend's word. Routing now reads the
+  /// backend's surface and nothing else.
 }
 
 /// The backend's decision about whether this account may place an order, and
@@ -422,12 +422,14 @@ class AppSession {
   /// user renders nothing at all.
   AccountSurface surface({required bool matchesAuthUser}) {
     if (!matchesAuthUser) return AccountSurface.unresolved;
-    // CHANGE #326 — a partner login can never resolve to the customer
-    // storefront. `is_partner` is the BACKEND's own boolean, so honouring it
-    // here is reading the payload, not guessing a surface: if the `surface`
-    // word ever drifted, the fallthrough below would send a partner to the
-    // storefront again, and that is the bug this change exists to retire.
-    if (isPartner) return AccountSurface.partner;
+    // CHANGE #657 — the backend's word, and ONLY the backend's word.
+    //
+    // #326 short-circuited on `is_partner` here so a drifted surface word could
+    // not drop a partner on the storefront. #653 then collapsed partner into
+    // the admin interface, so `my_session()` answers `surface:'admin',
+    // is_partner:true` — and this short-circuit turned that correct payload
+    // back into the old Partner page for every partner login. Reading the
+    // payload means reading the field the payload decides with.
     return surfaceFromName(surfaceName);
   }
 
@@ -444,8 +446,12 @@ class AppSession {
         return AccountSurface.pendingSupplier;
       case 'worker':
         return AccountSurface.worker;
+      // CHANGE #657 — the legacy word. No backend function emits it any more,
+      // but a cached client or an old payload must land on the SHARED admin
+      // shell, never on `unresolved` — whose fallthrough is the customer
+      // storefront, which is the #326 bug.
       case 'partner':
-        return AccountSurface.partner;
+        return AccountSurface.admin;
       case 'customer':
       case 'public':
         return AccountSurface.customer;

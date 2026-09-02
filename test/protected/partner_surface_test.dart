@@ -1,25 +1,35 @@
-// CHANGE #326 — the partner surface.
+// CHANGE #657 — the partner surface, and why there is no longer one.
 //
-// A real partner login (a zone-locked fulfilment partner for Jai Mahakal) signed
-// in and landed on the CUSTOMER storefront: Best Sellers, a Home/Catalogue/
-// Offers/Orders/Bulk bottom nav, and a profile screen telling her
-// "Not Registered — Complete Registration" for a pharmacy she will never have.
+// #326 wrote this file because a zone partner landed on the CUSTOMER storefront:
+// `my_session()` shipped surface:'partner' and `AccountSurface` had no word for
+// it, so the payload parsed to `unresolved`, whose fallthrough IS the storefront.
+// The fix gave Dart the word AND made `is_partner` outrank it.
 //
-// The backend was never wrong. `my_session()` returned, for that exact uid,
-// surface:'partner', is_partner:true, is_admin:false, home_route:'/partner'.
-// `AccountSurface` simply had no word for it, so the payload parsed to
-// `unresolved` — and the shell's unresolved path IS the customer storefront.
+// #653 then retired the partner surface in the BACKEND:
+// `_session_partner_overlay()` returns surface:'admin', is_admin:true, because
+// super admin, admin and partner are ONE interface — what differs is the
+// per-feature View/Write matrix and the zone lock, both server-side.
 //
-// This file pins the three things that let that happen, so none of them can
-// come back quietly:
-//   1. 'partner' parses to a real surface, and `is_partner` outranks the word.
-//   2. A partner is never `customer`, never `admin`, and never asked to
-//      register — even though get_my_role() calls them an admin so that the
-//      fulfilment RPCs authorise.
-//   3. The partner home renders the backend's payload verbatim, draws no zone
-//      picker, and has both a way out (sign out) and a real error state.
+// #326's `is_partner` short-circuit outlived the payload it was written for, and
+// that is the bug this file now pins. Om signed in as a partner of Jai Mahakal
+// on a FRESH build #975 (version.json commit 7b6b3a6c == the running bundle, so
+// no cache was involved) and still got "Partner / Your zone, your work" — because
+// `AppSession.surface()` returned AccountSurface.partner before it ever read the
+// backend's word 'admin'.
 //
-// Fixtures are the SHAPE of the live payload for uid 8ecbe189-…-40854a332711.
+// What this file holds down now:
+//   1. The backend's `surface` word decides, and nothing else does. A partner
+//      payload (surface:'admin', is_partner:true) resolves to ADMIN.
+//   2. `is_partner` is still carried through as identity/scope — it simply
+//      routes nothing.
+//   3. The legacy word 'partner' resolves to ADMIN, never to `unresolved` —
+//      because `unresolved` is the storefront, which is the #326 bug.
+//   4. The RULE 4 mismatch guard still outranks everything.
+//   5. The shared partner widgets that the ADMIN interface still uses render the
+//      backend verbatim (partnerDestination, PartnerHomeView's tiles).
+//
+// Fixtures are the SHAPE of the live payload for uid
+// 67c8a63a-4e58-4e4e-bcb4-29e63211cc7a (pallavi.medicom@gmail.com).
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -29,17 +39,18 @@ import 'package:pharma_b2b/services/ui_copy.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 
 /// The live my_session() payload for the partner login that reported the bug,
-/// trimmed to the fields the surface decision reads.
+/// as `_session_partner_overlay()` returns it AFTER #653: the surface word is
+/// 'admin' and is_admin is true. Copied from the function body in pg_proc, not
+/// invented here.
 Map<String, dynamic> partnerSessionJson({String authUserId = 'uid-partner'}) => {
       'signed_in': true,
       'auth_user_id': authUserId,
-      'login_email': 'pallavibanjare854@gmail.com',
-      // The USER TYPE. get_my_role() still says 'admin' — deliberately — so the
-      // zone-scoped fulfilment RPCs keep authorising.
+      'login_email': 'pallavi.medicom@gmail.com',
+      // The USER TYPE stays 'partner' — it is identity, not a route.
       'role': 'partner',
-      'surface': 'partner',
+      'surface': 'admin',
       'is_partner': true,
-      'is_admin': false,
+      'is_admin': true,
       'is_super_admin': false,
       'is_supplier': false,
       'is_customer': false,
@@ -54,8 +65,8 @@ Map<String, dynamic> partnerSessionJson({String authUserId = 'uid-partner'}) => 
       'partner_zone_label': 'Raipur Zone',
       'display_name': 'Jai Mahakal Medical And Surgical',
       'header_title': 'Jai Mahakal Medical And Surgical',
-      'home_route': '/partner',
-      'home_label': 'Partner',
+      'home_route': '/dashboard',
+      'home_label': 'Dashboard',
       'order_gate': {
         'has_blocker': true,
         'reason': 'staff_account',
@@ -140,36 +151,37 @@ void main() {
   });
 
   group('the surface a partner resolves to', () {
-    test("'partner' is a real surface, not an unknown word", () {
-      expect(AppSession.surfaceFromName('partner'), AccountSurface.partner);
+    test('the live partner payload resolves to the ADMIN surface', () {
+      // The exact regression Om reported: this returned AccountSurface.partner
+      // on build #975 and rendered the old Partner page.
+      final s = AppSession.fromJson(partnerSessionJson());
+      expect(s.surface(matchesAuthUser: true), AccountSurface.admin);
     });
 
-    test('the live partner payload resolves to the partner surface', () {
-      final s = AppSession.fromJson(partnerSessionJson());
-      expect(s.surface(matchesAuthUser: true), AccountSurface.partner);
+    test('the backend word decides — is_partner routes NOTHING', () {
+      // Same booleans, a different surface word: if `is_partner` still
+      // short-circuited, both of these would answer the same thing.
+      final admin = AppSession.fromJson(partnerSessionJson());
+      final asCustomer = AppSession.fromJson(
+          partnerSessionJson()..['surface'] = 'customer');
+      expect(admin.surface(matchesAuthUser: true), AccountSurface.admin);
+      expect(asCustomer.surface(matchesAuthUser: true), AccountSurface.customer);
     });
 
-    test('a partner is NEVER the customer surface — the reported bug', () {
-      final s = AppSession.fromJson(partnerSessionJson());
+    test("the legacy word 'partner' lands on admin, never on unresolved", () {
+      // No backend function emits it any more, but `unresolved` falls through
+      // to the customer storefront and that is the #326 bug.
+      expect(AppSession.surfaceFromName('partner'), AccountSurface.admin);
+      final s = AppSession.fromJson(partnerSessionJson()..['surface'] = 'partner');
       final surface = s.surface(matchesAuthUser: true);
-      expect(surface, isNot(AccountSurface.customer));
-      // `unresolved` is the value that used to land here, and the shell's
-      // unresolved path is the storefront. That is the whole bug.
+      expect(surface, AccountSurface.admin);
       expect(surface, isNot(AccountSurface.unresolved));
+      expect(surface, isNot(AccountSurface.customer));
     });
 
-    test('is_partner outranks a drifted surface word', () {
-      // If the backend ever renamed the word, the fallthrough must not put a
-      // partner back on the storefront: is_partner is a backend boolean too.
-      final json = partnerSessionJson()..['surface'] = 'something_new';
-      final s = AppSession.fromJson(json);
-      expect(s.surface(matchesAuthUser: true), AccountSurface.partner);
-    });
-
-    test('a partner is not an admin and is never asked to register', () {
+    test('a partner is still never asked to register a pharmacy', () {
       final s = AppSession.fromJson(partnerSessionJson());
       expect(s.isPartner, isTrue);
-      expect(s.isAdmin, isFalse);
       expect(s.isSuperAdmin, isFalse);
       expect(s.isCustomer, isFalse);
       // needs_profile / has_customer_account are what draw "Not Registered" and
@@ -180,12 +192,14 @@ void main() {
     });
 
     test('the partner identity and its ONE zone are carried through', () {
+      // Deleting the partner SURFACE must not delete the partner SCOPE — the
+      // zone lock is what every zone-aware RPC is clamped by.
       final s = AppSession.fromJson(partnerSessionJson());
       expect(s.partnerId, '1');
       expect(s.partnerName, 'Jai Mahakal Medical And Surgical');
       expect(s.partnerZoneId, '1');
       expect(s.partnerZoneLabel, 'Raipur Zone');
-      expect(s.homeRoute, '/partner');
+      expect(s.homeRoute, '/dashboard');
     });
 
     test('the RULE 4 mismatch guard still outranks everything', () {
@@ -208,7 +222,7 @@ void main() {
     });
   });
 
-  group('partner home renders the backend, computes nothing', () {
+  group('the shared partner widgets render the backend, compute nothing', () {
     testWidgets('groups and tiles print verbatim, in payload order',
         (tester) async {
       await tester.pumpWidget(_host(PartnerHomeView(

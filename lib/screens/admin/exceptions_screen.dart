@@ -349,28 +349,33 @@ class _ReasonFilters extends StatelessWidget {
             final f = asMap(raw);
             final key = (f['key'] ?? '').toString();
             final on = f['selected'] == true;
-            return SizedBox(
-              height: Ds.touch.minTarget,
-              child: InkWell(
-                key: Key('exc_filter_$key'),
-                borderRadius: Ds.r.rChip,
-                onTap: () => onPick(key),
-                child: Container(
-                  alignment: Alignment.center,
-                  padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
-                  decoration: BoxDecoration(
-                    color: on ? Ds.c.brandSoft : Ds.c.surface,
-                    borderRadius: Ds.r.rChip,
-                    border: Border.all(
-                        color: on ? Ds.c.brand : Ds.c.divider),
-                  ),
-                  child: Text(
-                    '${f['label'] ?? ''} · ${f['count'] ?? 0}',
-                    style: Ds.t.caption.copyWith(
-                      color: on ? Ds.c.brand : Ds.c.textSecondary,
-                      fontWeight: on ? FontWeight.w600 : FontWeight.w400,
+            // No `alignment:` on the Container — that makes it fill every
+            // pixel the Wrap will give it, and seven chips became seven
+            // full-width rows above the first exception. Constraints + a
+            // min-size Row keep the 44 px touch target AND shrink-wrap.
+            return InkWell(
+              key: Key('exc_filter_$key'),
+              borderRadius: Ds.r.rChip,
+              onTap: () => onPick(key),
+              child: Container(
+                constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
+                padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+                decoration: BoxDecoration(
+                  color: on ? Ds.c.brandSoft : Ds.c.surface,
+                  borderRadius: Ds.r.rChip,
+                  border: Border.all(color: on ? Ds.c.brand : Ds.c.divider),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '${f['label'] ?? ''} · ${f['count'] ?? 0}',
+                      style: Ds.t.caption.copyWith(
+                        color: on ? Ds.c.brand : Ds.c.textSecondary,
+                        fontWeight: on ? FontWeight.w600 : FontWeight.w400,
+                      ),
                     ),
-                  ),
+                  ],
                 ),
               ),
             );

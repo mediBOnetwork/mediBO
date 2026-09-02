@@ -663,7 +663,9 @@ class _Row extends StatelessWidget {
             label: '${row['tokens_display'] ?? ''} · ${row['cost_display'] ?? ''}',
             tone: statusTone('paused'),
             icon: Icons.data_usage),
-      if (row['has_tokens'] == true && priceModelChip(row).isNotEmpty)
+      // CHANGE #656: the model/effort chip is on EVERY card, not only one that
+      // has spent tokens — a pending row has to show what it will build on.
+      if (priceModelChip(row).isNotEmpty)
         ToneChip(
             label: priceModelChip(row),
             tone: statusTone('building'),

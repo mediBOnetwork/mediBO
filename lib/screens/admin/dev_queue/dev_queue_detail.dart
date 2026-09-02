@@ -42,6 +42,8 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
   Map<String, dynamic> _specItems = const {}; // CHANGE #571 — the spec checklist
   bool _loading = true;
   bool _busy = false;
+  // CHANGE #656: dev_model_options() — the picker's options, labels and titles.
+  Map<String, dynamic> _mo = const {};
   Timer? _tick; // 1s ticker for the live ATR countdown while building
   DateTime _now = DateTime.now();
 
@@ -56,6 +58,7 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
       _loading = false;
     }
     _load();
+    _loadModelOptions();
     _poll = Timer.periodic(const Duration(seconds: 5), (_) {
       if (_active) _load(silent: true);
     });
@@ -292,22 +295,18 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
                 label: (_spec['route_label']).toString(),
                 tone: toneByName((_spec['route_tone'] ?? 'neutral').toString()),
                 icon: routeIcon((_spec['route'] ?? '').toString())),
-          // CHANGE #656: Show model and effort from the command
-          if ((_row['model'] ?? '').toString().isNotEmpty)
+          // CHANGE #656: the model and the effort the row will build on. Both
+          // labels are backend strings (model_label / effort_label) — Dart
+          // neither maps a model id to a name nor capitalises an effort.
+          if ((_row['model_label'] ?? '').toString().isNotEmpty)
             ToneChip(
-                label: (_row['model'] ?? 'Opus 5')
-                    .toString()
-                    .replaceAll('claude-opus-5', 'Opus 5')
-                    .replaceAll('claude-fable-5-1', 'Fable 5'),
+                label: (_row['model_label']).toString(),
                 tone: statusTone('pending'),
-                icon: Icons.devices_outlined),
-          if ((_row['effort'] ?? '').toString().isNotEmpty)
+                icon: Icons.memory),
+          if ((_row['effort_label'] ?? '').toString().isNotEmpty)
             ToneChip(
-                label: ((_row['effort'] ?? 'high').toString()[0].toUpperCase() +
-                    (_row['effort'] ?? 'high').toString().substring(1)),
-                tone: (_row['effort'] ?? 'high') == 'extra'
-                    ? statusTone('failed')
-                    : statusTone('pending'),
+                label: (_row['effort_label']).toString(),
+                tone: statusTone('pending'),
                 icon: Icons.bolt),
           if ((_spec['area_label'] ?? '').toString().isNotEmpty)
             ToneChip(
@@ -790,6 +789,7 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
     switch (_status) {
       case 'pending':
         add('dev_queue.btn_edit', _editSpec, icon: Icons.edit_outlined, primary: true);
+        add('dev_queue.btn_model', _editModel, icon: Icons.memory);
         add('dev_queue.btn_pause', () => _run(() => _svc.pause(widget.id)));
         add('dev_queue.btn_cancel', () => _cancel(), color: const Color(0xFF991B1B));
         break;
@@ -797,6 +797,7 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
         add('dev_queue.btn_resume', () => _run(() => _svc.resume(widget.id)),
             color: kBrand, primary: true);
         add('dev_queue.btn_edit', _editSpec, icon: Icons.edit_outlined);
+        add('dev_queue.btn_model', _editModel, icon: Icons.memory);
         add('dev_queue.btn_cancel', () => _cancel(), color: const Color(0xFF991B1B));
         break;
       case 'awaiting_approval':
@@ -804,6 +805,7 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
             color: kBrand, primary: true);
         add('dev_queue.btn_reject', _reject, color: const Color(0xFF991B1B));
         add('dev_queue.btn_edit', _editSpec, icon: Icons.edit_outlined);
+        add('dev_queue.btn_model', _editModel, icon: Icons.memory);
         break;
       case 'building':
         add('dev_queue.btn_debug', _debug, icon: Icons.bug_report_outlined, primary: true);
@@ -886,6 +888,80 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
       _run(() => _svc.reject(widget.id, reason));
     }
   }
+
+  Future<void> _loadModelOptions() async {
+    try {
+      final o = await _svc.modelOptions();
+      if (mounted) setState(() => _mo = o);
+    } catch (_) {}
+  }
+
+  /// CHANGE #656 — change the model / effort of a row that has not started.
+  /// The options, their labels and the sheet's own titles are all fields of
+  /// dev_model_options(); the sheet writes back through dev_cmd_update, which
+  /// refuses anything but Opus 5 / Fable 5 and high / extra.
+  Future<void> _editModel() async {
+    final models = (_mo['models'] as List?) ?? const [];
+    final efforts = (_mo['efforts'] as List?) ?? const [];
+    if (models.isEmpty && efforts.isEmpty) return;
+    var model = (_row['model'] ?? _mo['default_model'] ?? '').toString();
+    var effort = (_row['effort'] ?? _mo['default_effort'] ?? '').toString();
+    final saved = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) => Padding(
+          padding: EdgeInsets.all(Ds.space.x16),
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text((_mo['title'] ?? '').toString(), style: Ds.t.subtitle),
+            if ((_mo['hint'] ?? '').toString().isNotEmpty)
+              Text((_mo['hint'] ?? '').toString(), style: Ds.t.caption),
+            SizedBox(height: Ds.space.x16),
+            _pickRow((_mo['model_title'] ?? '').toString(), models, model,
+                (v) => setSheet(() => model = v)),
+            SizedBox(height: Ds.space.x16),
+            _pickRow((_mo['effort_title'] ?? '').toString(), efforts, effort,
+                (v) => setSheet(() => effort = v)),
+            SizedBox(height: Ds.space.x24),
+            SizedBox(
+              width: double.infinity,
+              height: Ds.touch.minTarget,
+              child: FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                style: FilledButton.styleFrom(backgroundColor: kBrand),
+                child: Text(c('dev_queue.btn_save_edit')),
+              ),
+            ),
+            SizedBox(height: Ds.space.x8),
+          ]),
+        ),
+      ),
+    );
+    if (saved == true) {
+      await _run(() => _svc.update(widget.id, {'model': model, 'effort': effort}));
+    }
+  }
+
+  Widget _pickRow(String title, List options, String selected, void Function(String) onPick) =>
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (title.isNotEmpty) Text(title, style: Ds.t.caption),
+        SizedBox(height: Ds.space.x8),
+        Wrap(spacing: Ds.space.x8, runSpacing: Ds.space.x8, children: [
+          for (final o in options.whereType<Map>())
+            ChoiceChip(
+              label: Text((o['label'] ?? '').toString()),
+              selected: selected == (o['value'] ?? '').toString(),
+              onSelected: (_) => onPick((o['value'] ?? '').toString()),
+              selectedColor: Ds.c.brandSoft,
+              backgroundColor: Ds.c.bg,
+              showCheckmark: false,
+              side: BorderSide(
+                  color: selected == (o['value'] ?? '').toString() ? kBrand : kBorder),
+            ),
+        ]),
+      ]);
 
   Future<void> _editSpec() async {
     final ctl = TextEditingController(text: (_spec['spec'] ?? '').toString());

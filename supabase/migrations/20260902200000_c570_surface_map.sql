@@ -347,6 +347,13 @@ declare
   v_groups  jsonb := '[]'::jsonb;
   v_part    jsonb;
   v_lim     int  := least(greatest(coalesce(p_limit,6),1), 20);
+  -- CHANGE #570 QA round 2 — the entity groups' doors, resolved once. The
+  -- `screens` group below is gated row by row; these three groups list ORDERS,
+  -- CUSTOMERS and SUPPLIERS, and every one of their rows opens the same three
+  -- features, so the answer is fetched once rather than per row.
+  v_can_360  boolean;
+  v_can_cust boolean;
+  v_can_supp boolean;
 begin
   if v_role not in ('admin','super_admin') then
     return jsonb_build_object('ok', false, 'message', 'Admins only.', 'groups', '[]'::jsonb);
@@ -357,6 +364,10 @@ begin
       'empty_label', 'Type at least two characters.');
   end if;
   v_like := '%' || lower(v_q) || '%';
+
+  v_can_360  := coalesce(public.admin_access('admin.customer_360'),'none') <> 'none';
+  v_can_cust := coalesce(public.admin_access('admin.customers'),'none') <> 'none';
+  v_can_supp := coalesce(public.admin_access('admin.suppliers'),'none') <> 'none';
 
   select jsonb_agg(x order by rank, sort_order) into v_part from (
     select f.sort_order,
@@ -418,12 +429,18 @@ begin
              'kind','order', 'title', coalesce(o.order_code, 'Order #' || o.id),
              'subtitle', coalesce(o.pharmacy_name,'') || ' · ' || coalesce(o.status,''),
              'icon_key','receipt', 'icon_letter','O',
-             'route_key', case when pp.id is not null then 'customer_360' else 'customers' end,
-             'deep_link', case when pp.id is not null
+             -- CHANGE #570 QA round 2 — an entity row is a DOOR onto a
+             -- feature, so it carries the caller's access to that feature, not
+             -- just the row's existence. A reader denied admin.customer_360
+             -- lands on admin.customers; denied both, the row carries no door
+             -- at all rather than a deep link into a screen that will refuse.
+             'route_key', case when pp.id is not null and v_can_360 then 'customer_360'
+                               when v_can_cust then 'customers' end,
+             'deep_link', case when pp.id is not null and v_can_360
                                then '/admin/go/customer_360/' || pp.id::text
-                               else '/admin/go/customers' end,
-             'feature_key', case when pp.id is not null then 'admin.customer_360'
-                                 else 'admin.customers' end,
+                               when v_can_cust then '/admin/go/customers' end,
+             'feature_key', case when pp.id is not null and v_can_360 then 'admin.customer_360'
+                                 when v_can_cust then 'admin.customers' end,
              'seed', coalesce(pp.id::text, o.order_code, o.pharmacy_name)) as x
       from orders o
       left join lateral (
@@ -446,9 +463,11 @@ begin
              'title', coalesce(nullif(btrim(p.pharmacy_name),''), p.customer_name, 'Customer'),
              'subtitle', coalesce(p.city,'') ||
                          case when coalesce(p.approved,false) then '' else ' · pending approval' end,
-             'icon_key','people', 'icon_letter','C', 'route_key','customer_360',
-             'deep_link', '/admin/go/customer_360/' || p.id::text,
-             'feature_key','admin.customer_360',
+             'icon_key','people', 'icon_letter','C',
+             'route_key', case when v_can_360 then 'customer_360' end,
+             'deep_link', case when v_can_360
+                               then '/admin/go/customer_360/' || p.id::text end,
+             'feature_key', case when v_can_360 then 'admin.customer_360' end,
              'seed', p.id::text) as x
       from pharmacy_profiles p
      where coalesce(p.is_deleted,false) = false
@@ -467,8 +486,10 @@ begin
     select jsonb_build_object(
              'kind','supplier', 'title', s.supplier_name,
              'subtitle', coalesce(s.city,''),
-             'icon_key','inventory', 'icon_letter','S', 'route_key','suppliers',
-             'deep_link', '/admin/go/suppliers', 'feature_key','admin.suppliers',
+             'icon_key','inventory', 'icon_letter','S',
+             'route_key', case when v_can_supp then 'suppliers' end,
+             'deep_link', case when v_can_supp then '/admin/go/suppliers' end,
+             'feature_key', case when v_can_supp then 'admin.suppliers' end,
              'seed', s.supplier_name) as x
       from supplier_profiles s
      where coalesce(s.is_deleted,false) = false
@@ -576,7 +597,13 @@ declare
   v_drift  jsonb := '[]'::jsonb;
   v_part   jsonb;
   v_sections jsonb := '[]'::jsonb;
+  v_pending jsonb := '[]'::jsonb;
   v_admins int;
+  -- how long a newly registered feature may go without a declared door before
+  -- it counts as drift. DATA, so the window moves without a deploy.
+  v_grace int := coalesce(
+    (select (value #>> '{}')::int from public.app_settings
+      where key = 'surface_map_grace_min'), 90);
 begin
   if v_role <> 'super_admin' then
     return jsonb_build_object('ok', false,
@@ -671,6 +698,15 @@ begin
   -- R1 · a live tile whose route no dispatcher declares — a door that opens
   --      onto nothing. (admin.delivery_extras / delivery_waves /
   --      returns_refunds were exactly this.)
+  --
+  --      QA round 2: this fired on `devtool.heartbeat`, registered minutes
+  --      earlier by command #468 while that command was still building its
+  --      screen. Correct on the data, wrong on the situation — and on a
+  --      five-worker pool it makes every registry INSERT a red rg_check for
+  --      whoever deploys next. A doorless tile is drift once it is older than
+  --      surface_map_grace_min; younger than that it is reported as a warning
+  --      that does not count, so Om still sees it and nobody else's build
+  --      breaks while the owning command is still working.
   select coalesce(jsonb_agg(jsonb_build_object(
            'code','unrouted_feature', 'tone','danger',
            'label', f.label || ' has no door',
@@ -681,7 +717,8 @@ begin
     from public.feature_registry f
     left join public.surface_route r
       on r.route_key = f.route_key and r.feature_key = f.feature_key and r.is_active
-   where f.is_active and f.route_key <> '' and r.route_key is null;
+   where f.is_active and f.route_key <> '' and r.route_key is null
+     and f.created_at < now() - make_interval(mins => v_grace);
   v_drift := v_drift || v_part;
 
   -- R2 · a declared feature door naming a feature that is gone or switched off.
@@ -766,6 +803,24 @@ begin
    where not exists (select 1 from public.surface_audience s where s.surface = f.surface);
   v_drift := v_drift || v_part;
 
+  -- ...and the same tiles while they are still inside the grace window. These
+  --    are REPORTED, never counted: a door that has not landed yet is a build
+  --    in progress, and a build in progress is not a defect.
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'code','door_pending', 'tone','warning',
+           'label', f.label || ' — door not landed yet',
+           'feature_key', f.feature_key,
+           'detail', 'registered ' || age_label || ' ago with route_key "' || f.route_key
+                     || '" and no surface_route row. Counts as drift after '
+                     || v_grace::text || ' minutes.')
+         order by f.feature_key), '[]'::jsonb) into v_pending
+    from (select fr.*, (extract(epoch from (now() - fr.created_at)) / 60)::int::text || ' min' as age_label
+            from public.feature_registry fr) f
+    left join public.surface_route r
+      on r.route_key = f.route_key and r.feature_key = f.feature_key and r.is_active
+   where f.is_active and f.route_key <> '' and r.route_key is null
+     and f.created_at >= now() - make_interval(mins => v_grace);
+
   return jsonb_build_object(
     'ok', true,
     'title', coalesce(nullif(public._c('surface_map.title'),''), 'Surface map'),
@@ -773,6 +828,11 @@ begin
                 'Every feature, the audience it was registered for, and the audience that can reach it.'),
     'drift', v_drift,
     'drift_count', jsonb_array_length(v_drift),
+    'pending', v_pending,
+    'pending_count', jsonb_array_length(v_pending),
+    'pending_heading', case when jsonb_array_length(v_pending) = 1
+                            then '1 door still being built'
+                            else jsonb_array_length(v_pending)::text || ' doors still being built' end,
     -- the four row captions the screen prints. Renaming one is an UPDATE.
     'labels', jsonb_build_object(
       'intended', coalesce(nullif(public._c('surface_map.built_for'),''), 'Built for'),

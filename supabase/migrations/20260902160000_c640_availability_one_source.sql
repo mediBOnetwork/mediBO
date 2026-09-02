@@ -966,3 +966,110 @@ end;
 $$;
 
 select public.medicine_rebuild_availability_trigger();
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 10. THE BACKFILL DRIVES OFF THE COMPANY KEY, NOT THE ID SPACE
+-- ─────────────────────────────────────────────────────────────────────────────
+--
+-- zone_sync_medicine_batch() walks the whole id space, which is right for a
+-- steady-state sweep (it notices a row whose lookup entry DISAPPEARED) but
+-- wrong for the one-off repair: 87% of the catalogue has no zone supplier at
+-- all and needs no write, yet every batch pays to scan it. Worse, a batch big
+-- enough to be efficient is a statement long enough to hit the 50 s cap on a
+-- 1 GB instance shared by five builders.
+--
+-- This does the same write, addressed by company: the rows for one lookup key,
+-- found through the existing marketer_canonical index. A few hundred rows per
+-- statement, so it never approaches the timeout, and it touches only rows that
+-- actually change.
+create or replace function public.zone_sync_by_key(
+  p_zone_id smallint, p_key text)
+returns integer
+language plpgsql
+security definer
+set search_path to 'public'
+as $$
+declare v_code text; v_canons text[]; v_n int;
+begin
+  select code into v_code from zones where id = p_zone_id and is_active;
+  if v_code is null then return 0; end if;
+
+  -- Every marketer_canonical that resolves to this key: the key itself, plus
+  -- every alias variant grouped under it. resolve_company_canonical() says the
+  -- same thing one row at a time; this says it once, as a set.
+  select coalesce(array_agg(distinct u.c), '{}'::text[]) into v_canons
+    from (select p_key as c
+          union all
+          select a.variant_canonical from company_alias a where a.group_key = p_key) u;
+
+  execute format($q$
+    WITH src AS (
+      SELECT m.id,
+             (SELECT coalesce(array_agg(DISTINCT t.s ORDER BY t.s), '{}'::text[])
+                FROM (SELECT btrim(x) AS s FROM unnest(
+                        coalesce(l.sups,'{}'::text[])
+                        || coalesce(m.%2$I,'{}'::text[])
+                        || coalesce(m.%3$I,'{}'::text[])
+                        || coalesce(m.%4$I,'{}'::text[])) x) t
+               WHERE t.s <> '') AS want
+      FROM public."MEDICINE" m
+      LEFT JOIN zone_company_lookup l ON l.zone_id = $2 AND l.key = $3
+      WHERE m.marketer_canonical = ANY($1)
+    )
+    UPDATE public."MEDICINE" m SET %1$I = src.want
+      FROM src WHERE m.id = src.id AND m.%1$I IS DISTINCT FROM src.want
+  $q$, 'z_'||v_code||'_sup', 'z_'||v_code||'_av',
+       'z_'||v_code||'_oos', 'z_'||v_code||'_nostock')
+  USING v_canons, p_zone_id, p_key;
+
+  get diagnostics v_n = row_count;
+  return v_n;
+end;
+$$;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 11. THE LAST RIVAL WRITER
+-- ─────────────────────────────────────────────────────────────────────────────
+--
+-- zone_sync_medicine() was a SEVENTH writer of z_<zone>_sup with its OWN way of
+-- deciding which company a product belongs to:
+--
+--     LEFT JOIN company co ON norm_place(coalesce(co.name_canonical, co.company_name))
+--                           = norm_place(coalesce(m.marketer_canonical, m.marketer))
+--
+-- — a third rule, next to zone_marketer_key's case-sensitive cache and
+-- resolve_company_canonical()'s alias groups. It also rebuilt the master list as
+-- (company suppliers MINUS oos MINUS nostock), deleting every supplier that had
+-- already answered in that zone. Nothing calls it on a schedule, which is the
+-- only reason it was not actively undoing the sync — a latent trap, not a
+-- working feature.
+--
+-- It keeps its name and signature (callers and rg's baseline see no change) and
+-- becomes a thin wrapper over the one definition: the same by-key sync the
+-- backfill and the dispatcher use.
+create or replace function public.zone_sync_medicine(
+  p_zone_id smallint, p_limit integer default null::integer)
+returns jsonb
+language plpgsql
+security definer
+set search_path to 'public'
+as $$
+declare k record; v_rows int := 0; v_keys int := 0;
+begin
+  if not exists (select 1 from zones where id = p_zone_id and is_active) then
+    return jsonb_build_object('error','unknown_zone');
+  end if;
+
+  for k in select l.key from zone_company_lookup l
+            where l.zone_id = p_zone_id
+            order by l.key
+            limit coalesce(p_limit, 1000000)
+  loop
+    v_keys := v_keys + 1;
+    v_rows := v_rows + public.zone_sync_by_key(p_zone_id, k.key);
+  end loop;
+
+  return jsonb_build_object('status','ok','zone_id',p_zone_id,
+                            'keys',v_keys,'rows_written',v_rows);
+end;
+$$;

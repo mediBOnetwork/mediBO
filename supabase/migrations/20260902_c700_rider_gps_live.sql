@@ -787,3 +787,39 @@ begin
 end $$;
 
 grant execute on function public.customer_track_order(uuid) to anon, authenticated, service_role, postgres;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 14. CLOSING A LEAK THE JOURNEY CAUGHT (qa-424-237).
+--
+-- That journey asserts "no shop-id engine function is client-reachable", and it
+-- was red: nineteen internal SECURITY DEFINER helpers that take an arbitrary
+-- shop uuid were EXECUTE-able by any signed-in client through PostgREST, and
+-- several of them WRITE (_khata_post, _c417_reserve, _khata_post_sale). Any
+-- pharmacy could have posted a khata entry against another pharmacy's books.
+--
+-- The cause is a familiar one: 20260901_c423_bill_vault.sql revoked EXECUTE
+-- from anon and authenticated, but not from PUBLIC — and PUBLIC EXECUTE is
+-- Postgres's DEFAULT for every new function, so `authenticated` inherited the
+-- privilege straight back through PUBLIC. Revoking a role by name does not
+-- remove the PUBLIC grant sitting underneath it.
+--
+-- Safe: no Dart caller exists (there is no rpc('_…') anywhere in lib/), and
+-- every in-database caller is itself SECURITY DEFINER, so it executes as the
+-- owner and never consults these grants.
+do $$
+declare r record; n int := 0;
+begin
+  for r in
+    select p.oid::regprocedure::text as sig
+      from pg_proc p join pg_namespace ns on ns.oid = p.pronamespace
+     where ns.nspname = 'public'
+       and p.proname like '\_%'
+       and p.prosecdef
+       and pg_get_function_identity_arguments(p.oid) ~ '(p_shop|p_pharmacy_id|p_shop_id)'
+       and has_function_privilege('authenticated', p.oid, 'EXECUTE')
+  loop
+    execute format('revoke all on function %s from public, anon, authenticated', r.sig);
+    n := n + 1;
+  end loop;
+  raise notice 'c700: revoked PUBLIC execute on % shop-id helper(s)', n;
+end $$;

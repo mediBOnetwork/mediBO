@@ -82,7 +82,9 @@ for dirpath, _dirs, files in os.walk(os.path.join(root, 'lib')):
         # are blanked (not deleted) so reported line numbers stay true.
         src = re.sub(r'/\*.*?\*/', lambda m: re.sub(r'[^\n]', ' ', m.group(0)),
                      src, flags=re.S)
-        src = re.sub(r'(?m)//[^\n]*', lambda m: ' ' * len(m.group(0)), src)
+        # (?<!:) so a URL inside a string literal — 'https://medibo.in' — is
+        # not read as a comment, which would blank any cf() sharing its line.
+        src = re.sub(r'(?m)(?<!:)//[^\n]*', lambda m: ' ' * len(m.group(0)), src)
 
         for m in CF.finditer(src):
             key = m.group(1)

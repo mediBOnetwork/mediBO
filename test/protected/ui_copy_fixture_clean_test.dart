@@ -43,6 +43,23 @@ final _dartSource = <String, RegExp>{
       r'|\.contains\(|\.startsWith\(|\.endsWith\()'),
   'a null-aware operator': RegExp(r'(!=\s*null|==\s*null|\?\?)'),
   "a fragment's own tail": RegExp(r'^\s*[\]})]'),
+  // ROUND 5 — shapes rather than method names. The named-method list could
+  // never keep up (.format( .all( .of( .abs() .fold( .padLeft( were all
+  // absent), so QA handed over eleven plainly-Dart values that passed every
+  // rule. Note the call rule requires the paren to TOUCH the name, which is
+  // what keeps 'https://company.com (optional)' storable.
+  'an arrow function': RegExp(r'=>'),
+  'a const expression': RegExp(r'^\s*const\s'),
+  'a Flutter/Dart class': RegExp(
+      r'\b(Theme|EdgeInsets|SizedBox|TextStyle|FontWeight|BoxDecoration'
+      r'|MediaQuery|DateFormat|NumberFormat|Navigator|BorderRadius|Colors'
+      r'|Icons|Duration|Offset|Alignment|CrossAxisAlignment|MainAxisAlignment'
+      r'|Padding|Scaffold|InkWell|GestureDetector)\s*[.(]'),
+  'a method call': RegExp(r'[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*\('),
+  'a quoted ternary': RegExp(r"\?\s*'[^']*'\s*:\s*'[^']*'"),
+  'string concatenation': RegExp(r"('\s*\+|\+\s*')"),
+  'a bare Dart string literal': RegExp(r"^\s*'.*'\s*$"),
+  'a trailing semicolon': RegExp(r';\s*$'),
 };
 
 /// A brace is legal only as `{slot}` or the backend's own `{{slot}}`. Consume
@@ -130,5 +147,53 @@ void main() {
     expect(_bareExpression('Ordered by: {name}'), isFalse);
     expect(_dartSource['a bare \$identifier']!.hasMatch(r'UPI ID: $vpa'), isTrue);
     expect(_dartSource['a bare \$identifier']!.hasMatch(r'Save $5 today'), isFalse);
+  });
+
+  test('the round-5 shape rules refuse Dart and still admit copy', () {
+    // The eleven values hostile QA got past every earlier rule. Each must be
+    // refused by SOME rule — which one does not matter.
+    bool isSource(String v) =>
+        _dartSource.values.any((re) => re.hasMatch(v)) ||
+        _braceIsSource(v) ||
+        _bareExpression(v);
+    for (final bad in <String>[
+      'Theme.of(context).textTheme.bodyMedium',
+      'EdgeInsets.all(16)',
+      'const SizedBox(height: 8)',
+      'TextStyle(fontWeight: FontWeight.w600)',
+      "DateFormat('dd MMM yyyy').format(date)",
+      'order.total.abs()',
+      '(x) => x.name',
+      "count > 1 ? 'items' : 'item'",
+      "'Total: '",
+      "'Qty: ' + qty",
+    ]) {
+      expect(isSource(bad), isTrue, reason: 'accepted Dart source: $bad');
+    }
+    // …and the copy that must stay storable. 'https://company.com (optional)'
+    // is the one that decided the call rule's shape: a dotted host followed by
+    // a SPACE and a paren is a sentence, not a method call.
+    for (final good in <String>[
+      'Ordered by: {name}',
+      'Ordered by: {name} · {pharmacy}',
+      '₹{amount}',
+      'Heartbeat FAILED at {{stage}}',
+      "Doctor's prescription",
+      r'Save $5 today',
+      r'US$ 20',
+      'Visit https://medibo.in for help',
+      'https://company.com (optional)',
+      'Loading...',
+      'Cancel this order?',
+      'Your order is on the way.',
+      ', ',
+      'Scan to pay',
+      'UPI ID: {vpa}',
+      'GST: {v}',
+      'new_column_name',
+      'Proforma — not a tax invoice. Rates and GST are final; batch may change.',
+    ]) {
+      expect(isSource(good), isFalse, reason: 'refused legitimate copy: $good');
+    }
   });
 }

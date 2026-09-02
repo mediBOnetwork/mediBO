@@ -185,7 +185,15 @@ flutter clean
 SENTRY_RELEASE="medibo@${CHANGE_LABEL}"
 SENTRY_DIST="${CHANGE_LABEL}"
 echo "[crash] release=${SENTRY_RELEASE} dist=${SENTRY_DIST}"
+# CHANGE #657 — MEDIBO_CHANGE bakes the change number into main.dart.js, so the
+# RUNNING JavaScript can be compared against the live /version.json. Every other
+# build marker (index.html's _builtCommit, <meta name="build-commit">) is stamped
+# into the DOCUMENT, and a browser on a stale document reads a stale marker and a
+# fresh version.json and concludes nothing is wrong. This one cannot be re-read
+# from a cached document. The COMMIT cannot be used here — it is created by the
+# `git commit` below, after the build.
 flutter build web --release \
+  --dart-define=MEDIBO_CHANGE="${N}" \
   --dart-define=SENTRY_RELEASE="${SENTRY_RELEASE}" \
   --dart-define=SENTRY_DIST="${SENTRY_DIST}"
 # NOTE: the downloadable Android APK is NOT bundled here. At 82 MB it exceeds

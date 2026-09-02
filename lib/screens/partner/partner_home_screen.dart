@@ -12,11 +12,8 @@
 import 'package:flutter/material.dart';
 
 import '../../design_tokens.dart';
-import '../../services/partner_state.dart';
 import '../../services/ui_copy.dart';
-import '../../user_state.dart';
 import '../../utils/render_log.dart';
-import '../../services/order_alert_service.dart';
 import '../../services/masked_call_service.dart';
 import '../../widgets/masked_call_button.dart';
 import '../admin/admin_fulfillment_screen_web.dart';
@@ -100,160 +97,19 @@ Widget? partnerDestination(String routeKey, {List<dynamic>? tabs}) {
   }
 }
 
-class PartnerHomeScreen extends StatefulWidget {
-  const PartnerHomeScreen({super.key, this.rpc});
-
-  /// Test seam. Null in production -> the real RPCs.
-  final PartnerRpc? rpc;
-
-  @override
-  State<PartnerHomeScreen> createState() => _PartnerHomeScreenState();
-}
-
-class _PartnerHomeScreenState extends State<PartnerHomeScreen> {
-  Map<String, dynamic>? _payload;
-
-  /// CHANGE #398 — partner_work_queue(): what is WAITING, as opposed to what
-  /// this partner is allowed to open. Fetched beside partner_home() and
-  /// rendered above it; a board that fails to load simply does not draw, so a
-  /// queue outage can never cost the partner the feature list underneath it.
-  Map<String, dynamic>? _queue;
-  bool _loading = true;
-
-  /// CHANGE #326 — explicit absence. `_payload = {}` on a thrown RPC used to be
-  /// indistinguishable from "the backend says you are not a partner", so a
-  /// network blip rendered a blank card with no words and no way forward.
-  bool _failed = false;
-
-  PartnerRpc get _rpc => widget.rpc ?? PartnerApi.call;
-
-  /// CHANGE #398 — the ring, on the phone that has to answer it.
-  ///
-  /// #306 addressed the new-order alert to admin devices. The partner is the
-  /// one who sources, collects, counts and packs the order, so order_alert_push
-  /// now rings the partner's own staff devices first and escalates to admin
-  /// only when nobody accepts inside the window. That is the push half; this is
-  /// the in-app half — the same OrderAlertService the admin shell runs, feeding
-  /// the same OrderAlertCard, with order_alert_feed() zone-clamped so a partner
-  /// only ever sees their own zone's alerts.
-  bool _ringBusy = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-    _startRing();
-  }
-
-  Future<void> _startRing() async {
-    try {
-      OrderAlertService.instance.addListener(_onRing);
-      await OrderAlertService.instance.start();
-      _onRing();
-    } catch (_) {}
-  }
-
-  void _onRing() {
-    if (mounted) setState(() {});
-  }
-
-  Future<void> _ringAct(String orderId, String action) async {
-    if (_ringBusy) return;
-    setState(() => _ringBusy = true);
-    try {
-      final r = await OrderAlertService.instance.act(orderId, action);
-      final msg = (r['message'] ?? '').toString();
-      if (mounted && msg.isNotEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-      }
-      // The queue this partner is working on just changed shape.
-      await _load();
-    } catch (_) {
-    } finally {
-      if (mounted) setState(() => _ringBusy = false);
-    }
-  }
-
-  @override
-  void dispose() {
-    OrderAlertService.instance.removeListener(_onRing);
-    super.dispose();
-  }
-
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _failed = false;
-    });
-    Map<String, dynamic> p;
-    var failed = false;
-    try {
-      p = await _rpc('partner_home', const {});
-    } catch (_) {
-      p = <String, dynamic>{};
-      failed = true;
-    }
-    Map<String, dynamic>? q;
-    try {
-      q = await _rpc('partner_work_queue', const {'p_limit': 5});
-    } catch (_) {
-      q = null;
-    }
-    if (!mounted) return;
-    setState(() {
-      _payload = p;
-      _queue = q;
-      _failed = failed;
-      _loading = false;
-    });
-  }
-
-  Future<void> _open(String featureKey) async {
-    Map<String, dynamic> r;
-    try {
-      r = await _rpc('partner_open', {'p_feature': featureKey});
-    } catch (_) {
-      return;
-    }
-    if (!mounted) return;
-    if (r['ok'] != true) {
-      final msg = (r['message'] ?? '').toString();
-      if (msg.isNotEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-      }
-      // The grant changed under them — refetch so the tile disappears too.
-      _load();
-      return;
-    }
-    final dest = partnerDestination((r['route_key'] ?? '').toString(),
-        tabs: r['tabs'] is List ? r['tabs'] as List : null);
-    if (dest == null) return;
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => PartnerFeaturePage(
-        // The page title is the backend's own label for the feature.
-        title: (r['label'] ?? '').toString(),
-        child: dest,
-      ),
-    ));
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_loading) return const PartnerHomeSkeleton();
-    return PartnerHomeView(
-      payload: _payload ?? const {},
-      queue: _queue,
-      ring: OrderAlertService.instance.items,
-      ringBadge: OrderAlertService.instance.badgeLabel,
-      ringBusy: _ringBusy,
-      onRingAct: _ringAct,
-      onOpen: _open,
-      failed: _failed,
-      onRetry: _load,
-      onSignOut: () => UserState.read(context).signOut(),
-    );
-  }
-}
+// CHANGE #657 — PartnerHomeScreen (the ROUTED old Partner page) is deleted.
+//
+// It was reachable three ways — the `/partner` route, the `_AppRoot` surface
+// branch and HomeShell's own branch — and #653 removed none of them, so a
+// partner login that the backend had already moved to the admin interface kept
+// landing on "Partner / Your zone, your work". All three entry points are gone
+// with it; nothing in the app constructs this page any more.
+//
+// What stays in this file is what the SHARED admin interface still uses:
+// partnerDestination() (the zone-scoped route_key -> screen resolver),
+// PartnerFeaturePage (the Scaffold every partner feature screen renders inside),
+// and PartnerWorkQueue / PartnerRing (the work board). Deleting those would
+// remove working features, not a route.
 
 /// A skeleton, not a bare spinner (design QA rule 6).
 class PartnerHomeSkeleton extends StatelessWidget {

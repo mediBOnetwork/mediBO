@@ -25,6 +25,15 @@
 //     renders neutral rather than blanking the card, and a reason_code this
 //     build has never heard of still renders, because its label came with it.
 //
+// REACHABILITY. The console is Fulfill stage 10 (feature_registry
+// 'fulfill.exceptions'), and /admin/go/exceptions opens it directly so a digest
+// line or a notification has somewhere to point — the shell switches to the
+// fulfilment screen and asks it for the stage by the BACKEND's own key, which
+// is ignored in silence if fulfill_tabs() never sent that stage to this login.
+// The fulfilment page is wrapped in a QuickLinkNavigator for the same reason
+// the dashboard is: a next action here can point OUT of the pipeline (Money,
+// Bill pipeline, WhatsApp Ops, Add medicine), and those buttons must resolve.
+//
 // Styling is 100% `Ds` tokens (DESIGN.md / CHANGE #66): zero style literals.
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';

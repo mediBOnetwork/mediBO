@@ -33,6 +33,7 @@ import '../../services/device_location.dart';
 import '../../services/masked_call_service.dart';
 import '../../services/push_service.dart';
 import '../../user_state.dart';
+import '../../services/run_location_service.dart';
 import '../../utils/render_log.dart';
 import 'agency_team_section.dart'; // C630: PART D
 import 'delivery_google_route.dart';
@@ -40,7 +41,6 @@ import 'delivery_home_panel.dart'; // C630: PART B + C
 import 'delivery_proof_sheet.dart';
 import 'delivery_run_map_panel.dart';
 import '../../services/ui_copy.dart';
-import '../../design_tokens.dart';
 import '../../widgets/masked_call_button.dart';
 import 'rider_profile_sheet.dart'; // C463 gap 119
 
@@ -104,6 +104,11 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
 
   Timer? _heartbeat;
   StreamSubscription? _watch;
+
+  /// CHANGE #700 — true once the Android foreground service accepted the run.
+  /// Android only; every other platform leaves it false and keeps the in-app
+  /// loop, which is what it has always done.
+  bool _fgsRunning = false;
   bool _busy = false;
 
   /// Guards the arrival popup so one pending stop cannot open two dialogs.
@@ -217,7 +222,7 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
       if (_runStarted) {
         _startHeartbeat();
       } else {
-        _stopHeartbeat();
+        _stopRunSharing();
       }
 
       await _loadRunMap();
@@ -254,6 +259,14 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
 
   void _startHeartbeat() {
     if (_heartbeat != null) return;
+    // CHANGE #700 — on Android the run is carried by a foreground service that
+    // keeps its own location subscription, so it survives the app going to the
+    // background or the screen locking. The in-app loop below is the fallback
+    // for web and iOS, which have no equivalent; it is ALSO left running on
+    // Android when the service refuses to start (permission denied, an older
+    // APK with no native half), because a rider reporting from the foreground
+    // is better than a rider reporting nothing.
+    _startForegroundService();
     _push();
     _heartbeat = Timer.periodic(const Duration(seconds: 25), (_) => _push());
     // …and on significant movement, which the browser reports itself.
@@ -261,6 +274,17 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
     RenderLog.write('c629_delivery_heartbeat', 'started');
   }
 
+  Future<void> _startForegroundService() async {
+    if (!RunLocationService.instance.isSupported) return;
+    _fgsRunning = await RunLocationService.instance.start();
+    if (mounted) setState(() {});
+  }
+
+  /// Stops the IN-APP loop only. Deliberately leaves the Android foreground
+  /// service alone: this runs on dispose, and disposing this screen is exactly
+  /// what happens when the rider backgrounds the app or walks into another
+  /// tab — the ten minutes the service exists to survive. Only the run ending
+  /// stops the service (see [_stopRunSharing]).
   void _stopHeartbeat() {
     _heartbeat?.cancel();
     _heartbeat = null;
@@ -268,6 +292,17 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
       _watch?.cancel();
     } catch (_) {}
     _watch = null;
+  }
+
+  /// The trip is over. Android stops sharing the rider's position the moment
+  /// the run does, never a minute later — after which the customer's map is
+  /// supposed to say "last seen", and does.
+  void _stopRunSharing() {
+    _stopHeartbeat();
+    if (_fgsRunning || RunLocationService.instance.isSupported) {
+      RunLocationService.instance.stop();
+      _fgsRunning = false;
+    }
   }
 
   Future<void> _push() async {
@@ -282,15 +317,31 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
         _meLng = fix.lng;
       });
     }
+    // CHANGE #700 — through rider-location, so a web/iOS fix is road-snapped by
+    // the same code path the Android service uses. One snapper, one broadcast,
+    // no second opinion about where the rider is.
     try {
-      await Supabase.instance.client.rpc('delivery_update_location', params: {
-        'p_lat': fix.lat,
-        'p_lng': fix.lng,
-        'p_heading': fix.heading,
-        'p_accuracy': fix.accuracy,
+      await Supabase.instance.client.functions.invoke('rider-location', body: {
+        'lat': fix.lat,
+        'lng': fix.lng,
+        'heading': fix.heading,
+        'accuracy': fix.accuracy,
+        'source': 'inapp',
       });
     } catch (_) {
-      // A dropped heartbeat is not an error the rider can act on.
+      // The function is unreachable — write the raw fix directly rather than
+      // lose the position. It publishes the same broadcast, just unsnapped,
+      // and the payload's own note says so.
+      try {
+        await Supabase.instance.client.rpc('delivery_update_location', params: {
+          'p_lat': fix.lat,
+          'p_lng': fix.lng,
+          'p_heading': fix.heading,
+          'p_accuracy': fix.accuracy,
+        });
+      } catch (_) {
+        // A dropped heartbeat is not an error the rider can act on.
+      }
     }
   }
 
@@ -322,7 +373,7 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
     try {
       final res = await Supabase.instance.client.rpc('delivery_finish_run');
       if (!mounted) return;
-      _stopHeartbeat();
+      _stopRunSharing();
       if (res is Map) {
         // The response's own sentence says how many came back as returns.
         _toast(res['message']?.toString() ?? '');

@@ -32,7 +32,7 @@ import '../../services/live_feed.dart';
 
 import '../../fulfill/fulfill_lookups.dart';
 import '../../utils/render_log.dart';
-import 'delivery_run_map_panel.dart';
+import 'run_live_map.dart';
 
 Color get _kText => FulfillLookups.instance.color('c_ff111827', const Color(0xFF111827));
 Color get _kSub => FulfillLookups.instance.color('c_ff6b7280', const Color(0xFF6B7280));
@@ -56,6 +56,21 @@ class DeliveryTrackingData {
   final double riderLat;
   final double riderLng;
   final bool hasRiderLocation;
+
+  /// CHANGE #700 — the pair the BACKEND says to plot: road-snapped where OSRM
+  /// answered, raw where it did not. The choice is made server-side precisely
+  /// so the customer map and the admin map can never disagree about it.
+  final double mapLat;
+  final double mapLng;
+  final bool riderSnapped;
+
+  /// The run-scoped broadcast topic this viewer may listen to, and the
+  /// backend's own staleness block ("Live" / "Last seen 4 min ago" /
+  /// "Rider offline") — never computed here from a timestamp.
+  final String channel;
+  final Map<String, dynamic> live;
+  final String note;
+  final int animateMs;
 
   final double destLat;
   final double destLng;
@@ -103,6 +118,13 @@ class DeliveryTrackingData {
     required this.riderLat,
     required this.riderLng,
     required this.hasRiderLocation,
+    required this.mapLat,
+    required this.mapLng,
+    required this.riderSnapped,
+    required this.channel,
+    required this.live,
+    required this.note,
+    required this.animateMs,
     required this.destLat,
     required this.destLng,
     required this.hasDestination,
@@ -155,6 +177,13 @@ class DeliveryTrackingData {
       riderLat: riderLat?.toDouble() ?? 0,
       riderLng: riderLng?.toDouble() ?? 0,
       hasRiderLocation: riderLat != null && riderLng != null,
+      mapLat: (m['map_lat'] as num?)?.toDouble() ?? riderLat?.toDouble() ?? 0,
+      mapLng: (m['map_lng'] as num?)?.toDouble() ?? riderLng?.toDouble() ?? 0,
+      riderSnapped: m['rider_snapped'] == true,
+      channel: m['has_channel'] == true ? _s(m['channel']) : '',
+      live: m['live'] is Map ? Map<String, dynamic>.from(m['live'] as Map) : const {},
+      note: _s(m['note']),
+      animateMs: (m['animate_ms'] as num?)?.toInt() ?? 1200,
       destLat: destLat?.toDouble() ?? 0,
       destLng: destLng?.toDouble() ?? 0,
       hasDestination: destLat != null && destLng != null,
@@ -178,6 +207,16 @@ class DeliveryTrackingData {
       riderLat: _d(m['rider_lat']),
       riderLng: _d(m['rider_lng']),
       hasRiderLocation: m['has_rider_location'] == true,
+      // The public /track/{token} page has no signed-in identity, so it cannot
+      // pass the private channel's RLS check. Empty channel = no subscription;
+      // that page keeps the refetch it already had. Stated, not inferred.
+      mapLat: (m['map_lat'] as num?)?.toDouble() ?? _d(m['rider_lat']),
+      mapLng: (m['map_lng'] as num?)?.toDouble() ?? _d(m['rider_lng']),
+      riderSnapped: m['rider_snapped'] == true,
+      channel: '',
+      live: m['live'] is Map ? Map<String, dynamic>.from(m['live'] as Map) : const {},
+      note: _s(m['note']),
+      animateMs: (m['animate_ms'] as num?)?.toInt() ?? 1200,
       destLat: _d(m['destination_lat']),
       destLng: _d(m['destination_lng']),
       hasDestination: m['has_destination'] == true,
@@ -233,6 +272,20 @@ class _DeliveryTrackingViewState extends State<DeliveryTrackingView> {
   /// else's rider costs one read and changes nothing on screen. Debounced so a
   /// fleet mid-run cannot turn into a refetch storm.
   void _subscribe() {
+    // CHANGE #700 — when the backend handed this viewer a run channel, the
+    // rider's dot arrives on that BROADCAST (inside RunLiveMap, which also
+    // animates between frames and drives the debounced refetch below). The
+    // 15 s poll #643 introduced is then pure duplicate traffic, so it is not
+    // opened at all.
+    //
+    // It is still opened for a viewer with NO channel — the public
+    // /track/{token} page, which has no signed-in identity and so cannot pass
+    // the private channel's RLS check. One surface gains realtime; the other
+    // keeps exactly what it had.
+    if (widget.data.channel.isNotEmpty) {
+      RenderLog.write('c700_track_realtime', 'broadcast');
+      return;
+    }
     try {
       // CHANGE #643: an UNFILTERED binding on a rider-position table fanned
       // every rider's every ping to every viewer. The registry puts this on a
@@ -336,13 +389,23 @@ class _DeliveryTrackingViewState extends State<DeliveryTrackingView> {
         ],
 
         // F2 — the live map, shown while the backend says tracking is on.
+        // CHANGE #700: the marker now rides run:<run_id> and animates between
+        // the points the backend publishes, under the backend's own staleness
+        // line. The pair plotted is map_lat/map_lng — road-snapped where OSRM
+        // answered — so this view and the admin's show the same dot.
         if (d.tracking && (d.hasDestination || d.hasRiderLocation)) ...[
           const SizedBox(height: 12),
-          DeliveryRunMapPanel(
+          RunLiveMap(
+            channel: d.channel,
             stops: stops,
-            originLat: d.hasRiderLocation ? d.riderLat : null,
-            originLng: d.hasRiderLocation ? d.riderLng : null,
+            live: d.live,
+            note: d.note,
+            animateMs: d.animateMs,
+            initialPoint: d.hasRiderLocation
+                ? RiderPoint(d.mapLat, d.mapLng, d.riderSnapped)
+                : null,
             height: 240,
+            onFrame: (_) => _bump(),
           ),
         ],
 

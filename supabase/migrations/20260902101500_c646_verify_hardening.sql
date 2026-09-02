@@ -538,3 +538,103 @@ end $rg$;
 $c646c$)
 on conflict (name) do update
   set enabled = excluded.enabled, note = excluded.note, body = excluded.body;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 7. A regression-guard probe row must never look like a worker.
+--
+-- Found while running this command's own journeys: `worker-grid-loads` was red
+-- with "chips=3 | every settled building command has a chip=false". The fourth
+-- "building" row was id = -647, claimed_by = 'probe-647' — a reserved-negative
+-- probe seeded by an rg behaviour whose rollback did not take. Nothing had ever
+-- said those ids are not real work, so it counted as a build with no worker
+-- behind it and failed a journey on an unrelated command.
+--
+-- Reserved ids are negative by convention (c641_complete_fast_under_2s uses
+-- -641). This makes the convention load-bearing in the two places that count
+-- builds, and clears the one row that leaked.
+delete from dev_commands where id < 0 and status = 'building';
+
+create or replace function public.dev_supervisor_tick(
+  p_agents text[] default '{}',
+  p_routes text[] default array['fast','sonnet','opus'])
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare v_ctl jsonb; v_slots jsonb; v_routes jsonb;
+begin
+  perform _dev_guard();
+
+  v_ctl := public.dev_ctl_get();
+
+  select coalesce(jsonb_object_agg(a.agent, coalesce(b.row_json, 'null'::jsonb)), '{}'::jsonb)
+    into v_slots
+  from unnest(coalesce(p_agents,'{}')) a(agent)
+  left join lateral (
+    select jsonb_build_object(
+             'id', c.id, 'title', c.title, 'model', c.model, 'effort', c.effort,
+             'eta_left_s', c.eta_left_s, 'started_at', c.started_at,
+             'heartbeat_at', c.heartbeat_at) as row_json
+      from dev_commands c
+     where c.status = 'building' and c.claimed_by = a.agent and c.id > 0
+     order by c.heartbeat_at desc nulls last
+     limit 1
+  ) b on true;
+
+  select coalesce(jsonb_object_agg(r.route, coalesce(k.n, 0)), '{}'::jsonb)
+    into v_routes
+  from unnest(coalesce(p_routes,'{}')) r(route)
+  left join lateral (
+    select count(*)::int n from dev_commands c
+     where c.status = 'pending' and c.route = r.route and c.id > 0
+  ) k on true;
+
+  return jsonb_build_object(
+    'ok', true,
+    'server_time', now(),
+    'ctl', v_ctl,
+    'workflow', coalesce(v_ctl #>> '{desired_state,workflow}', 'on'),
+    'active_host', coalesce(nullif(v_ctl #>> '{pool,config,active_host}',''),
+                            (select value #>> '{active_host}' from dev_runner_config
+                              where key = 'worker_pool'), ''),
+    -- id > 0 throughout: a reserved-negative rg probe row is not a build.
+    'pending_count',  (select count(*)::int from dev_commands
+                        where status = 'pending'  and id > 0),
+    'building_count', (select count(*)::int from dev_commands
+                        where status = 'building' and id > 0),
+    'android_requested',
+      (select count(*)::int from dev_commands
+        where android_status = 'requested' and id > 0),
+    'pending_by_route', v_routes,
+    'slots', v_slots);
+end $$;
+
+grant execute on function public.dev_supervisor_tick(text[],text[]) to service_role;
+
+-- The journey asks "does the grid account for every command that has been
+-- building for more than two minutes?". A probe row has no worker and never
+-- will, so counting it made the grid look wrong when it was right.
+do $c646$
+declare v_src text; v_new text;
+begin
+  select p.prosrc into v_src
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.proname = 'dev_journey_probe';
+
+  if v_src is null then return; end if;
+
+  v_new := replace(v_src,
+    E'       where d.status=\'building\'\n         and d.started_at < now() - interval \'2 minutes\'',
+    E'       where d.status=\'building\'\n         and d.id > 0   -- CHANGE #646: reserved-negative ids are rg probes\n         and d.started_at < now() - interval \'2 minutes\'');
+
+  if v_new = v_src then
+    raise notice 'C646: dev_journey_probe worker-grid-loads guard already present or the branch moved — leaving it alone.';
+    return;
+  end if;
+
+  execute format(
+    'create or replace function public.dev_journey_probe(p_name text) returns jsonb '
+    'language plpgsql security definer set search_path = public as %L',
+    v_new);
+end $c646$;

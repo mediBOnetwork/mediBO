@@ -759,11 +759,10 @@ comment on function public.availability_contract_check(boolean) is
 -- Three claims, all catalogue-cheap, so this never turns rg_watch() into a
 -- 562k-row scan:
 --   a) the CHECK constraint exists AND is validated;
---   b) the ONE WRITER is live: write a deliberately wrong `buyable` onto a row
---      and it must come back DERIVED. (The constraint alone cannot be provoked
---      through a normal UPDATE any more, because the trigger corrects the value
---      before the constraint ever sees it — which is the stronger guarantee, so
---      that is what gets asserted.)
+--   b) the constraint BITES: a divergent write is attempted and must be
+--      refused. (The writer trigger fires only on the zone-array columns, so a
+--      hand-written `buyable` is not silently corrected — it is REJECTED, which
+--      is what this proves.)
 --   c) every cart-side availability reader resolves through
 --      storefront_effective_count(), the same call the storefront makes. This
 --      is the "no surface reads a different field than the others" half — it is
@@ -772,7 +771,7 @@ comment on function public.availability_contract_check(boolean) is
 insert into rg_behavior_tests (name, enabled, body, note)
 values ('c640_availability_one_source', true, $b$
 do $c640$
-declare v jsonb; v_missing text; v_id bigint; v_n int; v_buyable boolean;
+declare v jsonb; v_missing text; v_id bigint; v_n int;
 begin
   v := public.availability_contract_check(false);
   if not (v->>'ok')::boolean then
@@ -781,16 +780,17 @@ begin
       v::text;
   end if;
 
-  -- The one writer must actually own the column.
+  -- The constraint must actually bite, not merely exist.
   select m.id, coalesce(m.supplier_count,0) into v_id, v_n
     from public."MEDICINE" m order by m.id limit 1;
-  update public."MEDICINE" set buyable = (v_n = 0) where id = v_id;
-  select m.buyable into v_buyable from public."MEDICINE" m where m.id = v_id;
-  if coalesce(v_buyable,false) is distinct from (v_n > 0) then
+  begin
+    update public."MEDICINE" set buyable = (v_n = 0) where id = v_id;
     raise exception
-      'C640: buyable was written by hand and STAYED wrong on product % (supplier_count %). zz_medicine_set_buyable_trg is not deriving the three columns together.',
+      'C640: buyable was written by hand on product % (supplier_count %) and the write was ACCEPTED. medicine_availability_one_source is not enforcing the contract.',
       v_id, v_n;
-  end if;
+  exception
+    when check_violation then null;   -- expected: the guard refused it
+  end;
 
   -- Every cart-side reader asks the SAME question the storefront asks.
   select string_agg(p.proname, ', ') into v_missing

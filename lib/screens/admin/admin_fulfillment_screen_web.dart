@@ -40,6 +40,8 @@ import 'admin_supplier_screen.dart'; // CHANGE #537: pipeline stages 2 and 3 reu
 import '../../fulfill/fulfill_pipeline_tabs.dart'; // CHANGE #537: the 9-stage bar
 import '../../design_tokens.dart'; // CHANGE #537: skeleton + empty state on tokens
 import 'barcode_count_screen.dart'; // CHANGE #624: barcode counting screen
+import 'exceptions_screen.dart'; // CHANGE #690: stage 10 — the exceptions console
+import 'admin_dashboard_screen.dart' show QuickLinkNavigator; // CHANGE #690: an exception's non-stage route
 import '../../fulfill/count_voice_hooks.dart'; // COUNT MODE: voice bridge
 import '../../widgets/pinned_footer_list.dart';
 import '../../widgets/fulfill_item_sheet.dart';
@@ -8767,6 +8769,20 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
       _schedulePipelineReload();
     }
   }
+  // CHANGE #690 — an exception's next_action.route. Whether it is one of THIS
+  // bar's stages is decided from the backend's own tab list, never a list of
+  // stage names written here; anything else is an admin destination and goes
+  // to the shell's quick-link navigator exactly as the ops board's does.
+  void _openExceptionRoute(String route) {
+    if (route.isEmpty) return;
+    final isStage = _pipeline.tabs.any((t) => t.stageKey == route);
+    if (isStage) {
+      _selectStage(route);
+      return;
+    }
+    QuickLinkNavigator.of(context)?.navigate(route);
+  }
+
   // #132B: open the Dispute stage from an item popup's "View dispute".
   void _openDisputesTab() => _selectStage('dispute');
 
@@ -8777,6 +8793,10 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
     RenderLog.write('c174_dispute_refresh', 'load_disputes=true;disputes_tab_reloaded=true');
   }
   final _arrivalsKey = GlobalKey<_ArrivalsScreenState>();
+
+  // CHANGE #690 — stage 10. The console reloads itself when the stage is
+  // re-opened, exactly like every other stage on this bar.
+  final _exceptionsKey = GlobalKey<ExceptionsScreenState>();
 
   // CHANGE #545 — repaint the header when the central admin date moves. Each of
   // the 5 tab widgets listens to AdminDateScope independently for its own
@@ -9014,6 +9034,9 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
         case 'delivery':
           _deliveryKey.currentState?.reload();
           break;
+        case 'exceptions':
+          _exceptionsKey.currentState?.reload();
+          break;
       }
     });
   }
@@ -9057,6 +9080,12 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
           onRefreshCollect: _refreshCollect,
           onRefreshArrivals: _refreshArrivals,
           onRefreshPack: _refreshPack,
+        );
+      case 'exceptions':
+        return ExceptionsScreen(
+          key: _exceptionsKey,
+          onNavigate: _openExceptionRoute,
+          onChanged: _schedulePipelineReload,
         );
       default:
         return const SizedBox.shrink();

@@ -530,6 +530,19 @@ declare v_id bigint; s public.test_sessions%rowtype;
         v_after jsonb; v_res jsonb; v_clean boolean;
 begin
   if not public._test_guard() then return jsonb_build_object('ok',false,'error','not_authorized'); end if;
+
+  -- A purge must be INERT. Deleting a synthetic inquiry row fired
+  -- trg_inquiry_rebuild_spo -> inquiry_engine_sync(), which rewrites every
+  -- inquiry_forms row on the platform; the first live purge died on a lock
+  -- timeout there. Nothing downstream should react to a test row LEAVING —
+  -- it was never real. Replica mode is transaction-local and only covers the
+  -- deletes below.
+  begin
+    set local session_replication_role = 'replica';
+  exception when others then null;   -- not permitted here: fall back to plain deletes
+  end;
+  set local lock_timeout = '5s';
+
   v_id := coalesce(p_session, public.test_session_live_id());
   if v_id is null then
     return jsonb_build_object('ok',false,'error','no_session',
@@ -761,6 +774,22 @@ begin
     'empty', public.uic('test_session.empty',''),
     'rows', v_rows);
 end $fn$;
+
+------------------------------------------------------------------ nobody writes these tables directly
+-- A row in test_sessions puts the WHOLE PLATFORM into incognito, so it must be
+-- unreachable except through the guarded RPCs above. RLS on with no policy is
+-- a total deny for anon and authenticated; the security-definer functions and
+-- service_role still see everything.
+do $$
+declare t text;
+begin
+  foreach t in array array['test_sessions','test_session_actor','test_session_exempt','test_storage_rule'] loop
+    -- NOT `force`: these functions are security definer owned by the table
+    -- owner, and FORCE would apply the deny to them too.
+    execute format('alter table public.%I enable row level security', t);
+    execute format('revoke all on public.%I from anon, authenticated', t);
+  end loop;
+end $$;
 
 ------------------------------------------------------------------ grants
 grant execute on function public.test_session_banner() to anon, authenticated;

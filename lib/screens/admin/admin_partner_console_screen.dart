@@ -724,12 +724,23 @@ class _AuditRow extends StatelessWidget {
         children: [
           // CMD #467 row 155 — the sentence arrives composed. This used to be
           // `action · feature_key` joined here, which printed raw slugs
-          // ("open_denied · partner.settlement") at a mediBO admin.
+          // ("open_denied · partner.settlement") at a mediBO admin. The tone is
+          // a 4 px accent, not the text colour: nine action types painted as
+          // nine coloured sentences is a rainbow, and the one that matters
+          // (a refusal) stops standing out.
+          Container(
+            width: Ds.space.x4,
+            height: Ds.space.x16,
+            margin: EdgeInsets.only(right: Ds.space.x8, top: Ds.space.x4),
+            decoration: BoxDecoration(
+              color: PartnerAuditTone.fg((row['tone'] ?? 'neutral').toString()),
+              borderRadius: Ds.r.rChip,
+            ),
+          ),
           Expanded(
             child: Text(
               (row['line'] ?? row['action'] ?? '').toString(),
-              style: Ds.t.body.copyWith(
-                  color: PartnerAuditTone.fg((row['tone'] ?? 'neutral').toString())),
+              style: Ds.t.body,
             ),
           ),
           SizedBox(width: Ds.space.x8),

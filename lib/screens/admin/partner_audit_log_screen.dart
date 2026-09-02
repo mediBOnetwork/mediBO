@@ -379,9 +379,12 @@ class _FilterBlock extends StatelessWidget {
               InkWell(
                 onTap: o.onTap,
                 borderRadius: Ds.r.rChip,
+                // Center(widthFactor: 1) and NOT `alignment:` — a Container
+                // with an alignment expands to the Wrap's full width under
+                // loose constraints, which turned a row of pills into one
+                // full-bleed bar per option.
                 child: Container(
                   constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
-                  alignment: Alignment.center,
                   padding: EdgeInsets.symmetric(
                       horizontal: Ds.space.x16, vertical: Ds.space.x8),
                   decoration: BoxDecoration(
@@ -390,10 +393,13 @@ class _FilterBlock extends StatelessWidget {
                     border: Border.all(
                         color: o.selected ? Ds.c.brand : Ds.c.divider),
                   ),
-                  child: Text(
-                    o.label,
-                    style: Ds.t.caption.copyWith(
-                      color: o.selected ? Ds.c.surface : Ds.c.text,
+                  child: Center(
+                    widthFactor: 1,
+                    child: Text(
+                      o.label,
+                      style: Ds.t.caption.copyWith(
+                        color: o.selected ? Ds.c.surface : Ds.c.text,
+                      ),
                     ),
                   ),
                 ),

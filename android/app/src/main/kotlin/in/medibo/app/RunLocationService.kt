@@ -13,6 +13,8 @@ import android.os.Build
 import android.os.IBinder
 import android.os.Looper
 import android.util.Log
+import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
@@ -98,7 +100,9 @@ class RunLocationService : Service() {
         when (intent?.action) {
             ACTION_STOP -> {
                 stopUpdates()
-                stopForeground(STOP_FOREGROUND_REMOVE)
+                // ServiceCompat, because STOP_FOREGROUND_REMOVE is API 24+ and
+                // this app's minSdk is Flutter's default, well below that.
+                ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
                 stopSelf()
                 return START_NOT_STICKY
             }
@@ -191,10 +195,14 @@ class RunLocationService : Service() {
             this, 0, open,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
-        val b = Notification.Builder(this, CHANNEL_ID)
+        // NotificationCompat, not Notification.Builder(Context, String): that
+        // constructor is API 26+ and would crash every older device the moment
+        // a rider started a trip.
+        val b = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(notifTitle)
             .setContentText(notifBody)
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
         if (pi != null) b.setContentIntent(pi)
         return b.build()

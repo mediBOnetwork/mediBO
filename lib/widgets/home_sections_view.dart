@@ -367,6 +367,11 @@ class HomeHeroBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final accent = Brand.hex(hero.accent, Brand.accent);
+    // CHANGE #678 — the hero number is the viewer's count (zone for an
+    // approved customer, catalogue for anyone else), formatted by the backend
+    // and printed verbatim. The log carries every prop label so the live
+    // render can be checked against the payload without a screenshot.
+    RenderLog.write('c678_hero_props', hero.props.map((p) => p.label).join('|'));
 
     return Container(
       margin: const EdgeInsets.fromLTRB(12, 10, 12, 22),

@@ -221,6 +221,12 @@ class _StorefrontScreenState extends State<StorefrontScreen> {
     if (fresh != null && mounted) {
       setState(() => _categoryCounts = fresh);
       RenderLog.write('c441_counts', 'cached=${_categoryCounts.length}');
+      // CHANGE #678 — the counts are the VIEWER's: get_all_storefront_counts
+      // answers with the zone's numbers for an approved customer and the global
+      // feed's for anyone else. Nothing here decides which; the log just shows
+      // what arrived so the live render can be checked against the backend.
+      RenderLog.write('c678_counts',
+          'all=${fresh['ALL'] ?? ''};categories=${fresh.length}');
     }
     // On total failure, keep whatever's already showing (cache or empty) —
     // _countFor() also falls back to a live per-category fetch below.

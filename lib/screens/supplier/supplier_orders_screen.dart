@@ -28,6 +28,25 @@ Color _hexColor(String? hex, Color fallback) {
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 
+/// CHANGE #464 gap 45 — the supplier order total, decided entirely by the
+/// backend. `po_pricing_block` sends `payable_display` (already rupee-formatted
+/// by `inr_money`) and `show_payable`; this class only carries them. The screen
+/// used to interpolate the rupee sign and pick its own rounding branch off the
+/// raw numeric, which put the rounding rule for a supplier's money in Flutter.
+class SupplierOrderTotal {
+  final bool show;
+  final String display;
+  const SupplierOrderTotal({required this.show, required this.display});
+
+  static SupplierOrderTotal from(Map<String, dynamic>? pricing) {
+    final display = (pricing?['payable_display'] as String?) ?? '';
+    return SupplierOrderTotal(
+      show: pricing?['show_payable'] == true && display.isNotEmpty,
+      display: display,
+    );
+  }
+}
+
 class SupplierOrdersScreen extends StatefulWidget {
   final String? viewAsSupplierId;
   final String supplierName;
@@ -470,7 +489,13 @@ class _OrderCardState extends State<_OrderCard> {
   Widget build(BuildContext context) {
     final orderNo   = widget.order['order_no']?.toString() ?? '';
     final orderCode = (widget.order['order_code'] as String?)?.trim() ?? '';
-    final totalAmount = (widget.order['total_amount'] as num?)?.toDouble();
+    // CHANGE #464 gap 45: the order total is a BACKEND string. Dart no longer
+    // owns the rupee sign or the rounding rule — po_pricing_block sends
+    // payable_display, and show_payable decides whether it appears at all.
+    final pricing = widget.order['pricing'] is Map
+        ? Map<String, dynamic>.from(widget.order['pricing'] as Map)
+        : const <String, dynamic>{};
+    final total = SupplierOrderTotal.from(pricing);
     final itemCount = (widget.order['item_count'] as num?)?.toInt() ?? 0;
     // CHANGE #548: raw backend timestamp, rendered via ist_fmt.
     final createdAt = widget.order['created_at']?.toString();
@@ -544,9 +569,9 @@ class _OrderCardState extends State<_OrderCard> {
                   ),
                 ),
                 Row(mainAxisSize: MainAxisSize.min, children: [
-                  if (totalAmount != null && totalAmount > 0) ...[
+                  if (total.show) ...[
                     Text(
-                      '₹${totalAmount % 1 == 0 ? totalAmount.toInt() : totalAmount.toStringAsFixed(2)}',
+                      total.display,
                       style: const TextStyle(
                         fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF111827),
                       ),
@@ -811,10 +836,7 @@ class _OrderCardState extends State<_OrderCard> {
                       RenderLog.write('c189_supplier_tab_shared_card', 'true');
                       return Column(children: [
                         PoPricingBanner(
-                            pricing: widget.order['pricing'] is Map
-                                ? Map<String, dynamic>.from(
-                                    widget.order['pricing'] as Map)
-                                : null),
+                            pricing: pricing.isEmpty ? null : pricing),
                         ...items.map((item) => Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [

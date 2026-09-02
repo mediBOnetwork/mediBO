@@ -4,14 +4,11 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-import '../fulfill/fulfill_lookups.dart'; // C629: backend-owned button copy
-import '../services/date_labels.dart';
 import 'delivery/customer_track_sheet.dart';  // C629: PART F1 — live tracking
 import 'customer/order_edit_sheet.dart';  // CHANGE #408
 import 'customer/order_cancel_sheet.dart'; // CMD #452 — gaps #130
 import 'customer/order_help_sheet.dart';   // CMD #452 — gaps #132
 import 'customer/order_return_sheet.dart'; // CMD #452 — gaps #131
-import 'pharmacy/pharmacy_parcel_count_screen.dart'; // CMD #431 — Count, on the order
 import 'package:http/http.dart' as http;
 import 'package:pharma_b2b/utils/toast.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -19,18 +16,16 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/live_feed.dart';
 
 import '../utils/download_bytes.dart';
-import '../utils/order_code.dart';
 import '../utils/render_log.dart';
 import '../widgets/animations.dart';
 import '../widgets/bill_actions_row.dart';
 import '../widgets/bill_viewer.dart';
 import '../widgets/cust_pay_panel.dart';
 import '../widgets/customer_order_item_card.dart'; // #641: the Items-tab card
+import '../widgets/order_card_lean.dart'; // #630: the lean card, its progress line and the change window
 import '../services/ui_copy.dart';
 import '../design_tokens.dart'; // #173: Ds tokens for the reorder entry points
 import 'reorder_screen.dart'; // #173: reorder suite (suggestions + smart diff)
-import 'purchases_screen.dart'; // #367 row 174: purchase analytics + register
-import 'order_lists_screen.dart'; // #367 row 178: named saved order lists
 import '../widgets/substitute_choice.dart'; // #366 row 176: customer picks the substitute
 
 // ─── Data models ─────────────────────────────────────────────────────────────
@@ -243,7 +238,24 @@ class _OrdersScreenState extends State<OrdersScreen> {
   String? _focusCode;
   final GlobalKey _focusKey = GlobalKey();
 
-  List<_DbOrder> _orders = [];
+  // ── CHANGE #630 ───────────────────────────────────────────────────────────
+  // The tab is ORDERS now. The reorder banner, the Purchases tile, the
+  // Saved-lists tile and the per-card help box were shop tools wearing an
+  // orders list as a hat; they are registry rows on My Shop and this screen
+  // has never heard of them. What is left is one filter row, one search box
+  // and a list of cards that each say one true thing and offer one thing to
+  // tap.
+  List<CustomerOrderCard> _cards = [];
+
+  /// The filter row, as the backend sent it: key, label, count and which one
+  /// is selected. The screen does not decide the default, does not count the
+  /// buckets and does not word the chips.
+  List<Map<String, dynamic>> _filters = const [];
+  String _filter = 'active';
+  String _searchHint = '';
+  final TextEditingController _searchCtl = TextEditingController();
+  Timer? _searchDebounce;
+
   bool _loading = true;
   /// #572 — empty-state copy comes from the payload, not from Dart literals.
   String _emptyTitle = '';
@@ -267,26 +279,19 @@ class _OrdersScreenState extends State<OrdersScreen> {
   /// initState ran EXACTLY ONCE, at shell build — which for a cold open is
   /// before the session is resolved. my_customer_id() was null, the payload
   /// came back `no_customer_account: true`, and that empty list was then kept
-  /// forever: switching to the tab does not rebuild the State, and realtime
-  /// never started because subscribing needs the account id the empty payload
-  /// did not carry. A customer with orders saw "no orders" until a full page
-  /// reload. That is the bug.
+  /// forever. Re-fetch when the ACCOUNT changes, not on one event constant.
   String? _authedUid;
   StreamSubscription<AuthState>? _authSub;
 
   /// CHANGE #619 — one key, every outcome: ok / threw / badshape, with the
   /// attempt number, whether a session was attached, and what came back.
-  /// #614 logged only success, so the failure that actually shipped was
-  /// invisible in the render-log.
   static const kC622Fetch = 'c622_orders_fetch';
   static const int _kMaxFetchRetries = 3;
   Timer? _retryTimer;
 
   /// CHANGE #622 — true only when the RPC never gave us an answer (threw, or
   /// returned a shape that is not the payload). Kept strictly apart from
-  /// `_hasOrders == false`, which the SERVER said. One means "we don't know",
-  /// the other means "there are none"; showing the second for the first is
-  /// exactly the bug customers reported.
+  /// `_hasOrders == false`, which the SERVER said.
   bool _loadFailed = false;
 
   @override
@@ -294,22 +299,8 @@ class _OrdersScreenState extends State<OrdersScreen> {
     super.initState();
     _focusCode = widget.focusOrderCode;
     _authedUid = Supabase.instance.client.auth.currentUser?.id;
-    // CHANGE #614 — refetch whenever the ACCOUNT changes, not when a
-    // particular event constant arrives. setSession(refreshToken) — the
-    // WhatsApp OTP path — resolves through gotrue's token-refresh branch and
-    // emits tokenRefreshed, never signedIn, so a signedIn-only listener would
-    // be dead on that login exactly as in #566.
     _authSub =
         Supabase.instance.client.auth.onAuthStateChange.listen(_onAuthState);
-    // CHANGE #629: the Track button's label lives in the copy catalog like
-    // every other string. Load it, then repaint — the button is never given a
-    // hardcoded fallback, so an unloaded catalog shows no word rather than an
-    // English one written here.
-    FulfillLookups.instance.ensureLoaded().then((_) {
-      if (mounted) setState(() {});
-    });
-    // #572 — subscribe only AFTER the fetch has resolved the account id; the
-    // channel filter needs the account, which only the backend can tell us.
     _fetch();
   }
 
@@ -330,14 +321,10 @@ class _OrdersScreenState extends State<OrdersScreen> {
     final uid = Supabase.instance.client.auth.currentUser?.id;
     if (uid == _authedUid) return;
     _authedUid = uid;
-    // The old channel is keyed to the previous account — drop it, and drop the
-    // account id with it so nothing renders against a mismatch.
     _channel?.unsubscribe();
     _channel = null;
     _customerId = '';
     if (!mounted) return;
-    // #622 — a new account deserves a clean slate: the previous account's
-    // failure must not colour what this one sees.
     setState(() {
       _loading = true;
       _loadFailed = false;
@@ -359,48 +346,27 @@ class _OrdersScreenState extends State<OrdersScreen> {
   void dispose() {
     _authSub?.cancel();
     _retryTimer?.cancel();
+    _searchDebounce?.cancel();
+    _searchCtl.dispose();
     _channel?.unsubscribe();
     super.dispose();
   }
 
-  /// CHANGE #572 — ONE RPC, keyed to the ACCOUNT.
-  ///
-  /// This used to read the `orders` table directly with
-  /// `.eq('user_id', currentUser.id)` — the LOGIN. An account reachable by two
-  /// login methods saw only the orders placed under one of them; that is the
-  /// "orders vanished" report. my_orders_screen() resolves the account itself
-  /// and returns rows already sorted, counted and formatted, so there is no
-  /// client-side ordering, folding or money formatting left here.
-  /// CHANGE #619 — every exit is now recorded, and the one answer that cannot
-  /// be true is re-asked instead of believed.
-  ///
-  /// #614 made this re-fetch when the account arrives, and production proved
-  /// the re-fetch fires: the render-log carried `c614_orders_auth_refetch=uid:1`
-  /// on a `auth_role=customer` session. It also carried
-  /// `c614_orders_payload=has:0;admin:0;nocust:1` — and `my_customer_id()` was
-  /// verified server-side to resolve that exact account. So the request that
-  /// answered "no account" reached the server WITHOUT its token.
-  ///
-  /// The reason it stuck: of the three ways out of the old body, only the
-  /// happy path wrote anything. A throw and a non-Map response both returned
-  /// silently, leaving the cold-boot (signed-out) payload on screen as though
-  /// the server had confirmed it. An authed re-fetch could fail and look
-  /// exactly like "you have no orders".
-  ///
-  /// `no_customer_account: true` while a session is live is a contradiction,
-  /// not an answer. Ask again. Never fabricate the list.
+  /// CHANGE #630 — ONE RPC for the whole tab: the filter row with its counts,
+  /// the search hint, the empty-state copy and the cards, each already carrying
+  /// its own stage sentence, its own money string and the single action it
+  /// offers. Nothing on this screen is computed, worded, counted, sorted or
+  /// chosen in Dart.
   Future<void> _fetch({int attempt = 0}) async {
     final client = Supabase.instance.client;
     final hasSession = client.auth.currentSession != null;
+    final query = _searchCtl.text.trim();
     try {
-      final raw = await client.rpc(
-        'my_orders_screen',
-        // #619 — a normal customer sends NO argument. p_view_as_user belongs to
-        // the admin view-as path alone; the backend defaults it to null.
-        params: widget.viewAsUserId == null
-            ? const <String, dynamic>{}
-            : {'p_view_as_user': widget.viewAsUserId},
-      );
+      final raw = await client.rpc('my_orders_screen_v2', params: {
+        'p_filter': _filter,
+        if (query.isNotEmpty) 'p_query': query,
+        if (widget.viewAsUserId != null) 'p_view_as_user': widget.viewAsUserId,
+      });
       final map = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
       if (map is! Map) {
         RenderLog.write(kC622Fetch,
@@ -412,7 +378,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
       final payload = map.cast<String, dynamic>();
       final parsed = ((payload['orders'] as List<dynamic>?) ?? const [])
           .whereType<Map>()
-          .map((r) => _DbOrder.fromPayload(r.cast<String, dynamic>()))
+          .map((r) => CustomerOrderCard.fromPayload(r.cast<String, dynamic>()))
           .toList();
       final hasOrders = payload['has_orders'] == true;
       final noCust = payload['no_customer_account'] == true;
@@ -423,60 +389,44 @@ class _OrdersScreenState extends State<OrdersScreen> {
           'ok;try:$attempt;sess:${hasSession ? 1 : 0};count:${parsed.length}'
           ';has:${hasOrders ? 1 : 0};nocust:${noCust ? 1 : 0}'
           ';cust:${custId.isEmpty ? 0 : 1}');
-      RenderLog.write('orders_fetched',
-          'count:${parsed.length}${widget.viewAsUserId != null ? ':viewas' : ''}');
-      // CHANGE #625 — written where the PAYLOAD lands, not where the Items tab
-      // renders, so the key proves the new contract arrived without anyone
-      // having to tap a card open first. `dup` is the check that matters for
-      // the duplicate bug: distinct names vs rows, per order. dup:0 across the
-      // board means no order is carrying a repeated line.
-      if (parsed.isNotEmpty) {
-        var rows = 0, distinct = 0, unfOrders = 0, unfRows = 0;
-        for (final o in parsed) {
-          rows += o.lines.length;
-          distinct += o.lines.map((l) => l.name).toSet().length;
-          if (o.hasUnfulfilled) unfOrders++;
-          unfRows += o.unfulfilledLines.length;
-        }
-        RenderLog.write(
-            'c625_unfulfilled_items',
-            'orders:${parsed.length};lines:$rows;dup:${rows - distinct}'
-            ';unf_orders:$unfOrders;unf_lines:$unfRows'
-            ';src:my_orders_screen');
-      }
+      // CHANGE #630 — proof the new tab rendered: which bucket, how many
+      // cards, how many carried a progress line, and how many DIFFERENT
+      // primary actions the backend chose across them. One action per card is
+      // the whole point, so `acts` naming more than one key is the evidence
+      // that the choice is the backend's and not a constant.
+      RenderLog.write(
+          'c630_orders_tab',
+          'filter:$_filter;cards:${parsed.length}'
+          ';prog:${parsed.where((o) => o.progressSteps.isNotEmpty).length}'
+          ';acts:${parsed.map((o) => o.actionKey).where((k) => k.isNotEmpty).toSet().length}'
+          ';q:${query.isEmpty ? 0 : 1}');
 
-      // Signed in, yet the server resolved no account — re-ask rather than
-      // render a signed-out empty state at a customer who has orders. On the
-      // last attempt the payload is adopted as-is: a genuinely account-less
-      // login (a fresh admin) must still get its own copy, not a spinner.
       if (noCust && hasSession && attempt < _kMaxFetchRetries) {
         _retryOrSettle(attempt);
         return;
       }
 
       setState(() {
-        _orders = parsed;
+        _cards = parsed;
+        _filters = ((payload['filters'] as List<dynamic>?) ?? const [])
+            .whereType<Map>()
+            .map((f) => Map<String, dynamic>.from(f))
+            .toList();
+        _filter = (payload['filter'] ?? _filter).toString();
+        _searchHint =
+            ((payload['search'] as Map?)?['hint'] ?? '').toString();
         _emptyTitle = (payload['empty_title'] ?? '').toString();
         _emptyNote = (payload['empty_note'] ?? '').toString();
         _customerId = custId;
-        // CHANGE #614 — the backend already said whether there are orders and
-        // what kind of session this is. Read those; do not re-derive them.
         _hasOrders = hasOrders;
         _isAdminSession = payload['is_admin_session'] == true;
         _noCustomerAccount = noCust;
         _loading = false;
-        _loadFailed = false; // the server answered; whatever it said stands
+        _loadFailed = false;
       });
-      // CHANGE #298 — a push/inbox tap named an order; bring it into view once
-      // the list it lives in exists. Cleared afterwards so a later refresh does
-      // not yank the user back here.
       _revealFocusedOrder();
       if (_channel == null) _subscribeRealtime();
     } catch (e) {
-      // CHANGE #622 — record WHAT was thrown, not merely that something was.
-      // #619 logged the bare word "threw", which proved a failure existed but
-      // named nothing; the answer turned out to be a PostgrestException
-      // carrying SQLSTATE 25006, and that message is what identified the bug.
       RenderLog.write(
           kC622Fetch,
           'threw:${e.runtimeType}:${_short(e)}'
@@ -493,14 +443,9 @@ class _OrdersScreenState extends State<OrdersScreen> {
   }
 
   /// Backs off and asks again, or stops pretending and shows what we have.
-  /// A fetch that failed must never leave a stale payload looking authoritative.
   void _retryOrSettle(int attempt, {bool failed = false}) {
     if (!mounted) return;
     if (attempt >= _kMaxFetchRetries) {
-      // CHANGE #622 — a transport failure must NEVER settle into the empty
-      // state. "No orders" is a thing only the server may say; when it never
-      // answered, saying it for them is the app inventing the one fact the
-      // customer cares about. Retries exhausted on a throw => error state.
       setState(() {
         _loading = false;
         if (failed) _loadFailed = true;
@@ -514,10 +459,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
     );
   }
 
-  /// #572 — keyed to the ACCOUNT, like the fetch. Filtering on user_id meant a
-  /// change to an order placed under the account's OTHER login never triggered
-  /// a refresh. Realtime is only a refetch trigger: the callback re-runs the
-  /// RPC rather than parsing the row, so the backend stays the only answer.
+  /// #572 — keyed to the ACCOUNT, like the fetch.
   void _subscribeRealtime() {
     if (widget.viewAsUserId != null) return; // no realtime in view-as mode
     final accountId = _customerId;
@@ -550,95 +492,128 @@ class _OrdersScreenState extends State<OrdersScreen> {
     });
   }
 
+  /// PART A5/A6 — everything that used to be a chip on the row is inside the
+  /// order now, so tapping the card is the way in.
+  Future<void> _openOrder(CustomerOrderCard o, {String? tab}) async {
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => CustomerOrderDetailScreen(
+          orderId: o.id, orderCode: o.orderCode, initialTab: tab),
+    ));
+    await _fetch();
+  }
+
+  /// PART A4 — the card offers ONE action and the BACKEND named it. This
+  /// routes that key; it never decides which action an order deserves. A key
+  /// this build has never heard of opens the order rather than throwing, so a
+  /// new action is an UPDATE on the backend and not a deploy.
+  Future<void> _runCardAction(CustomerOrderCard o, String key) async {
+    switch (key) {
+      case 'track':
+        await showCustomerTrackSheet(context, o.id);
+        return;
+      case 'pay':
+        await _openOrder(o, tab: 'payment');
+        return;
+      case 'reorder':
+        await Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => ReorderScreen(orderId: o.id)));
+        await _fetch();
+        return;
+      case 'edit':
+        final saved = await showOrderEditSheet(context, o.id);
+        if (saved) await _fetch();
+        return;
+      default:
+        await _openOrder(o);
+    }
+  }
+
+  void _selectFilter(String key) {
+    if (key == _filter) return;
+    setState(() {
+      _filter = key;
+      _loading = true;
+    });
+    _fetch();
+  }
+
+  /// PART A8 — search by order code or medicine name. The matching is the
+  /// backend's (it reaches into order_items.product_name, which the client
+  /// does not hold); this only debounces the typing.
+  void _onSearchChanged(String _) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 350), _fetch);
+  }
+
   @override
   Widget build(BuildContext context) {
+    // An admin login has no pharmacy account; the backend says so and words
+    // it. There is nothing to filter or search, so the chrome stays away.
+    if (!_loading && _noCustomerAccount && _isAdminSession) {
+      return _OrdersEmpty(
+          icon: Icons.receipt_long_outlined,
+          title: _emptyTitle,
+          note: _emptyNote,
+          onRefresh: _fetch);
+    }
+    return Column(
+      children: [
+        _OrdersHeader(
+          filters: _filters,
+          selected: _filter,
+          onSelect: _selectFilter,
+          controller: _searchCtl,
+          hint: _searchHint,
+          onChanged: _onSearchChanged,
+          onClear: () {
+            _searchCtl.clear();
+            _fetch();
+          },
+        ),
+        Expanded(child: _buildBody()),
+      ],
+    );
+  }
+
+  Widget _buildBody() {
     if (_loading) {
       return const Center(child: CircularProgressIndicator());
     }
-    // CHANGE #622 — the RPC never answered (threw, or returned a shape that is
-    // not the payload), and the retries are spent. Say THAT. Borrowing the
-    // empty state's words here is how a signed-in customer with orders was
-    // told they had none. "You have no orders" is the server's sentence to
-    // pronounce, never the app's guess when the server is unreachable.
-    //
-    // This is the one screen state whose copy is written in Dart rather than
-    // fetched: there is no payload to take it from, because the payload is
-    // exactly what failed to arrive.
+    // CHANGE #622 — the RPC never answered and the retries are spent. Say
+    // THAT. Borrowing the empty state's words here is how a signed-in customer
+    // with orders was told they had none.
     if (_loadFailed) {
-      return RefreshIndicator(
-        onRefresh: _fetch,
-        child: ListView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          children: [
-            SizedBox(height: MediaQuery.of(context).size.height * 0.25),
-            Icon(Icons.cloud_off_outlined,
-                size: 64, color: Theme.of(context).hintColor),
-            const SizedBox(height: 12),
-            Center(child: Text(c('orders.load_failed_title'))),
-            const SizedBox(height: 4),
-            Center(
-              child: Text(c('orders.load_failed_note'),
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: Theme.of(context).hintColor)),
-            ),
-          ],
-        ),
-      );
+      return _OrdersEmpty(
+          icon: Icons.cloud_off_outlined,
+          title: c('orders.load_failed_title'),
+          note: c('orders.load_failed_note'),
+          onRefresh: _fetch);
     }
-
-    // CHANGE #614 — `has_orders` is the backend's answer; the screen used to
-    // decide this itself with `_orders.isEmpty`. Same result on the happy
-    // path, but it is not the app's question to answer.
-    //
-    // This branch also covers the admin login: the backend sends
-    // is_admin_session + no_customer_account with empty_title "Admin account"
-    // and a note pointing at the admin Orders tab, and both print verbatim —
-    // no blank screen, no crash, nothing worded in Dart.
+    // CHANGE #614 — `has_orders` is the backend's answer for the bucket that
+    // was asked for; the screen does not re-derive it from the array.
     if (!_hasOrders) {
-      return RefreshIndicator(
-        onRefresh: _fetch,
-        child: ListView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          children: [
-            SizedBox(height: MediaQuery.of(context).size.height * 0.25),
-            Icon(Icons.receipt_long_outlined,
-                size: 64, color: Theme.of(context).hintColor),
-            const SizedBox(height: 12),
-            // #572 — empty-state copy printed verbatim from the payload.
-            Center(child: Text(_emptyTitle)),
-            const SizedBox(height: 4),
-            Center(
-              child: Text(_emptyNote,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: Theme.of(context).hintColor)),
-            ),
-          ],
-        ),
-      );
+      return _OrdersEmpty(
+          icon: Icons.receipt_long_outlined,
+          title: _emptyTitle,
+          note: _emptyNote,
+          onRefresh: _fetch);
     }
     return RefreshIndicator(
       onRefresh: _fetch,
-      child: ListView.builder(
-        padding: const EdgeInsets.all(16),
+      child: ListView.separated(
+        padding: EdgeInsets.fromLTRB(
+            Ds.space.x16, Ds.space.x8, Ds.space.x16, Ds.space.x24),
         physics: platformScrollPhysics(),
-        // CHANGE #173 — first row is the reorder entry: it opens the predictive
-        // "Due for reorder" screen (cadence computed server-side from history).
-        // CMD #367 — two more entry points ride the same header rows:
-        // Purchases (row 174) and Saved lists (row 178), both reachable for
-        // every signed-in customer straight from Orders.
-        itemCount: _orders.length + 2,
+        itemCount: _cards.length,
+        separatorBuilder: (_, _) => SizedBox(height: Ds.space.x12),
         itemBuilder: (context, i) {
-          if (i == 0) return const _ReorderEntry();
-          if (i == 1) return const _PurchasesAndListsEntry();
-          final o = _orders[i - 2];
-          // CHANGE #298 — the deep-linked order opens itself and is scrolled
-          // into view; every other card is untouched.
-          final focused = _focusCode != null && o.number == _focusCode;
-          return _OrderCard(
+          final o = _cards[i];
+          final focused = _focusCode != null && o.orderCode == _focusCode;
+          return OrderCardLean(
             key: focused ? _focusKey : null,
-            order: o,
-            autoOpen: focused,
-            onChanged: _fetch,
+            card: o,
+            onOpen: () => _openOrder(o),
+            onAction: (key) => _runCardAction(o, key),
           );
         },
       ),
@@ -646,162 +621,132 @@ class _OrdersScreenState extends State<OrdersScreen> {
   }
 }
 
-/// CHANGE #173 — the top-of-Orders entry into the predictive reorder screen.
-/// Words are chrome copy from ui_copy; the screen itself renders backend
-/// payloads. Reachable for every signed-in customer with order history.
-class _ReorderEntry extends StatelessWidget {
-  const _ReorderEntry();
+/// CHANGE #630 — the filter row and the search box, both drawn from the
+/// payload. The chips are whatever `filters[]` holds, in payload order, with
+/// the backend's own labels and counts; an unknown key tomorrow needs no
+/// deploy.
+class _OrdersHeader extends StatelessWidget {
+  final List<Map<String, dynamic>> filters;
+  final String selected;
+  final ValueChanged<String> onSelect;
+  final TextEditingController controller;
+  final String hint;
+  final ValueChanged<String> onChanged;
+  final VoidCallback onClear;
+
+  const _OrdersHeader({
+    required this.filters,
+    required this.selected,
+    required this.onSelect,
+    required this.controller,
+    required this.hint,
+    required this.onChanged,
+    required this.onClear,
+  });
+
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.only(bottom: Ds.space.x12),
-      child: InkWell(
-        borderRadius: Ds.r.rCard,
-        onTap: () => Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => const ReorderScreen())),
-        child: Container(
-          padding: EdgeInsets.all(Ds.space.x12),
-          decoration: BoxDecoration(
-            color: Ds.c.successSoft,
-            borderRadius: Ds.r.rCard,
+    return Container(
+      color: Ds.c.surface,
+      padding: EdgeInsets.fromLTRB(
+          Ds.space.x16, Ds.space.x12, Ds.space.x16, Ds.space.x12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            height: Ds.touch.minTarget,
+            child: TextField(
+              controller: controller,
+              onChanged: onChanged,
+              textInputAction: TextInputAction.search,
+              style: Ds.t.body,
+              decoration: InputDecoration(
+                isDense: true,
+                hintText: hint,
+                hintStyle: Ds.t.caption,
+                prefixIcon: Icon(Icons.search, color: Ds.c.textSecondary),
+                suffixIcon: controller.text.isEmpty
+                    ? null
+                    : IconButton(
+                        icon: Icon(Icons.close, color: Ds.c.textSecondary),
+                        onPressed: onClear),
+                filled: true,
+                fillColor: Ds.c.bg,
+                contentPadding:
+                    EdgeInsets.symmetric(horizontal: Ds.space.x12),
+                border: OutlineInputBorder(
+                    borderRadius: Ds.r.rButton,
+                    borderSide: BorderSide(color: Ds.c.divider)),
+                enabledBorder: OutlineInputBorder(
+                    borderRadius: Ds.r.rButton,
+                    borderSide: BorderSide(color: Ds.c.divider)),
+                focusedBorder: OutlineInputBorder(
+                    borderRadius: Ds.r.rButton,
+                    borderSide: BorderSide(color: Ds.c.brand)),
+              ),
+            ),
           ),
-          child: Row(children: [
-            Icon(Icons.autorenew, color: Ds.c.brandDark),
-            SizedBox(width: Ds.space.x12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+          if (filters.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x12),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              physics: const ClampingScrollPhysics(),
+              child: Row(
                 children: [
-                  Text(
-                    c('reorder.entry_due').isEmpty
-                        ? 'Due for reorder'
-                        : c('reorder.entry_due'),
-                    style: Ds.t.body.copyWith(
-                        fontWeight: FontWeight.w700, color: Ds.c.brandDark),
-                  ),
-                  Text(
-                    c('reorder.entry_open').isEmpty
-                        ? 'View your regular items'
-                        : c('reorder.entry_open'),
-                    style: Ds.t.caption.copyWith(color: Ds.c.brandDark),
-                  ),
+                  for (final f in filters) ...[
+                    OrdersFilterChip(
+                      label: (f['label'] ?? '').toString(),
+                      count: (f['count'] as num?)?.toInt() ?? 0,
+                      selected: (f['key'] ?? '').toString() == selected,
+                      onTap: () => onSelect((f['key'] ?? '').toString()),
+                    ),
+                    SizedBox(width: Ds.space.x8),
+                  ],
                 ],
               ),
             ),
-            Icon(Icons.chevron_right, color: Ds.c.brandDark),
-          ]),
-        ),
-      ),
-    );
-  }
-}
-
-/// CMD #367 — the customer's two new surfaces, side by side under the reorder
-/// entry: **Purchases** (row 174 — spend by month, top products and companies,
-/// savings vs MRP and the downloadable purchase register) and **Saved lists**
-/// (row 178 — named, editable, schedulable lists with one-tap reorder).
-/// The chrome words come from ui_copy; both screens render backend payloads.
-class _PurchasesAndListsEntry extends StatelessWidget {
-  const _PurchasesAndListsEntry();
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.only(bottom: Ds.space.x12),
-      child: Row(
-        children: [
-          Expanded(
-            child: _EntryTile(
-              icon: Icons.insights_outlined,
-              title: c('purchases.entry_title').isEmpty
-                  ? 'Purchases'
-                  : c('purchases.entry_title'),
-              subtitle: c('purchases.entry_sub').isEmpty
-                  ? 'Spend, register, savings'
-                  : c('purchases.entry_sub'),
-              onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const PurchasesScreen())),
-            ),
-          ),
-          SizedBox(width: Ds.space.x12),
-          Expanded(
-            child: _EntryTile(
-              icon: Icons.playlist_add_check_outlined,
-              title: c('order_lists.entry_title').isEmpty
-                  ? 'Saved lists'
-                  : c('order_lists.entry_title'),
-              subtitle: c('order_lists.entry_sub').isEmpty
-                  ? 'Reorder in one tap'
-                  : c('order_lists.entry_sub'),
-              onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const OrderListsScreen())),
-            ),
-          ),
-          // CMD #452 — feature_gaps #132. Support used to be one "Contact Us"
-          // link in the storefront footer with nothing to come back to. Every
-          // help request raised from an order lives here, with its reference,
-          // its status and the thread the customer can reopen.
-          SizedBox(width: Ds.space.x12),
-          Expanded(
-            child: _EntryTile(
-              icon: Icons.support_agent_outlined,
-              title: c('support.entry_title'),
-              subtitle: c('support.entry_sub'),
-              onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => const MySupportRequestsScreen())),
-            ),
-          ),
+          ],
         ],
       ),
     );
   }
 }
 
-class _EntryTile extends StatelessWidget {
+/// One empty/failed state, so the three of them cannot drift apart. The words
+/// are always the caller's — this widget writes none.
+class _OrdersEmpty extends StatelessWidget {
   final IconData icon;
   final String title;
-  final String subtitle;
-  final VoidCallback onTap;
-  const _EntryTile({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.onTap,
-  });
+  final String note;
+  final Future<void> Function() onRefresh;
+  const _OrdersEmpty(
+      {required this.icon,
+      required this.title,
+      required this.note,
+      required this.onRefresh});
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      borderRadius: Ds.r.rCard,
-      onTap: onTap,
-      child: Container(
-        constraints: BoxConstraints(minHeight: Ds.touch.minTarget),
-        padding: EdgeInsets.all(Ds.space.x12),
-        decoration: BoxDecoration(
-          color: Ds.c.surface,
-          borderRadius: Ds.r.rCard,
-          boxShadow: Ds.elevation.e1,
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(icon, color: Ds.c.brand),
-            SizedBox(height: Ds.space.x8),
-            Text(title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Ds.t.body.copyWith(fontWeight: FontWeight.w600)),
-            Text(subtitle,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: Ds.t.caption),
-          ],
-        ),
+    return RefreshIndicator(
+      onRefresh: onRefresh,
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: EdgeInsets.symmetric(horizontal: Ds.space.x24),
+        children: [
+          SizedBox(height: MediaQuery.of(context).size.height * 0.2),
+          Icon(icon, size: Ds.space.x48, color: Ds.c.textSecondary),
+          SizedBox(height: Ds.space.x12),
+          Center(child: Text(title, style: Ds.t.subtitle)),
+          SizedBox(height: Ds.space.x4),
+          Center(
+            child: Text(note,
+                textAlign: TextAlign.center, style: Ds.t.caption),
+          ),
+        ],
       ),
     );
   }
 }
-
 /// CMD #452 — the customer's action row on an order card: cancel (#130),
 /// returns (#131) and help (#132). Every label, tone, badge and disabled
 /// explanation is the payload's; the only thing decided here is which sheet a
@@ -828,6 +773,12 @@ class _CustomerActionsRow extends StatelessWidget {
         break;
       case 'help':
         changed = await showOrderHelpSheet(context, orderId);
+        break;
+      // CHANGE #630 — the edit door arrives in this same list now, because
+      // ONE gate decides both doors. It is present only while the window is
+      // open, so there is no closed-window branch to write here.
+      case 'edit':
+        changed = await showOrderEditSheet(context, orderId);
         break;
       default:
         // Forward compatibility: a key this build does not know is not an
@@ -921,381 +872,333 @@ class _ActionChip extends StatelessWidget {
 }
 
 // ─── Order card ───────────────────────────────────────────────────────────────
-// CHANGE #446 — expands into an Items / Bill / Payment accordion, backed by
-// ONE call to cust_order_panel(order_id). The frontend only displays strings
-// the RPC returns and sends user input to RPCs — no currency/date/percent formatting here.
+// CHANGE #630 — ONE CARD, ONE TRUTH, ONE THING TO TAP.
+//
+// What this card used to be: an order code, a status pill, a five-chip row
+// that ran off the right edge of a 360 px phone (Items · Payment · Bill ·
+// Track · Count), an Edit button, an actions row (Cancel · Returns · Help), a
+// Reorder button, and an accordion that opened a whole sub-screen inside a
+// list item. A cancelled order still offered Reorder ABOVE a help box; a
+// pending one stacked five actions. A list of orders had become a control
+// panel per row.
+//
+// What it is now: what the order IS (code, when, how many, how much), where it
+// actually is in plain words, and the single thing worth doing about it. The
+// rest lives one tap away, inside the order.
 
-class _OrderCard extends StatefulWidget {
-  final _DbOrder order;
+// ─── The order, opened ──────────────────────────────────────────────────────
 
-  /// CHANGE #298 — a deep-linked order arrives with its Items section already
-  /// open, so the tap lands on the content, not on a collapsed row.
-  final bool autoOpen;
+/// CHANGE #630 — PART A5/A6/B. Items · Payment · Bill · Help are TABS in here
+/// now, not chips on a list row, and Help is one of them rather than a box
+/// bolted to every card in the list.
+///
+/// PART B: the edit and cancel doors are drawn from `actions[]`, which the
+/// backend builds from ONE gate (`_order_change_gate`). When the window is
+/// shut the actions are ABSENT — there is no greyed-out button here to tap and
+/// be refused by — and `window_note` carries the backend's sentence saying
+/// why. This screen never works out whether a change is still allowed.
+class CustomerOrderDetailScreen extends StatefulWidget {
+  final String orderId;
+  final String orderCode;
+  final String? initialTab;
 
-  /// CMD #452 — a self-cancel or a return changes the ORDER, not just this
-  /// card, so the screen re-fetches instead of the card patching itself.
-  final Future<void> Function()? onChanged;
-
-  const _OrderCard(
-      {super.key,
-      required this.order,
-      this.autoOpen = false,
-      this.onChanged});
+  const CustomerOrderDetailScreen({
+    super.key,
+    required this.orderId,
+    this.orderCode = '',
+    this.initialTab,
+  });
 
   @override
-  State<_OrderCard> createState() => _OrderCardState();
+  State<CustomerOrderDetailScreen> createState() =>
+      _CustomerOrderDetailScreenState();
 }
 
-class _OrderCardState extends State<_OrderCard> {
-  // CHANGE #458: null = nothing open (static card, no auto-expand). 0=Items 1=Payment 2=Bill.
-  // A single int? enforces "only one section open at once" by construction — never
-  // independent per-section booleans that could disagree.
-  int? _tab;
-
-  // CHANGE #408 — the edit window, as the BACKEND sees it. It arrives ON the
-  // order row from my_orders_screen(), so the card asks nobody: only the
-  // backend knows whether a supplier has been asked yet, and inferring it here
-  // from a status string is exactly the client-side logic this codebase does
-  // not allow. Re-read after a save, because the server recomputed it.
-  late Map<String, dynamic> _editState = widget.order.edit;
+class _CustomerOrderDetailScreenState extends State<CustomerOrderDetailScreen> {
+  Map<String, dynamic>? _payload;
+  bool _loading = true;
+  String _error = '';
+  String _tab = '';
 
   @override
   void initState() {
     super.initState();
-    // CHANGE #298 — the ONLY card that auto-expands is the one a notification
-    // named. #458's "no auto-expand" rule still holds for every other card.
-    if (widget.autoOpen) _tab = 0;
+    _tab = widget.initialTab ?? '';
+    _load();
   }
 
-  /// After a save the basket changed, so the window is re-read rather than
-  /// assumed to still be open.
-  Future<void> _reloadEditState() async {
+  Future<void> _load() async {
     try {
-      final raw = await Supabase.instance.client
-          .rpc('order_edit_state', params: {'p_order_id': widget.order.id});
+      final raw = await Supabase.instance.client.rpc('customer_order_detail',
+          params: {'p_order_id': widget.orderId});
+      final map = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
       if (!mounted) return;
-      setState(() =>
-          _editState = raw is Map ? Map<String, dynamic>.from(raw) : const {});
-    } catch (_) {
-      // A card that cannot ask simply keeps what the list gave it.
+      if (map is! Map) {
+        setState(() {
+          _loading = false;
+          _error = c('orders.load_failed_title');
+        });
+        return;
+      }
+      final p = map.cast<String, dynamic>();
+      final tabs = ((p['tabs'] as List<dynamic>?) ?? const [])
+          .whereType<Map>()
+          .toList();
+      setState(() {
+        _payload = p;
+        _loading = false;
+        _error = p['ok'] == true ? '' : (p['message'] ?? '').toString();
+        if (_tab.isEmpty && tabs.isNotEmpty) {
+          _tab = (tabs.first['key'] ?? '').toString();
+        }
+      });
+      if (p['ok'] == true) {
+        RenderLog.write(
+            'c630_order_detail',
+            'tabs:${tabs.length};acts:${((p['actions'] as List?) ?? const []).length}'
+            ';gate:${((p['change_window'] as Map?)?['reason_code'] ?? '')}');
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = c('orders.load_failed_title');
+      });
     }
   }
 
-  // CHANGE #458 B3: tapping the open button again closes it; tapping a different
-  // button switches to it (closing whatever was open) — never two sections at once.
-  //
-  // CHANGE #625: nothing is fetched on open any more. See _buildSectionContent.
-  void _toggleTab(int tab) {
-    setState(() => _tab = _tab == tab ? null : tab);
-  }
-
-  // CHANGE #548: backend-formatted (ist_fmt 'dmy_hm2'); no Dart date math.
-  String _date(String ts) =>
-      DateLabels.instance.label(ts, DateStyle.dmyHm2) ?? '';
-
-  // CHANGE #458: static card — no ExpansionTile, no whole-card tap target.
-  // B1: header trimmed to Order ID, Date & Time, Status, Total (₹), and
-  // "Placed by admin" only when true — no pack count, no MRP.
-  // B2: Items | Payment | Bill render as three always-visible equal-width
-  // buttons. B3: tapping one opens ONLY that section (closes any other);
-  // tapping the open one again closes it; tapping the card body elsewhere
-  // does nothing — there is no gesture handler on the body at all.
-  // CHANGE #459: header reflow — left column is Date & Time over Order ID;
-  // right column is Status chip over "Placed by admin" (admin-placed only,
-  // otherwise nothing — no chip, no reserved gap). No total amount and no MRP
-  // anywhere on this card (PTR isn't available yet, so no price shows here at
-  // all — per Om, remove total from the header).
-  // CHANGE #460: left circle restored (same size/style/position as the
-  // original receipt-icon avatar).
-  // CHANGE #461: circle content is now the count of unique line items
-  // (distinct products) in the order — order.lines.length, from the SAME
-  // items list already fetched for the orders list (each _DbLine is one
-  // distinct product; quantity per line is separate). NOT order.itemCount
-  // (that sums quantities — the old "N packs" metric this card dropped in
-  // #458). No new query — FittedBox shrinks the text so 1/2/3-digit counts
-  // all fit without overflow.
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final order = widget.order;
-    // #572 — counted by the backend (unique_item_count), not by measuring the
-    // lines list on the client.
-    final uniqueItemCount = order.uniqueItemCount.toString();
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            CircleAvatar(
-              backgroundColor: theme.colorScheme.primaryContainer,
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                child: Padding(
-                  padding: const EdgeInsets.all(4),
-                  child: Text(uniqueItemCount,
-                      style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                          color: theme.colorScheme.onPrimaryContainer)),
-                ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                // Date & Time
-                Text(_date(order.placedAt), style: const TextStyle(color: Color(0xFF6B7280))),
-                const SizedBox(height: 2),
-                // Order ID (canonical CPO-format display id) — ellipsize, never overflow.
-                Text(order.number,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.bold)),
-                // #619 — the order total, printed from the backend's own
-                // total_display. No rupee prefix, rounding or grouping is
-                // applied here; the string arrives finished.
-                if (order.totalDisplay.isNotEmpty) ...[
-                  const SizedBox(height: 2),
-                  Text(order.totalDisplay,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          fontWeight: FontWeight.w600, color: Color(0xFF374151))),
-                ],
-              ]),
-            ),
-            const SizedBox(width: 8),
-            Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                // Status
-                _StatusChip(
-                  status: order.status,
-                  label: order.statusLabel,
-                  colorHex: order.statusColor,
-                ),
-                if (order.placedByAdmin) ...[
-                  const SizedBox(height: 4),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFEF3C7),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Text(c('orders.placed_by_admin'),
-                        style: const TextStyle(
-                            fontSize: 10,
-                            color: Color(0xFF92400E),
-                            fontWeight: FontWeight.w600)),
+    final p = _payload;
+    final title = (p?['title'] ?? '').toString();
+    return Scaffold(
+      backgroundColor: Ds.c.bg,
+      appBar: AppBar(
+        title: Text(widget.orderCode.isNotEmpty
+            ? '$title ${widget.orderCode}'.trim()
+            : title),
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : (p == null || p['ok'] != true)
+              ? Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(Ds.space.x24),
+                    child: Text(_error, style: Ds.t.body),
                   ),
-                ],
-              ],
-            ),
-          ]),
-          const SizedBox(height: 14),
-          // CMD #431 — the row scrolls sideways now. It stopped being four
-          // equal columns the moment Count joined it: five Expanded chips on a
-          // 360 px phone squeeze every caption to two cramped lines, and the
-          // fifth one would be the first to go. So the chips keep a readable
-          // minimum width, share the row evenly when there IS room, and scroll
-          // when there is not — which also means a sixth chip tomorrow costs
-          // this layout nothing.
-          LayoutBuilder(builder: (context, box) {
-            const gap = 8.0;
-            const minChip = 84.0;
-            final chips = <Widget Function(double)>[
-              (w) => SizedBox(
-                    width: w,
-                    child: _TabButton(
-                        label: c('orders.tab_items'),
-                        selected: _tab == 0,
-                        onTap: () => _toggleTab(0)),
-                  ),
-              (w) => SizedBox(
-                    width: w,
-                    child: _TabButton(
-                        label: c('orders.tab_payment'),
-                        selected: _tab == 1,
-                        onTap: () => _toggleTab(1)),
-                  ),
-              (w) => SizedBox(
-                    width: w,
-                    child: _TabButton(
-                        label: c('orders.tab_bill'),
-                        selected: _tab == 2,
-                        onTap: () => _toggleTab(2)),
-                  ),
-              // CHANGE #629 (PART F1): Track. This opens a sheet rather than a
-              // fourth accordion section, because customer_track_order()
-              // answers for itself whether there is anything to track —
-              // including 'Preparing your order' when no delivery row exists
-              // yet. The card never works that out from order.status.
-              (w) => SizedBox(
-                    width: w,
-                    child: _TabButton(
-                        label: FulfillLookups.instance.ui('dlv_track'),
-                        selected: false,
-                        onTap: () => showCustomerTrackSheet(context, order.id)),
-                  ),
-              // CMD #431 — count this parcel against this order's own bill.
-              // The chip draws itself only when pharmacy_parcel_order_chip()
-              // said so, and its caption ('Count' / 'Counting' / 'Counted') is
-              // the backend's, so the card never works out where the count got
-              // to either.
-              (w) => ParcelOrderChip(
-                    orderId: order.id,
-                    builder: (ctx, label, onTap) => SizedBox(
-                      width: w,
-                      child: _TabButton(
-                          label: label, selected: false, onTap: onTap),
-                    ),
-                  ),
-            ];
-            final n = chips.length;
-            final even = (box.maxWidth - gap * (n - 1)) / n;
-            final w = even >= minChip ? even : minChip;
-            final row = [
-              for (var i = 0; i < n; i++) ...[
-                if (i > 0) const SizedBox(width: gap),
-                chips[i](w),
-              ],
-            ];
-            return SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              physics: const ClampingScrollPhysics(),
-              child: Row(children: row),
-            );
-          }),
-          // CHANGE #408 — edit this order, but ONLY while the backend says the
-          // window is open. OrderEditButton renders nothing at all when
-          // `can_edit` is false, so the affordance disappears the moment the
-          // waterfall starts — and the write is refused server-side too, so
-          // this is a courtesy, not the guard.
-          if (_editState['can_edit'] == true) ...[
-            SizedBox(height: Ds.space.x8),
-            SizedBox(
+                )
+              : _buildBody(p),
+    );
+  }
+
+  Widget _buildBody(Map<String, dynamic> p) {
+    final cardMap = (p['card'] as Map?)?.cast<String, dynamic>();
+    final card = cardMap == null ? null : CustomerOrderCard.fromPayload(cardMap);
+    final orderMap = (p['order'] as Map?)?.cast<String, dynamic>();
+    final order = orderMap == null ? null : _DbOrder.fromPayload(orderMap);
+    final tabs = ((p['tabs'] as List<dynamic>?) ?? const [])
+        .whereType<Map>()
+        .map((t) => Map<String, dynamic>.from(t))
+        .toList();
+    // PART B — one gate, read verbatim. `window.actions` is empty when the
+    // backend shut the window, and `window.note` is its sentence for why. This
+    // screen has no branch on order status and no wording of its own.
+    final window = OrderChangeWindow.fromDetail(p);
+    final actions = window.actions;
+    final windowNote = window.note;
+
+    return RefreshIndicator(
+      onRefresh: _load,
+      child: ListView(
+        padding: EdgeInsets.fromLTRB(
+            Ds.space.x16, Ds.space.x16, Ds.space.x16, Ds.space.x32),
+        physics: platformScrollPhysics(),
+        children: [
+          if (card != null) _DetailHeader(card: card),
+          // PART B — the sentence that replaces the actions once the window is
+          // shut. It is the backend's, verbatim; there is no Dart wording here
+          // and no disabled button to explain itself.
+          if (windowNote.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x12),
+            Container(
               width: double.infinity,
-              child: OrderEditButton(
-                state: _editState,
-                onTap: () async {
-                  final saved = await showOrderEditSheet(context, order.id);
-                  if (saved && mounted) await _reloadEditState();
-                },
-              ),
+              padding: EdgeInsets.all(Ds.space.x12),
+              decoration: BoxDecoration(
+                  color: Ds.c.infoSoft, borderRadius: Ds.r.rCard),
+              child: Text(windowNote, style: Ds.t.body),
             ),
           ],
-          // CMD #452 — the doors a buyer has on this order. The list, the
-          // labels, whether each is enabled and the sentence shown when one is
-          // not all arrive on the order row (`actions`), so this row renders
-          // and routes; it decides nothing. An action key this build has never
-          // heard of is skipped in silence, so the backend can add one without
-          // a deploy.
-          if (order.actions.isNotEmpty) ...[
-            SizedBox(height: Ds.space.x8),
+          if (actions.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x16),
             _CustomerActionsRow(
-              orderId: order.id,
-              actions: order.actions,
-              onChanged: widget.onChanged,
-            ),
+                orderId: widget.orderId, actions: actions, onChanged: _load),
           ],
-          // CHANGE #173 — Reorder this order. Opens the Smart Basket Diff:
-          // the backend reconciles this past order against the current catalog
-          // (unavailable dropped, out-of-stock swapped, price changes flagged)
-          // before anything reaches the cart. The card decides nothing.
-          SizedBox(height: Ds.space.x8),
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton.icon(
-              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => ReorderScreen(orderId: order.id))),
-              icon: const Icon(Icons.replay, size: 18),
-              label: Text(c('reorder.order_button').isEmpty
-                  ? 'Reorder'
-                  : c('reorder.order_button')),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: Ds.c.brand,
-                side: BorderSide(color: Ds.c.brand),
-                shape:
-                    RoundedRectangleBorder(borderRadius: Ds.r.rButton),
-                minimumSize: const Size(0, 44),
-              ),
+          if (tabs.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x24),
+            _DetailTabBar(
+              tabs: tabs,
+              selected: _tab,
+              onSelect: (k) => setState(() => _tab = k),
             ),
-          ),
-          if (_tab != null) ...[
-            const SizedBox(height: 12),
-            _buildSectionContent(),
+            SizedBox(height: Ds.space.x16),
+            _tabBody(p, order),
           ],
-        ]),
+        ],
       ),
     );
   }
 
-  /// CHANGE #625 — the Items list is the payload this card was BUILT from.
-  ///
-  /// It used to be a second RPC. Opening Items called `cust_order_panel()`,
-  /// whose `items` array answers exactly the question `my_orders_screen().lines`
-  /// already answered — "what is in this order" — and the two disagreed. The
-  /// panel builds its array with `LEFT JOIN inquiry i ON i.product_id =
-  /// oi.product_id`, unqualified by order or by date, so an order_item whose
-  /// product carries N inquiry rows is emitted N times. Verified on live order
-  /// CPO310726PAL124O1: 8 order_items, 18 rows out of that join — Rozustat 20
-  /// Tablet three times, Pinkgums Dental Gel twice. That is the duplicate the
-  /// customer saw, and it was never in the data.
-  ///
-  /// `lines` is grouped by product_id server-side and takes its inquiry status
-  /// through a `limit 1` lateral, so it cannot fan out. One payload, one
-  /// answer, and nothing left that could disagree with itself.
-  ///
-  /// Bill and Payment already fetch for themselves (#463 / CustPayPanel), so
-  /// with Items served from the payload this card makes no call of its own at
-  /// all — there is no load state left to render.
-  Widget _buildSectionContent() {
+  Widget _tabBody(Map<String, dynamic> p, _DbOrder? order) {
     switch (_tab) {
-      case 0:
-        return _ItemsTab(order: widget.order);
-      case 1:
+      case 'items':
+        return order == null
+            ? const SizedBox.shrink()
+            : _ItemsTab(order: order);
+      case 'payment':
         return CustPayPanel(
-            key: ValueKey(widget.order.id),
-            orderId: widget.order.id,
-            orderCode: widget.order.number);
-      case 2:
-        // CHANGE #464: "Upload Bill" moved off this card entirely (now
-        // admin-Customer-Orders-tab only) — no upload-triggered refresh needed
-        // here anymore, so a plain per-order key is enough.
-        return _BillTab(key: ValueKey(widget.order.id), orderId: widget.order.id);
+            key: ValueKey(widget.orderId),
+            orderId: widget.orderId,
+            orderCode: widget.orderCode);
+      case 'bill':
+        return _BillTab(key: ValueKey(widget.orderId), orderId: widget.orderId);
+      case 'help':
+        return _HelpTab(
+            orderId: widget.orderId,
+            help: (p['help'] as Map?)?.cast<String, dynamic>() ?? const {},
+            onChanged: _load);
       default:
+        // Forward compatibility: a tab key this build has never heard of
+        // renders nothing rather than throwing.
         return const SizedBox.shrink();
     }
   }
 }
 
-// CHANGE #458 — Items/Payment/Bill accordion button. Meant to be wrapped in
-// Expanded so three of these fill the card width equally; content is centered
-// since the box now stretches instead of shrinking to the label.
-class _TabButton extends StatelessWidget {
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-  const _TabButton({required this.label, required this.selected, required this.onTap});
+/// The order's own summary at the top of its detail — the same card the list
+/// drew, minus the action (you are already inside the order).
+class _DetailHeader extends StatelessWidget {
+  final CustomerOrderCard card;
+  const _DetailHeader({required this.card});
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        padding: const EdgeInsets.symmetric(vertical: 9),
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: selected ? const Color(0xFF1B7A43) : const Color(0xFFF3F4F6),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Text(label,
-            style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: selected ? Colors.white : const Color(0xFF374151))),
+    return Container(
+      decoration: BoxDecoration(
+          color: Ds.c.surface,
+          borderRadius: Ds.r.rCard,
+          boxShadow: Ds.elevation.e1),
+      padding: EdgeInsets.all(Ds.space.x16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(child: Text(card.orderCode, style: Ds.t.subtitle)),
+              SizedBox(width: Ds.space.x8),
+              Text(card.dateLabel, style: Ds.t.caption),
+            ],
+          ),
+          SizedBox(height: Ds.space.x4),
+          Row(
+            children: [
+              Expanded(child: Text(card.itemCountLabel, style: Ds.t.caption)),
+              SizedBox(width: Ds.space.x8),
+              Text(card.amountLabel,
+                  style: card.amountIsMoney ? Ds.t.bodyStrong : Ds.t.caption),
+            ],
+          ),
+          SizedBox(height: Ds.space.x12),
+          Text(card.stageLabel, style: Ds.t.body),
+          if (card.progressShow && card.progressSteps.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x12),
+            OrderProgressLine(steps: card.progressSteps),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// PART A5 — the tabs, from the payload, in payload order.
+class _DetailTabBar extends StatelessWidget {
+  final List<Map<String, dynamic>> tabs;
+  final String selected;
+  final ValueChanged<String> onSelect;
+  const _DetailTabBar(
+      {required this.tabs, required this.selected, required this.onSelect});
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      physics: const ClampingScrollPhysics(),
+      child: Row(
+        children: [
+          for (final t in tabs) ...[
+            OrdersFilterChip(
+              label: (t['label'] ?? '').toString(),
+              count: 0,
+              selected: (t['key'] ?? '').toString() == selected,
+              onTap: () => onSelect((t['key'] ?? '').toString()),
+            ),
+            SizedBox(width: Ds.space.x8),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// PART A6 — Help, inside the order. It used to be a box on every card in the
+/// list, which made a list of orders read like a complaint form.
+class _HelpTab extends StatelessWidget {
+  final String orderId;
+  final Map<String, dynamic> help;
+  final Future<void> Function() onChanged;
+  const _HelpTab(
+      {required this.orderId, required this.help, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    final title = (help['title'] ?? '').toString();
+    final label = (help['label'] ?? '').toString();
+    final openCount = (help['open_count'] as num?)?.toInt() ?? 0;
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+          color: Ds.c.surface,
+          borderRadius: Ds.r.rCard,
+          boxShadow: Ds.elevation.e1),
+      padding: EdgeInsets.all(Ds.space.x16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (title.isNotEmpty) Text(title, style: Ds.t.body),
+          if (openCount > 0) ...[
+            SizedBox(height: Ds.space.x4),
+            Text('$openCount', style: Ds.t.caption),
+          ],
+          if (label.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x16),
+            SizedBox(
+              width: double.infinity,
+              height: Ds.touch.minTarget,
+              child: OutlinedButton(
+                onPressed: () async {
+                  final changed = await showOrderHelpSheet(context, orderId);
+                  if (changed) await onChanged();
+                },
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Ds.c.brand,
+                  side: BorderSide(color: Ds.c.brand),
+                  shape:
+                      RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+                ),
+                child: Text(label),
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -2246,44 +2149,3 @@ class _WaNumberPickerState extends State<_WaNumberPicker> {
 }
 
 
-// ─── Status chip ──────────────────────────────────────────────────────────────
-
-/// Parses '#RRGGBB' from the backend. Not a decision — a hex string is not a
-/// Dart Color until something converts it. #625 lifted this out of _StatusChip
-/// so the order chip and the per-line chip parse backend colours identically.
-Color _hexColor(String hex, {required Color fallback}) {
-  final h = hex.replaceFirst('#', '').trim();
-  if (h.length != 6) return fallback;
-  final v = int.tryParse(h, radix: 16);
-  return v == null ? fallback : Color(0xFF000000 | v);
-}
-
-class _StatusChip extends StatelessWidget {
-  final String status;
-  final String label;
-  final String colorHex;
-  const _StatusChip({
-    required this.status,
-    required this.label,
-    required this.colorHex,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    // #572 — the chip no longer switch-cases the status into a label and a
-    // colour. Both arrive decided from order_status_config, so adding a status
-    // or recolouring one is an UPDATE in app_settings, not a deploy.
-    final color = _hexColor(colorHex, fallback: Colors.orange);
-    return Container(
-      margin: const EdgeInsets.only(top: 4),
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.15),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Text(label,
-          style: TextStyle(
-              fontSize: 11, color: color, fontWeight: FontWeight.w600)),
-    );
-  }
-}

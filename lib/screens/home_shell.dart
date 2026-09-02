@@ -88,6 +88,7 @@ import 'cart_screen.dart';
 import '../utils/toast.dart';
 import 'orders_screen.dart';
 import '../services/pos_api.dart'; // CMD #411 — pos_entry() at boot
+import '../services/customer_nav.dart'; // #630 — the bottom bar registry
 import 'pharmacy/pos_screen.dart'; // CMD #411 — the pharmacy counter
 import '../widgets/scan_mic_search_controls.dart'; // #409 — used by the shell part files
 import '../services/pharmacy_stock_api.dart'; // CMD #412 — pharmacy_stock_entry() at boot
@@ -220,6 +221,14 @@ class HomeShell extends StatefulWidget {
     // tiles the My Shop tab now draws was a tap that did nothing. Each screen
     // resolves the caller's own account and prints the backend's refusal for
     // anyone else, so the key is a door and never a permission.
+    // CHANGE #630 — the four shop tools that left the Orders tab. Caught by
+    // my_shop_reachability_test the moment they were registered, which is what
+    // that test is for: a route case alone is not reachability. Each screen
+    // resolves the caller's OWN account (ReorderScreen, PurchasesScreen and
+    // OrderListsScreen read the caller's order history; MySupportRequestsScreen
+    // reads my_support_tickets()), so listing them grants a door and never a
+    // permission — and without the line every one of them is parked for a
+    // pharmacy, who is not an admin, exactly as 'refill' was.
     'cust_reorder_due', 'cust_saved_lists', 'cust_help_requests',
   };
 
@@ -333,6 +342,8 @@ class _HomeShellState extends State<HomeShell> {
     // instantly from cache when one exists; refreshes in the background with
     // retry, and never wipes a good cache on a failed refresh.
     _bootstrapHomeCategories();
+    // CHANGE #630 — the bottom bar's slots, their order and their audience.
+    CustomerNav.load();
     // CMD #411 — after the first frame, same reason as push: a counter entry
     // that fails to resolve must never sit in front of the shell's own build.
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadPosEntry());
@@ -474,6 +485,10 @@ class _HomeShellState extends State<HomeShell> {
     // CHANGE #298 — login, account switch and logout all reach the shell as an
     // auth rebuild, and all three mean the same thing to a device token.
     _syncPushIdentity();
+    // CHANGE #630 — and the bottom bar, for the same reason: customer_nav()
+    // resolves each slot's audience against the CALLER, so signing in is what
+    // turns the My Shop slot on.
+    CustomerNav.syncIdentity();
     final viewAs = ViewAsState.of(context);
     final key = viewAs.isActive
         ? '${viewAs.role!.name}:${viewAs.identity!.id}'
@@ -1054,6 +1069,11 @@ class _HomeShellState extends State<HomeShell> {
             MaterialPageRoute(builder: (_) => const PurchasesScreen()));
         break;
       // CHANGE #536 QA round 3 — the cshop_buying trio. See selfGatedRoutes.
+      // CHANGE #630 PART A1 is why they exist at all: "Due for reorder" (#173),
+      // Saved lists (#367) and Help requests were three header tiles and a help
+      // box bolted to the top of a list of ORDERS. None of them is an order,
+      // so they are My Shop registry rows now — and a registry row is a menu
+      // entry until this switch gives it a door.
       case 'cust_reorder_due':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const ReorderScreen()));
@@ -1739,34 +1759,29 @@ class _HomeShellState extends State<HomeShell> {
             )
           : (_cartOpen
               ? null
-              : Builder(builder: (ctx) {
-                  // CHANGE #536 QA round 2 — the SAME rule the desktop header
-                  // uses (shell_header_chrome.dart): the suite belongs to a
-                  // signed-in pharmacy, so an admin and a signed-out visitor
-                  // are not offered a tab whose RPC would refuse them. The bar
-                  // owns the slot->page map; the shell only obeys it, so the
-                  // two cannot drift apart when a slot is hidden.
-                  // QA round 3 (finding 301) — the shell no longer keeps its
-                  // own copy of the slot->page map. It used to read
-                  // `_MobileBottomBar.pagesFor(showMyShop)` here and index it
-                  // in onNavTap, which meant the map that decided WHICH slots
-                  // exist (inside the bar) and the map that decided WHERE a
-                  // tap goes (here) were two reads that could be made to
-                  // disagree: forcing the bar's prop to true while this local
-                  // kept the real value drew a My Shop tab whose tap opened
-                  // Bulk upload, with every test still green. The bar hands
-                  // back the PAGE now, so there is one map, in one place, and
-                  // the shell's only job is to go there.
-                  final showMyShop = UserState.of(ctx).isAuthenticated &&
-                      !UserState.of(ctx).isAdmin;
-                  return _MobileBottomBar(
+              : ValueListenableBuilder<List<Map<String, dynamic>>>(
+                  // CHANGE #630 — the slots, their order, their labels and WHO
+                  // is offered each one are customer_nav()'s answer, rendered
+                  // verbatim. The shell used to compute
+                  // `showMyShop = isAuthenticated && !isAdmin` here (#536 QA
+                  // round 2) and hand it to a bar that owned a hardcoded
+                  // slot->page list; that rule is on the row now
+                  // (`visibility`) and is resolved inside customer_nav(), so
+                  // re-ordering the bar is an UPDATE and a hidden slot cannot
+                  // leave a hole in a list the shell also has to index. (The
+                  // desktop header still reads the same rule from UserState —
+                  // it has no slots to renumber, so it was left alone.)
+                  valueListenable: CustomerNav.value,
+                  builder: (_, slots, _) => _MobileBottomBar(
                     index: _index,
                     cartOpen: _cartOpen,
-                    showMyShop: showMyShop,
                     onCartTap: () => _openCart(),
+                    slots: slots,
+                    // The bar hands back the PAGE its row named, so there is
+                    // no ladder here that has to agree with the slot order.
                     onPageTap: _setIndex,
-                  );
-                })),
+                  ),
+                )),
       body: Stack(
         children: [
           SizedBox.expand(

@@ -71,7 +71,7 @@
   "lib/screens/delivery/delivery_tracking_view.dart": 14,
   "lib/screens/home_shell.dart": 11,
   "lib/screens/legal_pages.dart": 12,
-  "lib/screens/orders_screen.dart": 92,
+  "lib/screens/orders_screen.dart": 71,
   "lib/screens/platform_unavailable.dart": 1,
   "lib/screens/product_detail_screen.dart": 80,
   "lib/screens/profile_screen.dart": 111,

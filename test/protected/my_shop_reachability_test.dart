@@ -67,6 +67,57 @@ Set<String> _registeredCustomerShopRoutes() {
   return routes;
 }
 
+/// One `customer_nav_slot` row, as the migrations wrote it.
+///
+/// CHANGE #630 — the bottom bar's order and its audience are registry data, so
+/// the fixture for both is the migration that seeds the table, exactly as the
+/// customer_shop route list above is derived from the migrations that register
+/// it. Reading the rows here is what keeps this test honest when the sequence
+/// changes again: it will change in SQL, and this will read the new SQL.
+class _NavSlot {
+  final int pageIndex;
+  final int sortOrder;
+  final String visibility;
+  const _NavSlot(this.pageIndex, this.sortOrder, this.visibility);
+}
+
+String _navMigrationSource() {
+  final f = File('supabase/migrations/20260902_c630_nav_visibility.sql');
+  expect(f.existsSync(), isTrue,
+      reason: 'the nav visibility migration must exist');
+  return f.readAsStringSync();
+}
+
+Map<String, _NavSlot> _navSlotRows() {
+  final dir = Directory('supabase/migrations');
+  expect(dir.existsSync(), isTrue, reason: 'run this from the package root');
+  final rows = <String, _NavSlot>{};
+  //   ('home', 'home_shell.home', 'home', 0, 10),
+  final seed = RegExp(
+      r"""\(\s*'([a-z_]+)'\s*,\s*'home_shell\.[a-z_]+'\s*,\s*'[a-z_]+'\s*,\s*(\d+)\s*,\s*(\d+)\s*\)""");
+  //   set badge_key = 'shop', visibility = 'customer_only' ... slot_key = 'my_shop'
+  final vis = RegExp(
+      r"""visibility\s*=\s*'(always|customer_only)'[\s\S]{0,400}?slot_key\s*=\s*'([a-z_]+)'""");
+  final files = dir.listSync().whereType<File>().where((f) => f.path.endsWith('.sql')).toList()
+    ..sort((a, b) => a.path.compareTo(b.path));
+  for (final f in files) {
+    final sql = f.readAsStringSync();
+    if (!sql.contains('customer_nav_slot')) continue;
+    for (final m in seed.allMatches(sql)) {
+      rows[m.group(1)!] = _NavSlot(
+          int.parse(m.group(2)!), int.parse(m.group(3)!), 'always');
+    }
+    for (final m in vis.allMatches(sql)) {
+      final k = m.group(2)!;
+      final r = rows[k];
+      if (r != null) rows[k] = _NavSlot(r.pageIndex, r.sortOrder, m.group(1)!);
+    }
+  }
+  expect(rows.length, greaterThanOrEqualTo(5),
+      reason: 'expected the whole bottom bar, got ${rows.keys.toList()}');
+  return rows;
+}
+
 String _shellSource() {
   final f = File('lib/screens/home_shell.dart');
   expect(f.existsSync(), isTrue, reason: 'run this from the package root');
@@ -184,37 +235,46 @@ void main() {
       //
       // QA round 2 — this used to be `shell.contains('onNavTap')`, which is
       // true of any shell that has ANY bottom bar: repoint the slot at page 3
-      // and the assertion stays green while the door is gone. The mobile door
-      // is now the slot->page map the bar exports and the shell obeys, so the
-      // assertion is on the map itself, and on the shell reading it rather
-      // than hand-rolling a second copy that can drift.
-      expect(
-          RegExp(r'pagesFor\(bool\s+showMyShop\)\s*=>\s*\n?\s*showMyShop\s*\?\s*const\s*\[0,\s*0,\s*1,\s*11,\s*2\]')
-              .hasMatch(_barsSource()),
-          isTrue,
-          reason: 'Om: Home - Catalogue - Orders - My Shop - Bulk');
-      // QA round 3 (finding 301) — round 2's version of this asserted that the
-      // SHELL also read `_MobileBottomBar.pagesFor(...)`. That was the bug, not
-      // the guard: two reads of one map is a drift, and QA demonstrated it by
-      // forcing the bar's `showMyShop:` prop to true while the shell's own
-      // `slots` local kept the real value — the bar drew five tabs, the shell
-      // mapped four, tapping My Shop opened Bulk upload, and every test here
-      // stayed green because both halves matched their own regex.
+      // and the assertion stays green while the door is gone.
       //
-      // There is one map now. The bar resolves the tap itself and hands back a
-      // PAGE, so the assertion is that no second reader exists at all: strip
-      // the comments and `pagesFor` may appear exactly twice in the bar (its
-      // declaration and the single read in build) and not once anywhere else.
-      expect('pagesFor'.allMatches(_uncommented(_barsSource())).length, 2,
-          reason: 'the slot map is declared once and read once, in the bar');
+      // CHANGE #630 — Om moved the order (My Shop LAST) and ruled that
+      // "registry sort_order owns it; do not hardcode the order in Dart". So
+      // the slot->page map is no longer a Dart list to assert on; it is a
+      // `customer_nav_slot` row, and the door is the row plus the two lines
+      // that render it. All three are asserted here, and the Dart list is
+      // asserted GONE — a change that quietly reinstates it fails.
+      expect(_navSlotRows().containsKey('my_shop'), isTrue,
+          reason: 'the registry must still carry a My Shop slot');
+      expect(_navSlotRows()['my_shop']!.pageIndex, 11,
+          reason: 'the My Shop slot must open page 11');
+      expect(_uncommented(_barsSource()).contains('pagesFor'), isFalse,
+          reason: 'the slot order is registry data now, not a Dart literal');
       expect(_uncommented(shell).contains('pagesFor'), isFalse,
-          reason: 'the shell must not keep a second copy of the slot map');
-      expect(RegExp(r'onTap:\s*\(i\)\s*\{\s*\n?\s*if\s*\(i\s*>=\s*0\s*&&\s*i\s*<\s*slots\.length\)\s*onPageTap\(slots\[i\]\)')
+          reason: 'the shell must not keep a copy of the slot map either');
+      // QA round 3 (finding 301) — round 2's version asserted that the SHELL
+      // also read the map. That was the bug, not the guard: two readers of one
+      // map is a drift, and QA demonstrated it by forcing the bar's prop true
+      // while the shell's own local kept the real value — the bar drew five
+      // tabs, the shell mapped four, tapping My Shop opened Bulk upload, and
+      // every test stayed green because both halves matched their own regex.
+      // There is one reader now: `pageOf`, in the bar. It is declared once and
+      // read exactly twice (the lit slot, and the tap), and nowhere else.
+      expect('pageOf'.allMatches(_uncommented(_barsSource())).length, 3,
+          reason: 'pageOf is declared once and read twice, in the bar');
+      expect(_uncommented(shell).contains('pageOf'), isFalse,
+          reason: 'the shell must not resolve a slot to a page itself');
+      expect(
+          RegExp(r'onTap:\s*\(i\)\s*\{\s*\n?\s*if\s*\(i\s*>=\s*0\s*&&\s*i\s*<\s*slots\.length\)\s*onPageTap\(pageOf\(slots\[i\]\)\)')
               .hasMatch(_barsSource()),
           isTrue,
-          reason: 'the bar must resolve its own tap through its own map');
+          reason: 'the bar must resolve its own tap through the row it drew');
       expect(RegExp(r'onPageTap:\s*_setIndex').hasMatch(shell), isTrue,
           reason: 'the shell obeys the page the bar names, and computes none');
+      expect(RegExp(r'valueListenable:\s*CustomerNav\.value').hasMatch(shell),
+          isTrue,
+          reason: 'the bar must be handed customer_nav()\'s own slots');
+      expect(RegExp(r'slots:\s*slots').hasMatch(shell), isTrue,
+          reason: 'and it must pass them through, not filter them here');
 
       // Desktop: the header link added by QA round 1. Without it the desktop
       // shell rendered page 11 and offered no way to select it.
@@ -251,33 +311,58 @@ void main() {
       // QA round 2 — the mobile half of the SAME rule. Round 1 gated the
       // desktop header and left a comment claiming the mobile bar already did
       // it; the bar was picked on isAdmin alone, so an anonymous visitor was
-      // shown the tab and got a blank page. The shell must compute showMyShop
-      // from BOTH conditions and hand it to the bar, and the bar must drop the
-      // slot when it is false.
+      // shown the tab and got a blank page.
+      //
+      // CHANGE #630 — the mobile bar is registry-driven, and a bar that hides
+      // a slot by position is exactly how a hole appears in a list the shell
+      // also indexes. So the rule moved onto the ROW (`visibility`) and is
+      // resolved inside customer_nav() against the caller. The Dart half is
+      // asserted GONE and the SQL half is asserted PRESENT — the audience rule
+      // cannot be deleted by either stack alone.
+      expect(_uncommented(_shellSource()).contains('showMyShop'), isFalse,
+          reason: 'the mobile audience rule is the row\'s, not the shell\'s');
+      expect(_uncommented(_barsSource()).contains('showMyShop'), isFalse,
+          reason: 'the bar renders the slots it is given, and gates none');
+      final navSql = _navMigrationSource();
+      expect(_navSlotRows()['my_shop']!.visibility, 'customer_only',
+          reason: 'My Shop must not be offered to anon or to an admin');
+      expect(navSql.contains('auth.uid() is not null'), isTrue,
+          reason: 'customer_nav() must know whether the caller is signed in');
+      expect(navSql.contains('_is_admin()'), isTrue,
+          reason: 'customer_nav() must know whether the caller is an admin');
       expect(
-          RegExp(r'showMyShop\s*=\s*UserState\.of\(ctx\)\.isAuthenticated\s*&&\s*\n?\s*!UserState\.of\(ctx\)\.isAdmin')
-              .hasMatch(_shellSource()),
+          RegExp(r"visibility\s*=\s*'always'\s*\n?\s*or\s*\(\s*me\.signed_in\s+and\s+not\s+me\.is_admin\s*\)")
+              .hasMatch(navSql),
           isTrue,
-          reason: 'the mobile door must use the desktop rule, not isAdmin alone');
-      expect(_barsSource().contains('if (showMyShop)'), isTrue,
-          reason: 'the My Shop slot must not be drawn when it is not offered');
+          reason: 'a customer_only slot needs BOTH conditions, not isAdmin alone');
     });
 
-    // ── Om's placement decision (#536) ───────────────────────────────────────
-    test('My Shop is the FIFTH tab, between Orders and Bulk', () {
-      final bars = _barsSource();
-      // The ITEM order must match the slot map, or the tab a thumb presses is
-      // not the page it opens. Orders' receipt icon comes before the storefront
-      // icon, and Bulk's upload icon after it.
-      final orders = bars.indexOf("c('home_shell.orders')");
-      final myShop = bars.indexOf("c('home_shell.my_shop')");
-      final bulk = bars.indexOf("c('home_shell.bulk')");
-      expect(orders, greaterThan(-1));
-      expect(myShop, greaterThan(-1));
-      expect(bulk, greaterThan(-1));
-      expect(orders, lessThan(myShop),
-          reason: 'Orders keeps the position its thumbs know');
-      expect(myShop, lessThan(bulk), reason: 'My Shop sits before Bulk');
+    // ── Om's placement decision (#630, superseding #536) ────────────────────
+    test('the sequence is Home · Catalogue · Bulk · Orders · My Shop', () {
+      // Om, live on #630: "customer bottom-nav SEQUENCE changes to exactly:
+      // Home · Catalogue · Bulk · Orders · My Shop (My Shop LAST, Bulk moves
+      // to third). Registry sort_order owns it; do not hardcode the order in
+      // Dart." #536 put My Shop fourth and asserted the order by the position
+      // of five `c('home_shell.*')` literals in the bar; those literals are
+      // gone, and asserting on their order would only prove the bar had been
+      // hardcoded again. The order is one column now, so that is what is read.
+      final rows = _navSlotRows();
+      for (final k in const ['home', 'catalogue', 'bulk', 'orders', 'my_shop']) {
+        expect(rows.containsKey(k), isTrue, reason: 'no $k slot registered');
+      }
+      final order = rows.entries.toList()
+        ..sort((a, b) => a.value.sortOrder.compareTo(b.value.sortOrder));
+      expect(order.map((e) => e.key).toList(),
+          const ['home', 'catalogue', 'bulk', 'orders', 'my_shop'],
+          reason: 'Om: My Shop LAST, Bulk third');
+      // And the bar must draw them in the order it was handed, with no sort of
+      // its own — the whole point of moving the sequence into a column.
+      expect(_uncommented(_barsSource()).contains('for (final s in slots)'),
+          isTrue,
+          reason: 'the bar renders the payload order verbatim');
+      expect(RegExp(r'slots\s*\.\s*sort\(').hasMatch(_uncommented(_barsSource())),
+          isFalse,
+          reason: 'a client-side sort would take the order back off the row');
     });
 
     // Om: "The storefront home stays exactly as it is — do not insert shop
@@ -321,11 +406,18 @@ void main() {
       // lives, and explaining it is the opposite of re-implementing it.
       expect(api.contains("'99+'"), isFalse,
           reason: 'the badge cap is a backend decision, not a Dart literal');
+      // CHANGE #630 — #536 asserted here that hiding My Shop renumbered a Dart
+      // list rather than leaving a hole. There is no list to renumber now: the
+      // backend simply does not send the slot, and the bar finds the lit tab by
+      // matching the row's own page_index instead of counting positions. That
+      // is the same guarantee, stated where it now lives.
       expect(
-          RegExp(r'showMyShop\s*\?\s*const\s*\[0,\s*0,\s*1,\s*11,\s*2\]\s*:\s*const\s*\[0,\s*0,\s*1,\s*2\]')
+          RegExp(r'slots\.indexWhere\(\(s\)\s*=>\s*pageOf\(s\)\s*==\s*index\)')
               .hasMatch(_barsSource()),
           isTrue,
-          reason: 'hiding the slot must renumber the map, never leave a hole');
+          reason: 'the lit slot is found by page, never by a counted position');
+      expect(_barsSource().contains('found < 0 ? 0 : found'), isTrue,
+          reason: 'a page with no slot falls back to Home, never to a hole');
     });
   });
 }

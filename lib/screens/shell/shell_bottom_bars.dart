@@ -10,7 +10,31 @@ part of '../home_shell.dart';
 // reference. A part shares the library's imports and its privacy scope, so
 // this is a pure move — and it gives this concern its own leasable path, so
 // a cart command and a login command stop fighting over one file.
+/// CHANGE #630 — the bar is a REGISTRY, not five hand-written slots.
+///
+/// Om: "customer bottom-nav sequence changes to exactly Home · Catalogue ·
+/// Bulk · Orders · My Shop. Registry sort_order owns it; do not hardcode the
+/// order in Dart." Until now the five slots were a Dart list literal AND the
+/// selected slot was a hand-written `index == 11 ? 2 : index == 1 ? 3 : ...`
+/// ladder — two expressions that had to agree, so re-ordering the bar was a
+/// two-place edit with a wrong answer available in between. Both facts are one
+/// `customer_nav_slot` row each now: the row carries the shell page it opens,
+/// which makes the ladder a lookup and the order an UPDATE.
+///
+/// The ONE thing that stays here is `icon_key` → glyph. A row cannot carry an
+/// IconData, so the map below is the same arrangement `kNavIcons` already uses
+/// for the admin registry — an unknown key draws a neutral glyph rather than
+/// throwing, so a new slot ships without a deploy even if its icon waits for one.
+const Map<String, ({IconData icon, IconData active})> _kBottomNavGlyphs = {
+  'home': (icon: Icons.home_outlined, active: Icons.home),
+  'grid': (icon: Icons.grid_view_outlined, active: Icons.grid_view),
+  'upload_file': (icon: Icons.upload_file_outlined, active: Icons.upload_file),
+  'receipt': (icon: Icons.receipt_long_outlined, active: Icons.receipt_long),
+  'storefront': (icon: Icons.storefront_outlined, active: Icons.storefront),
+};
+
 class _MobileBottomBar extends StatelessWidget {
+  /// The shell page currently showing.
   final int index;
   final bool cartOpen;
   final VoidCallback onCartTap;
@@ -19,44 +43,46 @@ class _MobileBottomBar extends StatelessWidget {
   /// the slot it was tapped at.
   ///
   /// It used to hand back the slot index, which forced the shell to map it
-  /// through `pagesFor(showMyShop)` a SECOND time. Two call sites of one map
-  /// is a drift waiting to happen, and QA proved it: setting the bar's
-  /// `showMyShop:` prop to `true` while the shell's own `slots` kept the real
-  /// value left every test green, and a signed-out visitor tapping the fourth
-  /// tab landed on Bulk upload. `pagesFor` is now read in exactly one place —
-  /// four lines below, next to the `if (showMyShop)` that draws the slot — so
-  /// the list that decides which items exist IS the list that decides where
-  /// they go, and there is no second copy left to disagree with it.
+  /// through its own copy of the slot->page list a SECOND time. Two call sites
+  /// of one map is a drift waiting to happen, and QA proved it: a signed-out
+  /// visitor tapping the fourth tab landed on Bulk upload while every test
+  /// stayed green. The map is read in exactly one place — `pageOf`, below —
+  /// so the list that decides which items exist IS the list that decides where
+  /// they go.
   final ValueChanged<int> onPageTap;
 
-  /// CHANGE #536 QA round 2 — whether the My Shop slot is offered at all.
+  /// `customer_nav().slots`, in the backend's order, rendered verbatim.
   ///
-  /// Round 1 gated the DESKTOP header on `isAuthenticated && !isAdmin` and its
-  /// comment claimed the mobile bar already used that rule. It did not: the bar
-  /// was picked on `isAdmin` alone, so a SIGNED-OUT visitor was shown a My Shop
-  /// tab whose RPC anon holds no EXECUTE on (`customer_shop_home` returns 42501
-  /// permission denied), and tapping it painted an empty page with no message
-  /// and no way back. One rule, one place, both layouts.
-  final bool showMyShop;
+  /// CHANGE #630 — the bar is a REGISTRY, not five hand-written slots. Om:
+  /// "customer bottom-nav sequence changes to exactly Home · Catalogue · Bulk ·
+  /// Orders · My Shop. Registry sort_order owns it; do not hardcode the order
+  /// in Dart." The five slots used to be a Dart list literal (`pagesFor`) next
+  /// to five hand-written `BottomNavigationBarItem`s — two expressions that had
+  /// to agree, so re-ordering the bar was a two-place edit with a wrong answer
+  /// available in between. Both are one `customer_nav_slot` row each now: the
+  /// row carries its label, its icon, its badge and the shell page it opens, so
+  /// re-ordering the bar is an UPDATE and hiding a slot cannot leave a hole.
+  ///
+  /// WHO is offered My Shop is the same row's decision (`visibility`), resolved
+  /// against the caller inside `customer_nav()`. That rule is #536 QA round 2 —
+  /// an admin and a signed-out visitor must not be shown a tab whose RPC would
+  /// refuse them (customer_shop_home() has no EXECUTE for anon) — and keeping
+  /// it on the row is what stops a hidden slot from leaving a hole in a list
+  /// the bar also indexes by position.
+  final List<Map<String, dynamic>> slots;
 
   const _MobileBottomBar({
     required this.index,
     required this.cartOpen,
     required this.onCartTap,
     required this.onPageTap,
-    required this.showMyShop,
+    required this.slots,
   });
 
-  /// The page each slot opens, in slot order — the single source of truth the
-  /// bar draws from and the shell navigates by, so the two can never drift.
-  ///
-  /// Om's placement decision (#536): Home · Catalogue · Orders · My Shop ·
-  /// Bulk. My Shop is the FIFTH tab and it goes between Orders and Bulk, so
-  /// the three tabs a plain ordering customer already knows keep the positions
-  /// their thumbs know. Page 0 is Home, 1 Orders, 11 My Shop, 2 Bulk; slot 1
-  /// (Catalogue) opens Home, exactly as it did before this change.
-  static List<int> pagesFor(bool showMyShop) =>
-      showMyShop ? const [0, 0, 1, 11, 2] : const [0, 0, 1, 2];
+  /// The page a slot opens: the row's own `page_index`, never its position.
+  /// The single source of truth the bar draws from and the shell navigates by.
+  static int pageOf(Map<String, dynamic> slot) =>
+      (slot['page_index'] as num?)?.toInt() ?? 0;
 
   /// The attention count on the My Shop icon, redrawn whenever the notifier
   /// changes and absent entirely while the backend says there is nothing to
@@ -73,13 +99,13 @@ class _MobileBottomBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cart = AppState.of(context);
-    // CHANGE #536 — five slots for a signed-in shop: Home, Catalogue, Orders,
-    // My Shop, Bulk; four for everyone else. The slot a page highlights is read
-    // out of the SAME list the shell navigates by, so hiding My Shop cannot
-    // leave a page pointing at a slot that no longer exists (a hidden page 11
-    // finds no slot and falls back to Home).
-    final slots = pagesFor(showMyShop);
-    final found = slots.indexOf(index);
+    // A bar needs at least two destinations to exist; until the registry
+    // answers, draw nothing rather than a guessed bar.
+    if (slots.length < 2) return const SizedBox.shrink();
+    // Which slot is lit is a LOOKUP over the same list the taps resolve
+    // through, so hiding a slot cannot leave a page pointing at one that no
+    // longer exists (a hidden page 11 finds no slot and falls back to Home).
+    final found = slots.indexWhere((s) => pageOf(s) == index);
     final bottomNavIndex = found < 0 ? 0 : found;
     return BottomNavigationBar(
       currentIndex: bottomNavIndex,
@@ -90,58 +116,47 @@ class _MobileBottomBar extends StatelessWidget {
       unselectedFontSize: 10,
       elevation: 8,
       // The one map, read once, used for both halves of the question: which
-      // slots exist (below) and where each one goes (here). QA round 3
-      // finding 301 — a second copy of this list in the shell could be made
-      // to disagree with this one without a single test going red.
+      // slots exist (below) and where each one goes (here).
       onTap: (i) {
-        if (i >= 0 && i < slots.length) onPageTap(slots[i]);
+        if (i >= 0 && i < slots.length) onPageTap(pageOf(slots[i]));
       },
       items: [
-        BottomNavigationBarItem(
-          icon: const Icon(Icons.home_outlined),
-          activeIcon: const Icon(Icons.home),
-          label: c('home_shell.home'),
-        ),
-        BottomNavigationBarItem(
-          icon: const Icon(Icons.grid_view_outlined),
-          activeIcon: const Icon(Icons.grid_view),
-          label: c('home_shell.catalogue'),
-        ),
-        BottomNavigationBarItem(
-          icon: Badge(
-            isLabelVisible: cart.orders.isNotEmpty,
-            label: Text('${cart.orders.length}'),
-            child: const Icon(Icons.receipt_long_outlined),
-          ),
-          activeIcon: Badge(
-            isLabelVisible: cart.orders.isNotEmpty,
-            label: Text('${cart.orders.length}'),
-            child: const Icon(Icons.receipt_long),
-          ),
-          label: c('home_shell.orders'),
-        ),
-        // CHANGE #536 — MY SHOP. The pharmacy suite used to hang off one row in
-        // the account dropdown; it is a first-class destination now. The label
-        // is ui_copy like every other slot, so renaming the tab is an UPDATE.
-        // Offered only to a signed-in non-admin (QA round 2) — see showMyShop.
-        //
-        // The badge is customer_shop_badge()'s answer, printed: the BACKEND
-        // decides whether a count is worth showing at all and formats the
-        // number (it caps itself at 99+). `show` is the flag, never
-        // `count > 0` computed here.
-        if (showMyShop)
+        for (final s in slots)
           BottomNavigationBarItem(
-            icon: _shopBadge(const Icon(Icons.storefront_outlined)),
-            activeIcon: _shopBadge(const Icon(Icons.storefront)),
-            label: c('home_shell.my_shop'),
+            icon: _glyph(s, cart, active: false),
+            activeIcon: _glyph(s, cart, active: true),
+            // The word is the backend's, from ui_copy, like every other label.
+            label: (s['label'] ?? '').toString(),
           ),
-        BottomNavigationBarItem(
-          icon: const Icon(Icons.upload_file_outlined),
-          activeIcon: const Icon(Icons.upload_file),
-          label: c('home_shell.bulk'),
-        ),
       ],
     );
+  }
+
+  /// `icon_key` -> glyph, plus the row's own badge.
+  ///
+  /// A row cannot carry an IconData, so the glyph map is the same arrangement
+  /// `kNavIcons` already uses for the admin registry — an unknown key draws a
+  /// neutral glyph rather than throwing, so a new slot ships without a deploy
+  /// even if its icon waits for one. WHICH slot carries a badge, and which
+  /// badge, is the ROW's answer (`badge_key`), never a guess made here.
+  Widget _glyph(Map<String, dynamic> slot, CartModel cart,
+      {required bool active}) {
+    final pair = _kBottomNavGlyphs[(slot['icon_key'] ?? '').toString()];
+    final icon = Icon(pair == null
+        ? Icons.widgets_outlined
+        : (active ? pair.active : pair.icon));
+    switch ((slot['badge_key'] ?? '').toString()) {
+      case 'cart':
+        return Badge(
+          isLabelVisible: cart.orders.isNotEmpty,
+          label: Text('${cart.orders.length}'),
+          child: icon,
+        );
+      case 'shop':
+        return _shopBadge(icon);
+      default:
+        return icon;
+    }
   }
 }
 

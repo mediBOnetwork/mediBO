@@ -17,6 +17,8 @@
 -- on-conflict-do-update. A resumed worker re-applies it as a no-op.
 -- ═══════════════════════════════════════════════════════════════════════════
 
+set lock_timeout = '30s';
+
 -- ── A. A CANARY SESSION IS A PURGE SCOPE, NEVER AN AMBIENT STAMPER ─────────
 -- A live test session stamps EVERY insert on 57 tables as synthetic. That is
 -- right for Om's own incognito run and catastrophic for a daily job: a real
@@ -828,11 +830,11 @@ insert into public.heartbeat_stage (ord, stage_key, label, timeout_ms, note) val
   (60, 'supplier_order', 'Supplier order cut',   20000, 'rebuilt by the real engine'),
   (70, 'collect',        'Collected at shop',    20000, 'shop-stage counting marks the lines'),
   (80, 'count',          'Counted in warehouse', 25000, 'confirm counting, then warehouse receive'),
-  (90, 'bag',            'Bagged',               20000, 'every line lands in a bag'),
+  (90, 'bag',            'Bagged and received',  25000, 'bag counts entered, then warehouse receive allocates them'),
   (100,'pack',           'Packed',               20000, 'lines packed and the order marked dispatch-ready'),
   (110,'assign',         'Rider assigned',       20000, 'assigned to the synthetic rider only'),
-  (120,'deliver',        'Delivered',            20000, 'simulated proof of delivery'),
-  (130,'bill',           'Bill generated',       25000, 'invoice issued on the TEST series'),
+  (120,'deliver',        'Delivered',            20000, 'the real OTP proof path; only the tap is simulated'),
+  (105,'bill',           'Bill generated',       30000, 'invoice on the TEST series, PDF attached, balance settled'),
   (140,'close',          'Order closed',         20000, 'the order reaches a closed state'),
   (150,'exclusions',     'Books untouched',      30000, 'P&L, GST, settlements, demand and dashboards unmoved')
 on conflict (stage_key) do update
@@ -862,11 +864,11 @@ insert into public.ui_copy (key, value) values
   ('heartbeat.error_title',      '"Could not load the heartbeat"'::jsonb),
   ('heartbeat.retry',            '"Retry"'::jsonb),
   ('heartbeat.never',            '"never"'::jsonb),
-  ('heartbeat.stage_of',         '"{done} of {total} stages"'::jsonb),
-  ('heartbeat.alert_push_title', '"Heartbeat FAILED at {stage}"'::jsonb),
-  ('heartbeat.alert_push_body',  '"Order {order} stopped at {stage}: {error}"'::jsonb),
+  ('heartbeat.stage_of',         '"{{done}} of {{total}} stages"'::jsonb),
+  ('heartbeat.alert_push_title', '"Heartbeat FAILED at {{stage}}"'::jsonb),
+  ('heartbeat.alert_push_body',  '"Order {{order}} stopped at {{stage}}: {{error}}"'::jsonb),
   ('admin_nav.overflow_heartbeat','"Heartbeat"'::jsonb)
-on conflict (key) do nothing;
+on conflict (key) do update set value = excluded.value, updated_at = now();
 
 -- ── D. THE STAGE DRIVERS ──────────────────────────────────────────────────
 
@@ -950,8 +952,16 @@ begin
        or not (select coalesce(is_synthetic,false) from public.supplier_profiles where id = v_supid) then
       return jsonb_build_object('ok', false, 'error','fixture_not_marked_synthetic');
     end if;
+    -- A rider cannot take a stop until training is passed. The synthetic rider
+    -- will never sit a module, so use the platform's own admin override — the
+    -- same door a real onboarding uses — rather than writing training rows.
+    begin
+      if coalesce((public.delivery_training_state(v_rider)->>'blocks_assignment')::boolean, false) then
+        v_res := public.admin_training_override(v_rider, 'synthetic heartbeat rider');
+      end if;
+    exception when others then v_res := jsonb_build_object('error', sqlerrm); end;
     select label into v_name from public.test_fixture where key='supplier';
-    return jsonb_build_object('ok', true, 'fixtures', v_fix,
+    return jsonb_build_object('ok', true, 'fixtures', v_fix, 'training', v_res,
       'ctx', jsonb_build_object('pharmacy_id', v_ph, 'supplier_id', v_supid,
                                 'supplier_name', v_name, 'rider_id', v_rider,
                                 'zone_id', v_zone, 'order_date', v_date));
@@ -1080,9 +1090,11 @@ begin
 
   ----------------------------------------------------------------- collect --
   if p_key = 'collect' then
-    insert into public.supplier_count_mode (assigned_supplier, mode, set_at, set_by, mode_date)
-    values (v_sup, 'shop', now(), 'heartbeat', v_date)
-    on conflict (assigned_supplier, mode_date) do update set mode='shop', set_at=now(), set_by='heartbeat';
+    -- _supplier_shop_stage() is "no supplier_count_mode row exists". A row left
+    -- by yesterday's canary would put this supplier straight into the warehouse
+    -- and the shop count would never happen — so clear the SYNTHETIC supplier's
+    -- own rows and start the cycle where a real one starts it.
+    delete from public.supplier_count_mode where assigned_supplier = v_sup;
     v_res := public.fw_mark_all_received(v_sup);
     select count(*) into v_n from public.order_items
      where order_id = v_order and coalesce(shop_qty,0) >= quantity;
@@ -1096,49 +1108,69 @@ begin
   ------------------------------------------------------------------- count --
   if p_key = 'count' then
     v_res := public.fw_confirm_counting(v_sup, v_date, true);
-    -- forwarded to the warehouse; now receive it there
-    perform public.fw_mark_all_received(v_sup);
-    select count(*) into v_n from public.order_items
-     where order_id = v_order and coalesce(received_qty,0) >= quantity and coalesce(at_warehouse,false);
-    if v_n < coalesce((p_ctx->>'lines')::int,1) then
-      return jsonb_build_object('ok', false, 'error','lines_not_received',
-        'received', v_n, 'confirm', v_res);
+    if coalesce(v_res->>'error','') <> '' then
+      return jsonb_build_object('ok', false, 'error', v_res->>'error', 'confirm', v_res);
     end if;
-    return jsonb_build_object('ok', true, 'received', v_n, 'confirm', v_res);
+    select count(*) into v_n from public.order_items
+     where order_id = v_order and coalesce(collect_locked,false);
+    if v_n < coalesce((p_ctx->>'lines')::int,1) then
+      return jsonb_build_object('ok', false, 'error','not_forwarded_to_warehouse',
+        'forwarded', v_n, 'confirm', v_res);
+    end if;
+    return jsonb_build_object('ok', true, 'forwarded', v_n, 'confirm', v_res);
   end if;
 
   --------------------------------------------------------------------- bag --
   if p_key = 'bag' then
-    select count(*) into v_n from public.bag_allocations where order_id = v_order;
-    if v_n = 0 then
-      -- a dedicated synthetic bag, never a real warehouse bag number
-      select coalesce(max(bag_no),0) + 1 into v_bag from public.bags;
-      insert into public.bags (bag_no, bag_code, status, note, is_synthetic)
-      values (v_bag, 'TST-HB', 'empty', 'heartbeat canary bag', true)
-      on conflict (bag_no) do nothing;
-      for r in select id from public.order_items where order_id = v_order loop
-        perform public.fw_set_item_bag(r.id, v_bag);
-      end loop;
-      select count(*) into v_n from public.bag_allocations where order_id = v_order;
+    -- In the real warehouse the bag count IS the count: bag_count_set writes
+    -- bag_item_counts, and receiving then allocates the group into that bag
+    -- (_bag_alloc_on_received). Bagging after the lines are received is too
+    -- late — the line is locked by then.
+    select coalesce(max(bag_no),0) + 1 into v_bag from public.bags;
+    insert into public.bags (bag_no, status, note, is_synthetic)
+    values (v_bag, 'empty', 'heartbeat canary bag', true)
+    on conflict (bag_no) do nothing;
+    for r in select oi.id, oi.product_id, oi.quantity
+               from public.order_items oi where oi.order_id = v_order loop
+      v_items := v_items || jsonb_build_object('count_set',
+        public.bag_count_set(v_sup, r.product_id, r.quantity, 'heartbeat', v_bag, v_date));
+    end loop;
+    -- now receive it in the warehouse; the trigger allocates into the bag
+    v_res := public.fw_mark_all_received(v_sup);
+    select count(*) into v_n from public.order_items
+     where order_id = v_order and coalesce(received_qty,0) >= quantity and coalesce(at_warehouse,false);
+    if v_n < coalesce((p_ctx->>'lines')::int,1) then
+      return jsonb_build_object('ok', false, 'error','lines_not_received',
+        'received', v_n, 'receive', v_res, 'counts', v_items);
     end if;
-    if v_n = 0 then
-      return jsonb_build_object('ok', false, 'error','nothing_bagged');
+    select count(*) into v_lines from public.bag_allocations where order_id = v_order;
+    if v_lines = 0 then
+      return jsonb_build_object('ok', false, 'error','nothing_bagged',
+        'bag_no', v_bag, 'counts', v_items, 'receive', v_res);
     end if;
     if exists (select 1 from public.bag_allocations
                 where order_id = v_order and not coalesce(is_synthetic,false)) then
       return jsonb_build_object('ok', false, 'error','bag_allocation_not_marked_synthetic');
     end if;
-    return jsonb_build_object('ok', true, 'allocations', v_n);
+    return jsonb_build_object('ok', true, 'allocations', v_lines, 'received', v_n, 'bag_no', v_bag);
   end if;
 
   -------------------------------------------------------------------- pack --
   if p_key = 'pack' then
-    for r in select id, quantity from public.order_items where order_id = v_order loop
-      begin perform public.pack_mark_item(r.id, true, r.quantity); exception when others then null; end;
+    -- Dispatch-ready needs BOTH halves the pack screen asks for: the pack-stage
+    -- count and the packed quantity. Marking packed alone leaves the order
+    -- 'not_fully_counted' and it never reaches a rider.
+    for r in select oi.id, oi.quantity from public.order_items oi
+              where oi.order_id = v_order loop
+      v_items := v_items || jsonb_build_object(
+        'counted', public.pack_set_counted_item(r.id, r.quantity),
+        'packed',  public.pack_mark_item(r.id, true, r.quantity));
     end loop;
-    perform public.pack_set_dispatch_ready(v_order, true);
+    v_res := public.pack_set_dispatch_ready(v_order, true);
     if not coalesce((select dispatch_ready from public.orders where id = v_order), false) then
-      return jsonb_build_object('ok', false, 'error','not_dispatch_ready');
+      return jsonb_build_object('ok', false,
+        'error', coalesce(nullif(v_res->>'error',''), 'not_dispatch_ready'),
+        'detail', v_res, 'lines', v_items);
     end if;
     select count(*) into v_n from public.order_items where order_id = v_order and coalesce(packed,false);
     return jsonb_build_object('ok', true, 'packed', v_n, 'dispatch_ready', true);
@@ -1160,14 +1192,35 @@ begin
 
   ----------------------------------------------------------------- deliver --
   if p_key = 'deliver' then
-    v_res := public.test_sim_delivery_complete(v_order, null);
-    if not coalesce((v_res->>'ok')::boolean,false) then
-      return jsonb_build_object('ok', false, 'error', coalesce(v_res->>'error','delivery_failed'), 'detail', v_res);
+    -- The REAL proof-of-delivery path, end to end: the rider's OTP is sent,
+    -- read back from delivery_otp (this is the canary's own delivery) and
+    -- verified. Only the human tapping is simulated.
+    select id into v_del from public.deliveries where order_id = v_order limit 1;
+    if v_del is null then
+      return jsonb_build_object('ok', false, 'error','no_delivery_row');
     end if;
-    if not exists (select 1 from public.deliveries where order_id = v_order and status='delivered') then
-      return jsonb_build_object('ok', false, 'error','not_delivered', 'detail', v_res);
+    -- the rider's own taps are the simulated part; everything the PLATFORM
+    -- does — handover evidence, OTP issue, OTP verification — is the real code
+    update public.deliveries
+       set accept_status = 'accepted', accepted_at = coalesce(accepted_at, now())
+     where id = v_del and coalesce(accept_status,'') <> 'accepted';
+    v_items := jsonb_build_object('handover', public.delivery_handover_scan(
+      (select qr_token from public.deliveries where id = v_del), null, null, 'qr'));
+    v_items := v_items || jsonb_build_object('otp_sent', public.delivery_send_otp(v_del));
+    select code into v_code from public.delivery_otp where delivery_id = v_del;
+    if coalesce(v_code,'') = '' then
+      return jsonb_build_object('ok', false, 'error','no_otp_issued', 'detail', v_items);
     end if;
-    return jsonb_build_object('ok', true, 'delivery', v_res);
+    v_res := public.delivery_verify_otp(v_del, v_code, null, null, 'TEST RECEIVER (SYNTHETIC)');
+    if (select status from public.deliveries where id = v_del) <> 'delivered' then
+      return jsonb_build_object('ok', false,
+        'error', coalesce(nullif(v_res->>'error',''),'not_delivered'),
+        'detail', v_res, 'otp', v_items);
+    end if;
+    if not exists (select 1 from public.deliveries where id = v_del and coalesce(is_synthetic,false)) then
+      return jsonb_build_object('ok', false, 'error','delivery_not_marked_synthetic');
+    end if;
+    return jsonb_build_object('ok', true, 'delivery_id', v_del, 'verify', v_res);
   end if;
 
   -------------------------------------------------------------------- bill --
@@ -1177,14 +1230,47 @@ begin
     if coalesce(v_code,'') = '' then
       return jsonb_build_object('ok', false, 'error','no_invoice_number', 'detail', v_res);
     end if;
-    -- a canary invoice must come off the TEST series, never the real one
-    if v_code not like 'TEST%' and not exists (
-         select 1 from public.customer_invoice_series
-          where fy like 'TEST-%' and coalesce(is_synthetic,false)) then
+    -- a canary invoice comes off the TEST series; the real one must not move
+    if not exists (select 1 from public.customer_invoice_series
+                    where fy like 'TEST-%' and coalesce(is_synthetic,false)) then
       return jsonb_build_object('ok', false, 'error','invoice_off_the_real_series',
                                 'invoice_no', v_code, 'detail', v_res);
     end if;
-    return jsonb_build_object('ok', true, 'invoice_no', v_code, 'detail', v_res);
+
+    -- the bill PDF: the real job, with the renderer's callback simulated
+    v_items := public.bill_job_enqueue(v_order, true);
+    if nullif(v_items->>'job_id','') is null then
+      return jsonb_build_object('ok', false,
+        'error', coalesce(nullif(v_items->>'reason',''),'no_bill_job'), 'detail', v_items,
+        'ready', public._bill_ready(v_order));
+    end if;
+    v_items := v_items || jsonb_build_object('report', public.bill_job_report(
+      (v_items->>'job_id')::uuid, true, 'customer-bills',
+      'synthetic/heartbeat/' || v_order::text || '.pdf', 'heartbeat-bill.pdf', null));
+    if nullif((select cust_bill_path from public.orders where id = v_order),'') is null then
+      return jsonb_build_object('ok', false, 'error','bill_not_attached', 'detail', v_items);
+    end if;
+
+    -- the customer settles the bill: capture whatever the bill still shows due
+    declare v_bill jsonb; v_rem numeric; begin
+      v_bill := public.customer_bill(v_order);
+      v_rem  := coalesce((v_bill->'totals'->>'remaining')::numeric, 0);
+      if v_rem > 0 then
+        v_items := v_items || jsonb_build_object('settle',
+          public.test_sim_payment_capture(v_order, v_rem, null));
+      end if;
+      v_items := v_items || jsonb_build_object('bill_ready', v_bill->>'ready',
+                                               'remaining_before', v_rem);
+    end;
+
+    v_res := public.delivery_eligibility(v_order);
+    if not coalesce((v_res->>'can_assign')::boolean, false) then
+      return jsonb_build_object('ok', false,
+        'error', 'bill_stage_left_order_ineligible: ' || coalesce(v_res->>'blocked_label',''),
+        'eligibility', v_res, 'detail', v_items);
+    end if;
+    return jsonb_build_object('ok', true, 'invoice_no', v_code,
+      'eligibility', v_res, 'detail', v_items);
   end if;
 
   ------------------------------------------------------------------- close --
@@ -1294,8 +1380,8 @@ insert into public.wa_event_routes (event_key, label, description, audience, ena
 values ('heartbeat_failed', 'Heartbeat failed',
         'The daily end-to-end canary stopped at a stage. Urgent: the pipeline is broken.',
         'admin', true, true,
-        'Heartbeat FAILED at {stage}',
-        'Order {order} stopped at {stage}: {error}',
+        'Heartbeat FAILED at {{stage}}',
+        'Order {{order}} stopped at {{stage}}: {{error}}',
         'admin')
 on conflict (event_key) do update
   set audience = 'admin', enabled = true, push_enabled = true,
@@ -1306,7 +1392,7 @@ create or replace function public.heartbeat_alert(p_run bigint)
  returns jsonb language plpgsql security definer set search_path to 'public','net'
 as $function$
 declare r public.heartbeat_run%rowtype; cfg public.heartbeat_config%rowtype;
-        v_phone text; v_vars jsonb; v_res jsonb; v_fp text;
+        v_phone text; v_vars jsonb; v_res jsonb; v_fp text; v_push jsonb; v_uid uuid;
 begin
   select * into r from public.heartbeat_run where id = p_run;
   if r.id is null then return jsonb_build_object('ok', false, 'error','no_run'); end if;
@@ -1323,8 +1409,36 @@ begin
     'run_id',     r.id::text,
     'audience',   'admin');
 
+  -- PUSH FIRST, addressed by USER not by phone. Admin push tokens carry no
+  -- phone10, so notify()'s phone-matched push finds nothing and the alert
+  -- silently degrades to a queued WhatsApp with no approved template. The
+  -- device push IS the urgent path, so it is asked for by user id.
+  select u.id into v_uid
+    from auth.users u
+    join public.admins a on lower(btrim(a.email)) = lower(btrim(u.email))
+   where coalesce(a.is_super,false)
+     and exists (select 1 from public.push_tokens t
+                  where t.is_active and t.user_id = u.id)
+   order by u.created_at limit 1;
+  if v_uid is null then
+    select t.user_id into v_uid from public.push_tokens t
+     where t.is_active and t.role in ('admin','super_admin') and t.user_id is not null
+     order by t.created_at desc limit 1;
+  end if;
+  if v_uid is not null then
+    begin
+      v_push := public.notif_push_send(coalesce(cfg.alert_event_key,'heartbeat_failed'),
+                                       v_phone, v_uid, null, v_vars, 'admin');
+    exception when others then
+      v_push := jsonb_build_object('ok', false, 'error', sqlerrm);
+    end;
+  else
+    v_push := jsonb_build_object('ok', false, 'reason','no_admin_push_token');
+  end if;
+
   begin
-    v_res := public.notify(coalesce(cfg.alert_event_key,'heartbeat_failed'), v_phone, v_vars);
+    v_res := public.notify(coalesce(cfg.alert_event_key,'heartbeat_failed'), v_phone,
+                           v_vars || jsonb_build_object('_no_push', true));
   exception when others then
     v_res := jsonb_build_object('ok', false, 'error', sqlerrm);
   end;
@@ -1337,7 +1451,7 @@ begin
           jsonb_build_object('run_id', r.id, 'stage', r.failed_stage,
                              'stage_label', r.failed_label, 'error', r.error,
                              'order_id', r.order_id, 'order_code', r.order_code,
-                             'notify', v_res),
+                             'notify', v_res, 'push', v_push),
           now(), now(), 1)
   on conflict (fingerprint) do update
     set last_seen = now(), seen_count = public.rg_alerts.seen_count + 1,
@@ -1345,20 +1459,23 @@ begin
 
   update public.heartbeat_run
      set alert_sent = true,
-         alert_detail = jsonb_build_object('notify', v_res, 'phone_present', v_phone is not null,
+         alert_detail = jsonb_build_object('notify', v_res, 'push', v_push,
+                                           'delivered', coalesce((v_push->>'ok')::boolean,false)
+                                                     or coalesce((v_res->>'ok')::boolean,false),
+                                           'phone_present', v_phone is not null,
                                            'fingerprint', v_fp)
    where id = p_run;
 
-  return jsonb_build_object('ok', true, 'notify', v_res, 'fingerprint', v_fp);
+  return jsonb_build_object('ok', true, 'notify', v_res, 'push', v_push, 'fingerprint', v_fp);
 end $function$;
 
 -- ── G. CLEANUP, THE RUNNER, THE CRON AND THE SCREEN'S PAYLOAD ─────────────
 
 insert into public.ui_copy (key, value) values
-  ('heartbeat.summary_ok',      '"Heartbeat OK — {passed}/{total} stages in {secs}s · order {order} · artifacts cleaned"'::jsonb),
-  ('heartbeat.summary_fail',    '"Heartbeat FAILED at {stage} — {error} · order {order}"'::jsonb),
-  ('heartbeat.summary_skipped', '"Heartbeat skipped — {reason}"'::jsonb)
-on conflict (key) do nothing;
+  ('heartbeat.summary_ok',      '"Heartbeat OK — {{passed}}/{{total}} stages in {{secs}}s · order {{order}} · artifacts cleaned"'::jsonb),
+  ('heartbeat.summary_fail',    '"Heartbeat FAILED at {{stage}} — {{error}} · order {{order}}"'::jsonb),
+  ('heartbeat.summary_skipped', '"Heartbeat skipped — {{reason}}"'::jsonb)
+on conflict (key) do update set value = excluded.value, updated_at = now();
 
 -- Every row this run created joins the run's purge scope, so nothing it made
 -- outlives it. Scoped by time as well as by the synthetic flag: a run never
@@ -1366,30 +1483,31 @@ on conflict (key) do nothing;
 create or replace function public._hb_claim_rows(p_session bigint, p_since timestamptz)
  returns int language plpgsql security definer set search_path to 'public'
 as $function$
-declare t text; n int; v_total int := 0; v_has_created boolean;
+declare t text; n int; v_total int := 0;
 begin
   foreach t in array public._test_session_tables() loop
+    -- The TEST invoice counter is deliberately NOT claimed. Purging it resets
+    -- the series to 0001 while a leftover synthetic order still holds that
+    -- number, and the next run dies on orders_invoice_no_uidx. The counter is
+    -- infrastructure, not an artifact.
+    continue when t = 'customer_invoice_series';
     if not exists (select 1 from information_schema.columns
                     where table_schema='public' and table_name=t and column_name='test_session_id')
       then continue; end if;
     if not exists (select 1 from information_schema.columns
                     where table_schema='public' and table_name=t and column_name='is_synthetic')
       then continue; end if;
-    v_has_created := exists (select 1 from information_schema.columns
-                              where table_schema='public' and table_name=t and column_name='created_at');
     begin
-      if v_has_created then
-        execute format('update public.%I set test_session_id = $1
-                         where coalesce(is_synthetic,false) and test_session_id is null
-                           and created_at >= $2', t) using p_session, p_since;
-      else
-        execute format('update public.%I set test_session_id = $1
-                         where coalesce(is_synthetic,false) and test_session_id is null', t)
-          using p_session;
-      end if;
+      -- Every synthetic row in these tables with no owning session is orphaned
+      -- test residue: the books already ignore it and no purge will ever come
+      -- for it. The cast itself (pharmacy/supplier/rider profiles) is not in
+      -- this list, so adopting orphans can never delete the fixtures.
+      execute format('update public.%I set test_session_id = $1
+                       where coalesce(is_synthetic,false) and test_session_id is null', t)
+        using p_session;
       get diagnostics n = row_count;
       v_total := v_total + n;
-    exception when others then null;   -- a table that refuses the stamp is reported by residue
+    exception when others then null;   -- a table that refuses the stamp shows up as residue
     end;
   end loop;
   return v_total;
@@ -1430,10 +1548,11 @@ as $function$
 declare
   cfg public.heartbeat_config%rowtype;
   st record; v_run bigint; v_sess bigint; v_ctx jsonb; v_res jsonb;
-  v_ok boolean; v_err text; v_t0 timestamptz; v_ms int; v_started timestamptz := now();
+  v_ok boolean; v_err text; v_t0 timestamptz; v_ms int; v_started timestamptz := clock_timestamp();
   v_total int; v_passed int := 0; v_fail_key text; v_fail_label text;
   v_order uuid; v_code text; v_secs numeric; v_line text; v_tpl text;
   v_clean jsonb; v_break text := nullif(btrim(coalesce(p_break_stage,'')),'');
+  v_try int;
 begin
   if not public._test_guard() then
     return jsonb_build_object('ok', false, 'error','not_authorized');
@@ -1453,9 +1572,12 @@ begin
                         jsonb_build_object('reason', public.uic('heartbeat.busy',''))));
   end if;
 
+  -- status 'canary', never 'live': test_sessions_one_live is a unique index on
+  -- (true) where status='live', so a canary claiming it would lock Om out of
+  -- his own test mode and serialise every run behind that one index tuple.
   insert into public.test_sessions (label, scope, status, started_by_label, expires_at)
   values ('heartbeat ' || to_char(now() at time zone 'Asia/Kolkata','DD Mon HH24:MI'),
-          'canary', 'live', 'heartbeat', now() + interval '2 hours')
+          'canary', 'canary', 'heartbeat', now() + interval '2 hours')
   returning id into v_sess;
 
   select count(*) into v_total from public.heartbeat_stage where enabled;
@@ -1475,27 +1597,45 @@ begin
     insert into public.heartbeat_stage_run (run_id, ord, stage_key, label, status, timeout_ms)
     values (v_run, st.ord, st.stage_key, st.label, 'running',
             coalesce(st.timeout_ms, cfg.default_timeout_ms));
-    begin
-      perform set_config('statement_timeout',
-                         coalesce(st.timeout_ms, cfg.default_timeout_ms)::text, true);
-      if v_break is not null and st.stage_key = v_break then
-        raise exception 'deliberate drill break at stage %', st.stage_key using errcode = 'P0001';
-      end if;
-      v_res := public._hb_stage(st.stage_key, v_run, v_ctx);
-      v_ok  := coalesce((v_res->>'ok')::boolean, false);
-      v_err := nullif(v_res->>'error','');
-      if v_ok then v_ctx := v_ctx || coalesce(v_res->'ctx','{}'::jsonb); end if;
-    exception
-      when query_canceled then
-        v_ok := false;
-        v_err := 'timed out after ' || coalesce(st.timeout_ms, cfg.default_timeout_ms)::text || ' ms';
-        v_res := jsonb_build_object('ok', false, 'error', v_err, 'timeout', true);
-      when others then
-        v_ok := false;
-        v_err := sqlstate || ': ' || sqlerrm;
-        v_res := jsonb_build_object('ok', false, 'error', v_err);
-    end;
+    v_try := 0;
+    <<attempt>>
+    loop
+      v_try := v_try + 1;
+      begin
+        perform set_config('statement_timeout',
+                           coalesce(st.timeout_ms, cfg.default_timeout_ms)::text, true);
+        -- the session default is 5 s, which a busy warehouse refresh can exceed
+        -- without anything being wrong; bound the wait by THIS stage's budget.
+        perform set_config('lock_timeout',
+                           least(coalesce(st.timeout_ms, cfg.default_timeout_ms), 15000)::text, true);
+        if v_break is not null and st.stage_key = v_break then
+          raise exception 'deliberate drill break at stage %', st.stage_key using errcode = 'P0001';
+        end if;
+        v_res := public._hb_stage(st.stage_key, v_run, v_ctx);
+        v_ok  := coalesce((v_res->>'ok')::boolean, false);
+        v_err := nullif(v_res->>'error','');
+        if v_ok then v_ctx := v_ctx || coalesce(v_res->'ctx','{}'::jsonb); end if;
+      exception
+        when lock_not_available or serialization_failure or deadlock_detected then
+          v_ok := false;
+          v_err := sqlstate || ': ' || sqlerrm;
+          v_res := jsonb_build_object('ok', false, 'error', v_err, 'contention', true, 'attempt', v_try);
+        when query_canceled then
+          v_ok := false;
+          v_err := 'timed out after ' || coalesce(st.timeout_ms, cfg.default_timeout_ms)::text || ' ms';
+          v_res := jsonb_build_object('ok', false, 'error', v_err, 'timeout', true);
+        when others then
+          v_ok := false;
+          v_err := sqlstate || ': ' || sqlerrm;
+          v_res := jsonb_build_object('ok', false, 'error', v_err);
+      end;
+      exit attempt when v_ok
+                     or v_try >= 3
+                     or not coalesce((v_res->>'contention')::boolean, false);
+      perform pg_sleep(2);            -- two honest retries, then it is a failure
+    end loop;
     perform set_config('statement_timeout', '0', true);
+    perform set_config('lock_timeout', '5s', true);
     v_ms := (extract(epoch from (clock_timestamp() - v_t0)) * 1000)::int;
 
     update public.heartbeat_stage_run
@@ -1523,12 +1663,12 @@ begin
 
   v_order := nullif(v_ctx->>'order_id','')::uuid;
   v_code  := nullif(v_ctx->>'order_code','');
-  v_secs  := round(extract(epoch from (now() - v_started))::numeric, 1);
+  v_secs  := round(extract(epoch from (clock_timestamp() - v_started))::numeric, 1);
 
   update public.heartbeat_run
      set status = case when v_fail_key is null then 'passed' else 'failed' end,
          ended_at = now(),
-         ms = (extract(epoch from (now() - v_started)) * 1000)::int,
+         ms = (extract(epoch from (clock_timestamp() - v_started)) * 1000)::int,
          order_id = v_order, order_code = v_code,
          stages_passed = v_passed, failed_stage = v_fail_key, failed_label = v_fail_label,
          error = (select error from public.heartbeat_stage_run
@@ -1637,7 +1777,7 @@ as $function$
     'order_code',    coalesce(r.order_code,''),
     'failed_stage',  coalesce(r.failed_label, r.failed_stage,''),
     'error',         coalesce(r.error,''),
-    'stage_label',   public.notif_render(public.uic('heartbeat.stage_of','{done} of {total} stages'),
+    'stage_label',   public.notif_render(public.uic('heartbeat.stage_of','{{done}} of {{total}} stages'),
                        jsonb_build_object('done', r.stages_passed::text, 'total', r.stages_total::text)),
     'alert_label',   case when r.status = 'failed'
                           then case when r.alert_sent
@@ -1751,3 +1891,84 @@ grant execute on function public.heartbeat_run_now(text)        to authenticated
 grant execute on function public.heartbeat_exclusion_audit(timestamptz) to authenticated;
 revoke execute on function public.heartbeat_run_once(text, text) from authenticated, anon;
 revoke execute on function public.heartbeat_tick()               from authenticated, anon;
+
+-- ── I. A WAKE SIGNAL MUST NEVER BLOCK A CUSTOMER ORDER ───────────────────
+-- Found while proving the canary: every insert into `orders` fires
+-- trg_cron_wake_unfulfilled -> cron_wake(), which upserts one row of
+-- cron_signal. The dispatcher holds those rows for its whole run, so an order
+-- placed while cron_dispatch() is working waits on a transactionid lock — the
+-- canary hit 55P03 three runs in a row, and a real customer order takes the
+-- same wait. A wake is a HINT, not a ledger entry: if the dispatcher is
+-- holding the row it is already running, which is precisely what the hint was
+-- for. Take it without waiting or skip it.
+create or replace function public.cron_wake(p_task text)
+ returns void
+ language plpgsql
+ security definer
+ set search_path to 'public'
+as $function$
+begin
+  if exists (select 1 from public.cron_signal where task = p_task) then
+    -- bump it only if the row is free RIGHT NOW; never queue behind a dispatch
+    if exists (select 1 from public.cron_signal where task = p_task for update skip locked) then
+      update public.cron_signal set last_at = now(), n = n + 1 where task = p_task;
+    end if;
+    return;
+  end if;
+  insert into public.cron_signal (task) values (p_task)
+  on conflict (task) do nothing;
+exception
+  when foreign_key_violation then return;
+  when lock_not_available   then return;   -- a missed hint costs one poll interval
+end $function$;
+
+-- ── J. A DIRTY FLAG MUST NEVER BLOCK A CUSTOMER ORDER ────────────────────
+-- The second contention the canary found, same shape as cron_wake. An order
+-- accepted on the storefront fires tg_reset_inquiry_on_accept -> the inquiry
+-- row changes -> trg_omp_dirty updates ONE row of job_dirty_state. The
+-- dispatcher's recompute_ordered_medicine_points holds that row for the whole
+-- recompute (90 s+ measured here), so every order placed in that window waits
+-- on a transactionid lock. The canary hit it three runs running; a real
+-- customer order takes exactly the same wait.
+--
+-- Marking a job dirty is a HINT. If the row is locked the job is running RIGHT
+-- NOW, which is what the hint asks for; skipping costs at worst one refresh
+-- interval, while waiting costs the order. It is never allowed to fail the
+-- write that triggered it.
+create or replace function public.job_mark_dirty(p_jobs text[])
+ returns int
+ language plpgsql
+ security definer
+ set search_path to 'public'
+as $function$
+declare j text; n int := 0;
+begin
+  foreach j in array coalesce(p_jobs, '{}') loop
+    begin
+      if exists (select 1 from public.job_dirty_state
+                  where job = j and not coalesce(dirty,false) for update skip locked) then
+        update public.job_dirty_state set dirty = true where job = j;
+        n := n + 1;
+      end if;
+    exception when lock_not_available or others then null;
+    end;
+  end loop;
+  return n;
+end $function$;
+
+create or replace function public.trg_omp_dirty()
+ returns trigger language plpgsql security definer set search_path to 'public'
+as $function$
+begin
+  perform public.job_mark_dirty(array['ordered_medicine_points']);
+  return null;
+end $function$;
+
+create or replace function public.trg_medicine_marks_refresh_jobs_dirty()
+ returns trigger language plpgsql security definer set search_path to 'public'
+as $function$
+begin
+  perform public.job_mark_dirty(
+    array['therapeutic_categories','storefront_feed','medicine_companies']);
+  return null;
+end $function$;

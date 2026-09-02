@@ -451,15 +451,25 @@ begin
        and g.src ~ ('\m' || c.proname || '[[:space:]]*\(')
   ),
   stmts as (
+    -- An UPDATE statement, up to its terminating semicolon. `\y` is a word
+    -- BOUNDARY; `\m` is a word START, so the closing `\m` this rule was first
+    -- written with could never match (nothing starts a word straight after
+    -- "where") and every statement read as unconditional. The table may carry
+    -- an alias, and `set` must follow it — which is also what keeps
+    -- `on conflict ... do update set` and the words "update your details" out
+    -- of a rule about unconditional writes.
     select g.proname,
            (regexp_matches(g.src,
-              '\mupdate[[:space:]]+(?:only[[:space:]]+)?(?:public\.)?"?[a-zA-Z_][a-zA-Z0-9_]*"?[^;]*?;',
+              '\yupdate\y[[:space:]]+(?:only[[:space:]]+)?(?:public\.)?'
+              '"?[a-zA-Z_][a-zA-Z0-9_]*"?'
+              '(?:[[:space:]]+(?:as[[:space:]]+)?[a-zA-Z_][a-zA-Z0-9_]*)?'
+              '[[:space:]]+set[[:space:]][^;]*?;',
               'gi'))[1] as stmt
       from graph g
   )
   select string_agg(distinct proname, ', ' order by proname) into v_bad
     from stmts
-   where stmt !~* '\mwhere\m';
+   where stmt !~* '\ywhere\y';
 
   if v_bad is not null then
     raise exception

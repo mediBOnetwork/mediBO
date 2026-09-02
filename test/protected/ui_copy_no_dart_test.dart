@@ -80,9 +80,47 @@ void main() {
     });
 
     test('a half-supplied template drops only the missing half', () {
+      // ROUND 2 changed this expectation deliberately. It used to end on a
+      // naked '·' — the separator that belonged between two values, left
+      // pointing at nothing. #633 already stripped a trailing ':' for exactly
+      // that reason; the middot is the same defect in a different glyph.
       expect(
           cf('admin_customer.ordered_by_with_pharmacy', {'name': 'Ramesh'}),
-          'Ordered by: Ramesh ·');
+          'Ordered by: Ramesh');
+    });
+  });
+
+  // ── ROUND 2 (hostile QA) ────────────────────────────────────────────────
+  // An EMPTY value is not the same as a missing one to the resolver — the slot
+  // does get substituted, so the template ends up with no placeholder left and
+  // the #633 tidy pass used to skip it entirely. The reader still saw the
+  // wreckage: a label with nothing after it, or a separator against a colon.
+  group('an empty value leaves no wreckage either', () {
+    test('an empty name does not leave a dangling colon', () {
+      expect(cf('admin_customer.ordered_by', {'name': ''}), 'Ordered by');
+    });
+
+    test('an empty name does not leave the separator against the label', () {
+      expect(
+          cf('admin_customer.ordered_by_with_pharmacy',
+              {'name': '', 'pharmacy': 'Sai Medicals'}),
+          'Ordered by: Sai Medicals');
+    });
+
+    test('an empty value in the middle does not double the spacing', () {
+      expect(cf('cart.removed_line_summary', {'qty': '2', 'amount': ''}),
+          '×2 · ₹');
+    });
+
+    test('a value that is present is never tidied away', () {
+      expect(
+          cf('admin_customer.ordered_by_with_pharmacy',
+              {'name': 'Ramesh', 'pharmacy': 'Sai Medicals'}),
+          'Ordered by: Ramesh · Sai Medicals');
+    });
+
+    test('copy with no placeholder is still returned untouched', () {
+      expect(cf('plain.no_placeholder', {'name': ''}), 'Pending approval');
     });
   });
 }

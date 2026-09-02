@@ -138,8 +138,17 @@ String c(String key) => UiCopy.t(key);
 String cf(String key, Map<String, String> vars) {
   var s = UiCopy.t(key);
   if (s.isEmpty) return '';
-  vars.forEach((k, v) => s = s.replaceAll('{$k}', v));
-  return _stripUnresolved(key, s);
+  // CHANGE #686 — a slot filled with an EMPTY value leaves exactly the wreckage
+  // an unfilled slot leaves: "Ordered by: " on a customer with no name, or
+  // "Ordered by:  · Sai Medicals" once the separator lands beside nothing. The
+  // template still has no placeholder left, so #633's tidy pass used to skip
+  // it. Fill and tidy are the same decision, so they run together now.
+  var filledEmpty = false;
+  vars.forEach((k, v) {
+    if (v.isEmpty && s.contains('{$k}')) filledEmpty = true;
+    s = s.replaceAll('{$k}', v);
+  });
+  return _stripUnresolved(key, s, tidyAnyway: filledEmpty);
 }
 
 /// CMD #633 — a placeholder the caller never filled must never reach a reader.
@@ -157,14 +166,21 @@ String cf(String key, Map<String, String> vars) {
 /// screenshot to catch one.
 final RegExp _kPlaceholder = RegExp(r'\{[A-Za-z0-9_.]+\}');
 
-String _stripUnresolved(String key, String s) {
-  if (!_kPlaceholder.hasMatch(s)) return s;
-  try {
-    RenderLog.write('c633_raw_placeholder', key);
-  } catch (_) {}
+String _stripUnresolved(String key, String s, {bool tidyAnyway = false}) {
+  final hasSlot = _kPlaceholder.hasMatch(s);
+  if (!hasSlot && !tidyAnyway) return s;
+  if (hasSlot) {
+    try {
+      RenderLog.write('c633_raw_placeholder', key);
+    } catch (_) {}
+  }
   var out = s.replaceAll(_kPlaceholder, '');
   out = out.replaceAll(RegExp(r'[ \t]{2,}'), ' ').trim();
+  // CHANGE #686 — "Ordered by: · Sai Medicals": the separator that belonged
+  // between two values now sits against the label. Drop the separator, keep
+  // every word the backend wrote.
+  out = out.replaceAll(RegExp(r':\s*[\u00B7\u2022|]\s*'), ': ');
   // "Failed to load: {e}" would otherwise end on a naked colon.
-  out = out.replaceAll(RegExp(r'[:,\-\u2013\u2014]\s*$'), '').trim();
+  out = out.replaceAll(RegExp(r'[:,\-\u2013\u2014\u00B7\u2022|]\s*$'), '').trim();
   return out;
 }

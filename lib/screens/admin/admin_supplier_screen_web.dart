@@ -6995,7 +6995,16 @@ class _SupProfileImportDialogState extends State<_SupProfileImportDialog> {
     for (final col in _cols.where((c) => c.mappedTo == 'create_new')) {
       final name = (_newColCtrls[col.index]?.text ?? '').trim();
       if (name.isEmpty) {
-        showToast(context, cf('admin_supplier.toast_enter_col_name', {'a': '${col.header.isNotEmpty ? col.header : "Column ${col.index + 1}"}'}));
+        // CHANGE #686 — "Column N" was a Dart literal composed inline. It is
+        // the same fallback the add-medicine screen reads from the backend.
+        showToast(
+            context,
+            cf('admin_supplier.toast_enter_col_name', {
+              'a': col.header.isNotEmpty
+                  ? col.header
+                  : cf('admin_supplier.column_fallback',
+                      {'n': '${col.index + 1}'}),
+            }));
         return;
       }
       if (!RegExp(r'^[a-z][a-z0-9_]*$').hasMatch(name)) {

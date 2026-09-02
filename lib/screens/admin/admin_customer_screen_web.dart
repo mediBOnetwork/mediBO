@@ -11266,8 +11266,17 @@ class _SLeadsTabState extends State<_SLeadsTab> {
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           decoration: BoxDecoration(color: const Color(0xFFF9FAFB), borderRadius: BorderRadius.circular(8)),
           child: Text(
-            cf('admin_customer.enrich_summary', {'enriched': '$enriched', 'errors': '$errors', 'photos': '$withPhoto', 'hours': '$withHours'}) +
-            '$withWebsite websites · $withEmail emails',
+            // CHANGE #686 — the template ended on a dangling ' · ' because
+            // the last two counts were concatenated here, separator and
+            // wording included. All six counts are slots now.
+            cf('admin_customer.enrich_summary', {
+              'enriched': '$enriched',
+              'errors': '$errors',
+              'photos': '$withPhoto',
+              'hours': '$withHours',
+              'websites': '$withWebsite',
+              'emails': '$withEmail',
+            }),
             style: const TextStyle(fontSize: 12, color: Color(0xFF4B5563)),
           ),
         ),

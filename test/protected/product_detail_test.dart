@@ -97,12 +97,21 @@ Map<String, dynamic> _payload({
         'has_price': hasMrp,
         'has_discount': false,
       },
+      // CHANGE #640 — the verdict now FOLLOWS `buyable` in this fixture instead
+      // of being pinned to available. It used to say "available" while
+      // stock.buyable said false, i.e. the fixture reproduced the live bug:
+      // one payload, two answers. The page reads the verdict as its one source
+      // now, so a fixture that contradicts itself no longer describes anything
+      // real. The assertion below is unchanged — an unavailable product still
+      // prints the backend's own out-of-stock label.
       'availability': {
-        'is_available': true,
-        'can_add': true,
-        'cta_label': 'Add to cart',
+        'is_available': buyable,
+        'can_add': buyable,
+        'cta_label': buyable ? 'Add to cart' : 'Unavailable',
         'gated': true,
-        'colors': {'bg': '#1B7A43', 'fg': '#FFFFFF'},
+        'colors': buyable
+            ? {'bg': '#1B7A43', 'fg': '#FFFFFF'}
+            : {'bg': '#F3F4F6', 'fg': '#9CA3AF'},
       },
       'stock': {
         'buyable': buyable,
@@ -155,6 +164,14 @@ Future<void> _pump(WidgetTester tester, Map<String, dynamic> payload) async {
           key: ValueKey('pdp-${_pumpSeq++}'),
           productId: '176026',
           loader: (_) async => ProductDetail.fromMap(payload),
+          // CHANGE #640 — the seam existed but was never wired here. It did not
+          // matter while the fixture's verdict was pinned to "available": the
+          // page only asks about a Notify subscription for a product it cannot
+          // sell, so the unavailable branch was unreachable and the real
+          // MedicineRepository (and its uninitialised Supabase) was never
+          // constructed. Now that an unavailable fixture is actually
+          // unavailable, the probe runs — and it must stay network-free.
+          notifyStatusLoader: (_) async => false,
         ),
       ),
     ),

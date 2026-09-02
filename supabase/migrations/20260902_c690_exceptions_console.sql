@@ -204,7 +204,7 @@ values
    '', 'exception stuck reason owner age', '', null, 'partner.exceptions'),
   ('fulfill.exceptions', 'Exceptions', 'Fulfill', 'alert', 'exceptions', 95,
    'medibo', false, 'read', true, 'orders', 'fulfill_tab', '{admin,super_admin}',
-   '/admin/fulfill/exceptions',
+   '/admin/go/exceptions',
    'exception stuck reason owner age dispute unfulfillable count variance',
    'Stage 10 — every stuck object in one queue, with a reason and an owner',
    'partner.exceptions', 'partner.exceptions')

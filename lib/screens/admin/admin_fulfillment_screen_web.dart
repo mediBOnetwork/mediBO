@@ -8597,7 +8597,7 @@ class AdminFulfillmentScreen extends StatefulWidget {
   /// tab), selects nothing and leaves the current tab alone — never an
   /// exception, never a blank body.
   static void openStage(String stageKey) =>
-      _key.currentState?._selectStage(stageKey);
+      _key.currentState?._requestStage(stageKey);
 
   @override
   State<AdminFulfillmentScreen> createState() => _AdminFulfillmentScreenState();
@@ -8632,6 +8632,12 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
   final Set<String> _visited = <String>{};
 
   Timer? _pipelineDebounce;
+
+  /// CHANGE #690 — a stage asked for BEFORE fulfill_tabs() has answered. A deep
+  /// link lands on an empty bar, and dropping the request there is how
+  /// /admin/go/<stage> silently opened the wrong tab. It is applied the moment
+  /// the payload arrives, and only if the payload actually contains it.
+  String _pendingStage = '';
 
   int _disputeCount = 0; // #132C: open dispute count (now also proven server-side)
   int _shopCount = 0;      // CHANGE #473: Supplier Shop count
@@ -8973,6 +8979,11 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
         // Keep the operator where they were. Only fall back to the first
         // stage when the current one is gone (or was never chosen) — a
         // permission change must not silently move someone's tab.
+        if (_pendingStage.isNotEmpty &&
+            payload.indexOfStage(_pendingStage) >= 0) {
+          _stage = _pendingStage;
+          _pendingStage = '';
+        }
         if (payload.indexOfStage(_stage) < 0) {
           _stage = payload.firstStage;
         }
@@ -8993,6 +9004,19 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
     _pipelineDebounce = Timer(const Duration(milliseconds: 900), () {
       if (mounted) _loadPipeline();
     });
+  }
+
+  /// A stage request from OUTSIDE this screen (a deep link, a notification).
+  /// If the bar is already loaded it is just a selection; if it is not, the
+  /// request waits for the payload rather than being dropped.
+  void _requestStage(String stageKey) {
+    if (!mounted || stageKey.isEmpty) return;
+    if (_pipeline.indexOfStage(stageKey) >= 0) {
+      _selectStage(stageKey);
+      return;
+    }
+    _pendingStage = stageKey;
+    RenderLog.write('c690_stage_pending', stageKey);
   }
 
   /// Select a stage by the BACKEND's key. A key that is not in the payload —

@@ -10,6 +10,7 @@ import 'services/delivery_role_state.dart'; // C629: is this login a delivery ac
 import 'services/force_logout_guard.dart'; // WhatsApp "Log Out" -> instant local sign-out
 import 'services/force_logout_realtime.dart'; // WhatsApp "Log Out" -> live INSERT -> instant sign-out
 import 'services/fulfill_realtime.dart'; // C355: app-level realtime auth + subscription
+import 'services/access.dart';
 import 'services/map_config.dart'; // C634: one backend-owned map config, session-cached
 import 'utils/render_log.dart';
 
@@ -493,6 +494,10 @@ class AuthNotifier extends ChangeNotifier {
     // it with the rest of the account state so the next login re-reads it
     // rather than rendering on the previous session's provider/key.
     MapConfigService.clear();
+    // CHANGE #653: the per-feature View/Write matrix belongs to the credential
+    // that just went away. The next login must never render through the
+    // previous login's toggles.
+    Access.instance.clear();
     RenderLog.write('auth_email', 'signed_out');
     RenderLog.write('auth_role', 'none');
   }
@@ -533,6 +538,13 @@ class AuthNotifier extends ChangeNotifier {
       // it by the time a user can tap. NOT awaited and never allowed to throw:
       // a map config must never sit in front of first paint (BOOT RESILIENCE).
       MapConfigService.load().ignore();
+
+      // CHANGE #653 — ONE interface for super admin, admin and partner. The
+      // per-feature View/Write matrix is fetched here, in the one place a
+      // session is resolved, so nav, routes, deep links and action buttons all
+      // read the same answer. Not awaited and never allowed to throw: the
+      // backend enforces every RPC itself, so a slow matrix delays nothing.
+      unawaited(Access.instance.load());
 
       // CHANGE #629 — "is this login a delivery account?" is asked here, in the
       // ONE place a session is fetched, so every path that resolves a session

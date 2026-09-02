@@ -9102,6 +9102,9 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
               unselectedColor: _kSub,
               badgeColor: FulfillLookups.instance.color('c_ff6b7280'),
               surfaceColor: _kCard,
+              // CHANGE #653 — the View-only word for a tab this login holds
+              // read but not write, straight off the same payload.
+              readonlyBadge: _pipeline.readonlyBadge,
             )
           else if (_pipelineLoading)
             // The pipeline has a known shape, so show the shape rather than a

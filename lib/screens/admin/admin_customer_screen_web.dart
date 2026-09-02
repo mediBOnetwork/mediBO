@@ -25,6 +25,8 @@ import '../../design_tokens.dart'; // CHANGE #238 — Ds tokens for the new pane
 import '../../models/order_item_panel_view.dart'; // CHANGE #238
 import '../../fulfill/fulfill_lookups.dart'; // C639: backend-owned entry label
 import 'demand_preview_sheet.dart'; // C639 PART D
+import '../../services/access.dart';
+import '../../widgets/access_readonly_chip.dart';
 import '../../services/admin_date_scope.dart'; // CHANGE #545
 import '../../services/admin_zone_scope.dart'; // CHANGE #609
 import '../../services/date_labels.dart'; // CHANGE #548
@@ -1788,6 +1790,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
 
   @override
   Widget build(BuildContext context) {
+    _redirectIfTabHidden();
     return LayoutBuilder(builder: (ctx, box) {
       final isDesktop = box.maxWidth >= 900;
 
@@ -2094,27 +2097,40 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Row(mainAxisSize: MainAxisSize.min, children: [
-                _tab(_CustFilter.approvedCustomers,
-                    'Customers (${_approvedRows.length})'),
+                // CHANGE #653 — ONE interface. Each tab is its own row in the
+                // permission matrix (partner_screen_tab -> feature_registry),
+                // so a super admin, an admin and a partner see the SAME screen
+                // with the tabs their matrix turned on. `tabCanView` answers
+                // true for a tab the backend has not catalogued, so a new tab
+                // is never hidden by a stale registry.
+                if (_tabOn('customers'))
+                  _tab(_CustFilter.approvedCustomers,
+                      'Customers (${_approvedRows.length})'),
                 const SizedBox(width: 4),
                 // CHANGE #606 — the count is the backend's `count`, not
                 // _orderRows.length. The list and the number can no longer
                 // disagree because only one of them is computed.
-                _tab(_CustFilter.customerOrders,
-                    'Customer Orders ($_ordersCount)'),
+                if (_tabOn('orders'))
+                  _tab(_CustFilter.customerOrders,
+                      'Customer Orders ($_ordersCount)'),
                 const SizedBox(width: 4),
-                _tab(_CustFilter.cartNotOrdered,
-                    'Cart (${_cartRows.length})'),
+                if (_tabOn('cart'))
+                  _tab(_CustFilter.cartNotOrdered,
+                      'Cart (${_cartRows.length})'),
                 const SizedBox(width: 4),
-                _tab(_CustFilter.pendingRegistrations,
-                    'Pending Approval (${_regRows.length})'),
+                if (_tabOn('pending'))
+                  _tab(_CustFilter.pendingRegistrations,
+                      'Pending Approval (${_regRows.length})'),
                 const SizedBox(width: 4),
-                _tab(_CustFilter.leads,
-                    'Leads (${_loggedInLeads.length + _otherLeads.length})'),
+                if (_tabOn('leads'))
+                  _tab(_CustFilter.leads,
+                      'Leads (${_loggedInLeads.length + _otherLeads.length})'),
                 const SizedBox(width: 4),
-                _tab(_CustFilter.sLeads, 'S Leads ($_sLeadsTotal)'),
+                if (_tabOn('s_leads'))
+                  _tab(_CustFilter.sLeads, 'S Leads ($_sLeadsTotal)'),
                 const SizedBox(width: 4),
-                _tab(_CustFilter.routes, 'Routes ($_routesZones)'),
+                if (_tabOn('routes'))
+                  _tab(_CustFilter.routes, 'Routes ($_routesZones)'),
               ]),
             ),
           ),
@@ -2125,10 +2141,45 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     );
   }
 
+  /// CHANGE #653 — is this tab turned on for the signed-in login? The screen
+  /// asks the matrix; it never decides by role.
+  bool _tabOn(String tabKey) => Access.instance.tabCanView('customer', tabKey);
+
+  /// The backend's tab key for each filter, in the tab row's own order.
+  static const Map<_CustFilter, String> _tabKeys = {
+    _CustFilter.approvedCustomers: 'customers',
+    _CustFilter.customerOrders: 'orders',
+    _CustFilter.cartNotOrdered: 'cart',
+    _CustFilter.pendingRegistrations: 'pending',
+    _CustFilter.leads: 'leads',
+    _CustFilter.sLeads: 's_leads',
+    _CustFilter.routes: 'routes',
+  };
+
+  /// CHANGE #653 — a tab this login does not hold must not be left OPEN
+  /// either: the button is gone, so there would be no way back. Land on the
+  /// first tab the matrix does allow.
+  void _redirectIfTabHidden() {
+    if (_tabOn(_tabKeys[_filter] ?? '')) return;
+    for (final e in _tabKeys.entries) {
+      if (_tabOn(e.value)) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && !_tabOn(_tabKeys[_filter] ?? '')) {
+            setState(() => _filter = e.key);
+          }
+        });
+        return;
+      }
+    }
+  }
+
   // Part D: MouseRegion for pointer cursor on all tabs
   // Part E: pill/chip style tabs — active = green fill, inactive = grey outline
   Widget _tab(_CustFilter f, String label) {
     final active = _filter == f;
+    // CHANGE #653 — View on + Write off is a real state, and the tab says so
+    // in the backend's own word. The refusal itself is server-side.
+    final readOnly = !Access.instance.tabCanWrite('customer', _tabKeys[f] ?? '');
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       child: GestureDetector(
@@ -2151,14 +2202,18 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
               color: active ? const Color(0xFF1B7A43) : const Color(0xFFD1D5DB),
             ),
           ),
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-              color: active ? Colors.white : const Color(0xFF6B7280),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+                color: active ? Colors.white : const Color(0xFF6B7280),
+              ),
             ),
-          ),
+            if (readOnly)
+              AccessReadOnlyChip(label: Access.instance.readonlyBadge),
+          ]),
         ),
       ),
     );

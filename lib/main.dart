@@ -517,6 +517,22 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
             // Public order view    — no auth required, handles /order/<token>
             onGenerateRoute: (settings) {
               final name = settings.name ?? '';
+              // CHANGE #653 — /partner is GONE. Super admin, admin and
+              // partner are ONE interface: one shell, one nav, one set of
+              // routes. A partner login lands on the SHARED home and the
+              // per-feature View/Write matrix decides what is on it, so this
+              // path redirects there instead of opening a partner layout.
+              {
+                final path = name.split('?').first;
+                if (path == '/partner' || path.startsWith('/partner/')) {
+                  try {
+                    RenderLog.write('c653_partner_redirect', 1);
+                  } catch (_) {}
+                  return MaterialPageRoute(
+                    builder: (_) => _AppRoot(auth: _auth),
+                  );
+                }
+              }
               // CHANGE #636 — the product detail page is a real route, so it
               // gets a shareable URL and a real back stack (a similar-product
               // tile pushes its own page rather than replacing this one).

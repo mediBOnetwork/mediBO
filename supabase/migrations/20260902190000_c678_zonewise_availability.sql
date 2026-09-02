@@ -347,9 +347,11 @@ update public.cron_task
        next_run_at = least(coalesce(next_run_at, now()), now() + interval '1 minute'),
        note = 'CHANGE #678 — drains zone_resync_queue (incremental master-list propagation). Never resets zone_sync_state.'
  where name = 'zone_sup_sync';
+-- (zone_backfill's enabled flag is NOT touched here: a runner pauses it while a
+-- manual sweep runs and re-enables it afterwards — see the #678 result. The
+-- gate itself only opens for a zone with no finished cursor.)
 update public.cron_task
-   set enabled = true,
-       note = 'CHANGE #678 — id-sweep backfill for a zone whose cursor is not done: a NEW zone (zone_add) or an explicit zone_full_rebuild(). Nothing else can open this gate.'
+   set note = 'CHANGE #678 — id-sweep backfill for a zone whose cursor is not done: a NEW zone (zone_add) or an explicit zone_full_rebuild(). Nothing else can open this gate.'
  where name = 'zone_backfill';
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -1583,22 +1585,36 @@ language plpgsql
 security definer
 set search_path to 'public'
 as $$
-declare v_payload jsonb; v_ords jsonb; v_t0 timestamptz := clock_timestamp();
+declare v_n int; v_payload jsonb; v_ords jsonb; v_t0 timestamptz; v_out jsonb := '[]'::jsonb;
 begin
   perform set_config('request.jwt.claims', '', true);   -- build as anon
-  v_payload := public._storefront_home_build(100);
-  v_ords    := coalesce(v_payload -> '_ords', '[]'::jsonb);
-  v_payload := v_payload - '_ords';
-  insert into public.storefront_home_cache (cache_key, payload, ords, built_at, build_ms)
-  values ('anon:100', v_payload, v_ords, now(),
-          (extract(epoch from clock_timestamp() - v_t0) * 1000)::int)
-  on conflict (cache_key) do update
-    set payload = excluded.payload, ords = excluded.ords,
-        built_at = now(), build_ms = excluded.build_ms;
+  -- every anon variant the app has asked for (the web home passes its own
+  -- p_items), plus the default — whichever is missing or older than 8 minutes.
+  for v_n in
+    select distinct n from (
+      select split_part(cache_key, ':', 2)::int as n from public.storefront_home_cache
+       where cache_key like 'anon:%'
+      union select 100) t
+     where not exists (select 1 from public.storefront_home_cache c
+                        where c.cache_key = 'anon:' || t.n
+                          and c.built_at > now() - interval '8 minutes')
+  loop
+    v_t0 := clock_timestamp();
+    v_payload := public._storefront_home_build(v_n);
+    v_ords    := coalesce(v_payload -> '_ords', '[]'::jsonb);
+    v_payload := v_payload - '_ords';
+    insert into public.storefront_home_cache (cache_key, payload, ords, built_at, build_ms)
+    values ('anon:' || v_n, v_payload, v_ords, now(),
+            (extract(epoch from clock_timestamp() - v_t0) * 1000)::int)
+    on conflict (cache_key) do update
+      set payload = excluded.payload, ords = excluded.ords,
+          built_at = now(), build_ms = excluded.build_ms;
+    v_out := v_out || jsonb_build_object('key', 'anon:' || v_n,
+               'ms', (extract(epoch from clock_timestamp() - v_t0) * 1000)::int,
+               'hero', v_payload -> 'hero' -> 'props' -> 0 ->> 'label');
+  end loop;
   delete from public.storefront_home_cache where built_at < now() - interval '1 hour';
-  return jsonb_build_object('ok', true, 'key', 'anon:100',
-                            'ms', (extract(epoch from clock_timestamp() - v_t0) * 1000)::int,
-                            'hero', v_payload -> 'hero' -> 'props' -> 0 ->> 'label');
+  return jsonb_build_object('ok', true, 'warmed', v_out);
 end
 $$;
 revoke all on function public.storefront_home_warm_tick() from anon, authenticated;
@@ -1606,8 +1622,14 @@ revoke all on function public.storefront_home_warm_tick() from anon, authenticat
 insert into public.cron_task (name, ord, mode, gate_sql, work_sql, step_timeout_ms, enabled,
                               base_interval_s, max_interval_s, current_interval_s, next_run_at, dml, note)
 values ('storefront_home_warm', 538, 'poll',
-        $g$select not exists (select 1 from public.storefront_home_cache
-                             where cache_key = 'anon:100' and built_at > now() - interval '8 minutes')$g$,
+        $g$select exists (
+             select 1 from (
+               select split_part(cache_key, ':', 2)::int as n from public.storefront_home_cache
+                where cache_key like 'anon:%'
+               union select 100) t
+              where not exists (select 1 from public.storefront_home_cache c
+                                 where c.cache_key = 'anon:' || t.n
+                                   and c.built_at > now() - interval '8 minutes'))$g$,
         'select public.storefront_home_warm_tick()',
         50000, true, 120, 600, 120, now() + interval '1 minute', true,
         'CHANGE #678 — rebuilds the anonymous home payload (25 rails, ~1 MB, 2-4 s) so an anon visit is served from cache inside the 3 s anon budget. Invalidated by every count refresh.')

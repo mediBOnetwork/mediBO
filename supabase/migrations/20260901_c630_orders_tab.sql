@@ -779,7 +779,7 @@ on conflict (key) do nothing;
 -- bolted to the top of a list of orders. They become registry rows on #536's
 -- My Shop surface — DATA — so moving one again never touches Dart.
 insert into nav_category (category_key, label, icon_key, sort_order, is_active) values
-  ('cshop_buying', 'Buying', 'shopping_cart', 1005, true)
+  ('cshop_buying', 'Buying', 'bag', 1005, true)
 on conflict (category_key) do update set
   label      = excluded.label,
   icon_key   = excluded.icon_key,
@@ -791,9 +791,9 @@ insert into feature_registry (
   owner, partner_eligible, default_access, is_active, category, surface, roles_allowed
 ) values
   ('cust.reorder_due',   'Due for reorder', 'What you usually buy about now',      'Buying', 'autorenew',  'cust_reorder_due',   10, 'medibo', false, 'read', true, 'cshop_buying', 'customer_shop', array['customer','super_admin']),
-  ('cust.purchases',     'Purchases',       'Your spend, month by month',          'Buying', 'analytics',  'cust_purchases',     20, 'medibo', false, 'read', true, 'cshop_buying', 'customer_shop', array['customer','super_admin']),
-  ('cust.saved_lists',   'Saved lists',     'Named lists you reorder in one tap',  'Buying', 'list',       'cust_saved_lists',   30, 'medibo', false, 'read', true, 'cshop_buying', 'customer_shop', array['customer','super_admin']),
-  ('cust.help_requests', 'Help requests',   'Questions you have raised on orders', 'Buying', 'support',    'cust_help_requests', 40, 'medibo', false, 'read', true, 'cshop_buying', 'customer_shop', array['customer','super_admin'])
+  ('cust.purchases',     'Purchases',       'Your spend, month by month',          'Buying', 'timeline',   'cust_purchases',     20, 'medibo', false, 'read', true, 'cshop_buying', 'customer_shop', array['customer','super_admin']),
+  ('cust.saved_lists',   'Saved lists',     'Named lists you reorder in one tap',  'Buying', 'task',       'cust_saved_lists',   30, 'medibo', false, 'read', true, 'cshop_buying', 'customer_shop', array['customer','super_admin']),
+  ('cust.help_requests', 'Help requests',   'Questions you have raised on orders', 'Buying', 'support_agent', 'cust_help_requests', 40, 'medibo', false, 'read', true, 'cshop_buying', 'customer_shop', array['customer','super_admin'])
 on conflict (feature_key) do update set
   label            = excluded.label,
   description      = excluded.description,
@@ -837,7 +837,7 @@ end $$;
 
 insert into public.customer_nav_slot (slot_key, label_key, icon_key, page_index, sort_order) values
   ('home',      'home_shell.home',      'home',        0,  10),
-  ('catalogue', 'home_shell.catalogue', 'grid',        3,  20),
+  ('catalogue', 'home_shell.catalogue', 'grid',        0,  20),
   ('bulk',      'home_shell.bulk',      'upload_file', 2,  30),
   ('orders',    'home_shell.orders',    'receipt',     1,  40),
   ('my_shop',   'home_shell.my_shop',   'storefront', 11,  50)

@@ -77,7 +77,6 @@
   "lib/screens/profile_screen.dart": 111,
   "lib/screens/public/dispute_form_screen.dart": 73,
   "lib/screens/public/inquiry_form_screen.dart": 71,
-  "lib/screens/public/public_order_page.dart": 21,
   "lib/screens/public/stock_update_form_screen.dart": 60,
   "lib/screens/public/track_page.dart": 8,
   "lib/screens/public/wa_link_redirect_page.dart": 12,

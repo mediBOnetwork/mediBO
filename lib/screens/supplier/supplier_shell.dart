@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../design_tokens.dart';
 import '../../pages/supplier_disputes_page.dart';
@@ -13,6 +14,7 @@ import 'supplier_orders_screen.dart';
 import 'supplier_payments_screen.dart';
 import 'supplier_payout_screen.dart';
 import 'supplier_records_screen.dart';
+import 'supplier_scorecard_inbox.dart'; // #465 row 65 — the bell + inbox
 import 'supplier_staff_screen.dart';
 
 class SupplierShell extends StatefulWidget {
@@ -41,6 +43,8 @@ class _SupplierShellState extends State<SupplierShell> {
   /// slow session must never take a tab away from the owner.
   Map<String, dynamic>? _session;
   int _pendingInquiryCount = 0;
+  /// CHANGE #465 · row 65 — the BACKEND's unread total for this supplier.
+  int _inboxUnread = 0;
   int _activeDisputeCount = 0;
   bool _bannerDismissed = false;
 
@@ -99,7 +103,10 @@ class _SupplierShellState extends State<SupplierShell> {
   void initState() {
     super.initState();
     RenderLog.write('supplier_shell', 'init');
-    if (!widget.isViewAs) _loadSession();
+    if (!widget.isViewAs) {
+      _loadSession();
+      _loadInbox();
+    }
   }
 
   Future<void> _loadSession() async {
@@ -116,6 +123,21 @@ class _SupplierShellState extends State<SupplierShell> {
           supplierRows(s['features']).length);
     } catch (_) {
       // The shell keeps working on its pre-#402 behaviour.
+    }
+  }
+
+  /// The inbox is asked for its own unread count; nothing is counted here.
+  Future<void> _loadInbox() async {
+    try {
+      final raw = await Supabase.instance.client
+          .rpc('supplier_inbox', params: {'p_limit': 1});
+      final map = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
+      if (!mounted || map is! Map || map['ok'] != true) return;
+      final n = (map['unread'] as num?)?.toInt() ?? 0;
+      if (n != _inboxUnread) setState(() => _inboxUnread = n);
+      RenderLog.write('c465_sup_bell', 'unread:$n');
+    } catch (_) {
+      // A bell that cannot ask simply shows no number.
     }
   }
 
@@ -330,6 +352,13 @@ class _SupplierShellState extends State<SupplierShell> {
       backgroundColor: const Color(0xFFF5F6F8),
       body: Column(children: [
         _SupplierHeader(
+          inboxUnread: _inboxUnread,
+          onInbox: viewAsSupplierId == null
+              ? () async {
+                  await showSupplierInbox(context);
+                  await _loadInbox();
+                }
+              : null,
           supplierName: supplierName,
           isDesktop: isDesktop,
           staffLabel: supplierStr(supplierMap(_session), 'actor_label'),
@@ -382,6 +411,12 @@ class _NavItem {
 // ── Header ────────────────────────────────────────────────────────────────────
 
 class _SupplierHeader extends StatelessWidget {
+  /// CHANGE #465 · register row 65 — the bell. notification_log had 35 rows for
+  /// audience='supplier' and every one was channel='whatsapp', so a supplier
+  /// who opened the app was told nothing about a new inquiry, a new PO or a
+  /// dispute. The count is the BACKEND's unread total, never counted here.
+  final int inboxUnread;
+  final VoidCallback? onInbox;
   final String supplierName;
   final bool isDesktop;
   final VoidCallback? onLogout;
@@ -392,6 +427,8 @@ class _SupplierHeader extends StatelessWidget {
   final VoidCallback? onMenu;
 
   const _SupplierHeader({
+    this.inboxUnread = 0,
+    this.onInbox,
     required this.supplierName,
     required this.isDesktop,
     required this.onLogout,
@@ -435,6 +472,20 @@ class _SupplierHeader extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 12),
+        if (onInbox != null)
+          InkWell(
+            onTap: onInbox,
+            borderRadius: Ds.r.rButton,
+            child: Padding(
+              padding: EdgeInsets.all(Ds.space.x4),
+              child: Badge(
+                isLabelVisible: inboxUnread > 0,
+                label: Text('$inboxUnread'),
+                child: const Icon(Icons.notifications_none,
+                    color: Colors.white, size: 20),
+              ),
+            ),
+          ),
         if (onMenu != null)
           InkWell(
             onTap: onMenu,

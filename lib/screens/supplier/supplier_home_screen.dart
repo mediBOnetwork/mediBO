@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 import 'supplier_schemes_screen.dart';
+import 'supplier_scorecard_inbox.dart'; // #465 rows 64/65
 
 class SupplierHomeScreen extends StatefulWidget {
   final String? viewAsSupplierId;
@@ -104,6 +105,13 @@ class _SupplierHomeScreenState extends State<SupplierHomeScreen> {
       // cmd #401 — the two "about my shop" entry points, above the search bar
       // so a shop left marked closed is visible on the tab he lands on.
       const SupplierShopEntries(),
+      // CHANGE #465 · register row 64 — the supplier's OWN number. SPN decides
+      // whether this supplier is asked first or never, and until now every SPN
+      // RPC was admin-side, so the one number that governs their business was
+      // the one thing they could not see. Read-only: supplier_scorecard()
+      // resolves my_supplier_id() itself and takes no argument, and the card
+      // draws nothing at all for a login that is not a supplier.
+      if (widget.viewAsSupplierId == null) const SupplierScorecardCard(),
       // CHANGE #461 / feature_gaps #169 — the way in to the scheme book.
       // supplier_schemes had zero rows and no filing surface at all, so the
       // scheme fields every buyer card already reads had never carried data.

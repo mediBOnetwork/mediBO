@@ -11,6 +11,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../services/live_feed.dart';
 import 'package:pharma_b2b/utils/toast.dart';
+import 'supplier_leads_screen.dart'; // #465 row 63 — the self-signup queue
 import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:xml/xml.dart' as xmlp;
 
@@ -5513,6 +5514,32 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         Text(c('admin_supplier.supplier_leads_subtitle'),
             style: TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
         const SizedBox(height: 10),
+        // CHANGE #465 · supplier register row 63 — the SELF-SIGNUP queue. The
+        // list below this is the CSV-import lead list and predates
+        // /supplier-signup: it carries no GSTIN, no drug licence and no way to
+        // turn an applicant into a supplier. Applications from the public page
+        // land in their own queue, where approving provisions the login
+        // through admin_create_supplier().
+        Padding(
+          padding: EdgeInsets.only(bottom: Ds.space.x12),
+          child: OutlinedButton.icon(
+            key: const ValueKey('c465_leads_queue_entry'),
+            onPressed: () {
+              RenderLog.write('c465_leads_queue_open', '1');
+              Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => const SupplierLeadsScreen(),
+              ));
+            },
+            icon: const Icon(Icons.how_to_reg_outlined, size: 18),
+            label: Text(c('sup_lead.queue_title')),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Ds.c.brand,
+              side: BorderSide(color: Ds.c.brand),
+              shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+              minimumSize: Size(0, Ds.touch.minTarget),
+            ),
+          ),
+        ),
         if (_leads.isEmpty)
           Text(c('admin_supplier.no_leads_yet'), style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)))
         else

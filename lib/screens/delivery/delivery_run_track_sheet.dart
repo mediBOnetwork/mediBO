@@ -12,11 +12,20 @@
 // It computes nothing. The point count, the distance and the distance sentence
 // are all printed exactly as the RPC sent them — including the empty state's
 // wording.
+//
+// CHANGE #700 — the same sheet is now the ADMIN'S LIVE MAP. It was a list of
+// coordinates: true history, but useless for "where is that rider right now",
+// which is the question ops actually asks while a round is running. The live
+// half subscribes to the run's broadcast through RunLiveMap — the SAME widget
+// the customer sheet uses, so the two can never show a different dot — and
+// prints the backend's own staleness line above it. The trail list below is
+// unchanged, and is what a dispute is settled with.
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../design_tokens.dart';
 import '../../services/ui_copy.dart';
+import 'run_live_map.dart';
 
 class DeliveryRunTrackSheet extends StatefulWidget {
   const DeliveryRunTrackSheet({super.key, required this.runId});
@@ -42,6 +51,12 @@ class DeliveryRunTrackSheet extends StatefulWidget {
 
 class _DeliveryRunTrackSheetState extends State<DeliveryRunTrackSheet> {
   Map<String, dynamic>? _data;
+
+  /// delivery_live_state() — the rider's current point, the channel to listen
+  /// on, and the staleness sentence. A separate payload from the trail on
+  /// purpose: one answers "where now", the other "where has it been", and
+  /// merging them would make a composite this screen owns.
+  Map<String, dynamic> _live = const {};
   bool _loading = true;
 
   @override
@@ -51,8 +66,9 @@ class _DeliveryRunTrackSheetState extends State<DeliveryRunTrackSheet> {
   }
 
   Future<void> _load() async {
+    final client = Supabase.instance.client;
     try {
-      final res = await Supabase.instance.client
+      final res = await client
           .rpc('delivery_run_track', params: {'p_run_id': widget.runId});
       if (!mounted) return;
       setState(() {
@@ -62,6 +78,16 @@ class _DeliveryRunTrackSheetState extends State<DeliveryRunTrackSheet> {
     } catch (_) {
       if (!mounted) return;
       setState(() => _loading = false);
+    }
+    try {
+      final live = await client
+          .rpc('delivery_live_state', params: {'p_run_id': widget.runId});
+      if (!mounted) return;
+      if (live is Map && live['ok'] == true) {
+        setState(() => _live = Map<String, dynamic>.from(live));
+      }
+    } catch (_) {
+      // No live block -> the sheet is the trail it has always been.
     }
   }
 
@@ -81,6 +107,22 @@ class _DeliveryRunTrackSheetState extends State<DeliveryRunTrackSheet> {
             Text(subtitle, style: Ds.t.caption),
           ],
           SizedBox(height: Ds.space.x16),
+          // CHANGE #700 — the live half, shown only while the backend says
+          // there is a rider position to show. Same widget as the customer's.
+          if (_live['has_rider'] == true) ...[
+            RunLiveMap(
+              channel: _live['channel']?.toString() ?? '',
+              stops: const [],
+              live: _live['live'] is Map
+                  ? Map<String, dynamic>.from(_live['live'] as Map)
+                  : const {},
+              note: _live['note']?.toString() ?? '',
+              animateMs: (_live['animate_ms'] as num?)?.toInt() ?? 1200,
+              initialPoint: RiderPoint.from(_live),
+              height: 220,
+            ),
+            SizedBox(height: Ds.space.x24),
+          ],
           if (_loading)
             const _TrackSkeleton()
           else if (points.isEmpty)

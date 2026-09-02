@@ -126,6 +126,14 @@ dependencies {
     // on its own.
     implementation(platform("com.google.firebase:firebase-bom:33.16.0"))
     implementation("com.google.firebase:firebase-messaging")
+    // CHANGE #700 — RunLocationService. play-services-location is a pure
+    // JVM/AAR artifact with no native libraries, so it neither pulls an NDK
+    // toolchain (this host cannot download one) nor changes the 16 KB
+    // page-size alignment of the shipped APK. androidx.core supplies
+    // ContextCompat.startForegroundService and ActivityCompat.requestPermissions,
+    // both used by MainActivity's run_location channel.
+    implementation("com.google.android.gms:play-services-location:21.3.0")
+    implementation("androidx.core:core-ktx:1.13.1")
 }
 
 flutter {

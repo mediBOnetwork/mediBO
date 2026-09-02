@@ -63,9 +63,22 @@ def slots(v):
 
 # cf('key', { 'a': …, 'b': … })  — brace-matched so nested maps/ternaries in the
 # VALUES cannot end the scan early. Only the keys of the top-level map count.
-CF = re.compile(r"""(?<![A-Za-z0-9_])cf\(\s*'([A-Za-z0-9_.]+)'\s*,\s*\{""")
-C  = re.compile(r"""(?<![A-Za-z0-9_])c\(\s*'([A-Za-z0-9_.]+)'\s*\)""")
-PARAM = re.compile(r"""'([A-Za-z0-9_]+)'\s*:""")
+#
+# ROUND 5 — the key and the map are both matched in every form Dart writes them,
+# because QA probed eight shapes and only three were seen. A call site the
+# scanner cannot see is a mismatch it cannot report, which is the same silence
+# the whole script exists to end:
+#   KEY   'k'   "k"   r'k'   r"k"
+#   MAP   {…}   <String,String>{…}   const {…}   params: {…}
+# A key held in a VARIABLE stays invisible on purpose — there is nothing static
+# to compare — and that is the one form the report cannot speak for.
+_KEY = r"""(?:r?'([A-Za-z0-9_.]+)'|r?"([A-Za-z0-9_.]+)")"""
+_MAP = r"""(?:(?:params|args|vals|values)\s*:\s*)?(?:const\s+)?(?:<[^<>{}]*>\s*)?\{"""
+CF = re.compile(r"(?<![A-Za-z0-9_])cf\(\s*" + _KEY + r"\s*,\s*" + _MAP)
+# c('k'), and UiCopy.t('k') — the raw accessor c() itself delegates to. Both
+# fill nothing, so a key with a slot read through either loses its value.
+C  = re.compile(r"(?:(?<![A-Za-z0-9_])c|UiCopy\.t)\(\s*" + _KEY + r"\s*\)")
+PARAM = re.compile(r"""['"]([A-Za-z0-9_]+)['"]\s*:""")
 
 findings = []
 for dirpath, _dirs, files in os.walk(os.path.join(root, 'lib')):
@@ -87,7 +100,7 @@ for dirpath, _dirs, files in os.walk(os.path.join(root, 'lib')):
         src = re.sub(r'(?m)(?<!:)//[^\n]*', lambda m: ' ' * len(m.group(0)), src)
 
         for m in CF.finditer(src):
-            key = m.group(1)
+            key = m.group(1) or m.group(2)
             i, depth = m.end() - 1, 0
             while i < len(src):
                 if src[i] == '{':
@@ -120,7 +133,7 @@ for dirpath, _dirs, files in os.walk(os.path.join(root, 'lib')):
                                  'file': rel, 'line': line, 'template': templates[key]})
 
         for m in C.finditer(src):
-            key = m.group(1)
+            key = m.group(1) or m.group(2)
             if key not in templates:
                 continue
             want = slots(templates[key])

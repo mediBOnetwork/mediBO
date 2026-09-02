@@ -296,6 +296,54 @@ void main() {
     expect(find.byIcon(Icons.refresh), findsOneWidget);
   });
 
+  // ── CHANGE #536 — Om's placement rule: the intro state ───────────────────
+  //
+  // "For accounts that are plain ordering customers with no shop activity yet,
+  // the tab still shows with a simple intro state — do not hide it." Whether an
+  // account is a shop yet is the BACKEND's answer (intro.has), never emptiness
+  // inferred in Dart: a customer with no shop still gets all nineteen tiles, so
+  // there is nothing here that could infer it.
+  testWidgets('intro.has draws the backend intro ABOVE the sections',
+      (t) async {
+    final p = _payload();
+    p['intro'] = {
+      'has': true,
+      'title': 'Your counter, once you set it up',
+      'body': 'You order stock here today.',
+    };
+    await _pump(t, payload: p);
+
+    expect(find.text('Your counter, once you set it up'), findsOneWidget);
+    expect(find.text('You order stock here today.'), findsOneWidget);
+    // Above the first section, and the sections are still all there.
+    expect(t.getTopLeft(find.text('Your counter, once you set it up')).dy,
+        lessThan(t.getTopLeft(find.text('Money')).dy));
+    expect(find.text('Khata book'), findsOneWidget);
+  });
+
+  testWidgets('intro.has false draws no intro — and absence is not emptiness',
+      (t) async {
+    final p = _payload();
+    p['intro'] = {
+      'has': false,
+      'title': 'Your counter, once you set it up',
+      'body': 'You order stock here today.',
+    };
+    await _pump(t, payload: p);
+
+    // The copy arrived in the payload and is deliberately NOT drawn: the flag
+    // decides, not the presence of the strings.
+    expect(find.text('Your counter, once you set it up'), findsNothing);
+    expect(find.text('Money'), findsOneWidget);
+  });
+
+  testWidgets('a payload with no intro block at all still renders', (t) async {
+    // Forward compatibility in the other direction: an older backend that has
+    // never heard of `intro` must not crash the tab.
+    await _pump(t, payload: _payload());
+    expect(find.text('Money'), findsOneWidget);
+  });
+
   testWidgets('the retry re-asks the backend', (t) async {
     seedUiCopy();
     var calls = 0;

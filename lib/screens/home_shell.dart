@@ -14,6 +14,7 @@ import '../design_tokens.dart';
 import '../theme.dart';
 import '../url_sync.dart';
 import '../user_state.dart';
+import '../services/customer_shop_api.dart';
 import '../services/ui_copy.dart';
 import '../util.dart';
 import '../view_as_state.dart';
@@ -725,6 +726,13 @@ class _HomeShellState extends State<HomeShell> {
     // in notifiers their own tiles listen to, so the shell still knows nothing
     // about pharmacies.
     StockEntry.load();
+    // CHANGE #536 — the My Shop tab's attention count, on the same terms and
+    // only for a viewer who is offered the tab at all: an admin and a signed-out
+    // visitor never see it, so they never pay for the call.
+    if (UserState.of(context).isAuthenticated &&
+        !UserState.of(context).isAdmin) {
+      ShopBadge.load();
+    }
   }
 
   void _consumePendingDeepLink() {

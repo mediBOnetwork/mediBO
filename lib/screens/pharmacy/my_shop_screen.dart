@@ -163,9 +163,18 @@ class _MyShopScreenState extends State<MyShopScreen> {
     // whole purpose is to be navigated AWAY from into one of nineteen feature
     // screens, and a verifier that reads the log the instant boot paints — one
     // RPC before this tab does — sees the debounced value not at all.
+    // Om's placement rule: a plain ordering customer with no shop activity yet
+    // KEEPS this tab and is met by a short intro instead of being dropped
+    // straight into nineteen counter tools. Whether that account "is a shop
+    // yet" is the backend's answer (`intro.has`), never emptiness inferred here.
+    final intro = res['intro'];
+    final introMap = intro is Map ? Map<String, dynamic>.from(intro) : const {};
+    final showIntro = introMap['has'] == true;
+
     RenderLog.writeNow(
       'c536_my_shop',
-      'sections:${sections.length};tiles:${sections.fold<int>(0, (n, s) => n + _rows(s['items']).length)}',
+      'sections:${sections.length};tiles:${sections.fold<int>(0, (n, s) => n + _rows(s['items']).length)}'
+          ';intro:${showIntro ? 1 : 0}',
     );
 
     return RefreshIndicator(
@@ -178,6 +187,13 @@ class _MyShopScreenState extends State<MyShopScreen> {
           if (_s(res['subtitle']).isNotEmpty) ...[
             SizedBox(height: Ds.space.x4),
             Text(_s(res['subtitle']), style: Ds.t.caption),
+          ],
+          if (showIntro) ...[
+            SizedBox(height: Ds.space.x16),
+            _Intro(
+              title: _s(introMap['title']),
+              body: _s(introMap['body']),
+            ),
           ],
           SizedBox(height: Ds.space.x24),
           for (final section in sections) ...[
@@ -317,6 +333,42 @@ class _Tile extends StatelessWidget {
                 size: Ds.space.x24, color: Ds.c.textSecondary),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// CHANGE #536 — the intro a plain ordering customer is met by, printed.
+///
+/// Om: "For accounts that are plain ordering customers with no shop activity
+/// yet, the tab still shows with a simple intro state — do not hide it." Both
+/// sentences arrive in the payload; this widget owns the box they sit in and
+/// not one word inside it.
+class _Intro extends StatelessWidget {
+  final String title;
+  final String body;
+
+  const _Intro({required this.title, required this.body});
+
+  @override
+  Widget build(BuildContext context) {
+    if (title.isEmpty && body.isEmpty) return const SizedBox.shrink();
+    return Container(
+      padding: EdgeInsets.all(Ds.space.x16),
+      decoration: BoxDecoration(
+        color: Ds.c.infoSoft,
+        borderRadius: Ds.r.rCard,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (title.isNotEmpty)
+            Text(title, style: Ds.t.subtitle),
+          if (title.isNotEmpty && body.isNotEmpty)
+            SizedBox(height: Ds.space.x8),
+          if (body.isNotEmpty)
+            Text(body, style: Ds.t.caption),
+        ],
       ),
     );
   }

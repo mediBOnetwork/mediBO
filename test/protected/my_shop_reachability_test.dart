@@ -141,10 +141,10 @@ void main() {
       // assertion is on the map itself, and on the shell reading it rather
       // than hand-rolling a second copy that can drift.
       expect(
-          RegExp(r'pagesFor\(bool\s+showMyShop\)\s*=>\s*\n?\s*showMyShop\s*\?\s*const\s*\[0,\s*0,\s*11,\s*1,\s*2\]')
+          RegExp(r'pagesFor\(bool\s+showMyShop\)\s*=>\s*\n?\s*showMyShop\s*\?\s*const\s*\[0,\s*0,\s*1,\s*11,\s*2\]')
               .hasMatch(_barsSource()),
           isTrue,
-          reason: 'the mobile bar must offer My Shop (page 11) in its slot map');
+          reason: 'Om: Home - Catalogue - Orders - My Shop - Bulk');
       expect(shell.contains('_MobileBottomBar.pagesFor('), isTrue,
           reason: 'the shell must navigate by the bar\'s own map, not a copy');
       expect(RegExp(r'onNavTap:\s*\(i\)\s*\{\s*\n?\s*if\s*\(i\s*>=\s*0\s*&&\s*i\s*<\s*slots\.length\)\s*_setIndex\(slots\[i\]\)')
@@ -188,8 +188,52 @@ void main() {
           reason: 'the mobile door must use the desktop rule, not isAdmin alone');
       expect(_barsSource().contains('if (showMyShop)'), isTrue,
           reason: 'the My Shop slot must not be drawn when it is not offered');
+    });
+
+    // ── Om's placement decision (#536) ───────────────────────────────────────
+    test('My Shop is the FIFTH tab, between Orders and Bulk', () {
+      final bars = _barsSource();
+      // The ITEM order must match the slot map, or the tab a thumb presses is
+      // not the page it opens. Orders' receipt icon comes before the storefront
+      // icon, and Bulk's upload icon after it.
+      final orders = bars.indexOf("c('home_shell.orders')");
+      final myShop = bars.indexOf("c('home_shell.my_shop')");
+      final bulk = bars.indexOf("c('home_shell.bulk')");
+      expect(orders, greaterThan(-1));
+      expect(myShop, greaterThan(-1));
+      expect(bulk, greaterThan(-1));
+      expect(orders, lessThan(myShop),
+          reason: 'Orders keeps the position its thumbs know');
+      expect(myShop, lessThan(bulk), reason: 'My Shop sits before Bulk');
+    });
+
+    test('the tab badge is the backend answer, never a count computed here',
+        () {
+      final bars = _barsSource();
+      // `show` is the flag. A bar that drew the badge on `count > 0` would be
+      // deciding "where meaningful" for itself — Om gave that to the backend.
+      expect(bars.contains('ShopBadge.show'), isTrue);
+      expect(bars.contains('ShopBadge.label'), isTrue);
+
+      // Scoped to the badge helper: the sticky cart bar below it has its own
+      // unrelated `> 0` arithmetic, and a whole-file match would report that.
+      final from = bars.indexOf('static Widget _shopBadge(');
+      expect(from, greaterThan(-1));
+      final helper = bars.substring(from, bars.indexOf('\n\n', from));
+      expect(helper.contains('isLabelVisible: ShopBadge.show'), isTrue,
+          reason: 'the bar must not decide a badge is meaningful');
+      expect(RegExp(r'[><]\s*0').hasMatch(helper), isFalse,
+          reason: 'no count arithmetic in the badge — the backend sent show');
+
+      // And the number is printed, not formatted: the 99+ cap lives in SQL.
+      final api = File('lib/services/customer_shop_api.dart').readAsStringSync();
+      expect(api.contains("value.value['count_label']"), isTrue);
+      // The LITERAL, not the word: the doc comment explains where the cap
+      // lives, and explaining it is the opposite of re-implementing it.
+      expect(api.contains("'99+'"), isFalse,
+          reason: 'the badge cap is a backend decision, not a Dart literal');
       expect(
-          RegExp(r'showMyShop\s*\?\s*const\s*\[0,\s*0,\s*11,\s*1,\s*2\]\s*:\s*const\s*\[0,\s*0,\s*1,\s*2\]')
+          RegExp(r'showMyShop\s*\?\s*const\s*\[0,\s*0,\s*1,\s*11,\s*2\]\s*:\s*const\s*\[0,\s*0,\s*1,\s*2\]')
               .hasMatch(_barsSource()),
           isTrue,
           reason: 'hiding the slot must renumber the map, never leave a hole');

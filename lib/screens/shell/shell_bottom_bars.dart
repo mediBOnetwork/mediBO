@@ -36,16 +36,32 @@ class _MobileBottomBar extends StatelessWidget {
 
   /// The page each slot opens, in slot order — the single source of truth the
   /// bar draws from and the shell navigates by, so the two can never drift.
-  /// Page 0 is Home, 11 My Shop, 1 Orders, 2 Bulk; slot 1 (Catalogue) opens
-  /// Home, exactly as it did before this change.
+  ///
+  /// Om's placement decision (#536): Home · Catalogue · Orders · My Shop ·
+  /// Bulk. My Shop is the FIFTH tab and it goes between Orders and Bulk, so
+  /// the three tabs a plain ordering customer already knows keep the positions
+  /// their thumbs know. Page 0 is Home, 1 Orders, 11 My Shop, 2 Bulk; slot 1
+  /// (Catalogue) opens Home, exactly as it did before this change.
   static List<int> pagesFor(bool showMyShop) =>
-      showMyShop ? const [0, 0, 11, 1, 2] : const [0, 0, 1, 2];
+      showMyShop ? const [0, 0, 1, 11, 2] : const [0, 0, 1, 2];
+
+  /// The attention count on the My Shop icon, redrawn whenever the notifier
+  /// changes and absent entirely while the backend says there is nothing to
+  /// say. Never a spinner and never a zero.
+  static Widget _shopBadge(Widget icon) => ValueListenableBuilder(
+        valueListenable: ShopBadge.value,
+        builder: (context, _, child) => Badge(
+          isLabelVisible: ShopBadge.show && ShopBadge.label.isNotEmpty,
+          label: Text(ShopBadge.label),
+          child: icon,
+        ),
+      );
 
   @override
   Widget build(BuildContext context) {
     final cart = AppState.of(context);
-    // CHANGE #536 — five slots for a signed-in shop: Home, Catalogue, My Shop,
-    // Orders, Bulk; four for everyone else. The slot a page highlights is read
+    // CHANGE #536 — five slots for a signed-in shop: Home, Catalogue, Orders,
+    // My Shop, Bulk; four for everyone else. The slot a page highlights is read
     // out of the SAME list the shell navigates by, so hiding My Shop cannot
     // leave a page pointing at a slot that no longer exists (a hidden page 11
     // finds no slot and falls back to Home).
@@ -72,16 +88,6 @@ class _MobileBottomBar extends StatelessWidget {
           activeIcon: const Icon(Icons.grid_view),
           label: c('home_shell.catalogue'),
         ),
-        // CHANGE #536 — MY SHOP. The pharmacy suite used to hang off one row in
-        // the account dropdown; it is a first-class destination now. The label
-        // is ui_copy like every other slot, so renaming the tab is an UPDATE.
-        // Offered only to a signed-in non-admin (QA round 2) — see showMyShop.
-        if (showMyShop)
-          BottomNavigationBarItem(
-            icon: const Icon(Icons.storefront_outlined),
-            activeIcon: const Icon(Icons.storefront),
-            label: c('home_shell.my_shop'),
-          ),
         BottomNavigationBarItem(
           icon: Badge(
             isLabelVisible: cart.orders.isNotEmpty,
@@ -95,6 +101,21 @@ class _MobileBottomBar extends StatelessWidget {
           ),
           label: c('home_shell.orders'),
         ),
+        // CHANGE #536 — MY SHOP. The pharmacy suite used to hang off one row in
+        // the account dropdown; it is a first-class destination now. The label
+        // is ui_copy like every other slot, so renaming the tab is an UPDATE.
+        // Offered only to a signed-in non-admin (QA round 2) — see showMyShop.
+        //
+        // The badge is customer_shop_badge()'s answer, printed: the BACKEND
+        // decides whether a count is worth showing at all and formats the
+        // number (it caps itself at 99+). `show` is the flag, never
+        // `count > 0` computed here.
+        if (showMyShop)
+          BottomNavigationBarItem(
+            icon: _shopBadge(const Icon(Icons.storefront_outlined)),
+            activeIcon: _shopBadge(const Icon(Icons.storefront)),
+            label: c('home_shell.my_shop'),
+          ),
         BottomNavigationBarItem(
           icon: const Icon(Icons.upload_file_outlined),
           activeIcon: const Icon(Icons.upload_file),

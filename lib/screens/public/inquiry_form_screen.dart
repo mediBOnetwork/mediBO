@@ -9,6 +9,47 @@ import '../../widgets/inquiry_v12.dart';
 
 const _kGreen = Color(0xFF1B7A43);
 
+/// CHANGE #464 gap 46: backend badge colours arrive as hex strings on the
+/// payload. The fallback is only ever reached when the payload sent none.
+Color _hex(String? hex, Color fallback) {
+  if (hex == null || hex.isEmpty) return fallback;
+  final h = hex.startsWith('#') ? hex.substring(1) : hex;
+  final v = int.tryParse(h.length == 6 ? 'FF$h' : h, radix: 16);
+  return v == null ? fallback : Color(v);
+}
+
+/// CHANGE #464 gap 46 — the answer badge on the read-only receipt.
+///
+/// `inquiry_answer_badge(answer)` has existed in the backend the whole time,
+/// keyed on the `inquiry_answer_badges` app_settings map. This screen used to
+/// re-derive label/bg/fg from the answer string in a Dart `switch` whose
+/// default branch labelled anything unrecognised as a refusal — which is how
+/// 'Short supplied' (cmd #464 gap 47) would have been mislabelled. Nothing is
+/// decided here: an absent badge renders nothing.
+class InquiryBadge {
+  final String label;
+  final Color bg;
+  final Color fg;
+  const InquiryBadge(
+      {required this.label, required this.bg, required this.fg});
+
+  bool get has => label.isNotEmpty;
+
+  static const Color _fallbackBg = Color(0xFFF3F4F6);
+  static const Color _fallbackFg = Color(0xFF6B7280);
+
+  static InquiryBadge from(Map<String, dynamic> item) {
+    final badge = item['badge'] is Map
+        ? Map<String, dynamic>.from(item['badge'] as Map)
+        : const <String, dynamic>{};
+    return InquiryBadge(
+      label: (badge['label'] as String?) ?? '',
+      bg: _hex(badge['bg'] as String?, _fallbackBg),
+      fg: _hex(badge['fg'] as String?, _fallbackFg),
+    );
+  }
+}
+
 class InquiryFormScreen extends StatefulWidget {
   final String token;
   const InquiryFormScreen({super.key, required this.token});
@@ -466,10 +507,13 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
               ),
             ),
             const SizedBox(height: 20),
+            // CHANGE #464 gap 46: the expired/invalid page is ui_copy, not Dart
+            // literals, and a raw Postgres string is never surfaced here — the
+            // backend answers with 'expired' or 'invalid' and nothing else.
             Text(
-              isExpired
-                  ? 'This inquiry link has expired'
-                  : 'This link is no longer valid',
+              c(isExpired
+                  ? 'inquiry_form_screen.expired_title'
+                  : 'inquiry_form_screen.invalid_title'),
               style: const TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.w700,
@@ -479,9 +523,9 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
             ),
             const SizedBox(height: 8),
             Text(
-              isExpired
-                  ? 'Please contact mediBO for a new link.'
-                  : 'Please contact mediBO for assistance.',
+              c(isExpired
+                  ? 'inquiry_form_screen.expired_body'
+                  : 'inquiry_form_screen.invalid_body'),
               style: const TextStyle(
                   fontSize: 14, color: Color(0xFF6B7280)),
               textAlign: TextAlign.center,
@@ -553,25 +597,9 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
     final name = item['product_name'] as String? ?? '';
     final company = item['company'] as String?;
     final imageUrl = item['image_url'] as String?;
-    final answer = item['answer'] as String? ?? '';
 
-    Color badgeBg;
-    Color badgeFg;
-    String badgeLabel;
-    switch (answer) {
-      case 'Available':
-        badgeBg = const Color(0xFFD1FAE5);
-        badgeFg = const Color(0xFF065F46);
-        badgeLabel = 'Available';
-      case 'Out of Stock':
-        badgeBg = const Color(0xFFFEE2E2);
-        badgeFg = const Color(0xFF991B1B);
-        badgeLabel = 'Out of Stock';
-      default:
-        badgeBg = const Color(0xFFF3F4F6);
-        badgeFg = const Color(0xFF6B7280);
-        badgeLabel = "Don't stock";
-    }
+    // CHANGE #464 gap 46: the badge is the BACKEND's, printed verbatim.
+    final badge = InquiryBadge.from(item);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
@@ -629,17 +657,21 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
               ],
             ),
           ),
-          const SizedBox(width: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-            decoration: BoxDecoration(
-                color: badgeBg, borderRadius: BorderRadius.circular(20)),
-            child: Text(
-              badgeLabel,
-              style: TextStyle(
-                  fontSize: 12, fontWeight: FontWeight.w500, color: badgeFg),
+          // No badge on the payload means no badge on the card — Dart does not
+          // invent one.
+          if (badge.has) ...[
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                  color: badge.bg, borderRadius: BorderRadius.circular(20)),
+              child: Text(
+                badge.label,
+                style: TextStyle(
+                    fontSize: 12, fontWeight: FontWeight.w500, color: badge.fg),
+              ),
             ),
-          ),
+          ],
         ],
       ),
     );

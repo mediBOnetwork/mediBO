@@ -495,7 +495,9 @@ begin
          set supplier_count = x.n, buyable = (x.n > 0), supplier_label = public._supplier_label(x.n)
         from x
        where m.id = x.id
-         and (m.supplier_count is distinct from x.n
+         -- NULL and 0 are the same answer (the contract reads coalesce(supplier_count,0));
+         -- rewriting ~400k NULLs to 0 at 15 ms a row is an hour for nothing.
+         and (coalesce(m.supplier_count, 0) is distinct from x.n
               or coalesce(m.buyable, false) is distinct from (x.n > 0)
               or m.supplier_label is distinct from public._supplier_label(x.n))
       returning m.id

@@ -8596,8 +8596,22 @@ class AdminFulfillmentScreen extends StatefulWidget {
   /// or one the caller has no permission for (so the backend never sent that
   /// tab), selects nothing and leaves the current tab alone — never an
   /// exception, never a blank body.
-  static void openStage(String stageKey) =>
-      _key.currentState?._requestStage(stageKey);
+  /// CHANGE #690 — a deep link can land before this screen EXISTS. The admin
+  /// pages are lazy inside the IndexedStack, so the shell's post-frame callback
+  /// runs in the same frame that first builds this widget and `_key.currentState`
+  /// is still null: `/admin/go/exceptions` opened Fulfil on whatever tab was
+  /// last used and silently dropped the stage. The request is therefore parked
+  /// on the CLASS, and the state picks it up in initState.
+  static String _pendingOpen = '';
+
+  static void openStage(String stageKey) {
+    final st = _key.currentState;
+    if (st != null) {
+      st._requestStage(stageKey);
+      return;
+    }
+    _pendingOpen = stageKey;
+  }
 
   @override
   State<AdminFulfillmentScreen> createState() => _AdminFulfillmentScreenState();
@@ -8861,6 +8875,13 @@ class _AdminFulfillmentScreenState extends State<AdminFulfillmentScreen>
   @override
   void initState() {
     super.initState();
+    // CHANGE #690 — a stage asked for before this screen was built (see
+    // AdminFulfillmentScreen.openStage). Taken once, then applied by
+    // _loadPipeline the moment fulfill_tabs() answers.
+    if (AdminFulfillmentScreen._pendingOpen.isNotEmpty) {
+      _pendingStage = AdminFulfillmentScreen._pendingOpen;
+      AdminFulfillmentScreen._pendingOpen = '';
+    }
     // CHANGE #307 → #537: the requested tab is now a STAGE. A caller that
     // named the stage outright wins; otherwise the legacy index is translated.
     var want = widget.initialTab;

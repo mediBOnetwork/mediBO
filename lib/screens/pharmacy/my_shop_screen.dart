@@ -20,6 +20,7 @@ import 'package:flutter/material.dart';
 
 import '../../design_tokens.dart';
 import '../../services/customer_shop_api.dart';
+import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 import '../admin/nav_registry_view.dart' show navIcon, navIconLetter, navIconResolves;
 
@@ -125,10 +126,17 @@ class _MyShopScreenState extends State<MyShopScreen> {
 
     // A load that never landed: the retry is the whole screen, because there is
     // nothing truthful to draw underneath it.
+    //
+    // CHANGE #536 QA round 2 — this used to read `res?['empty_message']`, and on
+    // a FAILED load `res` is null by definition, so the "one-message state" was
+    // one empty string and an empty button: a blank page with nothing to read
+    // and nothing to press. The copy for a payload that never arrived cannot
+    // come from the payload; it comes from ui_copy, which is backend-owned and
+    // already in memory, so re-wording it stays an UPDATE and never a deploy.
     if (_failed || res == null) {
       return _Centered(
-        message: _s(res?['empty_message']),
-        actionLabel: _s(res?['retry_label']),
+        message: c('my_shop.load_failed'),
+        actionLabel: c('my_shop.retry'),
         onAction: _load,
       );
     }
@@ -155,9 +163,18 @@ class _MyShopScreenState extends State<MyShopScreen> {
     // whole purpose is to be navigated AWAY from into one of nineteen feature
     // screens, and a verifier that reads the log the instant boot paints — one
     // RPC before this tab does — sees the debounced value not at all.
+    // Om's placement rule: a plain ordering customer with no shop activity yet
+    // KEEPS this tab and is met by a short intro instead of being dropped
+    // straight into nineteen counter tools. Whether that account "is a shop
+    // yet" is the backend's answer (`intro.has`), never emptiness inferred here.
+    final intro = res['intro'];
+    final introMap = intro is Map ? Map<String, dynamic>.from(intro) : const {};
+    final showIntro = introMap['has'] == true;
+
     RenderLog.writeNow(
       'c536_my_shop',
-      'sections:${sections.length};tiles:${sections.fold<int>(0, (n, s) => n + _rows(s['items']).length)}',
+      'sections:${sections.length};tiles:${sections.fold<int>(0, (n, s) => n + _rows(s['items']).length)}'
+          ';intro:${showIntro ? 1 : 0}',
     );
 
     return RefreshIndicator(
@@ -170,6 +187,13 @@ class _MyShopScreenState extends State<MyShopScreen> {
           if (_s(res['subtitle']).isNotEmpty) ...[
             SizedBox(height: Ds.space.x4),
             Text(_s(res['subtitle']), style: Ds.t.caption),
+          ],
+          if (showIntro) ...[
+            SizedBox(height: Ds.space.x16),
+            _Intro(
+              title: _s(introMap['title']),
+              body: _s(introMap['body']),
+            ),
           ],
           SizedBox(height: Ds.space.x24),
           for (final section in sections) ...[
@@ -314,6 +338,42 @@ class _Tile extends StatelessWidget {
   }
 }
 
+/// CHANGE #536 — the intro a plain ordering customer is met by, printed.
+///
+/// Om: "For accounts that are plain ordering customers with no shop activity
+/// yet, the tab still shows with a simple intro state — do not hide it." Both
+/// sentences arrive in the payload; this widget owns the box they sit in and
+/// not one word inside it.
+class _Intro extends StatelessWidget {
+  final String title;
+  final String body;
+
+  const _Intro({required this.title, required this.body});
+
+  @override
+  Widget build(BuildContext context) {
+    if (title.isEmpty && body.isEmpty) return const SizedBox.shrink();
+    return Container(
+      padding: EdgeInsets.all(Ds.space.x16),
+      decoration: BoxDecoration(
+        color: Ds.c.infoSoft,
+        borderRadius: Ds.r.rCard,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (title.isNotEmpty)
+            Text(title, style: Ds.t.subtitle),
+          if (title.isNotEmpty && body.isNotEmpty)
+            SizedBox(height: Ds.space.x8),
+          if (body.isNotEmpty)
+            Text(body, style: Ds.t.caption),
+        ],
+      ),
+    );
+  }
+}
+
 /// A one-message state: the backend's sentence, and a Retry when the failure
 /// was ours rather than an answer.
 class _Centered extends StatelessWidget {
@@ -337,9 +397,22 @@ class _Centered extends StatelessWidget {
           children: [
             if (message.isNotEmpty)
               Text(message, style: Ds.t.body, textAlign: TextAlign.center),
-            if (onAction != null && actionLabel.isNotEmpty) ...[
+            // CHANGE #536 QA round 2 — the retry is offered whenever there IS
+            // one, not only when the copy for it arrived. ui_copy is fetched
+            // like everything else, so a cold offline boot can hand us an
+            // empty label; the old `&& actionLabel.isNotEmpty` turned that
+            // into a page with no way forward. The label stays backend-owned —
+            // when it is missing the button carries the refresh icon and no
+            // word of our own.
+            if (onAction != null) ...[
               SizedBox(height: Ds.space.x16),
-              OutlinedButton(onPressed: onAction, child: Text(actionLabel)),
+              if (actionLabel.isNotEmpty)
+                OutlinedButton(onPressed: onAction, child: Text(actionLabel))
+              else
+                OutlinedButton(
+                  onPressed: onAction,
+                  child: const Icon(Icons.refresh),
+                ),
             ],
           ],
         ),

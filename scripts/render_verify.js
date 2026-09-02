@@ -139,6 +139,16 @@ async function wheelBeforeShot(page) {
 const customerPath    = argVal('--customer-path');
 const customerShot    = argVal('--customer-shot');
 
+// CHANGE #536 — the viewport the customer phase drives.
+//
+// The phase was hardcoded to 1280x800, which is a DESKTOP proof. Om's placement
+// decision for #536 is a five-slot BOTTOM BAR, and the bottom bar only exists
+// below the shell's 900 px breakpoint — so the one thing that most needed
+// proving could not be photographed by the one tool that can photograph an
+// authenticated Flutter page. `--customer-width 390` drives the phone.
+const customerWidth = parseInt(argVal('--customer-width') || '1280', 10);
+const customerHeight = parseInt(argVal('--customer-height') || '800', 10);
+
 // ── Phase selection (CHANGE #192) ─────────────────────────────────────────────
 // The verifier used to run EVERY phase on every invocation, so the mandated
 // `--keys boot_status` boot check also exercised the allocation, receiving,
@@ -378,7 +388,13 @@ async function phaseCustomerPath(browser, session, expectedHash) {
 
   for (let attempt = 1; attempt <= MAX_RETRIES && !passed; attempt++) {
     console.log(`  Attempt ${attempt}/${MAX_RETRIES}`);
-    const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    const ctx = await browser.newContext({
+      viewport: { width: customerWidth, height: customerHeight },
+      // A phone-width viewport that still reports a desktop pointer renders the
+      // desktop layout in some engines. Say it is a phone.
+      isMobile: customerWidth < 900,
+      hasTouch: customerWidth < 900,
+    });
     await ctx.addInitScript(({ key, val }) => {
       localStorage.setItem(key, val);
     }, { key: STORAGE_KEY, val: JSON.stringify(session) });
@@ -388,6 +404,7 @@ async function phaseCustomerPath(browser, session, expectedHash) {
     try {
       await page.goto(TARGET, { waitUntil: 'domcontentloaded', timeout: 30000 });
       await waitForFlutter(page, 10, 'boot_status=painted');
+      console.log(`  Viewport   : ${customerWidth}x${customerHeight}`);
       console.log(`  Deep link  : ${customerPath}`);
       await page.goto(`${TARGET}${customerPath}`,
         { waitUntil: 'domcontentloaded', timeout: 30000 });

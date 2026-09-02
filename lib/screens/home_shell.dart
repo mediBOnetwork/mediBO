@@ -14,6 +14,7 @@ import '../design_tokens.dart';
 import '../theme.dart';
 import '../url_sync.dart';
 import '../user_state.dart';
+import '../services/customer_shop_api.dart';
 import '../services/ui_copy.dart';
 import '../util.dart';
 import '../view_as_state.dart';
@@ -115,6 +116,9 @@ import 'pharmacy/near_listing_screen.dart';
 // analytics (CMD #367) existed but its ONLY door was a button inside Orders,
 // so the Money section the spec asks for had no Purchase reports tile.
 import 'purchases_screen.dart';
+import 'reorder_screen.dart';
+import 'order_lists_screen.dart';
+import 'customer/order_help_sheet.dart';
 import 'admin/admin_money_screen.dart'; // CMD #450 — /admin/go/money
 import 'admin/admin_demand_engine_screen.dart'; // CMD #427 — /admin/go/demand_engine
 import 'profile_screen.dart';
@@ -209,6 +213,14 @@ class HomeShell extends StatefulWidget {
     // the spec names Purchase reports in Money and the screen was built, but
     // it was reachable only from a button buried inside Orders.
     'purchases',
+    // CHANGE #536 QA round 3 — the three cshop_buying routes another command
+    // registered onto surface='customer_shop' at 15:56 UTC while this one was
+    // still open. Their screens already existed (they were reachable only from
+    // buttons inside Orders), but no case here meant every one of the three
+    // tiles the My Shop tab now draws was a tap that did nothing. Each screen
+    // resolves the caller's own account and prints the backend's refusal for
+    // anyone else, so the key is a door and never a permission.
+    'cust_reorder_due', 'cust_saved_lists', 'cust_help_requests',
   };
 
   @override
@@ -736,6 +748,13 @@ class _HomeShellState extends State<HomeShell> {
     // in notifiers their own tiles listen to, so the shell still knows nothing
     // about pharmacies.
     StockEntry.load();
+    // CHANGE #536 — the My Shop tab's attention count, on the same terms and
+    // only for a viewer who is offered the tab at all: an admin and a signed-out
+    // visitor never see it, so they never pay for the call.
+    if (UserState.of(context).isAuthenticated &&
+        !UserState.of(context).isAdmin) {
+      ShopBadge.load();
+    }
   }
 
   void _consumePendingDeepLink() {
@@ -1034,6 +1053,19 @@ class _HomeShellState extends State<HomeShell> {
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const PurchasesScreen()));
         break;
+      // CHANGE #536 QA round 3 — the cshop_buying trio. See selfGatedRoutes.
+      case 'cust_reorder_due':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const ReorderScreen()));
+        break;
+      case 'cust_saved_lists':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const OrderListsScreen()));
+        break;
+      case 'cust_help_requests':
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const MySupportRequestsScreen()));
+        break;
       case 'mr': setState(() { _index = 7; _cartOpen = false; }); break;
       case 'companies': setState(() { _index = 8; _cartOpen = false; }); break;
       case 'delivery_partners': setState(() { _index = 9; _cartOpen = false; }); break;
@@ -1293,6 +1325,25 @@ class _HomeShellState extends State<HomeShell> {
         break;
       case 'logout':
         UserState.read(context).signOut(); break;
+      // CHANGE #536 QA round 3 — THE CLASS, not the three tiles.
+      //
+      // The registry is data and it moves without a deploy, so a row can name a
+      // route this build has never heard of (it happened at 15:56 UTC, three
+      // cshop_buying tiles registered by another command). Falling out of the
+      // switch in silence turns that into a tile you can tap forever, which is
+      // indistinguishable from a broken screen. Say so instead — in the
+      // backend's words, from ui_copy, and record it so the render-log names
+      // the key that had no door.
+      default:
+        RenderLog.write('c536_route_unknown', route);
+        final unknown = c('home_shell.route_unavailable');
+        if (unknown.isNotEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(unknown),
+                behavior: SnackBarBehavior.floating),
+          );
+        }
+        break;
     }
   }
 
@@ -1688,26 +1739,26 @@ class _HomeShellState extends State<HomeShell> {
             )
           : (_cartOpen
               ? null
-              : _MobileBottomBar(
-                  index: _index,
-                  cartOpen: _cartOpen,
-                  onCartTap: () => _openCart(),
-                  onNavTap: (i) {
-                    // CHANGE #536 — slot 2 is My Shop (page 11). Orders and
-                    // Bulk keep their pages and only move one slot right.
-                    switch (i) {
-                      case 0:
-                      case 1:
-                        _setIndex(0);
-                      case 2:
-                        _setIndex(11);
-                      case 3:
-                        _setIndex(1);
-                      case 4:
-                        _setIndex(2);
-                    }
-                  },
-                )),
+              : Builder(builder: (ctx) {
+                  // CHANGE #536 QA round 2 — the SAME rule the desktop header
+                  // uses (shell_header_chrome.dart): the suite belongs to a
+                  // signed-in pharmacy, so an admin and a signed-out visitor
+                  // are not offered a tab whose RPC would refuse them. The bar
+                  // owns the slot->page map; the shell only obeys it, so the
+                  // two cannot drift apart when a slot is hidden.
+                  final showMyShop = UserState.of(ctx).isAuthenticated &&
+                      !UserState.of(ctx).isAdmin;
+                  final slots = _MobileBottomBar.pagesFor(showMyShop);
+                  return _MobileBottomBar(
+                    index: _index,
+                    cartOpen: _cartOpen,
+                    showMyShop: showMyShop,
+                    onCartTap: () => _openCart(),
+                    onNavTap: (i) {
+                      if (i >= 0 && i < slots.length) _setIndex(slots[i]);
+                    },
+                  );
+                })),
       body: Stack(
         children: [
           SizedBox.expand(

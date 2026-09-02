@@ -79,6 +79,12 @@ String _headerSource() {
   return f.readAsStringSync();
 }
 
+String _barsSource() {
+  final f = File('lib/screens/shell/shell_bottom_bars.dart');
+  expect(f.existsSync(), isTrue, reason: 'run this from the package root');
+  return f.readAsStringSync();
+}
+
 void main() {
   group('My Shop reachability — the invariant #536 broke and then fixed', () {
     test('the migrations really do register a customer_shop suite', () {
@@ -117,6 +123,43 @@ void main() {
           reason: 'deep links silently dead-end for a pharmacy: $missing');
     });
 
+    // CHANGE #536 QA round 3 — the registry can outrun the build.
+    //
+    // The two tests above read THIS checkout's migrations, so they were green
+    // while three cshop_buying rows another command wrote at 15:56 UTC drew
+    // three live tiles with no case in the shell. feature_registry is data: it
+    // moves without a deploy, and no test of this repo can promise a deployed
+    // build knows every key it will one day be handed. What the build CAN
+    // promise is that an unknown key says so.
+    test('an unrecognised route says so instead of falling through in silence',
+        () {
+      final src = _shellSource();
+      expect(src.contains('default:'), isTrue,
+          reason: 'the deep-link router must have a default arm — without one '
+              'a registry row this build has never heard of is a tap that '
+              'does nothing');
+      final tail = src.substring(src.indexOf('default:'));
+      expect(tail.contains("c('home_shell.route_unavailable')"), isTrue,
+          reason: 'the sentence belongs to ui_copy, not to Dart');
+      expect(tail.contains("RenderLog.write('c536_route_unknown'"), isTrue,
+          reason: 'the render-log must name the key that had no door');
+    });
+
+    test('the cshop_buying trio is routed and self-gated', () {
+      // Found live on CHANGE #983: registered onto customer_shop, drawn by the
+      // tab, and every one of the three was a tap that did nothing.
+      final src = _shellSource();
+      for (final r in const [
+        'cust_reorder_due',
+        'cust_saved_lists',
+        'cust_help_requests'
+      ]) {
+        expect(src.contains("case '$r':"), isTrue, reason: '$r has no case');
+        expect(HomeShell.selfGatedRoutes.contains(r), isTrue,
+            reason: '$r is parked for a pharmacy');
+      }
+    });
+
     test('my_shop itself is both routed and self-gated', () {
       expect(_shellSource(), contains("case 'my_shop':"));
       expect(HomeShell.selfGatedRoutes, contains('my_shop'));
@@ -126,9 +169,25 @@ void main() {
       final shell = _shellSource();
       final header = _headerSource();
 
-      // Mobile: the bottom bar's fifth slot.
-      expect(shell.contains('onNavTap'), isTrue,
-          reason: 'the mobile bottom bar is how a phone reaches My Shop');
+      // Mobile: the bottom bar's My Shop slot.
+      //
+      // QA round 2 — this used to be `shell.contains('onNavTap')`, which is
+      // true of any shell that has ANY bottom bar: repoint the slot at page 3
+      // and the assertion stays green while the door is gone. The mobile door
+      // is now the slot->page map the bar exports and the shell obeys, so the
+      // assertion is on the map itself, and on the shell reading it rather
+      // than hand-rolling a second copy that can drift.
+      expect(
+          RegExp(r'pagesFor\(bool\s+showMyShop\)\s*=>\s*\n?\s*showMyShop\s*\?\s*const\s*\[0,\s*0,\s*1,\s*11,\s*2\]')
+              .hasMatch(_barsSource()),
+          isTrue,
+          reason: 'Om: Home - Catalogue - Orders - My Shop - Bulk');
+      expect(shell.contains('_MobileBottomBar.pagesFor('), isTrue,
+          reason: 'the shell must navigate by the bar\'s own map, not a copy');
+      expect(RegExp(r'onNavTap:\s*\(i\)\s*\{\s*\n?\s*if\s*\(i\s*>=\s*0\s*&&\s*i\s*<\s*slots\.length\)\s*_setIndex\(slots\[i\]\)')
+              .hasMatch(shell),
+          isTrue,
+          reason: 'a mobile tap must open the page its own slot map names');
 
       // Desktop: the header link added by QA round 1. Without it the desktop
       // shell rendered page 11 and offered no way to select it.
@@ -143,13 +202,94 @@ void main() {
           reason: 'the desktop link must select the My Shop page (index 11)');
     });
 
-    test('the desktop door is offered to a pharmacy, not to an admin', () {
+    test('BOTH doors are offered to a pharmacy, not to an admin or a visitor',
+        () {
       final header = _headerSource();
-      // Same rule the mobile bar uses. An admin browsing the storefront is not
-      // offered a suite that would refuse them, and a signed-out visitor is
-      // not offered a tab that cannot load.
+      // An admin browsing the storefront is not offered a suite that would
+      // refuse them, and a signed-out visitor is not offered a tab that cannot
+      // load — customer_shop_home() has no EXECUTE for anon, so that tap can
+      // only ever be a failed round trip.
       expect(header.contains('isAuthenticated'), isTrue);
       expect(header.contains('!UserState.of(context).isAdmin'), isTrue);
+
+      // QA round 2 — the mobile half of the SAME rule. Round 1 gated the
+      // desktop header and left a comment claiming the mobile bar already did
+      // it; the bar was picked on isAdmin alone, so an anonymous visitor was
+      // shown the tab and got a blank page. The shell must compute showMyShop
+      // from BOTH conditions and hand it to the bar, and the bar must drop the
+      // slot when it is false.
+      expect(
+          RegExp(r'showMyShop\s*=\s*UserState\.of\(ctx\)\.isAuthenticated\s*&&\s*\n?\s*!UserState\.of\(ctx\)\.isAdmin')
+              .hasMatch(_shellSource()),
+          isTrue,
+          reason: 'the mobile door must use the desktop rule, not isAdmin alone');
+      expect(_barsSource().contains('if (showMyShop)'), isTrue,
+          reason: 'the My Shop slot must not be drawn when it is not offered');
+    });
+
+    // ── Om's placement decision (#536) ───────────────────────────────────────
+    test('My Shop is the FIFTH tab, between Orders and Bulk', () {
+      final bars = _barsSource();
+      // The ITEM order must match the slot map, or the tab a thumb presses is
+      // not the page it opens. Orders' receipt icon comes before the storefront
+      // icon, and Bulk's upload icon after it.
+      final orders = bars.indexOf("c('home_shell.orders')");
+      final myShop = bars.indexOf("c('home_shell.my_shop')");
+      final bulk = bars.indexOf("c('home_shell.bulk')");
+      expect(orders, greaterThan(-1));
+      expect(myShop, greaterThan(-1));
+      expect(bulk, greaterThan(-1));
+      expect(orders, lessThan(myShop),
+          reason: 'Orders keeps the position its thumbs know');
+      expect(myShop, lessThan(bulk), reason: 'My Shop sits before Bulk');
+    });
+
+    // Om: "The storefront home stays exactly as it is — do not insert shop
+    // tiles into it." The suite lives on its own page and is reached by its own
+    // tab; a future change that drops it into the storefront feed fails here.
+    test('the shop surface is a page of its own, never folded into the home',
+        () {
+      final shell = _shellSource();
+      expect(RegExp('MyShopScreen').allMatches(shell).length, 1,
+          reason: 'exactly one construction, in the pages list — a second one '
+              'means the suite has been folded into another page');
+      expect(shell.contains("case 'my_shop':"), isTrue);
+      // And it is page 11, the slot the map and both doors agree on.
+      expect(RegExp(r"case 'my_shop':\s*\n\s*setState\(\(\) \{ _index = 11;")
+              .hasMatch(shell),
+          isTrue);
+    });
+
+    test('the tab badge is the backend answer, never a count computed here',
+        () {
+      final bars = _barsSource();
+      // `show` is the flag. A bar that drew the badge on `count > 0` would be
+      // deciding "where meaningful" for itself — Om gave that to the backend.
+      expect(bars.contains('ShopBadge.show'), isTrue);
+      expect(bars.contains('ShopBadge.label'), isTrue);
+
+      // Scoped to the badge helper: the sticky cart bar below it has its own
+      // unrelated `> 0` arithmetic, and a whole-file match would report that.
+      final from = bars.indexOf('static Widget _shopBadge(');
+      expect(from, greaterThan(-1));
+      final helper = bars.substring(from, bars.indexOf('\n\n', from));
+      expect(helper.contains('isLabelVisible: ShopBadge.show'), isTrue,
+          reason: 'the bar must not decide a badge is meaningful');
+      expect(RegExp(r'[><]\s*0').hasMatch(helper), isFalse,
+          reason: 'no count arithmetic in the badge — the backend sent show');
+
+      // And the number is printed, not formatted: the 99+ cap lives in SQL.
+      final api = File('lib/services/customer_shop_api.dart').readAsStringSync();
+      expect(api.contains("value.value['count_label']"), isTrue);
+      // The LITERAL, not the word: the doc comment explains where the cap
+      // lives, and explaining it is the opposite of re-implementing it.
+      expect(api.contains("'99+'"), isFalse,
+          reason: 'the badge cap is a backend decision, not a Dart literal');
+      expect(
+          RegExp(r'showMyShop\s*\?\s*const\s*\[0,\s*0,\s*1,\s*11,\s*2\]\s*:\s*const\s*\[0,\s*0,\s*1,\s*2\]')
+              .hasMatch(_barsSource()),
+          isTrue,
+          reason: 'hiding the slot must renumber the map, never leave a hole');
     });
   });
 }

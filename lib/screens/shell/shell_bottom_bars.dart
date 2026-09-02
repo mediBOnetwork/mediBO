@@ -16,20 +16,58 @@ class _MobileBottomBar extends StatelessWidget {
   final VoidCallback onCartTap;
   final ValueChanged<int> onNavTap;
 
+  /// CHANGE #536 QA round 2 — whether the My Shop slot is offered at all.
+  ///
+  /// Round 1 gated the DESKTOP header on `isAuthenticated && !isAdmin` and its
+  /// comment claimed the mobile bar already used that rule. It did not: the bar
+  /// was picked on `isAdmin` alone, so a SIGNED-OUT visitor was shown a My Shop
+  /// tab whose RPC anon holds no EXECUTE on (`customer_shop_home` returns 42501
+  /// permission denied), and tapping it painted an empty page with no message
+  /// and no way back. One rule, one place, both layouts.
+  final bool showMyShop;
+
   const _MobileBottomBar({
     required this.index,
     required this.cartOpen,
     required this.onCartTap,
     required this.onNavTap,
+    required this.showMyShop,
   });
+
+  /// The page each slot opens, in slot order — the single source of truth the
+  /// bar draws from and the shell navigates by, so the two can never drift.
+  ///
+  /// Om's placement decision (#536): Home · Catalogue · Orders · My Shop ·
+  /// Bulk. My Shop is the FIFTH tab and it goes between Orders and Bulk, so
+  /// the three tabs a plain ordering customer already knows keep the positions
+  /// their thumbs know. Page 0 is Home, 1 Orders, 11 My Shop, 2 Bulk; slot 1
+  /// (Catalogue) opens Home, exactly as it did before this change.
+  static List<int> pagesFor(bool showMyShop) =>
+      showMyShop ? const [0, 0, 1, 11, 2] : const [0, 0, 1, 2];
+
+  /// The attention count on the My Shop icon, redrawn whenever the notifier
+  /// changes and absent entirely while the backend says there is nothing to
+  /// say. Never a spinner and never a zero.
+  static Widget _shopBadge(Widget icon) => ValueListenableBuilder(
+        valueListenable: ShopBadge.value,
+        builder: (context, _, child) => Badge(
+          isLabelVisible: ShopBadge.show && ShopBadge.label.isNotEmpty,
+          label: Text(ShopBadge.label),
+          child: icon,
+        ),
+      );
 
   @override
   Widget build(BuildContext context) {
     final cart = AppState.of(context);
-    // CHANGE #536 — five slots now: Home, Catalogue, My Shop, Orders, Bulk.
-    // page 11 is My Shop, page 1 Orders, page 2 Bulk; everything else is Home.
-    final bottomNavIndex =
-        index == 11 ? 2 : index == 1 ? 3 : index == 2 ? 4 : 0;
+    // CHANGE #536 — five slots for a signed-in shop: Home, Catalogue, Orders,
+    // My Shop, Bulk; four for everyone else. The slot a page highlights is read
+    // out of the SAME list the shell navigates by, so hiding My Shop cannot
+    // leave a page pointing at a slot that no longer exists (a hidden page 11
+    // finds no slot and falls back to Home).
+    final slots = pagesFor(showMyShop);
+    final found = slots.indexOf(index);
+    final bottomNavIndex = found < 0 ? 0 : found;
     return BottomNavigationBar(
       currentIndex: bottomNavIndex,
       type: BottomNavigationBarType.fixed,
@@ -50,14 +88,6 @@ class _MobileBottomBar extends StatelessWidget {
           activeIcon: const Icon(Icons.grid_view),
           label: c('home_shell.catalogue'),
         ),
-        // CHANGE #536 — MY SHOP. The pharmacy suite used to hang off one row in
-        // the account dropdown; it is a first-class destination now. The label
-        // is ui_copy like every other slot, so renaming the tab is an UPDATE.
-        BottomNavigationBarItem(
-          icon: const Icon(Icons.storefront_outlined),
-          activeIcon: const Icon(Icons.storefront),
-          label: c('home_shell.my_shop'),
-        ),
         BottomNavigationBarItem(
           icon: Badge(
             isLabelVisible: cart.orders.isNotEmpty,
@@ -71,6 +101,21 @@ class _MobileBottomBar extends StatelessWidget {
           ),
           label: c('home_shell.orders'),
         ),
+        // CHANGE #536 — MY SHOP. The pharmacy suite used to hang off one row in
+        // the account dropdown; it is a first-class destination now. The label
+        // is ui_copy like every other slot, so renaming the tab is an UPDATE.
+        // Offered only to a signed-in non-admin (QA round 2) — see showMyShop.
+        //
+        // The badge is customer_shop_badge()'s answer, printed: the BACKEND
+        // decides whether a count is worth showing at all and formats the
+        // number (it caps itself at 99+). `show` is the flag, never
+        // `count > 0` computed here.
+        if (showMyShop)
+          BottomNavigationBarItem(
+            icon: _shopBadge(const Icon(Icons.storefront_outlined)),
+            activeIcon: _shopBadge(const Icon(Icons.storefront)),
+            label: c('home_shell.my_shop'),
+          ),
         BottomNavigationBarItem(
           icon: const Icon(Icons.upload_file_outlined),
           activeIcon: const Icon(Icons.upload_file),

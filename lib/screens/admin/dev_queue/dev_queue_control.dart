@@ -410,39 +410,10 @@ class _DevQueueControlState extends State<DevQueueControl> {
   /// decision to show it at all come from `dev_ctl_get().breaker` — nothing
   /// here is computed, pluralised or worded in Dart. It clears itself when
   /// Workflow goes back on, because that is what the backend does to the flag.
-  Widget _breakerBadge() {
-    final b = (_snap['breaker'] as Map?)?.cast<String, dynamic>() ?? const {};
-    if ((b['tripped'] ?? false) != true) return const SizedBox.shrink();
-    final label = (b['label'] ?? '').toString();
-    final detail = (b['detail'] ?? '').toString();
-    if (label.isEmpty) return const SizedBox.shrink();
-    return Padding(
-      padding: EdgeInsets.only(top: Ds.space.x8),
-      child: Container(
-        width: double.infinity,
-        padding: EdgeInsets.symmetric(
-            horizontal: Ds.space.x12, vertical: Ds.space.x8),
-        decoration: BoxDecoration(
-          color: Ds.c.dangerSoft,
-          borderRadius: Ds.r.rButton,
-        ),
-        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Icon(Icons.pause_circle_outline,
-              size: Ds.t.bodySize, color: Ds.c.danger),
-          SizedBox(width: Ds.space.x8),
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(label, style: Ds.t.body.copyWith(color: Ds.c.danger)),
-              if (detail.isNotEmpty) ...[
-                SizedBox(height: Ds.space.x4),
-                Text(detail, style: Ds.t.caption),
-              ],
-            ]),
-          ),
-        ]),
-      ),
-    );
-  }
+  /// The widget itself lives in dev_queue_common.dart so the protected suite
+  /// can render it against a real payload.
+  Widget _breakerBadge() => BreakerBanner(
+      breaker: (_snap['breaker'] as Map?)?.cast<String, dynamic>() ?? const {});
 
   Widget _expandedHeader() => Row(children: [
         Text(c('dev_queue.ctl_section'),

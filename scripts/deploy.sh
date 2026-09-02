@@ -383,7 +383,7 @@ if [ -z "${CF_ZONE_ID:-}" ] || [ -z "${CF_API_TOKEN:-}" ]; then
   echo "    permission for the medibo.in zone) before trusting this deploy is live everywhere."
   exit 1
 fi
-PURGE_RESP=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/purge_cache" \
+PURGE_RESP=$(curl --max-time 60 -s -X POST "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/purge_cache" \
   -H "Authorization: Bearer $CF_API_TOKEN" \
   -H "Content-Type: application/json" \
   --data '{"purge_everything":true}')
@@ -471,9 +471,9 @@ for i in $(seq 1 $MAX); do
     # Retry up to 3x with 5s gaps because different CF edge nodes propagate at
     # slightly different speeds (version.json can be live before bootstrap).
     echo "[live-assert] verifying edge serves the NEW bundle…"
-    IDX_CODE=$(curl -s -o /dev/null -w "%{http_code}" https://medibo.in/)
-    BS_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://medibo.in/flutter_bootstrap.js?cb=${RANDOM}")
-    MAIN_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://medibo.in/main.${SHORT}.dart.js")
+    IDX_CODE=$(curl --max-time 60 -s -o /dev/null -w "%{http_code}" https://medibo.in/)
+    BS_CODE=$(curl --max-time 60 -s -o /dev/null -w "%{http_code}" "https://medibo.in/flutter_bootstrap.js?cb=${RANDOM}")
+    MAIN_CODE=$(curl --max-time 60 -s -o /dev/null -w "%{http_code}" "https://medibo.in/main.${SHORT}.dart.js")
     # CHANGE #604: retry. version.json propagates PER EDGE NODE — the poll loop
     # above can succeed on one node while this check hits another that is still
     # serving the old copy. #603 failed exactly that way on a healthy deploy.
@@ -491,14 +491,14 @@ for i in $(seq 1 $MAX); do
       # CHANGE #600: cache-bust. Without it this reads a CACHED bootstrap and
       # fails a healthy deploy — exactly what happened on #599, where
       # version.json already showed the new commit.
-      LIVE_BUNDLE_REF=$(curl -s -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+      LIVE_BUNDLE_REF=$(curl --max-time 60 -s -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
         "https://medibo.in/flutter_bootstrap.js?cb=${RANDOM}${_bsr}" 2>/dev/null \
         | grep -o "main\.[a-f0-9]*\.dart\.js" | head -1 || true)
       [ "$LIVE_BUNDLE_REF" = "main.${SHORT}.dart.js" ] && break
       [ "$_bsr" -lt 3 ] && sleep 5
     done
-    SHELL_CC=$(curl -sI https://medibo.in/ | grep -i "cache-control" | head -1 | tr -d '\r')
-    MAIN_CC=$(curl -sI "https://medibo.in/main.${SHORT}.dart.js" | grep -i "cache-control" | head -1 | tr -d '\r')
+    SHELL_CC=$(curl --max-time 60 -sI https://medibo.in/ | grep -i "cache-control" | head -1 | tr -d '\r')
+    MAIN_CC=$(curl --max-time 60 -sI "https://medibo.in/main.${SHORT}.dart.js" | grep -i "cache-control" | head -1 | tr -d '\r')
 
     ASSERT_FAIL=0
     [ "$IDX_CODE"   != "200" ] && { echo "❌  live-assert: index=$IDX_CODE (want 200)"; ASSERT_FAIL=1; }

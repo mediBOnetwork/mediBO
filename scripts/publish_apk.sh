@@ -29,7 +29,7 @@ echo "→ APK: $APK ($(du -h "$APK" | cut -f1))"
 # mints a fresh key that passes a DN check and is still the wrong identity.
 bash "$(dirname "$0")/verify_signing.sh" "$APK"
 
-RES=$(curl -fsS -X POST "$FN" \
+RES=$(curl --max-time 60 -fsS -X POST "$FN" \
         -H "x-notify-secret: $SECRET" \
         -H 'content-type: application/json' \
         -d "{\"path\":\"medibo-$VER.apk\"}")
@@ -38,7 +38,7 @@ UPLOAD_URL=$(printf '%s' "$RES" | python3 -c 'import json,sys; print(json.load(s
 PUBLIC_URL=$(printf '%s' "$RES" | python3 -c 'import json,sys; print(json.load(sys.stdin)["public_url"])')
 
 echo "→ uploading…"
-curl -fsS -X PUT "$UPLOAD_URL" \
+curl --max-time 900 -fsS -X PUT "$UPLOAD_URL" \
   -H 'content-type: application/vnd.android.package-archive' \
   --data-binary "@$APK" >/dev/null
 

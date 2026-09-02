@@ -167,6 +167,29 @@ class AccessMatrix {
   /// rule of its own.
   List<AccessTab> tabsFor(String screen) => _tabs[screen] ?? const [];
 
+  /// CHANGE #657 — the `allowedTabs` set for a screen that is addressed by tab
+  /// NUMBER (AdminFulfillmentScreen), derived from this login's own matrix.
+  ///
+  /// Null means UNBOUNDED, and it is returned in exactly two cases: the matrix
+  /// has not resolved yet, or the backend granted View on every tab of the
+  /// screen. Both are the state every full admin is in, so this never narrows
+  /// an admin — it bounds only a login the backend has actually bounded.
+  ///
+  /// This exists because the fulfilment screen is the one container that does
+  /// not gate its own tabs (the supplier and customer screens call
+  /// [tabCanView] themselves). Opening it from the shared nav without this
+  /// would hand every stage to a partner who was granted three.
+  Set<int>? allowedTabIndexes(String screen) {
+    if (!resolved) return null;
+    final tabs = _tabs[screen] ?? const <AccessTab>[];
+    if (tabs.isEmpty) return null;
+    if (tabs.every((t) => t.canView)) return null;
+    return tabs
+        .where((t) => t.canView && t.index >= 0)
+        .map((t) => t.index)
+        .toSet();
+  }
+
   /// The tab entry for one tab key, or null when the backend did not send it.
   AccessTab? tab(String screen, String tabKey) {
     for (final t in tabsFor(screen)) {
@@ -199,6 +222,7 @@ class AccessTab {
     required this.featureKey,
     required this.canView,
     required this.canWrite,
+    this.index = -1,
   });
 
   final String tabKey;
@@ -207,12 +231,20 @@ class AccessTab {
   final bool canView;
   final bool canWrite;
 
+  /// CHANGE #657 — `partner_screen_tab.tab_index`, the BACKEND's own position
+  /// for this tab. The screens that take an `allowedTabs` set are addressed by
+  /// number, and the number must come from the same table that grants the tab —
+  /// a Dart-side list order would silently re-map a grant the day a tab moved.
+  /// -1 when the payload did not send one.
+  final int index;
+
   factory AccessTab.fromJson(Map<String, dynamic> json) => AccessTab(
         tabKey: (json['tab_key'] ?? '').toString(),
         label: (json['label'] ?? '').toString(),
         featureKey: (json['feature'] ?? '').toString(),
         canView: json['v'] == true,
         canWrite: json['w'] == true,
+        index: (json['index'] is num) ? (json['index'] as num).toInt() : -1,
       );
 }
 
@@ -274,6 +306,8 @@ class Access extends ChangeNotifier {
       _matrix.tabCanView(screen, tabKey);
   bool tabCanWrite(String screen, String tabKey) =>
       _matrix.tabCanWrite(screen, tabKey);
+  Set<int>? allowedTabIndexes(String screen) =>
+      _matrix.allowedTabIndexes(screen);
   String get deniedViewMessage => _matrix.deniedViewMessage;
   String get deniedWriteMessage => _matrix.deniedWriteMessage;
   String get readonlyBadge => _matrix.readonlyBadge;

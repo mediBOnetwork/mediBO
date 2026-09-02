@@ -159,7 +159,9 @@ as $$
 declare z record; v_zone_sups text[]; v_keys text[]; j jsonb;
 begin
   j := to_jsonb(NEW);
-  v_keys := array(select k from unnest(array[
+  -- DISTINCT: name_canonical and lower(company_name) are often the same string,
+  -- and a duplicate key would make the queue upsert below "affect row a second time".
+  v_keys := array(select distinct k from unnest(array[
               nullif(btrim(coalesce(NEW.name_canonical,'')),''),
               nullif(lower(btrim(coalesce(NEW.company_name,''))),'')]) k where k is not null);
   if array_length(v_keys,1) is null then return NEW; end if;
@@ -190,6 +192,22 @@ begin
   return NEW;
 end;
 $$;
+
+-- The trigger fired only on an explicit UPDATE OF "PS1".."PS30" — but the
+-- supplier map reaches the company as UPDATE company SET suppliers = … (from
+-- refresh_company_suppliers), and PS1..PS30 are then filled by a BEFORE trigger
+-- (company_rank_ps), which an "UPDATE OF column" trigger does not see. So a
+-- supplier mapped to a company through supplier_company NEVER reached MEDICINE
+-- until the next full rebuild. It now fires on the write that actually happens
+-- (suppliers), on an explicit PS write, and on INSERT.
+drop trigger if exists company_ps_to_medicine_trg on public.company;
+create trigger company_ps_to_medicine_trg
+  after insert or update of suppliers,
+    "PS1", "PS2", "PS3", "PS4", "PS5", "PS6", "PS7", "PS8", "PS9", "PS10",
+    "PS11", "PS12", "PS13", "PS14", "PS15", "PS16", "PS17", "PS18", "PS19", "PS20",
+    "PS21", "PS22", "PS23", "PS24", "PS25", "PS26", "PS27", "PS28", "PS29", "PS30"
+  on public.company
+  for each row execute function public.company_ps_to_medicine();
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 3. THE DRAIN — applies the queue with a bounded, indexed recompute

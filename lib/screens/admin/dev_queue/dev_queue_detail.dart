@@ -76,17 +76,21 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
     try {
       final results = await Future.wait([
         _svc.spec(widget.id),
-        _svc.list(limit: 500),
+        // CHANGE #643 — dev_cmd_get(id), not dev_cmd_list(limit: 500). This
+        // screen used to pull EVERY command (2.4 MB, most of it other
+        // commands' build logs) and then search it for one id, on every
+        // refresh while a build was live. It now reads the one row it is
+        // showing, and merges it over the card it was opened from.
+        _svc.get(widget.id),
         // CHANGE #571 — the spec checklist rides the same refresh as the row,
         // so "why was this refused?" is answered on the screen, not in a log.
         _svc.specItems(widget.id),
       ]);
       final spec = results[0];
-      final rows = ((results[1]['rows'] as List?) ?? const [])
-          .whereType<Map>()
-          .map((e) => Map<String, dynamic>.from(e));
-      final row = rows.firstWhere((r) => asInt(r['id']) == widget.id,
-          orElse: () => _row);
+      final detail = results[1];
+      final row = detail['ok'] == true && detail['row'] is Map
+          ? <String, dynamic>{..._row, ...Map<String, dynamic>.from(detail['row'] as Map)}
+          : _row;
       // While building, the row holds file leases — show them as path chips so
       // Om can see exactly what this worker has locked (and any conflict note).
       List<Map<String, dynamic>> leases = _leases;

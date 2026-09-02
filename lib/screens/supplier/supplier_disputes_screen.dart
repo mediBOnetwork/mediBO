@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../services/live_feed.dart';
+
 import '../../services/fulfill_realtime.dart' show kC416;
 import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
@@ -55,7 +57,7 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
   String _supplierName = '';
   bool _closedExpanded = false;
   final Map<String, bool> _responding = {};
-  RealtimeChannel? _rtChannel;
+  LiveFeedHandle? _rtChannel;
   Timer? _rtDebounce;
 
   String? get _actingSupplier => widget.viewAsSupplierName;
@@ -85,25 +87,28 @@ class _SupplierDisputesScreenState extends State<SupplierDisputesScreen> {
 
   void _subscribeRealtime() {
     try {
-      _rtChannel = Supabase.instance.client
-          .channel('supplier_disputes_189_${_actingSupplier ?? "self"}')
-          .onPostgresChanges(
-            event: PostgresChangeEvent.all,
-            schema: 'public',
-            table: 'supplier_disputes',
-            callback: (_) {
+      // CHANGE #643: LiveFeed decides live-vs-poll from realtime_plan().
+      LiveFeed.instance
+          .watch(
+            channelPrefix: 'supplier_disputes_189_${_actingSupplier ?? "self"}',
+            tables: const ['supplier_disputes'],
+            onChange: (_) {
               _rtDebounce?.cancel();
               _rtDebounce = Timer(const Duration(milliseconds: 250), () {
                 if (mounted) _load();
               });
             },
           )
-          .subscribe((status, [_]) {
-            if (status == RealtimeSubscribeStatus.subscribed) {
-              RenderLog.write('c189_realtime_subscribed',
-                  'supplier_disputes_channel_ok;acting=${_actingSupplier != null}');
-            }
-          });
+          .then((h) {
+        if (!mounted) {
+          h.dispose();
+          return;
+        }
+        _rtChannel?.unsubscribe();
+        _rtChannel = h;
+        RenderLog.write('c189_realtime_subscribed',
+            'supplier_disputes_channel_ok;acting=${_actingSupplier != null}');
+      });
     } catch (_) {}
   }
 

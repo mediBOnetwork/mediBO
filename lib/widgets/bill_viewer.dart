@@ -178,12 +178,13 @@ class _BillFilePreviewState extends State<BillFilePreview> {
         // back 480x4608, an aspect-ratio-broken sliver that renders as an
         // effectively blank thumbnail inside a normal-height box. `contain`
         // preserves aspect ratio, so 480/1600 apply to width as intended.
-        final urls = await Future.wait([
-          storage.createSignedUrl(widget.path, 3600,
-              transform: const TransformOptions(width: 480, quality: 70, resize: ResizeMode.contain)),
-          storage.createSignedUrl(widget.path, 3600,
-              transform: const TransformOptions(width: 1600, quality: 80, resize: ResizeMode.contain)),
-        ]);
+        // CHANGE #643: one plain signed URL, not two transformed renders.
+        // Two transforms per bill thumbnail is two billable image
+        // transformations and two origin fetches for one picture; the quota was
+        // at 86/100. The thumbnail is scaled at the widget instead, and the
+        // fullscreen view reuses the object the thumbnail already cached.
+        final signed = await storage.createSignedUrl(widget.path, 3600);
+        final urls = [signed, signed];
         if (!mounted) return;
         setState(() {
           _url = urls[0];

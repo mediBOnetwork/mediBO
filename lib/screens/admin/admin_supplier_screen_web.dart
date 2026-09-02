@@ -8,6 +8,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+import '../../services/live_feed.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:xml/xml.dart' as xmlp;
@@ -491,7 +493,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   final LayerLink _importSupplierLink = LayerLink();
   OverlayEntry? _importSupplierOverlay;
   final ScrollController _scrollCtrl = ScrollController();
-  final List<RealtimeChannel> _channels = [];
+  final List<LiveFeedHandle> _channels = [];
   Timer? _debounce;
 
   // ── Inquiry link state ───────────────────────────────────────────────────
@@ -523,7 +525,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   // CHANGE #509: direct postgres_changes on inquiry + inquiry_forms, additive
   // to the #458 broadcast channel above (belt-and-suspenders — the broadcast
   // topic depends on every write path remembering to publish it; this doesn't).
-  final List<RealtimeChannel> _inqDbChannels = [];
+  final List<LiveFeedHandle> _inqDbChannels = [];
   Timer? _c509Debounce;
   final Set<int> _settingAnswerFor = {}; // inquiry_ids currently being admin-set
   String? _expandedOrderId; // which supplier order row is expanded
@@ -698,64 +700,36 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     // Single-binding channel for supplier_profiles: UPDATE → surgical patch;
     // INSERT/DELETE → full debounced reload. CHANGE #252: c252_rt_sub logged on subscribe.
     RenderLog.write('rt_supplier_profiles', 1);
-    final spCh = client
-        .channel('admin_supplier_profiles')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'supplier_profiles',
-          callback: (payload) {
-            if (payload.eventType == PostgresChangeEvent.update) {
-              _patchSupplierRow(payload.newRecord);
-            } else {
-              RenderLog.write('c252_rt_reload', 'table=supplier_profiles');
-              _debouncedLoad();
-            }
+    // CHANGE #643: three admin list feeds — supplier_profiles, supplier_orders
+    // and supplier_leads (the last was never even published, so its channel
+    // delivered nothing). None of them is worth a standing WAL subscription per
+    // admin session; LiveFeed puts them on the registry's interval and the
+    // reload below is the same reload the INSERT/DELETE path always ran.
+    // The surgical UPDATE patch is gone with the payload that fed it: a refetch
+    // is what every other event on this screen already did.
+    LiveFeed.instance
+        .watch(
+          channelPrefix: 'admin_supplier_feeds',
+          tables: const ['supplier_profiles', 'supplier_orders', 'supplier_leads'],
+          onChange: (changed) {
+            RenderLog.write('c252_rt_reload', 'table=${changed.join("+")}');
+            _debouncedLoad();
           },
         )
-        .subscribe((status, [_]) {
-          if (status == RealtimeSubscribeStatus.subscribed) {
-            RenderLog.write('c252_rt_sub', 'channel=supplier_profiles');
-          }
-        });
-    _channels.add(spCh);
-
-    // Separate channels for other tables (single-binding each).
-    for (final table in ['supplier_orders', 'supplier_leads']) {
-      final ch = client
-          .channel('admin_sup_${table}_$ts')
-          .onPostgresChanges(
-            event: PostgresChangeEvent.all,
-            schema: 'public',
-            table: table,
-            callback: (_) => _debouncedLoad(),
-          )
-          .subscribe();
-      _channels.add(ch);
-    }
-  }
-
-  static const _spnPatchKeys = [
-    'margin', 'cd_condition', 'behaviour', 'payment_type', 'payment_term',
-    'margin_points', 'cd_points', 'behaviour_points', 'payment_term_points',
-    'status', 'supplier_name',
-  ];
-
-  void _patchSupplierRow(Map<String, dynamic> newRow) {
-    final id = newRow['id'] as String?;
-    if (id == null || !mounted) return;
-    final idx = _suppliers.indexWhere((s) => s.id == id);
-    if (idx >= 0) {
-      for (final k in _spnPatchKeys) {
-        if (newRow.containsKey(k)) _suppliers[idx].rawData[k] = newRow[k];
+        .then((h) {
+      if (!mounted) {
+        h.dispose();
+        return;
       }
-    }
-    // If this echo is for the currently-open SPN panel, skip the callback and
-    // parent rebuild — the user's local _values are source of truth while editing.
-    if (id == _spnSupplierId) return;
-    _spnCallbacks[id]?.call(newRow);
-    if (mounted) setState(() {});
+      _channels.add(h);
+      RenderLog.write('c252_rt_sub', 'channel=supplier_feeds');
+    });
   }
+
+  // CHANGE #643: _patchSupplierRow / _spnPatchKeys are gone with the
+  // postgres_changes payload that fed them — supplier_profiles is no longer a
+  // live channel, so there is no row echo to patch from. Every event on this
+  // screen now takes the reload path it already took for INSERT and DELETE.
 
   void _applySort() {
     if (_sortMode == _SupSortMode.spnDesc) {
@@ -2420,24 +2394,23 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   // publish one.
   void _subscribeInquiryDbChanges() {
     if (_inqDbChannels.isNotEmpty) return; // guard duplicate subscription
-    final client = Supabase.instance.client;
-    final ts = DateTime.now().millisecondsSinceEpoch;
-    for (final table in ['inquiry', 'inquiry_forms']) {
-      final ch = client
-          .channel('admin_inq_${table}_$ts')
-          .onPostgresChanges(
-            event: PostgresChangeEvent.all,
-            schema: 'public',
-            table: table,
-            callback: (_) => _debouncedInquiryDbRefetch(),
-          )
-          .subscribe((status, [_]) {
-            if (status == RealtimeSubscribeStatus.subscribed) {
-              try { RenderLog.write('c509_inq_realtime_subscribed', table); } catch (_) {}
-            }
-          });
-      _inqDbChannels.add(ch);
-    }
+    // CHANGE #643: the inquiry waterfall is the highest-churn admin feed in the
+    // product. The refetch is unchanged; only the trigger moved to the interval
+    // realtime_table_registry names for these two tables.
+    LiveFeed.instance
+        .watch(
+          channelPrefix: 'admin_inq',
+          tables: const ['inquiry', 'inquiry_forms'],
+          onChange: (_) => _debouncedInquiryDbRefetch(),
+        )
+        .then((h) {
+      if (!mounted) {
+        h.dispose();
+        return;
+      }
+      _inqDbChannels.add(h);
+      try { RenderLog.write('c509_inq_realtime_subscribed', 'inquiry+inquiry_forms'); } catch (_) {}
+    });
   }
 
   void _debouncedInquiryDbRefetch() {
@@ -2458,7 +2431,7 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     _c509Debounce?.cancel();
     _c509Debounce = null;
     for (final ch in _inqDbChannels) {
-      try { Supabase.instance.client.removeChannel(ch); } catch (_) {}
+      try { ch.dispose(); } catch (_) {}
     }
     _inqDbChannels.clear();
   }

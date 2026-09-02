@@ -9,6 +9,8 @@ import '../../widgets/substitute_choice.dart'; // #366 row 176
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+import '../../services/live_feed.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:pharma_b2b/utils/toast.dart';
 import 'package:pharma_b2b/services/ui_copy.dart';
@@ -620,7 +622,7 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
   // unlike S Leads — zones list is heavier and city-scoped).
   int _routesZones = 0;
 
-  final List<RealtimeChannel> _realtimeChannels = [];
+  final List<LiveFeedHandle> _realtimeChannels = [];
   Timer? _debounce;
 
   // ── Auto-load guard (prevents concurrent/storm fetches) ──────────────────
@@ -759,18 +761,23 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
     // periodic/2s poll timer anywhere in this file — debounced-load only).
     const tables = ['cart_items', 'orders', 'order_items', 'pharmacy_profiles', 'payment_claims', 'pending_orders'];
     RenderLog.write('co_realtime_369', 'tables:${tables.join(",")}');
-    for (final table in tables) {
-      final ch = client
-          .channel('admin_${table}_$ts')
-          .onPostgresChanges(
-            event: PostgresChangeEvent.all,
-            schema: 'public',
-            table: table,
-            callback: (_) => _debouncedLoad(),
-          )
-          .subscribe();
-      _realtimeChannels.add(ch);
-    }
+    // CHANGE #643: six UNFILTERED bindings, one per table, held open by every
+    // admin session — on the two busiest tables in the product. LiveFeed asks
+    // realtime_plan() which of these still publish and polls the rest on the
+    // registry's interval. The refetch is the same debounced reload.
+    LiveFeed.instance
+        .watch(
+          channelPrefix: 'admin_customer_feeds',
+          tables: tables,
+          onChange: (_) => _debouncedLoad(),
+        )
+        .then((h) {
+      if (!mounted) {
+        h.dispose();
+        return;
+      }
+      _realtimeChannels.add(h);
+    });
   }
 
   void _debouncedLoad() {
@@ -6528,7 +6535,7 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
   final Map<String, String> _imgViewTypes = {};   // claimId → HtmlElementView viewType
   final Set<String> _signedUrlErrors = {};        // claimId → sign or image-load failed (CHANGE #474)
   final Map<String, int> _imgAttempt = {};        // claimId → retry attempt counter (CHANGE #474)
-  RealtimeChannel? _paymentChannel;
+  LiveFeedHandle? _paymentChannel;
 
   @override
   void initState() {
@@ -6548,17 +6555,25 @@ class _OrderPaymentPanelState extends State<_OrderPaymentPanel> {
     // No order_id filter: online claims may arrive with order_id=null initially
     // (linked later by admin). Subscribe to ALL payment_claims changes and let
     // the RPC handle filtering. Belt-and-suspenders with the top-level list sub.
-    _paymentChannel = Supabase.instance.client
-        .channel('payclaims_${widget.orderId}')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'payment_claims',
-          callback: (_) {
+    // CHANGE #643: payment_claims is an admin list feed on the registry's
+    // interval. No order_id filter, as before — an online claim can arrive with
+    // order_id null and be linked later, so the RPC is what filters.
+    LiveFeed.instance
+        .watch(
+          channelPrefix: 'payclaims_${widget.orderId}',
+          tables: const ['payment_claims'],
+          onChange: (_) {
             if (mounted) _load();
           },
         )
-        .subscribe();
+        .then((h) {
+      if (!mounted) {
+        h.dispose();
+        return;
+      }
+      _paymentChannel?.unsubscribe();
+      _paymentChannel = h;
+    });
     RenderLog.write('c227_payclaims_rt',
         'change:227,subscribed:true,table:payment_claims,covers:cash+online');
   }
@@ -8700,7 +8715,7 @@ class _SLeadsTabState extends State<_SLeadsTab> {
   String? _activeRunLevel;
   List<String> _activeRunTypeLabels = [];
   Map<String, dynamic>? _runStatus;
-  RealtimeChannel? _runChannel;
+  LiveFeedHandle? _runChannel;
   Timer? _pollTimer;
   bool _resuming = false;
 
@@ -9449,21 +9464,30 @@ class _SLeadsTabState extends State<_SLeadsTab> {
 
   void _subscribeToRun(String runId) {
     _runChannel?.unsubscribe();
-    final ts = DateTime.now().millisecondsSinceEpoch;
-    _runChannel = Supabase.instance.client
-        .channel('s_leads_run_${runId}_$ts')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.update,
-          schema: 'public',
-          table: 'lead_scrape_runs',
-          filter: PostgresChangeFilter(
-            type: PostgresChangeFilterType.eq,
-            column: 'id',
-            value: runId,
-          ),
-          callback: (_) => _refreshStatus(),
+    // CHANGE #643: the filter is kept and handed to LiveFeed, so if the
+    // registry ever puts lead_scrape_runs back on a live channel this stays
+    // narrowed to one run rather than every run in the system.
+    LiveFeed.instance
+        .watch(
+          channelPrefix: 's_leads_run_$runId',
+          tables: const ['lead_scrape_runs'],
+          filters: {
+            'lead_scrape_runs': PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'id',
+              value: runId,
+            ),
+          },
+          onChange: (_) => _refreshStatus(),
         )
-        .subscribe();
+        .then((h) {
+      if (!mounted) {
+        h.dispose();
+        return;
+      }
+      _runChannel?.unsubscribe();
+      _runChannel = h;
+    });
   }
 
   void _startPolling() {
@@ -11559,7 +11583,7 @@ class _RoutesTabState extends State<_RoutesTab> {
   List<Map<String, dynamic>>? _pastPlans;
   // ── CHANGE #486: realtime status (queued/building/ready) — replaces the
   // old #483 4s poll. Patches the affected card in place, no full reload.
-  RealtimeChannel? _planRealtimeChannel;
+  LiveFeedHandle? _planRealtimeChannel;
 
   // ── D3: Today's Visits (admin, collapsible, lazy-loaded) — unchanged from #446
   bool _visitsExpanded = false;
@@ -11641,30 +11665,40 @@ class _RoutesTabState extends State<_RoutesTab> {
   // flicker). Ignored while _pastPlans hasn't been loaded yet — the next
   // expand fetches it fresh via route_plan_list() anyway.
   void _subscribePlanRealtime() {
-    try {
-      _planRealtimeChannel = Supabase.instance.client
-          .channel('route_plans_changes')
-          .onPostgresChanges(
-            event: PostgresChangeEvent.update,
-            schema: 'public',
-            table: 'route_plans',
-            callback: _onPlanRealtimeChange,
-          )
-          .onPostgresChanges(
-            event: PostgresChangeEvent.insert,
-            schema: 'public',
-            table: 'route_plans',
-            callback: _onPlanRealtimeChange,
-          )
-          .onPostgresChanges(
-            // CHANGE #488: a plan deleted on one device disappears live here too.
-            event: PostgresChangeEvent.delete,
-            schema: 'public',
-            table: 'route_plans',
-            callback: _onPlanRealtimeChange,
-          )
-          .subscribe();
+    // CHANGE #643: route_plans is an admin list feed and no longer publishes,
+    // so there is no per-row payload to patch from. The list is refetched with
+    // route_plan_list() — the same call the expand and the clear-old path
+    // already used, and the one that was always the fallback "so the count is
+    // right even if a realtime event is missed".
+    LiveFeed.instance
+        .watch(
+          channelPrefix: 'route_plans_changes',
+          tables: const ['route_plans'],
+          onChange: (_) => _refetchPlans(),
+        )
+        .then((h) {
+      if (!mounted) {
+        h.dispose();
+        return;
+      }
+      _planRealtimeChannel?.unsubscribe();
+      _planRealtimeChannel = h;
       RenderLog.write('c486_autocluster_realtime', 1);
+    });
+  }
+
+  /// One refetch, used by every path that needs the plan list to be current.
+  Future<void> _refetchPlans() async {
+    if (_pastPlans == null || !mounted) return;
+    try {
+      final list = await Supabase.instance.client
+          .rpc('route_plan_list', params: {'p_limit': 10});
+      if (!mounted) return;
+      final fresh = ((list as List?) ?? [])
+          .map((p) => Map<String, dynamic>.from(p as Map))
+          .toList();
+      setState(() => _pastPlans = fresh);
+      _fetchOptStatusFor(fresh);
     } catch (_) {}
   }
 
@@ -11672,41 +11706,6 @@ class _RoutesTabState extends State<_RoutesTab> {
   String _planWhenLabel(String? createdAt) =>
       DateLabels.instance.label(createdAt, DateStyle.dmy2Hm) ?? '';
 
-  void _onPlanRealtimeChange(PostgresChangePayload payload) {
-    if (_pastPlans == null || !mounted) return;
-    // CHANGE #488: DELETE payloads carry the row in oldRecord, not newRecord.
-    if (payload.eventType == PostgresChangeEvent.delete) {
-      final deletedId = payload.oldRecord['id']?.toString();
-      if (deletedId == null) return;
-      setState(() => _pastPlans =
-          _pastPlans!.where((p) => p['plan_id'].toString() != deletedId).toList());
-      return;
-    }
-    final row = payload.newRecord;
-    final planId = row['id']?.toString();
-    if (planId == null) return;
-    if (payload.eventType == PostgresChangeEvent.update) {
-      final idx = _pastPlans!.indexWhere((p) => p['plan_id'].toString() == planId);
-      if (idx == -1) return;
-      setState(() => _pastPlans![idx] = {..._pastPlans![idx], 'status': row['status']});
-    } else if (payload.eventType == PostgresChangeEvent.insert) {
-      if (_pastPlans!.any((p) => p['plan_id'].toString() == planId)) return;
-      final city = row['city']?.toString() ?? '';
-      final k = (row['k'] as num?)?.toInt() ?? 0;
-      final totalLeads = (row['total_leads'] as num?)?.toInt() ?? 0;
-      final classes = ((row['classes'] as List?) ?? []).join(', ');
-      final createdAt = row['created_at']?.toString();
-      final item = <String, dynamic>{
-        'plan_id': planId,
-        'city': city,
-        'title': '$city · ${k}R · $totalLeads leads',
-        'types': classes,
-        'when_label': _planWhenLabel(createdAt),
-        'status': row['status']?.toString() ?? 'queued',
-      };
-      setState(() => _pastPlans = [item, ..._pastPlans!]);
-    }
-  }
 
   /// CHANGE #552 — chips + their lead_class mapping, both backend-sourced.
   /// Best-effort: a failure here leaves the chip row empty rather than

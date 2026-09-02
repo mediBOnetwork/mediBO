@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../services/live_feed.dart';
+
 import 'product.dart';
 import '../utils/order_code.dart';
 import '../utils/render_log.dart';
@@ -272,7 +274,7 @@ class CartModel extends ChangeNotifier {
   final ValueNotifier<String?> cartError = ValueNotifier<String?>(null);
 
   StreamSubscription<AuthState>? _authSub;
-  RealtimeChannel? _cartChannel;
+  LiveFeedHandle? _cartChannel;
 
   // ── View As mode ──────────────────────────────────────────────────────────
   // CHANGE #559: cart_state()/cart_set_item()/cart_clear() resolve the target
@@ -446,19 +448,21 @@ class CartModel extends ChangeNotifier {
 
   void _subscribeToCartRealtime(String uid) {
     _cartChannel?.unsubscribe();
-    final ts = DateTime.now().millisecondsSinceEpoch;
-    _cartChannel = Supabase.instance.client
-        .channel('customer_cart_${uid}_$ts')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'cart_items',
-          filter: PostgresChangeFilter(
-            type: PostgresChangeFilterType.eq,
-            column: 'user_id',
-            value: uid,
-          ),
-          callback: (_) {
+    // CHANGE #643: cart_items is one of the eight tables the registry still
+    // marks live — one buyer on two devices must agree instantly — and it is
+    // filtered to this user, which is what the registry requires of it.
+    LiveFeed.instance
+        .watch(
+          channelPrefix: 'customer_cart_$uid',
+          tables: const ['cart_items'],
+          filters: {
+            'cart_items': PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'user_id',
+              value: uid,
+            ),
+          },
+          onChange: (_) {
             // CHANGE #610 — our OWN cart_set_item already returned the new
             // cart, and adopting it is what put it on screen. The realtime
             // echo of that same write must not kick off a second full read:
@@ -472,7 +476,10 @@ class CartModel extends ChangeNotifier {
             refresh();
           },
         )
-        .subscribe();
+        .then((h) {
+      _cartChannel?.unsubscribe();
+      _cartChannel = h;
+    });
   }
 
   // ── Reading the server cart ───────────────────────────────────────────────

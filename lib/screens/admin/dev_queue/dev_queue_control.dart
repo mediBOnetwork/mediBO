@@ -380,6 +380,10 @@ class _DevQueueControlState extends State<DevQueueControl> {
             child: _expanded ? _expandedHeader() : _collapsedHeader(),
           ),
         ),
+        // CHANGE #641 — the circuit breaker, always visible. It is rendered
+        // OUTSIDE the expand gate on purpose: the one state Om must never have
+        // to open a panel to discover is "the fleet paused itself".
+        _breakerBadge(),
         if (_expanded) ...[
           const SizedBox(height: 4),
           _row('vm', c('dev_queue.ctl_vm'), Icons.dns_outlined, _vmChip()),
@@ -399,6 +403,44 @@ class _DevQueueControlState extends State<DevQueueControl> {
           ],
         ],
       ]),
+    );
+  }
+
+  /// The DB circuit breaker (CHANGE #641). Every string, the tone and the
+  /// decision to show it at all come from `dev_ctl_get().breaker` — nothing
+  /// here is computed, pluralised or worded in Dart. It clears itself when
+  /// Workflow goes back on, because that is what the backend does to the flag.
+  Widget _breakerBadge() {
+    final b = (_snap['breaker'] as Map?)?.cast<String, dynamic>() ?? const {};
+    if ((b['tripped'] ?? false) != true) return const SizedBox.shrink();
+    final label = (b['label'] ?? '').toString();
+    final detail = (b['detail'] ?? '').toString();
+    if (label.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: EdgeInsets.only(top: Ds.space.x8),
+      child: Container(
+        width: double.infinity,
+        padding: EdgeInsets.symmetric(
+            horizontal: Ds.space.x12, vertical: Ds.space.x8),
+        decoration: BoxDecoration(
+          color: Ds.c.dangerSoft,
+          borderRadius: Ds.r.rButton,
+        ),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Icon(Icons.pause_circle_outline,
+              size: Ds.t.bodySize, color: Ds.c.danger),
+          SizedBox(width: Ds.space.x8),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(label, style: Ds.t.body.copyWith(color: Ds.c.danger)),
+              if (detail.isNotEmpty) ...[
+                SizedBox(height: Ds.space.x4),
+                Text(detail, style: Ds.t.caption),
+              ],
+            ]),
+          ),
+        ]),
+      ),
     );
   }
 

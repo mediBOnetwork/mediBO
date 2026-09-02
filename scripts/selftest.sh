@@ -14,7 +14,7 @@
 # mean no bundle is ever built, so there is nothing to roll back and no twin to
 # pay for.
 #
-# THREE PHASES, ALL MUST BE GREEN
+# FOUR PHASES, ALL MUST BE GREEN
 #   TWO phases gate the build (the third moved off it — see below):
 #   1. protected — flutter test test/protected/  (the regression suite)
 #   2. focused   — the command's OWN test(s), auto-detected from the git diff
@@ -98,7 +98,7 @@ FAILED_PHASES=()
 LOG="$(mktemp)"
 
 # ── PHASE 1: the protected regression suite ────────────────────────────────
-rule; say "PHASE 1/3 — protected suite (flutter test test/protected/)"
+rule; say "PHASE 1/4 — protected suite (flutter test test/protected/)"
 if timeout 900 flutter test test/protected/ >"$LOG" 2>&1; then
   PROTECTED_OK=passed
   say "protected: PASSED — $(grep -oE '\+[0-9]+' "$LOG" | tail -1 | tr -d '+') tests"
@@ -112,7 +112,7 @@ fi
 # ── PHASE 2: this command's own focused test(s) ────────────────────────────
 # Auto-detected so a builder never has to remember to wire it: every changed or
 # new *_test.dart outside test/protected/ (already covered by phase 1).
-rule; say "PHASE 2/3 — focused test(s) for this change"
+rule; say "PHASE 2/4 — focused test(s) for this change"
 FOCUS_FILES=()
 if [ ${#FOCUS_ARGS[@]} -gt 0 ]; then
   for f in "${FOCUS_ARGS[@]}"; do [ -f "$f" ] && FOCUS_FILES+=("$f"); done
@@ -147,7 +147,7 @@ else
 fi
 
 # ── PHASE 3: schema/RPC regression guard ───────────────────────────────────
-rule; say "PHASE 3/3 — rg_check() (post-deploy since CHANGE #273)"
+rule; say "PHASE 3/4 — rg_check() (post-deploy since CHANGE #273)"
 if [ "$RUN_RG" = "1" ]; then
   RG_RAW="$("$DEVCMD" rgcheck 2>/dev/null | tr -d '[:space:]')"
   if [ "$RG_RAW" = "true" ]; then
@@ -161,6 +161,23 @@ if [ "$RUN_RG" = "1" ]; then
   fi
 else
   say "rg_check: deferred to scripts/rg_after_deploy.sh (CHANGE #273)"
+fi
+
+# ── PHASE 4: the RPC-budget guards (CHANGE #641) ───────────────────────────
+# Cheap (~1 s), and the one class of regression that took the whole fleet down
+# for eleven hours. It runs on EVERY self-test, not only in the two-hourly
+# rg_check, so it fails the command that caused it. An unreachable backend is
+# never treated as red.
+rule; say "PHASE 4/4 — RPC budget guards (CHANGE #641)"
+CFS_OUT="$(bash "$(dirname "$0")/test_complete_fast_speed.sh" 2>&1)"; CFS_RC=$?
+say "$CFS_OUT"
+if [ "$CFS_RC" -eq 1 ]; then
+  FAILED_PHASES+=("rpc_budget")
+  say "rpc budget: RED — an HTTP RPC is doing heavy work again"
+elif [ "$CFS_RC" -eq 2 ]; then
+  say "rpc budget: UNREACHABLE (network/auth) — not treated as red"
+else
+  say "rpc budget: GREEN"
 fi
 
 rm -f "$LOG"

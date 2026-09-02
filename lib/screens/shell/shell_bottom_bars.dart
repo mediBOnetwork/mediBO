@@ -64,9 +64,11 @@ class _MobileBottomBar extends StatelessWidget {
   /// re-ordering the bar is an UPDATE and hiding a slot cannot leave a hole.
   ///
   /// WHO is offered My Shop is the same row's decision (`visibility`), resolved
-  /// against the caller inside `customer_nav()`. That rule was #536 QA round 2
-  /// — an admin and a signed-out visitor must not be shown a tab whose RPC
-  /// would refuse them — and it is now decided once, in SQL, for both layouts.
+  /// against the caller inside `customer_nav()`. That rule is #536 QA round 2 —
+  /// an admin and a signed-out visitor must not be shown a tab whose RPC would
+  /// refuse them (customer_shop_home() has no EXECUTE for anon) — and keeping
+  /// it on the row is what stops a hidden slot from leaving a hole in a list
+  /// the bar also indexes by position.
   final List<Map<String, dynamic>> slots;
 
   const _MobileBottomBar({

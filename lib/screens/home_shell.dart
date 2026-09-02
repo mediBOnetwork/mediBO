@@ -87,12 +87,6 @@ import '../services/delivery_role_state.dart'; // C629: is_partner, from the bac
 import 'cart_screen.dart';
 import '../utils/toast.dart';
 import 'orders_screen.dart';
-// CHANGE #630 — the four shop tools that used to hang off the top of the
-// Orders tab. They are My Shop registry rows now, so the router needs a door
-// for each route_key the registry names.
-import 'reorder_screen.dart';
-import 'order_lists_screen.dart';
-import 'customer/order_help_sheet.dart';
 import '../services/pos_api.dart'; // CMD #411 — pos_entry() at boot
 import 'pharmacy/pos_screen.dart'; // CMD #411 — the pharmacy counter
 import '../widgets/scan_mic_search_controls.dart'; // #409 — used by the shell part files
@@ -1117,6 +1111,11 @@ class _HomeShellState extends State<HomeShell> {
             MaterialPageRoute(builder: (_) => const PurchasesScreen()));
         break;
       // CHANGE #536 QA round 3 — the cshop_buying trio. See selfGatedRoutes.
+      // CHANGE #630 PART A1 is why they exist at all: "Due for reorder" (#173),
+      // Saved lists (#367) and Help requests were three header tiles and a help
+      // box bolted to the top of a list of ORDERS. None of them is an order,
+      // so they are My Shop registry rows now — and a registry row is a menu
+      // entry until this switch gives it a door.
       case 'cust_reorder_due':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const ReorderScreen()));
@@ -1292,24 +1291,6 @@ class _HomeShellState extends State<HomeShell> {
       case 'reorder':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const ReorderAdminScreen()));
-        break;
-      // CHANGE #630 — PART A1. "Due for reorder" (#173), Purchases and Saved
-      // lists (#367) and Help requests were three header tiles and a help box
-      // bolted to the top of a list of ORDERS. None of them is an order; they
-      // are things a pharmacy does with its own shop. They live on My Shop
-      // now, which means they need a route here — the registry row is the
-      // menu, this switch is the door.
-      case 'cust_reorder_due':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const ReorderScreen()));
-        break;
-      case 'cust_saved_lists':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const OrderListsScreen()));
-        break;
-      case 'cust_help_requests':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const MySupportRequestsScreen()));
         break;
       case 'pnl':
         Navigator.push(context,
@@ -1830,10 +1811,11 @@ class _HomeShellState extends State<HomeShell> {
                   // `showMyShop = isAuthenticated && !isAdmin` here (#536 QA
                   // round 2) and hand it to a bar that owned a hardcoded
                   // slot->page list; that rule now lives on the row
-                  // (`visibility`) and is resolved once, in SQL, for both
-                  // layouts — so re-ordering the bar is an UPDATE and the
-                  // gate cannot say one thing on a phone and another on a
-                  // laptop.
+                  // (`visibility`) and is resolved inside customer_nav(), so
+                  // re-ordering the bar is an UPDATE and a hidden slot cannot
+                  // leave a hole in a list the shell also has to index. (The
+                  // desktop header still reads the same rule from UserState —
+                  // it has no slots to renumber, so it was left alone.)
                   slots: _navSlots,
                   // The bar hands back the PAGE its row named, so there is no
                   // ladder here that has to agree with the slot order.

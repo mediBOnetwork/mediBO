@@ -254,29 +254,12 @@ class MedicineRepository {
     }
   }
 
-  /// #401: cart_items stores a point-in-time price/name snapshot with no
-  /// `buyable` column, so cart lines must re-fetch current buyability by id
-  /// to know if a line is still orderable. Returns id -> buyable (missing
-  /// ids, e.g. a deleted product, are simply absent from the map).
-  Future<Map<String, bool>> fetchBuyableFlags(List<String> ids) async {
-    if (ids.isEmpty) return {};
-    try {
-      final raw = await _client
-          .rpc('medicine_buyable_flags', params: {'p_ids': ids});
-      final flags = ((raw is List ? raw.first : raw) as Map)['flags'] as Map;
-      final rows = flags.entries
-          .map((e) => <String, dynamic>{'id': e.key, 'buyable': e.value})
-          .toList();
-      final out = <String, bool>{};
-      for (final r in rows as List) {
-        final row = r as Map<String, dynamic>;
-        out[row['id'].toString()] = row['buyable'] == true;
-      }
-      return out;
-    } catch (_) {
-      return {};
-    }
-  }
+  // CHANGE #640 — `fetchBuyableFlags()` (an extra `medicine_buyable_flags`
+  // round trip that answered "is this line still orderable?" from the raw
+  // `buyable` column) is GONE. #610 already stopped calling it — cart_state()
+  // returns the flag itself — so all it did was leave a SECOND availability
+  // door open in Dart for the next caller to walk through. Availability has
+  // one door now: the backend's `availability` verdict on the payload.
 
   /// Estimated total row count from Postgres planner stats — instant,
   /// no sequential scan. Accuracy: within ~1-2% after autovacuum.

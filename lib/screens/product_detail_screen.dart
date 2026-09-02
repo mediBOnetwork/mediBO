@@ -140,8 +140,9 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
 
     // Only ask about a subscription for a product that cannot be bought —
     // that is the only state where the control exists. Read ONCE.
-    final av = res.availability;
-    final oos = res.ok && (av != null ? !av.canAdd : !res.buyable);
+    // CHANGE #640 — through the page's ONE add decision, so the Notify probe
+    // can never disagree with the button the bar is about to draw.
+    final oos = res.ok && !res.canAdd;
     if (!oos) return;
 
     final status = widget.notifyStatusLoader ??
@@ -972,6 +973,9 @@ class _StockRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // CHANGE #640 — `data.buyable` is the availability VERDICT's own
+    // `is_available` (see ProductDetail), not a second stock column. The chip
+    // and the bottom bar are two renderings of one answer.
     if (data.buyable) {
       if (!data.hasSupplierLabel) return const SizedBox.shrink();
       return _Chip(
@@ -1260,7 +1264,9 @@ class _StickyBar extends StatelessWidget {
 
     final cart = AppState.of(context);
     final qty = cart.quantityOf(data.id);
-    final canAdd = av?.canAdd ?? data.buyable;
+    // CHANGE #640 — the page's ONE add decision, the same one the stock chip
+    // and the Notify probe above read.
+    final canAdd = data.canAdd;
     final pr = data.pricing;
 
     return SafeArea(

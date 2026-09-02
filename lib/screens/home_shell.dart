@@ -30,10 +30,7 @@ import 'admin/admin_add_medicine_screen.dart';
 import 'admin/admin_manage_admins_screen.dart';
 import 'admin/admin_audit_screen.dart';
 import 'admin/admin_roles_screen.dart';
-import 'admin/admin_delivery_extras_screen.dart';   // CHANGE #570 — dead tile, now wired
-import 'admin/admin_delivery_waves_screen.dart';    // CHANGE #570 — dead tile, now wired
-import 'admin/returns_refunds_screen.dart';         // CHANGE #570 — dead tile, now wired
-import 'admin/surface_map_screen.dart';             // CHANGE #570 — the audit
+import 'shell/shell_extra_routes.dart';             // CHANGE #570 — four doors
 import 'admin/admin_customer_screen.dart';
 import 'admin/admin_company_screen.dart';
 import 'admin/admin_dashboard_screen.dart';
@@ -1216,30 +1213,12 @@ class _HomeShellState extends State<HomeShell> {
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => buildFeatureGapsScreen()));
         break;
-      // CHANGE #570 — four doors that the registry had already promised.
-      //
-      // The first three tiles have been live on the super-admin dashboard for
-      // weeks with no case anywhere in the app: their screens exist, their
-      // RPCs answer, and tapping them fell into the default branch above and
-      // showed "route unavailable". That is the "built for X, missing from X"
-      // half of Om's report, and it is why surface_route now DECLARES every
-      // door and rg_check fails on a tile that has none.
-      case 'delivery_extras':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const AdminDeliveryExtrasScreen()));
-        break;
-      case 'delivery_waves':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const AdminDeliveryWavesScreen()));
-        break;
-      case 'returns_refunds':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const ReturnsRefundsScreen()));
-        break;
-      // ...and the audit that found them.
-      case 'surface_map':
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const SurfaceMapScreen()));
+      // CHANGE #570 — four doors the registry had already promised, in
+      // shell/shell_extra_routes.dart. Null means "not mine", so an unknown
+      // route still reaches the backend-worded default branch below.
+      case _ when shellExtraRouteScreen(route) != null:
+        Navigator.push(context, MaterialPageRoute(
+            builder: (_) => shellExtraRouteScreen(route)!));
         break;
       case 'deletion_requests':
         Navigator.push(

@@ -872,7 +872,7 @@ begin
       select 1 from jsonb_array_elements(public.nav_search('supplier')->'groups') g,
                    jsonb_array_elements(g->'items') i
        where g->>'key' = 'screens' and i->>'feature_key' like 'partner.%') then
-      raise exception 'nav_search offered a partner.% feature to an admin';
+      raise exception 'nav_search offered a partner-owned feature to an admin console';
     end if;
   end if;
 

@@ -873,7 +873,11 @@ stable
 security definer
 set search_path to 'public'
 as $function$
-  select jsonb_build_object(
+  -- Admin surface only: this is another party's outcome history.
+  select case when coalesce(public.get_my_role(),'none') not in ('admin','super_admin')
+              then jsonb_build_object('ok', false, 'error', 'not_authorized',
+                     'message', public._c('exc.not_authorized'))
+  else jsonb_build_object(
     'ok', true,
     'subject_kind', p_subject_kind,
     'subject_key',  p_subject_key,
@@ -891,7 +895,7 @@ as $function$
                where i2.subject_kind = p_subject_kind
                  and i2.subject_key  = p_subject_key
                  and i2.closed_at >= now() - make_interval(days => greatest(coalesce(p_days,90),1))
-               group by i2.reason_code) g), '[]'::jsonb))
+               group by i2.reason_code) g), '[]'::jsonb)) end
     from public.exception_scorecard_input i
    where i.subject_kind = p_subject_kind
      and i.subject_key  = p_subject_key
@@ -1134,3 +1138,29 @@ update public.feature_gaps
             || 'partner digest carries the zone''s open count.',
        updated_at = now()
  where id = 74;
+
+-- ── 16. The door ────────────────────────────────────────────────────────────
+-- Postgres grants EXECUTE to PUBLIC by default, and PostgREST exposes every
+-- function in this schema — so a SECURITY DEFINER helper with no auth check of
+-- its own is an anonymous read of every stuck object in the business. Mirror
+-- admin_ops_board(): PUBLIC and anon lose EXECUTE on all of them; the two
+-- internal helpers are owner-only (their callers are definers and run as the
+-- owner already); the four console RPCs keep `authenticated`, where their own
+-- role/zone checks live.
+revoke execute on function public._exception_rows()                       from public, anon, authenticated;
+revoke execute on function public._exception_writable(text)               from public, anon, authenticated;
+revoke execute on function public.exception_digest_line(smallint)         from public, anon, authenticated;
+revoke execute on function public.exceptions_queue(smallint, text, text, integer) from public, anon;
+revoke execute on function public.exceptions_start(text)                  from public, anon;
+revoke execute on function public.exceptions_action(text)                 from public, anon;
+revoke execute on function public.exceptions_close(text, text, text)      from public, anon;
+revoke execute on function public.exception_scorecard_inputs(text, text, integer) from public, anon;
+
+grant execute on function public.exceptions_queue(smallint, text, text, integer) to authenticated, service_role;
+grant execute on function public.exceptions_start(text)                   to authenticated, service_role;
+grant execute on function public.exceptions_action(text)                  to authenticated, service_role;
+grant execute on function public.exceptions_close(text, text, text)       to authenticated, service_role;
+grant execute on function public.exception_scorecard_inputs(text, text, integer) to authenticated, service_role;
+grant execute on function public._exception_rows()                        to service_role;
+grant execute on function public._exception_writable(text)                to service_role;
+grant execute on function public.exception_digest_line(smallint)          to service_role;

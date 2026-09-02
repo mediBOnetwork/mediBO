@@ -2040,3 +2040,13 @@ end $rg$;$body$, true,
 'CHANGE #468 — a synthetic order must stay invisible to every book: the ledgers refuse the write, and pnl_line_v / _c427_bill_units keep the filter that hides it from P&L, settlements, GST and the demand engine.')
 on conflict (name) do update
   set body = excluded.body, enabled = true, note = excluded.note;
+
+-- The door itself. surface_route is the declaration the #570 surface-map audit
+-- checks: a live tile whose route no dispatcher declares is a door onto
+-- nothing. openDevTool() in dev_queue_screen.dart is the dispatcher.
+insert into public.surface_route (route_key, feature_key, kind, handled_by, note, is_active)
+values ('heartbeat', 'devtool.heartbeat', 'feature', 'dev_queue_screen',
+        'CHANGE #468 — openDevTool() pushes AdminHeartbeatScreen.', true)
+on conflict (route_key, feature_key) do update
+  set kind = excluded.kind, handled_by = excluded.handled_by,
+      note = excluded.note, is_active = true;

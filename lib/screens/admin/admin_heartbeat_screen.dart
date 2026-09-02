@@ -539,7 +539,7 @@ class _RunSheetState extends State<_RunSheet> {
               child: ListView.separated(
                 shrinkWrap: true,
                 itemCount: stages.length,
-                separatorBuilder: (_, __) =>
+                separatorBuilder: (_, _) =>
                     Divider(height: Ds.space.x24, color: Ds.c.divider),
                 itemBuilder: (_, i) {
                   final s = stages[i];

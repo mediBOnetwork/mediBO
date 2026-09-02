@@ -207,6 +207,22 @@ void main() {
       expect(myShop, lessThan(bulk), reason: 'My Shop sits before Bulk');
     });
 
+    // Om: "The storefront home stays exactly as it is — do not insert shop
+    // tiles into it." The suite lives on its own page and is reached by its own
+    // tab; a future change that drops it into the storefront feed fails here.
+    test('the shop surface is a page of its own, never folded into the home',
+        () {
+      final shell = _shellSource();
+      expect(RegExp('MyShopScreen').allMatches(shell).length, 1,
+          reason: 'exactly one construction, in the pages list — a second one '
+              'means the suite has been folded into another page');
+      expect(shell.contains("case 'my_shop':"), isTrue);
+      // And it is page 11, the slot the map and both doors agree on.
+      expect(RegExp(r"case 'my_shop':\s*\n\s*setState\(\(\) \{ _index = 11;")
+              .hasMatch(shell),
+          isTrue);
+    });
+
     test('the tab badge is the backend answer, never a count computed here',
         () {
       final bars = _barsSource();

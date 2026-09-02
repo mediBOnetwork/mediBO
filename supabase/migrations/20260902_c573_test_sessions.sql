@@ -154,10 +154,16 @@ begin
     return new;
   end if;
 
-  -- An ambient TEST SESSION stamps everything written while it is live. This
+  -- An ambient TEST SESSION stamps everything CREATED while it is live. This
   -- is the whole point of Om's scope change: he never picks an account and
   -- never ticks a box, he just switches the platform to incognito.
-  v_sess := public._test_session_ambient();
+  --
+  -- INSERT ONLY, and that is a safety rule, not a shortcut. On UPDATE the
+  -- ambient stamp would convert a REAL row that merely got touched during the
+  -- session into a synthetic one — and the session purge would then delete it.
+  -- c573b_proof check 7 (business data byte-identical before vs after) caught
+  -- exactly that. A session may create test data; it may never adopt live data.
+  v_sess := case when tg_op = 'INSERT' then public._test_session_ambient() else null end;
   if v_sess is not null then
     new.is_synthetic := true;
     v_j := to_jsonb(new);
@@ -774,3 +780,118 @@ begin
 end $fn$;
 
 grant execute on function public.test_run_session(text) to authenticated, service_role;
+
+-- CHANGE #573 (session layer) — the proof Om asked for, as one callable RPC:
+-- open a session, walk a full order inside it, then purge and show that the
+-- business data is byte-identical and nothing of the session is left.
+create or replace function public.c573b_proof()
+returns jsonb language plpgsql security definer set search_path to 'public' as $fn$
+declare v_checks jsonb := '[]'::jsonb; v_ok boolean := true;
+        v_sess bigint; v_start jsonb; v_run jsonb; v_purge jsonb;
+        v_fp_before jsonb; v_fp_after jsonb;
+        n bigint; m bigint; v_res jsonb; v_files bigint;
+        v_wa bigint; v_books bigint; v_unstamped bigint; v_fixtures bigint;
+begin
+  if not public._test_guard() then return jsonb_build_object('ok',false,'error','not_authorized'); end if;
+
+  perform public.test_fixtures_ensure();
+  update public.test_sessions set status='ended', ended_at=coalesce(ended_at,now()) where status='live';
+
+  v_fp_before := public.test_fingerprint();
+
+  -- 1 — the switch opens a session
+  v_start := public.test_session_start('c573b proof', 1);
+  v_sess  := (v_start->>'session_id')::bigint;
+  v_checks := v_checks || jsonb_build_array(jsonb_build_object(
+    'n',1,'name','session opens and is live',
+    'ok', (v_sess is not null and public.test_session_live_id() = v_sess),
+    'detail', v_start));
+  if v_sess is null then
+    return jsonb_build_object('ok',false,'checks',v_checks);
+  end if;
+
+  -- 2 — a full order walked inside the session
+  v_run := public.test_run_full('c573b proof order','manual');
+  update public.test_run set test_session_id = v_sess where test_session_id is null;
+  v_checks := v_checks || jsonb_build_array(jsonb_build_object(
+    'n',2,'name','full order runs inside the session',
+    'ok', coalesce((v_run->>'ok')::boolean,false),
+    'detail', coalesce(v_run->'stage', to_jsonb(coalesce(v_run->>'order_code','')))));
+
+  -- 3 — EVERY row the run created carries the session id (ambient stamping)
+  select count(*) into v_unstamped from public.orders
+   where is_synthetic and test_session_id is distinct from v_sess
+     and created_at >= (select started_at from public.test_sessions where id = v_sess);
+  select count(*) into n from public.orders where test_session_id = v_sess;
+  select count(*) into m from public.order_items where test_session_id = v_sess;
+  v_checks := v_checks || jsonb_build_array(jsonb_build_object(
+    'n',3,'name','ambient stamp reaches orders and their children',
+    'ok', (n > 0 and m > 0 and v_unstamped = 0),
+    'detail', jsonb_build_object('orders',n,'order_items',m,'unstamped',v_unstamped)));
+
+  -- 4 — nothing left the building
+  select count(*) into v_wa from public.wa_campaign_recipients
+   where test_session_id = v_sess and coalesce(status,'') not in ('skipped','synthetic_suppressed');
+  v_checks := v_checks || jsonb_build_array(jsonb_build_object(
+    'n',4,'name','zero outbound messages escaped the session',
+    'ok', (v_wa = 0), 'detail', jsonb_build_object('escaped', v_wa)));
+
+  -- 5 — nothing reached the books
+  select (select count(*) from public.gst_ledger where is_synthetic)
+       + (select count(*) from public.partner_settlements where is_synthetic)
+       + (select count(*) from public.loyalty_ledger where is_synthetic)
+    into v_books;
+  v_checks := v_checks || jsonb_build_array(jsonb_build_object(
+    'n',5,'name','zero synthetic rows in the books',
+    'ok', (v_books = 0), 'detail', jsonb_build_object('book_rows', v_books)));
+
+  -- 6 — the purge, run to completion the way the app runs it
+  v_purge := public.test_session_purge(v_sess);
+  while coalesce((v_purge->>'ok')::boolean,false) and not coalesce((v_purge->>'done')::boolean,true) loop
+    v_purge := public.test_session_purge(v_sess);
+  end loop;
+  v_res := public.test_session_residue(v_sess);
+  v_checks := v_checks || jsonb_build_array(jsonb_build_object(
+    'n',6,'name','purge leaves zero residue (rows and files)',
+    'ok', (coalesce((v_res->>'total')::bigint,1) = 0 and coalesce((v_res->>'files')::bigint,1) = 0),
+    'detail', v_res));
+
+  -- 7 — the business data is byte-identical
+  v_fp_after := public.test_fingerprint();
+  v_checks := v_checks || jsonb_build_array(jsonb_build_object(
+    'n',7,'name','business data byte-identical before vs after',
+    'ok', (v_fp_before = v_fp_after),
+    'detail', jsonb_build_object(
+      'tables', (select count(*) from jsonb_object_keys(v_fp_after)),
+      'differs', coalesce((select jsonb_agg(k) from jsonb_object_keys(v_fp_after) k
+                            where v_fp_before->k is distinct from v_fp_after->k), '[]'::jsonb))));
+
+  -- 8 — the purge is idempotent: running it again changes nothing
+  v_purge := public.test_session_purge(v_sess);
+  v_checks := v_checks || jsonb_build_array(jsonb_build_object(
+    'n',8,'name','purge is idempotent (second run is a no-op)',
+    'ok', coalesce((v_purge->>'ok')::boolean,false) and public.test_fingerprint() = v_fp_after,
+    'detail', jsonb_build_object('done', v_purge->'done')));
+
+  -- 9 — the permanent cast survives a session purge
+  select count(*) into v_fixtures from public.test_fixture;
+  v_checks := v_checks || jsonb_build_array(jsonb_build_object(
+    'n',9,'name','the permanent test cast survives the purge',
+    'ok', (v_fixtures >= 4), 'detail', jsonb_build_object('fixtures', v_fixtures)));
+
+  -- 10 — the platform is out of incognito and the banner says so
+  v_checks := v_checks || jsonb_build_array(jsonb_build_object(
+    'n',10,'name','session closed — banner is off again',
+    'ok', (public.test_session_live_id() is null
+           and not coalesce((public.test_session_banner()->>'on')::boolean, true)),
+    'detail', public.test_session_banner()));
+
+  select bool_and(coalesce((x->>'ok')::boolean,false)) into v_ok
+    from jsonb_array_elements(v_checks) x;
+
+  return jsonb_build_object('ok', v_ok, 'session_id', v_sess,
+    'passed', (select count(*) from jsonb_array_elements(v_checks) x where (x->>'ok')::boolean),
+    'total', jsonb_array_length(v_checks), 'checks', v_checks);
+end $fn$;
+
+grant execute on function public.c573b_proof() to authenticated, service_role;

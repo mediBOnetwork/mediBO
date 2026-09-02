@@ -1621,7 +1621,15 @@ class _HomeShellState extends State<HomeShell> {
           adminPage(() => const AdminMrScreen()),
           adminPage(() => const AdminCompanyScreen()),
           adminPage(() => const AdminDeliveryPartnerScreen()),
-          adminPage(() => AdminFulfillmentScreen()),
+          // CHANGE #657 — the fulfilment screen is the ONE container that does
+          // not gate its own tabs (the supplier and customer screens call
+          // Access.tabCanView themselves), and it is now reachable from the
+          // SHARED nav by every admin-surface login, partners included. So it
+          // is handed the same bound the partner route path has always passed:
+          // the tab numbers the BACKEND granted. Null — every full admin — is
+          // unbounded and unchanged.
+          adminPage(() => AdminFulfillmentScreen(
+              allowedTabs: Access.instance.allowedTabIndexes('fulfillment'))),
           // CHANGE #536 — index 11, MY SHOP. It is appended rather than slotted
           // in beside the customer's other three pages because indices 3–10 are
           // addressed by number from _handleAdminNav; inserting would have

@@ -237,9 +237,18 @@ grant execute on function public.supplier_scorecard() to authenticated, service_
 -- the tabs already read, so a badge can never drift from what the tab shows.
 -- Only the inbox ITEMS are rows, because an item is a thing that happened.
 
-create unique index if not exists notification_log_in_app_once
-  on public.notification_log (event_key, recipient_id, (payload->>'entity'))
-  where channel = 'in_app';
+-- Guarded by a catalog check, not just IF NOT EXISTS: notification_log is a hot
+-- table, and re-running this migration must not sit waiting for a lock it does
+-- not need to take. A resumed worker WILL re-apply this file.
+do $$
+begin
+  if not exists (select 1 from pg_indexes
+                  where schemaname='public' and indexname='notification_log_in_app_once') then
+    create unique index notification_log_in_app_once
+      on public.notification_log (event_key, recipient_id, (payload->>'entity'))
+      where channel = 'in_app';
+  end if;
+end $$;
 
 insert into ui_copy (key, value) values
   ('sup_inbox.title',        '"Notifications"'::jsonb),
@@ -339,13 +348,20 @@ grant execute on function public.supplier_notify_sweep() to service_role;
 
 -- On the ONE dispatcher, with an offset schedule — never a bare */N (the
 -- connection-exhaustion outage of 18 Aug was 35 jobs all starting on minute 0).
-insert into cron_task (name, ord, mode, gate_sql, work_sql, enabled, note,
-                       base_interval_s, max_interval_s, current_interval_s)
-values ('supplier_inapp_notify', 950, 'poll', null,
-        'select public.supplier_notify_sweep()', true,
-        'CHANGE #465 gap 65 — mints in-app notifications for the 7 suppliers who can log in.',
-        300, 1800, 300)
-on conflict (name) do nothing;
+-- Existence-checked rather than ON CONFLICT: the dispatcher writes to cron_task
+-- every minute, and a re-applied migration must not queue behind it for a row
+-- that is already there.
+do $$
+begin
+  if not exists (select 1 from public.cron_task where name = 'supplier_inapp_notify') then
+    insert into public.cron_task (name, ord, mode, gate_sql, work_sql, enabled, note,
+                                  base_interval_s, max_interval_s, current_interval_s)
+    values ('supplier_inapp_notify', 950, 'poll', null,
+            'select public.supplier_notify_sweep()', true,
+            'CHANGE #465 gap 65 — mints in-app notifications for the suppliers who can log in.',
+            300, 1800, 300);
+  end if;
+end $$;
 
 -- The inbox the shell reads. Badges are counted live; items are the rows.
 create or replace function public.supplier_inbox(p_limit int default 30)
@@ -431,3 +447,254 @@ end $fn$;
 
 revoke all on function public.supplier_inbox_mark_read(bigint[]) from public;
 grant execute on function public.supplier_inbox_mark_read(bigint[]) to authenticated, service_role;
+
+-- ── GAP 63 · There is no supplier self-registration or onboarding ───────────
+-- Reproduced: 28 of 35 supplier_profiles rows have user_id NULL; supplier_leads
+-- had 0 rows; the only creation paths are admin_create_supplier /
+-- admin_create_suppliers / admin_import_supplier. A distributor who hears about
+-- mediBO has no way in and no way to submit GSTIN, drug licence or contact
+-- details for verification.
+--
+-- supplier_leads existed but carried only (name, email, mobile, status, source,
+-- notes) — nothing a licence check needs. The columns a verification decision
+-- actually rests on are added here; every one is `if not exists`.
+
+alter table public.supplier_leads add column if not exists contact_person text;
+alter table public.supplier_leads add column if not exists whatsapp_no      text;
+alter table public.supplier_leads add column if not exists gstin            text;
+alter table public.supplier_leads add column if not exists drug_license_1   text;
+alter table public.supplier_leads add column if not exists drug_license_2   text;
+alter table public.supplier_leads add column if not exists address          text;
+alter table public.supplier_leads add column if not exists city             text;
+alter table public.supplier_leads add column if not exists state            text;
+alter table public.supplier_leads add column if not exists pincode          text;
+alter table public.supplier_leads add column if not exists decided_at       timestamptz;
+alter table public.supplier_leads add column if not exists decided_by       uuid;
+alter table public.supplier_leads add column if not exists decision_note    text;
+alter table public.supplier_leads add column if not exists supplier_id      uuid;
+alter table public.supplier_leads add column if not exists updated_at       timestamptz not null default now();
+
+-- One application per GSTIN while it is still being looked at. A distributor
+-- who taps submit twice gets one row, not two entries in the admin's queue.
+create unique index if not exists supplier_leads_open_gstin
+  on public.supplier_leads (lower(btrim(gstin)))
+  where gstin is not null and btrim(gstin) <> '' and status = 'new';
+
+alter table public.supplier_leads enable row level security;
+
+-- The FORM IS DATA. Which fields a distributor is asked for, their labels,
+-- their hints and whether each is required are rows, so adding "FSSAI number"
+-- tomorrow is an INSERT and not a deploy.
+create table if not exists public.supplier_signup_field (
+  field_key   text primary key,
+  label       text not null,
+  hint        text not null default '',
+  required    boolean not null default false,
+  keyboard    text not null default 'text',
+  sort_order  int  not null default 100,
+  is_active   boolean not null default true
+);
+
+insert into public.supplier_signup_field
+  (field_key, label, hint, required, keyboard, sort_order) values
+  ('name',           'Firm name',        'As printed on your drug licence', true,  'text',  10),
+  ('contact_person', 'Contact person',   'Who should we speak to',          true,  'text',  20),
+  ('mobile',         'Mobile number',    '10 digits',                       true,  'phone', 30),
+  ('whatsapp_no',    'WhatsApp number',  'If different from the mobile',    false, 'phone', 40),
+  ('email',          'Email',            '',                                false, 'email', 50),
+  ('gstin',          'GSTIN',            '15 characters',                   true,  'text',  60),
+  ('drug_license_1', 'Drug licence 20B', '',                                true,  'text',  70),
+  ('drug_license_2', 'Drug licence 21B', '',                                false, 'text',  80),
+  ('address',        'Address',          '',                                false, 'text',  90),
+  ('city',           'City',             '',                                true,  'text', 100),
+  ('state',          'State',            '',                                false, 'text', 110),
+  ('pincode',        'PIN code',         '6 digits',                        false, 'phone',120)
+on conflict (field_key) do update set
+  label = excluded.label, hint = excluded.hint, required = excluded.required,
+  keyboard = excluded.keyboard, sort_order = excluded.sort_order, is_active = true;
+
+insert into ui_copy (key, value) values
+  ('sup_signup.title',    '"Sell on mediBO"'::jsonb),
+  ('sup_signup.subtitle', '"Tell us about your firm. We check your licence and call you back."'::jsonb),
+  ('sup_signup.cta',      '"Send my details"'::jsonb),
+  ('sup_signup.done_title','"Thank you — we have your details"'::jsonb),
+  ('sup_signup.done_note', '"Our team verifies the licence and calls you on the number you gave."'::jsonb),
+  ('sup_signup.dup',      '"We already have an application against this GSTIN and are looking at it."'::jsonb),
+  ('sup_signup.missing',  '"Please fill every required field."'::jsonb),
+  ('sup_signup.entry',    '"Are you a distributor? Sell on mediBO"'::jsonb),
+  ('sup_lead.queue_title','"Supplier applications"'::jsonb),
+  ('sup_lead.empty',      '"No applications waiting."'::jsonb),
+  ('sup_lead.approve',    '"Approve & create supplier"'::jsonb),
+  ('sup_lead.reject',     '"Reject"'::jsonb),
+  ('sup_lead.approved',   '"Supplier created."'::jsonb),
+  ('sup_lead.rejected',   '"Application rejected."'::jsonb),
+  ('sup_lead.not_admin',  '"Only an admin can decide an application."'::jsonb)
+on conflict (key) do update set value = excluded.value, updated_at = now();
+
+-- The public form: fields, labels and copy. No auth — this is the door.
+create or replace function public.supplier_signup_form()
+returns jsonb
+language sql
+stable security definer
+set search_path to 'public'
+as $fn$
+  select jsonb_build_object(
+    'ok', true,
+    'title',    public._c('sup_signup.title'),
+    'subtitle', public._c('sup_signup.subtitle'),
+    'cta',      public._c('sup_signup.cta'),
+    'fields', coalesce((
+      select jsonb_agg(jsonb_build_object(
+               'key', f.field_key, 'label', f.label, 'hint', f.hint,
+               'required', f.required, 'keyboard', f.keyboard)
+             order by f.sort_order, f.field_key)
+        from public.supplier_signup_field f where f.is_active), '[]'::jsonb));
+$fn$;
+
+revoke all on function public.supplier_signup_form() from public;
+grant execute on function public.supplier_signup_form() to anon, authenticated, service_role;
+
+create or replace function public.supplier_signup_submit(p jsonb)
+returns jsonb
+language plpgsql
+security definer
+set search_path to 'public'
+as $fn$
+declare
+  v_missing text[];
+  v_gst     text := nullif(btrim(coalesce(p->>'gstin','')),'');
+  v_id      uuid;
+begin
+  -- Required-ness is the TABLE's answer, not a list repeated here.
+  select coalesce(array_agg(f.label order by f.sort_order), '{}')
+    into v_missing
+    from public.supplier_signup_field f
+   where f.is_active and f.required
+     and coalesce(nullif(btrim(coalesce(p->>f.field_key,'')),''), '') = '';
+  if array_length(v_missing,1) > 0 then
+    return jsonb_build_object('ok', false, 'error', 'missing',
+      'message', public._c('sup_signup.missing'), 'fields', to_jsonb(v_missing));
+  end if;
+
+  if exists (select 1 from public.supplier_leads l
+              where l.status = 'new' and lower(btrim(coalesce(l.gstin,''))) = lower(v_gst)) then
+    return jsonb_build_object('ok', false, 'error', 'duplicate',
+      'message', public._c('sup_signup.dup'));
+  end if;
+
+  insert into public.supplier_leads
+    (name, contact_person, mobile, whatsapp_no, email, gstin,
+     drug_license_1, drug_license_2, address, city, state, pincode,
+     status, source)
+  values (btrim(p->>'name'), nullif(btrim(coalesce(p->>'contact_person','')),''),
+          btrim(coalesce(p->>'mobile','')), nullif(btrim(coalesce(p->>'whatsapp_no','')),''),
+          nullif(btrim(coalesce(p->>'email','')),''), v_gst,
+          nullif(btrim(coalesce(p->>'drug_license_1','')),''),
+          nullif(btrim(coalesce(p->>'drug_license_2','')),''),
+          nullif(btrim(coalesce(p->>'address','')),''),
+          nullif(btrim(coalesce(p->>'city','')),''),
+          nullif(btrim(coalesce(p->>'state','')),''),
+          nullif(btrim(coalesce(p->>'pincode','')),''),
+          'new', 'self_signup')
+  returning id into v_id;
+
+  return jsonb_build_object('ok', true, 'id', v_id,
+    'title', public._c('sup_signup.done_title'),
+    'note',  public._c('sup_signup.done_note'));
+end $fn$;
+
+revoke all on function public.supplier_signup_submit(jsonb) from public;
+grant execute on function public.supplier_signup_submit(jsonb) to anon, authenticated, service_role;
+
+-- The admin side: the queue, and the decision that provisions the supplier.
+create or replace function public.admin_supplier_leads(p_status text default 'new')
+returns jsonb
+language plpgsql
+stable security definer
+set search_path to 'public'
+as $fn$
+begin
+  if not coalesce(public.get_my_role() in ('admin','super_admin'), false) then
+    return jsonb_build_object('ok', false, 'error', 'not_admin',
+      'message', public._c('sup_lead.not_admin'));
+  end if;
+  return jsonb_build_object(
+    'ok', true,
+    'title', public._c('sup_lead.queue_title'),
+    'empty', public._c('sup_lead.empty'),
+    'approve_label', public._c('sup_lead.approve'),
+    'reject_label',  public._c('sup_lead.reject'),
+    'rows', coalesce((
+      select jsonb_agg(jsonb_build_object(
+               'id', l.id, 'name', coalesce(l.name,''),
+               'contact', coalesce(l.contact_person,''),
+               'mobile', coalesce(l.mobile,''),
+               'gstin', coalesce(l.gstin,''),
+               'dl', concat_ws(' · ', nullif(l.drug_license_1,''), nullif(l.drug_license_2,'')),
+               'city', coalesce(l.city,''),
+               'status', coalesce(l.status,''),
+               'when_label', public._ist_stamp(l.created_at))
+             order by l.created_at desc)
+        from public.supplier_leads l
+       where l.status = coalesce(nullif(btrim(coalesce(p_status,'')),''), 'new')), '[]'::jsonb));
+end $fn$;
+
+revoke all on function public.admin_supplier_leads(text) from public;
+grant execute on function public.admin_supplier_leads(text) to authenticated, service_role;
+
+create or replace function public.admin_supplier_lead_decide(
+  p_id uuid, p_action text, p_note text default null)
+returns jsonb
+language plpgsql
+security definer
+set search_path to 'public'
+as $fn$
+declare l public.supplier_leads%rowtype; v_res jsonb; v_sup uuid;
+begin
+  if not coalesce(public.get_my_role() in ('admin','super_admin'), false) then
+    return jsonb_build_object('ok', false, 'error', 'not_admin',
+      'message', public._c('sup_lead.not_admin'));
+  end if;
+  select * into l from public.supplier_leads where id = p_id;
+  if l.id is null then
+    return jsonb_build_object('ok', false, 'error', 'not_found');
+  end if;
+
+  if lower(coalesce(p_action,'')) = 'approve' then
+    -- Provisioning goes through the SAME creator the admin screens use, so an
+    -- approved application produces exactly the supplier an admin would have
+    -- typed — no second write path into supplier_profiles.
+    v_res := public.admin_create_supplier(
+      jsonb_build_object(
+        'supplier_name',  l.name,
+        'contact_person', coalesce(l.contact_person,''),
+        'phone',          coalesce(l.mobile,''),
+        'whatsapp_no',    coalesce(l.whatsapp_no, l.mobile,''),
+        'email',          coalesce(l.email,''),
+        'gstin',          coalesce(l.gstin,''),
+        'dl_1',           coalesce(l.drug_license_1,''),
+        'dl_2',           coalesce(l.drug_license_2,''),
+        'address',        coalesce(l.address,''),
+        'city',           coalesce(l.city,''),
+        'state',          coalesce(l.state,''),
+        'pincode',        coalesce(l.pincode,''),
+        'status',         'active'),
+      array[]::text[]);
+    v_sup := nullif(v_res->>'id','')::uuid;
+    update public.supplier_leads
+       set status='approved', decided_at=now(), decided_by=auth.uid(),
+           decision_note=p_note, supplier_id=v_sup, updated_at=now()
+     where id = p_id;
+    return jsonb_build_object('ok', true, 'message', public._c('sup_lead.approved'),
+                              'supplier_id', v_sup, 'result', v_res);
+  end if;
+
+  update public.supplier_leads
+     set status='rejected', decided_at=now(), decided_by=auth.uid(),
+         decision_note=p_note, updated_at=now()
+   where id = p_id;
+  return jsonb_build_object('ok', true, 'message', public._c('sup_lead.rejected'));
+end $fn$;
+
+revoke all on function public.admin_supplier_lead_decide(uuid, text, text) from public;
+grant execute on function public.admin_supplier_lead_decide(uuid, text, text) to authenticated, service_role;

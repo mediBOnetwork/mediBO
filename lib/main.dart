@@ -32,6 +32,7 @@ import 'screens/admin/settlement_screen.dart'; // /admin/settlement
 import 'screens/home_shell.dart';
 import 'screens/public/inquiry_form_screen.dart';
 import 'screens/public/stock_update_form_screen.dart'; // C639: /stock-update/<token>
+import 'screens/public/supplier_signup_screen.dart'; // C465 row 63: /supplier-signup
 import 'screens/public/storefront_screen.dart'; // CMD #417: /shop/<token>
 import 'screens/public/substitute_token_screen.dart'; // #366: /substitute/<token>
 import 'screens/admin/returns_refunds_screen.dart'; // C395: /admin/returns
@@ -624,6 +625,19 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
                     builder: (_) => TrackPage(token: token),
                   );
                 }
+              }
+              // CHANGE #465 · supplier register row 63 — the door a distributor
+              // walks in through. 28 of 35 supplier_profiles rows had no login
+              // and supplier_leads had zero rows, because the ONLY ways to
+              // create a supplier were the three admin RPCs. Public and
+              // anonymous by design: this is a shop asking to sell, not a
+              // session, and nothing behind it is granted until an admin
+              // approves the application.
+              if (name == '/supplier-signup' ||
+                  name.startsWith('/supplier-signup?')) {
+                return MaterialPageRoute(
+                  builder: (_) => const SupplierSignupScreen(),
+                );
               }
               // CHANGE #639 — the stock-update link the 5pm sweep sends over
               // WhatsApp. Public, exactly like /inquiry/<token>: the token IS

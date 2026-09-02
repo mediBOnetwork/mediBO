@@ -34,9 +34,12 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
   bool _debug = false;
   bool _busy = false;
 
-  // CHANGE #656: per-command model and effort selection
-  String _model = 'claude-opus-5'; // claude-opus-5 | claude-fable-5-1
-  String _effort = 'high'; // high | extra
+  // CHANGE #656: model and effort travel with the command. Both the OPTIONS
+  // and the DEFAULTS come from dev_model_options() — nothing here knows a
+  // model id, a label or which one is the default until the backend says so.
+  Map<String, dynamic> _mo = const {};
+  String _model = '';
+  String _effort = '';
 
   // Generate-Command (ask-doubt-before-building). OFF = today's fire-and-forget
   // Add. ON = the paste becomes ONE request the runner asks doubts about, then
@@ -59,6 +62,7 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
     super.initState();
     _paste.addListener(_reparse);
     _loadTemplates();
+    _loadModelOptions();
   }
 
   @override
@@ -66,6 +70,19 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
     _paste.dispose();
     _batch.dispose();
     super.dispose();
+  }
+
+  // CHANGE #656: the picker's options AND its defaults are the backend's.
+  Future<void> _loadModelOptions() async {
+    try {
+      final o = await widget.service.modelOptions();
+      if (!mounted) return;
+      setState(() {
+        _mo = o;
+        _model = (o['default_model'] ?? '').toString();
+        _effort = (o['default_effort'] ?? '').toString();
+      });
+    } catch (_) {}
   }
 
   Future<void> _loadTemplates() async {
@@ -104,8 +121,8 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
           'targets_ios': _ios,
           'debug': _debug,
           // CHANGE #656: per-command model and effort
-          'model': _model,
-          'effort': _effort,
+          if (_model.isNotEmpty) 'model': _model,
+          if (_effort.isNotEmpty) 'effort': _effort,
           // CHANGE #72 — media attaches to the FIRST spec only (there is no
           // per-spec attach UI yet); the sheet shows a one-line hint saying so.
           if (i == 0 && _images.isNotEmpty) 'images': _images,
@@ -124,8 +141,8 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
         'targets_android': _apk || _aab,
         'targets_ios': _ios,
         // CHANGE #656: per-command model and effort
-        'model': _model,
-        'effort': _effort,
+        if (_model.isNotEmpty) 'model': _model,
+        if (_effort.isNotEmpty) 'effort': _effort,
       };
 
   // Generate ON → fire-and-leave: create the draft and immediately return Om
@@ -450,48 +467,62 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
         decoration: _fieldDeco(c('dev_queue.label_batch')),
       );
 
-  // CHANGE #656: Model and Effort selectors
-  Widget _modelEffortSection() => Container(
-        margin: EdgeInsets.only(bottom: Ds.space.x12),
-        padding: EdgeInsets.all(Ds.space.x12),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: Ds.r.rChip,
-          border: Border.all(color: kBorder),
+  // CHANGE #656: Model and Effort. Every string on this card — the heading, the
+  // hint, the two column titles and each chip label — is a field of
+  // dev_model_options(). Changing "Fable 5" to something else is an UPDATE, not
+  // a deploy, and this widget renders nothing at all until the payload lands.
+  Widget _modelEffortSection() {
+    final models = (_mo['models'] as List?) ?? const [];
+    final efforts = (_mo['efforts'] as List?) ?? const [];
+    if (models.isEmpty && efforts.isEmpty) return const SizedBox.shrink();
+    return Container(
+      margin: EdgeInsets.only(bottom: Ds.space.x12),
+      padding: EdgeInsets.all(Ds.space.x12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: Ds.r.rChip,
+        border: Border.all(color: kBorder),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text((_mo['title'] ?? '').toString(), style: Ds.t.body),
+        if ((_mo['hint'] ?? '').toString().isNotEmpty)
+          Text((_mo['hint'] ?? '').toString(), style: Ds.t.caption),
+        SizedBox(height: Ds.space.x12),
+        _optionColumn(
+          title: (_mo['model_title'] ?? '').toString(),
+          options: models,
+          selected: _model,
+          onPick: (v) => setState(() => _model = v),
         ),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('Model & Effort', style: Ds.t.body),
-          Text('Select which Claude model and effort level', style: Ds.t.caption),
-          SizedBox(height: Ds.space.x12),
-          Row(children: [
-            Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('Model', style: Ds.t.caption),
-                SizedBox(height: Ds.space.x8),
-                Wrap(spacing: Ds.space.x8, runSpacing: Ds.space.x8, children: [
-                  _choice('Opus 5', _model == 'claude-opus-5',
-                      () => setState(() => _model = 'claude-opus-5')),
-                  _choice('Fable 5', _model == 'claude-fable-5-1',
-                      () => setState(() => _model = 'claude-fable-5-1')),
-                ]),
-              ]),
+        SizedBox(height: Ds.space.x12),
+        _optionColumn(
+          title: (_mo['effort_title'] ?? '').toString(),
+          options: efforts,
+          selected: _effort,
+          onPick: (v) => setState(() => _effort = v),
+        ),
+      ]),
+    );
+  }
+
+  Widget _optionColumn({
+    required String title,
+    required List options,
+    required String selected,
+    required void Function(String) onPick,
+  }) =>
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (title.isNotEmpty) Text(title, style: Ds.t.caption),
+        SizedBox(height: Ds.space.x8),
+        Wrap(spacing: Ds.space.x8, runSpacing: Ds.space.x8, children: [
+          for (final o in options.whereType<Map>())
+            _choice(
+              (o['label'] ?? '').toString(),
+              selected == (o['value'] ?? '').toString(),
+              () => onPick((o['value'] ?? '').toString()),
             ),
-            SizedBox(width: Ds.space.x12),
-            Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('Effort', style: Ds.t.caption),
-                SizedBox(height: Ds.space.x8),
-                Wrap(spacing: Ds.space.x8, runSpacing: Ds.space.x8, children: [
-                  _choice('High', _effort == 'high',
-                      () => setState(() => _effort = 'high')),
-                  _choice('Extra', _effort == 'extra',
-                      () => setState(() => _effort = 'extra')),
-                ]),
-              ]),
-            ),
-          ]),
         ]),
-      );
+      ]);
 
   // Generate-Command controls. OFF by default so Add stays fire-and-forget.
   Widget _generateSection() => Container(

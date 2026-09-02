@@ -58,6 +58,11 @@ class DevQueueService {
   Future<Map<String, dynamic>> messages(int id, {int limit = 50, int? afterId}) async =>
       _asMap(await _c.rpc('dev_cmd_messages',
           params: {'p_id': id, 'p_limit': limit, 'p_after_id': afterId}));
+  /// CHANGE #656 — the model/effort picker is DATA. Labels, values, defaults
+  /// and the section titles all arrive from dev_model_options(); the sheet
+  /// renders them verbatim and never spells a model id or a label in Dart.
+  Future<Map<String, dynamic>> modelOptions() async =>
+      _asMap(await _c.rpc('dev_model_options'));
 
   Future<Map<String, dynamic>> spec(int id) async =>
       _asMap(await _c.rpc('dev_cmd_spec', params: {'p_id': id}));

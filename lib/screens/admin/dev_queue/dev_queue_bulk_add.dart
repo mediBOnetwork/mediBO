@@ -340,10 +340,12 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
                         size: 18, color: kBrand),
                     const SizedBox(width: 8),
                     Text(
+                        // CHANGE #686 — c() fills no slots, so this had to
+                        // substitute the template by hand. cf() is the one
+                        // place substitution belongs.
                         n == 1
                             ? c('dev_queue.bulk_count_one')
-                            : c('dev_queue.bulk_count_many')
-                                .replaceFirst('{n}', '$n'),
+                            : cf('dev_queue.bulk_count_many', {'n': '$n'}),
                         style: const TextStyle(
                             fontSize: 13,
                             fontWeight: FontWeight.w700,

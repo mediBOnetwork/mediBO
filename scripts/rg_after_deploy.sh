@@ -59,4 +59,12 @@ fi
 # REPORT: a failure here is noise, never a red deploy.
 bash "$(dirname "$0")/god_files.sh" >/dev/null 2>&1 || true
 
+# CHANGE #686 — the cf() call sites and the ui_copy templates are compared on
+# the same pass. Neither side can see the other on its own (SQL cannot read
+# Dart; a protected test cannot reach the database), and that blind spot is
+# how "Ordered by: ${row.pharmacy.isNotEmpty ?" reached a screenshot. Like the
+# god-file scan this only REPORTS: the rows it writes make rg behaviour
+# c686_ui_copy_params red, and dev_cmd_complete() is where red is enforced.
+bash "$(dirname "$0")/ui_copy_param_check.sh" || true
+
 exit 0

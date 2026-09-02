@@ -487,6 +487,52 @@ end;
 $$;
 revoke all on function public.availability_heal_batch(bigint, bigint) from anon, authenticated;
 
+-- A supplier who ANSWERED for a product (inquiry history, stock-update loop)
+-- belongs on that zone's master list even if the company map has forgotten
+-- them — the invariant set_state keeps live, restored here for history that a
+-- rebuild may have dropped. Idempotent; returns rows touched per zone.
+create or replace function public.zone_readd_responders()
+returns jsonb
+language plpgsql
+security definer
+set search_path to 'public'
+as $$
+declare z record; v_n int; v_out jsonb := '{}'::jsonb;
+begin
+  for z in select id, code from zones where is_active and not coalesce(is_synthetic,false) loop
+    execute format($q$
+      with r as (
+        select i.product_id, btrim(i.responsed_by) as sup
+          from inquiry i
+         where i.zone_id = $1 and i.product_id is not null
+           and btrim(coalesce(i.responsed_by,'')) <> ''
+        union
+        select q.product_id, btrim(q.supplier_name)
+          from stock_update_queue q
+         where q.zone_id = $1 and q.product_id is not null
+           and btrim(coalesce(q.supplier_name,'')) <> ''
+      ), live as (
+        select r.product_id, sp.supplier_name as sup
+          from r
+          join supplier_profiles sp
+            on lower(btrim(sp.supplier_name)) = lower(r.sup)
+           and sp.zone_id = $1 and not coalesce(sp.is_deleted,false)
+      )
+      update public."MEDICINE" m
+         set %1$I = (select coalesce(array_agg(distinct s order by s), '{}'::text[])
+                       from unnest(m.%1$I || l.sups) s)
+        from (select product_id, array_agg(distinct sup) as sups from live group by product_id) l
+       where m.id = l.product_id
+         and not (m.%1$I @> l.sups)
+    $q$, 'z_'||z.code||'_sup') using z.id;
+    get diagnostics v_n = row_count;
+    v_out := v_out || jsonb_build_object(z.code, v_n);
+  end loop;
+  return v_out;
+end;
+$$;
+revoke all on function public.zone_readd_responders() from anon, authenticated;
+
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 6. THE VIEWER RULE — anon / unapproved = global, approved = zone
 -- ─────────────────────────────────────────────────────────────────────────────

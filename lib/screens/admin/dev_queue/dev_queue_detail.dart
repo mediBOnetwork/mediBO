@@ -295,19 +295,15 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
                 label: (_spec['route_label']).toString(),
                 tone: toneByName((_spec['route_tone'] ?? 'neutral').toString()),
                 icon: routeIcon((_spec['route'] ?? '').toString())),
-          // CHANGE #656: the model and the effort the row will build on. Both
-          // labels are backend strings (model_label / effort_label) — Dart
-          // neither maps a model id to a name nor capitalises an effort.
+          // CHANGE #656: the model this row will build on. The label is a
+          // backend string (model_label) — Dart never maps a model id to a
+          // name. The effort chip is the one #198 already draws below, from
+          // the same _dev_effort_label.
           if ((_row['model_label'] ?? '').toString().isNotEmpty)
             ToneChip(
                 label: (_row['model_label']).toString(),
                 tone: statusTone('pending'),
                 icon: Icons.memory),
-          if ((_row['effort_label'] ?? '').toString().isNotEmpty)
-            ToneChip(
-                label: (_row['effort_label']).toString(),
-                tone: statusTone('pending'),
-                icon: Icons.bolt),
           if ((_spec['area_label'] ?? '').toString().isNotEmpty)
             ToneChip(
                 label: (_spec['area_label']).toString(),

@@ -141,9 +141,138 @@ def promote(play: Play, code: int, to_track: str, notes: str,
             "release_notes": notes, "track_state": state, "tracks": tracks}
 
 
+
+# ── store listing text (CHANGE #644) ────────────────────────────────────────
+# The Play listing is COPY, not code: it changes far more often than the app
+# does and must never require a build, an AAB or a release to update. This is
+# the whole edits.listings lane — read the default language, PATCH only the two
+# description fields, commit, then re-read to prove what is live.
+#
+# PATCH, deliberately, not PUT: edits.listings.patch merges, so `title` and
+# `video` keep whatever Play already holds. A PUT would blank every field this
+# script did not name, which is exactly how a listing loses its promo video.
+
+SHORT_MAX = 80
+FULL_MAX = 4000
+
+
+def default_language(play: Play) -> str:
+    """The listing language Play treats as this app's default.
+
+    edits.details.get is authoritative (`defaultLanguage`); the listings.list
+    fallback exists only for the case where details omits it, and then the sole
+    existing listing IS the default by definition.
+    """
+    lang = (play.details() or {}).get("defaultLanguage") or ""
+    if lang:
+        return lang
+    langs = [l.get("language") for l in list_listings(play) if l.get("language")]
+    if len(langs) == 1:
+        return langs[0]
+    raise SystemExit(
+        "Play did not report a defaultLanguage and there are %d listings (%s) — "
+        "refusing to guess which one to edit" % (len(langs), ", ".join(langs) or "none"))
+
+
+def list_listings(play: Play) -> list[dict]:
+    got = play._req("GET",
+                    f"{API}/applications/{PKG}/edits/{play.edit_id}/listings",
+                    "listings.list")
+    return got.get("listings", []) or []
+
+
+def get_listing(play: Play, lang: str) -> dict:
+    return play._req("GET",
+                     f"{API}/applications/{PKG}/edits/{play.edit_id}/listings/{lang}",
+                     f"listings.get({lang})")
+
+
+def patch_listing(play: Play, lang: str, short: str, full: str) -> dict:
+    body = {"shortDescription": short, "fullDescription": full}
+    return play._req("PATCH",
+                     f"{API}/applications/{PKG}/edits/{play.edit_id}/listings/{lang}",
+                     f"listings.patch({lang})",
+                     headers={"Content-Type": "application/json"}, json=body)
+
+
+def commit_listing(play: Play) -> tuple[dict, bool]:
+    """Commit a text-only edit, and say whether Play took it into review.
+
+    An edit that carries no app release cannot always be sent for review
+    automatically; Play answers that with an explicit instruction to set
+    changesNotSentForReview=true. We follow Play's own instruction rather than
+    failing, and report which path was taken so the caller never has to guess
+    whether a human still owes the console a click.
+    """
+    edit_id = play.edit_id
+    try:
+        out = play._req(
+            "POST",
+            f"{API}/applications/{PKG}/edits/{edit_id}:commit"
+            "?changesNotSentForReview=false",
+            "edits.commit")
+        play.edit_id = None
+        return out, True
+    except PlayError as e:
+        if "changesNotSentForReview" not in (e.body or ""):
+            raise
+        play.edit_id = edit_id
+        out = play._req(
+            "POST",
+            f"{API}/applications/{PKG}/edits/{edit_id}:commit"
+            "?changesNotSentForReview=true",
+            "edits.commit(changesNotSentForReview=true)")
+        play.edit_id = None
+        return out, False
+
+
+def update_listing(play: Play, short: str, full: str,
+                   lang: str | None = None) -> dict:
+    """insert -> list -> patch -> commit -> get. Returns what is LIVE, re-read."""
+    if len(short) > SHORT_MAX:
+        raise SystemExit(f"shortDescription is {len(short)} chars; Play's limit is {SHORT_MAX}")
+    if len(full) > FULL_MAX:
+        raise SystemExit(f"fullDescription is {len(full)} chars; Play's limit is {FULL_MAX}")
+    if not short.strip() or not full.strip():
+        raise SystemExit("refusing to write an empty description to the Play listing")
+
+    play.open_edit()
+    edit_id = play.edit_id
+    languages = [l.get("language") for l in list_listings(play)]
+    lang = lang or default_language(play)
+    before = get_listing(play, lang)
+    patch_listing(play, lang, short, full)
+    committed, sent_for_review = commit_listing(play)
+
+    # Verify against a FRESH edit: the committed one is gone, and reading back
+    # through a new edit is the only way to see what Play actually stored.
+    play.open_edit()
+    live = get_listing(play, lang)
+    play.delete_edit()
+
+    return {
+        "ok": True,
+        "package": PKG,
+        "language": lang,
+        "languages": languages,
+        "edit_id": edit_id,
+        "committed_edit": committed.get("id") or edit_id,
+        "sent_for_review": sent_for_review,
+        "before": {"shortDescription": before.get("shortDescription", ""),
+                   "fullDescription": before.get("fullDescription", "")},
+        "live": live,
+        # Proof the write is the text we asked for, not merely a 200.
+        "verified": (live.get("shortDescription") == short
+                     and live.get("fullDescription") == full),
+        # Untouched by this lane, echoed so a regression is visible.
+        "title": live.get("title"),
+        "video": live.get("video"),
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["tracks", "promote"])
+    ap.add_argument("cmd", choices=["tracks", "promote", "listing"])
     ap.add_argument("--sa", required=True)
     ap.add_argument("--code", type=int)
     ap.add_argument("--to", dest="to_track", default="production")
@@ -151,6 +280,10 @@ def main() -> int:
     ap.add_argument("--notes-file")
     ap.add_argument("--fraction", type=float, default=None,
                     help="staged rollout fraction; omitted = full rollout")
+    ap.add_argument("--short-file", help="listing: file holding the shortDescription")
+    ap.add_argument("--full-file", help="listing: file holding the fullDescription")
+    ap.add_argument("--language", default=None,
+                    help="listing: override the language; default = Play's defaultLanguage")
     a = ap.parse_args()
 
     play = Play(a.sa)
@@ -161,6 +294,25 @@ def main() -> int:
             play.delete_edit()
             print(json.dumps({"ok": True, "tracks": out}, indent=2, sort_keys=True))
             return 0
+
+        if a.cmd == "listing":
+            # No text given = read-only: report the languages and what is live.
+            if not a.short_file and not a.full_file:
+                play.open_edit()
+                lang = a.language or default_language(play)
+                out = {"ok": True, "package": PKG, "language": lang,
+                       "languages": [l.get("language") for l in list_listings(play)],
+                       "live": get_listing(play, lang)}
+                play.delete_edit()
+                print(json.dumps(out, indent=2, sort_keys=True))
+                return 0
+            if not (a.short_file and a.full_file):
+                raise SystemExit("listing needs BOTH --short-file and --full-file")
+            short = open(a.short_file, encoding="utf-8").read().strip()
+            full = open(a.full_file, encoding="utf-8").read().strip()
+            out = update_listing(play, short, full, a.language)
+            print(json.dumps(out, indent=2, sort_keys=True))
+            return 0 if out["verified"] else 1
 
         if not a.code or not a.notes_file:
             raise SystemExit("promote needs --code and --notes-file")

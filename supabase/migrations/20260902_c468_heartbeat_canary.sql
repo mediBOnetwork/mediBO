@@ -2050,3 +2050,207 @@ values ('heartbeat', 'devtool.heartbeat', 'feature', 'dev_queue_screen',
 on conflict (route_key, feature_key) do update
   set kind = excluded.kind, handled_by = excluded.handled_by,
       note = excluded.note, is_active = true;
+
+-- ── M. THE SUPPLIER BILL PAIRING — settle and the panel now agree ────────
+CREATE OR REPLACE FUNCTION public.supplier_order_try_settle(p_supplier_order_id uuid, p_mode text DEFAULT 'auto'::text, p_actor text DEFAULT NULL::text, p_reason text DEFAULT NULL::text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare st jsonb; so supplier_orders%rowtype; v_day date; v_sid uuid;
+begin
+  select * into so from supplier_orders where id = p_supplier_order_id;
+  if not found then return jsonb_build_object('ok',false,'error','supplier_order_not_found'); end if;
+  if so.settled_at is not null then
+    return public._supplier_settle_state(p_supplier_order_id) || jsonb_build_object('already', true);
+  end if;
+  if coalesce(so.status,'') = 'cancelled' then
+    return jsonb_build_object('ok',true,'closed',false,'skipped','cancelled');
+  end if;
+
+  st := public._supplier_settle_state(p_supplier_order_id);
+  if coalesce((st->>'ok')::boolean,false) is not true then return st; end if;
+  if p_mode <> 'override' and coalesce((st->>'can_close')::boolean,false) is not true then
+    return st;
+  end if;
+
+  perform set_config('medibo.closing', '1', true);
+  v_day := coalesce(so.order_date, (so.created_at at time zone 'Asia/Kolkata')::date);
+  v_sid := coalesce(so.supplier_id,
+             (select id from supplier_profiles where lower(supplier_name)=lower(so.supplier_name) limit 1));
+
+  update supplier_orders
+     set status         = 'closed',
+         settled_at     = now(),
+         settled_by     = coalesce(p_actor,'system'),
+         settled_reason = p_reason,
+         settle_mode    = case when p_mode = 'override' then 'override' else 'auto' end
+   where id = p_supplier_order_id;
+
+  -- The bill itself is stamped settled — same supplier, same IST day, which is
+  -- the exact pairing sup_order_bill_panel() totals the money from.
+  --
+  -- CHANGE #468: it was NOT the same pairing. This used v_day
+  -- (= coalesce(order_date, created IST)) while the panel matches on the
+  -- CREATED date alone — the strict rule locked with Om on 23 Jul. The two
+  -- agree only while order_date equals the created date, so the moment a
+  -- rebuild re-stamped created_at, a settled supplier order's bill was never
+  -- stamped settled and stayed open money on the supplier ledger. Match the
+  -- panel exactly.
+  update pending_bills pb
+     set settled_at = now(), settled_order_id = p_supplier_order_id
+   where pb.settled_at is null
+     and lower(coalesce(pb.verdict,'')) <> 'fake'
+     and (pb.imported_at is not null or lower(coalesce(pb.status,'')) = 'imported')
+     and (pb.received_at at time zone 'Asia/Kolkata')::date
+         = (so.created_at at time zone 'Asia/Kolkata')::date
+     and ((v_sid is not null and pb.supplier_id = v_sid::text)
+       or (pb.supplier_id is null and pb.supplier_name is not null
+           and lower(pb.supplier_name) = lower(so.supplier_name)));
+
+  -- 'shipped' IS the removal from the supplier open-order scope: it is the
+  -- filter bill_lines_from_scan() matches a scanned line against.
+  update order_items oi
+     set fulfillment_state = 'shipped'
+    from orders o
+   where o.id = oi.order_id
+     and oi.assigned_supplier = so.supplier_name
+     and (o.created_at at time zone 'Asia/Kolkata')::date = v_day
+     and coalesce(oi.fulfillment_state,'') not in ('cancelled','shipped');
+
+  insert into order_closure_log(kind, supplier_order_id, event, mode, actor, reason, blockers)
+  values ('supplier_order', p_supplier_order_id, 'settled',
+          case when p_mode = 'override' then 'override' else 'auto' end,
+          coalesce(p_actor,'system'), p_reason, coalesce(st->'blockers','[]'::jsonb));
+
+  perform set_config('medibo.closing', '', true);
+  return public._supplier_settle_state(p_supplier_order_id) || jsonb_build_object('just_closed', true);
+end $function$;
+
+update public.rg_behavior_tests
+   set body = $ocs$
+
+do $rg$
+declare v_soid uuid; v_sname text; v_day date; v_ss jsonb; v_amt numeric; v_panel jsonb;
+        v_reopened int;
+begin
+  set local statement_timeout = '60s';
+  set local lock_timeout = '5s';
+  set local idle_in_transaction_session_timeout = '60s';
+  perform set_config('request.jwt.claims',
+    (select json_build_object('sub', u.id, 'email', u.email, 'role','authenticated')::text
+       from auth.users u join admins a on lower(a.email)=lower(u.email) limit 1), true);
+
+  select so.id, so.supplier_name, coalesce(so.order_date,(so.created_at at time zone 'Asia/Kolkata')::date)
+    into v_soid, v_sname, v_day
+    from supplier_orders so
+   where so.settled_at is null and coalesce(so.status,'') not in ('closed','shipped','cancelled')
+     and exists (select 1 from order_items x join orders o on o.id=x.order_id
+                  where x.assigned_supplier = so.supplier_name
+                    and (o.created_at at time zone 'Asia/Kolkata')::date =
+                        coalesce(so.order_date,(so.created_at at time zone 'Asia/Kolkata')::date)
+                    and coalesce(x.fulfillment_state,'') not in ('cancelled','unfillable','shipped'))
+   order by so.created_at desc limit 1;
+  -- CHANGE #229 (auto-heal) — never pass vacuously. Settling marks a supplier
+  -- order 'closed' and its lines 'shipped', so once settlement works the
+  -- candidate query above finds nothing and the old early RG_ROLLBACK would
+  -- report green forever. Re-open the newest settled/closed supplier order
+  -- (and its lines) inside this rolled-back transaction instead.
+  if v_soid is null then
+    select so.id, so.supplier_name,
+           coalesce(so.order_date, (so.created_at at time zone 'Asia/Kolkata')::date)
+      into v_soid, v_sname, v_day
+      from supplier_orders so
+     where exists (select 1 from order_items x join orders o on o.id = x.order_id
+                    where x.assigned_supplier = so.supplier_name
+                      and (o.created_at at time zone 'Asia/Kolkata')::date =
+                          coalesce(so.order_date, (so.created_at at time zone 'Asia/Kolkata')::date))
+     order by so.created_at desc limit 1;
+    if v_soid is null then raise exception 'RG_ROLLBACK'; end if;  -- no supplier orders at all
+    update supplier_orders
+       set status = 'pending', settled_at = null, settled_by = null,
+           settled_reason = null, settle_mode = null
+     where id = v_soid;
+    update order_items x set fulfillment_state = 'pending'
+      from orders o
+     where o.id = x.order_id and x.assigned_supplier = v_sname
+       and (o.created_at at time zone 'Asia/Kolkata')::date = v_day
+       and coalesce(x.fulfillment_state, '') = 'shipped';
+    update orders o set closed_at = null, close_mode = null, closed_by = null,
+                        closed_reason = null, status = 'accepted'
+     where o.closed_at is not null
+       and exists (select 1 from order_items x where x.order_id = o.id
+                     and x.assigned_supplier = v_sname
+                     and (o.created_at at time zone 'Asia/Kolkata')::date = v_day);
+    select count(*) into v_reopened from order_items x join orders o on o.id = x.order_id
+     where x.assigned_supplier = v_sname
+       and (o.created_at at time zone 'Asia/Kolkata')::date = v_day
+       and coalesce(x.fulfillment_state, '') not in ('cancelled', 'unfillable', 'shipped');
+    if coalesce(v_reopened, 0) = 0 then
+      raise exception 'RG_FAIL: settlement fixture re-open produced no live lines'; end if;
+  end if;
+
+  insert into supplier_count_mode(assigned_supplier) values (v_sname) on conflict do nothing;
+
+  update order_items x set fulfillment_state='received', received_locked=true
+    from orders o
+   where o.id = x.order_id and x.assigned_supplier = v_sname
+     and (o.created_at at time zone 'Asia/Kolkata')::date = v_day
+     and coalesce(x.fulfillment_state,'') not in ('cancelled','unfillable');
+
+  update supplier_disputes set status='resolved', resolved_at=now()
+   where coalesce(status,'') not in ('resolved','cancelled')
+     and order_item_id in (select x.id from order_items x join orders o on o.id=x.order_id
+                            where x.assigned_supplier=v_sname
+                              and (o.created_at at time zone 'Asia/Kolkata')::date = v_day);
+
+  v_amt := 1234.00;
+  insert into pending_bills(file_path,file_name,supplier_name,status,imported_at,received_at,scan_result,scan_status)
+  values ('rg/sup.pdf','rgsup.pdf', v_sname, 'imported', now(),
+          -- CHANGE #468: the panel's STRICT DATE MATCH is the supplier order's
+          -- CREATED date (IST), not its order_date. The fixture used v_day
+          -- (order_date when present), so the moment a rebuild re-stamped
+          -- created_at the bill stopped attaching and this test went red on a
+          -- fixture bug rather than a defect.
+          (((select (created_at at time zone 'Asia/Kolkata')::date
+               from supplier_orders where id = v_soid)::text || ' 12:00')::timestamp
+             at time zone 'Asia/Kolkata'),
+          jsonb_build_object('total', v_amt::text), 'done');
+
+  v_panel := public.sup_order_bill_panel(v_soid);
+  if coalesce((v_panel->>'any_bill_imported')::boolean,false) is not true then
+    raise exception 'RG_FAIL: fixture bill not attached: %', v_panel; end if;
+
+  v_ss := public._supplier_settle_state(v_soid);
+  if (v_ss->>'can_close')::boolean then raise exception 'RG_FAIL: settleable while the bill is unpaid: %', v_ss; end if;
+
+  insert into supplier_payments(supplier_order_id, supplier_name, amount, mode, kind, created_by)
+  values (v_soid, v_sname,
+          coalesce((v_panel->>'bills_amount_total')::numeric,0) + coalesce((v_panel->>'adjustments_total')::numeric,0)
+            - coalesce((v_panel->>'total_paid')::numeric,0),
+          'online','balance','rg');
+
+  v_ss := public._supplier_settle_state(v_soid);
+  if (v_ss->>'closed')::boolean is not true then
+    raise exception 'RG_FAIL: received+undisputed+paid supplier order did NOT settle: %', v_ss; end if;
+  if (select status from supplier_orders where id=v_soid) <> 'closed' then
+    raise exception 'RG_FAIL: settled supplier order status is %', (select status from supplier_orders where id=v_soid); end if;
+  if (select settled_at from supplier_orders where id=v_soid) is null then
+    raise exception 'RG_FAIL: settled_at not stamped'; end if;
+  if exists (select 1 from order_items x join orders o on o.id=x.order_id
+              where x.assigned_supplier=v_sname
+                and (o.created_at at time zone 'Asia/Kolkata')::date=v_day
+                and coalesce(x.fulfillment_state,'') not in ('shipped','cancelled')) then
+    raise exception 'RG_FAIL: settled supplier lines still sit in the bill-matching scope'; end if;
+  if not exists (select 1 from order_closure_log where supplier_order_id=v_soid and event='settled') then
+    raise exception 'RG_FAIL: settlement not logged'; end if;
+  if not exists (select 1 from pending_bills where settled_order_id = v_soid and settled_at is not null) then
+    raise exception 'RG_FAIL: the supplier bill itself was not stamped settled'; end if;
+  if not exists (select 1 from pending_bills where settled_order_id = v_soid
+                   and (imported_at is not null or lower(coalesce(status,''))='imported')) then
+    raise exception 'RG_FAIL: settling un-imported the bill'; end if;
+
+  raise exception 'RG_ROLLBACK';
+end $rg$;$ocs$
+ where name = 'order_closure_supplier';

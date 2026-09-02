@@ -44,6 +44,7 @@ import 'screens/public/wa_link_redirect_page.dart'; // /r/:code — campaign lin
 import 'screens/admin/wa_campaigns_screen.dart'; // /admin/wa-campaigns
 import 'screens/admin/admin_scope_audit_screen.dart'; // /admin/scope-audit
 import 'screens/admin/dev_queue/cron_health_screen.dart'; // /admin/cron-health
+import 'screens/admin/test_mode_screen.dart';  // /admin/test-mode (#573)
 import 'screens/admin/admin_delivery_extras_screen.dart'; // /admin/delivery-programme
 import 'screens/pharmacy/pharmacy_owner_screen.dart';
 import 'screens/pharmacy/pharmacy_expiry_screen.dart';   // CMD #413 — /pharmacy/expiry
@@ -834,6 +835,19 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
                 return MaterialPageRoute(
                   settings: settings,
                   builder: (_) => const CronHealthScreen(),
+                );
+              }
+              // CHANGE #573 — the synthetic lane's console, at a real URL for
+              // the same reason /admin/cron-health has one: Flutter renders to
+              // canvas, so without a URL no headless verifier can ever prove
+              // this screen painted. It is still reached by tapping
+              // Admin & System -> Test mode; the URL adds no privilege of its
+              // own — test_mode_screen() answers {ok:false, not_authorized} for
+              // anyone who is not an admin and the screen renders that reply.
+              if (name.split('?').first == '/admin/test-mode') {
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => const TestModeScreen(),
                 );
               }
               // CHANGE #323 — partner settlement, at a real URL for the same

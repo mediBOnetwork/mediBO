@@ -26,6 +26,8 @@ import 'dart:async';
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'live_feed.dart';
+
 import '../utils/render_log.dart';
 
 class AdminDateScope {
@@ -172,7 +174,7 @@ class AdminDateScope {
   }
 
   // ── realtime ──────────────────────────────────────────────────────────────
-  RealtimeChannel? _channel;
+  LiveFeedHandle? _channel;
   Timer? _debounce;
   Timer? _retry;
   int _backoffIdx = 0;
@@ -190,28 +192,25 @@ class AdminDateScope {
 
   void _subscribe() {
     try {
-      final ch = Supabase.instance.client
-          .channel('admin_date_scope_c545')
-          .onPostgresChanges(
-            event: PostgresChangeEvent.all,
-            schema: 'public',
-            table: 'admin_date_scope',
-            callback: (_) => _onEvent(),
-          );
-      ch.subscribe((status, [error]) {
-        if (status == RealtimeSubscribeStatus.subscribed) {
-          _backoffIdx = 0;
-          RenderLog.write('c545_date_rt', 's=up');
-          // Events may have been missed while the socket was down.
-          refresh();
-        } else if (status == RealtimeSubscribeStatus.closed ||
-            status == RealtimeSubscribeStatus.channelError ||
-            status == RealtimeSubscribeStatus.timedOut) {
-          RenderLog.write('c545_date_rt', 's=down');
-          _scheduleRetry();
-        }
+      // CHANGE #643: one row that changes a few times a day does not earn a
+      // standing WAL subscription. LiveFeed polls it on the registry's interval.
+      LiveFeed.instance
+          .watch(
+            channelPrefix: 'admin_date_scope_c545',
+            tables: const ['admin_date_scope'],
+            onChange: (_) => _onEvent(),
+          )
+          .then((h) {
+        _channel?.unsubscribe();
+        _channel = h;
+        _backoffIdx = 0;
+        RenderLog.write('c545_date_rt', 's=up');
+        // Events may have been missed while the socket was down.
+        refresh();
+      }).catchError((Object _) {
+        RenderLog.write('c545_date_rt', 's=down');
+        _scheduleRetry();
       });
-      _channel = ch;
     } catch (_) {
       _scheduleRetry();
     }

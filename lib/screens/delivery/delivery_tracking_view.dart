@@ -26,6 +26,8 @@ import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../services/live_feed.dart';
+
 import '../../fulfill/fulfill_lookups.dart';
 import '../../utils/render_log.dart';
 import 'delivery_run_map_panel.dart';
@@ -159,7 +161,7 @@ class DeliveryTrackingView extends StatefulWidget {
 }
 
 class _DeliveryTrackingViewState extends State<DeliveryTrackingView> {
-  RealtimeChannel? _channel;
+  LiveFeedHandle? _channel;
   Timer? _debounce;
 
   @override
@@ -187,15 +189,24 @@ class _DeliveryTrackingViewState extends State<DeliveryTrackingView> {
   /// fleet mid-run cannot turn into a refetch storm.
   void _subscribe() {
     try {
-      _channel = Supabase.instance.client
-          .channel('delivery_track_${DateTime.now().microsecondsSinceEpoch}')
-          .onPostgresChanges(
-            event: PostgresChangeEvent.all,
-            schema: 'public',
-            table: 'delivery_partner_locations',
-            callback: (_) => _bump(),
+      // CHANGE #643: an UNFILTERED binding on a rider-position table fanned
+      // every rider's every ping to every viewer. The registry puts this on a
+      // 15 s poll — inside the useful resolution of a road move — and the
+      // refetch below is unchanged.
+      LiveFeed.instance
+          .watch(
+            channelPrefix: 'delivery_track',
+            tables: const ['delivery_partner_locations'],
+            onChange: (_) => _bump(),
           )
-          .subscribe();
+          .then((h) {
+        if (!mounted) {
+          h.dispose();
+          return;
+        }
+        _channel?.unsubscribe();
+        _channel = h;
+      });
       RenderLog.write('c629_track_realtime', 'subscribed');
     } catch (_) {
       // No socket -> the view still renders the payload it already has.

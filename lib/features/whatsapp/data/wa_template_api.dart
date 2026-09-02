@@ -253,15 +253,10 @@ class WaTemplateApi {
       if (renderWidth == null) {
         return await storage.createSignedUrl(path, expiresIn);
       }
-      return await storage.createSignedUrl(
-        path,
-        expiresIn,
-        transform: TransformOptions(
-          width: renderWidth,
-          quality: renderQuality,
-          resize: ResizeMode.contain,
-        ),
-      );
+      // CHANGE #643: plain signed URL — no server-side render. Supabase image
+      // transformations are a metered project feature and were at 86/100 for
+      // the cycle; a template preview does not need to spend one.
+      return await storage.createSignedUrl(path, expiresIn);
     } catch (_) {
       return null;
     }

@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import '../../services/date_labels.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../services/live_feed.dart';
+
 import '../../services/ui_copy.dart';
 import '../../utils/bill_mime.dart';
 import '../../utils/download_bytes.dart';
@@ -45,7 +47,7 @@ class _SupplierOrdersScreenState extends State<SupplierOrdersScreen> {
   bool _loading = false;
   bool _firstLoad = true;
   String? _expandedOrderId;
-  RealtimeChannel? _rt;
+  LiveFeedHandle? _rt;
 
   @override
   void initState() {
@@ -61,16 +63,21 @@ class _SupplierOrdersScreenState extends State<SupplierOrdersScreen> {
   }
 
   void _subscribeRealtime() {
-    final ts = DateTime.now().millisecondsSinceEpoch;
-    _rt = Supabase.instance.client
-        .channel('sup_orders_rt_$ts')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'supplier_orders',
-          callback: (_) => _fetch(source: 'realtime', silent: true),
+    // CHANGE #643: transport chosen by realtime_plan(); the refetch is the same.
+    LiveFeed.instance
+        .watch(
+          channelPrefix: 'sup_orders_rt',
+          tables: const ['supplier_orders'],
+          onChange: (_) => _fetch(source: 'realtime', silent: true),
         )
-        .subscribe();
+        .then((h) {
+      if (!mounted) {
+        h.dispose();
+        return;
+      }
+      _rt?.unsubscribe();
+      _rt = h;
+    });
   }
 
   Future<void> _fetch({String source = 'manual', bool silent = false}) async {

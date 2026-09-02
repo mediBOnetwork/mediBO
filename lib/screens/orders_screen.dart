@@ -16,6 +16,8 @@ import 'package:http/http.dart' as http;
 import 'package:pharma_b2b/utils/toast.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../services/live_feed.dart';
+
 import '../utils/download_bytes.dart';
 import '../utils/order_code.dart';
 import '../utils/render_log.dart';
@@ -248,7 +250,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
   String _emptyNote = '';
   /// #572 — the ACCOUNT id, as the backend resolved it. Realtime keys on this.
   String _customerId = '';
-  RealtimeChannel? _channel;
+  LiveFeedHandle? _channel;
 
   // ── CHANGE #614 ───────────────────────────────────────────────────────────
   /// Backend answers, adopted verbatim. `has_orders` decides whether the list
@@ -521,20 +523,31 @@ class _OrdersScreenState extends State<OrdersScreen> {
     final accountId = _customerId;
     if (accountId.isEmpty) return;
     _channel?.unsubscribe();
-    _channel = Supabase.instance.client
-        .channel('customer_orders_$accountId')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'orders',
-          filter: PostgresChangeFilter(
-            type: PostgresChangeFilterType.eq,
-            column: 'customer_id',
-            value: accountId,
-          ),
-          callback: (_) => _fetch(),
+    // CHANGE #643: `orders` is the highest-churn table in the app and no longer
+    // publishes to Realtime — LiveFeed reads realtime_plan() and puts this on
+    // the backend's own interval instead. The callback is unchanged: this was
+    // always a refetch trigger, never a row parser.
+    LiveFeed.instance
+        .watch(
+          channelPrefix: 'customer_orders_$accountId',
+          tables: const ['orders'],
+          filters: {
+            'orders': PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'customer_id',
+              value: accountId,
+            ),
+          },
+          onChange: (_) => _fetch(),
         )
-        .subscribe();
+        .then((h) {
+      if (!mounted) {
+        h.dispose();
+        return;
+      }
+      _channel?.unsubscribe();
+      _channel = h;
+    });
   }
 
   @override

@@ -4,6 +4,8 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+import '../../services/live_feed.dart';
 import 'package:pharma_b2b/services/date_labels.dart';
 import 'package:pharma_b2b/services/ui_copy.dart';
 import 'package:pharma_b2b/utils/toast.dart';
@@ -89,12 +91,15 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
   bool _detailsOpen = false;
   bool _busy = false;
 
-  RealtimeChannel? _channel;
-  RealtimeChannel? _orderChannel;
-  RealtimeChannel? _supplierChannel;
-  RealtimeChannel? _mrChannel;
-  RealtimeChannel? _companyChannel;
-  RealtimeChannel? _dpChannel;
+  // CHANGE #643: six unfiltered postgres_changes channels (pharmacy_profiles,
+  // supplier_profiles, orders, mr_registrations, company_profiles,
+  // delivery_partner_registrations) replaced by ONE backend read. Three of
+  // those tables were never in the publication, so three of the six had been
+  // delivering nothing since the day they were written; the other three fanned
+  // every INSERT on the busiest tables in the product to every admin session.
+  LiveFeedHandle? _alertWatch;
+  String? _alertCursor;
+  bool _alertInFlight = false;
   late final AnimationController _flashCtrl;
   late final Animation<double> _flashAnim;
   late final AnimationController _slideCtrl;
@@ -117,12 +122,7 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
       begin: const Offset(0, -0.06), end: Offset.zero,
     ).animate(CurvedAnimation(parent: _slideCtrl, curve: Curves.easeOutCubic));
 
-    _subscribeRealtime();
-    _subscribeOrders();
-    _subscribeSuppliers();
-    _subscribeMr();
-    _subscribeCompanies();
-    _subscribeDeliveryPartners();
+    _startAlertFeed();
 
     // Listen for messages from the FCM service worker (dedup: SW posts when
     // app is focused so we don't also get the OS notification)
@@ -137,120 +137,80 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
     });
   }
 
-  void _subscribeRealtime() {
-    final ts = DateTime.now().millisecondsSinceEpoch;
-    _channel = Supabase.instance.client
-        .channel('admin_new_reg_$ts')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.insert,
-          schema: 'public',
-          table: 'pharmacy_profiles',
-          callback: (payload) {
-            final rec = Map<String, dynamic>.from(payload.newRecord);
-            if (rec.isEmpty) return;
-            final approved = rec['approved'] as bool? ?? false;
-            final status   = rec['status']   as String? ?? '';
-            final id       = rec['id']       as String? ?? '';
-            if (!approved && (status == 'pending' || status.isEmpty)) {
-              _enqueue(rec, id);
-            }
-          },
+  /// CHANGE #643 — one read: "what has arrived since I last asked?".
+  ///
+  /// admin_alert_new_since() decides which rows are alert-worthy (a pending
+  /// registration, a pending order) and hands them back already typed by
+  /// `kind`. This method routes each one to the same enqueue it always used —
+  /// nothing about which alerts appear, or in what order, is decided here.
+  ///
+  /// The cadence is the registry's: LiveFeed watches the tables this feed is
+  /// built from, so if any of them is ever put back on a live channel the
+  /// overlay picks that up with no code change.
+  void _startAlertFeed() {
+    _pollAlerts();
+    LiveFeed.instance
+        .watch(
+          channelPrefix: 'admin_alert_overlay',
+          tables: const [
+            'pharmacy_profiles',
+            'supplier_profiles',
+            'orders',
+            'mr_registrations',
+            'company_profiles',
+            'delivery_partner_registrations',
+          ],
+          onChange: (_) => _pollAlerts(),
         )
-        .subscribe();
+        .then((h) {
+      if (!mounted) {
+        h.dispose();
+        return;
+      }
+      _alertWatch?.dispose();
+      _alertWatch = h;
+    });
   }
 
-  void _subscribeSuppliers() {
-    final ts = DateTime.now().millisecondsSinceEpoch;
-    _supplierChannel = Supabase.instance.client
-        .channel('admin_new_sup_reg_$ts')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.insert,
-          schema: 'public',
-          table: 'supplier_profiles',
-          callback: (payload) {
-            final rec = Map<String, dynamic>.from(payload.newRecord);
-            if (rec.isEmpty) return;
-            final approved = rec['approved'] as bool? ?? false;
-            final status   = rec['status']   as String? ?? '';
-            final id       = rec['id']       as String? ?? '';
-            if (!approved && (status == 'pending' || status.isEmpty)) {
-              _enqueueSupplier(rec, id);
-            }
-          },
-        )
-        .subscribe();
-  }
-
-  void _subscribeMr() {
-    final ts = DateTime.now().millisecondsSinceEpoch;
-    _mrChannel = Supabase.instance.client
-        .channel('admin_new_mr_$ts')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.insert,
-          schema: 'public',
-          table: 'mr_registrations',
-          callback: (payload) {
-            final rec = Map<String, dynamic>.from(payload.newRecord);
-            if (rec.isEmpty) return;
-            _enqueueGeneric(rec, rec['id'] as String? ?? '', 'mr_registration');
-          },
-        )
-        .subscribe();
-  }
-
-  void _subscribeCompanies() {
-    final ts = DateTime.now().millisecondsSinceEpoch;
-    _companyChannel = Supabase.instance.client
-        .channel('admin_new_co_$ts')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.insert,
-          schema: 'public',
-          table: 'company_profiles',
-          callback: (payload) {
-            final rec = Map<String, dynamic>.from(payload.newRecord);
-            if (rec.isEmpty) return;
-            _enqueueGeneric(rec, rec['id'] as String? ?? '', 'company_registration');
-          },
-        )
-        .subscribe();
-  }
-
-  void _subscribeDeliveryPartners() {
-    final ts = DateTime.now().millisecondsSinceEpoch;
-    _dpChannel = Supabase.instance.client
-        .channel('admin_new_dp_$ts')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.insert,
-          schema: 'public',
-          table: 'delivery_partner_registrations',
-          callback: (payload) {
-            final rec = Map<String, dynamic>.from(payload.newRecord);
-            if (rec.isEmpty) return;
-            _enqueueGeneric(rec, rec['id'] as String? ?? '', 'dp_registration');
-          },
-        )
-        .subscribe();
-  }
-
-  void _subscribeOrders() {
-    final ts = DateTime.now().millisecondsSinceEpoch;
-    _orderChannel = Supabase.instance.client
-        .channel('admin_new_order_$ts')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.insert,
-          schema: 'public',
-          table: 'orders',
-          callback: (payload) {
-            final rec = Map<String, dynamic>.from(payload.newRecord);
-            if (rec.isEmpty) return;
-            final status = rec['status'] as String? ?? '';
-            final id     = rec['id']     as String? ?? '';
-            if (status == 'pending' || status.isEmpty) {
-              _enqueueOrder(rec, id);
-            }
-          },
-        )
-        .subscribe();
+  Future<void> _pollAlerts() async {
+    if (_alertInFlight || !mounted) return;
+    _alertInFlight = true;
+    try {
+      final raw = await Supabase.instance.client.rpc(
+        'admin_alert_new_since',
+        params: {'p_since': _alertCursor},
+      );
+      final m = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
+      if (m is! Map || m['ok'] != true || !mounted) return;
+      _alertCursor = m['server_time']?.toString() ?? _alertCursor;
+      for (final e in (m['rows'] as List? ?? const [])) {
+        if (e is! Map) continue;
+        final kind = e['kind']?.toString() ?? '';
+        final id = e['id']?.toString() ?? '';
+        final row = e['row'];
+        if (id.isEmpty || row is! Map) continue;
+        final rec = Map<String, dynamic>.from(row);
+        switch (kind) {
+          case 'new_registration':
+            _enqueue(rec, id);
+            break;
+          case 'new_supplier':
+            _enqueueSupplier(rec, id);
+            break;
+          case 'new_order':
+            _enqueueOrder(rec, id);
+            break;
+          default:
+            // mr_registration / company_registration / dp_registration —
+            // the backend's own alert type, printed as it arrived.
+            _enqueueGeneric(rec, id, kind);
+        }
+      }
+    } catch (_) {
+      // A failed poll shows nothing new; the next tick asks again.
+    } finally {
+      _alertInFlight = false;
+    }
   }
 
   Future<void> _maybeFetchAndEnqueue(String id) async {
@@ -478,12 +438,7 @@ class _AdminAlertOverlayState extends State<AdminAlertOverlay>
 
   @override
   void dispose() {
-    _channel?.unsubscribe();
-    _orderChannel?.unsubscribe();
-    _supplierChannel?.unsubscribe();
-    _mrChannel?.unsubscribe();
-    _companyChannel?.unsubscribe();
-    _dpChannel?.unsubscribe();
+    _alertWatch?.dispose();
     audioStop();
     orderAudioStop();
     _flashCtrl.dispose();

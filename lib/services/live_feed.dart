@@ -74,6 +74,11 @@ class LiveFeedHandle {
     _disposed = true;
     _dispose();
   }
+
+  /// Same thing, under the name the call sites already used when they held a
+  /// RealtimeChannel — so swapping the transport does not also rewrite every
+  /// dispose() in the app.
+  void unsubscribe() => dispose();
 }
 
 class LiveFeed {

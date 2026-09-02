@@ -27,7 +27,6 @@ class OrderAlertService extends ChangeNotifier {
   /// The last order_alert_feed() payload, verbatim. Null until the first read.
   Map<String, dynamic>? feed;
 
-  RealtimeChannel? _alertChannel;
   Timer? _poll;
   bool _started = false;
 
@@ -53,7 +52,6 @@ class OrderAlertService extends ChangeNotifier {
     if (_started) return;
     _started = true;
     await refresh();
-    _subscribe();
     // A backstop only: realtime is the live path, this catches a dropped
     // socket. The interval is the backend's own poll_s.
     final secs = (feed?['poll_s'] as num?)?.toInt() ?? 20;
@@ -61,19 +59,11 @@ class OrderAlertService extends ChangeNotifier {
     _poll = Timer.periodic(Duration(seconds: secs.clamp(10, 120)), (_) => refresh());
   }
 
-  void _subscribe() {
-    if (_alertChannel != null) return;
-    final ts = DateTime.now().millisecondsSinceEpoch;
-    _alertChannel = _db
-        .channel('admin_order_alert_$ts')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'order_alert',
-          callback: (_) => refresh(),
-        )
-        .subscribe();
-  }
+  // CHANGE #643: `order_alert` is not in the supabase_realtime publication and
+  // never was, so this channel delivered nothing from the day it was written —
+  // it only held a binding open. The alert feed was already refreshed on the
+  // backend's own poll_s interval (see _startPolling above), which is what has
+  // actually been driving this surface all along.
 
   Future<void> refresh() async {
     try {
@@ -190,7 +180,6 @@ class OrderAlertService extends ChangeNotifier {
   @override
   void dispose() {
     _poll?.cancel();
-    _alertChannel?.unsubscribe();
     super.dispose();
   }
 }

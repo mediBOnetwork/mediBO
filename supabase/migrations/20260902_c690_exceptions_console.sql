@@ -563,6 +563,8 @@ begin
                  'label', public._c('exc.action.' || p.reason_code),
                  'rpc', '', 'args', '{}'::jsonb,
                  'route', coalesce(nullif(p.action_route, ''),
+                            (select m.route from public.exception_route_map m
+                              where m.class_key = p.action_ref),
                             (select c.action_route from public.ops_board_class c
                               where c.key = p.action_ref), ''))
                else jsonb_build_object('has', false, 'kind', 'none',
@@ -1164,3 +1166,31 @@ grant execute on function public.exception_scorecard_inputs(text, text, integer)
 grant execute on function public._exception_rows()                        to service_role;
 grant execute on function public._exception_writable(text)                to service_role;
 grant execute on function public.exception_digest_line(smallint)          to service_role;
+
+-- ── 17. The action must actually go somewhere ───────────────────────────────
+-- ops_board_class.action_route names an ops-board destination, and four of
+-- those names ('orders', 'inquiry', 'bills', 'payments') are not routes the
+-- shell can open — the dashboard tile has always landed on "that screen is not
+-- available". A console whose next action does nothing is worse than no
+-- action, so sla_breach translates the class to a route the shell really
+-- serves. It is DATA: a new class is one INSERT, never a deploy.
+create table if not exists public.exception_route_map (
+  class_key text primary key,
+  route     text not null,
+  note      text
+);
+
+insert into public.exception_route_map (class_key, route, note) values
+  ('orders_open',         'customer_order',  'Fulfill stage 1 — the customer order itself'),
+  ('supplier_unsettled',  'supplier_order',  'Fulfill stage 3 — the supplier order'),
+  ('inquiry_pending',     'supplier_inquiry','Fulfill stage 2 — the waterfall'),
+  ('bills_pending',       'bill_pipeline',   'Bill pipeline'),
+  ('bill_scan_error',     'bill_pipeline',   'Bill pipeline — re-run the scan'),
+  ('catalog_barcode_gap', 'add_medicine',    'Add medicine — attach the code to its product')
+on conflict (class_key) do update
+  set route = excluded.route, note = excluded.note;
+
+-- Payment claims are verified on the Money screen's "To verify" tab (#450),
+-- which is a route the shell opens; 'payments' is not.
+update public.exception_reason set action_route = 'money'
+ where reason_code = 'payment_claim_stuck';

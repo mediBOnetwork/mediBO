@@ -827,11 +827,7 @@ class _HomeShellState extends State<HomeShell> {
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const BagsScreen()));
         break;
-      // CHANGE #690 — the exceptions console is a Fulfill STAGE, not a page of
-      // its own, so /admin/go/exceptions opens the fulfilment screen (index 10)
-      // and then asks it for that stage by the BACKEND's own key. A login that
-      // fulfill_tabs() never sent the stage to lands on the bar it already had.
-      case 'exceptions':
+      case 'exceptions': // CHANGE #690 — a Fulfill stage, not a page.
         setState(() { _index = 10; _cartOpen = false; });
         WidgetsBinding.instance.addPostFrameCallback(
             (_) => AdminFulfillmentScreen.openStage('exceptions'));
@@ -1716,8 +1712,13 @@ class _HomeShellState extends State<HomeShell> {
           // is handed the same bound the partner route path has always passed:
           // the tab numbers the BACKEND granted. Null — every full admin — is
           // unbounded and unchanged.
-          adminPage(() => AdminFulfillmentScreen(
-              allowedTabs: Access.instance.allowedTabIndexes('fulfillment'))),
+          // CHANGE #690 — wrapped like the dashboard: an exception's next
+          // action points out of the pipeline, and .of(context) must resolve.
+          adminPage(() => QuickLinkNavigator(
+                navigate: _handleAdminNav,
+                child: AdminFulfillmentScreen(
+                    allowedTabs:
+                        Access.instance.allowedTabIndexes('fulfillment')))),
           // CHANGE #536 — index 11, MY SHOP. It is appended rather than slotted
           // in beside the customer's other three pages because indices 3–10 are
           // addressed by number from _handleAdminNav; inserting would have

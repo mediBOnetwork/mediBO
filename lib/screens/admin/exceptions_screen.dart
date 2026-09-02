@@ -25,6 +25,15 @@
 //     renders neutral rather than blanking the card, and a reason_code this
 //     build has never heard of still renders, because its label came with it.
 //
+// REACHABILITY. The console is Fulfill stage 10 (feature_registry
+// 'fulfill.exceptions'), and /admin/go/exceptions opens it directly so a digest
+// line or a notification has somewhere to point — the shell switches to the
+// fulfilment screen and asks it for the stage by the BACKEND's own key, which
+// is ignored in silence if fulfill_tabs() never sent that stage to this login.
+// The fulfilment page is wrapped in a QuickLinkNavigator for the same reason
+// the dashboard is: a next action here can point OUT of the pipeline (Money,
+// Bill pipeline, WhatsApp Ops, Add medicine), and those buttons must resolve.
+//
 // Styling is 100% `Ds` tokens (DESIGN.md / CHANGE #66): zero style literals.
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -458,16 +467,17 @@ class _ExceptionCard extends StatelessWidget {
                 ),
               if (act['has'] == true && canClose)
                 SizedBox(width: Ds.space.x12),
+              // One filled primary per surface, and it lives in the close
+              // sheet: a list of cards each shouting a green button is a wall,
+              // not a hierarchy. Here the action leads and Close follows it.
               if (canClose)
-                Expanded(
-                  child: SizedBox(
-                    height: Ds.touch.minTarget,
-                    child: FilledButton(
-                      key: Key('exc_close_${s('id')}'),
-                      onPressed: busy ? null : () => onClose(data),
-                      child: Text(s('close_label'),
-                          maxLines: 1, overflow: TextOverflow.ellipsis),
-                    ),
+                SizedBox(
+                  height: Ds.touch.minTarget,
+                  child: TextButton(
+                    key: Key('exc_close_${s('id')}'),
+                    onPressed: busy ? null : () => onClose(data),
+                    child: Text(s('close_label'),
+                        maxLines: 1, overflow: TextOverflow.ellipsis),
                   ),
                 ),
             ]),

@@ -729,7 +729,9 @@ begin
          'residue_label', public.uic('test_session.residue_label','Rows still held'),
          'files_label',   public.uic('test_session.files_label','Files still held'),
          'proof_clean',   public.uic('test_session.proof_clean',''),
-         'proof_dirty',   public.uic('test_session.proof_dirty','')))
+         'proof_dirty',   public.uic('test_session.proof_dirty',''),
+         'purge_row_label', public.uic('test_session.purge_action','Purge this session'),
+         'confirm_purge',   public.uic('test_session.confirm_purge','')))
     || jsonb_build_object('banner', public.test_session_banner())
     || jsonb_build_object('actions', v_actions || coalesce(v->'actions','[]'::jsonb));
 end $fn$;

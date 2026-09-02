@@ -19,8 +19,12 @@
 // The one thing chosen locally is the same thing every screen chooses locally:
 // a backend TONE NAME resolved to the fixed design palette.
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+import '../../services/test_session.dart';
 
 import '../../design_tokens.dart';
 import '../../utils/render_log.dart';
@@ -89,12 +93,16 @@ class TestModeService {
   Future<Map<String, dynamic>> set(Map<String, dynamic> patch) async =>
       _asMap(await _c.rpc('test_mode_set', params: {'p_patch': patch}));
 
-  Future<Map<String, dynamic>> runFull() async =>
-      _asMap(await _c.rpc('test_run_full', params: {'p_label': null}));
-
-  Future<Map<String, dynamic>> purge({required bool includeFixtures}) async =>
-      _asMap(await _c
-          .rpc('test_purge', params: {'p_include_fixtures': includeFixtures}));
+  /// CHANGE #573 — ONE door for every button on this screen. The payload sends
+  /// the action keys; this posts the key back. No Dart switch decides what a
+  /// button does, so a new action is a backend row and never a deploy.
+  Future<Map<String, dynamic>> act(String key,
+      {Map<String, dynamic> arg = const {}}) async {
+    final raw = _asMap(await _c
+        .rpc('test_mode_action', params: {'p_key': key, 'p_arg': arg}));
+    final r = raw['result'];
+    return r is Map ? Map<String, dynamic>.from(r) : raw;
+  }
 }
 
 class TestModeScreen extends StatefulWidget {
@@ -172,6 +180,9 @@ class _TestModeScreenState extends State<TestModeScreen> {
             .showSnackBar(SnackBar(content: Text(msg)));
       }
       _phoneTouched = false;
+      // The platform-wide strip is driven by its own poll; refresh it now so
+      // switching the session on or off is visible immediately, everywhere.
+      unawaited(TestSessionState.instance.refresh());
       await _load();
     } catch (e) {
       if (!mounted) return;
@@ -218,17 +229,22 @@ class _TestModeScreenState extends State<TestModeScreen> {
       if (ok != true) return;
     }
 
-    switch ((action['key'] ?? '').toString()) {
-      case 'run_full':
-        await _run(_svc.runFull);
-        break;
-      case 'purge':
-        await _run(() => _svc.purge(includeFixtures: false));
-        break;
-      case 'purge_all':
-        await _run(() => _svc.purge(includeFixtures: true));
-        break;
-    }
+    final key = (action['key'] ?? '').toString();
+    if (key.isEmpty) return;
+    final arg = action['arg'];
+    final params = arg is Map ? Map<String, dynamic>.from(arg) : <String, dynamic>{};
+    await _run(() async {
+      var res = await _svc.act(key, arg: params);
+      // A purge is BOUNDED on the server so it can never blow the statement
+      // timeout. `done:false` is the backend saying "call me again" — the
+      // screen obeys that flag, it does not decide when the wipe is finished.
+      var rounds = 0;
+      while (res['done'] == false && rounds < 30) {
+        rounds++;
+        res = await _svc.act(key, arg: params);
+      }
+      return res;
+    });
   }
 
   String _s2(String key) => (_s[key] ?? '').toString();
@@ -245,6 +261,7 @@ class _TestModeScreenState extends State<TestModeScreen> {
     final fixtures = (_s['fixtures'] as Map?) ?? const {};
     final counts = (_s['counts'] as Map?) ?? const {};
     final runs = (_s['runs'] as Map?) ?? const {};
+    final sessions = (_s['sessions'] as Map?) ?? const {};
     final proof = (_s['proof'] as Map?) ?? const {};
     final actions = (_s['actions'] as List?) ?? const [];
 
@@ -284,6 +301,8 @@ class _TestModeScreenState extends State<TestModeScreen> {
                   _switchCard(Map<String, dynamic>.from(sw),
                       Map<String, dynamic>.from(rzp)),
                   SizedBox(height: Ds.space.x24),
+                  _sessionsCard(Map<String, dynamic>.from(sessions)),
+                  SizedBox(height: Ds.space.x24),
                   _proofCard(Map<String, dynamic>.from(proof)),
                   SizedBox(height: Ds.space.x24),
                   _fixturesCard(Map<String, dynamic>.from(fixtures)),
@@ -305,6 +324,105 @@ class _TestModeScreenState extends State<TestModeScreen> {
   }
 
   // ── pieces ────────────────────────────────────────────────────────────────
+
+  /// CHANGE #573 — the session list. One row per manual incognito run, with
+  /// what it is still holding and, once purged, the backend's own verdict on
+  /// whether the wipe was clean. Every word, tone and count is payload.
+  Widget _sessionsCard(Map<String, dynamic> s) {
+    final rows = (s['rows'] as List?) ?? const [];
+    RenderLog.write('c573_session_rows', rows.length);
+    return _card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text((s['title'] ?? '').toString(), style: Ds.t.subtitle),
+          SizedBox(height: Ds.space.x4),
+          Text((s['subtitle'] ?? '').toString(), style: Ds.t.caption),
+          SizedBox(height: Ds.space.x16),
+          if (rows.isEmpty)
+            Text((s['empty'] ?? '').toString(), style: Ds.t.caption)
+          else
+            ...rows.map((r) => _sessionRow(
+                Map<String, dynamic>.from(r as Map),
+                Map<String, dynamic>.from(s))),
+        ],
+      ),
+    );
+  }
+
+  Widget _sessionRow(Map<String, dynamic> r, Map<String, dynamic> s) {
+    final residue = (r['residue'] as Map?) ?? const {};
+    final proof = (r['proof'] as Map?) ?? const {};
+    final tone = _tone((r['status_tone'] ?? '').toString());
+    final held = (residue['total'] ?? 0).toString();
+    final files = (residue['files'] ?? 0).toString();
+    final hasProof = proof.containsKey('clean');
+    return Padding(
+      padding: EdgeInsets.only(bottom: Ds.space.x12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text((r['label'] ?? '').toString(),
+                    style: Ds.t.body, maxLines: 1,
+                    overflow: TextOverflow.ellipsis),
+              ),
+              SizedBox(width: Ds.space.x8),
+              Container(
+                padding: EdgeInsets.symmetric(
+                    horizontal: Ds.space.x8, vertical: Ds.space.x4),
+                decoration: BoxDecoration(
+                    color: tone.bg, borderRadius: Ds.r.rChip),
+                child: Text((r['status_label'] ?? '').toString(),
+                    style: Ds.t.caption.copyWith(color: tone.fg)),
+              ),
+            ],
+          ),
+          SizedBox(height: Ds.space.x4),
+          Text(
+            [
+              (r['started_label'] ?? '').toString(),
+              (r['by'] ?? '').toString(),
+              '${(s['residue_label'] ?? '').toString()} $held',
+              '${(s['files_label'] ?? '').toString()} $files',
+            ].where((t) => t.trim().isNotEmpty).join('  ·  '),
+            style: Ds.t.caption,
+          ),
+          if (hasProof) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(
+              proof['clean'] == true
+                  ? (s['proof_clean'] ?? '').toString()
+                  : (s['proof_dirty'] ?? '').toString(),
+              style: Ds.t.caption.copyWith(
+                  color: proof['clean'] == true ? Ds.c.success : Ds.c.danger),
+            ),
+          ],
+          if (r['can_purge'] == true) ...[
+            SizedBox(height: Ds.space.x8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(
+                onPressed: _busy
+                    ? null
+                    : () => _fire({
+                          'key': 'session_purge',
+                          'label': '',
+                          'confirm': (s['confirm_purge'] ?? '').toString(),
+                          'arg': {'session_id': (r['id'] ?? '').toString()},
+                        }),
+                child: Text((s['purge_row_label'] ?? '').toString(),
+                    style: Ds.t.body.copyWith(color: Ds.c.danger)),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
 
   Widget _card({required Widget child, Color? accent}) => Container(
         width: double.infinity,

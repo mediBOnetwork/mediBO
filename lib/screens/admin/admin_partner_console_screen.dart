@@ -18,6 +18,7 @@ import '../../design_tokens.dart';
 import '../../services/partner_state.dart';
 import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
+import 'partner_audit_log_screen.dart';
 import 'settlement_screen.dart';
 
 class AdminPartnerConsoleScreen extends StatefulWidget {
@@ -265,6 +266,15 @@ class _AdminPartnerConsoleScreenState extends State<AdminPartnerConsoleScreen> {
     await _load();
   }
 
+  // CMD #467 row 155 — the full, filterable trail. Pushed with the same rpc
+  // seam the console itself uses, so a test drives both with one fake.
+  void _openAuditLog() {
+    final id = (_payload?['partner_id'] as num?)?.toInt() ?? widget.partnerId;
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => PartnerAuditLogScreen(partnerId: id, rpc: widget.rpc),
+    ));
+  }
+
   @override
   Widget build(BuildContext context) {
     final p = _payload ?? const <String, dynamic>{};
@@ -301,6 +311,7 @@ class _AdminPartnerConsoleScreenState extends State<AdminPartnerConsoleScreen> {
               onSuspend: _askSuspendReason,
               onResume: () => _lifecycle(false, ''),
               onLicence: _pickLicenceDate,
+              onOpenAudit: _openAuditLog,
             ),
     );
   }
@@ -343,6 +354,7 @@ class PartnerConsoleView extends StatelessWidget {
     this.onSuspend,
     this.onResume,
     this.onLicence,
+    this.onOpenAudit,
   });
 
   final Map<String, dynamic> payload;
@@ -363,6 +375,17 @@ class PartnerConsoleView extends StatelessWidget {
   final void Function(Map<String, dynamic> lifecycle)? onSuspend;
   final VoidCallback? onResume;
   final void Function(Map<String, dynamic> licenceRow)? onLicence;
+
+  /// CMD #467 row 155. Null in a read-only render -> the button is inert but
+  /// still drawn, because whether it EXISTS is the payload's decision.
+  final VoidCallback? onOpenAudit;
+
+  /// The label, or '' when this build's payload carried no `audit_open` block.
+  String get auditOpenLabel {
+    final d = payload['audit_open'];
+    if (d is! Map) return '';
+    return (d['label'] ?? '').toString();
+  }
 
   String _s(String k) => (payload[k] ?? '').toString();
 
@@ -498,6 +521,19 @@ class PartnerConsoleView extends StatelessWidget {
             if (audit.isEmpty) Text(_s('empty_audit'), style: Ds.t.caption),
             for (final a in audit)
               _AuditRow(row: Map<String, dynamic>.from(a as Map)),
+            // CMD #467 row 155 — the door to the filterable, paged log. It is
+            // a descriptor, not a flag: a payload with no label draws nothing.
+            if (auditOpenLabel.isNotEmpty) ...[
+              SizedBox(height: Ds.space.x12),
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: OutlinedButton(
+                  onPressed: onOpenAudit,
+                  child: Text(auditOpenLabel),
+                ),
+              ),
+            ],
           ],
         ),
         SizedBox(height: Ds.space.x32),
@@ -686,12 +722,17 @@ class _AuditRow extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // CMD #467 row 155 — the sentence arrives composed. This used to be
+          // `action · feature_key` joined here, which printed raw slugs
+          // ("open_denied · partner.settlement") at a mediBO admin.
           Expanded(
             child: Text(
-              '${row['action'] ?? ''} · ${row['feature_key'] ?? ''}',
-              style: Ds.t.body,
+              (row['line'] ?? row['action'] ?? '').toString(),
+              style: Ds.t.body.copyWith(
+                  color: PartnerAuditTone.fg((row['tone'] ?? 'neutral').toString())),
             ),
           ),
+          SizedBox(width: Ds.space.x8),
           Text((row['at_label'] ?? '').toString(), style: Ds.t.caption),
         ],
       ),

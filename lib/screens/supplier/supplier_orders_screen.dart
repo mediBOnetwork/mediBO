@@ -466,16 +466,39 @@ class _OrderCardState extends State<_OrderCard> {
     }
   }
 
+  // CMD #467 row 52 — supplier_set_packed answers with a payload, not an
+  // exception. It used to be awaited and thrown away: a refusal (`not_found`,
+  // `not_authorized`) came back HTTP 200 as a bare slug, so the screen called
+  // onReload() as though the order had been packed and the supplier saw
+  // nothing at all. Every branch now renders the backend's own `message` —
+  // this file never decides what a refusal says.
   Future<void> _setPacked(String orderCode, bool nextPacked) async {
     if (_togglingPacked || orderCode.isEmpty) return;
     setState(() => _togglingPacked = true);
     try {
-      await Supabase.instance.client.rpc('supplier_set_packed', params: {
+      final raw = await Supabase.instance.client.rpc('supplier_set_packed', params: {
         'p_order_code': orderCode,
         'p_packed': nextPacked,
         'p_via': 'order_tab',
       });
-      widget.onReload();
+      final res = raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
+      final message = (res['message'] ?? '').toString();
+      RenderLog.write('c467_sup_packed',
+          'ok=${res['ok'] == true},error=${(res['error'] ?? '').toString()},msg=${message.isNotEmpty}');
+      if (res['ok'] == true) {
+        if (mounted && message.isNotEmpty) showToast(context, message);
+        widget.onReload();
+      } else {
+        if (mounted) {
+          showToast(
+            context,
+            message.isNotEmpty
+                ? message
+                : c('supplier_orders.toast_pack_failed'),
+            isError: true,
+          );
+        }
+      }
     } catch (e) {
       if (mounted) {
         showToast(context, c('supplier_orders.toast_pack_failed'), isError: true);

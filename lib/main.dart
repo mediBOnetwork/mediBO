@@ -28,6 +28,7 @@ import 'screens/auth/login_screen.dart';
 
 import 'screens/customer/customer_staff_screen.dart'; // CMD #438: /customer/staff
 import 'screens/admin/admin_partner_console_screen.dart';
+import 'screens/admin/partner_audit_log_screen.dart';
 import 'screens/admin/settlement_screen.dart'; // /admin/settlement
 import 'screens/home_shell.dart';
 import 'screens/public/inquiry_form_screen.dart';
@@ -909,6 +910,23 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
               // answers not_authorized itself and the screen renders that
               // refusal. Still reachable from Payment and Partner -> the
               // people icon on a partner card.
+              // CMD #467 row 155 — the partner audit trail. Its own route so
+              // the screen is provable on the live site (and linkable from a
+              // report) without a tap path; the RPC behind it refuses anyone
+              // who is not a mediBO admin, exactly as the console does.
+              if (name.startsWith('/admin/partner-audit')) {
+                final tail = name
+                    .substring('/admin/partner-audit'.length)
+                    .split('?')
+                    .first
+                    .replaceAll('/', '');
+                return MaterialPageRoute(
+                  settings: settings,
+                  builder: (_) => PartnerAuditLogScreen(
+                    partnerId: int.tryParse(tail) ?? 1,
+                  ),
+                );
+              }
               if (name.startsWith('/admin/partner-access')) {
                 final tail = name
                     .substring('/admin/partner-access'.length)

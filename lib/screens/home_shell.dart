@@ -720,6 +720,15 @@ class _HomeShellState extends State<HomeShell> {
   /// is parked in a notifier that PosMenuTile listens to, so the entry appears
   /// without the shell knowing anything about pharmacies.
   void _loadPosEntry() {
+    // CMD #633 — both of these are account questions, so they need a
+    // credential. Without one they were two guaranteed 401s on every
+    // anonymous storefront boot. They swallow their own errors, so this was
+    // never visible — it was just the same "admin data fetched for a
+    // stranger" habit the shell's page gate above closes.
+    if (Supabase.instance.client.auth.currentUser == null) {
+      RenderLog.write('c633_anon_shell', 'pos_entry=0;stock_entry=0');
+      return;
+    }
     PosEntry.load();
     // CMD #412 — the same one cheap call for the shelf. Both answers are parked
     // in notifiers their own tiles listen to, so the shell still knows nothing
@@ -1520,6 +1529,27 @@ class _HomeShellState extends State<HomeShell> {
 
         void onLogoTap() => _goHome();
 
+        // CMD #633 — the shell decides whether the admin pages EXIST, not each
+        // admin screen individually.
+        //
+        // The bug this closes: an IndexedStack builds every child, so all eight
+        // admin screens were constructed for an anonymous visitor on any route,
+        // each one firing its admin_* RPC on boot. Eight refusals per stranger,
+        // and one of them (admin_customer_screen_data) toasted its failure onto
+        // the public storefront — the red "Failed to load: {e}" banner. Gating
+        // each screen's own initState fixes the screen that was gated; gating
+        // the LIST fixes the class, including every admin screen written after
+        // this one.
+        //
+        // The placeholders keep the list length and every index identical,
+        // because indices 3–10 are addressed by NUMBER from _handleAdminNav.
+        // When auth resolves to an admin this rebuilds with the real screens,
+        // and their initState runs then — which is the moment it should.
+        final isAdmin = UserState.of(context).isAdmin;
+        Widget adminPage(Widget Function() build) =>
+            isAdmin ? build() : const SizedBox.shrink();
+        RenderLog.write('c633_anon_pages', 'admin_pages=${isAdmin ? 8 : 0}');
+
         // IndexedStack keeps all screen States alive — no re-fetch on tab switch.
         final pages = [
           StorefrontScreen(
@@ -1560,17 +1590,17 @@ class _HomeShellState extends State<HomeShell> {
           BulkUploadScreen(key: _bulkUploadKey),
           // Admin-only pages: indices 3–10 (desktop only; built for admin users)
           // Kept alive in IndexedStack so no state loss on tab switch.
-          QuickLinkNavigator(
-            navigate: _handleAdminNav,
-            child: const AdminDashboardScreen(),
-          ),
-          const AdminAddMedicineScreen(),
-          AdminSupplierScreen(),
-          AdminCustomerScreen(),
-          const AdminMrScreen(),
-          const AdminCompanyScreen(),
-          const AdminDeliveryPartnerScreen(),
-          AdminFulfillmentScreen(),
+          adminPage(() => QuickLinkNavigator(
+                navigate: _handleAdminNav,
+                child: const AdminDashboardScreen(),
+              )),
+          adminPage(() => const AdminAddMedicineScreen()),
+          adminPage(() => AdminSupplierScreen()),
+          adminPage(() => AdminCustomerScreen()),
+          adminPage(() => const AdminMrScreen()),
+          adminPage(() => const AdminCompanyScreen()),
+          adminPage(() => const AdminDeliveryPartnerScreen()),
+          adminPage(() => AdminFulfillmentScreen()),
           // CHANGE #536 — index 11, MY SHOP. It is appended rather than slotted
           // in beside the customer's other three pages because indices 3–10 are
           // addressed by number from _handleAdminNav; inserting would have
@@ -1578,7 +1608,6 @@ class _HomeShellState extends State<HomeShell> {
           MyShopScreen(navigate: _handleAdminNav, active: _index == 11),
         ];
 
-        final isAdmin = UserState.of(context).isAdmin;
         // Customer ViewAs: force customer shell (header + nav), never admin chrome
         final effectiveAdmin = isCustomerViewAs ? false : isAdmin;
         if (isCustomerViewAs) {

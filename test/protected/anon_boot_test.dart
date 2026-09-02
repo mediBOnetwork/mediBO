@@ -89,4 +89,68 @@ void main() {
       expect(calls.every((v) => v == 'e'), isTrue, reason: 'saw $calls');
     });
   });
+
+  // The QA round on #633: gating the ONE screen that toasted only fixed that
+  // screen. A live anonymous boot still fired eight admin_* RPCs, because the
+  // IndexedStack built all eight admin children. The shell now decides whether
+  // those pages exist at all, which is the only place that closes the class for
+  // admin screens nobody has written yet.
+  group('the shell builds no admin page for a stranger', () {
+    late String shell;
+
+    setUpAll(() {
+      shell = File('lib/screens/home_shell.dart').readAsStringSync();
+    });
+
+    test('every admin page in the IndexedStack is built behind the gate', () {
+      final start = shell.indexOf('final pages = [');
+      expect(start, greaterThan(0), reason: 'the pages list moved');
+      final pages = shell.substring(start, shell.indexOf('\n        ];', start));
+
+      // The eight admin screens at indices 3-10. Each must be constructed
+      // through adminPage(), never listed bare.
+      const adminScreens = [
+        'AdminDashboardScreen',
+        'AdminAddMedicineScreen',
+        'AdminSupplierScreen',
+        'AdminCustomerScreen',
+        'AdminMrScreen',
+        'AdminCompanyScreen',
+        'AdminDeliveryPartnerScreen',
+        'AdminFulfillmentScreen',
+      ];
+      for (final screen in adminScreens) {
+        expect(pages.contains(screen), isTrue, reason: '$screen left the list');
+        for (final line in pages.split('\n')) {
+          if (!line.contains(screen)) continue;
+          expect(line.contains('adminPage(') || line.trimLeft().startsWith('child:'),
+              isTrue,
+              reason: '$screen is built for anonymous visitors: $line');
+        }
+      }
+      expect(pages.contains('adminPage(() =>'), isTrue);
+    });
+
+    test('the gate reads the session and keeps every index', () {
+      expect(shell.contains('isAdmin ? build() : const SizedBox.shrink()'),
+          isTrue,
+          reason: 'a non-admin must still get a placeholder at that index — '
+              'indices 3-10 are addressed by number from _handleAdminNav');
+      final gate = shell.indexOf('Widget adminPage(');
+      final read = shell.indexOf('final isAdmin = UserState.of(context).isAdmin;');
+      expect(read, greaterThan(0));
+      expect(read, lessThan(gate), reason: 'the gate must read a real session');
+    });
+
+    test('the two account entry probes need a credential first', () {
+      final start = shell.indexOf('  void _loadPosEntry() {');
+      expect(start, greaterThan(0));
+      final body = shell.substring(start, shell.indexOf('\n  }\n', start));
+      expect(body.contains('auth.currentUser == null'), isTrue,
+          reason: 'pos_entry and stock_entry are account questions — asking '
+              'them signed out is two guaranteed 401s per stranger');
+      expect(body.indexOf('return;'), lessThan(body.indexOf('PosEntry.load()')),
+          reason: 'the guard must come before the calls');
+    });
+  });
 }

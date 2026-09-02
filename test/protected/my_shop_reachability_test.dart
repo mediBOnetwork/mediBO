@@ -270,8 +270,11 @@ void main() {
           reason: 'the bar must resolve its own tap through the row it drew');
       expect(RegExp(r'onPageTap:\s*_setIndex').hasMatch(shell), isTrue,
           reason: 'the shell obeys the page the bar names, and computes none');
-      expect(RegExp(r'slots:\s*_navSlots').hasMatch(shell), isTrue,
+      expect(RegExp(r'valueListenable:\s*CustomerNav\.value').hasMatch(shell),
+          isTrue,
           reason: 'the bar must be handed customer_nav()\'s own slots');
+      expect(RegExp(r'slots:\s*slots').hasMatch(shell), isTrue,
+          reason: 'and it must pass them through, not filter them here');
 
       // Desktop: the header link added by QA round 1. Without it the desktop
       // shell rendered page 11 and offered no way to select it.

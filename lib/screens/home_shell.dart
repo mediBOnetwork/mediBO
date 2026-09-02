@@ -88,6 +88,7 @@ import 'cart_screen.dart';
 import '../utils/toast.dart';
 import 'orders_screen.dart';
 import '../services/pos_api.dart'; // CMD #411 — pos_entry() at boot
+import '../services/customer_nav.dart'; // #630 — the bottom bar registry
 import 'pharmacy/pos_screen.dart'; // CMD #411 — the pharmacy counter
 import '../widgets/scan_mic_search_controls.dart'; // #409 — used by the shell part files
 import '../services/pharmacy_stock_api.dart'; // CMD #412 — pharmacy_stock_entry() at boot
@@ -315,49 +316,6 @@ class _HomeShellState extends State<HomeShell> {
   String? _pushBoundUid;
   bool _pushStarted = false;
 
-  // CHANGE #630 — the customer bottom bar, from the registry. Om: the sequence
-  // is Home · Catalogue · Bulk · Orders · My Shop, and "registry sort_order
-  // owns it; do not hardcode the order in Dart". So the shell asks for the
-  // slots and the bar renders them; re-ordering the bar is an UPDATE on
-  // customer_nav_slot, and the page each slot opens rides on the row.
-  List<Map<String, dynamic>> _navSlots = const [];
-
-  /// The auth identity the bar was fetched for. Login, account switch and
-  /// logout all change WHICH slots the backend returns (`visibility`), so the
-  /// bar has to be re-asked on the same event the push token is.
-  String? _navBoundUid;
-  bool _navBound = false;
-
-  /// The auth identity moved — re-ask for the bar. Never blanks what is
-  /// already drawn: a failed refresh keeps the last good answer.
-  void _syncNavIdentity() {
-    if (!_navBound) return;
-    final uid = Supabase.instance.client.auth.currentUser?.id;
-    if (uid == _navBoundUid) return;
-    _navBoundUid = uid;
-    _loadCustomerNav();
-  }
-
-  Future<void> _loadCustomerNav() async {
-    try {
-      final raw = await Supabase.instance.client.rpc('customer_nav');
-      final map = (raw is List ? (raw.isEmpty ? null : raw.first) : raw);
-      if (!mounted || map is! Map) return;
-      final slots = ((map['slots'] as List<dynamic>?) ?? const [])
-          .whereType<Map>()
-          .map((s) => Map<String, dynamic>.from(s))
-          .toList();
-      if (slots.isEmpty) return; // never blank a bar on a thin answer
-      _navBoundUid = Supabase.instance.client.auth.currentUser?.id;
-      _navBound = true;
-      setState(() => _navSlots = slots);
-      RenderLog.write('c630_nav_slots',
-          slots.map((s) => (s['key'] ?? '').toString()).join('>'));
-    } catch (_) {
-      // A bar that cannot ask keeps whatever it has. Boot resilience rule.
-    }
-  }
-
   @override
   void initState() {
     super.initState();
@@ -384,7 +342,8 @@ class _HomeShellState extends State<HomeShell> {
     // instantly from cache when one exists; refreshes in the background with
     // retry, and never wipes a good cache on a failed refresh.
     _bootstrapHomeCategories();
-    _loadCustomerNav();
+    // CHANGE #630 — the bottom bar's slots, their order and their audience.
+    CustomerNav.load();
     // CMD #411 — after the first frame, same reason as push: a counter entry
     // that fails to resolve must never sit in front of the shell's own build.
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadPosEntry());
@@ -526,11 +485,10 @@ class _HomeShellState extends State<HomeShell> {
     // CHANGE #298 — login, account switch and logout all reach the shell as an
     // auth rebuild, and all three mean the same thing to a device token.
     _syncPushIdentity();
-    // CHANGE #630 — and the bottom bar, for the same reason: `customer_nav()`
-    // resolves `visibility` against the CALLER, so signing in is what turns
-    // the My Shop slot on. A bar that asked once at boot would show a
-    // signed-out visitor's four slots for the rest of the session.
-    _syncNavIdentity();
+    // CHANGE #630 — and the bottom bar, for the same reason: customer_nav()
+    // resolves each slot's audience against the CALLER, so signing in is what
+    // turns the My Shop slot on.
+    CustomerNav.syncIdentity();
     final viewAs = ViewAsState.of(context);
     final key = viewAs.isActive
         ? '${viewAs.role!.name}:${viewAs.identity!.id}'
@@ -1801,25 +1759,28 @@ class _HomeShellState extends State<HomeShell> {
             )
           : (_cartOpen
               ? null
-              : _MobileBottomBar(
-                  index: _index,
-                  cartOpen: _cartOpen,
-                  onCartTap: () => _openCart(),
-                  // CHANGE #630 — the slots, their order, their labels and
-                  // WHO is offered each one are `customer_nav()`'s answer,
-                  // rendered verbatim. The shell used to compute
+              : ValueListenableBuilder<List<Map<String, dynamic>>>(
+                  // CHANGE #630 — the slots, their order, their labels and WHO
+                  // is offered each one are customer_nav()'s answer, rendered
+                  // verbatim. The shell used to compute
                   // `showMyShop = isAuthenticated && !isAdmin` here (#536 QA
                   // round 2) and hand it to a bar that owned a hardcoded
-                  // slot->page list; that rule now lives on the row
+                  // slot->page list; that rule is on the row now
                   // (`visibility`) and is resolved inside customer_nav(), so
                   // re-ordering the bar is an UPDATE and a hidden slot cannot
                   // leave a hole in a list the shell also has to index. (The
                   // desktop header still reads the same rule from UserState —
                   // it has no slots to renumber, so it was left alone.)
-                  slots: _navSlots,
-                  // The bar hands back the PAGE its row named, so there is no
-                  // ladder here that has to agree with the slot order.
-                  onPageTap: _setIndex,
+                  valueListenable: CustomerNav.value,
+                  builder: (_, slots, _) => _MobileBottomBar(
+                    index: _index,
+                    cartOpen: _cartOpen,
+                    onCartTap: () => _openCart(),
+                    slots: slots,
+                    // The bar hands back the PAGE its row named, so there is
+                    // no ladder here that has to agree with the slot order.
+                    onPageTap: _setIndex,
+                  ),
                 )),
       body: Stack(
         children: [

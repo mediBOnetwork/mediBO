@@ -274,3 +274,15 @@ on conflict (name) do update
 alter table public.ui_copy drop constraint if exists ui_copy_no_dart_source;
 alter table public.ui_copy add constraint ui_copy_no_dart_source
   check (not public.ui_copy_is_source_code(value #>> '{}'));
+
+-- ── 7. these two tables are NOT client surface ────────────────────────────
+-- Supabase's default grants made both readable AND writable by anon the moment
+-- they were created — which on ui_copy_source_exempt means any visitor could
+-- punch a hole in the guard this migration exists to install. ui_copy itself
+-- carries RLS with no anon privileges; these follow it. The report RPC is
+-- security definer, so the post-deploy scan is unaffected.
+revoke all on public.ui_copy_param_drift  from anon, authenticated;
+revoke all on public.ui_copy_source_exempt from anon, authenticated;
+revoke all on sequence public.ui_copy_param_drift_id_seq from anon, authenticated;
+alter table public.ui_copy_param_drift  enable row level security;
+alter table public.ui_copy_source_exempt enable row level security;

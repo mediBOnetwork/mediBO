@@ -25,7 +25,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher_string.dart';
 
+import '../../design_tokens.dart';
 import '../../services/live_feed.dart';
 
 import '../../fulfill/fulfill_lookups.dart';
@@ -65,6 +67,30 @@ class DeliveryTrackingData {
   final String title;
   final String message;
 
+  // CHANGE #463 gap 117 — the masked "Call rider" affordance.
+  //
+  // This carries NO phone number, by design: the button reports intent and the
+  // backend places the masked call, so a number never reaches this build. It
+  // is populated ONLY from the authenticated customer payload — the public
+  // token payload deliberately does not offer it, because that link never
+  // expires (register row 125) and holding it is not proof of being the buyer.
+  final bool hasCall;
+  final String callLabel;
+  final String callPrivacyNote;
+
+  // CHANGE #463 register row 121 — the rider's verified face. The payload
+  // sends a BUCKET and a PATH, never a URL: `rider-selfies` is private and its
+  // storage policy is what decides whether this viewer may sign it. `has` is
+  // the backend's answer — it is false unless an admin verified the identity
+  // AND this stop is live, so nothing here infers a face from a name.
+  final bool hasPhoto;
+  final String photoBucket;
+  final String photoPath;
+
+  /// The order the call is about — the backend's own `order_id`, echoed back
+  /// from call_action, so no caller has to thread an id down to this view.
+  final String callOrderId;
+
   const DeliveryTrackingData({
     required this.ok,
     required this.found,
@@ -83,6 +109,13 @@ class DeliveryTrackingData {
     required this.qrToken,
     required this.title,
     required this.message,
+    this.hasCall = false,
+    this.callLabel = '',
+    this.callPrivacyNote = '',
+    this.callOrderId = '',
+    this.hasPhoto = false,
+    this.photoBucket = '',
+    this.photoPath = '',
   });
 
   static double _d(dynamic v) => (v as num?)?.toDouble() ?? 0;
@@ -96,7 +129,19 @@ class DeliveryTrackingData {
     final destLat = m['destination_lat'] as num?;
     final destLng = m['destination_lng'] as num?;
     final ahead = _s(m['stops_ahead_label']);
+    // gap 117 — an absent or empty call_action means the backend decided this
+    // customer may not ring this rider right now. `has` is its answer, never
+    // inferred here from the status or from a phone number being present.
+    final call = (m['call_action'] as Map?) ?? const {};
+    final photo = (m['rider_photo'] as Map?) ?? const {};
     return DeliveryTrackingData(
+      hasPhoto: photo['has'] == true,
+      photoBucket: _s(photo['bucket']),
+      photoPath: _s(photo['path']),
+      hasCall: call['has'] == true,
+      callLabel: _s(call['label']),
+      callPrivacyNote: _s(call['privacy_note']),
+      callOrderId: _s(call['order_id']),
       ok: m['ok'] == true,
       // The customer RPC has no `found` — reaching it at all means the order
       // resolved. not_authorized is handled by the caller before this point.
@@ -252,7 +297,29 @@ class _DeliveryTrackingViewState extends State<DeliveryTrackingView> {
         ],
         if (d.partnerName.isNotEmpty) ...[
           const SizedBox(height: 2),
-          Text(d.partnerName, style: TextStyle(fontSize: 13, color: _kSub)),
+          // CHANGE #463 register row 121 unblocks register row 117's other
+          // half: the name now has a verified face beside it.
+          Row(children: [
+            if (d.hasPhoto) ...[
+              _RiderAvatar(bucket: d.photoBucket, path: d.photoPath),
+              SizedBox(width: Ds.space.x8),
+            ],
+            Expanded(
+              child: Text(d.partnerName,
+                  style: TextStyle(fontSize: 13, color: _kSub)),
+            ),
+          ]),
+        ],
+        // CHANGE #463 gap 117 — "the customer cannot contact the rider at
+        // all". The masking layer was already built and enabled; this payload
+        // just never asked for it.
+        if (d.hasCall) ...[
+          const SizedBox(height: 8),
+          _MaskedCallButton(
+            orderId: d.callOrderId,
+            label: d.callLabel,
+            privacyNote: d.callPrivacyNote,
+          ),
         ],
         if (d.hasStopsAhead && d.stopsAheadLabel.isNotEmpty) ...[
           const SizedBox(height: 8),
@@ -311,6 +378,166 @@ class _DeliveryTrackingViewState extends State<DeliveryTrackingView> {
           ),
         ],
       ],
+    );
+  }
+}
+
+/// CHANGE #463 gap 117 — the customer's masked "Call rider" button.
+///
+/// It carries no phone number and never will. `call_mask_prepare` returns a
+/// `did` — the masked number the CALLER dials — alongside a `callee` block
+/// holding the real number. This widget dials the DID and only the DID; the
+/// callee's phone is deliberately never read, never shown and never dialled,
+/// which is the whole point of the masking layer.
+///
+/// Every string the customer sees — the button label, the connecting notice,
+/// the dial hint, the privacy note and every refusal — is the backend's.
+class _MaskedCallButton extends StatefulWidget {
+  final String orderId;
+  final String label;
+  final String privacyNote;
+
+  const _MaskedCallButton({
+    required this.orderId,
+    required this.label,
+    required this.privacyNote,
+  });
+
+  @override
+  State<_MaskedCallButton> createState() => _MaskedCallButtonState();
+}
+
+class _MaskedCallButtonState extends State<_MaskedCallButton> {
+  bool _busy = false;
+
+  Future<void> _call() async {
+    if (widget.orderId.isEmpty) return;
+    setState(() => _busy = true);
+    try {
+      final uid = Supabase.instance.client.auth.currentUser?.id;
+      final raw = await Supabase.instance.client.rpc('call_mask_prepare', params: {
+        'p_actor': uid,
+        'p_order_id': widget.orderId,
+        'p_target_role': 'delivery',
+      });
+      final m = Map<String, dynamic>.from((raw is List ? raw.first : raw) as Map);
+      if (!mounted) return;
+
+      if (m['ok'] != true) {
+        final msg = (m['message'] as String?) ?? '';
+        if (msg.isNotEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(msg), behavior: SnackBarBehavior.floating),
+          );
+        }
+        setState(() => _busy = false);
+        return;
+      }
+
+      final copy = Map<String, dynamic>.from((m['copy'] as Map?) ?? const {});
+      final did = (m['did'] as String?) ?? '';
+
+      // The DID is the only number this build may touch. When the backend
+      // placed the call itself there is no DID to dial, and the notice it sent
+      // is what the customer reads.
+      if (did.isNotEmpty) {
+        await launchUrlString('tel:$did');
+        final hint = (copy['dial_hint'] as String?) ?? '';
+        if (mounted && hint.isNotEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(hint), behavior: SnackBarBehavior.floating),
+          );
+        }
+      } else {
+        final placed = (copy['placed'] as String?) ??
+            (copy['connecting'] as String?) ?? '';
+        if (mounted && placed.isNotEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(placed), behavior: SnackBarBehavior.floating),
+          );
+        }
+      }
+      if (mounted) setState(() => _busy = false);
+    } catch (_) {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          height: 44,
+          child: OutlinedButton.icon(
+            onPressed: _busy ? null : _call,
+            icon: const Icon(Icons.phone_outlined, size: 18),
+            label: Text(widget.label),
+            style: OutlinedButton.styleFrom(
+              side: BorderSide(color: _kBorder),
+              shape: RoundedRectangleBorder(borderRadius: Ds.r.rButton),
+            ),
+          ),
+        ),
+        if (widget.privacyNote.isNotEmpty) ...[
+          const SizedBox(height: 4),
+          Text(widget.privacyNote, style: Ds.t.caption.copyWith(color: _kSub)),
+        ],
+      ],
+    );
+  }
+}
+
+/// CHANGE #463 register row 121 — the rider's face, signed on demand.
+///
+/// `rider-selfies` is a private bucket, so there is no public URL to render and
+/// this widget never builds one: it asks storage to sign the backend's own
+/// bucket + path, and a refusal (the policy says this viewer is not the buyer
+/// on that stop, or the stop is over) simply renders nothing. A face is never
+/// a placeholder here.
+class _RiderAvatar extends StatefulWidget {
+  final String bucket;
+  final String path;
+
+  const _RiderAvatar({required this.bucket, required this.path});
+
+  @override
+  State<_RiderAvatar> createState() => _RiderAvatarState();
+}
+
+class _RiderAvatarState extends State<_RiderAvatar> {
+  String _url = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _sign();
+  }
+
+  Future<void> _sign() async {
+    try {
+      final u = await Supabase.instance.client.storage
+          .from(widget.bucket)
+          .createSignedUrl(widget.path, 600);
+      if (mounted) setState(() => _url = u);
+    } catch (_) {
+      // Not permitted, or gone. Silence is the correct render.
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_url.isEmpty) return const SizedBox.shrink();
+    return ClipOval(
+      child: Image.network(
+        _url,
+        width: Ds.space.x32,
+        height: Ds.space.x32,
+        fit: BoxFit.cover,
+        errorBuilder: (_, _, _) => const SizedBox.shrink(),
+      ),
     );
   }
 }

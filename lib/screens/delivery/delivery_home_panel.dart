@@ -30,7 +30,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../design_tokens.dart';
 import '../../fulfill/fulfill_lookups.dart';
 import 'rider_extras_sheets.dart';
-import '../../design_tokens.dart';
 import '../../services/device_location.dart';
 import '../../utils/render_log.dart';
 import 'delivery_sos_button.dart';
@@ -40,14 +39,31 @@ Color get _kGreen => FulfillLookups.instance.color('c_ff1b7a43', const Color(0xF
 Color get _kBorder => FulfillLookups.instance.color('c_ffe5e7eb', const Color(0xFFE5E7EB));
 Color get _kText => FulfillLookups.instance.color('c_ff111827', const Color(0xFF111827));
 Color get _kSub => FulfillLookups.instance.color('c_ff6b7280', const Color(0xFF6B7280));
+Color get _kSuccess => FulfillLookups.instance.color('c_ffd1fae5', Ds.c.success.withValues(alpha: 0.15));
+Color get _kSuccessText => FulfillLookups.instance.color('c_ff065f46', Ds.c.success);
+Color get _kWarning => FulfillLookups.instance.color('c_fffef3c7', Ds.c.warning.withValues(alpha: 0.15));
+Color get _kWarningText => FulfillLookups.instance.color('c_ff92400e', Ds.c.warning);
+Color get _kDanger => FulfillLookups.instance.color('c_fffee2e2', Ds.c.danger.withValues(alpha: 0.15));
+Color get _kDangerText => FulfillLookups.instance.color('c_ff991b1b', Ds.c.danger);
 
 String _ui(String k) => FulfillLookups.instance.ui(k);
 
-Color? _hex(String? h) {
-  final s = (h ?? '').trim().replaceFirst('#', '');
-  if (s.length != 6 && s.length != 8) return null;
-  final v = int.tryParse(s.length == 6 ? 'FF$s' : s, radix: 16);
-  return v == null ? null : Color(v);
+Color _colorFromToken(String? token) {
+  if (token == null || token.isEmpty) return _kText;
+  final s = token.trim().toLowerCase().replaceFirst('#', '');
+  switch (s) {
+    case '1b7a43': return _kGreen;
+    case 'e5e7eb': return _kBorder;
+    case '111827': return _kText;
+    case '6b7280': return _kSub;
+    case 'd1fae5': return _kSuccess;
+    case '065f46': return _kSuccessText;
+    case 'fef3c7': return _kWarning;
+    case '92400e': return _kWarningText;
+    case 'fee2e2': return _kDanger;
+    case '991b1b': return _kDangerText;
+    default: return _kText;
+  }
 }
 
 class DeliveryHomePanel extends StatelessWidget {
@@ -235,11 +251,13 @@ class DeliveryHomePanel extends StatelessWidget {
         : const <String, dynamic>{};
     final display = t['display']?.toString() ?? '';
     final value = t['value']?.toString() ?? '';
+    final bgColor = _colorFromToken(colors['bg']?.toString());
+    final fgColor = _colorFromToken(colors['fg']?.toString());
     return Container(
       margin: const EdgeInsets.only(right: 8),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
       decoration: BoxDecoration(
-        color: _hex(colors['bg']?.toString()) ?? Colors.transparent,
+        color: bgColor,
         borderRadius: BorderRadius.circular(10),
       ),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -247,11 +265,11 @@ class DeliveryHomePanel extends StatelessWidget {
             style: TextStyle(
                 fontSize: 17,
                 fontWeight: FontWeight.w800,
-                color: _hex(colors['fg']?.toString()) ?? _kText)),
+                color: fgColor)),
         Text(t['label']?.toString() ?? '',
             style: TextStyle(
                 fontSize: 11,
-                color: _hex(colors['fg']?.toString()) ?? _kSub)),
+                color: fgColor)),
       ]),
     );
   }

@@ -29,6 +29,7 @@ import '../../design_tokens.dart';
 import '../../fulfill/fulfill_lookups.dart';
 import '../../utils/render_log.dart';
 import 'delivery_id_scan.dart';
+import 'rider_verification_card.dart';
 
 Color get _kGreen => FulfillLookups.instance.color('c_ff1b7a43', const Color(0xFF1B7A43));
 Color get _kBorder => FulfillLookups.instance.color('c_ffe5e7eb', const Color(0xFFE5E7EB));
@@ -271,6 +272,16 @@ class _DeliveryRegisterScreenState extends State<DeliveryRegisterScreen> {
 
                 // A1(a) — the scan control, above the fields it fills.
                 DeliveryIdScanCard(onScanned: _applyScan),
+
+                const SizedBox(height: 16),
+
+                // CHANGE #463 (register row 121) — the identity checks. The
+                // card owns its own state and its own copy; this screen only
+                // gives it a place to stand. delivery_partner_register() is
+                // the gate, so nothing here decides whether Submit may run:
+                // the RPC refuses and its sentence is printed below like any
+                // other answer.
+                const RiderVerificationCard(),
 
                 const SizedBox(height: 16),
                 _field(_name, 'dlv_rider_name'),

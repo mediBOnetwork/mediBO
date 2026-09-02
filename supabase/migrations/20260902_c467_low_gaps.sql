@@ -375,6 +375,12 @@ $$;
 comment on function public.admin_partner_audit_list(bigint, text, text, int, int, int) is
   'CMD #467 row 155 — the readable partner audit trail: filter by feature/action/period, page by offset, every string composed here.';
 
+-- Every SECURITY DEFINER function inherits Postgres's default GRANT TO PUBLIC,
+-- and the anon key ships inside the web bundle and the APK. An admin reader of
+-- the audit trail must never be a public endpoint (rg_check behaviour
+-- `privileged_rpcs_are_not_anon` catches exactly this).
+revoke execute on function public.admin_partner_audit_list(bigint, text, text, int, int, int) from public, anon;
+revoke execute on function public.supplier_err(text, jsonb) from public, anon;
 grant execute on function public.admin_partner_audit_list(bigint, text, text, int, int, int) to authenticated;
 grant execute on function public.supplier_err(text, jsonb) to authenticated;
 
@@ -407,6 +413,7 @@ as $$
   left join feature_registry fr on fr.feature_key = a.feature_key;
 $$;
 
+revoke execute on function public.admin_partner_audit_preview(bigint, int) from public, anon;
 grant execute on function public.admin_partner_audit_preview(bigint, int) to authenticated;
 
 -- The console's Activity card now prints the same composed line as the full

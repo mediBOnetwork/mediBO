@@ -698,3 +698,67 @@ end $fn$;
 
 revoke all on function public.admin_supplier_lead_decide(uuid, text, text) from public;
 grant execute on function public.admin_supplier_lead_decide(uuid, text, text) to authenticated, service_role;
+
+-- ── GAP 51 · Supplier screens sit outside the design token system ───────────
+-- (Partial, by the gap's own recommendation: "migrate the two public token
+--  pages first". One of the two — inquiry_form_screen — is leased by batch A
+--  (#464) for the whole of this command, so this pass takes public_order_page
+--  and the rest is queued behind it. See the row's notes.)
+--
+-- public_order_page also branched on the status STRING in Dart to choose its
+-- chip colours — a display decision made client-side, which is the same class
+-- of bug as the literals themselves. The tone and the label come from the
+-- backend now, so the page renders and decides nothing.
+-- The return type gains two columns, which Postgres will not do in place, so
+-- the function is dropped and recreated in the same statement batch. Only the
+-- public order page calls it, and it is recreated three lines later.
+drop function if exists public.get_supplier_order_by_token(text);
+
+create function public.get_supplier_order_by_token(p_token text)
+returns table(supplier_name text, order_no integer, created_at timestamptz,
+              status text, status_label text, status_tone text,
+              total_amount numeric, item_count integer, items jsonb)
+language plpgsql
+security definer
+set search_path to 'public'
+as $function$
+begin
+  if p_token is null or btrim(p_token) = '' then return; end if;
+
+  return query
+  select so.supplier_name, so.order_no, so.created_at, so.status,
+         -- The word on the chip, and the tone it is drawn in. Both decided
+         -- here; the page maps a tone name onto a design token and nothing
+         -- else.
+         coalesce(nullif(btrim(coalesce(so.status,'')),''),
+                  public._c('public_order.status_pending')) as status_label,
+         case lower(btrim(coalesce(so.status,'')))
+           when 'confirmed' then 'success'
+           when 'delivered' then 'success'
+           when 'accepted'  then 'success'
+           when 'cancelled' then 'danger'
+           when 'rejected'  then 'danger'
+           else 'warning' end as status_tone,
+         so.total_amount,
+         coalesce(jsonb_array_length(so.items),0) as item_count,
+         coalesce((
+           select jsonb_agg(jsonb_build_object(
+                    'product_id',        it->>'product_id',
+                    'product_name',      it->>'product_name',
+                    'quantity',          (it->>'quantity')::int,
+                    'pack_type',         nullif(btrim(med.pack_type),''),
+                    'image_url',         nullif(btrim(med.image_url_1),''),
+                    'therapeutic_class', nullif(btrim(med.therapeutic_class),''),
+                    'company',           nullif(btrim(med.marketer),'')
+                  ) order by it->>'product_name')
+           from jsonb_array_elements(so.items) it
+           left join "MEDICINE" med on med.id = (it->>'product_id')::bigint
+         ), '[]'::jsonb) as items
+  from supplier_orders so
+  where so.token = btrim(p_token)
+  limit 1;
+end;
+$function$;
+
+revoke all on function public.get_supplier_order_by_token(text) from public;
+grant execute on function public.get_supplier_order_by_token(text) to anon, authenticated, service_role;

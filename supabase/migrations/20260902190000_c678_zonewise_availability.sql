@@ -159,7 +159,9 @@ as $$
 declare z record; v_zone_sups text[]; v_keys text[]; j jsonb;
 begin
   j := to_jsonb(NEW);
-  v_keys := array(select k from unnest(array[
+  -- DISTINCT: name_canonical and lower(company_name) are often the same string,
+  -- and a duplicate key would make the queue upsert below "affect row a second time".
+  v_keys := array(select distinct k from unnest(array[
               nullif(btrim(coalesce(NEW.name_canonical,'')),''),
               nullif(lower(btrim(coalesce(NEW.company_name,''))),'')]) k where k is not null);
   if array_length(v_keys,1) is null then return NEW; end if;
@@ -190,6 +192,22 @@ begin
   return NEW;
 end;
 $$;
+
+-- The trigger fired only on an explicit UPDATE OF "PS1".."PS30" — but the
+-- supplier map reaches the company as UPDATE company SET suppliers = … (from
+-- refresh_company_suppliers), and PS1..PS30 are then filled by a BEFORE trigger
+-- (company_rank_ps), which an "UPDATE OF column" trigger does not see. So a
+-- supplier mapped to a company through supplier_company NEVER reached MEDICINE
+-- until the next full rebuild. It now fires on the write that actually happens
+-- (suppliers), on an explicit PS write, and on INSERT.
+drop trigger if exists company_ps_to_medicine_trg on public.company;
+create trigger company_ps_to_medicine_trg
+  after insert or update of suppliers,
+    "PS1", "PS2", "PS3", "PS4", "PS5", "PS6", "PS7", "PS8", "PS9", "PS10",
+    "PS11", "PS12", "PS13", "PS14", "PS15", "PS16", "PS17", "PS18", "PS19", "PS20",
+    "PS21", "PS22", "PS23", "PS24", "PS25", "PS26", "PS27", "PS28", "PS29", "PS30"
+  on public.company
+  for each row execute function public.company_ps_to_medicine();
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 3. THE DRAIN — applies the queue with a bounded, indexed recompute
@@ -329,9 +347,11 @@ update public.cron_task
        next_run_at = least(coalesce(next_run_at, now()), now() + interval '1 minute'),
        note = 'CHANGE #678 — drains zone_resync_queue (incremental master-list propagation). Never resets zone_sync_state.'
  where name = 'zone_sup_sync';
+-- (zone_backfill's enabled flag is NOT touched here: a runner pauses it while a
+-- manual sweep runs and re-enables it afterwards — see the #678 result. The
+-- gate itself only opens for a zone with no finished cursor.)
 update public.cron_task
-   set enabled = true,
-       note = 'CHANGE #678 — id-sweep backfill for a zone whose cursor is not done: a NEW zone (zone_add) or an explicit zone_full_rebuild(). Nothing else can open this gate.'
+   set note = 'CHANGE #678 — id-sweep backfill for a zone whose cursor is not done: a NEW zone (zone_add) or an explicit zone_full_rebuild(). Nothing else can open this gate.'
  where name = 'zone_backfill';
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -731,6 +751,10 @@ begin
       from _zr;
 
   drop table if exists _zr;
+  -- the hero number for this zone just changed: every cached home payload is
+  -- now STALE (never deleted — an anonymous visitor must always find a copy;
+  -- the warm tick and the next approved visitor rebuild it).
+  update public.storefront_home_cache set built_at = '-infinity'::timestamptz;
   return jsonb_build_object('ok', true, 'zone', v_code, 'available', v_total, 'prev', v_prev);
 end;
 $$;
@@ -1292,6 +1316,370 @@ begin
         jsonb_build_object('icon','verified','label','Licensed distributors'))),
     'sections', v_sections);
 end
+$$;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 9b. THE HOME PAYLOAD IS CACHED PER VIEWER CLASS
+-- ─────────────────────────────────────────────────────────────────────────────
+-- storefront_home_v2 builds 25 rails × 24 cards (~1 MB) on every visit: 2–4 s
+-- on this instance (pg_stat_statements mean 4.2 s), while the anon role's
+-- statement_timeout is 3 s — so the public home, the surface that shows the
+-- hero number, failed with "Retry" whenever the box was busy. The payload is
+-- identical for every viewer of one class (anon / unapproved, or one zone's
+-- approved customers) except the per-user recently-viewed rail, so it is built
+-- once per class, kept 10 minutes, invalidated by every count refresh, warmed
+-- for anon by the cron, and the recently-viewed rail is spliced in per user.
+create table if not exists public.storefront_home_cache (
+  cache_key text primary key,                  -- 'anon:100' | 'zone:1:100'
+  payload   jsonb not null,
+  ords      jsonb not null default '[]'::jsonb, -- ord of every section in payload, in order
+  built_at  timestamptz not null default now(),
+  build_ms  integer
+);
+alter table public.storefront_home_cache enable row level security;
+
+-- The builder: the whole payload except the per-user rail, plus the ord list.
+create or replace function public._storefront_home_build(p_items integer default 100)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path to 'public'
+as $$
+declare
+  v_sections    jsonb := '[]'::jsonb;
+  v_ords        jsonb := '[]'::jsonb;
+  v_ids         bigint[];
+  v_see_all     text;
+  v_see_fmt     text;
+  v_label       text;
+  v_search_hint text;
+  v_theme       jsonb;
+  v_title       text;
+  v_accentw     text;
+  v_subtitle    text;
+  v_n           int;
+  v_total       int;
+  v_cap         int;
+  s             record;
+begin
+  select public.storefront_theme() into v_theme;
+  v_see_all := coalesce((select value from public.storefront_ui_label
+                          where key = 'see_all_label'), 'See all products');
+  v_see_fmt := coalesce((select value from public.storefront_ui_label
+                          where key = 'see_all_count_label'), '');
+  v_search_hint := coalesce((select value from public.storefront_ui_label
+                              where key = 'search_hint'), '');
+
+  for s in
+    select * from public.storefront_home_section where active order by ord
+  loop
+    v_n := least(s.item_count, greatest(coalesce(p_items, 100), 1));
+
+    if s.kind = 'feed' then
+      select array_agg(f.product_id order by f.rank) into v_ids
+        from public._sf_feed_ids(s.category, 0, v_n) f;
+      continue when v_ids is null;
+
+      v_title    := case when s.title <> '' then s.title
+                         else initcap(lower(s.category)) end;
+      v_accentw  := case when s.accent_word <> '' then s.accent_word
+                         else split_part(initcap(lower(s.category)), ' ', 1) end;
+      v_subtitle := case when s.subtitle <> '' then s.subtitle
+                         else 'TOP PICKS IN ' || s.category end;
+
+      v_total := public.get_storefront_count(s.category);
+      v_cap   := case when s.max_items > 0 then least(v_total, s.max_items)
+                      else v_total end;
+      v_label := case when v_see_fmt <> ''
+                      then replace(v_see_fmt, '{n}', to_char(v_total, 'FM999,999'))
+                      else v_see_all end;
+
+      v_sections := v_sections || jsonb_build_object(
+        'id', s.id, 'layout', s.layout,
+        'title', v_title, 'accent_word', v_accentw, 'subtitle', v_subtitle,
+        'band', coalesce(v_theme->>s.band_key, ''),
+        'accent', s.accent,
+        'see_all_label', v_label,
+        'see_all', jsonb_build_object('type','category','key', s.category),
+        'infinite', s.infinite,
+        'next_offset', coalesce(array_length(v_ids, 1), 0),
+        'page_size', s.page_size,
+        'total', v_cap,
+        'items', public._sf_cards(v_ids));
+      v_ords := v_ords || to_jsonb(s.ord);
+
+    elsif s.kind = 'recently_viewed' then
+      continue;   -- per user: spliced in by storefront_home_v2
+
+    elsif s.kind = 'icon_grid' then
+      v_sections := v_sections || jsonb_build_object(
+        'id', s.id, 'layout', 'icon_grid',
+        'title', s.title, 'accent_word', s.accent_word, 'subtitle', s.subtitle,
+        'band', coalesce(v_theme->>s.band_key, ''),
+        'accent', s.accent,
+        'infinite', false, 'next_offset', 0, 'page_size', 0, 'total', 0,
+        'items', (select coalesce(jsonb_agg(jsonb_build_object(
+            'label', initcap(lower(fm.category)),
+            'count_label', to_char(fm.total,'FM999,999') || ' products',
+            'key', fm.category) order by fm.total desc), '[]'::jsonb)
+          from (select c.category, c.total from public._sf_category_counts() c
+                 where c.category <> 'All' and c.total > 0
+                 order by c.total desc limit s.item_count) fm));
+      v_ords := v_ords || to_jsonb(s.ord);
+
+    elsif s.kind = 'brand_grid' then
+      v_sections := v_sections || jsonb_build_object(
+        'id', s.id, 'layout', 'brand_grid',
+        'title', s.title, 'accent_word', s.accent_word, 'subtitle', s.subtitle,
+        'band', coalesce(v_theme->>s.band_key, ''),
+        'accent', s.accent,
+        'infinite', false, 'next_offset', 0, 'page_size', 0, 'total', 0,
+        'items', (select coalesce(jsonb_agg(jsonb_build_object(
+            'label', mc.display,
+            'count_label', to_char(mc.buyable_count,'FM999,999') || ' products',
+            'key', mc.canon) order by mc.buyable_count desc), '[]'::jsonb)
+          from (select display, canon, buyable_count from public.medicine_company
+                 where buyable_count > 0 order by buyable_count desc
+                 limit s.item_count) mc));
+      v_ords := v_ords || to_jsonb(s.ord);
+    end if;
+  end loop;
+
+  return jsonb_build_object(
+    'ok', true,
+    'generated_for', 'home',
+    'theme', v_theme,
+    'header', jsonb_build_object(
+      'bg_top',    v_theme->>'deep',
+      'bg_bottom', v_theme->>'deep_alt',
+      'fg',        '#FFFFFF',
+      'accent',    v_theme->>'accent',
+      'search_hint', v_search_hint),
+    'hero', jsonb_build_object(
+      'show',    true,
+      'eyebrow', coalesce((select value from public.storefront_ui_label where key = 'hero_eyebrow'), ''),
+      'title',   coalesce((select value from public.storefront_ui_label where key = 'hero_title'), ''),
+      'cta',     coalesce((select value from public.storefront_ui_label where key = 'hero_cta'), ''),
+      'bg_top',    v_theme->>'deep',
+      'bg_bottom', v_theme->>'deep_alt',
+      'accent',    v_theme->>'accent',
+      -- the hero number: the viewer's count (zone for approved, catalogue for anon)
+      'props', jsonb_build_array(
+        jsonb_build_object('icon','inventory','label',
+          to_char(public.storefront_viewer_count(),'FM9,99,99,999') || '+ products'),
+        jsonb_build_object('icon','truck','label',coalesce((select value from public.storefront_ui_label where key='delivery_time'),'Same-day delivery')),
+        jsonb_build_object('icon','verified','label','Licensed distributors'))),
+    'sections', v_sections,
+    '_ords', v_ords);
+end
+$$;
+revoke all on function public._storefront_home_build(integer) from anon, authenticated;
+
+-- The per-user rail, with its ord so it can be spliced at the right place.
+create or replace function public._storefront_home_recent(p_items integer default 100)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path to 'public'
+as $$
+declare s record; v_n int; v_ids bigint[]; v_cards jsonb; v_theme jsonb;
+begin
+  if auth.uid() is null then return null; end if;
+  select * into s from public.storefront_home_section
+   where active and kind = 'recently_viewed' order by ord limit 1;
+  if s.id is null then return null; end if;
+  v_n := least(s.item_count, greatest(coalesce(p_items, 100), 1));
+  select array_agg(product_id order by viewed_at desc) into v_ids
+  from (select product_id, viewed_at from public.recently_viewed
+         where user_id = auth.uid()
+         order by viewed_at desc limit v_n) t;
+  if v_ids is null then return null; end if;
+  v_cards := public._sf_cards(v_ids);
+  if jsonb_array_length(v_cards) = 0 then return null; end if;
+  select public.storefront_theme() into v_theme;
+  return jsonb_build_object(
+    'id', s.id, 'layout', s.layout,
+    'title',       case when s.title <> '' then s.title
+                        else public.sf_label('recent_title') end,
+    'accent_word', case when s.accent_word <> '' then s.accent_word
+                        else public.sf_label('recent_accent_word') end,
+    'subtitle',    case when s.subtitle <> '' then s.subtitle
+                        else public.sf_label('recent_subtitle') end,
+    'band', coalesce(v_theme->>s.band_key, ''),
+    'accent', s.accent,
+    'see_all_label', '',
+    'see_all', jsonb_build_object('type','','key',''),
+    'infinite', false,
+    'next_offset', 0,
+    'page_size', 0,
+    'total', jsonb_array_length(v_cards),
+    'items', v_cards,
+    '_ord', s.ord);
+end
+$$;
+revoke all on function public._storefront_home_recent(integer) from anon, authenticated;
+
+-- The RPC: serve the class's cached payload (build it when missing or older
+-- than 10 minutes; serve stale while another caller rebuilds), then splice the
+-- viewer's own recently-viewed rail at its ord. VOLATILE because it writes the
+-- cache; PostgREST calls it by POST as before.
+create or replace function public.storefront_home_v2(p_items integer default 100)
+returns jsonb
+language plpgsql
+security definer
+set search_path to 'public'
+as $$
+declare
+  v_zone smallint; v_key text; v_n int := greatest(coalesce(p_items, 100), 1);
+  v_cached jsonb; v_ords jsonb; v_built timestamptz; v_payload jsonb;
+  v_rv jsonb; v_idx int; v_t0 timestamptz;
+begin
+  v_zone := public._viewer_zone_or_null();
+  v_key  := coalesce('zone:' || v_zone::text, 'anon') || ':' || v_n;
+
+  select payload, ords, built_at into v_cached, v_ords, v_built
+    from public.storefront_home_cache where cache_key = v_key;
+
+  -- An anonymous caller has a 3 s budget and a 2-4 s build: it NEVER rebuilds
+  -- inline while any copy exists (the warm tick refreshes anon rows every few
+  -- minutes; a stale hero number is worth more than a Retry screen). Approved
+  -- viewers (8 s budget) rebuild a stale row themselves, one at a time.
+  if v_cached is null or (v_zone is not null and v_built < now() - interval '10 minutes') then
+    if v_cached is not null
+       and not pg_try_advisory_xact_lock(hashtext('c678_home:' || v_key)) then
+      v_payload := v_cached;                 -- someone else is rebuilding; stale is fine
+    else
+      v_t0 := clock_timestamp();
+      v_payload := public._storefront_home_build(v_n);
+      v_ords    := coalesce(v_payload -> '_ords', '[]'::jsonb);
+      v_payload := v_payload - '_ords';
+      insert into public.storefront_home_cache (cache_key, payload, ords, built_at, build_ms)
+      values (v_key, v_payload, v_ords, now(),
+              (extract(epoch from clock_timestamp() - v_t0) * 1000)::int)
+      on conflict (cache_key) do update
+        set payload = excluded.payload, ords = excluded.ords,
+            built_at = now(), build_ms = excluded.build_ms;
+    end if;
+  else
+    v_payload := v_cached;
+  end if;
+
+  if auth.uid() is not null then
+    v_rv := public._storefront_home_recent(v_n);
+    if v_rv is not null then
+      select count(*) into v_idx
+        from jsonb_array_elements_text(coalesce(v_ords, '[]'::jsonb)) o
+       where o::int < (v_rv ->> '_ord')::int;
+      v_payload := jsonb_set(v_payload, '{sections}',
+        jsonb_insert(coalesce(v_payload -> 'sections', '[]'::jsonb),
+                     array[v_idx::text], v_rv - '_ord'));
+    end if;
+  end if;
+  return v_payload;
+end
+$$;
+grant execute on function public.storefront_home_v2(integer) to anon, authenticated;
+
+-- Warm the public home every few minutes so an anonymous visit never pays the
+-- build (the anon role has a 3 s statement budget). Zone classes are built
+-- lazily by their first approved visitor (8 s budget) and kept 10 minutes.
+create or replace function public.storefront_home_warm_tick()
+returns jsonb
+language plpgsql
+security definer
+set search_path to 'public'
+as $$
+declare v_n int; v_payload jsonb; v_ords jsonb; v_t0 timestamptz; v_out jsonb := '[]'::jsonb;
+begin
+  perform set_config('request.jwt.claims', '', true);   -- build as anon
+  -- every anon variant the app has asked for (the web home passes its own
+  -- p_items), plus the default — whichever is missing or older than 8 minutes.
+  for v_n in
+    select distinct n from (
+      select split_part(cache_key, ':', 2)::int as n from public.storefront_home_cache
+       where cache_key like 'anon:%'
+      union select 100) t
+     where not exists (select 1 from public.storefront_home_cache c
+                        where c.cache_key = 'anon:' || t.n
+                          and c.built_at > now() - interval '8 minutes')
+  loop
+    v_t0 := clock_timestamp();
+    v_payload := public._storefront_home_build(v_n);
+    v_ords    := coalesce(v_payload -> '_ords', '[]'::jsonb);
+    v_payload := v_payload - '_ords';
+    insert into public.storefront_home_cache (cache_key, payload, ords, built_at, build_ms)
+    values ('anon:' || v_n, v_payload, v_ords, now(),
+            (extract(epoch from clock_timestamp() - v_t0) * 1000)::int)
+    on conflict (cache_key) do update
+      set payload = excluded.payload, ords = excluded.ords,
+          built_at = now(), build_ms = excluded.build_ms;
+    v_out := v_out || jsonb_build_object('key', 'anon:' || v_n,
+               'ms', (extract(epoch from clock_timestamp() - v_t0) * 1000)::int,
+               'hero', v_payload -> 'hero' -> 'props' -> 0 ->> 'label');
+  end loop;
+  -- housekeeping: variants nobody asked for in an hour go; rows only MARKED
+  -- stale (built_at = -infinity) stay, so a stale copy is always servable.
+  delete from public.storefront_home_cache
+   where built_at > '-infinity'::timestamptz and built_at < now() - interval '1 hour';
+  return jsonb_build_object('ok', true, 'warmed', v_out);
+end
+$$;
+revoke all on function public.storefront_home_warm_tick() from anon, authenticated;
+
+insert into public.cron_task (name, ord, mode, gate_sql, work_sql, step_timeout_ms, enabled,
+                              base_interval_s, max_interval_s, current_interval_s, next_run_at, dml, note)
+values ('storefront_home_warm', 538, 'poll',
+        $g$select exists (
+             select 1 from (
+               select split_part(cache_key, ':', 2)::int as n from public.storefront_home_cache
+                where cache_key like 'anon:%'
+               union select 100) t
+              where not exists (select 1 from public.storefront_home_cache c
+                                 where c.cache_key = 'anon:' || t.n
+                                   and c.built_at > now() - interval '8 minutes'))$g$,
+        'select public.storefront_home_warm_tick()',
+        50000, true, 120, 120, 120, now() + interval '1 minute', true,
+        'CHANGE #678 — rebuilds the anonymous home payload (25 rails, ~1 MB, 2-4 s) so an anon visit is served from cache inside the 3 s anon budget. Invalidated by every count refresh.')
+on conflict (name) do update
+  set gate_sql = excluded.gate_sql, work_sql = excluded.work_sql, step_timeout_ms = excluded.step_timeout_ms,
+      enabled = true, base_interval_s = excluded.base_interval_s, max_interval_s = excluded.max_interval_s,
+      dml = true, note = excluded.note;
+
+-- A count refresh changes the hero number: drop every cached home.
+create or replace function public.refresh_zone_availability_counts(p_zone_id smallint default null)
+returns jsonb
+language plpgsql
+security definer
+set search_path to 'public'
+as $$
+declare z record; v_total bigint; v_out jsonb := '[]'::jsonb;
+begin
+  if public.zone_counts_are_settling() then
+    perform public._avail_count_guard_alert('sf_settling',
+      jsonb_build_object('reason','a zone master list is still building; kept the last snapshot',
+                         'zones', (select jsonb_agg(jsonb_build_object('zone',zone_id,'done',done,'last_id',last_id) order by zone_id) from zone_sync_state),
+                         'queued', (select count(*) from zone_resync_queue)));
+    return jsonb_build_object('skipped', true, 'reason', 'settling');
+  end if;
+
+  select total into v_total from public.medicine_count_cache where id = 1;
+  if v_total is null then select count(*) into v_total from "MEDICINE"; end if;
+  insert into public.sf_avail_counts(zone_id, cnt, updated_at)
+    values (0, v_total, now())
+    on conflict (zone_id) do update set cnt = excluded.cnt, updated_at = now();
+
+  for z in select id from public.zones
+            where is_active and not coalesce(is_synthetic, false)
+              and (p_zone_id is null or id = p_zone_id)
+            order by id loop
+    v_out := v_out || public._refresh_zone_avail(z.id);
+  end loop;
+  -- the hero number just changed: mark every cached home stale (never delete)
+  update public.storefront_home_cache set built_at = '-infinity'::timestamptz;
+  return jsonb_build_object('ok', true, 'global', v_total, 'zones', v_out);
+end;
 $$;
 
 -- ─────────────────────────────────────────────────────────────────────────────

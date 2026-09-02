@@ -751,8 +751,10 @@ begin
       from _zr;
 
   drop table if exists _zr;
-  -- the hero number for this zone just changed: drop every cached home payload
-  delete from public.storefront_home_cache;
+  -- the hero number for this zone just changed: every cached home payload is
+  -- now STALE (never deleted — an anonymous visitor must always find a copy;
+  -- the warm tick and the next approved visitor rebuild it).
+  update public.storefront_home_cache set built_at = '-infinity'::timestamptz;
   return jsonb_build_object('ok', true, 'zone', v_code, 'available', v_total, 'prev', v_prev);
 end;
 $$;
@@ -1540,7 +1542,11 @@ begin
   select payload, ords, built_at into v_cached, v_ords, v_built
     from public.storefront_home_cache where cache_key = v_key;
 
-  if v_cached is null or v_built < now() - interval '10 minutes' then
+  -- An anonymous caller has a 3 s budget and a 2-4 s build: it NEVER rebuilds
+  -- inline while any copy exists (the warm tick refreshes anon rows every few
+  -- minutes; a stale hero number is worth more than a Retry screen). Approved
+  -- viewers (8 s budget) rebuild a stale row themselves, one at a time.
+  if v_cached is null or (v_zone is not null and v_built < now() - interval '10 minutes') then
     if v_cached is not null
        and not pg_try_advisory_xact_lock(hashtext('c678_home:' || v_key)) then
       v_payload := v_cached;                 -- someone else is rebuilding; stale is fine
@@ -1613,7 +1619,10 @@ begin
                'ms', (extract(epoch from clock_timestamp() - v_t0) * 1000)::int,
                'hero', v_payload -> 'hero' -> 'props' -> 0 ->> 'label');
   end loop;
-  delete from public.storefront_home_cache where built_at < now() - interval '1 hour';
+  -- housekeeping: variants nobody asked for in an hour go; rows only MARKED
+  -- stale (built_at = -infinity) stay, so a stale copy is always servable.
+  delete from public.storefront_home_cache
+   where built_at > '-infinity'::timestamptz and built_at < now() - interval '1 hour';
   return jsonb_build_object('ok', true, 'warmed', v_out);
 end
 $$;
@@ -1631,7 +1640,7 @@ values ('storefront_home_warm', 538, 'poll',
                                  where c.cache_key = 'anon:' || t.n
                                    and c.built_at > now() - interval '8 minutes'))$g$,
         'select public.storefront_home_warm_tick()',
-        50000, true, 120, 600, 120, now() + interval '1 minute', true,
+        50000, true, 120, 120, 120, now() + interval '1 minute', true,
         'CHANGE #678 — rebuilds the anonymous home payload (25 rails, ~1 MB, 2-4 s) so an anon visit is served from cache inside the 3 s anon budget. Invalidated by every count refresh.')
 on conflict (name) do update
   set gate_sql = excluded.gate_sql, work_sql = excluded.work_sql, step_timeout_ms = excluded.step_timeout_ms,
@@ -1667,7 +1676,8 @@ begin
             order by id loop
     v_out := v_out || public._refresh_zone_avail(z.id);
   end loop;
-  delete from public.storefront_home_cache;   -- the hero number just changed
+  -- the hero number just changed: mark every cached home stale (never delete)
+  update public.storefront_home_cache set built_at = '-infinity'::timestamptz;
   return jsonb_build_object('ok', true, 'global', v_total, 'zones', v_out);
 end;
 $$;

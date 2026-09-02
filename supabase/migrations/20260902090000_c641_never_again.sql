@@ -1,5 +1,5 @@
 -- CHANGE #641 — never-again fix: an HTTP RPC may never run the regression guard.
--- Applied live via Supabase apply_migration; this file is the repo copy.
+-- Applied live via Supabase apply_migration / psql; this file is the repo copy.
 -- Idempotent: every statement is create-or-replace / on-conflict.
 
 -- ═══ c641_completion_rpcs_never_run_rg_check ═══
@@ -869,4 +869,88 @@ BEGIN
     'server_now',    now()
   );
 END $function$;
+
+-- ═══ c641_close_shipped ═══
+-- CHANGE #641 (8) — reconcile a row whose change is DEMONSTRABLY live.
+--
+-- The outage left finished commands parked with their code already on
+-- medibo.in. Their QA chip and their step count are stale artefacts of a
+-- database that stopped answering, so the normal bug-loop gate would hold them
+-- open forever while the thing it is protecting against — unshipped work
+-- claimed as done — is exactly what cannot be true here.
+--
+-- So this is a SEPARATE, narrower door, not a weakening of that gate. It closes
+-- a row only on evidence the runner cannot fake: the command's OWN deploy_queue
+-- entry reached 'deployed' with this change number, and deploy_registry says
+-- that change actually went live. No matching pair, no completion. The evidence
+-- is written into the row and the thread, so a reconciled completion is always
+-- distinguishable from a proven one.
+create or replace function public.dev_cmd_close_shipped(
+  p_id bigint, p_change_no integer, p_note text default null)
+returns jsonb language plpgsql security definer
+set search_path to 'public'
+set statement_timeout to '15s'
+as $function$
+declare r record; q record; d record; v_ev jsonb; v_msg text;
+begin
+  perform _dev_guard();
+  select * into r from dev_commands where id = p_id;
+  if not found then return jsonb_build_object('ok', false, 'error', 'no such command'); end if;
+  if r.status = 'completed' then
+    return jsonb_build_object('ok', true, 'already', true, 'id', p_id,
+      'change_no', r.web_deploy_no);
+  end if;
+  if r.status not in ('paused','building') then
+    return jsonb_build_object('ok', false, 'error', 'not paused or building',
+      'status', r.status);
+  end if;
+
+  select * into d from deploy_registry
+   where change_no = p_change_no and status = 'success' and deployed_at is not null;
+  if not found then
+    return jsonb_build_object('ok', false, 'retryable', false,
+      'error', format('change #%s is not a successful, deployed registry row', p_change_no));
+  end if;
+
+  select * into q from deploy_queue
+   where command_id = p_id and change_no = p_change_no and status = 'deployed'
+   order by id desc limit 1;
+  if not found then
+    return jsonb_build_object('ok', false, 'retryable', false,
+      'error', format('command #%s has no deploy_queue entry that reached deployed on change #%s — its work is NOT provably live',
+                      p_id, p_change_no));
+  end if;
+
+  v_ev := jsonb_build_object('change_no', p_change_no, 'branch', q.branch,
+            'commit', q.commit_sha, 'registry_commit', d.commit_sha,
+            'deployed_at', d.deployed_at, 'reconciled_at', now(),
+            'note', coalesce(p_note,''));
+
+  update dev_commands set
+    status = 'completed', finished_at = now(),
+    web_deploy_no = coalesce(web_deploy_no, p_change_no),
+    web_deployed_at = coalesce(web_deployed_at, d.deployed_at),
+    wait_state = null, wait_kind = null, wait_until = null,
+    wait_reason = null, wait_blocker = '{}'::jsonb,
+    result_summary = coalesce(nullif(result_summary,''), coalesce(p_note,''))
+  where id = p_id and status in ('paused','building');
+  if not found then
+    return jsonb_build_object('ok', true, 'already', true, 'id', p_id,
+      'note', 'closed concurrently');
+  end if;
+
+  perform _lease_release_internal(p_id);
+  perform _audit('system','dev_cmd_close_shipped', p_id::text, v_ev);
+
+  v_msg := format('✅ Reconciled (CHANGE #641): this command''s branch %s (%s) reached the live build as CHANGE #%s on %s IST. The row was left parked by the 2026-09-01 database outage, not by unfinished work.%s',
+             coalesce(q.branch,'?'), left(coalesce(q.commit_sha,'?'),8), p_change_no,
+             to_char(d.deployed_at at time zone 'Asia/Kolkata','DD Mon HH24:MI'),
+             case when coalesce(p_note,'') <> '' then E'\n\n' || p_note else '' end);
+  insert into dev_command_messages (command_id, sender, body) values (p_id, 'system', v_msg);
+
+  return jsonb_build_object('ok', true, 'id', p_id, 'change_no', p_change_no,
+    'evidence', v_ev);
+end $function$;
+
+revoke all on function public.dev_cmd_close_shipped(bigint, integer, text) from public, anon, authenticated;
 

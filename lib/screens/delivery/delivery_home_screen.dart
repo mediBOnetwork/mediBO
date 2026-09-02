@@ -27,6 +27,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../design_tokens.dart';
 import '../../fulfill/fulfill_lookups.dart';
 import '../../services/device_location.dart';
 import '../../services/masked_call_service.dart';
@@ -41,6 +42,7 @@ import 'delivery_run_map_panel.dart';
 import '../../services/ui_copy.dart';
 import '../../design_tokens.dart';
 import '../../widgets/masked_call_button.dart';
+import 'rider_profile_sheet.dart'; // C463 gap 119
 
 Color get _kGreen => FulfillLookups.instance.color('c_ff1b7a43', const Color(0xFF1B7A43));
 Color get _kBorder => FulfillLookups.instance.color('c_ffe5e7eb', const Color(0xFFE5E7EB));
@@ -49,11 +51,20 @@ Color get _kSub => FulfillLookups.instance.color('c_ff6b7280', const Color(0xFF6
 
 String _ui(String k) => FulfillLookups.instance.ui(k);
 
-Color? _hex(String? h) {
-  final s = (h ?? '').trim().replaceFirst('#', '');
-  if (s.length != 6 && s.length != 8) return null;
-  final v = int.tryParse(s.length == 6 ? 'FF$s' : s, radix: 16);
-  return v == null ? null : Color(v);
+/// CHANGE #463 gap 112 — the payload's colour is RESOLVED through the token
+/// layer, never parsed. A hex string the design system does not know returns
+/// null so the call site falls back to its own token; arbitrary hex from a
+/// payload can therefore never become a Color in this build.
+Color? _colorFromToken(String? token) {
+  if (token == null || token.isEmpty) return null;
+  final s = token.trim().toLowerCase().replaceFirst('#', '');
+  switch (s) {
+    case '1b7a43': return _kGreen;
+    case 'e5e7eb': return _kBorder;
+    case '111827': return _kText;
+    case '6b7280': return _kSub;
+    default: return null;
+  }
 }
 
 class DeliveryHomeScreen extends StatefulWidget {
@@ -566,6 +577,17 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
           ],
         ),
         actions: [
+          // CHANGE #463 gap 119 — my_delivery_profile_update() existed with no
+          // caller anywhere in lib/. This is the way in: a rider edits their
+          // own details instead of asking an admin to do it.
+          IconButton(
+            tooltip: _ui('dlv_my_details'),
+            onPressed: () async {
+              final saved = await RiderProfileSheet.show(context);
+              if (saved == true) _load();
+            },
+            icon: const Icon(Icons.person_outline, size: 20),
+          ),
           IconButton(
             tooltip: _ui('dlv_refresh'),
             onPressed: _load,
@@ -808,7 +830,7 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
               margin: const EdgeInsets.only(right: 8, top: 2),
               alignment: Alignment.center,
               decoration: BoxDecoration(
-                color: _hex(s['pin_color']?.toString()) ?? _kBorder,
+                color: _colorFromToken(s['pin_color']?.toString()) ?? _kBorder,
                 shape: BoxShape.circle,
               ),
               child: Text('${(s['seq'] as num).toInt()}',
@@ -836,6 +858,25 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(fontSize: 12, color: _kSub)),
+              ],
+              // CHANGE #463 gap 118 — the note the customer left for the door.
+              // Absent from the payload means the customer left none; the row
+              // is then absent too, never an empty placeholder.
+              if ((s['delivery_instruction']?.toString() ?? '').isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Icon(Icons.sticky_note_2_outlined, size: 13, color: _kGreen),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      '${_ui('dlv_instruction_label')}: ${s['delivery_instruction']}',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Ds.t.caption.copyWith(
+                          fontWeight: FontWeight.w600, color: _kGreen),
+                    ),
+                  ),
+                ]),
               ],
             ]),
           ),
@@ -969,13 +1010,13 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
     return Container(
       padding: EdgeInsets.symmetric(horizontal: Ds.space.x8, vertical: Ds.space.x4),
       decoration: BoxDecoration(
-        color: _hex(colors['bg']?.toString()) ?? Colors.transparent,
+        color: _colorFromToken(colors['bg']?.toString()) ?? Colors.transparent,
         borderRadius: Ds.r.rChip,
       ),
       child: Text(text,
           style: Ds.t.caption.copyWith(
               fontWeight: FontWeight.w700,
-              color: _hex(colors['fg']?.toString()) ?? _kText)),
+              color: _colorFromToken(colors['fg']?.toString()) ?? _kText)),
     );
   }
 

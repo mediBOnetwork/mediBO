@@ -33,11 +33,16 @@ Color get _kSub => FulfillLookups.instance.color('c_ff6b7280', const Color(0xFF6
 
 String _ui(String k) => FulfillLookups.instance.ui(k);
 
-Color? _hex(String? h) {
-  final s = (h ?? '').trim().replaceFirst('#', '');
-  if (s.length != 6 && s.length != 8) return null;
-  final v = int.tryParse(s.length == 6 ? 'FF$s' : s, radix: 16);
-  return v == null ? null : Color(v);
+Color _colorFromToken(String? token) {
+  if (token == null || token.isEmpty) return _kText;
+  final s = token.trim().toLowerCase().replaceFirst('#', '');
+  switch (s) {
+    case '1b7a43': return _kGreen;
+    case 'e5e7eb': return _kBorder;
+    case '111827': return _kText;
+    case '6b7280': return _kSub;
+    default: return _kText;
+  }
 }
 
 class AgencyTeamSection extends StatefulWidget {
@@ -434,14 +439,14 @@ class AgencyTeamSectionState extends State<AgencyTeamSection> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
               decoration: BoxDecoration(
-                color: _hex(colors['bg']?.toString()) ?? Colors.transparent,
+                color: _colorFromToken(colors['bg']?.toString()),
                 borderRadius: BorderRadius.circular(6),
               ),
               child: Text(r['status_label']!.toString(),
                   style: TextStyle(
                       fontSize: 10.5,
                       fontWeight: FontWeight.w700,
-                      color: _hex(colors['fg']?.toString()) ?? _kText)),
+                      color: _colorFromToken(colors['fg']?.toString()))),
             ),
         ]),
         const SizedBox(height: 3),

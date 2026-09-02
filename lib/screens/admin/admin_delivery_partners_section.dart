@@ -441,6 +441,9 @@ class AdminDeliveryPartnersSectionState
           Text([docType, docNumber].where((x) => x.isNotEmpty).join(' · '),
               style: TextStyle(fontSize: 11.5, color: _kSub)),
         ],
+        // CHANGE #463 (register row 121): the identity state, and the two
+        // actions that move it, on the card the reviewer already reads.
+        _verificationStrip(r, reviewable: true),
         const SizedBox(height: 8),
         Row(children: [
           // A2 — open the scanned ID so the admin can actually verify it.
@@ -494,6 +497,123 @@ class AdminDeliveryPartnersSectionState
     } catch (_) {}
   }
 
+  /// CHANGE #463 (register row 121) — `rider-selfies` is PRIVATE, unlike
+  /// `partner-docs`, so the face opens through a short-lived signed URL rather
+  /// than a public one. The bucket and the path are the payload's; this file
+  /// builds neither.
+  Future<void> _openSelfie(String bucket, String path) async {
+    if (bucket.isEmpty || path.isEmpty) return;
+    try {
+      final url = await Supabase.instance.client.storage
+          .from(bucket)
+          .createSignedUrl(path, 300);
+      if (url.isEmpty) return;
+      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+    } catch (_) {}
+  }
+
+  /// The reviewer's verdict on the identity. It is a SEPARATE decision from
+  /// approving the registration — an admin can verify a face today and still
+  /// leave the application pending — so it has its own RPC and never touches
+  /// status or is_active.
+  Future<void> _setVerification(String partnerId, String status) async {
+    if (partnerId.isEmpty) return;
+    try {
+      final res = await Supabase.instance.client.rpc(
+        'admin_delivery_verification_set',
+        params: {
+          'p': {'partner_id': partnerId, 'status': status}
+        },
+      );
+      if (!mounted) return;
+      await _load();
+      await widget.onChanged();
+      if (res is Map) _toast(res['message']?.toString() ?? '');
+      RenderLog.write('c463_rider_verification', 'admin_set;status=$status');
+    } catch (_) {}
+  }
+
+  Color _toneBg(String tone) {
+    switch (tone) {
+      case 'good':
+        return Ds.c.successSoft;
+      case 'bad':
+        return Ds.c.dangerSoft;
+      case 'warn':
+        return Ds.c.warningSoft;
+      default:
+        return Ds.c.infoSoft;
+    }
+  }
+
+  Color _toneFg(String tone) {
+    switch (tone) {
+      case 'good':
+        return Ds.c.success;
+      case 'bad':
+        return Ds.c.danger;
+      case 'warn':
+        return Ds.c.warning;
+      default:
+        return Ds.c.info;
+    }
+  }
+
+  /// The identity block, rendered verbatim. The chip's wording and its tone
+  /// are the backend's; only the token lookup happens here. An absent block
+  /// (an older payload) renders nothing rather than an empty chip.
+  Widget _verificationStrip(Map<String, dynamic> row, {required bool reviewable}) {
+    final v = row['verification'] is Map
+        ? Map<String, dynamic>.from(row['verification'] as Map)
+        : const <String, dynamic>{};
+    if (v.isEmpty) return const SizedBox.shrink();
+    final label = v['label']?.toString() ?? '';
+    if (label.isEmpty) return const SizedBox.shrink();
+    final tone = v['tone']?.toString() ?? '';
+    final selfiePath = v['selfie_path']?.toString() ?? '';
+    final selfieBucket = v['selfie_bucket']?.toString() ?? '';
+    final note = v['note']?.toString() ?? '';
+    final partnerId = row['partner_id']?.toString() ?? '';
+
+    return Padding(
+      padding: EdgeInsets.only(top: Ds.space.x8),
+      child: Wrap(
+        spacing: Ds.space.x8,
+        runSpacing: Ds.space.x4,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Container(
+            padding: EdgeInsets.symmetric(
+                horizontal: Ds.space.x8, vertical: Ds.space.x4),
+            decoration: BoxDecoration(
+              color: _toneBg(tone),
+              borderRadius: Ds.r.rChip,
+            ),
+            child: Text(label,
+                style: Ds.t.caption.copyWith(color: _toneFg(tone))),
+          ),
+          if (note.isNotEmpty) Text(note, style: Ds.t.caption),
+          if (selfiePath.isNotEmpty)
+            TextButton(
+              onPressed: () => _openSelfie(selfieBucket, selfiePath),
+              child: Text(v['view_label']?.toString() ?? ''),
+            ),
+          if (reviewable) ...[
+            TextButton(
+              onPressed: () => _setVerification(partnerId, 'verified'),
+              child: Text(v['verify_label']?.toString() ?? ''),
+            ),
+            TextButton(
+              style: TextButton.styleFrom(foregroundColor: Ds.c.danger),
+              onPressed: () => _setVerification(partnerId, 'rejected'),
+              child: Text(v['reject_label']?.toString() ?? ''),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   Widget _activeRow(Map<String, dynamic> p) {
     final typeLabel = p['type_label']?.toString() ?? '';
     final colors = p['type_colors'] is Map
@@ -542,6 +662,10 @@ class AdminDeliveryPartnersSectionState
           ].where((x) => x.isNotEmpty).join(' · '),
           style: TextStyle(fontSize: 11.5, color: _kSub),
         ),
+        // CHANGE #463 (register row 121): an already-approved rider's identity
+        // state is readable here too, and still reviewable — a face can be
+        // rejected after approval without touching is_active.
+        _verificationStrip(p, reviewable: true),
         const SizedBox(height: 6),
         Row(children: [
           if (isAgency) ...[

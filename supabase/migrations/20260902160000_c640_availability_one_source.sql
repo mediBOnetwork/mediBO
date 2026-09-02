@@ -1,13 +1,34 @@
--- CHANGE #640 — availability had five definitions. Now it has one.
+-- CHANGE #640 — availability had six definitions. Now it has one.
 --
 -- THE LIVE BUG
 --   SyNtraN 200 Capsule (id 252328) was listed on the storefront, was accepted
 --   into the cart, and was then shown as unavailable inside that same cart.
 --   The row said both things at once: supplier_count = 11, buyable = false.
---   13,767 rows of the catalogue disagreed with themselves the same way.
+--   At the time this was written 74,885 rows of the catalogue disagreed with
+--   themselves the same way (the spec counted 13,767; the cursor sweep below
+--   had been switching rows off one-way ever since).
 --
--- WHY (measured, not guessed)
---   FIVE writers of the two columns, THREE different definitions between them:
+-- THE ROOT CAUSE (measured, not guessed)
+--   `supplier_count` was RIGHT and `z_<zone>_sup` was empty.
+--   zone_company_lookup[zone 1, 'glenmark pharmaceuticals'] holds exactly 11
+--   suppliers — the 11 that supplier_count stored. The master list on the
+--   product row was never filled in, because both propagation paths
+--   (company_ps_to_medicine and zone_sync_medicine_batch) reach the row by
+--
+--        LEFT JOIN zone_marketer_key k ON k.marketer = m.marketer
+--
+--   which is a CASE-SENSITIVE text match against a CACHE. The cache holds
+--   'Glenmark Pharmaceuticals Ltd'; MEDICINE.marketer was later normalised to
+--   'GLENMARK PHARMACEUTICALS LTD'. 1,496 of 562,549 rows still matched. For
+--   the other 561,053 the sync ran, joined nothing, and wrote nothing — for
+--   every zone, every night, silently.
+--
+--   So `z_<zone>_sup` was empty, `medicine_zone_standby()` returned 0, and every
+--   surface that resolved through it (the cart's line render, order placement)
+--   called the product unavailable — while every surface that read the global
+--   column (the cart's ADD gate, the anonymous storefront) called it available.
+--
+-- AND SIX WRITERS, THREE DEFINITIONS BETWEEN THEM
 --     * medicine_set_buyable()        — buyable ONLY, from "z_<c>_sup is non-empty",
 --                                       ignoring oos/nostock. Never touched the count.
 --     * buyable_recompute_tick()      — buyable ONLY, same definition PLUS an
@@ -15,16 +36,15 @@
 --                                       only `buyable IS NULL OR TRUE`, so it could
 --                                       turn a product OFF and never back ON.
 --     * medicine_recompute_buyable()  — all three columns, from _ps_count().
---     * backfill_supplier_count()     — the count ONLY, and only where the count
---                                       was already NULL.
---     * medicine_zone_from_marketer() — rebuilt z_<c>_sup from zone_company_lookup
---                                       and overwrote all three. This is what left
---                                       BIG PLUS ORGANICS in z_rpr_av with z_rpr_sup
---                                       EMPTY on 252328: the rebuild dropped the
---                                       supplier from the master list while its
---                                       "available" tick stayed behind.
+--     * backfill_supplier_count()     — the count ONLY, and only where it was NULL.
+--     * medicine_zone_from_marketer() — rebuilt z_<c>_sup from the lookup (keyed
+--                                       correctly, via resolve_company_canonical)
+--                                       but only ON UPDATE OF marketer, and it
+--                                       DROPPED responders while doing so.
+--     * zone_sync_medicine_batch()    — the intended backfill, keyed through the
+--                                       stale cache, so a no-op for 561k rows.
 --
---   And SEVEN readers, each picking whichever column it liked:
+-- AND SEVEN READERS, each picking whichever column it liked:
 --     storefront feed / search / PDP / compare / wishlist / margin / same-composition
 --       -> storefront_effective_count() -> medicine_zone_standby()   (zone truth)
 --     cart_set_item()                     -> the GLOBAL supplier_count column
@@ -32,11 +52,11 @@
 --     _cart_strip_unavailable()           -> the GLOBAL supplier_count column
 --     _cart_unavailable_lines()           -> medicine_zone_standby()
 --     cart_state()                        -> the buyable column
---   So the storefront answered with zone truth and the cart answered with a stale
---   global column. Add succeeded, render refused. Exactly what Om saw.
 --
 -- THE ONE SOURCE OF TRUTH (the notes model, stated once)
+--   master(zone)    = zone_company_lookup[zone, resolve_company_canonical(marketer)]
 --   effective(zone) = (z_sup UNION z_av) MINUS z_oos MINUS z_nostock
+--                     where z_sup is master(zone) materialised on the row
 --   supplier_count  = |UNION over ACTIVE zones of effective(zone)|
 --   buyable         = supplier_count > 0
 --   supplier_label  = _supplier_label(supplier_count)
@@ -228,7 +248,7 @@ $$;
 -- consulted MRP, so the storefront already ignored it, and a price rule folded
 -- into a SUPPLIER COUNT is a second definition by another name. An unpriced
 -- product is a pricing state (pricing.has_price), not an availability one.
-create or replace function public.buyable_recompute_tick(p_chunk integer)
+create or replace function public.buyable_recompute_tick(p_chunk integer default 20000)
 returns jsonb
 language plpgsql
 security definer
@@ -276,7 +296,7 @@ $$;
 
 -- Same story: it wrote the count alone, only onto rows whose count was NULL.
 -- It now delegates to the one expression and stops being a second opinion.
-create or replace function public.backfill_supplier_count(p_batch integer)
+create or replace function public.backfill_supplier_count(p_batch integer default 4000)
 returns jsonb
 language plpgsql
 security definer
@@ -529,34 +549,158 @@ $$;
 -- 4. Reconcile the orphans, then backfill every disagreeing row.
 -- ─────────────────────────────────────────────────────────────────────────────
 
--- Any supplier that answered in a zone belongs on that zone's master list. This
--- repairs the rows the old marketer rebuild orphaned (252328 among them) so the
--- data matches the invariant, not just the expression that now enforces it.
-do $reconcile$
-declare z record; n bigint;
-begin
-  for z in select code from zones where is_active loop
-    execute format($f$
-      update public."MEDICINE" m
-         set %1$I = (
-               select coalesce(array_agg(distinct t.s order by t.s), '{}'::text[])
-                 from (select btrim(x) as s
-                         from unnest(coalesce(m.%1$I,'{}'::text[])
-                                  || coalesce(m.%2$I,'{}'::text[])
-                                  || coalesce(m.%3$I,'{}'::text[])
-                                  || coalesce(m.%4$I,'{}'::text[])) x) t
-                where t.s <> '')
-       where not (
-         coalesce(m.%1$I,'{}'::text[]) @> coalesce(m.%2$I,'{}'::text[])
-         and coalesce(m.%1$I,'{}'::text[]) @> coalesce(m.%3$I,'{}'::text[])
-         and coalesce(m.%1$I,'{}'::text[]) @> coalesce(m.%4$I,'{}'::text[]))
-    $f$, 'z_'||z.code||'_sup', 'z_'||z.code||'_av',
-         'z_'||z.code||'_oos', 'z_'||z.code||'_nostock');
-    get diagnostics n = row_count;
-    raise notice 'C640 reconcile zone %: % row(s) had a responder off the master list', z.code, n;
-  end loop;
-end
-$reconcile$;
+-- The propagation, keyed by the SAME resolver everything else uses.
+--
+-- zone_sync_medicine_batch() reached the row through the zone_marketer_key
+-- CACHE with a case-sensitive equality, and the cache had gone stale against a
+-- re-cased catalogue: 1,496 of 562,549 rows matched, so the sync was a silent
+-- no-op for 561,053 products. It now resolves the marketers IN ITS OWN BATCH,
+-- set-based (a batch has a few hundred distinct marketers, not 20,000 rows'
+-- worth of scalar calls), refreshes the cache as a side effect so the other
+-- consumer stops rotting too, and keeps every responder on the master list
+-- instead of deleting it.
+create or replace function public.zone_sync_medicine_batch(
+  p_zone_id smallint, p_batch integer default 250000)
+returns jsonb
+language plpgsql
+security definer
+set search_path to 'public'
+as $$
+DECLARE v_code text; v_last bigint; v_max bigint; v_hi bigint; v_n int;
+BEGIN
+  SELECT code INTO v_code FROM zones WHERE id = p_zone_id AND is_active;
+  IF v_code IS NULL THEN RETURN jsonb_build_object('error','unknown_zone'); END IF;
+
+  INSERT INTO zone_sync_state(zone_id) VALUES (p_zone_id) ON CONFLICT DO NOTHING;
+  SELECT last_id INTO v_last FROM zone_sync_state WHERE zone_id = p_zone_id;
+  SELECT max(id) INTO v_max FROM public."MEDICINE";
+  IF v_last >= coalesce(v_max,0) THEN
+    UPDATE zone_sync_state SET done = true, updated_at = now() WHERE zone_id = p_zone_id;
+    RETURN jsonb_build_object('status','ok','done',true,'last_id',v_last);
+  END IF;
+  v_hi := v_last + greatest(coalesce(p_batch,20000),1);
+
+  -- Keep the shared cache honest for the OTHER consumer
+  -- (company_ps_to_medicine still joins zone_marketer_key). This is the write
+  -- that was never happening: the cache was built once and never rebuilt after
+  -- the catalogue's marketer strings were re-cased, so 561,053 of 562,549 rows
+  -- stopped matching it.
+  INSERT INTO zone_marketer_key(marketer, key)
+  SELECT d.marketer, coalesce(a.group_key, d.marketer_canonical)
+    FROM (SELECT DISTINCT m.marketer, m.marketer_canonical
+            FROM public."MEDICINE" m
+           WHERE m.id > v_last AND m.id <= v_hi
+             AND m.marketer IS NOT NULL AND m.marketer_canonical IS NOT NULL) d
+    LEFT JOIN company_alias a ON a.variant_canonical = d.marketer_canonical
+  ON CONFLICT (marketer) DO UPDATE SET key = excluded.key
+   WHERE zone_marketer_key.key IS DISTINCT FROM excluded.key;
+
+  -- The sync resolves the key INLINE from the indexed `marketer_canonical`
+  -- column instead of trusting the cache or calling
+  -- resolve_company_canonical() per row. resolve_company_canonical(t) is, by
+  -- definition, coalesce(company_alias[company_canonical(t)].group_key,
+  -- company_canonical(t)) — and marketer_canonical already IS
+  -- company_canonical(marketer), maintained on the row and indexed. So the same
+  -- answer comes out of two index lookups rather than a regexp pipeline per row:
+  -- the version that called the function per distinct marketer took over 100 s
+  -- for a 20,000-row batch and could not finish inside the statement timeout.
+  EXECUTE format($q$
+    WITH src AS (
+      SELECT m.id,
+             (SELECT coalesce(array_agg(DISTINCT t.s ORDER BY t.s), '{}'::text[])
+                FROM (SELECT btrim(x) AS s FROM unnest(
+                        coalesce(l.sups,'{}'::text[])
+                        || coalesce(m.%2$I,'{}'::text[])
+                        || coalesce(m.%3$I,'{}'::text[])
+                        || coalesce(m.%4$I,'{}'::text[])) x) t
+               WHERE t.s <> '') AS want
+      FROM public."MEDICINE" m
+      LEFT JOIN company_alias a
+             ON a.variant_canonical = m.marketer_canonical
+      LEFT JOIN zone_company_lookup l
+             ON l.zone_id = $3
+            AND l.key = coalesce(a.group_key, m.marketer_canonical)
+      WHERE m.id > $1 AND m.id <= $2
+    )
+    UPDATE public."MEDICINE" m SET %1$I = src.want
+      FROM src WHERE m.id = src.id AND m.%1$I IS DISTINCT FROM src.want
+  $q$, 'z_'||v_code||'_sup', 'z_'||v_code||'_av',
+       'z_'||v_code||'_oos', 'z_'||v_code||'_nostock')
+  USING v_last, v_hi, p_zone_id;
+
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  UPDATE zone_sync_state SET last_id = v_hi, done = (v_hi >= coalesce(v_max,0)),
+                             updated_at = now()
+   WHERE zone_id = p_zone_id;
+  RETURN jsonb_build_object('status','ok','done',(v_hi >= coalesce(v_max,0)),
+                            'from',v_last,'to',v_hi,'max',v_max,'rows_written',v_n);
+END;
+$$;
+
+-- The company-edit path had the same orphaning bug as the marketer rebuild: it
+-- overwrote z_<c>_sup with (lookup MINUS oos MINUS nostock), deleting every
+-- supplier that had already answered in that zone. Responders stay on the list;
+-- `medicine_zone_effective()` subtracts them where it should.
+create or replace function public.company_ps_to_medicine()
+returns trigger
+language plpgsql
+set search_path to 'public'
+as $$
+DECLARE z record; v_zone_sups text[]; v_keys text[]; j jsonb;
+BEGIN
+  j := to_jsonb(NEW);
+  v_keys := ARRAY(SELECT k FROM unnest(ARRAY[
+              nullif(btrim(coalesce(NEW.name_canonical,'')),''),
+              nullif(lower(btrim(coalesce(NEW.company_name,''))),'')]) k WHERE k IS NOT NULL);
+  IF array_length(v_keys,1) IS NULL THEN RETURN NEW; END IF;
+
+  FOR z IN SELECT id, code FROM zones WHERE is_active LOOP
+    SELECT coalesce(array_agg(DISTINCT btrim(x.v) ORDER BY btrim(x.v)),'{}')
+      INTO v_zone_sups
+    FROM (SELECT j ->> ('PS'||g) AS v FROM generate_series(1,30) g) x
+    JOIN supplier_profiles sp
+      ON lower(btrim(sp.supplier_name)) = lower(btrim(x.v))
+     AND sp.zone_id = z.id AND NOT coalesce(sp.is_deleted,false)
+    WHERE btrim(coalesce(x.v,'')) <> '';
+
+    EXECUTE format('UPDATE public.company SET %I = $1 WHERE id = $2 AND %I IS DISTINCT FROM $1',
+                   'z_'||z.code||'_sup','z_'||z.code||'_sup') USING v_zone_sups, NEW.id;
+
+    UPDATE zone_company_lookup l SET sups = v_zone_sups
+     WHERE l.zone_id = z.id AND l.key = ANY(v_keys) AND l.sups IS DISTINCT FROM v_zone_sups;
+    INSERT INTO zone_company_lookup(zone_id, key, sups)
+    SELECT z.id, k, v_zone_sups FROM unnest(v_keys) k
+    ON CONFLICT (zone_id, key) DO NOTHING;
+
+    -- CHANGE #640 — resolve the marketer the way every other path resolves it,
+    -- and KEEP the responders. The old body reached the row through
+    -- zone_marketer_key with a case-sensitive equality (stale cache => no rows)
+    -- and then deleted any supplier sitting in oos/nostock from the master list.
+    EXECUTE format($q$
+      UPDATE public."MEDICINE" m
+         SET %1$I = (SELECT coalesce(array_agg(DISTINCT t.s ORDER BY t.s), '{}'::text[])
+                       FROM (SELECT btrim(x) AS s FROM unnest(
+                               $1::text[]
+                               || coalesce(m.%2$I,'{}'::text[])
+                               || coalesce(m.%3$I,'{}'::text[])
+                               || coalesce(m.%4$I,'{}'::text[])) x) t
+                      WHERE t.s <> '')
+       WHERE public.resolve_company_canonical(m.marketer) = ANY($2)
+    $q$, 'z_'||z.code||'_sup', 'z_'||z.code||'_av',
+         'z_'||z.code||'_oos', 'z_'||z.code||'_nostock')
+    USING v_zone_sups, v_keys;
+  END LOOP;
+
+  -- buyable / supplier_count / supplier_label are recomputed by
+  -- zz_medicine_set_buyable_trg on each of those UPDATEs. Calling
+  -- medicine_recompute_buyable() again here would be a second writer.
+  UPDATE inquiry SET product_id = product_id
+   WHERE supplier_order_id IS NULL AND asked_at IS NULL
+     AND product_id IN (SELECT m.id FROM public."MEDICINE" m
+        WHERE public.resolve_company_canonical(m.marketer) = ANY(v_keys));
+  RETURN NEW;
+END;
+$$;
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 5. THE GUARD. Divergence becomes impossible, not merely unlikely.

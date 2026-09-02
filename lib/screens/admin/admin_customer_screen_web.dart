@@ -3083,10 +3083,19 @@ class _AdminCustomerScreenState extends State<AdminCustomerScreen> {
           const SizedBox(width: 4),
           Expanded(
             child: Text(
-              cf('admin_customer.ordered_by', {
-                'a': row.name,
-                'b': row.pharmacy.isNotEmpty ? ' · ${row.pharmacy}' : '',
-              }),
+              // CHANGE #686 — the header Om photographed. It passed {a} and
+              // {b} at a template that takes {name}, so cf() stripped the
+              // unresolved placeholder and the dangling colon and the customer's
+              // name never appeared at all. It also built " · <pharmacy>" here,
+              // separator included — copy composed in Dart.
+              // Both live in the backend now: two keys, and this file only
+              // answers "is there a pharmacy", which is why both keys exist.
+              row.pharmacy.isEmpty
+                  ? cf('admin_customer.ordered_by', {'name': row.name})
+                  : cf('admin_customer.ordered_by_with_pharmacy', {
+                      'name': row.name,
+                      'pharmacy': row.pharmacy,
+                    }),
               style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
               overflow: TextOverflow.ellipsis,
             ),

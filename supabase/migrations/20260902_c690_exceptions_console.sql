@@ -181,6 +181,7 @@ insert into public.ui_copy (key, value) values
   ('exc.close.pick',       to_jsonb('Pick an outcome first.'::text)),
   ('exc.close.done',       to_jsonb('Outcome recorded.'::text)),
   ('exc.close.gone',       to_jsonb('That exception is already closed.'::text)),
+  ('exc.not_found',        to_jsonb('That exception is no longer in the queue.'::text)),
   ('exc.outcome.supplier_replaced', to_jsonb('Supplier replaced the stock'::text)),
   ('exc.outcome.supplier_credited', to_jsonb('Supplier credited the amount'::text)),
   ('exc.outcome.written_off',       to_jsonb('Written off — mediBO absorbed it'::text)),
@@ -677,10 +678,17 @@ set search_path to 'public'
 as $function$
 declare w record; v_actor text := coalesce(public.my_admin_id()::text, auth.uid()::text);
 begin
+  -- _exception_writable returns a refusal ROW when the caller may not write, and
+  -- NO row when the id is not (or is no longer) a live exception. Those are
+  -- different sentences and the console prints whichever is true.
   select * into w from public._exception_writable(p_id);
-  if w is null or coalesce(w.refusal,'') <> '' or w.reason_code is null then
+  if not found then
+    return jsonb_build_object('ok', false, 'error', 'not_found',
+      'message', public._c('exc.not_found'));
+  end if;
+  if coalesce(w.refusal,'') <> '' then
     return jsonb_build_object('ok', false, 'error', 'not_authorized',
-      'message', coalesce(nullif(w.refusal,''), public._c('exc.not_authorized')));
+      'message', w.refusal);
   end if;
 
   insert into public.exception_state
@@ -714,10 +722,17 @@ declare
   v_tok  text;
   v_ok   boolean := false;
 begin
+  -- _exception_writable returns a refusal ROW when the caller may not write, and
+  -- NO row when the id is not (or is no longer) a live exception. Those are
+  -- different sentences and the console prints whichever is true.
   select * into w from public._exception_writable(p_id);
-  if w is null or coalesce(w.refusal,'') <> '' or w.reason_code is null then
+  if not found then
+    return jsonb_build_object('ok', false, 'error', 'not_found',
+      'message', public._c('exc.not_found'));
+  end if;
+  if coalesce(w.refusal,'') <> '' then
     return jsonb_build_object('ok', false, 'error', 'not_authorized',
-      'message', coalesce(nullif(w.refusal,''), public._c('exc.not_authorized')));
+      'message', w.refusal);
   end if;
 
   begin
@@ -748,6 +763,16 @@ begin
       'message', public._c('exc.action.failed'));
   end if;
 
+  -- The dispatched RPC's own verdict wins. "Sent again" and "that send had no
+  -- number" are both answers from wa_send_retry, and the console must print
+  -- the one that actually happened rather than a cheerful default.
+  if v_res ? 'ok' and coalesce((v_res->>'ok')::boolean, false) = false then
+    return jsonb_build_object('ok', false, 'error', 'action_refused',
+      'id', p_id,
+      'message', coalesce(nullif(v_res->>'message',''), public._c('exc.action.failed')),
+      'result', v_res);
+  end if;
+
   perform public.exceptions_start(p_id);
 
   return jsonb_build_object('ok', true, 'id', p_id,
@@ -772,10 +797,17 @@ declare
   v_subj_k text;
   v_subj_v text;
 begin
+  -- _exception_writable returns a refusal ROW when the caller may not write, and
+  -- NO row when the id is not (or is no longer) a live exception. Those are
+  -- different sentences and the console prints whichever is true.
   select * into w from public._exception_writable(p_id);
-  if w is null or coalesce(w.refusal,'') <> '' or w.reason_code is null then
+  if not found then
+    return jsonb_build_object('ok', false, 'error', 'not_found',
+      'message', public._c('exc.not_found'));
+  end if;
+  if coalesce(w.refusal,'') <> '' then
     return jsonb_build_object('ok', false, 'error', 'not_authorized',
-      'message', coalesce(nullif(w.refusal,''), public._c('exc.not_authorized')));
+      'message', w.refusal);
   end if;
 
   select * into o from public.exception_outcome
@@ -1040,7 +1072,7 @@ begin
 
     -- CHANGE #690 — the same evening message now carries the zone's open
     -- exceptions, so a partner learns what is stuck without opening the app.
-    v_exc := public.exception_digest_line(rp.zone_id);
+    v_exc := public.exception_digest_line(rp.zone_id::smallint);
     if coalesce(v_exc,'') <> '' then
       v_body := v_body || E'\n' || v_exc;
     end if;

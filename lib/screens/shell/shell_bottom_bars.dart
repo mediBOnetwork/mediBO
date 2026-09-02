@@ -16,20 +16,42 @@ class _MobileBottomBar extends StatelessWidget {
   final VoidCallback onCartTap;
   final ValueChanged<int> onNavTap;
 
+  /// CHANGE #536 QA round 2 — whether the My Shop slot is offered at all.
+  ///
+  /// Round 1 gated the DESKTOP header on `isAuthenticated && !isAdmin` and its
+  /// comment claimed the mobile bar already used that rule. It did not: the bar
+  /// was picked on `isAdmin` alone, so a SIGNED-OUT visitor was shown a My Shop
+  /// tab whose RPC anon holds no EXECUTE on (`customer_shop_home` returns 42501
+  /// permission denied), and tapping it painted an empty page with no message
+  /// and no way back. One rule, one place, both layouts.
+  final bool showMyShop;
+
   const _MobileBottomBar({
     required this.index,
     required this.cartOpen,
     required this.onCartTap,
     required this.onNavTap,
+    required this.showMyShop,
   });
+
+  /// The page each slot opens, in slot order — the single source of truth the
+  /// bar draws from and the shell navigates by, so the two can never drift.
+  /// Page 0 is Home, 11 My Shop, 1 Orders, 2 Bulk; slot 1 (Catalogue) opens
+  /// Home, exactly as it did before this change.
+  static List<int> pagesFor(bool showMyShop) =>
+      showMyShop ? const [0, 0, 11, 1, 2] : const [0, 0, 1, 2];
 
   @override
   Widget build(BuildContext context) {
     final cart = AppState.of(context);
-    // CHANGE #536 — five slots now: Home, Catalogue, My Shop, Orders, Bulk.
-    // page 11 is My Shop, page 1 Orders, page 2 Bulk; everything else is Home.
-    final bottomNavIndex =
-        index == 11 ? 2 : index == 1 ? 3 : index == 2 ? 4 : 0;
+    // CHANGE #536 — five slots for a signed-in shop: Home, Catalogue, My Shop,
+    // Orders, Bulk; four for everyone else. The slot a page highlights is read
+    // out of the SAME list the shell navigates by, so hiding My Shop cannot
+    // leave a page pointing at a slot that no longer exists (a hidden page 11
+    // finds no slot and falls back to Home).
+    final slots = pagesFor(showMyShop);
+    final found = slots.indexOf(index);
+    final bottomNavIndex = found < 0 ? 0 : found;
     return BottomNavigationBar(
       currentIndex: bottomNavIndex,
       type: BottomNavigationBarType.fixed,
@@ -53,11 +75,13 @@ class _MobileBottomBar extends StatelessWidget {
         // CHANGE #536 — MY SHOP. The pharmacy suite used to hang off one row in
         // the account dropdown; it is a first-class destination now. The label
         // is ui_copy like every other slot, so renaming the tab is an UPDATE.
-        BottomNavigationBarItem(
-          icon: const Icon(Icons.storefront_outlined),
-          activeIcon: const Icon(Icons.storefront),
-          label: c('home_shell.my_shop'),
-        ),
+        // Offered only to a signed-in non-admin (QA round 2) — see showMyShop.
+        if (showMyShop)
+          BottomNavigationBarItem(
+            icon: const Icon(Icons.storefront_outlined),
+            activeIcon: const Icon(Icons.storefront),
+            label: c('home_shell.my_shop'),
+          ),
         BottomNavigationBarItem(
           icon: Badge(
             isLabelVisible: cart.orders.isNotEmpty,

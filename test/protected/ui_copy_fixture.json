@@ -2070,6 +2070,8 @@
 "journey.rehearsal": "rehearsal_ok",
 "journey.test": "journey_probe_ok",
 "login.tooltip_back": "Back",
+"my_shop.load_failed": "We could not load your shop just now. Check your connection and try again.",
+"my_shop.retry": "Try again",
 "notif_channel.email": "Email",
 "notif_channel.push": "Push",
 "notif_channel.sms": "SMS",

@@ -1627,26 +1627,26 @@ class _HomeShellState extends State<HomeShell> {
             )
           : (_cartOpen
               ? null
-              : _MobileBottomBar(
-                  index: _index,
-                  cartOpen: _cartOpen,
-                  onCartTap: () => _openCart(),
-                  onNavTap: (i) {
-                    // CHANGE #536 — slot 2 is My Shop (page 11). Orders and
-                    // Bulk keep their pages and only move one slot right.
-                    switch (i) {
-                      case 0:
-                      case 1:
-                        _setIndex(0);
-                      case 2:
-                        _setIndex(11);
-                      case 3:
-                        _setIndex(1);
-                      case 4:
-                        _setIndex(2);
-                    }
-                  },
-                )),
+              : Builder(builder: (ctx) {
+                  // CHANGE #536 QA round 2 — the SAME rule the desktop header
+                  // uses (shell_header_chrome.dart): the suite belongs to a
+                  // signed-in pharmacy, so an admin and a signed-out visitor
+                  // are not offered a tab whose RPC would refuse them. The bar
+                  // owns the slot->page map; the shell only obeys it, so the
+                  // two cannot drift apart when a slot is hidden.
+                  final showMyShop = UserState.of(ctx).isAuthenticated &&
+                      !UserState.of(ctx).isAdmin;
+                  final slots = _MobileBottomBar.pagesFor(showMyShop);
+                  return _MobileBottomBar(
+                    index: _index,
+                    cartOpen: _cartOpen,
+                    showMyShop: showMyShop,
+                    onCartTap: () => _openCart(),
+                    onNavTap: (i) {
+                      if (i >= 0 && i < slots.length) _setIndex(slots[i]);
+                    },
+                  );
+                })),
       body: Stack(
         children: [
           SizedBox.expand(

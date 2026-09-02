@@ -79,6 +79,12 @@ String _headerSource() {
   return f.readAsStringSync();
 }
 
+String _barsSource() {
+  final f = File('lib/screens/shell/shell_bottom_bars.dart');
+  expect(f.existsSync(), isTrue, reason: 'run this from the package root');
+  return f.readAsStringSync();
+}
+
 void main() {
   group('My Shop reachability — the invariant #536 broke and then fixed', () {
     test('the migrations really do register a customer_shop suite', () {
@@ -126,9 +132,25 @@ void main() {
       final shell = _shellSource();
       final header = _headerSource();
 
-      // Mobile: the bottom bar's fifth slot.
-      expect(shell.contains('onNavTap'), isTrue,
-          reason: 'the mobile bottom bar is how a phone reaches My Shop');
+      // Mobile: the bottom bar's My Shop slot.
+      //
+      // QA round 2 — this used to be `shell.contains('onNavTap')`, which is
+      // true of any shell that has ANY bottom bar: repoint the slot at page 3
+      // and the assertion stays green while the door is gone. The mobile door
+      // is now the slot->page map the bar exports and the shell obeys, so the
+      // assertion is on the map itself, and on the shell reading it rather
+      // than hand-rolling a second copy that can drift.
+      expect(
+          RegExp(r'pagesFor\(bool\s+showMyShop\)\s*=>\s*\n?\s*showMyShop\s*\?\s*const\s*\[0,\s*0,\s*11,\s*1,\s*2\]')
+              .hasMatch(_barsSource()),
+          isTrue,
+          reason: 'the mobile bar must offer My Shop (page 11) in its slot map');
+      expect(shell.contains('_MobileBottomBar.pagesFor('), isTrue,
+          reason: 'the shell must navigate by the bar\'s own map, not a copy');
+      expect(RegExp(r'onNavTap:\s*\(i\)\s*\{\s*\n?\s*if\s*\(i\s*>=\s*0\s*&&\s*i\s*<\s*slots\.length\)\s*_setIndex\(slots\[i\]\)')
+              .hasMatch(shell),
+          isTrue,
+          reason: 'a mobile tap must open the page its own slot map names');
 
       // Desktop: the header link added by QA round 1. Without it the desktop
       // shell rendered page 11 and offered no way to select it.
@@ -143,13 +165,34 @@ void main() {
           reason: 'the desktop link must select the My Shop page (index 11)');
     });
 
-    test('the desktop door is offered to a pharmacy, not to an admin', () {
+    test('BOTH doors are offered to a pharmacy, not to an admin or a visitor',
+        () {
       final header = _headerSource();
-      // Same rule the mobile bar uses. An admin browsing the storefront is not
-      // offered a suite that would refuse them, and a signed-out visitor is
-      // not offered a tab that cannot load.
+      // An admin browsing the storefront is not offered a suite that would
+      // refuse them, and a signed-out visitor is not offered a tab that cannot
+      // load — customer_shop_home() has no EXECUTE for anon, so that tap can
+      // only ever be a failed round trip.
       expect(header.contains('isAuthenticated'), isTrue);
       expect(header.contains('!UserState.of(context).isAdmin'), isTrue);
+
+      // QA round 2 — the mobile half of the SAME rule. Round 1 gated the
+      // desktop header and left a comment claiming the mobile bar already did
+      // it; the bar was picked on isAdmin alone, so an anonymous visitor was
+      // shown the tab and got a blank page. The shell must compute showMyShop
+      // from BOTH conditions and hand it to the bar, and the bar must drop the
+      // slot when it is false.
+      expect(
+          RegExp(r'showMyShop\s*=\s*UserState\.of\(ctx\)\.isAuthenticated\s*&&\s*\n?\s*!UserState\.of\(ctx\)\.isAdmin')
+              .hasMatch(_shellSource()),
+          isTrue,
+          reason: 'the mobile door must use the desktop rule, not isAdmin alone');
+      expect(_barsSource().contains('if (showMyShop)'), isTrue,
+          reason: 'the My Shop slot must not be drawn when it is not offered');
+      expect(
+          RegExp(r'showMyShop\s*\?\s*const\s*\[0,\s*0,\s*11,\s*1,\s*2\]\s*:\s*const\s*\[0,\s*0,\s*1,\s*2\]')
+              .hasMatch(_barsSource()),
+          isTrue,
+          reason: 'hiding the slot must renumber the map, never leave a hole');
     });
   });
 }

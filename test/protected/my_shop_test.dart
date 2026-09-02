@@ -36,7 +36,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:pharma_b2b/screens/pharmacy/my_shop_screen.dart';
+import 'package:pharma_b2b/services/ui_copy.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
+
+import 'ui_copy_fixture.dart';
 
 /// A customer_shop_home() answer. Sections are Money → Billing → Stock on
 /// purpose: neither the section order nor the tile order is alphabetical, and
@@ -123,6 +126,20 @@ Future<void> _pump(
           calls?.add(fn);
           return payload;
         },
+      ),
+    ),
+  ));
+  await tester.pumpAndSettle();
+}
+
+/// The same screen, with an RPC that throws — a signed-in shop whose call did
+/// not land. CHANGE #536 QA round 2: this is the state that used to be blank.
+Future<void> _pumpFailing(WidgetTester tester) async {
+  await tester.pumpWidget(MaterialApp(
+    home: Scaffold(
+      body: MyShopScreen(
+        navigate: (_) {},
+        rpc: (fn, params) async => throw Exception('no route to host'),
       ),
     ),
   ));
@@ -247,5 +264,57 @@ void main() {
     });
 
     expect(find.text('Your shop tools will appear here.'), findsOneWidget);
+  });
+
+  // ── CHANGE #536 QA round 2 — the failure state is never a blank page ──────
+  //
+  // The old code read its failure copy out of the PAYLOAD
+  // (`res?['empty_message']`, `res?['retry_label']`), and on a failed load
+  // `res` is null by definition — so a shop whose call did not land got one
+  // empty string and one empty button: nothing to read, nothing to press, no
+  // way back. The wording still belongs to the backend; it comes from ui_copy,
+  // which is already in memory, instead of from the answer that never arrived.
+  testWidgets('a failed load reads the backend copy, never a blank page',
+      (t) async {
+    seedUiCopy();
+    await _pumpFailing(t);
+
+    expect(find.text('We could not load your shop just now. '
+        'Check your connection and try again.'), findsOneWidget);
+    expect(find.text('Try again'), findsOneWidget);
+  });
+
+  testWidgets('a failed load always offers the retry, even with no copy',
+      (t) async {
+    // ui_copy is fetched like everything else, so a cold offline boot can hand
+    // the screen empty strings. A missing LABEL must not cost the shop the
+    // BUTTON — the screen still offers no wording of its own.
+    UiCopy.debugSet(const <String, String>{});
+    await _pumpFailing(t);
+
+    expect(find.byType(OutlinedButton), findsOneWidget);
+    expect(find.byIcon(Icons.refresh), findsOneWidget);
+  });
+
+  testWidgets('the retry re-asks the backend', (t) async {
+    seedUiCopy();
+    var calls = 0;
+    await t.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: MyShopScreen(
+          navigate: (_) {},
+          rpc: (fn, params) async {
+            calls++;
+            throw Exception('no route to host');
+          },
+        ),
+      ),
+    ));
+    await t.pumpAndSettle();
+    expect(calls, 1);
+
+    await t.tap(find.text('Try again'));
+    await t.pumpAndSettle();
+    expect(calls, 2);
   });
 }

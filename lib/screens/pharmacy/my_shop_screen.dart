@@ -20,6 +20,7 @@ import 'package:flutter/material.dart';
 
 import '../../design_tokens.dart';
 import '../../services/customer_shop_api.dart';
+import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 import '../admin/nav_registry_view.dart' show navIcon, navIconLetter, navIconResolves;
 
@@ -125,10 +126,17 @@ class _MyShopScreenState extends State<MyShopScreen> {
 
     // A load that never landed: the retry is the whole screen, because there is
     // nothing truthful to draw underneath it.
+    //
+    // CHANGE #536 QA round 2 — this used to read `res?['empty_message']`, and on
+    // a FAILED load `res` is null by definition, so the "one-message state" was
+    // one empty string and an empty button: a blank page with nothing to read
+    // and nothing to press. The copy for a payload that never arrived cannot
+    // come from the payload; it comes from ui_copy, which is backend-owned and
+    // already in memory, so re-wording it stays an UPDATE and never a deploy.
     if (_failed || res == null) {
       return _Centered(
-        message: _s(res?['empty_message']),
-        actionLabel: _s(res?['retry_label']),
+        message: c('my_shop.load_failed'),
+        actionLabel: c('my_shop.retry'),
         onAction: _load,
       );
     }
@@ -337,9 +345,22 @@ class _Centered extends StatelessWidget {
           children: [
             if (message.isNotEmpty)
               Text(message, style: Ds.t.body, textAlign: TextAlign.center),
-            if (onAction != null && actionLabel.isNotEmpty) ...[
+            // CHANGE #536 QA round 2 — the retry is offered whenever there IS
+            // one, not only when the copy for it arrived. ui_copy is fetched
+            // like everything else, so a cold offline boot can hand us an
+            // empty label; the old `&& actionLabel.isNotEmpty` turned that
+            // into a page with no way forward. The label stays backend-owned —
+            // when it is missing the button carries the refresh icon and no
+            // word of our own.
+            if (onAction != null) ...[
               SizedBox(height: Ds.space.x16),
-              OutlinedButton(onPressed: onAction, child: Text(actionLabel)),
+              if (actionLabel.isNotEmpty)
+                OutlinedButton(onPressed: onAction, child: Text(actionLabel))
+              else
+                OutlinedButton(
+                  onPressed: onAction,
+                  child: const Icon(Icons.refresh),
+                ),
             ],
           ],
         ),

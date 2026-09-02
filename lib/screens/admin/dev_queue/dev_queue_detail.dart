@@ -292,6 +292,23 @@ class _DevQueueDetailState extends State<DevQueueDetail> {
                 label: (_spec['route_label']).toString(),
                 tone: toneByName((_spec['route_tone'] ?? 'neutral').toString()),
                 icon: routeIcon((_spec['route'] ?? '').toString())),
+          // CHANGE #656: Show model and effort from the command
+          if ((_row['model'] ?? '').toString().isNotEmpty)
+            ToneChip(
+                label: (_row['model'] ?? 'Opus 5')
+                    .toString()
+                    .replaceAll('claude-opus-5', 'Opus 5')
+                    .replaceAll('claude-fable-5-1', 'Fable 5'),
+                tone: statusTone('pending'),
+                icon: Icons.devices_outlined),
+          if ((_row['effort'] ?? '').toString().isNotEmpty)
+            ToneChip(
+                label: ((_row['effort'] ?? 'high').toString()[0].toUpperCase() +
+                    (_row['effort'] ?? 'high').toString().substring(1)),
+                tone: (_row['effort'] ?? 'high') == 'extra'
+                    ? statusTone('failed')
+                    : statusTone('pending'),
+                icon: Icons.bolt),
           if ((_spec['area_label'] ?? '').toString().isNotEmpty)
             ToneChip(
                 label: (_spec['area_label']).toString(),

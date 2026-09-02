@@ -34,6 +34,10 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
   bool _debug = false;
   bool _busy = false;
 
+  // CHANGE #656: per-command model and effort selection
+  String _model = 'claude-opus-5'; // claude-opus-5 | claude-fable-5-1
+  String _effort = 'high'; // high | extra
+
   // Generate-Command (ask-doubt-before-building). OFF = today's fire-and-forget
   // Add. ON = the paste becomes ONE request the runner asks doubts about, then
   // builds to the answers.
@@ -99,6 +103,9 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
           'android_aab': _aab,
           'targets_ios': _ios,
           'debug': _debug,
+          // CHANGE #656: per-command model and effort
+          'model': _model,
+          'effort': _effort,
           // CHANGE #72 — media attaches to the FIRST spec only (there is no
           // per-spec attach UI yet); the sheet shows a one-line hint saying so.
           if (i == 0 && _images.isNotEmpty) 'images': _images,
@@ -116,6 +123,9 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
         'targets_web': true,
         'targets_android': _apk || _aab,
         'targets_ios': _ios,
+        // CHANGE #656: per-command model and effort
+        'model': _model,
+        'effort': _effort,
       };
 
   // Generate ON → fire-and-leave: create the draft and immediately return Om
@@ -302,6 +312,8 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
                 const SizedBox(height: 10),
                 _toggles(),
                 const SizedBox(height: 10),
+                _modelEffortSection(),
+                const SizedBox(height: 10),
                 _generateSection(),
                 _batchField(),
                 if (n > 0) ...[
@@ -436,6 +448,49 @@ class _DevQueueBulkAddState extends State<DevQueueBulkAdd> {
         controller: _batch,
         style: const TextStyle(fontSize: 14),
         decoration: _fieldDeco(c('dev_queue.label_batch')),
+      );
+
+  // CHANGE #656: Model and Effort selectors
+  Widget _modelEffortSection() => Container(
+        margin: EdgeInsets.only(bottom: Ds.space.x12),
+        padding: EdgeInsets.all(Ds.space.x12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: Ds.r.rChip,
+          border: Border.all(color: kBorder),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('Model & Effort', style: Ds.t.body),
+          Text('Select which Claude model and effort level', style: Ds.t.caption),
+          SizedBox(height: Ds.space.x12),
+          Row(children: [
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('Model', style: Ds.t.caption),
+                SizedBox(height: Ds.space.x8),
+                Wrap(spacing: Ds.space.x8, runSpacing: Ds.space.x8, children: [
+                  _choice('Opus 5', _model == 'claude-opus-5',
+                      () => setState(() => _model = 'claude-opus-5')),
+                  _choice('Fable 5', _model == 'claude-fable-5-1',
+                      () => setState(() => _model = 'claude-fable-5-1')),
+                ]),
+              ]),
+            ),
+            SizedBox(width: Ds.space.x12),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('Effort', style: Ds.t.caption),
+                SizedBox(height: Ds.space.x8),
+                Wrap(spacing: Ds.space.x8, runSpacing: Ds.space.x8, children: [
+                  _choice('High', _effort == 'high',
+                      () => setState(() => _effort = 'high')),
+                  _choice('Extra', _effort == 'extra',
+                      () => setState(() => _effort = 'extra')),
+                ]),
+              ]),
+            ),
+          ]),
+        ]),
       );
 
   // Generate-Command controls. OFF by default so Add stays fire-and-forget.

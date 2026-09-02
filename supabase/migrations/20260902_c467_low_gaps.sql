@@ -560,11 +560,25 @@ end $$;
 revoke execute on function public.admin_partner_audit_preview(bigint, int) from public, anon;
 grant  execute on function public.admin_partner_audit_preview(bigint, int) to authenticated;
 
+-- Writing the journey found two more members of the same class, both older than
+-- this command and both fixed here rather than reported:
+--   * partner_licence_expiry_sweep() — a cron job, SECURITY DEFINER, with no
+--     caller check and EXECUTE for anon. Anyone holding the key that ships in
+--     the bundle could have fired the reminder sweep at will. It runs from the
+--     cron dispatcher as its owner, so revoking every client role costs it
+--     nothing.
+--   * partner_staff_console() turned out to be fine — it scopes itself with
+--     my_partner_id() + partner_access(), which the first draft of the
+--     assertion below did not recognise. The lesson is in the regex: a guard
+--     is any check that ties the read to the CALLER, not one function name.
+revoke execute on function public.partner_licence_expiry_sweep() from public, anon, authenticated;
+
 -- The journey. It asserts the CLASS, not the one revoke: the three doors still
 -- exist (a bool_and over a vanished function is silently true), none of them is
 -- reachable with the key that ships in the bundle, the app is not locked out,
--- every partner-audit reader guards its own body, and the log table itself is
--- not directly selectable by either client role.
+-- every client-reachable reader of partner_audit_log ties its read to the
+-- caller, the log table is selectable by neither client role, and the cron-only
+-- sweep is reachable by neither.
 create or replace function public._journey_c467_partner_audit_fence()
 returns jsonb
 language plpgsql
@@ -574,10 +588,14 @@ set search_path to 'public'
 as $$
 declare
   v_present int; v_anon int; v_noauth int; v_unguarded int;
-  v_a1 boolean; v_a2 boolean; v_a3 boolean; v_a4 boolean; v_a5 boolean; v_ok boolean;
+  v_a1 boolean; v_a2 boolean; v_a3 boolean; v_a4 boolean; v_a5 boolean; v_a6 boolean;
+  v_ok boolean;
   c_fns constant text[] := array['admin_partner_audit_list',
                                  'admin_partner_audit_preview',
                                  'admin_partner_console'];
+  -- a guard is anything that ties the read to the CALLER, not one function name
+  c_guard constant text :=
+    '(role_for_medibo_only|get_my_role|is_admin|_dev_guard|my_partner_id|partner_access|is_partner|auth\.uid)';
 begin
   select count(*) into v_present
     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
@@ -596,30 +614,38 @@ begin
      and not has_function_privilege('authenticated', p.oid, 'execute');
   v_a3 := v_noauth = 0;
 
-  -- a grant is not a guard: every reader of partner_audit_log must refuse a
-  -- non-admin in its own body, whatever EXECUTE says.
+  -- a grant is not a guard: every CLIENT-REACHABLE reader of partner_audit_log
+  -- must refuse a caller it cannot place, whatever EXECUTE says. The writer and
+  -- the internal cNNN_*_proof helpers are not client doors and are excluded.
   select count(*) into v_unguarded
     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
    where n.nspname = 'public'
+     and p.prosecdef
      and p.prosrc like '%partner_audit_log%'
      and p.proname <> 'partner_audit'
-     and p.proname not like '\_journey%'
-     and p.prosecdef
-     and p.prosrc !~ '(role_for_medibo_only|get_my_role|is_admin|_dev_guard)';
+     and p.proname !~ '^c[0-9]+_'
+     and p.proname !~ '^_journey'
+     and (has_function_privilege('anon', p.oid, 'execute')
+          or has_function_privilege('authenticated', p.oid, 'execute'))
+     and p.prosrc !~ c_guard;
   v_a4 := v_unguarded = 0;
 
   v_a5 := not has_table_privilege('anon','public.partner_audit_log','select')
       and not has_table_privilege('authenticated','public.partner_audit_log','select');
 
-  v_ok := v_a1 and v_a2 and v_a3 and v_a4 and v_a5;
+  v_a6 := not has_function_privilege('anon','public.partner_licence_expiry_sweep()','execute')
+      and not has_function_privilege('authenticated','public.partner_licence_expiry_sweep()','execute');
+
+  v_ok := v_a1 and v_a2 and v_a3 and v_a4 and v_a5 and v_a6;
   return jsonb_build_object('status', case when v_ok then 'passed' else 'failed' end,
     'evidence', jsonb_build_object('db_proof',
       'partner-audit doors present='||v_present::text||' (>=3)='||v_a1::text||
       ' | anon EXECUTE holes='||v_anon::text||' -> none='||v_a2::text||
       ' | authenticated still holds EXECUTE on all='||v_a3::text||
-      ' | SECURITY DEFINER readers of partner_audit_log with no body guard='||
+      ' | client-reachable readers of partner_audit_log with no caller check='||
         v_unguarded::text||' -> none='||v_a4::text||
-      ' | the log table itself is not selectable by anon or authenticated='||v_a5::text));
+      ' | the log table itself is not selectable by anon or authenticated='||v_a5::text||
+      ' | the cron-only licence sweep is reachable by neither client role='||v_a6::text));
 end $$;
 
 revoke execute on function public._journey_c467_partner_audit_fence() from public, anon;

@@ -168,7 +168,7 @@ class _AdminFeedbackScreenState extends State<AdminFeedbackScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(_s(_p, 'nps_heading'), style: Ds.t.bodyStrong),
+                Text(_s(_p, 'nps_hero'), style: Ds.t.bodyStrong),
                 SizedBox(height: Ds.space.x4),
                 Text(_s(_p, 'responses_label'), style: Ds.t.caption),
               ],
@@ -323,6 +323,9 @@ class _Card extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
+        // Full width, always: a card that sizes to its own text (the empty
+        // state) sits ragged beside the cards above it.
+        width: double.infinity,
         padding: EdgeInsets.all(Ds.space.x16),
         decoration: BoxDecoration(
           color: Ds.c.surface,

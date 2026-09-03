@@ -35,6 +35,14 @@ Map<String, dynamic> _m(dynamic v) =>
 /// The arrival window, as its own card. `has:false` renders the backend's own
 /// state sentence (delivered / not started yet) or nothing at all — it never
 /// invents "ETA unavailable".
+///
+/// CHANGE #702 adds two payload blocks and no new logic. `confidence_label` is
+/// the model saying how much history stands behind this number, and `breach`
+/// is it saying the stop will miss the promise it was given — both are finished
+/// sentences, and both are drawn only when the backend sent them. The window
+/// itself is unchanged here: it got NARROWER because eta_lo/eta_hi replaced a
+/// config constant server-side, which is exactly the kind of change this widget
+/// should never be able to notice.
 class DeliveryEtaCard extends StatelessWidget {
   final Map<String, dynamic> eta;
 
@@ -54,6 +62,8 @@ class DeliveryEtaCard extends StatelessWidget {
     final countdown = _s(eta, 'countdown_label');
     final ahead = _s(eta, 'stops_ahead_label');
     final note = _s(eta, 'note');
+    final confidence = _s(eta, 'confidence_label');
+    final breach = _m(eta['breach']);
 
     return Container(
       width: double.infinity,
@@ -67,6 +77,38 @@ class DeliveryEtaCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // CHANGE #702 — the promise this stop is about to miss, said first
+          // because it is the only thing on this card that is bad news. It is
+          // the backend's own sentence; nothing here compares two timestamps.
+          if (breach['has'] == true) ...[
+            Container(
+              width: double.infinity,
+              padding: EdgeInsets.all(Ds.space.x12),
+              margin: EdgeInsets.only(bottom: Ds.space.x12),
+              decoration: BoxDecoration(
+                color: Ds.c.warningSoft,
+                borderRadius: Ds.r.rChip,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(_s(breach, 'title'),
+                      style: Ds.t.bodyStrong.copyWith(color: Ds.c.warning)),
+                  if (_s(breach, 'body').isNotEmpty) ...[
+                    SizedBox(height: Ds.space.x4),
+                    Text(_s(breach, 'body'), style: Ds.t.caption),
+                  ],
+                  if (_s(breach, 'promised_label').isNotEmpty) ...[
+                    SizedBox(height: Ds.space.x8),
+                    Text(
+                      '${_s(breach, 'promised_caption')} ${_s(breach, 'promised_label')}',
+                      style: Ds.t.caption,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
           if (heading.isNotEmpty) Text(heading, style: Ds.t.caption),
           if (heading.isNotEmpty) SizedBox(height: Ds.space.x4),
           Text(label, style: Ds.t.subtitle),
@@ -85,6 +127,13 @@ class DeliveryEtaCard extends StatelessWidget {
               ),
               child: Text(ahead, style: Ds.t.caption),
             ),
+          ],
+          // CHANGE #702 — "Based on 41 past deliveries here", or the honest
+          // admission that this route is new. The window width already carries
+          // the same fact; this says it in words.
+          if (confidence.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x8),
+            Text(confidence, style: Ds.t.caption),
           ],
           if (note.isNotEmpty) ...[
             SizedBox(height: Ds.space.x8),

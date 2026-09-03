@@ -80,12 +80,20 @@ insert into public.app_settings(key, value) values
   ('eta_multiplier_max',            to_jsonb(3.0)),
   ('eta_dwell_min_minutes',         to_jsonb(1)),
   ('eta_dwell_max_minutes',         to_jsonb(20)),
-  ('eta_band_min_minutes',          to_jsonb(10)),
+  ('eta_band_min_minutes',          to_jsonb(5)),
   ('eta_band_max_minutes',          to_jsonb(45)),
   ('eta_offline_minutes',           to_jsonb(3)),
   ('eta_renotify_minutes',          to_jsonb(20)),
   ('eta_breach_grace_minutes',      to_jsonb(10))
 on conflict (key) do nothing;
+
+-- The floor a LEARNED band may reach. It must sit below the cold-start
+-- fallback (delivery_eta_window_minutes / 2 = 10), or a zone the model knows
+-- perfectly could never be given a narrower window than one it has never seen —
+-- which is the entire promise of this change. The first cut of this migration
+-- seeded 10 and hit exactly that; this corrects only that value.
+update public.app_settings set value = to_jsonb(5)
+ where key = 'eta_band_min_minutes' and (value #>> '{}')::numeric = 10;
 
 insert into public.ui_copy(key, value) values
   ('delivery.eta_confidence_high',   to_jsonb('Based on {n} past deliveries here'::text)),
@@ -933,3 +941,99 @@ as $function$
                        'countdown_label','','stops_ahead',0,'stops_ahead_label','',
                        'breach', jsonb_build_object('has', false)));
 $function$;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 14. THE ADMIN RUN MAP reads the customer's own window, per pin.
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION public.delivery_run_map(p_run_id uuid DEFAULT NULL::uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_run delivery_runs%rowtype; v_partner uuid; v_loc delivery_partner_locations%rowtype;
+  v_pts jsonb; v_wave jsonb; v_wave_id uuid;
+begin
+  select id into v_partner from delivery_partner_registrations
+   where user_id = auth.uid() and is_active and coalesce(is_deleted,false)=false limit 1;
+
+  -- The default run is picked by scope_date(), NOT by now() — the flow scope
+  -- contract (stage 15, "Runs") requires it, and for a rider (who is not an
+  -- admin) scope_date() returns today anyway.
+  if p_run_id is not null then
+    select * into v_run from delivery_runs where id = p_run_id;
+  else
+    select * into v_run from delivery_runs
+     where partner_id = v_partner
+       and run_date = public.scope_date(null::date)
+     order by created_at desc limit 1;
+  end if;
+  if v_run.id is null then return jsonb_build_object('ok',true,'has_run',false); end if;
+
+  if not (v_partner is not null and v_run.partner_id = v_partner)
+     and not public._is_admin() then
+    return jsonb_build_object('ok',false,'error','not_authorized');
+  end if;
+
+  select * into v_loc from delivery_partner_locations where partner_id = v_run.partner_id;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'delivery_id', d.id, 'seq', d.seq, 'lat', d.lat, 'lng', d.lng,
+           'label', coalesce(o.pharmacy_name,''),
+           'status', d.status,
+           'pin_color', case d.status when 'delivered' then '#1B7A43'
+                                      when 'failed' then '#B42318'
+                                      when 'rto' then '#B42318' else '#F59E0B' end,
+           'wave_reason', s.reason,
+           -- The pin's tooltip, composed HERE so the run map can show WHY this
+           -- rider has this stop without the panel concatenating anything.
+           'map_title', coalesce(o.pharmacy_name,'') ||
+             case when coalesce(s.reason,'') = '' then ''
+                  else ' — ' || s.reason end,
+           'leg_km', d.leg_km, 'cum_km', d.cum_km, 'eta_min', d.eta_min,
+           -- CHANGE #702: the admin run map shows the SAME window the
+           -- customer is reading, and says when a stop is predicted to
+           -- miss its promise — both from the one block that words it.
+           'eta', public._delivery_eta_block(d.id))
+         order by d.seq nulls last), '[]'::jsonb)
+    into v_pts
+  from deliveries d
+  join orders o on o.id = d.order_id
+  left join delivery_wave_stop s on s.delivery_id = d.id
+  where d.run_id = v_run.id and d.status not in ('cancelled')
+    and d.lat is not null and d.lng is not null;
+
+  select d.wave_id into v_wave_id from deliveries d
+   where d.run_id = v_run.id and d.wave_id is not null limit 1;
+
+  if v_wave_id is not null then
+    select jsonb_build_object(
+             'heading','Why these stops',
+             'label', w.window_label || ' • ' || to_char(w.wave_date,'DD Mon'),
+             'mode_label', case w.mode when 'auto' then 'Assigned automatically'
+                                       when 'suggest' then 'Planned by the engine, approved by an admin'
+                                       else 'Assigned by an admin' end,
+             'decisions', coalesce((
+               select jsonb_agg(jsonb_build_object(
+                        'label', x.reason,
+                        'at_label', to_char(x.created_at at time zone 'Asia/Kolkata','HH24:MI'))
+                      order by x.created_at desc)
+                 from (select * from delivery_wave_decision
+                        where wave_id = w.id order by created_at desc limit 12) x), '[]'::jsonb))
+      into v_wave from delivery_wave w where w.id = v_wave_id;
+  end if;
+
+  return jsonb_build_object(
+    'ok', true, 'has_run', true, 'run_id', v_run.id,
+    'run_status', v_run.status,
+    'google_optimized', v_run.google_optimized,
+    'road_polyline', v_run.road_polyline,
+    'total_km', v_run.total_km, 'total_min', v_run.total_min,
+    'total_label', case when v_run.total_km is null then null
+                        else v_run.total_km::text || ' km' ||
+                             coalesce(' • ' || v_run.total_min::text || ' min','') end,
+    'origin_lat', v_loc.lat, 'origin_lng', v_loc.lng,
+    'wave', v_wave,
+    'waypoints', v_pts);
+end $function$;

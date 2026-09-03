@@ -372,6 +372,12 @@ begin
     'subtitle', _c('kyc.subtitle'),
     'empty_note', _c('kyc.empty_note'),
     'bucket', 'kyc-docs',
+    -- WHERE the file goes is the backend's answer, never a path the client
+    -- assembles: the storage policy admits a write only under the signed-in
+    -- user's own folder, and owner_id is the PROFILE id, which is a different
+    -- uuid. The token page already worked this way (upload_prefix); the panel
+    -- guessed, and every authenticated upload would have been refused by RLS.
+    'upload_prefix', auth.uid()::text,
     'owner_kind', v_kind,
     'owner_id', v_id,
     'state', v_state,

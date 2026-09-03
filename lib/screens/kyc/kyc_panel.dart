@@ -42,6 +42,18 @@ class KycPanel extends StatefulWidget {
     return Supabase.instance.client.rpc(fn, params: params);
   }
 
+  /// WHERE the file goes is the BACKEND's answer. `upload_prefix` is the folder
+  /// the storage policy admits for this login; owner_id is the profile id and
+  /// is a different uuid, so building the path from it had every authenticated
+  /// upload refused by RLS before the RPC was ever reached. Absent prefix =
+  /// no upload, not a guessed one.
+  static String? storagePath(
+      Map<String, dynamic> payload, String kind, String ext, int stamp) {
+    final prefix = (payload['upload_prefix'] ?? '').toString().trim();
+    if (prefix.isEmpty) return null;
+    return '$prefix/${kind}_$stamp.$ext';
+  }
+
   static Future<String> upload(
       String bucket, String path, Uint8List bytes, String mime) async {
     final t = uploadTransport;
@@ -107,7 +119,6 @@ class _KycPanelState extends State<KycPanel> {
         return;
       }
       final bucket = _s(_payload, 'bucket');
-      final owner = _s(_payload, 'owner_id');
       final ext = (f!.extension ?? 'jpg').toLowerCase();
       final mime = ext == 'pdf'
           ? 'application/pdf'
@@ -115,8 +126,12 @@ class _KycPanelState extends State<KycPanel> {
               ? 'image/png'
               : 'image/jpeg';
       final stamp = DateTime.now().millisecondsSinceEpoch;
-      final path = await KycPanel.upload(
-          bucket, '$owner/${kind}_$stamp.$ext', bytes, mime);
+      final target = KycPanel.storagePath(_payload, kind, ext, stamp);
+      if (target == null) {
+        if (mounted) setState(() => _busyKind = '');
+        return;
+      }
+      final path = await KycPanel.upload(bucket, target, bytes, mime);
 
       final res = _asMap(await KycPanel.rpc('kyc_upload_register', {
         'p_kind': kind,

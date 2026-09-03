@@ -6,55 +6,33 @@
 // a Dart `switch`, a `.toStringAsFixed(2)`, a pluralisation or a colour rule
 // growing back beside the server's answer and quietly disagreeing with it.
 //
-// So every assertion here feeds a deliberately ODD payload — a rupee string
-// with the wrong number of decimals, a rank that is not the row's position, a
-// waiting count of 1 labelled in the plural — and demands it appears on screen
-// verbatim. If a future edit starts computing any of these, these tests go red
-// exactly where the computation was introduced.
+// The row's SHAPE is also fenced here, and deliberately. Om rejected the first
+// build (3 Sep) because the row carried a waiting count, a rupee amount, a KYC
+// badge and an overflow menu and truncated on anything narrower than a desktop:
+// "This is a supplier INFO list, not an orders tab." So a test asserts those
+// four things are ABSENT from the row — a regression that puts any of them back
+// fails here rather than in a screenshot three weeks later.
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:pharma_b2b/screens/admin/admin_supplier_page.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
+import 'package:pharma_b2b/services/spn_options.dart';
+import 'package:pharma_b2b/widgets/spn_factor_editor.dart';
 import 'package:pharma_b2b/widgets/supplier_console_row.dart';
 
 Map<String, dynamic> _row({
   String name = 'Sagar Medicals',
-  bool hasWaiting = true,
-  bool hasDues = true,
-  Object? kycChip,
-  List<Map<String, dynamic>>? menu,
+  String subtitle = 'RAIPUR  ·  SAG100',
+  String statusLabel = 'active',
+  String statusTone = 'success',
 }) =>
     <String, dynamic>{
       'id': 'sup-1',
       'name': name,
-      'zone_label': 'Raipur Zone',
-      'rank_label': '#7',
-      'spn_label': 'SPN 845,104',
-      'waiting_label': '1 waiting',
-      'has_waiting': hasWaiting,
-      'dues_label': '₹38,591.2',
-      'has_dues': hasDues,
-      if (kycChip != null) 'kyc_chip': kycChip,
-      'menu': menu ??
-          <Map<String, dynamic>>[
-            {'key': 'edit', 'label': 'Edit', 'tone': 'neutral'},
-            {'key': 'spn', 'label': 'SPN', 'tone': 'neutral'},
-            {
-              'key': 'delete',
-              'label': 'Delete',
-              'tone': 'danger',
-              'confirm': {
-                'title': 'Delete this supplier?',
-                'body': 'Give a reason.',
-                'ok': 'Delete supplier',
-                'cancel': 'Keep supplier',
-                'needs_reason': true,
-                'reason_hint': 'Reason for deleting',
-                'reason_error': 'A reason is required.',
-              },
-            },
-          ],
+      'subtitle': subtitle,
+      'status_label': statusLabel,
+      'status_tone': statusTone,
     };
 
 Widget _host(Widget child) => MaterialApp(home: Scaffold(body: child));
@@ -66,79 +44,69 @@ void main() {
     RenderLog.flushEnabled = false;
   });
 
-  group('the compact supplier row prints, never computes', () {
-    testWidgets('every cell is the payload string, verbatim', (t) async {
+  group('the supplier row is a name and one quiet line', () {
+    testWidgets('name, subtitle and status all print verbatim', (t) async {
       await t.pumpWidget(_host(SupplierConsoleRow(row: _row())));
 
       expect(find.text('Sagar Medicals'), findsOneWidget);
-      // The rank is the BACKEND's rank. '#7' for a row rendered on its own
-      // proves the widget never counted its own position.
-      expect(find.text('Raipur Zone  ·  #7  SPN 845,104'), findsOneWidget);
-      // One waiting, and the backend still said "1 waiting" — no Dart plural.
-      expect(find.text('1 waiting'), findsOneWidget);
-      // One decimal place, because that is what the server sent. A Dart money
-      // formatter would have printed ₹38,591.20.
-      expect(find.text('₹38,591.2'), findsOneWidget);
+      // The separator is the BACKEND's — two spaces around a middle dot. A
+      // Dart join would have produced something else.
+      expect(find.text('RAIPUR  ·  SAG100'), findsOneWidget);
+      // Lower-case because that is the stored status; nothing here title-cases.
+      expect(find.text('active'), findsOneWidget);
     });
 
-    testWidgets('an absent KYC chip renders nothing at all', (t) async {
-      await t.pumpWidget(_host(SupplierConsoleRow(row: _row())));
+    testWidgets('the name is allowed to wrap, never ellipsised', (t) async {
+      await t.pumpWidget(_host(SizedBox(
+        width: 200,
+        child: SupplierConsoleRow(
+          row: _row(name: 'A Very Long Wholesale Supplier Name Private Limited'),
+        ),
+      )));
+
+      final name = t.widget<Text>(
+          find.text('A Very Long Wholesale Supplier Name Private Limited'));
+      expect(name.softWrap, isTrue);
+      expect(name.overflow, isNot(TextOverflow.ellipsis));
+    });
+
+    testWidgets('the row carries no amount, count, badge or menu', (t) async {
+      // The rejected build put all four here. Feeding them in proves the row
+      // ignores them rather than that the fixture happens to omit them.
+      final noisy = _row()
+        ..addAll(<String, dynamic>{
+          'waiting_label': '16 waiting',
+          'dues_label': '₹38,591.21',
+          'kyc_chip': {'show': true, 'label': 'KYC missing'},
+          'menu': [
+            {'key': 'delete', 'label': 'Delete', 'tone': 'danger'}
+          ],
+        });
+      await t.pumpWidget(_host(SupplierConsoleRow(row: noisy)));
+
+      expect(find.text('16 waiting'), findsNothing);
+      expect(find.text('₹38,591.21'), findsNothing);
       expect(find.text('KYC missing'), findsNothing);
-
-      await t.pumpWidget(_host(SupplierConsoleRow(
-        row: _row(kycChip: {
-          'show': true,
-          'label': 'KYC missing',
-          'bg': '#FEE2E2',
-          'fg': '#991B1B',
-          'border': '#FECACA',
-        }),
-      )));
-      expect(find.text('KYC missing'), findsOneWidget);
-    });
-
-    testWidgets('show:false is not rendered either', (t) async {
-      await t.pumpWidget(_host(SupplierConsoleRow(
-        row: _row(kycChip: {'show': false, 'label': 'KYC complete'}),
-      )));
-      expect(find.text('KYC complete'), findsNothing);
-    });
-
-    testWidgets('the ⋮ menu is the payload list, in payload order', (t) async {
-      Map<String, dynamic>? picked;
-      await t.pumpWidget(_host(SupplierConsoleRow(
-        row: _row(),
-        onMenu: (item) => picked = item,
-      )));
-
-      await t.tap(find.byIcon(Icons.more_vert));
-      await t.pumpAndSettle();
-
-      expect(find.text('Edit'), findsOneWidget);
-      expect(find.text('SPN'), findsOneWidget);
-      expect(find.text('Delete'), findsOneWidget);
-
-      // Order is the payload's, read off the rendered menu.
-      final labels = t
-          .widgetList<Text>(find.descendant(
-              of: find.byType(PopupMenuItem<int>), matching: find.byType(Text)))
-          .map((w) => w.data)
-          .toList();
-      expect(labels, ['Edit', 'SPN', 'Delete']);
-
-      await t.tap(find.text('Delete'));
-      await t.pumpAndSettle();
-
-      // The chosen entry is handed back untouched — including the confirm
-      // block, so the screen cannot invent its own delete copy.
-      expect(picked?['key'], 'delete');
-      expect((picked?['confirm'] as Map)['needs_reason'], true);
-      expect((picked?['confirm'] as Map)['ok'], 'Delete supplier');
-    });
-
-    testWidgets('a row with no menu shows no ⋮ button', (t) async {
-      await t.pumpWidget(_host(SupplierConsoleRow(row: _row(menu: []))));
       expect(find.byIcon(Icons.more_vert), findsNothing);
+      expect(find.text('Delete'), findsNothing);
+    });
+
+    testWidgets('an empty subtitle and status leave the second line off',
+        (t) async {
+      await t.pumpWidget(_host(SupplierConsoleRow(
+        row: _row(subtitle: '', statusLabel: ''),
+      )));
+      expect(find.text('Sagar Medicals'), findsOneWidget);
+      expect(find.byType(Row), findsNothing);
+    });
+
+    testWidgets('tapping the row is the only affordance', (t) async {
+      var opened = 0;
+      await t.pumpWidget(
+          _host(SupplierConsoleRow(row: _row(), onOpen: () => opened++)));
+      await t.tap(find.text('Sagar Medicals'));
+      await t.pumpAndSettle();
+      expect(opened, 1);
     });
   });
 
@@ -149,15 +117,21 @@ void main() {
       AdminSupplierPage.rpcOverride = (rpc, params) async => byRpc[rpc];
     }
 
-    Map<String, dynamic> page(List<Map<String, dynamic>> tabs) => {
+    Map<String, dynamic> page(List<Map<String, dynamic>> tabs,
+            {List<Map<String, dynamic>>? menu,
+            List<Map<String, dynamic>>? contacts}) =>
+        {
           'ok': true,
           'supplier_id': 'sup-1',
           'title': 'Sagar Medicals',
-          'subtitle': 'SAG100  ·  9000000024  ·  RAIPUR',
+          'subtitle': 'SAG100  ·  RAIPUR',
           'back_label': 'Suppliers',
           'chips': <Map<String, dynamic>>[],
           'spn_label': 'SPN 845,104',
+          'rank_label': '#7',
           'zone_label': 'Raipur Zone',
+          'contacts': contacts ?? const <Map<String, dynamic>>[],
+          'menu': menu ?? const <Map<String, dynamic>>[],
           'tabs': tabs,
           'default_tab': tabs.isEmpty ? '' : tabs.first['key'],
           'empty_label': 'Nothing here yet.',
@@ -313,6 +287,222 @@ void main() {
       expect(last.value['p_supplier_id'], 'sup-1');
     });
 
+    testWidgets('the header carries the identity the row stopped showing',
+        (t) async {
+      serve({
+        'admin_supplier_page': page([
+          {'key': 'profile', 'label': 'Info', 'rpc': 'tab_info'},
+        ], contacts: [
+          {'key': 'call', 'label': 'Call', 'url': 'tel:9000000024'},
+          {'key': 'whatsapp', 'label': 'WhatsApp', 'url': 'https://wa.me/91'},
+        ]),
+        'tab_info': {'ok': true, 'blocks': []},
+      });
+
+      await t.pumpWidget(const MaterialApp(
+          home: AdminSupplierPage(supplierId: 'sup-1')));
+      await t.pumpAndSettle();
+
+      expect(find.text('SAG100  ·  RAIPUR'), findsOneWidget);
+      // '#7' is the backend's rank, not this page's position in anything.
+      expect(find.text('#7'), findsOneWidget);
+      expect(find.text('SPN 845,104'), findsOneWidget);
+      expect(find.text('Call'), findsOneWidget);
+      expect(find.text('WhatsApp'), findsOneWidget);
+    });
+
+    testWidgets('the page runs every action itself — nothing pops back',
+        (t) async {
+      // Om's parity rule (3 Sep): the old card's actions must all still work,
+      // and they now live here. Edit asks the BACKEND for its form rather than
+      // handing the job back to the list.
+      final calls = <String>[];
+      AdminSupplierPage.rpcOverride = (rpc, params) async {
+        calls.add(rpc);
+        if (rpc == 'admin_supplier_page') {
+          return page([
+            {'key': 'profile', 'label': 'Info', 'rpc': 'tab_info'},
+          ], menu: [
+            {'key': 'edit', 'label': 'Edit', 'tone': 'neutral'},
+          ])
+            ..['edit'] = {
+              'label': 'Edit details',
+              'form_rpc': 'admin_supplier_edit_form',
+              'save_rpc': 'admin_supplier_edit_save',
+              'args': {'p_supplier_id': 'sup-1'},
+              'arg': 'p_patch',
+            };
+        }
+        if (rpc == 'admin_supplier_edit_form') {
+          return {
+            'ok': true,
+            'supplier_id': 'sup-1',
+            'title': 'Edit supplier',
+            'save_label': 'Save changes',
+            'cancel_label': 'Cancel',
+            'fields': [
+              {
+                'col': 'supplier_name',
+                'label': 'Supplier name',
+                'kind': 'text',
+                'required': true,
+                'value': 'Sagar Medicals',
+                'options': [],
+              },
+            ],
+          };
+        }
+        return {'ok': true, 'blocks': []};
+      };
+
+      String? popped = 'not-popped';
+      await t.pumpWidget(MaterialApp(
+        home: Builder(
+          builder: (ctx) => Scaffold(
+            body: Center(
+              child: ElevatedButton(
+                onPressed: () async {
+                  popped = await Navigator.of(ctx).push<String>(
+                      MaterialPageRoute(
+                          builder: (_) =>
+                              const AdminSupplierPage(supplierId: 'sup-1')));
+                },
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await t.tap(find.text('open'));
+      await t.pumpAndSettle();
+
+      await t.tap(find.byIcon(Icons.more_vert));
+      await t.pumpAndSettle();
+      await t.tap(find.text('Edit'));
+      await t.pumpAndSettle();
+
+      // The form opened HERE — the field list and every caption are the
+      // backend's, so adding a column tomorrow is an INSERT.
+      expect(calls, contains('admin_supplier_edit_form'));
+      expect(find.text('Edit supplier'), findsOneWidget);
+      expect(find.text('Supplier name'), findsOneWidget);
+      expect(find.text('Save changes'), findsOneWidget);
+      // And the page is still on screen: nothing was handed back to the list.
+      expect(popped, 'not-popped');
+    });
+
+    testWidgets('the status dropdown is the backend\'s options and RPC',
+        (t) async {
+      final calls = <MapEntry<String, Map<String, dynamic>>>[];
+      AdminSupplierPage.rpcOverride = (rpc, params) async {
+        calls.add(MapEntry(rpc, params));
+        if (rpc == 'admin_supplier_page') {
+          return page([
+            {'key': 'profile', 'label': 'Info', 'rpc': 'tab_info'},
+          ])
+            ..['status'] = {
+              'label': 'Status',
+              'value': 'Active',
+              'rpc': 'admin_set_supplier_status_value',
+              'args': {'p_id': 'sup-1'},
+              'arg': 'p_status',
+              'saved_label': 'Status updated',
+              'options': [
+                {'value': 'Active', 'label': 'Active'},
+                {'value': 'Suspended', 'label': 'Suspended'},
+              ],
+            };
+        }
+        return {'ok': true, 'blocks': []};
+      };
+
+      await t.pumpWidget(const MaterialApp(
+          home: AdminSupplierPage(supplierId: 'sup-1')));
+      await t.pumpAndSettle();
+
+      await t.tap(find.byType(DropdownButton<String>));
+      await t.pumpAndSettle();
+      await t.tap(find.text('Suspended').last);
+      await t.pumpAndSettle();
+      // The success toast owns a real 4 s timer; let it expire inside the test
+      // rather than leaving it pending at teardown.
+      await t.pump(const Duration(seconds: 5));
+
+      final write = calls.firstWhere(
+          (c) => c.key == 'admin_set_supplier_status_value');
+      expect(write.value['p_id'], 'sup-1');
+      // The value written is the option's own `value`, not its label and not
+      // a lower-cased guess.
+      expect(write.value['p_status'], 'Suspended');
+    });
+
+    testWidgets('a mapped catalogue company is a chip that comes off alone',
+        (t) async {
+      final calls = <MapEntry<String, Map<String, dynamic>>>[];
+      AdminSupplierPage.rpcOverride = (rpc, params) async {
+        calls.add(MapEntry(rpc, params));
+        if (rpc == 'admin_supplier_page') {
+          return page([
+            {'key': 'companies', 'label': 'Companies', 'rpc': 'tab_companies'},
+          ]);
+        }
+        return {
+          'ok': true,
+          'blocks': [
+            {
+              'kind': 'list',
+              'title': 'Companies stocked',
+              'empty': 'none',
+              'items': [
+                {
+                  'id': 'sc-1',
+                  'title': 'SUN PHARMA',
+                  // One supplier company, two catalogue companies.
+                  'chips': [
+                    {
+                      'label': 'Sun Pharma Laboratories',
+                      'remove': {
+                        'rpc': 'admin_supplier_company_unmap',
+                        'args': {
+                          'p_id': 'sc-1',
+                          'p_company': 'Sun Pharma Laboratories'
+                        },
+                      },
+                    },
+                    {
+                      'label': 'Sun Pharmaceutical Industries',
+                      'remove': {
+                        'rpc': 'admin_supplier_company_unmap',
+                        'args': {
+                          'p_id': 'sc-1',
+                          'p_company': 'Sun Pharmaceutical Industries'
+                        },
+                      },
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        };
+      };
+
+      await t.pumpWidget(const MaterialApp(
+          home: AdminSupplierPage(supplierId: 'sup-1')));
+      await t.pumpAndSettle();
+
+      expect(find.text('Sun Pharma Laboratories'), findsOneWidget);
+      expect(find.text('Sun Pharmaceutical Industries'), findsOneWidget);
+
+      await t.tap(find.byIcon(Icons.close).first);
+      await t.pumpAndSettle();
+
+      final unmap = calls
+          .firstWhere((c) => c.key == 'admin_supplier_company_unmap');
+      // Exactly the chip that was tapped — the other mapping is untouched.
+      expect(unmap.value['p_company'], 'Sun Pharma Laboratories');
+    });
+
     testWidgets('ok:false renders the backend message, never a throw',
         (t) async {
       serve({
@@ -330,7 +520,119 @@ void main() {
       expect(find.text('That supplier no longer exists.'), findsOneWidget);
     });
   });
+
+  _spnTests();
 }
 
 /// True when the widget tree is currently showing a framework error box.
 bool _hasErrorWidget(WidgetTester t) => t.any(find.byType(ErrorWidget));
+
+/// The four-factor SPN editor (Om, 3 Sep: "Nothing about the SPN formula
+/// changes"). What is fenced here is that it writes ONLY what moved — the old
+/// panel's whole reason for existing was per-field points, and rewriting an
+/// untouched factor re-stamps its points and churns the rank for nothing.
+Map<String, dynamic> _spnBlock() => <String, dynamic>{
+      'kind': 'spn',
+      'title': 'SPN factors',
+      'edit_label': 'Edit SPN factors',
+      'save_label': 'Save',
+      'cancel_label': 'Cancel',
+      'saved_label': 'SPN updated',
+      'unset_label': 'Not set',
+      'points_format': '{n} pts',
+      'total_label': 'SPN total',
+      'total_value': '845,104',
+      'rank_label': 'Rank in zone',
+      'rank_value': '#1',
+      'supplier_id': 'sup-1',
+      'factors': [
+        {
+          'field': 'margin',
+          'label': 'Margin',
+          'col': 'margin',
+          'points_col': 'margin_points',
+          'value': '8',
+          'points': 800000,
+        },
+        {
+          'field': 'behaviour',
+          'label': 'Behaviour',
+          'col': 'behaviour',
+          'points_col': 'behaviour_points',
+          'value': '10',
+          'points': 10000,
+        },
+      ],
+    };
+
+void _spnTests() {
+  group('the SPN factor editor writes only what moved', () {
+    testWidgets('every caption and both stats are the block\'s', (t) async {
+      await t.pumpWidget(_host(SpnFactorEditor(
+        block: _spnBlock(),
+        rpc: (rpc, params) async => const <Map<String, dynamic>>[],
+      )));
+      await t.pumpAndSettle();
+
+      expect(find.text('SPN factors'), findsOneWidget);
+      // The total is a formatted STRING from the backend, commas and all.
+      expect(find.text('845,104'), findsOneWidget);
+      expect(find.text('#1'), findsOneWidget);
+      expect(find.text('Margin'), findsOneWidget);
+      expect(find.text('Behaviour'), findsOneWidget);
+      expect(find.text('Edit SPN factors'), findsNothing); // that is the card
+      expect(find.text('Save'), findsOneWidget);
+    });
+
+    testWidgets('Save is dead until something actually changes', (t) async {
+      await t.pumpWidget(_host(SpnFactorEditor(
+        block: _spnBlock(),
+        rpc: (rpc, params) async => const <Map<String, dynamic>>[],
+      )));
+      await t.pumpAndSettle();
+
+      final save = t.widget<FilledButton>(find.ancestor(
+          of: find.text('Save'), matching: find.byType(FilledButton)));
+      expect(save.onPressed, isNull);
+    });
+
+    testWidgets('one changed factor writes one admin_set_supplier_spn call',
+        (t) async {
+      final calls = <Map<String, dynamic>>[];
+      await t.pumpWidget(_host(SpnFactorEditor(
+        block: _spnBlock(),
+        rpc: (rpc, params) async {
+          if (rpc == 'spn_options_list') {
+            return [
+              {'field': 'margin', 'label': '8', 'points': 800000},
+              {'field': 'margin', 'label': '12', 'points': 1200000},
+              {'field': 'behaviour', 'label': '10', 'points': 10000},
+            ];
+          }
+          calls.add({'rpc': rpc, ...params});
+          return {'ok': true};
+        },
+      )));
+      await t.pumpAndSettle();
+
+      await t.tap(find.byType(DropdownButton<SpnOption?>).first);
+      await t.pumpAndSettle();
+      await t.tap(find.text('12   1200000 pts').last);
+      await t.pumpAndSettle();
+      await t.tap(find.text('Save'));
+      await t.pumpAndSettle();
+
+      // Exactly one write: behaviour was never touched.
+      expect(calls.length, 1);
+      expect(calls.first['rpc'], 'admin_set_supplier_spn');
+      expect(calls.first['p_id'], 'sup-1');
+      final field = calls.first['p_field'] as Map;
+      // The column names are the BACKEND's, carried through untouched — this
+      // widget does not know that payment_term writes to payment_type.
+      expect(field['col'], 'margin');
+      expect(field['points_col'], 'margin_points');
+      expect(field['label'], '12');
+      expect(field['points'], '1200000');
+    });
+  });
+}

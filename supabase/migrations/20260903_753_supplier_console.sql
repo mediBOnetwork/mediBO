@@ -1690,3 +1690,1519 @@ begin
     execute format('grant execute on function %s to service_role', f.sig);
   end loop;
 end $c753grants$;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- #753 REVISION — Om rejected the first layout (3 Sep, 12:34 IST):
+--
+--   "This is a supplier INFO list, not an orders tab."
+--
+-- The list carried eight filter chips, a Sort block, and a row crammed with a
+-- waiting count, a rupee amount, a KYC badge and an overflow menu. It is now
+-- the plainest thing that can answer "which supplier?": a search box, ONE
+-- horizontally scrollable row of five chips, and a row that is a NAME with
+-- city · code · a status dot under it. Every number and every action moved to
+-- the supplier page, which is where you go when you have picked one.
+--
+-- The zone chip is gone entirely: the header's zone picker already says which
+-- zone you are in, and printing it twice was the app answering a question the
+-- shell had already answered.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+insert into public.ui_copy (key, value) values
+  ('admin_sup2.sort_sheet_title', to_jsonb('Sort suppliers'::text)),
+  ('admin_sup2.filters_label',    to_jsonb('Filters'::text)),
+  ('admin_sup2.call_label',       to_jsonb('Call'::text)),
+  ('admin_sup2.wa_label',         to_jsonb('WhatsApp'::text)),
+  ('admin_sup2.i_waiting',        to_jsonb('Inquiries waiting'::text)),
+  ('admin_sup2.i_dues',           to_jsonb('Dues pending'::text)),
+  ('admin_sup2.i_kyc',            to_jsonb('KYC / licence'::text)),
+  ('admin_sup2.i_at_a_glance',    to_jsonb('At a glance'::text)),
+  ('admin_sup2.tab_info',         to_jsonb('Info'::text))
+on conflict (key) do nothing;
+
+update public.admin_supplier_tab set label = public._c('admin_sup2.tab_info')
+ where tab_key = 'profile';
+
+create or replace function public.admin_suppliers_console(
+  p_filters jsonb default '[]'::jsonb,
+  p_sort    text  default null,
+  p_search  text  default null)
+returns jsonb
+language plpgsql stable security definer set search_path to 'public'
+as $$
+declare
+  v_role  text := public._sup753_gate();
+  v_zone  smallint := public.admin_active_zone();
+  v_f     text[] := coalesce((select array_agg(x#>>'{}') from jsonb_array_elements(coalesce(p_filters,'[]'::jsonb)) x), '{}'::text[]);
+  -- A–Z is the default now. You scan this list for a NAME.
+  v_sort  text := lower(coalesce(nullif(btrim(coalesce(p_sort,'')),''),'name'));
+  v_q     text := lower(btrim(coalesce(p_search,'')));
+  v_cfg   jsonb := coalesce((select value from app_settings where key='supplier_status_values'),'{}'::jsonb);
+  v_active text := lower(coalesce(v_cfg->>'active','active'));
+  v_copy  jsonb;
+  v_rows  jsonb; v_chips jsonb; v_n int;
+begin
+  if v_role = 'none' then
+    return jsonb_build_object('ok', false, 'allowed', false,
+                              'message', public._c('admin_sup2.forbidden'));
+  end if;
+
+  v_copy := jsonb_build_object(
+    'count_one',  public._c('admin_sup2.count_one'),
+    'count_many', public._c('admin_sup2.count_many'));
+
+  with base as (
+    select sp.id, sp.supplier_name, sp.contact_name, sp.phone, sp.supplier_code,
+           sp.city, sp.state, sp.status, sp."SPN" as spn, sp.zone_id,
+           sp.drug_license, sp.dl_1, sp.gstin, sp.gst, sp.dl_expiry, sp.gstin_expiry
+      from supplier_profiles sp
+     where coalesce(sp.is_deleted,false) = false
+       and (v_zone is null or sp.zone_id = v_zone)
+  ),
+  paid as (select sp.supplier_order_id, sum(coalesce(sp.amount,0)) amt
+             from supplier_payments sp group by 1),
+  dues as (
+    select so.supplier_id,
+           sum(greatest(coalesce(so.total_amount,0) - coalesce(p.amt,0), 0)) as due
+      from supplier_orders so
+      left join paid p on p.supplier_order_id = so.id
+     where so.settled_at is null
+       and lower(coalesce(so.status,'')) <> 'cancelled'
+       and so.supplier_id is not null
+     group by 1
+  ),
+  e as (
+    select b.*,
+           coalesce(d.due,0) as dues_amt,
+           (coalesce(m.total,0) - coalesce(m.matched,0)) as unmatched,
+           (public._sup753_kyc(coalesce(nullif(b.drug_license,''), b.dl_1),
+                               coalesce(nullif(b.gstin,''), b.gst),
+                               b.dl_expiry, b.gstin_expiry)->>'state') as kyc_state,
+           (lower(coalesce(b.status,'')) = v_active) as is_active
+      from base b
+      left join dues d on d.supplier_id = b.id
+      left join supplier_match_status_v m on m.supplier_id = b.id
+  ),
+  filtered as (
+    select c.* from e c
+     where (not ('active'    = any(v_f)) or c.is_active)
+       and (not ('inactive'  = any(v_f)) or not c.is_active)
+       and (not ('unmatched' = any(v_f)) or c.unmatched > 0)
+       and (not ('dues'      = any(v_f)) or c.dues_amt > 0)
+       and (not ('licence'   = any(v_f)) or c.kyc_state in ('expiring','expired'))
+       and (v_q = '' or lower(coalesce(c.supplier_name,'')) like '%'||v_q||'%'
+                     or lower(coalesce(c.contact_name,'')) like '%'||v_q||'%'
+                     or lower(coalesce(c.supplier_code,'')) like '%'||v_q||'%'
+                     or lower(coalesce(c.phone,'')) like '%'||v_q||'%'
+                     or lower(coalesce(c.city,'')) like '%'||v_q||'%'
+                     or exists (select 1 from supplier_company sc
+                                 where sc.supplier_id = c.id
+                                   and (lower(coalesce(sc.supplier_company,'')) like '%'||v_q||'%'
+                                     or lower(coalesce(sc.company_1,'')) like '%'||v_q||'%')))
+  ),
+  ordered as (
+    select f.* from filtered f
+     order by case when v_sort = 'spn'  then -coalesce(f.spn,0) end,
+              case when v_sort = 'dues' then -f.dues_amt end,
+              lower(f.supplier_name)
+  )
+  -- The row is a NAME and one quiet line under it. Nothing else: no rupees, no
+  -- counts, no badge, no menu — those all live on the page you tap through to.
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'id',        o.id,
+           'name',      coalesce(nullif(btrim(o.supplier_name),''), o.contact_name, '—'),
+           'subtitle',  array_to_string(array_remove(array[
+                          nullif(btrim(coalesce(o.city,'')),''),
+                          nullif(btrim(coalesce(o.supplier_code,'')),'')], null), '  ·  '),
+           'status_label', coalesce(o.status,''),
+           'status_tone',  case when o.is_active then 'success' else 'muted' end
+         )), '[]'::jsonb), count(*)
+    into v_rows, v_n
+    from ordered o;
+
+  with e as (
+      select b.id,
+             (lower(coalesce(b.status,'')) = v_active) as is_active,
+             (coalesce(m.total,0) - coalesce(m.matched,0)) as unmatched,
+             coalesce(d.due,0) as dues_amt,
+             (public._sup753_kyc(coalesce(nullif(b.drug_license,''), b.dl_1),
+                                 coalesce(nullif(b.gstin,''), b.gst),
+                                 b.dl_expiry, b.gstin_expiry)->>'state') as kyc_state
+        from supplier_profiles b
+        left join (select so.supplier_id,
+                          sum(greatest(coalesce(so.total_amount,0) - coalesce(p.amt,0),0)) due
+                     from supplier_orders so
+                     left join (select supplier_order_id, sum(coalesce(amount,0)) amt
+                                  from supplier_payments group by 1) p
+                       on p.supplier_order_id = so.id
+                    where so.settled_at is null
+                      and lower(coalesce(so.status,'')) <> 'cancelled'
+                      and so.supplier_id is not null
+                    group by 1) d on d.supplier_id = b.id
+        left join supplier_match_status_v m on m.supplier_id = b.id
+       where coalesce(b.is_deleted,false) = false
+         and (v_zone is null or b.zone_id = v_zone)
+  )
+  select jsonb_build_array(
+    jsonb_build_object('key','active',   'label',public._c('admin_sup2.chip_active'),
+                       'count',(select count(*) from e where e.is_active)),
+    jsonb_build_object('key','inactive', 'label',public._c('admin_sup2.chip_inactive'),
+                       'count',(select count(*) from e where not e.is_active)),
+    jsonb_build_object('key','unmatched','label',public._c('admin_sup2.chip_unmatched'),
+                       'count',(select count(*) from e where e.unmatched > 0)),
+    jsonb_build_object('key','dues',     'label',public._c('admin_sup2.chip_dues'),
+                       'count',(select count(*) from e where e.dues_amt > 0)),
+    jsonb_build_object('key','licence',  'label',public._c('admin_sup2.chip_licence'),
+                       'count',(select count(*) from e where e.kyc_state in ('expiring','expired'))))
+    into v_chips;
+
+  select jsonb_agg(c || jsonb_build_object('active', (c->>'key') = any(v_f)))
+    into v_chips from jsonb_array_elements(v_chips) c;
+
+  return jsonb_build_object(
+    'ok', true, 'allowed', true,
+    'role', v_role,
+    'zone_id', v_zone,
+    'title', public._c('admin_sup2.title'),
+    'search_hint', public._c('admin_sup2.search_hint'),
+    'empty_label', public._c('admin_sup2.empty'),
+    'filters_label', public._c('admin_sup2.filters_label'),
+    'sort_sheet_title', public._c('admin_sup2.sort_sheet_title'),
+    'chips', coalesce(v_chips,'[]'::jsonb),
+    -- Sorting lives behind the filter icon now; A–Z is what the list opens on.
+    'sorts', jsonb_build_array(
+       jsonb_build_object('key','name', 'label',public._c('admin_sup2.sort_name'), 'active', v_sort='name'),
+       jsonb_build_object('key','spn',  'label',public._c('admin_sup2.sort_spn'),  'active', v_sort='spn'),
+       jsonb_build_object('key','dues', 'label',public._c('admin_sup2.sort_dues'), 'active', v_sort='dues')),
+    'sort', v_sort,
+    'rows', v_rows,
+    'count', v_n,
+    'count_label', public.count_label(v_copy,'count_one','count_many',v_n));
+end $$;
+
+-- The page is where a supplier's numbers and actions live now. The header
+-- carries the identity + the two ways to reach them; the ⋮ carries Edit, SPN,
+-- Deactivate and Delete-with-reason, which used to sit on every list row.
+create or replace function public.admin_supplier_page(p_supplier_id uuid)
+returns jsonb
+language plpgsql stable security definer set search_path to 'public'
+as $$
+declare
+  v_role text := public._sup753_gate();
+  v_zone smallint := public.admin_active_zone();
+  sp supplier_profiles%rowtype;
+  v_tabs jsonb; v_kyc jsonb; v_rank int; v_active text;
+  v_phone text; v_wa text;
+begin
+  if v_role = 'none' then return public._sup753_deny(false); end if;
+  sp := public._sup753_row(p_supplier_id);
+  if sp.id is null then return public._sup753_deny(false); end if;
+
+  v_active := lower(coalesce((select value->>'active' from app_settings
+                               where key='supplier_status_values'),'active'));
+  v_kyc := public._sup753_kyc(coalesce(nullif(sp.drug_license,''), sp.dl_1),
+                              coalesce(nullif(sp.gstin,''), sp.gst),
+                              sp.dl_expiry, sp.gstin_expiry);
+
+  select r into v_rank from (
+    select x.id, rank() over (order by coalesce(x."SPN",0) desc, lower(x.supplier_name)) r
+      from supplier_profiles x
+     where coalesce(x.is_deleted,false) = false
+       and (v_zone is null or x.zone_id = v_zone)) q(id, r)
+   where q.id = sp.id;
+
+  v_phone := coalesce(nullif(btrim(coalesce(sp.phone,'')),''), nullif(btrim(coalesce(sp.contact_no,'')),''));
+  v_wa    := public._sup753_wa(coalesce(nullif(sp.whatsapp_no,''), v_phone));
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'key', t.tab_key, 'label', t.label,
+           'icon', coalesce(t.icon_key,''),
+           'rpc', coalesce(nullif(t.rpc,''), 'admin_supplier_tab_'||t.tab_key))
+         order by t.sort_order), '[]'::jsonb)
+    into v_tabs
+    from admin_supplier_tab t
+   where t.is_active
+     and (t.feature_key is null
+          or public.my_partner_id() is null
+          or public.partner_can(t.feature_key,'read'));
+
+  return jsonb_build_object(
+    'ok', true,
+    'supplier_id', sp.id,
+    'title', coalesce(nullif(btrim(sp.supplier_name),''), sp.contact_name, '—'),
+    'subtitle', array_to_string(array_remove(array[
+        nullif(btrim(coalesce(sp.supplier_code,'')),''),
+        nullif(btrim(coalesce(sp.city,'')),''),
+        nullif(btrim(coalesce(sp.state,'')),'')], null), '  ·  '),
+    'phone', coalesce(v_phone,''),
+    'contacts', (case when coalesce(v_phone,'') = '' then '[]'::jsonb
+                 else jsonb_build_array(
+                   jsonb_build_object('key','call','label',public._c('admin_sup2.call_label'),
+                                      'url','tel:'||regexp_replace(v_phone,'[^0-9+]','','g'))) end)
+                || (case when v_wa is null then '[]'::jsonb
+                    else jsonb_build_array(
+                      jsonb_build_object('key','whatsapp','label',public._c('admin_sup2.wa_label'),
+                                         'url', v_wa)) end),
+    'back_label', public._c('admin_sup2.back'),
+    'chips', jsonb_build_array(
+       public.status_chip('supplier_status', sp.status),
+       v_kyc->'chip'),
+    'spn_label', public._c('admin_sup2.spn_prefix')||' '||to_char(coalesce(sp."SPN",0),'FM999,999,999'),
+    'rank_label', public._c('admin_sup2.rank_prefix')||coalesce(v_rank,0)::text,
+    'zone_label', coalesce((select z.name from zones z where z.id = sp.zone_id),
+                           public._c('admin_sup2.no_zone')),
+    'menu', public._sup753_menu(sp.id, coalesce(sp.supplier_name,''),
+                                coalesce(nullif(sp.whatsapp_no,''), v_phone),
+                                (lower(coalesce(sp.status,'')) = v_active)),
+    'tabs', v_tabs,
+    'default_tab', coalesce(v_tabs->0->>'key','profile'),
+    'empty_label', public._c('admin_sup2.tab_empty'));
+end $$;
+
+-- Info gains the three facts the list stopped showing.
+create or replace function public.admin_supplier_tab_profile(p_supplier_id uuid)
+returns jsonb
+language plpgsql stable security definer set search_path to 'public'
+as $$
+declare
+  v_role text := public._sup753_gate();
+  v_zone smallint := public.admin_active_zone();
+  sp supplier_profiles%rowtype; v_kyc jsonb; v_docs jsonb;
+  v_waiting int; v_dues numeric; v_copy jsonb;
+begin
+  if v_role = 'none' then return public._sup753_deny(false); end if;
+  sp := public._sup753_row(p_supplier_id);
+  if sp.id is null then return public._sup753_deny(false); end if;
+
+  v_kyc := public._sup753_kyc(coalesce(nullif(sp.drug_license,''), sp.dl_1),
+                              coalesce(nullif(sp.gstin,''), sp.gst),
+                              sp.dl_expiry, sp.gstin_expiry);
+  v_copy := jsonb_build_object('one', public._c('admin_sup2.waiting_one'),
+                               'many', public._c('admin_sup2.waiting_many'));
+
+  select count(*)::int into v_waiting
+    from inquiry i
+   where lower(btrim(coalesce(i.current_supplier,''))) = lower(btrim(sp.supplier_name))
+     and lower(coalesce(i.current_status,'')) = 'confirmation pending'
+     and (v_zone is null or i.zone_id = v_zone);
+
+  select coalesce(sum(greatest(coalesce(so.total_amount,0) - coalesce(p.amt,0),0)),0)
+    into v_dues
+    from supplier_orders so
+    left join (select supplier_order_id, sum(coalesce(amount,0)) amt
+                 from supplier_payments group by 1) p on p.supplier_order_id = so.id
+   where so.supplier_id = sp.id and so.settled_at is null
+     and lower(coalesce(so.status,'')) <> 'cancelled';
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'id', d.id,
+           'title', coalesce(nullif(d.title,''), d.file_name, d.kind),
+           'subtitle', coalesce(public.ist_fmt(d.ready_at,'day_mon_year'), ''),
+           'chip', public.status_chip('doc_status', d.status))
+         order by d.requested_at desc), '[]'::jsonb)
+    into v_docs
+    from supplier_document d
+   where d.supplier_id = sp.id;
+
+  return jsonb_build_object('ok', true, 'blocks', jsonb_build_array(
+    jsonb_build_object('kind','tiles','title',public._c('admin_sup2.i_at_a_glance'),'tiles', jsonb_build_array(
+      jsonb_build_object('label',public._c('admin_sup2.i_waiting'),
+        'value', case when v_waiting = 0 then '0'
+                      else public.count_label(v_copy,'one','many',v_waiting) end,
+        'tone', case when v_waiting > 0 then 'warning' else 'neutral' end),
+      jsonb_build_object('label',public._c('admin_sup2.i_dues'),
+        'value', public.inr_money(v_dues),
+        'tone', case when v_dues > 0 then 'danger' else 'neutral' end),
+      jsonb_build_object('label',public._c('admin_sup2.i_kyc'),
+        'value', v_kyc->'chip'->>'label',
+        'tone', case v_kyc->>'state' when 'ok' then 'success'
+                                     when 'expiring' then 'warning' else 'danger' end))),
+    jsonb_build_object('kind','kv','title',public._c('admin_sup2.p_business'),'rows',jsonb_build_array(
+      public._sup753_kv(public._c('admin_sup2.f_name'),   sp.supplier_name),
+      public._sup753_kv(public._c('admin_sup2.f_code'),   sp.supplier_code),
+      public._sup753_kv(public._c('admin_sup2.f_type'),   coalesce(nullif(sp.stockist_type,''), sp.store_type)),
+      public._sup753_kv(public._c('admin_sup2.f_zone'),   (select z.name from zones z where z.id = sp.zone_id)),
+      public._sup753_kv(public._c('admin_sup2.f_status'), sp.status),
+      public._sup753_kv(public._c('admin_sup2.f_approved'), public.ist_fmt(sp.approved_at,'day_mon_year')),
+      public._sup753_kv(public._c('admin_sup2.f_created'),  public.ist_fmt(sp.created_at,'day_mon_year')))),
+    jsonb_build_object('kind','kv','title',public._c('admin_sup2.p_contact'),'rows',jsonb_build_array(
+      public._sup753_kv(public._c('admin_sup2.f_person'),   coalesce(nullif(sp.contact_person,''), sp.contact_name)),
+      public._sup753_kv(public._c('admin_sup2.f_phone'),    coalesce(nullif(sp.phone,''), sp.contact_no)),
+      public._sup753_kv(public._c('admin_sup2.f_whatsapp'), sp.whatsapp_no),
+      public._sup753_kv(public._c('admin_sup2.f_email'),    sp.email),
+      public._sup753_kv(public._c('admin_sup2.f_address'),  coalesce(nullif(sp.address,''), sp.street_address)),
+      public._sup753_kv(public._c('admin_sup2.f_city'),
+        array_to_string(array_remove(array[nullif(btrim(coalesce(sp.city,'')),''),
+                                           nullif(btrim(coalesce(sp.state,'')),'')], null), ', ')))),
+    jsonb_build_object('kind','kv','title',public._c('admin_sup2.p_trade'),'rows',jsonb_build_array(
+      public._sup753_kv(public._c('admin_sup2.f_payment'), coalesce(nullif(sp.payment_term,''), sp.payment_type)),
+      public._sup753_kv(public._c('admin_sup2.f_margin'),  sp.margin),
+      public._sup753_kv(public._c('admin_sup2.f_cd'),      sp.cd_condition),
+      public._sup753_kv(public._c('admin_sup2.f_deal'),    sp.deal))),
+    jsonb_build_object('kind','kv','title',public._c('admin_sup2.p_kyc'),
+      'chip', v_kyc->'chip', 'rows', jsonb_build_array(
+      public._sup753_kv(public._c('admin_sup2.f_dl'),     coalesce(nullif(sp.drug_license,''), sp.dl_1)),
+      public._sup753_kv(public._c('admin_sup2.f_dl_exp'),
+        case when sp.dl_expiry is null then '' else to_char(sp.dl_expiry,'FMDD Mon YYYY') end),
+      public._sup753_kv(public._c('admin_sup2.f_gst'),    coalesce(nullif(sp.gstin,''), sp.gst)),
+      public._sup753_kv(public._c('admin_sup2.f_gst_exp'),
+        case when sp.gstin_expiry is null then '' else to_char(sp.gstin_expiry,'FMDD Mon YYYY') end),
+      public._sup753_kv(public._c('admin_sup2.f_kyc_state'), v_kyc->'chip'->>'label'))),
+    jsonb_build_object('kind','list','title',public._c('admin_sup2.p_docs'),
+      'empty', public._c('admin_sup2.p_docs_empty'), 'items', v_docs)));
+end $$;
+
+-- Grants again for the two functions just replaced.
+do $c753g2$
+declare f record;
+begin
+  for f in select p.oid::regprocedure::text as sig
+             from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+            where n.nspname='public'
+              and p.proname in ('admin_suppliers_console','admin_supplier_page',
+                                'admin_supplier_tab_profile')
+  loop
+    execute format('revoke all on function %s from public', f.sig);
+    execute format('revoke all on function %s from anon', f.sig);
+    execute format('grant execute on function %s to authenticated', f.sig);
+    execute format('grant execute on function %s to service_role', f.sig);
+  end loop;
+end $c753g2$;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- #753 REVISION 2 — the SPN factor editor (Om, 3 Sep 12:48 IST).
+--
+-- Tapping "SPN" on the old supplier card opened the four-factor editor. The
+-- card is gone, so the editor moved to the page: the SPN chip in the header
+-- and an "SPN factors" card at the top of Info both open it. The formula is
+-- untouched — margin/cd_condition/behaviour/payment_term still carry their own
+-- points, supplier_spn_propagate() still re-ranks on save. What changes is
+-- only where you tap.
+--
+-- The four field NAMES were Dart constants (spnFieldDisplayLabel). They are
+-- copy rows now, so renaming "CD Condition" is an UPDATE.
+-- ═══════════════════════════════════════════════════════════════════════════
+insert into public.ui_copy (key, value) values
+  ('admin_sup2.spn_title',   to_jsonb('SPN factors'::text)),
+  ('admin_sup2.spn_edit',    to_jsonb('Edit SPN factors'::text)),
+  ('admin_sup2.spn_save',    to_jsonb('Save'::text)),
+  ('admin_sup2.spn_cancel',  to_jsonb('Cancel'::text)),
+  ('admin_sup2.spn_total',   to_jsonb('SPN total'::text)),
+  ('admin_sup2.spn_rank',    to_jsonb('Rank in zone'::text)),
+  ('admin_sup2.spn_saved',   to_jsonb('SPN updated'::text)),
+  ('admin_sup2.spn_unset',   to_jsonb('Not set'::text)),
+  ('admin_sup2.spn_pts',     to_jsonb('{n} pts'::text)),
+  ('admin_sup2.spn_f_margin',       to_jsonb('Margin'::text)),
+  ('admin_sup2.spn_f_cd_condition', to_jsonb('CD condition'::text)),
+  ('admin_sup2.spn_f_behaviour',    to_jsonb('Behaviour'::text)),
+  ('admin_sup2.spn_f_payment_term', to_jsonb('Payment term'::text))
+on conflict (key) do nothing;
+
+-- One place decides the four factors, their columns and their current values.
+-- The editor renders it; it does not know what an SPN factor is.
+create or replace function public._sup753_spn_block(p_supplier_id uuid)
+returns jsonb
+language plpgsql stable security definer set search_path to 'public'
+as $$
+declare
+  sp supplier_profiles%rowtype;
+  v_zone smallint := public.admin_active_zone();
+  v_rank int;
+begin
+  select * into sp from supplier_profiles where id = p_supplier_id;
+  if not found then return '{}'::jsonb; end if;
+
+  select r into v_rank from (
+    select x.id, rank() over (order by coalesce(x."SPN",0) desc, lower(x.supplier_name)) r
+      from supplier_profiles x
+     where coalesce(x.is_deleted,false) = false
+       and (v_zone is null or x.zone_id = v_zone)) q(id, r)
+   where q.id = sp.id;
+
+  return jsonb_build_object(
+    'kind',  'spn',
+    'title', public._c('admin_sup2.spn_title'),
+    'edit_label',   public._c('admin_sup2.spn_edit'),
+    'save_label',   public._c('admin_sup2.spn_save'),
+    'cancel_label', public._c('admin_sup2.spn_cancel'),
+    'saved_label',  public._c('admin_sup2.spn_saved'),
+    'unset_label',  public._c('admin_sup2.spn_unset'),
+    'points_format',public._c('admin_sup2.spn_pts'),
+    'total_label',  public._c('admin_sup2.spn_total'),
+    'total_value',  to_char(coalesce(sp."SPN",0),'FM999,999,999'),
+    'rank_label',   public._c('admin_sup2.spn_rank'),
+    'rank_value',   public._c('admin_sup2.rank_prefix')||coalesce(v_rank,0)::text,
+    'supplier_id',  sp.id,
+    -- field = the spn_options key; col / points_col are exactly what
+    -- admin_set_supplier_spn(p_id, p_field) expects back.
+    'factors', jsonb_build_array(
+      jsonb_build_object('field','margin','label',public._c('admin_sup2.spn_f_margin'),
+        'col','margin','points_col','margin_points',
+        'value', coalesce(nullif(btrim(coalesce(sp.margin,'')),''), null),
+        'points', coalesce(sp.margin_points,0)),
+      jsonb_build_object('field','cd_condition','label',public._c('admin_sup2.spn_f_cd_condition'),
+        'col','cd_condition','points_col','cd_points',
+        'value', coalesce(nullif(btrim(coalesce(sp.cd_condition,'')),''), null),
+        'points', coalesce(sp.cd_points,0)),
+      jsonb_build_object('field','behaviour','label',public._c('admin_sup2.spn_f_behaviour'),
+        'col','behaviour','points_col','behaviour_points',
+        'value', coalesce(nullif(btrim(coalesce(sp.behaviour,'')),''), null),
+        'points', coalesce(sp.behaviour_points,0)),
+      jsonb_build_object('field','payment_term','label',public._c('admin_sup2.spn_f_payment_term'),
+        'col','payment_type','points_col','payment_term_points',
+        'value', coalesce(nullif(btrim(coalesce(sp.payment_type,'')),''), null),
+        'points', coalesce(sp.payment_term_points,0))));
+end $$;
+
+-- Info opens with the SPN card, then the three numbers the list stopped
+-- carrying, then the detail.
+create or replace function public.admin_supplier_tab_profile(p_supplier_id uuid)
+returns jsonb
+language plpgsql stable security definer set search_path to 'public'
+as $$
+declare
+  v_role text := public._sup753_gate();
+  v_zone smallint := public.admin_active_zone();
+  sp supplier_profiles%rowtype; v_kyc jsonb; v_docs jsonb;
+  v_waiting int; v_dues numeric; v_copy jsonb;
+begin
+  if v_role = 'none' then return public._sup753_deny(false); end if;
+  sp := public._sup753_row(p_supplier_id);
+  if sp.id is null then return public._sup753_deny(false); end if;
+
+  v_kyc := public._sup753_kyc(coalesce(nullif(sp.drug_license,''), sp.dl_1),
+                              coalesce(nullif(sp.gstin,''), sp.gst),
+                              sp.dl_expiry, sp.gstin_expiry);
+  v_copy := jsonb_build_object('one', public._c('admin_sup2.waiting_one'),
+                               'many', public._c('admin_sup2.waiting_many'));
+
+  select count(*)::int into v_waiting
+    from inquiry i
+   where lower(btrim(coalesce(i.current_supplier,''))) = lower(btrim(sp.supplier_name))
+     and lower(coalesce(i.current_status,'')) = 'confirmation pending'
+     and (v_zone is null or i.zone_id = v_zone);
+
+  select coalesce(sum(greatest(coalesce(so.total_amount,0) - coalesce(p.amt,0),0)),0)
+    into v_dues
+    from supplier_orders so
+    left join (select supplier_order_id, sum(coalesce(amount,0)) amt
+                 from supplier_payments group by 1) p on p.supplier_order_id = so.id
+   where so.supplier_id = sp.id and so.settled_at is null
+     and lower(coalesce(so.status,'')) <> 'cancelled';
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'id', d.id,
+           'title', coalesce(nullif(d.title,''), d.file_name, d.kind),
+           'subtitle', coalesce(public.ist_fmt(d.ready_at,'day_mon_year'), ''),
+           'chip', public.status_chip('doc_status', d.status))
+         order by d.requested_at desc), '[]'::jsonb)
+    into v_docs
+    from supplier_document d
+   where d.supplier_id = sp.id;
+
+  return jsonb_build_object('ok', true, 'blocks', jsonb_build_array(
+    public._sup753_spn_block(sp.id),
+    jsonb_build_object('kind','tiles','title',public._c('admin_sup2.i_at_a_glance'),'tiles', jsonb_build_array(
+      jsonb_build_object('label',public._c('admin_sup2.i_waiting'),
+        'value', case when v_waiting = 0 then '0'
+                      else public.count_label(v_copy,'one','many',v_waiting) end,
+        'tone', case when v_waiting > 0 then 'warning' else 'neutral' end),
+      jsonb_build_object('label',public._c('admin_sup2.i_dues'),
+        'value', public.inr_money(v_dues),
+        'tone', case when v_dues > 0 then 'danger' else 'neutral' end),
+      jsonb_build_object('label',public._c('admin_sup2.i_kyc'),
+        'value', v_kyc->'chip'->>'label',
+        'tone', case v_kyc->>'state' when 'ok' then 'success'
+                                     when 'expiring' then 'warning' else 'danger' end))),
+    jsonb_build_object('kind','kv','title',public._c('admin_sup2.p_business'),'rows',jsonb_build_array(
+      public._sup753_kv(public._c('admin_sup2.f_name'),   sp.supplier_name),
+      public._sup753_kv(public._c('admin_sup2.f_code'),   sp.supplier_code),
+      public._sup753_kv(public._c('admin_sup2.f_type'),   coalesce(nullif(sp.stockist_type,''), sp.store_type)),
+      public._sup753_kv(public._c('admin_sup2.f_zone'),   (select z.name from zones z where z.id = sp.zone_id)),
+      public._sup753_kv(public._c('admin_sup2.f_status'), sp.status),
+      public._sup753_kv(public._c('admin_sup2.f_approved'), public.ist_fmt(sp.approved_at,'day_mon_year')),
+      public._sup753_kv(public._c('admin_sup2.f_created'),  public.ist_fmt(sp.created_at,'day_mon_year')))),
+    jsonb_build_object('kind','kv','title',public._c('admin_sup2.p_contact'),'rows',jsonb_build_array(
+      public._sup753_kv(public._c('admin_sup2.f_person'),   coalesce(nullif(sp.contact_person,''), sp.contact_name)),
+      public._sup753_kv(public._c('admin_sup2.f_phone'),    coalesce(nullif(sp.phone,''), sp.contact_no)),
+      public._sup753_kv(public._c('admin_sup2.f_whatsapp'), sp.whatsapp_no),
+      public._sup753_kv(public._c('admin_sup2.f_email'),    sp.email),
+      public._sup753_kv(public._c('admin_sup2.f_address'),  coalesce(nullif(sp.address,''), sp.street_address)),
+      public._sup753_kv(public._c('admin_sup2.f_city'),
+        array_to_string(array_remove(array[nullif(btrim(coalesce(sp.city,'')),''),
+                                           nullif(btrim(coalesce(sp.state,'')),'')], null), ', ')))),
+    jsonb_build_object('kind','kv','title',public._c('admin_sup2.p_trade'),'rows',jsonb_build_array(
+      public._sup753_kv(public._c('admin_sup2.f_payment'), coalesce(nullif(sp.payment_term,''), sp.payment_type)),
+      public._sup753_kv(public._c('admin_sup2.f_margin'),  sp.margin),
+      public._sup753_kv(public._c('admin_sup2.f_cd'),      sp.cd_condition),
+      public._sup753_kv(public._c('admin_sup2.f_deal'),    sp.deal))),
+    jsonb_build_object('kind','kv','title',public._c('admin_sup2.p_kyc'),
+      'chip', v_kyc->'chip', 'rows', jsonb_build_array(
+      public._sup753_kv(public._c('admin_sup2.f_dl'),     coalesce(nullif(sp.drug_license,''), sp.dl_1)),
+      public._sup753_kv(public._c('admin_sup2.f_dl_exp'),
+        case when sp.dl_expiry is null then '' else to_char(sp.dl_expiry,'FMDD Mon YYYY') end),
+      public._sup753_kv(public._c('admin_sup2.f_gst'),    coalesce(nullif(sp.gstin,''), sp.gst)),
+      public._sup753_kv(public._c('admin_sup2.f_gst_exp'),
+        case when sp.gstin_expiry is null then '' else to_char(sp.gstin_expiry,'FMDD Mon YYYY') end),
+      public._sup753_kv(public._c('admin_sup2.f_kyc_state'), v_kyc->'chip'->>'label'))),
+    jsonb_build_object('kind','list','title',public._c('admin_sup2.p_docs'),
+      'empty', public._c('admin_sup2.p_docs_empty'), 'items', v_docs)));
+end $$;
+
+-- The header's SPN chip opens the same editor, so the page carries the block.
+create or replace function public.admin_supplier_page(p_supplier_id uuid)
+returns jsonb
+language plpgsql stable security definer set search_path to 'public'
+as $$
+declare
+  v_role text := public._sup753_gate();
+  v_zone smallint := public.admin_active_zone();
+  sp supplier_profiles%rowtype;
+  v_tabs jsonb; v_kyc jsonb; v_rank int; v_active text;
+  v_phone text; v_wa text;
+begin
+  if v_role = 'none' then return public._sup753_deny(false); end if;
+  sp := public._sup753_row(p_supplier_id);
+  if sp.id is null then return public._sup753_deny(false); end if;
+
+  v_active := lower(coalesce((select value->>'active' from app_settings
+                               where key='supplier_status_values'),'active'));
+  v_kyc := public._sup753_kyc(coalesce(nullif(sp.drug_license,''), sp.dl_1),
+                              coalesce(nullif(sp.gstin,''), sp.gst),
+                              sp.dl_expiry, sp.gstin_expiry);
+
+  select r into v_rank from (
+    select x.id, rank() over (order by coalesce(x."SPN",0) desc, lower(x.supplier_name)) r
+      from supplier_profiles x
+     where coalesce(x.is_deleted,false) = false
+       and (v_zone is null or x.zone_id = v_zone)) q(id, r)
+   where q.id = sp.id;
+
+  v_phone := coalesce(nullif(btrim(coalesce(sp.phone,'')),''), nullif(btrim(coalesce(sp.contact_no,'')),''));
+  v_wa    := public._sup753_wa(coalesce(nullif(sp.whatsapp_no,''), v_phone));
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'key', t.tab_key, 'label', t.label,
+           'icon', coalesce(t.icon_key,''),
+           'rpc', coalesce(nullif(t.rpc,''), 'admin_supplier_tab_'||t.tab_key))
+         order by t.sort_order), '[]'::jsonb)
+    into v_tabs
+    from admin_supplier_tab t
+   where t.is_active
+     and (t.feature_key is null
+          or public.my_partner_id() is null
+          or public.partner_can(t.feature_key,'read'));
+
+  return jsonb_build_object(
+    'ok', true,
+    'supplier_id', sp.id,
+    'title', coalesce(nullif(btrim(sp.supplier_name),''), sp.contact_name, '—'),
+    'subtitle', array_to_string(array_remove(array[
+        nullif(btrim(coalesce(sp.supplier_code,'')),''),
+        nullif(btrim(coalesce(sp.city,'')),''),
+        nullif(btrim(coalesce(sp.state,'')),'')], null), '  ·  '),
+    'phone', coalesce(v_phone,''),
+    'contacts', (case when coalesce(v_phone,'') = '' then '[]'::jsonb
+                 else jsonb_build_array(
+                   jsonb_build_object('key','call','label',public._c('admin_sup2.call_label'),
+                                      'url','tel:'||regexp_replace(v_phone,'[^0-9+]','','g'))) end)
+                || (case when v_wa is null then '[]'::jsonb
+                    else jsonb_build_array(
+                      jsonb_build_object('key','whatsapp','label',public._c('admin_sup2.wa_label'),
+                                         'url', v_wa)) end),
+    'back_label', public._c('admin_sup2.back'),
+    'chips', jsonb_build_array(
+       public.status_chip('supplier_status', sp.status),
+       v_kyc->'chip'),
+    'spn_label', public._c('admin_sup2.spn_prefix')||' '||to_char(coalesce(sp."SPN",0),'FM999,999,999'),
+    'rank_label', public._c('admin_sup2.rank_prefix')||coalesce(v_rank,0)::text,
+    -- The chip is tappable because the block is here; no chip, no editor.
+    'spn_block', public._sup753_spn_block(sp.id),
+    'zone_label', coalesce((select z.name from zones z where z.id = sp.zone_id),
+                           public._c('admin_sup2.no_zone')),
+    'menu', public._sup753_menu(sp.id, coalesce(sp.supplier_name,''),
+                                coalesce(nullif(sp.whatsapp_no,''), v_phone),
+                                (lower(coalesce(sp.status,'')) = v_active)),
+    'tabs', v_tabs,
+    'default_tab', coalesce(v_tabs->0->>'key','profile'),
+    'empty_label', public._c('admin_sup2.tab_empty'));
+end $$;
+
+do $c753g3$
+declare f record;
+begin
+  for f in select p.oid::regprocedure::text as sig
+             from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+            where n.nspname='public'
+              and p.proname in ('admin_supplier_page','admin_supplier_tab_profile',
+                                '_sup753_spn_block')
+  loop
+    execute format('revoke all on function %s from public', f.sig);
+    execute format('revoke all on function %s from anon', f.sig);
+    execute format('grant execute on function %s to authenticated', f.sig);
+    execute format('grant execute on function %s to service_role', f.sig);
+  end loop;
+end $c753g3$;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- #753 REVISION 3 — the Companies tab (Om, 3 Sep 12:51 IST).
+--
+-- "Unmap works, Map does nothing." The first cut mapped by typing a name into
+-- a prompt, which is not a workflow — you cannot type 18,663 catalogue names
+-- from memory. And it wrote company_1 ONLY, which quietly threw away the whole
+-- point of the thirty slots: one supplier company legitimately maps to MANY
+-- catalogue companies ("Sun Pharma" → Sun Pharma Laboratories AND Sun
+-- Pharmaceutical Industries).
+--
+-- So: Map opens a SEARCH over the catalogue with map_supplier_companies()'s
+-- auto-match suggestions pinned on top; picking one appends into the first
+-- free slot; every mapped catalogue company shows as its own removable chip.
+--
+-- Propagation stays incremental (#678). refresh_company_suppliers_trg already
+-- repoints only the touched company keys; this adds the zone_resync_queue rows
+-- for exactly those keys, the same shape _supplier_zone_incremental() uses.
+-- Nothing here calls resync_company_suppliers() or zone_full_rebuild().
+-- ═══════════════════════════════════════════════════════════════════════════
+insert into public.ui_copy (key, value) values
+  ('admin_sup2.c_add',        to_jsonb('Add company'::text)),
+  ('admin_sup2.c_add_title',  to_jsonb('Add a supplier company'::text)),
+  ('admin_sup2.c_add_hint',   to_jsonb('Name as the supplier writes it'::text)),
+  ('admin_sup2.c_add_ok',     to_jsonb('Add'::text)),
+  ('admin_sup2.c_automatch',  to_jsonb('Auto-match all'::text)),
+  ('admin_sup2.c_search_title', to_jsonb('Map to catalogue company'::text)),
+  ('admin_sup2.c_search_hint',  to_jsonb('Search catalogue companies'::text)),
+  ('admin_sup2.c_suggested',  to_jsonb('Suggested'::text)),
+  ('admin_sup2.c_all_companies', to_jsonb('All companies'::text)),
+  ('admin_sup2.c_no_matches', to_jsonb('No catalogue company matches that.'::text)),
+  ('admin_sup2.c_rename',     to_jsonb('Rename'::text)),
+  ('admin_sup2.c_rename_title', to_jsonb('Rename supplier company'::text)),
+  ('admin_sup2.c_delete',     to_jsonb('Delete'::text)),
+  ('admin_sup2.c_delete_title', to_jsonb('Delete this supplier company?'::text)),
+  ('admin_sup2.c_delete_body',  to_jsonb('It stops counting towards this supplier''s coverage. Mapped catalogue companies are unaffected.'::text)),
+  ('admin_sup2.c_delete_ok',  to_jsonb('Delete'::text)),
+  ('admin_sup2.c_mapped_ok',  to_jsonb('Mapped to {name}'::text)),
+  ('admin_sup2.c_unmapped_ok',to_jsonb('{name} removed'::text)),
+  ('admin_sup2.c_added_ok',   to_jsonb('{name} added'::text)),
+  ('admin_sup2.c_automatch_ok', to_jsonb('{n} mapped automatically'::text)),
+  ('admin_sup2.c_full',       to_jsonb('This company already fills all 30 slots.'::text))
+on conflict (key) do nothing;
+
+-- Every catalogue name currently on one supplier_company row.
+create or replace function public._sup753_mapped(p_id uuid)
+returns text[]
+language sql stable security definer set search_path to 'public'
+as $$
+  select coalesce(array_agg(v order by g), '{}'::text[])
+    from generate_series(1,30) g
+    cross join lateral (
+      select nullif(btrim(coalesce(to_jsonb(sc)->>('company_'||g),'')),'') as v
+        from supplier_company sc where sc.id = p_id) x
+   where x.v is not null;
+$$;
+
+-- Enqueue ONLY the company keys this write touched (#678). The zone resync
+-- drain picks them up; nothing rebuilds a zone.
+create or replace function public._sup753_zone_enqueue(p_names text[])
+returns void
+language plpgsql security definer set search_path to 'public'
+as $$
+declare v_names text[] := (select array_agg(distinct lower(btrim(n)))
+                             from unnest(coalesce(p_names,'{}'::text[])) n
+                            where btrim(coalesce(n,'')) <> '');
+begin
+  if v_names is null or array_length(v_names,1) is null then return; end if;
+  if to_regclass('public.zone_resync_queue') is null
+     or to_regclass('public.zone_company_lookup') is null then return; end if;
+
+  insert into public.zone_resync_queue (zone_id, company_key)
+  select l.zone_id, l.key
+    from public.zone_company_lookup l
+   where lower(btrim(l.key)) = any(v_names)
+  on conflict (zone_id, company_key) do update set enqueued_at = now();
+end $$;
+
+-- The first cut of this function took two arguments and wrote company_1 only.
+-- Replacing it with the three-argument version below leaves BOTH signatures
+-- resolvable, and PostgREST cannot choose between them ("is not unique"), so
+-- the old one goes. It is a function this same change created minutes ago and
+-- holds no data.
+drop function if exists public.admin_supplier_company_map(uuid, text);
+
+-- MAP: append into the first free slot. Never overwrites an existing mapping.
+create or replace function public.admin_supplier_company_map(
+  p_id uuid, p_company text default '', p_learn boolean default true)
+returns jsonb
+language plpgsql security definer set search_path to 'public'
+as $$
+declare
+  v_role text := public._sup753_gate();
+  v_name text := btrim(coalesce(p_company,''));
+  v_sid uuid; v_raw text; v_slot int; v_stem text;
+begin
+  if v_role = 'none' then raise exception 'forbidden'; end if;
+  select sc.supplier_id, sc.supplier_company into v_sid, v_raw
+    from supplier_company sc where sc.id = p_id;
+  if v_sid is null then raise exception 'company_row_not_found'; end if;
+  if (public._sup753_row(v_sid)).id is null then raise exception 'not_authorized_zone'; end if;
+  if v_name = '' then raise exception 'company_required'; end if;
+
+  -- Already mapped to this one: a no-op, not a duplicate slot.
+  if lower(v_name) = any (select lower(x) from unnest(public._sup753_mapped(p_id)) x) then
+    return jsonb_build_object('ok', true, 'id', p_id::text, 'company', v_name,
+      'message', replace(public._c('admin_sup2.c_mapped_ok'),'{name}', v_name));
+  end if;
+
+  select g into v_slot from generate_series(1,30) g
+   where nullif(btrim(coalesce((select to_jsonb(sc)->>('company_'||g)
+                                  from supplier_company sc where sc.id = p_id),'')),'') is null
+   order by g limit 1;
+  if v_slot is null then
+    return jsonb_build_object('ok', false, 'error','no_slot',
+      'message', public._c('admin_sup2.c_full'));
+  end if;
+
+  execute format('update supplier_company set %I = $1, match_state = ''done'', '
+                 'matched_at = now() where id = $2', 'company_'||v_slot)
+    using v_name, p_id;
+
+  -- Learn the alias so the next import of this raw name resolves itself.
+  if coalesce(p_learn,true) and to_regclass('public.company_alias') is not null then
+    begin
+      v_stem := public.company_stem(v_raw);
+      if v_stem is not null then
+        insert into public.company_alias(variant_canonical, group_key, note)
+        values (v_stem, v_name, 'admin map #753')
+        on conflict (variant_canonical) do update set group_key = excluded.group_key;
+      end if;
+    exception when others then null;
+    end;
+  end if;
+
+  perform public._sup753_zone_enqueue(array[v_name]);
+
+  return jsonb_build_object('ok', true, 'id', p_id::text, 'company', v_name,
+    'slot', v_slot,
+    'message', replace(public._c('admin_sup2.c_mapped_ok'),'{name}', v_name));
+end $$;
+
+-- UNMAP one chip by name, then compact the slots so slot 1 is never a hole.
+create or replace function public.admin_supplier_company_unmap(
+  p_id uuid, p_company text)
+returns jsonb
+language plpgsql security definer set search_path to 'public'
+as $$
+declare
+  v_role text := public._sup753_gate();
+  v_name text := btrim(coalesce(p_company,''));
+  v_sid uuid; v_keep text[]; i int;
+begin
+  if v_role = 'none' then raise exception 'forbidden'; end if;
+  select sc.supplier_id into v_sid from supplier_company sc where sc.id = p_id;
+  if v_sid is null then raise exception 'company_row_not_found'; end if;
+  if (public._sup753_row(v_sid)).id is null then raise exception 'not_authorized_zone'; end if;
+
+  select coalesce(array_agg(x order by ord), '{}'::text[]) into v_keep
+    from unnest(public._sup753_mapped(p_id)) with ordinality t(x, ord)
+   where lower(btrim(x)) <> lower(v_name);
+
+  for i in 1..30 loop
+    execute format('update supplier_company set %I = $1 where id = $2', 'company_'||i)
+      using (case when i <= coalesce(array_length(v_keep,1),0) then v_keep[i] else null end),
+            p_id;
+  end loop;
+
+  update supplier_company
+     set match_state = case when coalesce(array_length(v_keep,1),0) = 0
+                            then 'needs_review' else 'done' end,
+         matched_at  = case when coalesce(array_length(v_keep,1),0) = 0
+                            then null else now() end
+   where id = p_id;
+
+  perform public._sup753_zone_enqueue(array[v_name]);
+
+  return jsonb_build_object('ok', true, 'id', p_id::text,
+    'message', replace(public._c('admin_sup2.c_unmapped_ok'),'{name}', v_name));
+end $$;
+
+-- The search behind Map: auto-match suggestions first, then the catalogue.
+create or replace function public.admin_supplier_company_search(
+  p_id uuid, p_q text default '', p_limit integer default 40)
+returns jsonb
+language plpgsql stable security definer set search_path to 'public'
+as $$
+declare
+  v_role text := public._sup753_gate();
+  v_sid uuid; v_raw text; v_q text := lower(btrim(coalesce(p_q,'')));
+  v_lim int := least(greatest(coalesce(p_limit,40),1),100);
+  v_sug jsonb; v_all jsonb; v_mapped text[];
+begin
+  if v_role = 'none' then return public._sup753_deny(false); end if;
+  select sc.supplier_id, sc.supplier_company into v_sid, v_raw
+    from supplier_company sc where sc.id = p_id;
+  if v_sid is null then return public._sup753_deny(false); end if;
+  if (public._sup753_row(v_sid)).id is null then return public._sup753_deny(false); end if;
+
+  v_mapped := public._sup753_mapped(p_id);
+
+  -- The suggestions the matcher would have picked, minus anything already on
+  -- the row. Only when the admin has not started typing.
+  if v_q = '' then
+    select coalesce(jsonb_agg(jsonb_build_object('name', m)), '[]'::jsonb)
+      into v_sug
+      from (select unnest(matches) m
+              from public.map_supplier_companies(v_sid)
+             where sc_id = p_id
+             limit 1) s
+     where lower(btrim(s.m)) <> all (select lower(btrim(x)) from unnest(v_mapped) x);
+  else
+    v_sug := '[]'::jsonb;
+  end if;
+
+  select coalesce(jsonb_agg(jsonb_build_object('name', c.company_name)
+                  order by c.company_name), '[]'::jsonb)
+    into v_all
+    from (select c.company_name from company c
+           where (v_q = '' or lower(c.company_name) like '%'||v_q||'%')
+             and lower(btrim(c.company_name)) <> all
+                 (select lower(btrim(x)) from unnest(v_mapped) x)
+           order by (case when lower(c.company_name) like v_q||'%' then 0 else 1 end),
+                    c.company_name
+           limit v_lim) c;
+
+  return jsonb_build_object('ok', true,
+    'row_id', p_id, 'supplier_company', coalesce(v_raw,''),
+    'title', public._c('admin_sup2.c_search_title'),
+    'hint',  public._c('admin_sup2.c_search_hint'),
+    'cancel', public._c('admin_sup2.c_cancel'),
+    'suggested_label', public._c('admin_sup2.c_suggested'),
+    'all_label', public._c('admin_sup2.c_all_companies'),
+    'empty', public._c('admin_sup2.c_no_matches'),
+    'suggested', coalesce(v_sug,'[]'::jsonb),
+    'companies', v_all);
+end $$;
+
+create or replace function public.admin_supplier_company_delete(p_id uuid)
+returns jsonb
+language plpgsql security definer set search_path to 'public'
+as $$
+declare v_role text := public._sup753_gate(); v_sid uuid; v_names text[];
+begin
+  if v_role = 'none' then raise exception 'forbidden'; end if;
+  select sc.supplier_id into v_sid from supplier_company sc where sc.id = p_id;
+  if v_sid is null then raise exception 'company_row_not_found'; end if;
+  if (public._sup753_row(v_sid)).id is null then raise exception 'not_authorized_zone'; end if;
+
+  v_names := public._sup753_mapped(p_id);
+  delete from supplier_company where id = p_id;
+  perform public._sup753_zone_enqueue(v_names);
+  return jsonb_build_object('ok', true, 'id', p_id::text);
+end $$;
+
+create or replace function public.admin_supplier_company_automatch(p_supplier_id uuid)
+returns jsonb
+language plpgsql security definer set search_path to 'public'
+as $$
+declare
+  v_role text := public._sup753_gate(); sp supplier_profiles%rowtype;
+  r record; v_n int := 0; v_names text[] := '{}';
+begin
+  if v_role = 'none' then raise exception 'forbidden'; end if;
+  sp := public._sup753_row(p_supplier_id);
+  if sp.id is null then raise exception 'not_authorized_zone'; end if;
+
+  -- Only rows that have NO mapping yet, and only when the matcher is certain
+  -- enough to have produced exactly one candidate. Anything ambiguous stays
+  -- for a human — an auto-match that guesses is worse than none.
+  for r in
+    select m.sc_id, m.matches[1] as name
+      from public.map_supplier_companies(p_supplier_id) m
+      join supplier_company sc on sc.id = m.sc_id
+     where coalesce(array_length(m.matches,1),0) = 1
+       and coalesce(array_length(public._sup753_mapped(m.sc_id),1),0) = 0
+  loop
+    execute format('update supplier_company set company_1 = $1, match_state = ''done'', '
+                   'matched_at = now() where id = $2') using r.name, r.sc_id;
+    v_names := v_names || r.name;
+    v_n := v_n + 1;
+  end loop;
+
+  perform public._sup753_zone_enqueue(v_names);
+
+  return jsonb_build_object('ok', true, 'mapped', v_n,
+    'message', replace(public._c('admin_sup2.c_automatch_ok'),'{n}', v_n::text));
+end $$;
+
+-- The tab: unmapped first (they are the work), every mapped catalogue company
+-- as its own removable chip, and the three row actions.
+create or replace function public.admin_supplier_tab_companies(
+  p_supplier_id uuid, p_filter text default 'all')
+returns jsonb
+language plpgsql stable security definer set search_path to 'public'
+as $$
+declare
+  v_role text := public._sup753_gate();
+  sp supplier_profiles%rowtype;
+  v_f text := lower(coalesce(nullif(btrim(coalesce(p_filter,'')),''),'all'));
+  v_total int; v_mapped int; v_items jsonb; v_pct numeric;
+begin
+  if v_role = 'none' then return public._sup753_deny(false); end if;
+  sp := public._sup753_row(p_supplier_id);
+  if sp.id is null then return public._sup753_deny(false); end if;
+
+  select count(*),
+         count(*) filter (where coalesce(array_length(public._sup753_mapped(sc.id),1),0) > 0)
+    into v_total, v_mapped
+    from supplier_company sc where sc.supplier_id = sp.id;
+
+  v_pct := case when coalesce(v_total,0) = 0 then 0
+                else round((v_mapped::numeric * 100) / v_total, 1) end;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'id', x.id,
+           'title', x.raw,
+           'subtitle', case when x.is_mapped then ''
+                            else public._c('admin_sup2.c_unmapped_row') end,
+           'chip', jsonb_build_object('show', true,
+             'label', case when x.is_mapped then public._c('admin_sup2.c_mapped')
+                           else public._c('admin_sup2.c_unmapped') end,
+             'bg',     case when x.is_mapped then '#D1FAE5' else '#FEF3C7' end,
+             'fg',     case when x.is_mapped then '#065F46' else '#92400E' end,
+             'border', case when x.is_mapped then '#A7F3D0' else '#FDE68A' end),
+           -- One chip per mapped catalogue company, each removable. This is
+           -- the thirty slots finally showing up in the UI.
+           'chips', coalesce((
+              select jsonb_agg(jsonb_build_object(
+                       'label', m,
+                       'remove', jsonb_build_object(
+                         'rpc','admin_supplier_company_unmap',
+                         'args', jsonb_build_object('p_id', x.id, 'p_company', m))))
+                from unnest(x.mapped) m), '[]'::jsonb),
+           'actions', jsonb_build_array(
+             jsonb_build_object('key','map','label',public._c('admin_sup2.c_map'),
+               'tone','brand', 'picker', jsonb_build_object(
+                 'search_rpc','admin_supplier_company_search',
+                 'search_args', jsonb_build_object('p_id', x.id),
+                 'apply_rpc','admin_supplier_company_map',
+                 'apply_args', jsonb_build_object('p_id', x.id),
+                 'apply_key','p_company')),
+             jsonb_build_object('key','rename','label',public._c('admin_sup2.c_rename'),
+               'tone','neutral','rpc','admin_supplier_company_update',
+               'args', jsonb_build_object('p_id', x.id),
+               'prompt', jsonb_build_object(
+                 'title', public._c('admin_sup2.c_rename_title'),
+                 'hint',  public._c('admin_sup2.c_add_hint'),
+                 'ok',    public._c('admin_sup2.c_map_ok'),
+                 'cancel',public._c('admin_sup2.c_cancel'),
+                 'arg',   'p_patch', 'arg_shape','supplier_company',
+                 'value', x.raw)),
+             jsonb_build_object('key','delete','label',public._c('admin_sup2.c_delete'),
+               'tone','danger','rpc','admin_supplier_company_delete',
+               'args', jsonb_build_object('p_id', x.id),
+               'confirm', jsonb_build_object(
+                 'title', public._c('admin_sup2.c_delete_title'),
+                 'body',  public._c('admin_sup2.c_delete_body'),
+                 'ok',    public._c('admin_sup2.c_delete_ok'),
+                 'cancel',public._c('admin_sup2.c_cancel'),
+                 'needs_reason', false))))
+         -- Unmapped first: they are the queue. Then A–Z inside each group.
+         order by x.is_mapped, lower(x.raw)), '[]'::jsonb)
+    into v_items
+    from (
+      select sc.id,
+             coalesce(nullif(btrim(coalesce(sc.supplier_company,'')),''),'—') as raw,
+             public._sup753_mapped(sc.id) as mapped,
+             (coalesce(array_length(public._sup753_mapped(sc.id),1),0) > 0) as is_mapped
+        from supplier_company sc
+       where sc.supplier_id = sp.id
+    ) x
+   where (v_f = 'all')
+      or (v_f = 'mapped'   and x.is_mapped)
+      or (v_f = 'unmapped' and not x.is_mapped);
+
+  return jsonb_build_object('ok', true, 'filter', v_f, 'blocks', jsonb_build_array(
+    jsonb_build_object('kind','tiles','tiles', jsonb_build_array(
+      jsonb_build_object('label', public._c('admin_sup2.c_all'),      'value', v_total::text,  'tone','neutral'),
+      jsonb_build_object('label', public._c('admin_sup2.c_mapped'),   'value', v_mapped::text, 'tone','success'),
+      jsonb_build_object('label', public._c('admin_sup2.c_unmapped'), 'value', (v_total - v_mapped)::text,
+                         'tone', case when v_total - v_mapped > 0 then 'warning' else 'neutral' end),
+      jsonb_build_object('label', public._c('admin_sup2.c_match'),    'value', to_char(v_pct,'FM990.0')||'%', 'tone','info'))),
+    jsonb_build_object('kind','buttons','buttons', jsonb_build_array(
+      jsonb_build_object('key','add','label',public._c('admin_sup2.c_add'),'tone','brand',
+        'rpc','admin_supplier_company_add',
+        'args', jsonb_build_object('p_supplier_id', sp.id,
+                                   'p_supplier_name', coalesce(sp.supplier_name,'')),
+        'prompt', jsonb_build_object(
+          'title', public._c('admin_sup2.c_add_title'),
+          'hint',  public._c('admin_sup2.c_add_hint'),
+          'ok',    public._c('admin_sup2.c_add_ok'),
+          'cancel',public._c('admin_sup2.c_cancel'),
+          'arg',   'p_company')),
+      jsonb_build_object('key','automatch','label',public._c('admin_sup2.c_automatch'),'tone','neutral',
+        'rpc','admin_supplier_company_automatch',
+        'args', jsonb_build_object('p_supplier_id', sp.id)))),
+    jsonb_build_object('kind','chips','key','filter','arg','p_filter','chips', jsonb_build_array(
+      jsonb_build_object('key','all',     'label',public._c('admin_sup2.c_all'),     'count',v_total,           'active',v_f='all'),
+      jsonb_build_object('key','unmapped','label',public._c('admin_sup2.c_unmapped'),'count',v_total - v_mapped,'active',v_f='unmapped'),
+      jsonb_build_object('key','mapped',  'label',public._c('admin_sup2.c_mapped'),  'count',v_mapped,          'active',v_f='mapped'))),
+    jsonb_build_object('kind','list','title',public._c('admin_sup2.c_title'),
+      'empty', public._c('admin_sup2.c_empty'), 'items', v_items)));
+end $$;
+
+do $c753g4$
+declare f record;
+begin
+  for f in select p.oid::regprocedure::text as sig
+             from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+            where n.nspname='public'
+              and p.proname in ('admin_supplier_tab_companies','admin_supplier_company_map',
+                                'admin_supplier_company_unmap','admin_supplier_company_search',
+                                'admin_supplier_company_delete','admin_supplier_company_automatch',
+                                '_sup753_mapped','_sup753_zone_enqueue')
+  loop
+    execute format('revoke all on function %s from public', f.sig);
+    execute format('revoke all on function %s from anon', f.sig);
+    execute format('grant execute on function %s to authenticated', f.sig);
+    execute format('grant execute on function %s to service_role', f.sig);
+  end loop;
+end $c753g4$;
+
+insert into public.partner_rpc_allow (proname, source, note) values
+  ('admin_supplier_company_search','change_753','company mapping search')
+on conflict (proname) do nothing;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- #753 REVISION 4 — PARITY (Om, 3 Sep 12:55 IST).
+--
+-- "Nothing the OLD Suppliers card could do may be lost in the new layout."
+-- The old card carried, besides what is already rebuilt: a status dropdown, a
+-- matched X/Y progress chip, the shop open/closed control that the old
+-- "Availability" button opened, a bulk company link, and an Edit dialog whose
+-- fourteen fields were a Dart constant. All of it lands here, and the Edit
+-- form becomes DATA — its field list, labels, types and options are rows, so
+-- adding "district" tomorrow is an INSERT, not a deploy.
+-- ═══════════════════════════════════════════════════════════════════════════
+insert into public.ui_copy (key, value) values
+  ('admin_sup2.st_label',    to_jsonb('Status'::text)),
+  ('admin_sup2.st_saved',    to_jsonb('Status updated'::text)),
+  ('admin_sup2.match_label', to_jsonb('Matched {a}/{b}'::text)),
+  ('admin_sup2.e_title',     to_jsonb('Edit supplier'::text)),
+  ('admin_sup2.e_save',      to_jsonb('Save changes'::text)),
+  ('admin_sup2.e_cancel',    to_jsonb('Cancel'::text)),
+  ('admin_sup2.e_saved',     to_jsonb('Supplier updated'::text)),
+  ('admin_sup2.e_required',  to_jsonb('{label} is required.'::text)),
+  ('admin_sup2.e_bad_upi',   to_jsonb('That is not a valid UPI address.'::text)),
+  ('admin_sup2.e_open',      to_jsonb('Edit details'::text)),
+  ('admin_sup2.c_bulk',      to_jsonb('Bulk link'::text)),
+  ('admin_sup2.c_bulk_title',to_jsonb('Paste company names'::text)),
+  ('admin_sup2.c_bulk_hint', to_jsonb('One per line, or comma separated'::text)),
+  ('admin_sup2.c_bulk_ok',   to_jsonb('Link them'::text)),
+  ('admin_sup2.c_bulk_done', to_jsonb('{n} linked'::text)),
+  ('admin_sup2.a_set_none',  to_jsonb('Clear'::text)),
+  ('admin_sup2.a_none',      to_jsonb('No answer yet'::text)),
+  ('admin_sup2.a_shop',      to_jsonb('Shop'::text))
+on conflict (key) do nothing;
+
+-- ── The Edit form, as data ────────────────────────────────────────────────
+create table if not exists public.admin_supplier_edit_field (
+  col        text primary key,
+  label      text not null,
+  kind       text not null default 'text',    -- text | zone | status
+  sort_order integer not null default 100,
+  required   boolean not null default false,
+  is_active  boolean not null default true,
+  validate   text                             -- 'upi' | null
+);
+
+insert into public.admin_supplier_edit_field (col, label, kind, sort_order, required, validate) values
+  ('supplier_name',   'Supplier name',        'text',   10, true,  null),
+  ('supplier_code',   'Supplier code',        'text',   20, false, null),
+  ('stockist_type',   'Stockist type',        'text',   30, false, null),
+  ('zone_id',         'Zone',                 'zone',   40, false, null),
+  ('status',          'Status',               'status', 50, false, null),
+  ('contact_person',  'Contact person',       'text',   60, false, null),
+  ('contact_name',    'Contact name',         'text',   70, false, null),
+  ('phone',           'Phone',                'text',   80, false, null),
+  ('whatsapp_no',     'WhatsApp no.',         'text',   90, false, null),
+  ('email',           'Email',                'text',  100, false, null),
+  ('street_address',  'Address',              'text',  110, false, null),
+  ('city',            'City',                 'text',  120, false, null),
+  ('district',        'District',             'text',  130, false, null),
+  ('state',           'State',                'text',  140, false, null),
+  ('pincode',         'PIN code',             'text',  150, false, null),
+  ('drug_license',    'Drug licence',         'text',  160, false, null),
+  ('dl_expiry',       'Drug licence expiry',  'date',  170, false, null),
+  ('gstin',           'GSTIN',                'text',  180, false, null),
+  ('gstin_expiry',    'GSTIN expiry',         'date',  190, false, null),
+  ('payment_term',    'Payment term',         'text',  200, false, null),
+  ('payment_address', 'Payment address (UPI)','text',  210, false, 'upi'),
+  ('notes',           'Notes',                'text',  220, false, null)
+on conflict (col) do update
+  set label = excluded.label, kind = excluded.kind,
+      sort_order = excluded.sort_order, required = excluded.required,
+      validate = excluded.validate, is_active = true;
+
+create or replace function public.admin_supplier_edit_form(p_supplier_id uuid)
+returns jsonb
+language plpgsql stable security definer set search_path to 'public'
+as $$
+declare
+  v_role text := public._sup753_gate();
+  sp supplier_profiles%rowtype; v_row jsonb; v_fields jsonb;
+  v_cfg jsonb := coalesce((select value from app_settings where key='supplier_status_values'),'{}'::jsonb);
+begin
+  if v_role = 'none' then return public._sup753_deny(false); end if;
+  sp := public._sup753_row(p_supplier_id);
+  if sp.id is null then return public._sup753_deny(false); end if;
+  v_row := to_jsonb(sp);
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'col', f.col, 'label', f.label, 'kind', f.kind,
+           'required', f.required,
+           'value', coalesce(v_row->>f.col,''),
+           'options', case f.kind
+             when 'zone' then coalesce((select jsonb_agg(jsonb_build_object(
+                                          'value', z.id::text, 'label', z.name) order by z.id)
+                                         from zones z), '[]'::jsonb)
+             when 'status' then coalesce((select jsonb_agg(jsonb_build_object(
+                                            'value', v, 'label', v))
+                                           from (select distinct x from jsonb_each_text(v_cfg) e(k,x)) s(v)),
+                                         '[]'::jsonb)
+             else '[]'::jsonb end)
+         order by f.sort_order), '[]'::jsonb)
+    into v_fields
+    from admin_supplier_edit_field f where f.is_active;
+
+  return jsonb_build_object('ok', true,
+    'supplier_id', sp.id,
+    'title', public._c('admin_sup2.e_title'),
+    'save_label', public._c('admin_sup2.e_save'),
+    'cancel_label', public._c('admin_sup2.e_cancel'),
+    'required_format', public._c('admin_sup2.e_required'),
+    'fields', v_fields);
+end $$;
+
+create or replace function public.admin_supplier_edit_save(
+  p_supplier_id uuid, p_patch jsonb)
+returns jsonb
+language plpgsql security definer set search_path to 'public'
+as $$
+declare
+  v_role text := public._sup753_gate();
+  sp supplier_profiles%rowtype;
+  f record; v_val text; v_sets text[] := '{}';
+begin
+  if v_role = 'none' then raise exception 'forbidden'; end if;
+  sp := public._sup753_row(p_supplier_id);
+  if sp.id is null then raise exception 'not_authorized_zone'; end if;
+
+  for f in select * from admin_supplier_edit_field where is_active order by sort_order loop
+    if not (coalesce(p_patch,'{}'::jsonb) ? f.col) then continue; end if;
+    v_val := nullif(btrim(coalesce(p_patch->>f.col,'')),'');
+
+    if f.required and v_val is null then
+      return jsonb_build_object('ok', false, 'error','required',
+        'message', replace(public._c('admin_sup2.e_required'),'{label}', f.label));
+    end if;
+    if f.validate = 'upi' and v_val is not null
+       and v_val !~ '^[0-9A-Za-z._\-]{2,}@[A-Za-z]{2,}$' then
+      return jsonb_build_object('ok', false, 'error','bad_upi',
+        'message', public._c('admin_sup2.e_bad_upi'));
+    end if;
+
+    if f.kind = 'zone' then
+      v_sets := v_sets || format('%I = %L::smallint', f.col, v_val);
+    elsif f.kind = 'date' then
+      v_sets := v_sets || format('%I = %L::date', f.col, v_val);
+    else
+      v_sets := v_sets || format('%I = %L', f.col, v_val);
+    end if;
+  end loop;
+
+  if array_length(v_sets,1) is null then
+    return jsonb_build_object('ok', true, 'changed', 0);
+  end if;
+
+  execute format('update supplier_profiles set %s where id = %L',
+                 array_to_string(v_sets,', '), p_supplier_id);
+
+  return jsonb_build_object('ok', true, 'changed', array_length(v_sets,1),
+    'message', public._c('admin_sup2.e_saved'));
+end $$;
+
+-- ── Bulk link: the split happens in SQL, not in Dart ──────────────────────
+create or replace function public.admin_supplier_company_bulk_add(
+  p_supplier_id uuid, p_text text)
+returns jsonb
+language plpgsql security definer set search_path to 'public'
+as $$
+declare
+  v_role text := public._sup753_gate(); sp supplier_profiles%rowtype;
+  v_rows jsonb; v_res jsonb;
+begin
+  if v_role = 'none' then raise exception 'forbidden'; end if;
+  sp := public._sup753_row(p_supplier_id);
+  if sp.id is null then raise exception 'not_authorized_zone'; end if;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'supplier_id', sp.id,
+           'supplier_name', coalesce(sp.supplier_name,''),
+           'supplier_company', n)), '[]'::jsonb)
+    into v_rows
+    from (select distinct btrim(t) n
+            from regexp_split_to_table(coalesce(p_text,''), '[\n,;]+') t
+           where btrim(t) <> '') s;
+
+  v_res := public.admin_supplier_company_bulk_link(v_rows);
+  return jsonb_build_object('ok', true, 'linked', coalesce(v_res->>'linked','0')::int,
+    'message', replace(public._c('admin_sup2.c_bulk_done'),'{n}',
+                       coalesce(v_res->>'linked','0')));
+end $$;
+
+-- ── Header parity: the status dropdown, the matched X/Y, the Edit entry ────
+create or replace function public.admin_supplier_page(p_supplier_id uuid)
+returns jsonb
+language plpgsql stable security definer set search_path to 'public'
+as $$
+declare
+  v_role text := public._sup753_gate();
+  v_zone smallint := public.admin_active_zone();
+  sp supplier_profiles%rowtype;
+  v_tabs jsonb; v_kyc jsonb; v_rank int; v_active text;
+  v_phone text; v_wa text; v_cfg jsonb; v_total int; v_matched int;
+begin
+  if v_role = 'none' then return public._sup753_deny(false); end if;
+  sp := public._sup753_row(p_supplier_id);
+  if sp.id is null then return public._sup753_deny(false); end if;
+
+  v_cfg := coalesce((select value from app_settings where key='supplier_status_values'),'{}'::jsonb);
+  v_active := lower(coalesce(v_cfg->>'active','active'));
+  v_kyc := public._sup753_kyc(coalesce(nullif(sp.drug_license,''), sp.dl_1),
+                              coalesce(nullif(sp.gstin,''), sp.gst),
+                              sp.dl_expiry, sp.gstin_expiry);
+
+  select r into v_rank from (
+    select x.id, rank() over (order by coalesce(x."SPN",0) desc, lower(x.supplier_name)) r
+      from supplier_profiles x
+     where coalesce(x.is_deleted,false) = false
+       and (v_zone is null or x.zone_id = v_zone)) q(id, r)
+   where q.id = sp.id;
+
+  select count(*),
+         count(*) filter (where coalesce(array_length(public._sup753_mapped(sc.id),1),0) > 0)
+    into v_total, v_matched
+    from supplier_company sc where sc.supplier_id = sp.id;
+
+  v_phone := coalesce(nullif(btrim(coalesce(sp.phone,'')),''), nullif(btrim(coalesce(sp.contact_no,'')),''));
+  v_wa    := public._sup753_wa(coalesce(nullif(sp.whatsapp_no,''), v_phone));
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'key', t.tab_key, 'label', t.label,
+           'icon', coalesce(t.icon_key,''),
+           'rpc', coalesce(nullif(t.rpc,''), 'admin_supplier_tab_'||t.tab_key))
+         order by t.sort_order), '[]'::jsonb)
+    into v_tabs
+    from admin_supplier_tab t
+   where t.is_active
+     and (t.feature_key is null
+          or public.my_partner_id() is null
+          or public.partner_can(t.feature_key,'read'));
+
+  return jsonb_build_object(
+    'ok', true,
+    'supplier_id', sp.id,
+    'title', coalesce(nullif(btrim(sp.supplier_name),''), sp.contact_name, '—'),
+    'subtitle', array_to_string(array_remove(array[
+        nullif(btrim(coalesce(sp.supplier_code,'')),''),
+        nullif(btrim(coalesce(sp.city,'')),''),
+        nullif(btrim(coalesce(sp.state,'')),'')], null), '  ·  '),
+    'phone', coalesce(v_phone,''),
+    'contacts', (case when coalesce(v_phone,'') = '' then '[]'::jsonb
+                 else jsonb_build_array(
+                   jsonb_build_object('key','call','label',public._c('admin_sup2.call_label'),
+                                      'url','tel:'||regexp_replace(v_phone,'[^0-9+]','','g'))) end)
+                || (case when v_wa is null then '[]'::jsonb
+                    else jsonb_build_array(
+                      jsonb_build_object('key','whatsapp','label',public._c('admin_sup2.wa_label'),
+                                         'url', v_wa)) end),
+    'back_label', public._c('admin_sup2.back'),
+    'chips', jsonb_build_array(v_kyc->'chip'),
+    -- The status dropdown the old card carried, same RPC, options from the
+    -- same app_settings row the rest of the app reads.
+    'status', jsonb_build_object(
+      'label', public._c('admin_sup2.st_label'),
+      'value', coalesce(sp.status,''),
+      'rpc', 'admin_set_supplier_status_value',
+      'args', jsonb_build_object('p_id', sp.id),
+      'arg', 'p_status',
+      'saved_label', public._c('admin_sup2.st_saved'),
+      'options', coalesce((select jsonb_agg(jsonb_build_object('value', v, 'label', v))
+                             from (select distinct x v from jsonb_each_text(v_cfg) e(k,x)) s),
+                          '[]'::jsonb)),
+    'match_label', replace(replace(public._c('admin_sup2.match_label'),
+                     '{a}', v_matched::text), '{b}', v_total::text),
+    'spn_label', public._c('admin_sup2.spn_prefix')||' '||to_char(coalesce(sp."SPN",0),'FM999,999,999'),
+    'rank_label', public._c('admin_sup2.rank_prefix')||coalesce(v_rank,0)::text,
+    'spn_block', public._sup753_spn_block(sp.id),
+    'edit', jsonb_build_object(
+      'label', public._c('admin_sup2.e_open'),
+      'form_rpc','admin_supplier_edit_form',
+      'save_rpc','admin_supplier_edit_save',
+      'args', jsonb_build_object('p_supplier_id', sp.id),
+      'arg', 'p_patch'),
+    'zone_label', coalesce((select z.name from zones z where z.id = sp.zone_id),
+                           public._c('admin_sup2.no_zone')),
+    'menu', public._sup753_menu(sp.id, coalesce(sp.supplier_name,''),
+                                coalesce(nullif(sp.whatsapp_no,''), v_phone),
+                                (lower(coalesce(sp.status,'')) = v_active)),
+    'tabs', v_tabs,
+    'default_tab', coalesce(v_tabs->0->>'key','profile'),
+    'empty_label', public._c('admin_sup2.tab_empty'));
+end $$;
+
+-- ── Availability parity: the fourth state (clear) and the shop open/closed
+--    control that the old "Availability" button actually opened. ───────────
+create or replace function public.admin_supplier_availability_set(
+  p_supplier_id uuid, p_product_id bigint, p_state text)
+returns jsonb
+language plpgsql security definer set search_path to 'public'
+as $$
+declare v_role text := public._sup753_gate(); sp supplier_profiles%rowtype;
+        v_state text := btrim(coalesce(p_state,''));
+begin
+  if v_role = 'none' then raise exception 'forbidden'; end if;
+  sp := public._sup753_row(p_supplier_id);
+  if sp.id is null then raise exception 'not_authorized_zone'; end if;
+
+  -- An empty state CLEARS the memory: "no answer yet" is a real state, and
+  -- writing a blank string in its place would look like an answer.
+  if v_state = '' then
+    delete from supplier_item_memory
+     where lower(btrim(supplier_name)) = lower(btrim(sp.supplier_name))
+       and product_id = p_product_id;
+  else
+    insert into supplier_item_memory (supplier_name, product_id, last_answer,
+                                      last_answered_at, times_answered)
+    values (sp.supplier_name, p_product_id, v_state, now(), 1)
+    on conflict (supplier_name, product_id) do update
+      set last_answer = excluded.last_answer, last_answered_at = now();
+  end if;
+
+  insert into supplier_audit_log (supplier_id, actor_identity, feature_key, action, detail)
+  values (sp.id, coalesce(nullif(public.my_login_email(),''), auth.uid()::text, 'unknown'),
+          'admin.supplier.availability', 'set_state',
+          jsonb_build_object('product_id', p_product_id, 'state', v_state));
+
+  return jsonb_build_object('ok', true, 'product_id', p_product_id, 'state', v_state);
+end $$;
+
+create or replace function public.admin_supplier_tab_availability(
+  p_supplier_id uuid, p_zone_id smallint default null)
+returns jsonb
+language plpgsql stable security definer set search_path to 'public'
+as $$
+declare
+  v_role text := public._sup753_gate();
+  v_scope smallint := public.admin_active_zone();
+  sp supplier_profiles%rowtype;
+  v_zone smallint; v_zones jsonb; v_items jsonb; v_copy jsonb; v_shop jsonb;
+  v_avail text := 'Available'; v_oos text := 'Out of Stock';
+  v_dont text := 'We don''t stock this product';
+begin
+  if v_role = 'none' then return public._sup753_deny(false); end if;
+  sp := public._sup753_row(p_supplier_id);
+  if sp.id is null then return public._sup753_deny(false); end if;
+
+  v_zone := coalesce(p_zone_id, v_scope, sp.zone_id);
+  v_copy := jsonb_build_object('one', public._c('admin_sup2.a_times_one'),
+                               'many', public._c('admin_sup2.a_times_many'));
+
+  -- The shop open/closed panel — this is what the old card's "Availability"
+  -- button opened, and it is the same _supplier_closure_panel the supplier's
+  -- own portal renders.
+  v_shop := public._supplier_closure_panel(sp.supplier_name, 'admin');
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'key', z.id::text,
+           'value', z.id,
+           'label', case z.id when 1 then '①' when 2 then '②' when 3 then '③'
+                              when 4 then '④' when 5 then '⑤'
+                              else '('||z.id::text||')' end || ' ' || z.name,
+           'count', (select count(*) from supplier_item_memory m
+                      join catalogue_zone_avail cz
+                        on cz.product_id = m.product_id and cz.zone_id = z.id
+                     where lower(btrim(m.supplier_name)) = lower(btrim(sp.supplier_name))),
+           'active', (z.id = v_zone))
+         order by z.id), '[]'::jsonb)
+    into v_zones
+    from zones z
+   where (v_scope is null or z.id = v_scope);
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'id', m.product_id,
+           'title', coalesce(nullif(btrim(coalesce(md.product_name,'')),''), '#'||m.product_id::text),
+           'subtitle', public.count_label(v_copy,'one','many',coalesce(m.times_answered,0)),
+           'meta', case when m.last_answered_at is null then ''
+                        else public._c('admin_sup2.a_last')||': '||public.ist_fmt(m.last_answered_at,'day_mon_year') end,
+           'chip', jsonb_build_object('show', true,
+             'label', coalesce(nullif(m.last_answer,''), public._c('admin_sup2.a_none')),
+             'bg',     case lower(coalesce(m.last_answer,'')) when 'available' then '#D1FAE5'
+                            when 'out of stock' then '#FEE2E2' else '#EFF6FF' end,
+             'fg',     case lower(coalesce(m.last_answer,'')) when 'available' then '#065F46'
+                            when 'out of stock' then '#991B1B' else '#1E40AF' end,
+             'border', case lower(coalesce(m.last_answer,'')) when 'available' then '#A7F3D0'
+                            when 'out of stock' then '#FECACA' else '#BFDBFE' end),
+           'actions', jsonb_build_array(
+             jsonb_build_object('key','available','label',public._c('admin_sup2.a_set_available'),
+               'tone','success','selected',(m.last_answer = v_avail),
+               'rpc','admin_supplier_availability_set',
+               'args', jsonb_build_object('p_supplier_id', sp.id, 'p_product_id', m.product_id, 'p_state', v_avail)),
+             jsonb_build_object('key','oos','label',public._c('admin_sup2.a_set_oos'),
+               'tone','danger','selected',(m.last_answer = v_oos),
+               'rpc','admin_supplier_availability_set',
+               'args', jsonb_build_object('p_supplier_id', sp.id, 'p_product_id', m.product_id, 'p_state', v_oos)),
+             jsonb_build_object('key','dont','label',public._c('admin_sup2.a_set_dont'),
+               'tone','info','selected',(m.last_answer = v_dont),
+               'rpc','admin_supplier_availability_set',
+               'args', jsonb_build_object('p_supplier_id', sp.id, 'p_product_id', m.product_id, 'p_state', v_dont)),
+             jsonb_build_object('key','none','label',public._c('admin_sup2.a_set_none'),
+               'tone','muted','selected',false,
+               'rpc','admin_supplier_availability_set',
+               'args', jsonb_build_object('p_supplier_id', sp.id, 'p_product_id', m.product_id, 'p_state', ''))))
+         order by m.last_answered_at desc nulls last), '[]'::jsonb)
+    into v_items
+    from supplier_item_memory m
+    left join "MEDICINE" md on md.id = m.product_id
+   where lower(btrim(m.supplier_name)) = lower(btrim(sp.supplier_name))
+     and (v_zone is null
+          or exists (select 1 from catalogue_zone_avail cz
+                      where cz.product_id = m.product_id and cz.zone_id = v_zone));
+
+  return jsonb_build_object('ok', true, 'zone_id', v_zone, 'blocks', jsonb_build_array(
+    jsonb_build_object('kind','shop','title',public._c('admin_sup2.a_shop'),'shop', v_shop,
+      'supplier_name', coalesce(sp.supplier_name,'')),
+    jsonb_build_object('kind','chips','key','zone','arg','p_zone_id','arg_type','int',
+                       'title',public._c('admin_sup2.a_zone'),'chips',v_zones),
+    jsonb_build_object('kind','list','title',public._c('admin_sup2.a_title'),
+      'empty', public._c('admin_sup2.a_empty'), 'items', v_items)));
+end $$;
+
+do $c753g5$
+declare f record;
+begin
+  for f in select p.oid::regprocedure::text as sig
+             from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+            where n.nspname='public'
+              and p.proname in ('admin_supplier_page','admin_supplier_tab_availability',
+                                'admin_supplier_availability_set','admin_supplier_edit_form',
+                                'admin_supplier_edit_save','admin_supplier_company_bulk_add')
+  loop
+    execute format('revoke all on function %s from public', f.sig);
+    execute format('revoke all on function %s from anon', f.sig);
+    execute format('grant execute on function %s to authenticated', f.sig);
+    execute format('grant execute on function %s to service_role', f.sig);
+  end loop;
+end $c753g5$;
+
+insert into public.partner_rpc_allow (proname, source, note) values
+  ('admin_supplier_edit_form','change_753','supplier edit form')
+on conflict (proname) do nothing;

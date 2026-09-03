@@ -474,6 +474,114 @@ void main() {
     });
   });
 
+  group('a failed refresh never empties the Account group', () {
+    // HOSTILE QA ROUND 1, BLOCKER 2 — the class of bug this retires, and the
+    // journey qa-745-426 asserts.
+    //
+    // #745 made the WHOLE Account group payload-driven. That handed one RPC
+    // the power to blank a signed-in pharmacy's profile: customer_surfaces()
+    // times out on a shop's flaky connection, the notifier goes empty, and the
+    // customer is left on a screen with no rows, no error and nothing to tap
+    // to try again. Before #745 those rows were unconditional widgets and no
+    // network call could take them away.
+    //
+    // The rule that replaced it: the last good answer is kept on the device and
+    // repainted before the network says anything, and a BAD answer is never
+    // allowed to replace a good one. The customer is told what they are looking
+    // at in the backend's own words — a silent stale menu is its own defect.
+
+    test('a non-ok answer is discarded before it can reach the notifier', () {
+      final src =
+          File('lib/services/customer_surfaces.dart').readAsStringSync();
+      final start = src.indexOf('static Future<void> load()');
+      expect(start, greaterThan(0), reason: 'load() must stay in one place');
+      final body = src.substring(start, src.indexOf('\n  }', start));
+
+      // Every failure path leaves early, BEFORE the single assignment.
+      final assign = body.indexOf('value.value = p');
+      expect(assign, greaterThan(0),
+          reason: 'load() no longer publishes the payload it fetched');
+      for (final guard in const [
+        "if (map is! Map) return;",
+        "if (p['ok'] != true) return;",
+      ]) {
+        final at = body.indexOf(guard);
+        expect(at, greaterThan(0), reason: 'the guard `$guard` is gone — a '
+            'bad answer can now replace a good one');
+        expect(at, lessThan(assign),
+            reason: '`$guard` must run BEFORE the notifier is written');
+      }
+
+      // The notifier is written exactly once, and never from the catch: a
+      // throwing RPC must leave what is already on screen alone.
+      expect('value.value = '.allMatches(body).length, 1,
+          reason: 'load() writes the notifier more than once — one of those '
+              'paths is how an empty menu gets published');
+      final katch = body.substring(body.indexOf('} catch'));
+      expect(katch.contains('value.value'), isFalse,
+          reason: 'a failed fetch clears the menu it could not refresh');
+      expect(katch.contains('clear()'), isFalse,
+          reason: 'a failed fetch forgets the cached menu it could not '
+              'refresh — the exact blocker, one layer down');
+    });
+
+    test('the device cache is painted BEFORE the network is asked', () {
+      final src =
+          File('lib/services/customer_surfaces.dart').readAsStringSync();
+      final start = src.indexOf('static void ensureLoaded()');
+      expect(start, greaterThan(0));
+      final body = src.substring(start, src.indexOf('\n  }', start));
+      final restore = body.indexOf('_restore()');
+      final load = body.indexOf('load();');
+      expect(restore, greaterThan(0),
+          reason: 'boot no longer repaints the last good menu, so a slow or '
+              'failed first fetch shows an empty Account group');
+      expect(restore, lessThan(load),
+          reason: 'the cache must be drawn first — restoring AFTER the fetch '
+              'is the blank frame this fix exists to remove');
+    });
+
+    testWidgets('the cached menu is drawn in full, and says so', (tester) async {
+      // isLive is false until a fetch of THIS session lands, which is exactly
+      // the state a customer is in when the RPC failed and the cache is what
+      // is on screen.
+      final p = _payload();
+      p['offline_note'] = 'Showing your last saved menu.';
+      CustomerSurfaces.value.value = p;
+      await tester.pumpWidget(_host(const ProfileAccountMenu()));
+
+      expect(CustomerSurfaces.isLive, isFalse);
+      // The group is INTACT — this is the blocker.
+      expect(find.text('Edit my details'), findsOneWidget);
+      expect(find.text('Delivery addresses'), findsOneWidget);
+      expect(find.text('Staff logins'), findsOneWidget);
+      expect(find.text('Logout'), findsOneWidget);
+      expect(find.byType(DeleteAccountSection), findsOneWidget);
+      // And the customer is told, in the BACKEND's sentence.
+      expect(find.text('Showing your last saved menu.'), findsOneWidget);
+    });
+
+    testWidgets('no note is invented when the payload did not send one',
+        (tester) async {
+      CustomerSurfaces.value.value = _payload(); // carries no offline_note
+      await tester.pumpWidget(_host(const ProfileAccountMenu()));
+      expect(find.text('Edit my details'), findsOneWidget);
+      expect(find.textContaining('last saved'), findsNothing,
+          reason: 'the staleness sentence is ui_copy, not a Dart literal');
+    });
+
+    test('the words of the offline state are the backend\'s', () {
+      final src =
+          File('lib/screens/customer/profile_account_menu.dart')
+              .readAsStringSync();
+      expect(src.contains("payload['offline_note']"), isTrue,
+          reason: 'the staleness sentence must come from the payload');
+      expect(src.contains('Showing your last saved'), isFalse,
+          reason: 'the sentence was hardcoded into Dart — changing it is an '
+              'UPDATE to ui_copy, never a deploy');
+    });
+  });
+
   group('the profile is reachable by URL, not only by tapping the avatar', () {
     test('/admin/go/profile is self-gated so a pharmacy can open its own', () {
       // CHANGE #745. The profile route existed and had a case in the shell,

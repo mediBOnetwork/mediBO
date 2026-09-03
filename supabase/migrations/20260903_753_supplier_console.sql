@@ -1090,3 +1090,499 @@ begin
     'mime', 'text/csv',
     'content', coalesce(v_csv,''));
 end $$;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- PERFORMANCE — computed from tables that already exist (spec item 11).
+-- No new data entry anywhere: the inquiry log, supplier orders, disputes and
+-- the response log are the only inputs. Rolled up per calendar month (IST)
+-- into supplier_perf_monthly and refreshed by the bounded cron dispatcher.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- ── 16. SPN history — who changed the score, and when ─────────────────────
+create or replace function public.trg_753_spn_history()
+returns trigger
+language plpgsql security definer set search_path to 'public'
+as $$
+begin
+  if coalesce(new."SPN",-1) is distinct from coalesce(old."SPN",-1) then
+    insert into supplier_audit_log (supplier_id, actor_identity, feature_key, action, detail)
+    values (new.id,
+            coalesce(nullif(public.my_login_email(),''), auth.uid()::text, 'system'),
+            'admin.supplier.spn', 'spn_changed',
+            jsonb_build_object('from', old."SPN", 'to', new."SPN"));
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists trg_753_spn_history on public.supplier_profiles;
+create trigger trg_753_spn_history
+  after update of "SPN" on public.supplier_profiles
+  for each row execute function public.trg_753_spn_history();
+
+-- ── 17. One month of metrics for one supplier ─────────────────────────────
+create or replace function public._sup753_metrics(p_supplier_id uuid, p_month date)
+returns jsonb
+language plpgsql stable security definer set search_path to 'public'
+as $$
+declare
+  v_name text; v_from timestamptz; v_to timestamptz;
+  v_asked int; v_responded int; v_median numeric;
+  v_inq_asked int; v_inq_avail int;
+  v_orders int; v_short int; v_disputes int;
+  v_due int; v_ontime int; v_returns int; v_returns_ok boolean := false;
+begin
+  select supplier_name into v_name from supplier_profiles where id = p_supplier_id;
+  if v_name is null then return '{}'::jsonb; end if;
+
+  v_from := (p_month::timestamp at time zone 'Asia/Kolkata');
+  v_to   := ((p_month + interval '1 month')::timestamp at time zone 'Asia/Kolkata');
+
+  select count(*) filter (where l.kind = 'inquiry_asked'),
+         count(*) filter (where l.kind = 'inquiry_asked' and l.responded_at is not null),
+         percentile_cont(0.5) within group (
+           order by l.response_seconds) filter (where l.response_seconds is not null)
+    into v_asked, v_responded, v_median
+    from supplier_response_log l
+   where lower(btrim(coalesce(l.supplier_name,''))) = lower(btrim(v_name))
+     and l.asked_at >= v_from and l.asked_at < v_to;
+
+  select count(*),
+         count(*) filter (where lower(coalesce(i.current_status,'')) = 'available')
+    into v_inq_asked, v_inq_avail
+    from inquiry i
+   where lower(btrim(coalesce(i.current_supplier,''))) = lower(btrim(v_name))
+     and coalesce(i.asked_at, i.created_at) >= v_from
+     and coalesce(i.asked_at, i.created_at) <  v_to;
+
+  select count(*),
+         count(*) filter (where so.accept_due_at is not null),
+         count(*) filter (where so.accepted_at is not null and so.accept_due_at is not null
+                            and so.accepted_at <= so.accept_due_at)
+    into v_orders, v_due, v_ontime
+    from supplier_orders so
+   where so.supplier_id = p_supplier_id
+     and so.created_at >= v_from and so.created_at < v_to;
+
+  select count(*),
+         count(*) filter (where lower(coalesce(d.kind,'')) like '%short%'
+                            or coalesce(d.short_qty,0) > 0)
+    into v_disputes, v_short
+    from supplier_disputes d
+   where lower(btrim(coalesce(d.assigned_supplier,''))) = lower(btrim(v_name))
+     and d.created_at >= v_from and d.created_at < v_to;
+
+  -- #710's returns table may not exist yet; the metric says so instead of
+  -- printing a zero that looks like a fact.
+  if to_regclass('public.supplier_returns') is not null then
+    v_returns_ok := true;
+    execute format(
+      'select count(*) from public.supplier_returns r
+        where lower(btrim(coalesce(r.supplier_name,%L))) = lower(btrim(%L))
+          and r.created_at >= %L and r.created_at < %L', '', v_name, v_from, v_to)
+      into v_returns;
+  end if;
+
+  return jsonb_build_object(
+    'asked', coalesce(v_asked,0),
+    'responded', coalesce(v_responded,0),
+    'response_rate', case when coalesce(v_asked,0) = 0 then null
+                          else round((v_responded::numeric*100)/v_asked, 1) end,
+    'median_response_s', case when v_median is null then null else round(v_median) end,
+    'inq_asked', coalesce(v_inq_asked,0),
+    'inq_available', coalesce(v_inq_avail,0),
+    'fill_rate', case when coalesce(v_inq_asked,0) = 0 then null
+                      else round((v_inq_avail::numeric*100)/v_inq_asked, 1) end,
+    'orders', coalesce(v_orders,0),
+    'short_rate', case when coalesce(v_orders,0) = 0 then null
+                       else round((v_short::numeric*100)/v_orders, 1) end,
+    'dispute_rate', case when coalesce(v_orders,0) = 0 then null
+                         else round((v_disputes::numeric*100)/v_orders, 1) end,
+    'on_time_rate', case when coalesce(v_due,0) = 0 then null
+                         else round((v_ontime::numeric*100)/v_due, 1) end,
+    'returns_available', v_returns_ok,
+    'returns', case when v_returns_ok then coalesce(v_returns,0) else null end,
+    'returns_rate', case when not v_returns_ok or coalesce(v_orders,0) = 0 then null
+                         else round((coalesce(v_returns,0)::numeric*100)/v_orders, 1) end);
+end $$;
+
+-- ── 18. Bounded rollup — at most p_max suppliers per pass ─────────────────
+create or replace function public.supplier_perf_rollup(
+  p_months integer default 12, p_max integer default 40, p_supplier uuid default null)
+returns jsonb
+language plpgsql security definer set search_path to 'public'
+as $$
+declare
+  v_months int := least(greatest(coalesce(p_months,12),1),24);
+  v_max int := least(greatest(coalesce(p_max,40),1),200);
+  v_n int := 0; r record; m date;
+begin
+  for r in
+    select sp.id from supplier_profiles sp
+     where coalesce(sp.is_deleted,false) = false
+       and (p_supplier is null or sp.id = p_supplier)
+     order by sp.supplier_name
+     limit v_max
+  loop
+    for m in
+      select (date_trunc('month', (now() at time zone 'Asia/Kolkata')::date)
+              - (i || ' months')::interval)::date
+        from generate_series(0, v_months - 1) i
+    loop
+      insert into supplier_perf_monthly (supplier_id, month, metrics, computed_at)
+      values (r.id, m, public._sup753_metrics(r.id, m), now())
+      on conflict (supplier_id, month) do update
+        set metrics = excluded.metrics, computed_at = now();
+    end loop;
+    v_n := v_n + 1;
+  end loop;
+  return jsonb_build_object('ok', true, 'suppliers', v_n, 'months', v_months);
+end $$;
+
+insert into public.cron_task (name, ord, mode, work_sql, note, enabled,
+                              base_interval_s, max_interval_s, dml)
+values ('supplier_perf_rollup', 780, 'poll',
+        'select public.supplier_perf_rollup(12, 40)',
+        'CHANGE #753 — monthly supplier performance rollup, bounded to 40 suppliers a pass',
+        true, 21600, 86400, true)
+on conflict (name) do update
+  set work_sql = excluded.work_sql, note = excluded.note, enabled = true;
+
+-- ── 19. Performance tab ────────────────────────────────────────────────────
+insert into public.ui_copy (key, value) values
+  ('admin_sup2.pf_resp',    to_jsonb('Response rate'::text)),
+  ('admin_sup2.pf_median',  to_jsonb('Median response'::text)),
+  ('admin_sup2.pf_fill',    to_jsonb('Fill rate'::text)),
+  ('admin_sup2.pf_short',   to_jsonb('Short supply'::text)),
+  ('admin_sup2.pf_disp',    to_jsonb('Count disputes'::text)),
+  ('admin_sup2.pf_ontime',  to_jsonb('On-time collect'::text)),
+  ('admin_sup2.pf_returns', to_jsonb('Returns'::text)),
+  ('admin_sup2.pf_trend',   to_jsonb('Last 12 months'::text)),
+  ('admin_sup2.pf_month',   to_jsonb('Month'::text)),
+  ('admin_sup2.pf_spn',     to_jsonb('SPN history'::text)),
+  ('admin_sup2.pf_spn_empty', to_jsonb('No SPN change recorded yet.'::text)),
+  ('admin_sup2.pf_export',  to_jsonb('Export performance (CSV)'::text)),
+  ('admin_sup2.pf_na',      to_jsonb('—'::text)),
+  ('admin_sup2.pf_no_returns', to_jsonb('Returns not tracked yet'::text)),
+  ('admin_sup2.pf_spn_row', to_jsonb('SPN {from} → {to}'::text)),
+  ('admin_sup2.pf_window',  to_jsonb('This month'::text))
+on conflict (key) do nothing;
+
+create or replace function public._sup753_pct(p numeric)
+returns text
+language sql stable security definer set search_path to 'public'
+as $$ select case when p is null then public._c('admin_sup2.pf_na')
+                  else to_char(p,'FM990.0')||'%' end $$;
+
+create or replace function public.admin_supplier_tab_performance(p_supplier_id uuid)
+returns jsonb
+language plpgsql security definer set search_path to 'public'
+as $$
+declare
+  v_role text := public._sup753_gate();
+  sp supplier_profiles%rowtype;
+  v_this date := date_trunc('month',(now() at time zone 'Asia/Kolkata')::date)::date;
+  v_now jsonb; v_trend jsonb; v_spn jsonb; v_ret_ok boolean;
+begin
+  if v_role = 'none' then return public._sup753_deny(false); end if;
+  sp := public._sup753_row(p_supplier_id);
+  if sp.id is null then return public._sup753_deny(false); end if;
+
+  -- The current month is always live; the eleven behind it come from the cache
+  -- the cron keeps warm.
+  v_now := public._sup753_metrics(sp.id, v_this);
+  insert into supplier_perf_monthly (supplier_id, month, metrics, computed_at)
+  values (sp.id, v_this, v_now, now())
+  on conflict (supplier_id, month) do update
+    set metrics = excluded.metrics, computed_at = now();
+
+  v_ret_ok := coalesce((v_now->>'returns_available')::boolean, false);
+
+  select coalesce(jsonb_agg(jsonb_build_array(
+           jsonb_build_object('text', to_char(m.month,'Mon YY'), 'align','left'),
+           jsonb_build_object('text', public._sup753_pct((m.metrics->>'response_rate')::numeric), 'align','right'),
+           jsonb_build_object('text', case when m.metrics->>'median_response_s' is null
+                                           then public._c('admin_sup2.pf_na')
+                                           else public.fmt_duration_short((m.metrics->>'median_response_s')::int) end,
+                              'align','right'),
+           jsonb_build_object('text', public._sup753_pct((m.metrics->>'fill_rate')::numeric), 'align','right'),
+           jsonb_build_object('text', public._sup753_pct((m.metrics->>'short_rate')::numeric), 'align','right'),
+           jsonb_build_object('text', public._sup753_pct((m.metrics->>'dispute_rate')::numeric), 'align','right'),
+           jsonb_build_object('text', public._sup753_pct((m.metrics->>'on_time_rate')::numeric), 'align','right'))
+         order by m.month desc), '[]'::jsonb)
+    into v_trend
+    from supplier_perf_monthly m
+   where m.supplier_id = sp.id
+     and m.month > (v_this - interval '12 months')::date;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'id', a.id,
+           'title', replace(replace(public._c('admin_sup2.pf_spn_row'),
+                     '{from}', coalesce(a.detail->>'from','—')),
+                     '{to}',   coalesce(a.detail->>'to','—')),
+           'subtitle', coalesce(a.actor_identity,''),
+           'meta', coalesce(public.ist_fmt(a.created_at,'day_mon_year'),''))
+         order by a.created_at desc), '[]'::jsonb)
+    into v_spn
+    from supplier_audit_log a
+   where a.supplier_id = sp.id and a.action = 'spn_changed';
+
+  return jsonb_build_object('ok', true, 'blocks', jsonb_build_array(
+    jsonb_build_object('kind','tiles','title',public._c('admin_sup2.pf_window'),'tiles', jsonb_build_array(
+      jsonb_build_object('label',public._c('admin_sup2.pf_resp'),
+        'value',public._sup753_pct((v_now->>'response_rate')::numeric),'tone','info'),
+      jsonb_build_object('label',public._c('admin_sup2.pf_median'),
+        'value', case when v_now->>'median_response_s' is null then public._c('admin_sup2.pf_na')
+                      else public.fmt_duration_short((v_now->>'median_response_s')::int) end,'tone','neutral'),
+      jsonb_build_object('label',public._c('admin_sup2.pf_fill'),
+        'value',public._sup753_pct((v_now->>'fill_rate')::numeric),'tone','success'),
+      jsonb_build_object('label',public._c('admin_sup2.pf_short'),
+        'value',public._sup753_pct((v_now->>'short_rate')::numeric),'tone','warning'),
+      jsonb_build_object('label',public._c('admin_sup2.pf_disp'),
+        'value',public._sup753_pct((v_now->>'dispute_rate')::numeric),'tone','warning'),
+      jsonb_build_object('label',public._c('admin_sup2.pf_ontime'),
+        'value',public._sup753_pct((v_now->>'on_time_rate')::numeric),'tone','info'),
+      jsonb_build_object('label',public._c('admin_sup2.pf_returns'),
+        'value', case when v_ret_ok then public._sup753_pct((v_now->>'returns_rate')::numeric)
+                      else public._c('admin_sup2.pf_no_returns') end,
+        'tone', case when v_ret_ok then 'neutral' else 'muted' end))),
+    jsonb_build_object('kind','table','title',public._c('admin_sup2.pf_trend'),
+      'columns', jsonb_build_array(
+        jsonb_build_object('label',public._c('admin_sup2.pf_month'), 'align','left'),
+        jsonb_build_object('label',public._c('admin_sup2.pf_resp'),  'align','right'),
+        jsonb_build_object('label',public._c('admin_sup2.pf_median'),'align','right'),
+        jsonb_build_object('label',public._c('admin_sup2.pf_fill'),  'align','right'),
+        jsonb_build_object('label',public._c('admin_sup2.pf_short'), 'align','right'),
+        jsonb_build_object('label',public._c('admin_sup2.pf_disp'),  'align','right'),
+        jsonb_build_object('label',public._c('admin_sup2.pf_ontime'),'align','right')),
+      'rows', v_trend),
+    jsonb_build_object('kind','buttons','buttons', jsonb_build_array(
+      jsonb_build_object('key','export_perf','label',public._c('admin_sup2.pf_export'),'tone','brand',
+        'export', true, 'rpc','admin_supplier_performance_csv',
+        'args', jsonb_build_object('p_supplier_id', sp.id)))),
+    jsonb_build_object('kind','list','title',public._c('admin_sup2.pf_spn'),
+      'empty', public._c('admin_sup2.pf_spn_empty'), 'items', v_spn)));
+end $$;
+
+create or replace function public.admin_supplier_performance_csv(p_supplier_id uuid)
+returns jsonb
+language plpgsql stable security definer set search_path to 'public'
+as $$
+declare v_role text := public._sup753_gate(); sp supplier_profiles%rowtype; v_csv text;
+begin
+  if v_role = 'none' then return public._sup753_deny(false); end if;
+  sp := public._sup753_row(p_supplier_id);
+  if sp.id is null then return public._sup753_deny(false); end if;
+
+  select 'Month,Asked,Responded,Response rate %,Median response s,Inquiries,Available,Fill rate %,Orders,Short supply %,Dispute %,On-time %' || E'\n' ||
+         coalesce(string_agg(
+           to_char(m.month,'YYYY-MM')
+           ||','||coalesce(m.metrics->>'asked','0')
+           ||','||coalesce(m.metrics->>'responded','0')
+           ||','||coalesce(m.metrics->>'response_rate','')
+           ||','||coalesce(m.metrics->>'median_response_s','')
+           ||','||coalesce(m.metrics->>'inq_asked','0')
+           ||','||coalesce(m.metrics->>'inq_available','0')
+           ||','||coalesce(m.metrics->>'fill_rate','')
+           ||','||coalesce(m.metrics->>'orders','0')
+           ||','||coalesce(m.metrics->>'short_rate','')
+           ||','||coalesce(m.metrics->>'dispute_rate','')
+           ||','||coalesce(m.metrics->>'on_time_rate',''),
+           E'\n' order by m.month desc), '')
+    into v_csv from supplier_perf_monthly m where m.supplier_id = sp.id;
+
+  return jsonb_build_object('ok', true,
+    'file_name','performance-'||regexp_replace(lower(coalesce(sp.supplier_name,'supplier')),'[^a-z0-9]+','-','g')||'.csv',
+    'mime','text/csv', 'content', coalesce(v_csv,''));
+end $$;
+
+-- ── 20. History tab — ONE timeline over every table that touches a supplier ─
+insert into public.ui_copy (key, value) values
+  ('admin_sup2.h_title',  to_jsonb('Timeline'::text)),
+  ('admin_sup2.h_empty',  to_jsonb('Nothing happened with this supplier in this month.'::text)),
+  ('admin_sup2.h_month',  to_jsonb('Month'::text)),
+  ('admin_sup2.h_inq_asked',  to_jsonb('Inquiry sent'::text)),
+  ('admin_sup2.h_inq_ans',    to_jsonb('Inquiry answered'::text)),
+  ('admin_sup2.h_inq_adv',    to_jsonb('Inquiry moved on'::text)),
+  ('admin_sup2.h_order',      to_jsonb('Purchase order'::text)),
+  ('admin_sup2.h_dispute',    to_jsonb('Count dispute'::text)),
+  ('admin_sup2.h_bill',       to_jsonb('Bill received'::text)),
+  ('admin_sup2.h_payment',    to_jsonb('Payment made'::text)),
+  ('admin_sup2.h_debit',      to_jsonb('Debit note'::text)),
+  ('admin_sup2.h_avail',      to_jsonb('Availability changed'::text)),
+  ('admin_sup2.h_spn',        to_jsonb('SPN changed'::text)),
+  ('admin_sup2.h_closure',    to_jsonb('Shop closed'::text)),
+  ('admin_sup2.h_reopen',     to_jsonb('Shop reopened'::text)),
+  ('admin_sup2.h_deleted',    to_jsonb('Supplier deleted'::text))
+on conflict (key) do nothing;
+
+create or replace function public.admin_supplier_tab_history(
+  p_supplier_id uuid, p_month text default null, p_limit integer default 200)
+returns jsonb
+language plpgsql stable security definer set search_path to 'public'
+as $$
+declare
+  v_role text := public._sup753_gate();
+  sp supplier_profiles%rowtype;
+  v_this date := date_trunc('month',(now() at time zone 'Asia/Kolkata')::date)::date;
+  v_m date; v_from timestamptz; v_to timestamptz;
+  v_lim int := least(greatest(coalesce(p_limit,200),1),500);
+  v_months jsonb; v_items jsonb;
+begin
+  if v_role = 'none' then return public._sup753_deny(false); end if;
+  sp := public._sup753_row(p_supplier_id);
+  if sp.id is null then return public._sup753_deny(false); end if;
+
+  v_m := coalesce(to_date(nullif(btrim(coalesce(p_month,'')),''),'YYYY-MM'), v_this);
+  v_from := (v_m::timestamp at time zone 'Asia/Kolkata');
+  v_to   := ((v_m + interval '1 month')::timestamp at time zone 'Asia/Kolkata');
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'key', to_char(mm,'YYYY-MM'),
+           'label', to_char(mm,'Mon YY'),
+           'active', (mm = v_m)) order by mm desc), '[]'::jsonb)
+    into v_months
+    from (select (v_this - (i||' months')::interval)::date as mm
+            from generate_series(0,11) i) g;
+
+  with ev as (
+    select l.asked_at as at, public._c('admin_sup2.h_inq_asked') as title,
+           coalesce(i.product_name,'') as subtitle, 'info' as tone, 'inquiry' as icon,
+           'inquiry' as route, l.inquiry_id::text as arg
+      from supplier_response_log l
+      left join inquiry i on i.id = l.inquiry_id
+     where lower(btrim(coalesce(l.supplier_name,''))) = lower(btrim(sp.supplier_name))
+       and l.kind = 'inquiry_asked' and l.asked_at >= v_from and l.asked_at < v_to
+    union all
+    select l.responded_at, public._c('admin_sup2.h_inq_ans'),
+           coalesce(l.outcome,''), 'success', 'inquiry', 'inquiry', l.inquiry_id::text
+      from supplier_response_log l
+     where lower(btrim(coalesce(l.supplier_name,''))) = lower(btrim(sp.supplier_name))
+       and l.responded_at is not null and l.responded_at >= v_from and l.responded_at < v_to
+    union all
+    select l.asked_at, public._c('admin_sup2.h_inq_adv'),
+           coalesce(l.reason,''), 'warning', 'inquiry', 'inquiry', l.inquiry_id::text
+      from supplier_response_log l
+     where lower(btrim(coalesce(l.supplier_name,''))) = lower(btrim(sp.supplier_name))
+       and l.kind = 'po_timeout' and l.asked_at >= v_from and l.asked_at < v_to
+    union all
+    select so.created_at, public._c('admin_sup2.h_order'),
+           coalesce(so.order_code,'')||'  ·  '||public.inr_money(coalesce(so.total_amount,0)),
+           'neutral', 'order', 'supplier_order', so.id::text
+      from supplier_orders so
+     where so.supplier_id = sp.id and so.created_at >= v_from and so.created_at < v_to
+    union all
+    select d.created_at,
+           case when coalesce(d.adj_amount,0) > 0 then public._c('admin_sup2.h_debit')
+                else public._c('admin_sup2.h_dispute') end,
+           coalesce(d.product_name,''), 'danger', 'dispute', 'dispute', d.id::text
+      from supplier_disputes d
+     where lower(btrim(coalesce(d.assigned_supplier,''))) = lower(btrim(sp.supplier_name))
+       and d.created_at >= v_from and d.created_at < v_to
+    union all
+    select b.received_at, public._c('admin_sup2.h_bill'),
+           coalesce(b.file_name,''), 'neutral', 'bill', 'bill', b.id::text
+      from pending_bills b
+     where lower(btrim(coalesce(b.supplier_name,''))) = lower(btrim(sp.supplier_name))
+       and b.received_at >= v_from and b.received_at < v_to
+    union all
+    select pm.created_at, public._c('admin_sup2.h_payment'),
+           public.inr_money(coalesce(pm.amount,0))||'  ·  '||coalesce(pm.mode,''),
+           'success', 'payment', 'supplier_order', so.id::text
+      from supplier_payments pm
+      join supplier_orders so on so.id = pm.supplier_order_id
+     where so.supplier_id = sp.id and pm.created_at >= v_from and pm.created_at < v_to
+    union all
+    select a.created_at,
+           case a.action when 'spn_changed' then public._c('admin_sup2.h_spn')
+                         else public._c('admin_sup2.h_avail') end,
+           coalesce(a.actor_identity,''), 'info', 'audit', '', ''
+      from supplier_audit_log a
+     where a.supplier_id = sp.id and a.created_at >= v_from and a.created_at < v_to
+    union all
+    select c.starts_at, public._c('admin_sup2.h_closure'),
+           coalesce(c.reason,''), 'warning', 'closure', '', ''
+      from supplier_closure c
+     where lower(btrim(coalesce(c.supplier_name,''))) = lower(btrim(sp.supplier_name))
+       and c.starts_at >= v_from and c.starts_at < v_to
+    union all
+    select c.reopened_at, public._c('admin_sup2.h_reopen'),
+           '', 'success', 'closure', '', ''
+      from supplier_closure c
+     where lower(btrim(coalesce(c.supplier_name,''))) = lower(btrim(sp.supplier_name))
+       and c.reopened_at is not null and c.reopened_at >= v_from and c.reopened_at < v_to
+  )
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'when', public.ist_fmt(e.at,'day_mon_time12'),
+           'title', e.title, 'subtitle', e.subtitle,
+           'tone', e.tone, 'icon', e.icon,
+           'link', case when coalesce(e.route,'') = '' or coalesce(e.arg,'') = '' then null
+                        else jsonb_build_object('route', e.route, 'arg', e.arg) end)
+         order by e.at desc), '[]'::jsonb)
+    into v_items
+    from (select * from ev where at is not null order by at desc limit v_lim) e;
+
+  return jsonb_build_object('ok', true, 'month', to_char(v_m,'YYYY-MM'),
+    'blocks', jsonb_build_array(
+    jsonb_build_object('kind','chips','key','month','title',public._c('admin_sup2.h_month'),'chips',v_months),
+    jsonb_build_object('kind','timeline','title',public._c('admin_sup2.h_title'),
+      'empty', public._c('admin_sup2.h_empty'), 'items', v_items)));
+end $$;
+
+-- ── 21. Delete with a reason. Confirmed in the UI, RECORDED here. ──────────
+create or replace function public.admin_supplier_delete_with_reason(
+  p_supplier_id uuid, p_reason text)
+returns jsonb
+language plpgsql security definer set search_path to 'public'
+as $$
+declare
+  v_role text := public._sup753_gate();
+  sp supplier_profiles%rowtype;
+  v_reason text := btrim(coalesce(p_reason,''));
+  v_who text;
+begin
+  if v_role = 'none' then raise exception 'forbidden'; end if;
+  if v_reason = '' then
+    return jsonb_build_object('ok', false, 'error','reason_required',
+      'message', public._c('admin_sup2.delete_need_reason'));
+  end if;
+  sp := public._sup753_row(p_supplier_id);
+  if sp.id is null then
+    return jsonb_build_object('ok', false, 'error','not_found',
+      'message', public._c('admin_sup2.not_found'));
+  end if;
+
+  v_who := coalesce(nullif(public.my_login_email(),''), auth.uid()::text, 'unknown');
+
+  insert into supplier_delete_log (supplier_id, supplier_name, reason, deleted_by)
+  values (sp.id, coalesce(sp.supplier_name,''), v_reason, v_who);
+
+  insert into supplier_audit_log (supplier_id, actor_identity, feature_key, action, detail)
+  values (sp.id, v_who, 'admin.supplier.delete', 'deleted',
+          jsonb_build_object('reason', v_reason, 'supplier_name', sp.supplier_name));
+
+  update supplier_profiles
+     set is_deleted = true, deleted_at = now(), deleted_by = v_who,
+         deleted_snapshot = coalesce(deleted_snapshot,'{}'::jsonb)
+                            || jsonb_build_object('delete_reason', v_reason)
+   where id = sp.id;
+
+  return jsonb_build_object('ok', true, 'id', sp.id::text, 'reason', v_reason);
+end $$;
+
+-- ── 22. Partners may reach the console read RPCs; every one of them fences
+--       itself on admin_active_zone(), which is what the clamp check reads.
+insert into public.partner_rpc_allow (proname, source, note) values
+  ('admin_suppliers_console',           'change_753','supplier console list'),
+  ('admin_supplier_page',               'change_753','supplier page shell'),
+  ('admin_supplier_tab_profile',        'change_753','supplier page tab'),
+  ('admin_supplier_tab_companies',      'change_753','supplier page tab'),
+  ('admin_supplier_tab_availability',   'change_753','supplier page tab'),
+  ('admin_supplier_tab_orders',         'change_753','supplier page tab'),
+  ('admin_supplier_tab_payments',       'change_753','supplier page tab'),
+  ('admin_supplier_tab_performance',    'change_753','supplier page tab'),
+  ('admin_supplier_tab_history',        'change_753','supplier page tab'),
+  ('admin_supplier_statement_csv',      'change_753','supplier statement export'),
+  ('admin_supplier_performance_csv',    'change_753','supplier performance export')
+on conflict (proname) do nothing;
+
+select public.partner_rpc_allow_refresh();

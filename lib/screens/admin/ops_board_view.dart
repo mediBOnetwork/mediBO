@@ -245,6 +245,14 @@ class OpsBoardRow extends StatelessWidget {
                       crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
                         _Pill(text: _s(row, 'stage_label'), tone: null),
+                        // CHANGE #708 — a parked order says so on the board,
+                        // in the backend's own sentence. Its SLA clock is
+                        // already paused server-side, so the two never argue.
+                        if ((row['hold'] as Map?)?['held'] == true)
+                          _Pill(
+                              text: ((row['hold'] as Map?)?['badge'] ?? '')
+                                  .toString(),
+                              tone: 'amber'),
                         _Pill(text: _s(row, 'clock_label'), tone: tone),
                         if (_s(row, 'sla_label').isNotEmpty)
                           Text(_s(row, 'sla_label'), style: Ds.t.caption),
@@ -339,12 +347,22 @@ class OpsOrderDetailView extends StatelessWidget {
   /// Handed the fresh payload an action returned.
   final void Function(Map<String, dynamic>)? onTimelineRefreshed;
 
+  /// CHANGE #708 — opens the shared hold sheet for this order. Null on a
+  /// surface that only reads, and then the hold panel does not render at all.
+  final VoidCallback? onHold;
+
+  /// CHANGE #708 — releases the reserved stock, with the reason the panel
+  /// collected. Null when the payload says this login may not.
+  final Future<void> Function(String reason)? onReleaseStock;
+
   const OpsOrderDetailView({
     super.key,
     required this.payload,
     this.timeline = const {},
     this.onTimelineAct,
     this.onTimelineRefreshed,
+    this.onHold,
+    this.onReleaseStock,
   });
 
   @override
@@ -356,6 +374,11 @@ class OpsOrderDetailView extends StatelessWidget {
       );
     }
     final steps = opsRows(payload['steps']);
+    final hold = (payload['hold'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final holdSheet =
+        (payload['hold_sheet'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final holdStock =
+        (payload['hold_stock'] as Map?)?.cast<String, dynamic>() ?? const {};
     return SingleChildScrollView(
       padding: EdgeInsets.all(Ds.space.x16),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -371,6 +394,17 @@ class OpsOrderDetailView extends StatelessWidget {
         ),
         SizedBox(height: Ds.space.x4),
         Text(_s(payload, 'placed_label'), style: Ds.t.caption),
+        // CHANGE #708 — hold, resume, and the stock a parked order is still
+        // reserving. Every word here is the payload's; the panel decides only
+        // WHERE it sits.
+        if (onHold != null && (hold['held'] == true || holdSheet['can_hold'] == true))
+          OpsHoldPanel(
+            hold: hold,
+            sheet: holdSheet,
+            stock: holdStock,
+            onHold: onHold!,
+            onReleaseStock: onReleaseStock,
+          ),
         SizedBox(height: Ds.space.x24),
         Text(_s(payload, 'timeline_title'), style: Ds.t.body),
         SizedBox(height: Ds.space.x12),
@@ -433,6 +467,154 @@ class OpsOrderDetailView extends StatelessWidget {
             onAct: onTimelineAct,
             onRefreshed: onTimelineRefreshed,
           ),
+        ],
+      ]),
+    );
+  }
+}
+
+/// CHANGE #708 — the hold panel on the ops order card.
+///
+/// Three facts, all of them the payload's: whether this order is parked (and
+/// the sentence that says why), the one door — Hold or Resume, labelled by the
+/// backend — and the stock the hold is still reserving, with a release that is
+/// only offered when the payload says this login may (`can_release`).
+///
+/// It renders. It does not decide who may act, what the button says, how many
+/// units are reserved or how that number reads.
+class OpsHoldPanel extends StatefulWidget {
+  final Map<String, dynamic> hold;
+  final Map<String, dynamic> sheet;
+  final Map<String, dynamic> stock;
+  final VoidCallback onHold;
+  final Future<void> Function(String reason)? onReleaseStock;
+
+  const OpsHoldPanel({
+    super.key,
+    required this.hold,
+    required this.sheet,
+    required this.stock,
+    required this.onHold,
+    this.onReleaseStock,
+  });
+
+  @override
+  State<OpsHoldPanel> createState() => _OpsHoldPanelState();
+}
+
+class _OpsHoldPanelState extends State<OpsHoldPanel> {
+  final TextEditingController _reason = TextEditingController();
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    _reason.dispose();
+    super.dispose();
+  }
+
+  String _sk(Map<String, dynamic> m, String k) => (m[k] ?? '').toString();
+
+  Future<void> _release() async {
+    final fn = widget.onReleaseStock;
+    if (fn == null || _reason.text.trim().isEmpty || _busy) return;
+    setState(() => _busy = true);
+    await fn(_reason.text.trim());
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _reason.clear();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final held = widget.hold['held'] == true;
+    final label = held
+        ? _sk(widget.sheet, 'resume_submit_label')
+        : _sk(widget.sheet, 'title');
+    final canRelease =
+        widget.stock['can_release'] == true && widget.onReleaseStock != null;
+
+    return Container(
+      margin: EdgeInsets.only(top: Ds.space.x16),
+      padding: EdgeInsets.all(Ds.space.x16),
+      decoration: BoxDecoration(
+        color: held ? Ds.c.warningSoft : Ds.c.surface,
+        borderRadius: Ds.r.rCard,
+        border: Border.all(color: Ds.c.divider),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (held) ...[
+          Text(_sk(widget.hold, 'badge'), style: Ds.t.body),
+          if (_sk(widget.hold, 'held_by_label').isNotEmpty) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(_sk(widget.hold, 'held_by_label'), style: Ds.t.caption),
+          ],
+          if (_sk(widget.hold, 'note').isNotEmpty) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(_sk(widget.hold, 'note'), style: Ds.t.caption),
+          ],
+          if (_sk(widget.hold, 'auto_cancel_note').isNotEmpty) ...[
+            SizedBox(height: Ds.space.x4),
+            Text(_sk(widget.hold, 'auto_cancel_note'), style: Ds.t.caption),
+          ],
+          SizedBox(height: Ds.space.x12),
+        ],
+        if (label.isNotEmpty)
+          SizedBox(
+            height: Ds.touch.minTarget,
+            child: OutlinedButton(
+              onPressed: widget.onHold,
+              child: Text(label),
+            ),
+          ),
+
+        // The stock a parked order is still holding, and the way to hand it
+        // back. Absent whenever the payload sent no reserved lines.
+        if (widget.stock['has'] == true) ...[
+          SizedBox(height: Ds.space.x16),
+          Text(_sk(widget.stock, 'heading'), style: Ds.t.body),
+          SizedBox(height: Ds.space.x4),
+          Text(_sk(widget.stock, 'total_label'), style: Ds.t.caption),
+          SizedBox(height: Ds.space.x8),
+          for (final line in opsRows(widget.stock['rows']))
+            Padding(
+              padding: EdgeInsets.only(bottom: Ds.space.x4),
+              child: Row(children: [
+                Expanded(
+                    child: Text((line['line'] ?? '').toString(),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Ds.t.caption)),
+                SizedBox(width: Ds.space.x8),
+                Text((line['bag_label'] ?? '').toString(),
+                    style: Ds.t.caption),
+              ]),
+            ),
+          if (canRelease) ...[
+            SizedBox(height: Ds.space.x8),
+            Text(_sk(widget.stock, 'release_note'), style: Ds.t.caption),
+            SizedBox(height: Ds.space.x8),
+            TextField(
+              controller: _reason,
+              onChanged: (_) => setState(() {}),
+              decoration: InputDecoration(
+                  hintText: _sk(widget.stock, 'release_reason_label')),
+            ),
+            SizedBox(height: Ds.space.x8),
+            SizedBox(
+              height: Ds.touch.minTarget,
+              child: OutlinedButton(
+                onPressed:
+                    _reason.text.trim().isEmpty || _busy ? null : _release,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Ds.c.danger,
+                  side: BorderSide(color: Ds.c.danger),
+                ),
+                child: Text(_sk(widget.stock, 'release_label')),
+              ),
+            ),
+          ],
         ],
       ]),
     );

@@ -47,6 +47,10 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
   String? _batch;
   List<Map<String, dynamic>> _rows = const [];
   Map<String, int> _counts = const {};
+  /// CHANGE #887 — the list is BOUNDED (list_limits.cards_max, then a 48 kB
+  /// payload budget), so a page is the top of the list, not all of it. The
+  /// backend words the line; this renders it verbatim, or nothing when empty.
+  String _truncNote = '';
   Timer? _tick; // 1s ticker for live ATR countdown on building rows
   DateTime _now = DateTime.now();
 
@@ -144,6 +148,7 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
         }
         _counts = ((p['counts'] as Map?) ?? const {})
             .map((k, v) => MapEntry(k.toString(), asInt(v)));
+        _truncNote = (p['truncated_note'] as String?) ?? '';
         _loading = false;
       });
     } catch (_) {
@@ -308,6 +313,8 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
                 SliverToBoxAdapter(child: _draftsStrip()),
               SliverToBoxAdapter(child: _header()),
               SliverToBoxAdapter(child: _filters()),
+              if (!_loading && _truncNote.isNotEmpty)
+                SliverToBoxAdapter(child: _truncBanner()),
               if (_status == 'cancelled' && _rows.isNotEmpty)
                 SliverToBoxAdapter(child: _clearBar()),
               if (_loading)
@@ -484,6 +491,17 @@ class _DevQueueScreenState extends State<DevQueueScreen> {
                     color: Color(0xFF991B1B))),
           ),
         ),
+      );
+
+  /// The bound, said out loud. The list is capped by list_limits.cards_max and
+  /// then by the payload budget, so a page is the TOP of the registry, not all
+  /// of it. `truncated_note` is composed in the backend (ui_copy
+  /// `dev_queue.list_truncated`) and printed here verbatim — the app never
+  /// counts rows and never words this sentence.
+  Widget _truncBanner() => Padding(
+        padding: EdgeInsets.fromLTRB(
+            Ds.space.x16, Ds.space.x4, Ds.space.x16, Ds.space.x8),
+        child: Text(_truncNote, style: Ds.t.caption),
       );
 
   Widget _empty() => Padding(

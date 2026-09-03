@@ -36,6 +36,7 @@ import '../admin/admin_delivery_waves_screen.dart';
 import '../admin/admin_feedback_screen.dart';
 import '../admin/returns_refunds_screen.dart';
 import '../admin/surface_map_screen.dart';
+import '../admin/damage_report_screen.dart';
 import '../admin/support_threads_screen.dart';
 import '../partner/partner_tasks_screen.dart';
 import '../worker/worker_tasks_screen.dart';
@@ -90,6 +91,11 @@ Widget? shellExtraRouteScreen(String routeKey) => switch (routeKey) {
       // refuses anyone who is neither, so the door being open to a role
       // decides nothing about what that role reads.
       'order_threads' => const SupportThreadsScreen(),
+      // CHANGE #709 — the damage report. damage_report() gates it itself (an
+      // admin, or a partner holding partner.fulfil_tasks, zone-scoped) and
+      // answers not_authorized with its own sentence, so the door is opened
+      // here and the authorisation stays in the RPC.
+      'damage_report' => const DamageReportScreen(),
       _ => null,
     };
 

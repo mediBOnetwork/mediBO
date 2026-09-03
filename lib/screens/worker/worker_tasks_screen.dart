@@ -21,6 +21,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../design_tokens.dart';
 import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
+import '../fulfil/damage_sheet.dart';
 import '../../utils/toast.dart';
 import '../partner/partner_ui.dart';
 
@@ -104,6 +105,14 @@ class _WorkerTasksScreenState extends State<WorkerTasksScreen> {
                         _call('fulfil_task_start', {'p_task_id': id}),
                     onFinish: (id) =>
                         _call('fulfil_task_finish', {'p_task_id': id}),
+                    // CHANGE #709 — the damage door, on the task the worker is
+                    // actually holding. The label and the stage both come from
+                    // the row; this only opens the picker.
+                    onDamage: (orderId, stage) async {
+                      final logged =
+                          await showDamagePicker(context, orderId, stage);
+                      if (logged) await _load();
+                    },
                   ),
                 ),
       ),
@@ -122,11 +131,16 @@ class WorkerTasksView extends StatelessWidget {
     required this.payload,
     required this.onStart,
     required this.onFinish,
+    this.onDamage,
   });
 
   final Map<String, dynamic> payload;
   final void Function(Object taskId) onStart;
   final void Function(Object taskId) onFinish;
+
+  /// CHANGE #709 — "this broke": the order and the stage the row named. Null
+  /// on a surface that only reads, and then no door is drawn.
+  final void Function(String orderId, String stage)? onDamage;
 
   @override
   Widget build(BuildContext context) {
@@ -146,6 +160,7 @@ class WorkerTasksView extends StatelessWidget {
               row: Map<String, dynamic>.from(r as Map),
               onStart: onStart,
               onFinish: onFinish,
+              onDamage: onDamage,
             ),
             SizedBox(height: Ds.space.x12),
           ],
@@ -159,11 +174,13 @@ class _MyTaskRow extends StatelessWidget {
     required this.row,
     required this.onStart,
     required this.onFinish,
+    this.onDamage,
   });
 
   final Map<String, dynamic> row;
   final void Function(Object taskId) onStart;
   final void Function(Object taskId) onFinish;
+  final void Function(String orderId, String stage)? onDamage;
 
   @override
   Widget build(BuildContext context) {
@@ -212,6 +229,23 @@ class _MyTaskRow extends StatelessWidget {
                 child: Text(started
                     ? (task['finish_label'] ?? '').toString()
                     : (task['start_label'] ?? '').toString()),
+              ),
+            ),
+          ],
+          // CHANGE #709 — the damage door. It is drawn only when the ROW
+          // carries a label for it, so a build that meets an older payload
+          // simply shows nothing rather than a word written here.
+          if (onDamage != null &&
+              (row['damage_label'] ?? '').toString().isNotEmpty &&
+              (row['order_id'] ?? '').toString().isNotEmpty) ...[
+            SizedBox(height: Ds.space.x8),
+            SizedBox(
+              height: Ds.touch.minTarget,
+              child: OutlinedButton(
+                onPressed: () => onDamage!(
+                    (row['order_id'] ?? '').toString(),
+                    (row['damage_stage'] ?? 'count').toString()),
+                child: Text((row['damage_label'] ?? '').toString()),
               ),
             ),
           ],

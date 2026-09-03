@@ -45,6 +45,7 @@ import '../partner/partner_tasks_screen.dart';
 import '../worker/worker_tasks_screen.dart';
 import '../admin/kyc_review_screen.dart';
 import '../admin/settlement_invoices_screen.dart'; // CHANGE #695 — tax invoices
+import '../partner/partner_issues_screen.dart'; // CHANGE #696 — partner issues
 
 /// CHANGE #697 — the whole-order feedback card's one hook into the shell.
 /// `home_shell.dart` sits under a 2,000-line guard (#340 / #327 layer 1) and
@@ -130,6 +131,16 @@ Widget? shellExtraRouteScreen(String routeKey) => switch (routeKey) {
       // and never a way in - and refuses anyone who is neither office nor
       // partner with its own sentence.
       'settlement_invoices' => const SettlementInvoicesScreen(),
+      // CHANGE #696 — the mediBO <-> partner escalation channel, one door for
+      // both directions. The registry row carries roles_allowed
+      // {admin, super_admin, partner}, so the SAME tile is what a partner taps
+      // to raise an issue and what the office taps to work the queue.
+      //
+      // Authorisation is not the door, again: partner_ticket_list() answers a
+      // partner with their OWN tickets and the office with every zone, and
+      // refuses anyone who is neither with its own sentence — the screen never
+      // decides who may read what.
+      'partner_issues' => const PartnerIssuesScreen(),
       _ => null,
     };
 

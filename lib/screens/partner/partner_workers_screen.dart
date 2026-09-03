@@ -9,6 +9,13 @@
 // options, the attendance options, each row's status label and its tone. The
 // screen picks none of them — a new attendance state is one row in
 // partner_ops_label plus one entry in the RPC's option list, never a deploy.
+//
+// CHANGE #707 added the productivity columns. Every cell in them — the
+// items/hour, the variance percentage, the '—' that means "nothing measured
+// yet" — arrives as a FINISHED string on the row's `productivity` block, and
+// the four headings arrive once on the payload. This file divides nothing,
+// rounds nothing and appends no '%'; a worker with no closed task shows the
+// backend's dash rather than a zero this screen invented.
 
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -274,6 +281,21 @@ class PartnerWorkersView extends StatelessWidget {
                       ),
                     ],
                   ),
+                  // CHANGE #707 — today's numbers for this worker. The block
+                  // is ABSENT (not zeroed) on a payload that never sent one,
+                  // so an older backend simply draws the card it always drew.
+                  if (r['productivity'] is Map) ...[
+                    SizedBox(height: Ds.space.x12),
+                    _ProductivityRow(
+                      prod: Map<String, dynamic>.from(
+                          r['productivity'] as Map),
+                      tasksLabel: (d['prod_tasks_label'] as String?) ?? '',
+                      itemsLabel: (d['prod_items_label'] as String?) ?? '',
+                      varianceLabel:
+                          (d['prod_variance_label'] as String?) ?? '',
+                      packErrLabel: (d['prod_packerr_label'] as String?) ?? '',
+                    ),
+                  ],
                   if (onAdd != null) ...[
                     SizedBox(height: Ds.space.x12),
                     Wrap(
@@ -301,6 +323,80 @@ class PartnerWorkersView extends StatelessWidget {
             SizedBox(height: Ds.space.x12),
           ],
         ],
+      ],
+    );
+  }
+}
+
+/// The four productivity cells, in the order the spec names them: tasks done,
+/// items per hour, count-variance rate, pack errors.
+///
+/// It is a [Wrap] rather than a fixed four-column [Row] on purpose — the same
+/// card is read at 360 px and at 1280 px, and four cells that must share one
+/// line would squash the labels on a phone. Each cell keeps its label above its
+/// value so the pairing survives the reflow.
+class _ProductivityRow extends StatelessWidget {
+  const _ProductivityRow({
+    required this.prod,
+    required this.tasksLabel,
+    required this.itemsLabel,
+    required this.varianceLabel,
+    required this.packErrLabel,
+  });
+
+  final Map<String, dynamic> prod;
+  final String tasksLabel;
+  final String itemsLabel;
+  final String varianceLabel;
+  final String packErrLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Wrap(
+          spacing: Ds.space.x24,
+          runSpacing: Ds.space.x12,
+          children: [
+            _Cell(label: tasksLabel, value: (prod['tasks_done'] ?? '').toString()),
+            _Cell(
+                label: itemsLabel,
+                value: (prod['items_per_hour'] ?? '').toString()),
+            _Cell(
+                label: varianceLabel,
+                value: (prod['variance_rate'] ?? '').toString()),
+            _Cell(
+                label: packErrLabel,
+                value: (prod['pack_errors_label'] ?? '').toString()),
+          ],
+        ),
+        // The open-task count is the backend's own sentence ("3 open"), never
+        // a number this file pluralises.
+        if ((prod['open_label'] ?? '').toString().isNotEmpty) ...[
+          SizedBox(height: Ds.space.x8),
+          Text((prod['open_label'] ?? '').toString(), style: Ds.t.caption),
+        ],
+      ],
+    );
+  }
+}
+
+class _Cell extends StatelessWidget {
+  const _Cell({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(label, style: Ds.t.caption),
+        SizedBox(height: Ds.space.x4),
+        Text(value, style: Ds.t.bodyStrong),
       ],
     );
   }

@@ -44,6 +44,7 @@ import '../admin/support_threads_screen.dart';
 import '../partner/partner_tasks_screen.dart';
 import '../worker/worker_tasks_screen.dart';
 import '../admin/kyc_review_screen.dart';
+import '../partner/partner_documents_screen.dart';
 import '../admin/settlement_invoices_screen.dart'; // CHANGE #695 — tax invoices
 import '../partner/partner_issues_screen.dart'; // CHANGE #696 — partner issues
 
@@ -93,6 +94,23 @@ Widget? shellExtraRouteScreen(String routeKey) => switch (routeKey) {
       // and answers `not_authorized` with its own sentence, so the door is
       // opened here and the authorisation stays in the RPC.
       'kyc_review' => const KycReviewScreen(),
+      // CHANGE #692 — the partner's OWN agreement + KYC documents.
+      //
+      // The backend has emitted this tile since the migration landed:
+      // feature_registry `partner.documents` -> route_key
+      // `partner_documents`, and access_role_default gives a partner
+      // view+write on it. Its surface_route row names THIS function as
+      // `handled_by`, and the door was the one piece that never landed
+      // — so the tile drew, the tap fell through the shell's switch and
+      // a partner got the backend's "route unavailable" sentence on a
+      // feature whose whole point is to unblock their own zone. Same
+      // shape as #707 above, one more time.
+      //
+      // Authorisation is NOT here. partner_documents_screen() resolves
+      // the partner from the CALLER and answers anyone else with its
+      // own refusal, so opening the door to a role decides nothing
+      // about what that role may read or sign.
+      'partner_documents' => const PartnerDocumentsPage(),
       // CHANGE #713 — the other end of every customer conversation: the
       // messages waiting on an answer, and the calls somebody owes a customer.
       //

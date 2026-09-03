@@ -836,35 +836,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
     _debounce = Timer(const Duration(milliseconds: 500), () => _load(showSpinner: false));
   }
 
-  void _toggleCompanies(String id) => setState(() {
-    if (_companiesSupplierId == id) {
-      _companiesSupplierId = null;
-    } else {
-      _companiesSupplierId = id;
-      _expandedSupplierId  = null;
-      _spnSupplierId       = null;
-    }
-  });
-
-  void _toggleSpn(String id) => setState(() {
-    if (_spnSupplierId == id) {
-      _spnSupplierId = null;
-    } else {
-      _spnSupplierId       = id;
-      _expandedSupplierId  = null;
-      _companiesSupplierId = null;
-    }
-  });
-
-  Future<void> _reloadCompanyCount(String supplierId) async {
-    try {
-      final raw = await Supabase.instance.client
-          .rpc('admin_supplier_company_count', params: {'p_supplier_id': supplierId});
-      final n = (((raw is List ? raw.first : raw) as Map)['count'] as num?)?.toInt() ?? 0;
-      if (mounted) setState(() => _companyCounts[supplierId] = n);
-    } catch (_) {}
-  }
-
   Future<void> _load({bool showSpinner = true}) async {
     if (!mounted || _loadInFlight) return;
     _loadInFlight = true;
@@ -1211,15 +1182,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
   }
 
   // ── Edit supplier ────────────────────────────────────────────────────────────
-
-  Future<void> _editSupplier(_SupRow row) async {
-    final saved = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => _SupplierEditDialog(row: row),
-    );
-    if (saved == true) _load(showSpinner: false);
-  }
 
   // ── Order status ─────────────────────────────────────────────────────────────
 
@@ -4312,7 +4274,6 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
         ),
       ),
       _consoleChips(pad),
-      _consoleSorts(pad),
       if (_consoleLoading && _consoleList('rows').isEmpty)
         Padding(
           padding: EdgeInsets.all(Ds.space.x32),
@@ -4532,224 +4493,98 @@ class _AdminSupplierScreenState extends State<AdminSupplierScreen> {
 
   Widget _consoleChips(double pad) {
     final chips = _consoleList('chips');
-    final zone = _console['zone_chip'];
-    if (chips.isEmpty && zone == null) return const SizedBox.shrink();
+    if (chips.isEmpty) return const SizedBox.shrink();
+    // ONE horizontally scrollable row (Om, 3 Sep). No zone chip: the header's
+    // zone picker already says which zone this is, and printing it twice was
+    // the screen answering a question the shell had answered.
     return Padding(
-      padding: EdgeInsets.fromLTRB(pad, 0, pad, Ds.space.x12),
-      child: Wrap(
-        spacing: Ds.space.x8,
-        runSpacing: Ds.space.x8,
-        children: [
-          if (zone is Map)
-            _ConsoleChip(
-              label: (zone['label'] as String?) ?? '',
-              count: null,
-              active: true,
-              locked: true,
-              onTap: null,
-            ),
-          for (final ch in chips)
-            _ConsoleChip(
-              label: (ch['label'] as String?) ?? '',
-              count: ch['count'] is num ? (ch['count'] as num).toInt() : null,
-              active: ch['active'] == true,
-              locked: false,
-              onTap: () => _toggleConsoleFilter((ch['key'] as String?) ?? ''),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _consoleSorts(double pad) {
-    final sorts = _consoleList('sorts');
-    if (sorts.isEmpty) return const SizedBox.shrink();
-    return Padding(
-      padding: EdgeInsets.fromLTRB(pad, 0, pad, Ds.space.x12),
+      padding: EdgeInsets.fromLTRB(0, 0, 0, Ds.space.x12),
       child: Row(children: [
-        Text((_console['sort_label'] as String?) ?? '', style: Ds.t.caption),
-        SizedBox(width: Ds.space.x8),
         Expanded(
-          child: Wrap(
-            spacing: Ds.space.x8,
-            runSpacing: Ds.space.x8,
-            children: [
-              for (final so in sorts)
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: EdgeInsets.symmetric(horizontal: pad),
+            child: Row(children: [
+              for (final ch in chips) ...[
                 _ConsoleChip(
-                  label: (so['label'] as String?) ?? '',
-                  count: null,
-                  active: so['active'] == true,
-                  locked: false,
-                  onTap: () => _setConsoleSort((so['key'] as String?) ?? ''),
+                  label: (ch['label'] as String?) ?? '',
+                  count: ch['count'] is num ? (ch['count'] as num).toInt() : null,
+                  active: ch['active'] == true,
+                  onTap: () => _toggleConsoleFilter((ch['key'] as String?) ?? ''),
                 ),
-            ],
+                SizedBox(width: Ds.space.x8),
+              ],
+            ]),
+          ),
+        ),
+        Padding(
+          padding: EdgeInsets.only(right: pad),
+          child: IconButton(
+            tooltip: (_console['filters_label'] as String?) ?? '',
+            icon: Icon(Icons.tune, size: Ds.space.x16 + Ds.space.x4,
+                color: Ds.c.textSecondary),
+            onPressed: _openSortSheet,
           ),
         ),
       ]),
     );
   }
 
-  /// One compact row: name + zone on the left, SPN rank, inquiries waiting and
-  /// dues on the right, the licence/KYC chip beside them, and the overflow
-  /// menu the backend built. Phone and code moved to the supplier page.
-  Widget _consoleRow(Map<String, dynamic> row) {
-    final id = (row['id'] as String?) ?? '';
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      SupplierConsoleRow(
-        row: row,
-        onOpen: () => openAdminSupplierPage(context, id),
-        onMenu: (item) => _runConsoleMenu(row, item),
-      ),
-      // The ⋮ menu's Companies and SPN entries open the existing inline
-      // editors in place — the same two panels, reached from the new menu.
-      if (_companiesSupplierId == id)
-        _CompaniesInlineSection(
-          supplierId: id,
-          supplierName: (row['name'] as String?) ?? '',
-          matchService: _matchService,
-          onCompanyAdded: () => _reloadCompanyCount(id),
-        ),
-      if (_spnSupplierId == id)
-        _SpnInlineSection(
-          key: ValueKey('spn_$id'),
-          supplierId: id,
-          supplierName: (row['name'] as String?) ?? '',
-          onSaved: () => _load(showSpinner: false),
-        ),
-    ]);
-  }
-
-  _SupRow? _rowById(String id) {
-    for (final r in _suppliers) {
-      if (r.id == id) return r;
-    }
-    return null;
-  }
-
-  Future<void> _runConsoleMenu(
-      Map<String, dynamic> row, Map<String, dynamic> item) async {
-    final id = (row['id'] as String?) ?? '';
-    final key = (item['key'] as String?) ?? '';
-    final confirm = item['confirm'];
-
-    if (confirm is Map) {
-      final reason = await _confirmMenuAction(confirm.cast<String, dynamic>());
-      if (reason == null) return;
-      if (key == 'delete') {
-        await _deleteWithReason(id, reason);
-        return;
-      }
-    }
-
-    switch (key) {
-      case 'edit':
-        final r = _rowById(id);
-        if (r != null) await _editSupplier(r);
-        break;
-      case 'spn':
-        _toggleSpn(id);
-        break;
-      case 'companies':
-        _toggleCompanies(id);
-        break;
-      case 'availability':
-        await openAdminSupplierPage(context, id, initialTab: 'availability');
-        break;
-      case 'whatsapp':
-        final url = (item['url'] as String?) ?? '';
-        if (url.isNotEmpty) {
-          await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-        }
-        break;
-      case 'deactivate':
-        await _consoleStatusAction(id, 'suspend');
-        break;
-      case 'reactivate':
-        await _consoleStatusAction(id, 'reactivate');
-        break;
-    }
-  }
-
-  Future<void> _consoleStatusAction(String id, String action) async {
-    try {
-      await Supabase.instance.client.rpc('admin_supplier_action',
-          params: {'p_supplier_id': id, 'p_action': action});
-      await _load(showSpinner: false);
-    } catch (e) {
-      if (mounted) showToast(context, '$e', isError: true);
-    }
-  }
-
-  Future<void> _deleteWithReason(String id, String reason) async {
-    try {
-      final res = await Supabase.instance.client.rpc(
-          'admin_supplier_delete_with_reason',
-          params: {'p_supplier_id': id, 'p_reason': reason});
-      final m = res is Map ? res.cast<String, dynamic>() : const {};
-      if (!mounted) return;
-      final msg = (m['message'] as String?) ?? '';
-      if (msg.isNotEmpty) showToast(context, msg, isError: m['ok'] != true);
-      await _load(showSpinner: false);
-    } catch (e) {
-      if (mounted) showToast(context, '$e', isError: true);
-    }
-  }
-
-  /// Returns null on cancel, the typed reason when the backend asked for one,
-  /// and an empty string for a plain confirm. Every word is the payload's.
-  Future<String?> _confirmMenuAction(Map<String, dynamic> confirm) async {
-    final needsReason = confirm['needs_reason'] == true;
-    final ctl = TextEditingController();
-    var error = '';
-    return showDialog<String>(
+  /// Sorting moved off the list and behind the filter icon; A–Z is what the
+  /// list opens on. The options, their labels and which one is active are all
+  /// the payload's.
+  Future<void> _openSortSheet() async {
+    final sorts = _consoleList('sorts');
+    if (sorts.isEmpty) return;
+    await showModalBottomSheet<void>(
       context: context,
-      builder: (dctx) => StatefulBuilder(
-        builder: (dctx2, setLocal) => AlertDialog(
-          backgroundColor: Ds.c.surface,
-          shape: RoundedRectangleBorder(borderRadius: Ds.r.rCard),
-          title: Text((confirm['title'] as String?) ?? '', style: Ds.t.subtitle),
-          content: Column(mainAxisSize: MainAxisSize.min, children: [
-            Text((confirm['body'] as String?) ?? '', style: Ds.t.body),
-            if (needsReason) ...[
-              SizedBox(height: Ds.space.x16),
-              TextField(
-                controller: ctl,
-                autofocus: true,
-                style: Ds.t.body,
-                decoration: InputDecoration(
-                  hintText: (confirm['reason_hint'] as String?) ?? '',
-                  hintStyle: Ds.t.caption,
-                  errorText: error.isEmpty ? null : error,
-                  filled: true,
-                  fillColor: Ds.c.bg,
-                  border: OutlineInputBorder(borderRadius: Ds.r.rButton),
-                ),
-              ),
-            ],
-          ]),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dctx2),
-              child: Text((confirm['cancel'] as String?) ?? '',
-                  style: Ds.t.body),
-            ),
-            FilledButton(
-              style: FilledButton.styleFrom(backgroundColor: Ds.c.danger),
-              onPressed: () {
-                final v = ctl.text.trim();
-                if (needsReason && v.isEmpty) {
-                  setLocal(() =>
-                      error = (confirm['reason_error'] as String?) ?? '');
-                  return;
-                }
-                Navigator.pop(dctx2, v);
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(Ds.r.sheet))),
+      builder: (sctx) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Padding(
+            padding: EdgeInsets.all(Ds.space.x16),
+            child: Text((_console['sort_sheet_title'] as String?) ?? '',
+                style: Ds.t.subtitle),
+          ),
+          for (final so in sorts)
+            ListTile(
+              title: Text((so['label'] as String?) ?? '', style: Ds.t.body),
+              trailing: so['active'] == true
+                  ? Icon(Icons.check, color: Ds.c.brand,
+                      size: Ds.space.x16 + Ds.space.x4)
+                  : null,
+              onTap: () {
+                Navigator.pop(sctx);
+                _setConsoleSort((so['key'] as String?) ?? '');
               },
-              child: Text((confirm['ok'] as String?) ?? ''),
             ),
-          ],
-        ),
+          SizedBox(height: Ds.space.x8),
+        ]),
       ),
     );
+  }
+
+  /// A row is a name and one quiet line. Tapping it opens the supplier page,
+  /// which is where the numbers and the actions live.
+  Widget _consoleRow(Map<String, dynamic> row) {
+    final id = (row['id'] as String?) ?? '';
+    return SupplierConsoleRow(
+      row: row,
+      onOpen: () => _openSupplierPage(id),
+    );
+  }
+
+  /// The page owns every supplier action now — Edit, SPN, Companies,
+  /// Availability, status, Deactivate and Delete-with-reason all run there.
+  /// The list only reloads afterwards, because a rename or a delete changes
+  /// what it shows.
+  Future<void> _openSupplierPage(String id, {String initialTab = ''}) async {
+    await openAdminSupplierPage(context, id, initialTab: initialTab);
+    if (!mounted) return;
+    await _load(showSpinner: false);
+    await _loadConsole();
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -13164,20 +12999,17 @@ class _C328PayRow extends StatelessWidget {
       DateLabels.instance.label(ts, DateStyle.dmy2Time12) ?? '';
 }
 
-/// CHANGE #753 — a filter/sort chip on the Suppliers list. The label and the
-/// count are the backend's; `locked` is the zone scope, which is shown but
-/// never toggled because the zone is decided server-side.
+/// CHANGE #753 — one filter chip on the Suppliers list. The label and the
+/// count are the backend's; this widget only paints and reports the tap.
 class _ConsoleChip extends StatelessWidget {
   final String label;
   final int? count;
   final bool active;
-  final bool locked;
   final VoidCallback? onTap;
   const _ConsoleChip({
     required this.label,
     required this.count,
     required this.active,
-    required this.locked,
     required this.onTap,
   });
 
@@ -13186,7 +13018,7 @@ class _ConsoleChip extends StatelessWidget {
     if (label.trim().isEmpty) return const SizedBox.shrink();
     final text = count == null ? label : '$label  $count';
     return InkWell(
-      onTap: locked ? null : onTap,
+      onTap: onTap,
       borderRadius: Ds.r.rChip,
       child: Container(
         constraints: BoxConstraints(minHeight: Ds.touch.minTarget),

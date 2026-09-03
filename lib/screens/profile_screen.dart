@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'kyc/kyc_panel.dart';
+
 import '../models/account_registration.dart';
 import '../models/app_session.dart';
 import '../models/user_profile.dart';
@@ -477,6 +479,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       ],
                     ),
                   ),
+
+                  // CHANGE #705 — the licence-and-documents panel. Same
+                  // widget the supplier sees; kyc_my_panel() resolves which
+                  // account is asking and words every line, so this is one
+                  // constructor and no configuration.
+                  const KycPanel(),
 
                   // Business details
                   _SectionCard(

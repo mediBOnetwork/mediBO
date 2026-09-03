@@ -249,3 +249,12 @@ $fn$;
 grant execute on function public.kyc_can_review(text) to authenticated;
 grant execute on function public.kyc_review_queue(text,text,integer,integer) to authenticated;
 grant execute on function public.kyc_review_set(uuid,text,text) to authenticated;
+
+-- The door itself must be DECLARED, or rg_check fails on a registry tile with
+-- no dispatcher (CHANGE #570). shellExtraRouteScreen() opens it.
+insert into public.surface_route (route_key, feature_key, kind, handled_by, note, is_active)
+select 'kyc_review', 'partner.kyc_review', 'feature', 'home_shell',
+       'CHANGE #705 — the KYC review console; opened by shellExtraRouteScreen() in '
+       'lib/screens/shell/shell_extra_routes.dart, which home_shell reaches through '
+       'its one shellExtraRouteScreen(route) lookup.', true
+where not exists (select 1 from public.surface_route where route_key = 'kyc_review');

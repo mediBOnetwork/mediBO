@@ -1440,7 +1440,7 @@ values
    array['admin','super_admin'],
    'scorecard score target incentive bonus',
    'The partner''s own monthly scorecard, targets and incentive progress.',
-   '/partner/scorecard')
+   '/admin/partner-scorecard')
 on conflict (feature_key) do update set
   label = excluded.label, group_label = excluded.group_label,
   icon_key = excluded.icon_key, route_key = excluded.route_key,

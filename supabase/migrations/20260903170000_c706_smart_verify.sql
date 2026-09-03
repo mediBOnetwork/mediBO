@@ -34,11 +34,31 @@ create table if not exists public.kyc_verify_config (
   constraint kyc_verify_config_singleton check (id = 1)
 );
 insert into public.kyc_verify_config(id) values (1) on conflict (id) do nothing;
-alter table public.kyc_verify_config enable row level security;
+-- Enabling RLS a second time is a no-op that still wants ACCESS EXCLUSIVE,
+-- which is how a re-apply on a busy database dies instead of doing nothing.
+do $c706$ begin
+  if not (select relrowsecurity from pg_class
+           where oid = 'public.kyc_verify_config'::regclass) then
+    alter table public.kyc_verify_config enable row level security;
+  end if;
+end $c706$;
 
 -- The zone carries the GST state code the licence must belong to. Chhattisgarh
 -- is 22; a zone that has never been told keeps the config default.
-alter table public.zones add column if not exists gst_state_code text;
+--
+-- `add column if not exists` still takes an ACCESS EXCLUSIVE lock on zones to
+-- discover it has nothing to do, and zones is read by nearly every RPC — so a
+-- re-apply on a busy database died on a lock timeout rather than being the
+-- silent no-op a resumed worker needs. Ask the catalogue first; take the lock
+-- only when there is genuinely a column to add.
+do $c706$
+begin
+  if not exists (select 1 from information_schema.columns
+                  where table_schema = 'public' and table_name = 'zones'
+                    and column_name = 'gst_state_code') then
+    alter table public.zones add column gst_state_code text;
+  end if;
+end $c706$;
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 2. OCR EXTRACT — what the machine read, stored beside what was typed
@@ -64,7 +84,14 @@ create table if not exists public.kyc_doc_extract (
 create index if not exists kyc_doc_extract_queue_idx
   on public.kyc_doc_extract(status, requested_at)
   where status in ('queued','running');
-alter table public.kyc_doc_extract enable row level security;
+-- Enabling RLS a second time is a no-op that still wants ACCESS EXCLUSIVE,
+-- which is how a re-apply on a busy database dies instead of doing nothing.
+do $c706$ begin
+  if not (select relrowsecurity from pg_class
+           where oid = 'public.kyc_doc_extract'::regclass) then
+    alter table public.kyc_doc_extract enable row level security;
+  end if;
+end $c706$;
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 3. IDENTITY CLAIMS — one DL and one GSTIN per account, platform-wide
@@ -85,7 +112,14 @@ create table if not exists public.kyc_identity_claim (
 );
 create index if not exists kyc_identity_claim_owner_idx
   on public.kyc_identity_claim(owner_kind, owner_id);
-alter table public.kyc_identity_claim enable row level security;
+-- Enabling RLS a second time is a no-op that still wants ACCESS EXCLUSIVE,
+-- which is how a re-apply on a busy database dies instead of doing nothing.
+do $c706$ begin
+  if not (select relrowsecurity from pg_class
+           where oid = 'public.kyc_identity_claim'::regclass) then
+    alter table public.kyc_identity_claim enable row level security;
+  end if;
+end $c706$;
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 4. AUDIT — every decision, automatic or human, with the inputs it read
@@ -120,7 +154,14 @@ create table if not exists public.kyc_verify_run (
 create index if not exists kyc_verify_run_doc_idx  on public.kyc_verify_run(doc_id, created_at desc);
 create index if not exists kyc_verify_run_doc_seq_idx on public.kyc_verify_run(doc_id, seq desc);
 create index if not exists kyc_verify_run_owner_idx on public.kyc_verify_run(owner_kind, owner_id, created_at desc);
-alter table public.kyc_verify_run enable row level security;
+-- Enabling RLS a second time is a no-op that still wants ACCESS EXCLUSIVE,
+-- which is how a re-apply on a busy database dies instead of doing nothing.
+do $c706$ begin
+  if not (select relrowsecurity from pg_class
+           where oid = 'public.kyc_verify_run'::regclass) then
+    alter table public.kyc_verify_run enable row level security;
+  end if;
+end $c706$;
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 5. PURE HELPERS — normalisation, checksum, similarity, distance
@@ -498,7 +539,7 @@ insert into public.ui_copy (key, value) values
   ('kyc_verify.det.geo_far',         to_jsonb('The map pin is {d} from the address on the document — further than {max}.'::text)),
   ('kyc_verify.det.geo_absent',      to_jsonb('There is no map pin or no readable address to compare.'::text)),
 
-  ('kyc_verify.reason.prefix',       to_jsonb('Automatically rejected: {list}'::text)),
+  ('kyc_verify.reason.prefix',       to_jsonb('Automatically rejected: {list}.'::text)),
   ('kyc_verify.reason.expiry',       to_jsonb('the document has expired'::text)),
   ('kyc_verify.reason.dup_dl',       to_jsonb('this licence number belongs to another account'::text)),
   ('kyc_verify.reason.dup_gstin',    to_jsonb('this GSTIN belongs to another account'::text)),
@@ -858,9 +899,13 @@ begin
   v_auto_approve := case d.owner_kind when 'pharmacy' then cfg.auto_approve_pharmacy
                                       else cfg.auto_approve_supplier end;
 
-  -- A document a human has already ruled on is never re-decided by the machine;
-  -- the checks still run and are still shown, they just do not move the status.
-  if d.status in ('pending') then
+  -- A document a HUMAN has ruled on is never re-decided by the machine; the
+  -- checks still run and are still shown, they just do not move the status.
+  -- An automatic rejection (verified_by is null) stays the machine's own, so a
+  -- re-run refreshes its reason instead of leaving the applicant reading a
+  -- sentence the current checks no longer produce.
+  if d.status = 'pending'
+     or (d.status = 'rejected' and d.verified_by is null) then
     if v_tier = 'hard_fail' then
       update kyc_documents
          set status = 'rejected', reason = v_eval->>'reason',
@@ -1286,16 +1331,21 @@ begin
                and d.valid_to < (now() at time zone 'Asia/Kolkata')::date then 'danger'
           when d.status = 'verified' then 'success'
           else 'info' end,
-      'reason_line', case when coalesce(d.reason,'') = '' then ''
-                          else _cf('kyc.rejected_prefix', jsonb_build_object('reason', d.reason)) end,
+      -- CHANGE #706 — ONE rejection sentence. The checks block below prints
+      -- the machine's reason WITH the checks that produced it, so repeating it
+      -- as a bare line above is the same sentence twice. A human reviewer's
+      -- reason has no block to live in and still prints here.
+      'reason_line', case
+          when coalesce(d.reason,'') = '' then ''
+          when coalesce(v.blk->>'reason','') = d.reason then ''
+          else _cf('kyc.rejected_prefix', jsonb_build_object('reason', d.reason)) end,
       'button_label', case
           when d.id is null then _c('kyc.btn_upload')
           when d.status = 'verified' and d.valid_to is not null
                and d.valid_to < (now() at time zone 'Asia/Kolkata')::date then _c('kyc.btn_renew')
           else _c('kyc.btn_replace') end,
       -- CHANGE #706: what the automatic checks made of this document.
-      'verify', case when d.id is null then 'null'::jsonb
-                     else public.kyc_verify_panel(d.id) end
+      'verify', coalesce(v.blk, 'null'::jsonb)
     ) as r
     from (values ('drug_licence',1),('gst_certificate',2),('shop_photo',3),('pan',4))
            as t(kind, ord)
@@ -1306,6 +1356,9 @@ begin
        order by case k.status when 'verified' then 0 when 'pending' then 1 else 2 end,
                 k.submitted_at desc
        limit 1) d on true
+    left join lateral (
+      select case when d.id is null then null
+                  else public.kyc_verify_panel(d.id) end as blk) v on true
   ) x;
 
   return jsonb_build_object(

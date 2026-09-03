@@ -1051,3 +1051,17 @@ end
 $function$
 
 ;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 14. ADMIN VISIBILITY
+--
+-- feature_registry's trigger seeds role defaults from `default_access`, which
+-- left a plain admin at none/none — so only the super admin would ever see the
+-- board. Its sibling (partner.exceptions) gives an admin view+write; this is a
+-- READ-ONLY board, so an admin gets view and the SLA panel stays super-admin.
+-- access_effective resolves through the CANONICAL key, which is the partner
+-- twin, so this is the row that decides it.
+-- ─────────────────────────────────────────────────────────────────────────────
+update public.access_role_default
+   set can_view = true, can_write = false, updated_at = now()
+ where feature_key = 'partner.ops_board' and role = 'admin';

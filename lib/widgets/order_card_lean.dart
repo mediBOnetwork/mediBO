@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../design_tokens.dart';
+import 'delivery_proof_card.dart';
 
 /// CHANGE #630 — the customer's Orders tab, in the pieces that hold a contract.
 ///
@@ -53,6 +54,12 @@ class CustomerOrderCard {
   final bool placedByAdmin;
   final String placedByAdminLabel;
 
+  /// CHANGE #691 (register row 122) — the arrival window, already worded
+  /// ("Arriving 4:10–4:30 pm"). Absent (`has:false`) on every order that is not
+  /// on a rider's van right now, which is the only reason this card ever hides
+  /// it. There is no clock arithmetic on this side of the wire.
+  final Map<String, dynamic> eta;
+
   const CustomerOrderCard({
     required this.id,
     required this.orderCode,
@@ -70,6 +77,7 @@ class CustomerOrderCard {
     required this.situation,
     required this.placedByAdmin,
     required this.placedByAdminLabel,
+    this.eta = const {},
   });
 
   factory CustomerOrderCard.fromPayload(Map<String, dynamic> row) {
@@ -98,6 +106,9 @@ class CustomerOrderCard {
       situation: (row['situation'] ?? '').toString(),
       placedByAdmin: row['placed_by_admin'] == true,
       placedByAdminLabel: (row['placed_by_admin_label'] ?? '').toString(),
+      eta: row['eta'] is Map
+          ? Map<String, dynamic>.from(row['eta'] as Map)
+          : const {},
     );
   }
 }
@@ -211,6 +222,16 @@ class OrderCardLean extends StatelessWidget {
               ),
               SizedBox(height: Ds.space.x12),
               Text(card.stageLabel, style: Ds.t.body),
+              // CHANGE #691 (register row 122) — the stage word said "Out for
+              // delivery" and stopped there. The window sits under it, and only
+              // when the backend sent one.
+              if (card.eta['has'] == true) ...[
+                SizedBox(height: Ds.space.x8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: DeliveryEtaLine(eta: card.eta),
+                ),
+              ],
               if (card.placedByAdmin && card.placedByAdminLabel.isNotEmpty) ...[
                 SizedBox(height: Ds.space.x4),
                 Text(card.placedByAdminLabel,

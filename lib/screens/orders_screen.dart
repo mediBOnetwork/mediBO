@@ -25,6 +25,7 @@ import '../widgets/customer_order_item_card.dart'; // #641: the Items-tab card
 import '../widgets/order_card_lean.dart'; // #630: the lean card, its progress line and the change window
 import '../services/ui_copy.dart';
 import '../design_tokens.dart'; // #173: Ds tokens for the reorder entry points
+import '../widgets/delivery_proof_card.dart'; // #691: arrival window + proof of delivery
 import '../widgets/customer_surface_widgets.dart'; // CHANGE #745 — Rewards section
 import 'reorder_screen.dart'; // #173: reorder suite (suggestions + smart diff)
 import '../widgets/substitute_choice.dart'; // #366 row 176: customer picks the substitute
@@ -1022,6 +1023,14 @@ class _CustomerOrderDetailScreenState extends State<CustomerOrderDetailScreen> {
         physics: platformScrollPhysics(),
         children: [
           if (card != null) _DetailHeader(card: card),
+          // CHANGE #691 (register rows 122 / 126) — the arrival window while it
+          // is on the road, and the proof of delivery once it has landed. Both
+          // are finished blocks from customer_order_detail(); each hides itself
+          // when the backend says `has:false`.
+          DeliveryEtaCard(
+              eta: (p['eta'] as Map?)?.cast<String, dynamic>() ?? const {}),
+          DeliveryProofCard(
+              proof: (p['proof'] as Map?)?.cast<String, dynamic>() ?? const {}),
           // PART B — the sentence that replaces the actions once the window is
           // shut. It is the backend's, verbatim; there is no Dart wording here
           // and no disabled button to explain itself.

@@ -96,7 +96,16 @@ async function loadDelivery(id: string) {
       .select('full_name, phone').eq('id', d.partner_id).maybeSingle();
     rider = String(rp?.full_name ?? '');
   }
-  return { d, o, phone: ph, rider };
+  // CHANGE #691: the arrival window comes from the backend as a finished
+  // sentence; this function never formats a time.
+  let eta = ''
+  try {
+    const { data: e } = await supabase
+      .rpc('_delivery_eta_for_order', { p_order_id: d.order_id })
+    eta = String((e as any)?.label ?? '')
+  } catch (_) { /* a missing window never blocks the message */ }
+
+  return { d, o, phone: ph, rider, eta };
 }
 
 // CHANGE #354 (row 89): the code, read from the protected side table. Only the
@@ -109,9 +118,13 @@ async function loadOtp(deliveryId: string): Promise<string> {
 
 async function sendOutForDelivery(ctx: any, body: string): Promise<boolean> {
   const link = `${SITE}/track/${ctx.d.qr_token ?? ''}`;
+  // CHANGE #691 (register row 122): the arrival window, worded by
+  // _delivery_eta_for_order() and rebased on every stop. A run that has no
+  // window yet substitutes to nothing rather than to the word "null".
   const text = body.replace(/\{pharmacy\}/g, String(ctx.o?.pharmacy_name ?? ''))
                    .replace(/\{code\}/g, String(ctx.o?.order_code ?? ''))
                    .replace(/\{rider\}/g, ctx.rider)
+                   .replace(/\{eta\}/g, String(ctx.eta ?? ''))
                    .replace(/\{link\}/g, link);
   const sent = await sendText('91' + ctx.phone, text);
   await log('91' + ctx.phone, text, sent, 'delivery_out');
@@ -168,7 +181,7 @@ Deno.serve(async (req) => {
     if (!ctx) return new Response(JSON.stringify({ skipped: 'not_found' }), { status: 200 });
     if (!ctx.phone) return new Response(JSON.stringify({ skipped: 'no_phone' }), { status: 200 });
     const t = await tmpl('delivery_out_message',
-      '🚚 *Out for delivery*\n\n{pharmacy}, aapka order {code} raaste mein hai.\nDelivery partner: {rider}\n\nLive track: {link}');
+      '🚚 *Out for delivery*\n\n{pharmacy}, aapka order {code} raaste mein hai.\nDelivery partner: {rider}\n\nExpected: {eta}\nLive track: {link}');
     const ok = await sendOutForDelivery(ctx, t);
     return new Response(JSON.stringify({ ok, event, to: ctx.phone }), { status: 200 });
   }
@@ -181,7 +194,7 @@ Deno.serve(async (req) => {
       .select('id').eq('run_id', runId).eq('status', 'out_for_delivery');
     let sentN = 0, skipped = 0;
     const t = await tmpl('delivery_out_message',
-      '🚚 *Out for delivery*\n\n{pharmacy}, aapka order {code} raaste mein hai.\nDelivery partner: {rider}\n\nLive track: {link}');
+      '🚚 *Out for delivery*\n\n{pharmacy}, aapka order {code} raaste mein hai.\nDelivery partner: {rider}\n\nExpected: {eta}\nLive track: {link}');
     for (const r of (rows ?? [])) {
       const ctx = await loadDelivery(r.id);
       if (!ctx || !ctx.phone) { skipped++; continue; }

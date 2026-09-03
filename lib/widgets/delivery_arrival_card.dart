@@ -27,6 +27,17 @@ import 'package:qr_flutter/qr_flutter.dart';
 import '../design_tokens.dart';
 import '../utils/render_log.dart';
 
+// The card's own constants — the four numbers that are NOT a design choice a
+// token could recolour, called out here rather than buried inline (QA round 2
+// named them). A QR module grid has to be big enough for a counter phone to
+// read across a counter, its quiet zone has to be white or no scanner sees it
+// at all, and the handover code is read aloud digit by digit, so it is tracked
+// wider than prose. Everything else on this card is Ds.
+const double _kQrSize = 160;
+const Color _kQrQuietZone = Colors.white;
+const double _kOtpTracking = 6;
+const double _kColdIconSize = 18;
+
 String _s(Map<String, dynamic> m, String k) => (m[k] ?? '').toString();
 
 Map<String, dynamic> _m(dynamic v) =>
@@ -199,8 +210,8 @@ class _Handover extends StatelessWidget {
               ),
               child: QrImageView(
                 data: token,
-                size: 160,
-                backgroundColor: Colors.white,
+                size: _kQrSize,
+                backgroundColor: _kQrQuietZone,
               ),
             ),
           ),
@@ -210,7 +221,7 @@ class _Handover extends StatelessWidget {
           Text(_s(handover, 'otp_label'), style: Ds.t.caption),
           SizedBox(height: Ds.space.x4),
           Text(otp,
-              style: Ds.t.display.copyWith(letterSpacing: 6)),
+              style: Ds.t.display.copyWith(letterSpacing: _kOtpTracking)),
           SizedBox(height: Ds.space.x4),
           Text(_s(handover, 'otp_hint'), style: Ds.t.caption),
         ],
@@ -256,7 +267,7 @@ class ColdChainStrip extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.ac_unit, size: 18, color: tone.fg),
+          Icon(Icons.ac_unit, size: _kColdIconSize, color: tone.fg),
           SizedBox(width: Ds.space.x8),
           Expanded(
             child: Column(

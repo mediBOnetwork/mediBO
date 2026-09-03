@@ -13,9 +13,11 @@
 // file owns is which collection is open, which line the sheet is editing, and
 // the two values the user is typing into it.
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../design_tokens.dart';
 import '../../services/partner_state.dart';
+import '../../services/supplier_records_api.dart';
 import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 import 'partner_ui.dart';
@@ -119,6 +121,41 @@ class _PartnerReturnsScreenState extends State<PartnerReturnsScreen> {
   Future<void> _start(String supplierOrderId) =>
       _editorCall('partner_return_start', {'p_supplier_order_id': supplierOrderId});
 
+  /// The debit note PDF is NOT an editor call: it answers with a document
+  /// handoff, not the editor payload, so it must never be fed back into
+  /// _editor. Ask, then poll on the BACKEND's own `poll_ms` — no invented
+  /// interval and no invented timeout — then sign and open the file.
+  Future<void> _doc(String id) async {
+    if (id.isEmpty || _busy) return;
+    setState(() => _busy = true);
+    try {
+      var res = await _call('partner_return_doc', {'p_id': id});
+      var tries = 0;
+      while (res['ok'] == true &&
+          _s(res, 'status') == 'building' &&
+          tries < 20) {
+        final ms = res['poll_ms'];
+        await Future<void>.delayed(
+            Duration(milliseconds: ms is num ? ms.toInt() : 1500));
+        if (!mounted) return;
+        res = await _call('partner_return_doc_status', {'p_id': id});
+        tries++;
+      }
+      if (!mounted) return;
+      if (res['ok'] != true || _s(res, 'status') != 'ready') {
+        _toast(_s(res, 'message'), res['ok'] == true ? 'info' : 'danger');
+        return;
+      }
+      final url = await SupplierRecordsApi.signedUrl(
+          _s(res, 'bucket'), _s(res, 'path'));
+      if (url.isEmpty || !mounted) return;
+      await launchUrl(Uri.parse(url),
+          webOnlyWindowName: '_blank', mode: LaunchMode.externalApplication);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final d = _console;
@@ -154,8 +191,7 @@ class _PartnerReturnsScreenState extends State<PartnerReturnsScreen> {
                           {'p_id': _s(_editor?['row'], 'id')}),
                       onCancel: () => _editorCall('partner_return_cancel',
                           {'p_id': _s(_editor?['row'], 'id')}),
-                      onDoc: () => _editorCall('partner_return_doc',
-                          {'p_id': _s(_editor?['row'], 'id')}),
+                      onDoc: () => _doc(_s(_editor?['row'], 'id')),
                     )
                   : RefreshIndicator(
                       onRefresh: _load,

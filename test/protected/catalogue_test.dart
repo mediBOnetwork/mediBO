@@ -330,6 +330,28 @@ void main() {
       expect(rpc.lastArgs('catalogue_tree')['p_zone'], isFalse,
           reason: 'the switch is a QUESTION to the backend, not a client filter');
     });
+
+    testWidgets('an OFF switch is still drawn — has and on are two questions',
+        (tester) async {
+      // The bug this pins: resolving `has` from the same expression as `on`
+      // made the control vanish the moment anyone used it. `has` is "does this
+      // viewer get a switch", `on` is "is it flipped", and the backend answers
+      // both separately.
+      await _pump(tester, queued: {
+        'catalogue_home': [
+          {..._home(), 'zone': _zone(has: true, on: false)}
+        ],
+        'catalogue_tree': [_treeRoot()],
+      }, route: const CatalogueRoute(zoneOn: false));
+      expect(find.byType(Switch), findsOneWidget);
+      expect(tester.widget<Switch>(find.byType(Switch)).value, isFalse);
+      expect(
+          find.text('Showing the whole catalogue, including items no supplier '
+              'near you stocks.'),
+          findsOneWidget,
+          reason: 'the note under the switch changes because the BACKEND '
+              'changed it, not because this widget picked a second sentence');
+    });
   });
 
   group('the tree drills where the backend says', () {

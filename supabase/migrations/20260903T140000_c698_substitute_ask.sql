@@ -1998,3 +1998,39 @@ begin
 
   return v_out;
 end $function$;
+
+-- ── 20. REVOKE PUBLIC FIRST — a GRANT is not a fence (the #436 class) ───────
+-- Postgres gives every new function EXECUTE to PUBLIC, so the grants in §17
+-- were decoration: anon already held substitute_apply and substitute_ask_tick
+-- the moment they were created. #698's own journey caught it. Revoke first,
+-- then grant, and only the three token-page functions reach anon.
+
+revoke all on function public.substitute_ask_page(text)                        from public;
+revoke all on function public.substitute_ask_submit(text, bigint[], boolean)   from public;
+revoke all on function public.substitute_ask_skip(text)                        from public;
+revoke all on function public.substitute_ask_for_order(uuid)                   from public, anon;
+revoke all on function public.substitute_candidates(bigint, smallint, uuid, integer) from public, anon;
+revoke all on function public.med_substitutable(bigint)                        from public, anon;
+revoke all on function public.substitute_block_rules(boolean)                  from public, anon;
+revoke all on function public.substitute_block_rule_save(text, text, text, boolean, bigint) from public, anon;
+revoke all on function public.substitute_product_flag(bigint, boolean)         from public, anon;
+revoke all on function public.substitute_ask_open(uuid)                        from public, anon;
+revoke all on function public.substitute_ask_send_wa(bigint)                   from public, anon;
+revoke all on function public.substitute_ask_tick(integer)                     from public, anon;
+revoke all on function public.substitute_apply(bigint, bigint)                 from public, anon;
+revoke all on function public.substitute_ask_close(bigint, text)               from public, anon;
+revoke all on function public.substitute_start_probes(bigint)                  from public, anon;
+revoke all on function public.substitute_cancel_probe(bigint)                  from public, anon;
+revoke all on function public.substitute_equivalent_qty(bigint, bigint, numeric) from public, anon;
+revoke all on function public._substitute_ask_payload(bigint)                  from public, anon;
+revoke all on function public._substitute_mmss(interval)                       from public, anon;
+
+grant execute on function public.substitute_ask_page(text)                     to anon, authenticated;
+grant execute on function public.substitute_ask_submit(text, bigint[], boolean) to anon, authenticated;
+grant execute on function public.substitute_ask_skip(text)                      to anon, authenticated;
+grant execute on function public.substitute_ask_for_order(uuid)                 to authenticated;
+grant execute on function public.substitute_candidates(bigint, smallint, uuid, integer) to authenticated;
+grant execute on function public.med_substitutable(bigint)                      to authenticated;
+grant execute on function public.substitute_block_rules(boolean)                to authenticated;
+grant execute on function public.substitute_block_rule_save(text, text, text, boolean, bigint) to authenticated;
+grant execute on function public.substitute_product_flag(bigint, boolean)       to authenticated;

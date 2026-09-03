@@ -53,7 +53,22 @@ class InquiryBadge {
 
 class InquiryFormScreen extends StatefulWidget {
   final String token;
-  const InquiryFormScreen({super.key, required this.token});
+
+  /// CHANGE #687 — the link secret resolve_code() already verified.
+  ///
+  /// #612 made the secret a second path segment and #526 made
+  /// inquiry_secret_required the default, but this screen kept calling
+  /// get_inquiry_form with the token ALONE. _inquiry_form_gate refuses that
+  /// ('forbidden'), and the screen renders a refusal as "This link is no
+  /// longer valid" — so every secret-protected inquiry link, which is every
+  /// link sent on WhatsApp, opened on a dead end. The resolver had the secret
+  /// the whole time and simply did not pass it on.
+  ///
+  /// It is carried, never parsed: the app has no idea what a valid secret
+  /// looks like and must not acquire one.
+  final String? secret;
+
+  const InquiryFormScreen({super.key, required this.token, this.secret});
 
   @override
   State<InquiryFormScreen> createState() => _InquiryFormScreenState();
@@ -161,7 +176,10 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
     });
     try {
       final result = await Supabase.instance.client
-          .rpc('get_inquiry_form', params: {'p_token': widget.token});
+          .rpc('get_inquiry_form', params: {
+        'p_token': widget.token,
+        if (widget.secret != null) 'p_secret': widget.secret,
+      });
 
       if (!mounted) return;
       final data = Map<String, dynamic>.from(result as Map);
@@ -420,6 +438,7 @@ class _InquiryFormScreenState extends State<InquiryFormScreen> {
           params: {
             'p_token': widget.token,
             'p_answers': toSubmit,
+            if (widget.secret != null) 'p_secret': widget.secret,
           });
       // A refusal is a payload, not an exception. Its wording is the
       // backend's — printed verbatim, never re-phrased here.

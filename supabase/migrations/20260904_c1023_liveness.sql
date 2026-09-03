@@ -35,12 +35,14 @@ ALTER TABLE public.dev_commands
 UPDATE dev_runner_config
    SET value = jsonb_set(value, '{liveness}',
          coalesce(value->'liveness','{}'::jsonb) ||
-         jsonb_build_object('enabled', true, 'warn_min', 2,
-                            'dead_after_min', 5, 'max_lost', 3), true)
+         jsonb_build_object('enabled', true, 'warn_min', 6,
+                            'dead_after_min', 5, 'disconnect_grace_min', 1,
+                            'max_lost', 3), true)
  WHERE key = 'worker_pool';
 
 INSERT INTO ui_copy (key, value) VALUES
   ('dev_queue.agent_silent_chip', to_jsonb('⚠ agent silent {age} — session may be lost'::text)),
+  ('dev_queue.agent_gone_chip',   to_jsonb('⚠ Remote Control session disconnected {age} ago'::text)),
   ('dev_queue.session_lost_msg',  to_jsonb('↻ Re-queued: the Claude session for this build is gone ({why}). The branch work is untouched — the next worker resumes at the first unfinished step.'::text)),
   ('dev_queue.session_lost_stop', to_jsonb('This build has lost its Claude session {n} times. Reply yes to hand it out again, or split the spec.'::text))
 ON CONFLICT (key) DO NOTHING;
@@ -114,8 +116,8 @@ GRANT EXECUTE ON FUNCTION public.dev_cmd_heartbeat(bigint,text,bigint,bigint,tex
 CREATE OR REPLACE FUNCTION public.dev_cmd_liveness_sweep()
  RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public'
 AS $function$
-DECLARE cfg jsonb; v_on boolean; v_warn int; v_dead int; v_maxlost int;
-        r record; v_why text; v_msg text; v_q text;
+DECLARE cfg jsonb; v_on boolean; v_warn int; v_grace int; v_maxlost int;
+        r record; v_why text; v_msg text; v_q text; v_silent numeric;
         n_warn int := 0; n_lost int := 0; n_stop int := 0;
 BEGIN
   -- No _dev_guard() on purpose: this rides the cron dispatcher, which carries
@@ -123,8 +125,8 @@ BEGIN
   -- controlled by the GRANTs below instead.
   SELECT coalesce(value->'liveness','{}'::jsonb) INTO cfg FROM dev_runner_config WHERE key='worker_pool';
   v_on      := coalesce((cfg->>'enabled')::boolean, true);
-  v_warn    := coalesce((cfg->>'warn_min')::int, 2);
-  v_dead    := coalesce((cfg->>'dead_after_min')::int, 5);
+  v_warn    := coalesce((cfg->>'warn_min')::int, 6);
+  v_grace   := coalesce((cfg->>'disconnect_grace_min')::int, 1);
   v_maxlost := coalesce((cfg->>'max_lost')::int, 3);
   IF NOT v_on THEN RETURN jsonb_build_object('ok', true, 'enabled', false); END IF;
 
@@ -141,16 +143,26 @@ BEGIN
               -- "assume dead".
               AND agent_alive_at IS NOT NULL
   LOOP
+    v_silent := extract(epoch from now() - r.agent_alive_at) / 60.0;
     v_why := NULL;
-    IF r.agent_pane_alive IS FALSE THEN
-      v_why := 'the tmux pane exited';
-    ELSIF r.agent_alive_at < now() - (v_dead||' minutes')::interval THEN
-      v_why := 'no agent turn for '||_fmt_dur(extract(epoch from now()-r.agent_alive_at));
+
+    -- ── THE ONLY THING THAT RE-QUEUES A ROW IS BEING UNREACHABLE ───────────
+    -- agent_pane_alive is the runner's composite "Om can still open this":
+    -- the tmux session is up, the CLI process is up, and the CLI registry
+    -- holds a bridgeSessionId for the slot. Silence alone is NOT death — #692
+    -- sat 4m20s at its prompt with four background shells while it waited for
+    -- the merge worker, and re-queuing that would have thrown away a finished
+    -- build. The grace minute is there so a momentary registry blip during
+    -- active work (which keeps agent_alive_at fresh) cannot kill a live build.
+    IF r.agent_pane_alive IS FALSE AND v_silent >= v_grace THEN
+      v_why := 'the Remote Control session is not reachable and the agent has been quiet for '
+               || _fmt_dur(v_silent * 60);
     END IF;
 
     IF v_why IS NULL THEN
-      -- still breathing: raise or clear the amber chip
-      IF r.agent_alive_at < now() - (v_warn||' minutes')::interval THEN
+      -- Amber, not action. Raised immediately while unreachable (even inside
+      -- the grace minute), and after warn_min of silence while still connected.
+      IF r.agent_pane_alive IS FALSE OR v_silent >= v_warn THEN
         IF NOT coalesce(r.agent_silent_flagged,false) THEN
           UPDATE dev_commands SET agent_silent_flagged=true,
                  agent_silent_at=coalesce(agent_silent_at, r.agent_alive_at) WHERE id=r.id;
@@ -188,7 +200,8 @@ BEGIN
   END LOOP;
 
   RETURN jsonb_build_object('ok', true, 'warned', n_warn, 'requeued', n_lost,
-                            'stopped', n_stop, 'dead_after_min', v_dead);
+                            'stopped', n_stop, 'warn_min', v_warn,
+                            'disconnect_grace_min', v_grace);
 END $function$;
 
 REVOKE ALL ON FUNCTION public.dev_cmd_liveness_sweep() FROM public, anon;
@@ -205,11 +218,17 @@ ON CONFLICT (name) DO UPDATE
       enabled = true, note = excluded.note;
 
 -- ── the card says it before the sweep acts ────────────────────────────────
-CREATE OR REPLACE FUNCTION public.dev_cmd_agent_chip(p_status text, p_flagged boolean, p_since timestamptz)
+DROP FUNCTION IF EXISTS public.dev_cmd_agent_chip(text, boolean, timestamptz);
+CREATE OR REPLACE FUNCTION public.dev_cmd_agent_chip(p_status text, p_flagged boolean, p_since timestamptz, p_reachable boolean DEFAULT NULL)
  RETURNS text LANGUAGE sql STABLE AS $function$
+  -- Two sentences, because they mean different things to Om: "silent" is a
+  -- session he can still open, "disconnected" is one he cannot.
   SELECT CASE WHEN p_status='building' AND coalesce(p_flagged,false) AND p_since IS NOT NULL
-              THEN replace(_c_or('dev_queue.agent_silent_chip','⚠ agent silent {age} — session may be lost'),
-                           '{age}', _fmt_dur(coalesce(extract(epoch from now()-p_since), 0)))
+              THEN replace(
+                     CASE WHEN p_reachable IS FALSE
+                          THEN _c_or('dev_queue.agent_gone_chip','⚠ Remote Control session disconnected {age} ago')
+                          ELSE _c_or('dev_queue.agent_silent_chip','⚠ agent silent {age} — session may be lost') END,
+                     '{age}', _fmt_dur(coalesce(extract(epoch from now()-p_since), 0)))
               ELSE '' END;
 $function$;
 
@@ -373,9 +392,10 @@ begin
            -- live_chip above says the heartbeat stopped. This says the beat is
            -- fine and the Claude session behind it is not — the exact state
            -- #1016 sat in for 32 minutes with nothing on the card to show it.
-           dev_cmd_agent_chip(dc.status, dc.agent_silent_flagged, dc.agent_silent_at) as agent_chip,
+           dev_cmd_agent_chip(dc.status, dc.agent_silent_flagged, dc.agent_silent_at, dc.agent_pane_alive) as agent_chip,
            case when dc.status='building' and coalesce(dc.agent_silent_flagged,false)
-                then 'warning' else 'neutral' end as agent_tone,
+                then case when dc.agent_pane_alive is false then 'error' else 'warning' end
+                else 'neutral' end as agent_tone,
            coalesce(dc.agent_rc_session,'') as agent_rc_session,
            coalesce(dc.session_lost_count,0) as session_lost_count,
            coalesce(dc.started_flags,'') as started_flags,

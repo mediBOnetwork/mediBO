@@ -79,30 +79,44 @@ esac
 Q "update dev_commands set effort='high', model='claude-opus-5' where id=$X;" >/dev/null
 is "an admin/DBA CAN lower it" "$(Q "select effort||'/'||model from dev_commands where id=$X;")" "high/claude-opus-5"
 
-echo "── 4. a dead session is re-queued in minutes, not in forty ─────────────"
+echo "── 4. an UNREACHABLE session is re-queued in minutes, not in forty ────"
 L=$(mk high claude-opus-5)
 Q "update dev_commands set status='building', claimed_by='c1023-test', heartbeat_at=now(),
-          agent_alive_at=now() - interval '6 minutes', agent_pane_alive=true,
+          agent_alive_at=now() - interval '6 minutes', agent_pane_alive=false,
           agent_rc_session='rc-c1023-test' where id=$L;" >/dev/null
 Q "select dev_cmd_liveness_sweep();" >/dev/null
-is "a fresh heartbeat with a 6-minute-silent agent goes back to pending" \
+is "a fresh heartbeat with an unreachable session goes back to pending" \
    "$(Q "select status from dev_commands where id=$L;")" "pending"
 is "the worker is released with it" "$(Q "select coalesce(claimed_by,'-') from dev_commands where id=$L;")" "-"
 is "and Om is told why, in a system message" \
    "$(Q "select count(*) from dev_command_messages where command_id=$L and sender='system' and body like '%Re-queued%';")" "1"
 is "the loss is counted" "$(Q "select session_lost_count from dev_commands where id=$L;")" "1"
+is "model and effort survive the re-queue untouched" \
+   "$(Q "select effort||'/'||model from dev_commands where id=$L;")" "high/claude-opus-5"
 
-echo "── 5. a live agent is left alone, and warns before it is judged ────────"
+echo "── 5. a CONNECTED agent is never re-queued for being quiet ─────────────"
+# This is the guard against the obvious wrong fix. #692 sat 4m20s at its prompt
+# with four background shells while it waited for the merge worker; a rule that
+# reads silence as death throws that finished build away.
 A=$(mk high claude-opus-5)
 Q "update dev_commands set status='building', claimed_by='c1023-test',
-          agent_alive_at=now() - interval '3 minutes', agent_pane_alive=true where id=$A;" >/dev/null
+          agent_alive_at=now() - interval '20 minutes', agent_pane_alive=true where id=$A;" >/dev/null
 Q "select dev_cmd_liveness_sweep();" >/dev/null
-is "3 minutes silent is still building"       "$(Q "select status from dev_commands where id=$A;")" "building"
-is "…but the amber chip is raised"            "$(Q "select agent_silent_flagged from dev_commands where id=$A;")" "t"
-case "$(Q "select dev_cmd_agent_chip('building', true, now() - interval '6 minutes');")" in
-  *"agent silent"*) ok "the card sentence comes from the backend" ;;
-  *) bad "no agent_silent chip text" ;;
+is "20 minutes quiet but reachable is STILL building" "$(Q "select status from dev_commands where id=$A;")" "building"
+is "…and the amber chip is raised instead"            "$(Q "select agent_silent_flagged from dev_commands where id=$A;")" "t"
+case "$(Q "select dev_cmd_agent_chip('building', true, now() - interval '6 minutes', true);")" in
+  *"agent silent"*) ok "a reachable session reads 'agent silent'" ;;
+  *) bad "wrong chip for a reachable silent agent" ;;
 esac
+case "$(Q "select dev_cmd_agent_chip('building', true, now() - interval '6 minutes', false);")" in
+  *"disconnected"*) ok "an unreachable one says 'disconnected'" ;;
+  *) bad "wrong chip for an unreachable agent" ;;
+esac
+# A speaking agent clears the flag again on the next sweep.
+Q "update dev_commands set agent_alive_at=now() where id=$A;" >/dev/null
+Q "select dev_cmd_liveness_sweep();" >/dev/null
+is "a fresh turn clears the amber" "$(Q "select agent_silent_flagged from dev_commands where id=$A;")" "f"
+
 # A row that never reported liveness at all must never be judged on it.
 N=$(mk high claude-opus-5)
 Q "update dev_commands set status='building', claimed_by='c1023-test', agent_alive_at=null where id=$N;" >/dev/null
@@ -110,15 +124,28 @@ Q "select dev_cmd_liveness_sweep();" >/dev/null
 is "a runner that reports no liveness degrades to the old guards" \
    "$(Q "select status from dev_commands where id=$N;")" "building"
 
-echo "── 6. the pane exiting is judged immediately ───────────────────────────"
+echo "── 6. a momentary blip does not kill a live build ──────────────────────"
 P=$(mk high claude-opus-5)
 Q "update dev_commands set status='building', claimed_by='c1023-test',
           agent_alive_at=now(), agent_pane_alive=false where id=$P;" >/dev/null
 Q "select dev_cmd_liveness_sweep();" >/dev/null
-is "pane_alive=false is dead even with a turn one second ago" \
+is "unreachable but speaking one second ago survives the grace minute" \
+   "$(Q "select status from dev_commands where id=$P;")" "building"
+is "…while still going amber straight away" \
+   "$(Q "select agent_silent_flagged from dev_commands where id=$P;")" "t"
+Q "update dev_commands set agent_alive_at=now() - interval '2 minutes' where id=$P;" >/dev/null
+Q "select dev_cmd_liveness_sweep();" >/dev/null
+is "and is re-queued once the grace minute has passed" \
    "$(Q "select status from dev_commands where id=$P;")" "pending"
 
-for id in $X $H $L $A $N $P; do [ -n "${id:-}" ] && rm_row "$id"; done
+echo "── 7. a parked row is a known wait, never a lost session ───────────────"
+K=$(mk high claude-opus-5)
+Q "update dev_commands set status='building', claimed_by='c1023-test', wait_state='parked',
+          agent_alive_at=now() - interval '30 minutes', agent_pane_alive=false where id=$K;" >/dev/null
+Q "select dev_cmd_liveness_sweep();" >/dev/null
+is "a parked build is left alone" "$(Q "select status from dev_commands where id=$K;")" "building"
+
+for id in $X $H $L $A $N $P $K; do [ -n "${id:-}" ] && rm_row "$id"; done
 psql "$PGURL" -X -q -c "delete from dev_commands where title like 'c1023 ladder probe %$NONCE%';" >/dev/null 2>&1
 echo
 if [ "$fails" -eq 0 ]; then echo "c1023 effort/liveness behaviour: ALL GREEN"; exit 0; fi

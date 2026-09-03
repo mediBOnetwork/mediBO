@@ -170,6 +170,13 @@ class ExceptionsScreenState extends State<ExceptionsScreen> {
         ?.showSnackBar(SnackBar(content: Text(message)));
   }
 
+  /// CHANGE #470 — the deep link, handed straight to the shell. Same door the
+  /// route action already uses; nothing here interprets the route.
+  void _openLink(String route) {
+    if (route.isEmpty) return;
+    widget.onNavigate?.call(route);
+  }
+
   Future<void> _runAction(Map<String, dynamic> row) async {
     final act = asMap(row['next_action']);
     if (act['has'] != true) return;
@@ -282,6 +289,7 @@ class ExceptionsScreenState extends State<ExceptionsScreen> {
                 busy: _busy,
                 onAction: _runAction,
                 onClose: _close,
+                onLink: _openLink,
               )),
       ],
     );
@@ -394,11 +402,16 @@ class _ExceptionCard extends StatelessWidget {
   final Future<void> Function(Map<String, dynamic>) onAction;
   final Future<void> Function(Map<String, dynamic>) onClose;
 
+  /// CHANGE #470 — the row's own deep link. The screen never decides where it
+  /// goes; it hands the backend's route to the shell exactly as it arrived.
+  final void Function(String route) onLink;
+
   const _ExceptionCard({
     required this.data,
     required this.busy,
     required this.onAction,
     required this.onClose,
+    required this.onLink,
   });
 
   @override
@@ -407,6 +420,13 @@ class _ExceptionCard extends StatelessWidget {
     final (wash, ink) = toneColors(s('tone'));
     final act = asMap(data['next_action']);
     final canClose = data['can_close'] == true;
+    // CHANGE #470 — one tap to the exact screen that fixes it. When the action
+    // is itself a route the button already IS that link (the backend resolves
+    // both from the same field), so this only appears for an RPC action, where
+    // otherwise there was no way through to the screen at all.
+    final link = asMap(data['link']);
+    final linkOnly =
+        link['has'] == true && (act['kind'] ?? '').toString() != 'route';
 
     return Container(
       key: Key('exc_row_${s('id')}'),
@@ -448,6 +468,12 @@ class _ExceptionCard extends StatelessWidget {
               Text(s('sla_label'), style: Ds.t.caption.copyWith(color: ink)),
               Text(s('owner_label'), style: Ds.t.caption),
               Text(s('status_label'), style: Ds.t.caption),
+              // CHANGE #470 — the STAGE the thing is stuck at, in the
+              // backend's own words. A reason that is not stage-bound sends
+              // its own "no stage" sentence, so absence is still explicit.
+              if (s('stage_chip').isNotEmpty)
+                Text(s('stage_chip'),
+                    key: Key('exc_stage_${s('id')}'), style: Ds.t.caption),
             ],
           ),
           if (s('outcome_label').isNotEmpty) ...[
@@ -455,7 +481,7 @@ class _ExceptionCard extends StatelessWidget {
             Text(s('outcome_label'),
                 key: Key('exc_outcome_${s('id')}'), style: Ds.t.caption),
           ],
-          if (act['has'] == true || canClose) ...[
+          if (act['has'] == true || canClose || linkOnly) ...[
             SizedBox(height: Ds.space.x12),
             Row(children: [
               if (act['has'] == true)
@@ -470,7 +496,21 @@ class _ExceptionCard extends StatelessWidget {
                     ),
                   ),
                 ),
-              if (act['has'] == true && canClose)
+              if (linkOnly) ...[
+                if (act['has'] == true) SizedBox(width: Ds.space.x12),
+                SizedBox(
+                  height: Ds.touch.minTarget,
+                  child: TextButton(
+                    key: Key('exc_link_${s('id')}'),
+                    onPressed: busy
+                        ? null
+                        : () => onLink((link['route'] ?? '').toString()),
+                    child: Text((link['label'] ?? '').toString(),
+                        maxLines: 1, overflow: TextOverflow.ellipsis),
+                  ),
+                ),
+              ],
+              if ((act['has'] == true || linkOnly) && canClose)
                 SizedBox(width: Ds.space.x12),
               // One filled primary per surface, and it lives in the close
               // sheet: a list of cards each shouting a green button is a wall,

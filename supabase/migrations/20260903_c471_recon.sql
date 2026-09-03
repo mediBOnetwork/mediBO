@@ -1479,3 +1479,29 @@ begin
 end $function$
 
 ;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 11. REACHABILITY — the tile, in the registry the shell already renders
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Dashboard › Money › Reconciliation. The nav is backend-driven (#325/#653):
+-- this row IS the entry point, and `case 'recon'` in home_shell is its
+-- destination. icon_key must exist in the Dart catalogue — `fact_check` does,
+-- and the nav_icons_resolve guard fails the build if it ever does not.
+insert into public.feature_registry (
+  feature_key, label, icon_key, route_key, sort_order, owner, partner_eligible,
+  default_access, is_active, category, surface, roles_allowed, deep_link,
+  search_terms, description, canonical_key)
+values (
+  'admin.recon', 'Reconciliation', 'fact_check', 'recon', 870, 'medibo', false,
+  'none', true, 'money', 'dashboard', array['admin','super_admin'],
+  '/admin/recon',
+  'recon reconcile reconciliation drift money audit paisa gst settlement margin payments bills tally',
+  'Every night the money surfaces are compared against each other. A one-paisa difference is a finding.',
+  'admin.recon')
+on conflict (feature_key) do update set
+  label = excluded.label, icon_key = excluded.icon_key,
+  route_key = excluded.route_key, sort_order = excluded.sort_order,
+  category = excluded.category, surface = excluded.surface,
+  roles_allowed = excluded.roles_allowed, deep_link = excluded.deep_link,
+  search_terms = excluded.search_terms, description = excluded.description,
+  is_active = true;

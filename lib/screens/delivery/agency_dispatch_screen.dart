@@ -23,6 +23,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../design_tokens.dart';
+import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
 
 /// How often the board is re-asked so the backend's countdown stays truthful.
@@ -44,6 +45,7 @@ class AgencyDispatchScreen extends StatefulWidget {
 class _AgencyDispatchScreenState extends State<AgencyDispatchScreen> {
   Map<String, dynamic> _board = const {};
   bool _loading = true;
+  bool _failed = false;
   bool _busy = false;
   Timer? _tick;
 
@@ -69,6 +71,7 @@ class _AgencyDispatchScreenState extends State<AgencyDispatchScreen> {
       setState(() {
         _board = m;
         _loading = false;
+        _failed = false;
       });
       RenderLog.write(
           'c704_agency_dispatch',
@@ -77,7 +80,13 @@ class _AgencyDispatchScreenState extends State<AgencyDispatchScreen> {
           'riders=${AgencyBoard.rows(m, 'riders').length}');
     } catch (e) {
       if (!mounted) return;
-      setState(() => _loading = false);
+      // The payload never arrived, so there is no payload to print. The words
+      // for THAT are already on the device (ui_copy, cached at boot) — the
+      // screen still says nothing of its own.
+      setState(() {
+        _loading = false;
+        _failed = true;
+      });
       RenderLog.write('c704_agency_dispatch_err', e.toString());
     }
   }
@@ -103,6 +112,10 @@ class _AgencyDispatchScreenState extends State<AgencyDispatchScreen> {
       // Success and refusal are printed the same way: whatever the backend said.
       _toast(_s(m['message']));
     } catch (_) {
+      // A thrown call is not a refusal — the backend never got to answer. Say
+      // so with the backend's own sentence rather than leaving a tap that
+      // looks like it did nothing.
+      _toast(UiCopy.t('agency.assign_error'));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -114,14 +127,16 @@ class _AgencyDispatchScreenState extends State<AgencyDispatchScreen> {
       backgroundColor: Ds.c.bg,
       appBar: AppBar(title: Text(_s(_board['title']))),
       body: _loading
-          ? const Center(child: CircularProgressIndicator())
+          ? const AgencyDispatchSkeleton()
           : RefreshIndicator(
               onRefresh: _load,
-              child: AgencyDispatchBoardBody(
-                board: _board,
-                busy: _busy,
-                onAssign: _assign,
-              ),
+              child: _failed
+                  ? AgencyDispatchFailure(onRetry: _load)
+                  : AgencyDispatchBoardBody(
+                      board: _board,
+                      busy: _busy,
+                      onAssign: _assign,
+                    ),
             ),
     );
   }
@@ -288,8 +303,12 @@ class AgencyDispatchBoardBody extends StatelessWidget {
           SizedBox(height: Ds.space.x12),
           SizedBox(
             width: double.infinity,
-            height: Ds.touch.minTarget,
-            child: ElevatedButton(
+            // FilledButton, not ElevatedButton: the brand fill and the 48px
+            // minimum live in buildTheme()'s filledButtonTheme, and only
+            // FilledButton reads them. An ElevatedButton here paints Material's
+            // own pale default — an off-brand primary action, decided by the
+            // framework instead of by the design tokens.
+            child: FilledButton(
               onPressed: busy ? null : () => _pickRider(context, s),
               child: Text(_s(action['label'])),
             ),
@@ -310,6 +329,85 @@ class AgencyDispatchBoardBody extends StatelessWidget {
       ),
       child: Text(label,
           style: Ds.t.caption.copyWith(color: AgencyBoard.toneColor(tone))),
+    );
+  }
+}
+
+/// What the board looks like while it is being asked for — the same card
+/// rhythm the real list uses, so the page does not jump when the payload
+/// lands. A skeleton, deliberately, not a spinner: a spinner says "wait", a
+/// skeleton says what is coming.
+class AgencyDispatchSkeleton extends StatelessWidget {
+  const AgencyDispatchSkeleton({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: EdgeInsets.fromLTRB(
+          Ds.space.x16, Ds.space.x16, Ds.space.x16, Ds.space.x32),
+      children: [
+        for (var i = 0; i < 3; i++)
+          Container(
+            margin: EdgeInsets.only(bottom: Ds.space.x12),
+            padding: EdgeInsets.all(Ds.space.x16),
+            decoration: BoxDecoration(
+              color: Ds.c.surface,
+              borderRadius: BorderRadius.circular(Ds.r.card),
+              boxShadow: Ds.elevation.e1,
+            ),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              _bar(widthFactor: 0.55, height: Ds.space.x16),
+              SizedBox(height: Ds.space.x8),
+              _bar(widthFactor: 0.35, height: Ds.space.x12),
+              SizedBox(height: Ds.space.x12),
+              _bar(widthFactor: 0.8, height: Ds.space.x12),
+              SizedBox(height: Ds.space.x16),
+              _bar(widthFactor: 1, height: Ds.touch.minTarget),
+            ]),
+          ),
+      ],
+    );
+  }
+
+  Widget _bar({required double widthFactor, required double height}) =>
+      FractionallySizedBox(
+        alignment: Alignment.centerLeft,
+        widthFactor: widthFactor,
+        child: Container(
+          height: height,
+          decoration: BoxDecoration(
+            color: Ds.c.bg,
+            borderRadius: BorderRadius.circular(Ds.r.chip),
+          ),
+        ),
+      );
+}
+
+/// The board could not be asked at all. The one state with no payload behind
+/// it, so both sentences come from ui_copy — cached at boot, which is exactly
+/// why they are still readable when the network is not.
+class AgencyDispatchFailure extends StatelessWidget {
+  final Future<void> Function() onRetry;
+
+  const AgencyDispatchFailure({super.key, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: EdgeInsets.all(Ds.space.x24),
+      children: [
+        SizedBox(height: Ds.space.x32),
+        Text(UiCopy.t('agency.load_error'),
+            textAlign: TextAlign.center, style: Ds.t.body),
+        SizedBox(height: Ds.space.x24),
+        SizedBox(
+          height: Ds.touch.minTarget,
+          child: OutlinedButton(
+            onPressed: () => onRetry(),
+            child: Text(UiCopy.t('agency.retry')),
+          ),
+        ),
+      ],
     );
   }
 }

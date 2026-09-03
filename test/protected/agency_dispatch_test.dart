@@ -17,7 +17,9 @@
 //      has_bags:false remove those facts from the card instead of printing a
 //      dash, an empty separator or a zero.
 //
-//   3. Buttons are the payload's. action.has:false renders no button at all —
+//   3. Buttons are the payload's, and the primary one is a FilledButton so the
+//      brand fill comes from buildTheme() rather than from Material's own
+//      default. action.has:false renders no button at all —
 //      a stop in a state this build has never heard of offers nothing rather
 //      than guessing an action, and the label is never typed in Dart.
 //
@@ -29,12 +31,21 @@
 //   5. Sections render in PAYLOAD ORDER (the fixture is deliberately not
 //      alphabetical), and a section key this build does not know is an empty
 //      list rather than a crash.
+//
+//   6. The two states with no payload behind them are still readable. While it
+//      loads the board paints a SKELETON, not a bare spinner. When the call
+//      itself fails there is no payload to print, so the sentence and the retry
+//      label come from ui_copy — which is cached at boot, which is why they are
+//      still there when the network is not. Neither string is typed in Dart:
+//      seed no copy and the failure page renders empty rather than inventing
+//      wording.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:pharma_b2b/design_tokens.dart';
 import 'package:pharma_b2b/screens/delivery/agency_dispatch_screen.dart';
+import 'package:pharma_b2b/services/ui_copy.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 
 Map<String, dynamic> _stop({
@@ -193,14 +204,14 @@ void main() {
     testWidgets('the button is the payload button, and absent when has:false',
         (t) async {
       await _pump(t, _board());
-      expect(find.widgetWithText(ElevatedButton, 'Pick a rider'), findsNWidgets(2));
-      expect(find.widgetWithText(ElevatedButton, 'Change rider'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Pick a rider'), findsNWidgets(2));
+      expect(find.widgetWithText(FilledButton, 'Change rider'), findsOneWidget);
 
       final b = _board();
       b['waiting'] = [_stop(code: 'X', pharmacy: 'No Action Pharmacy', hasAction: false)];
       b['running'] = <Map<String, dynamic>>[];
       await _pump(t, b);
-      expect(find.byType(ElevatedButton), findsNothing,
+      expect(find.byType(FilledButton), findsNothing,
           reason: 'a state this build has never heard of offers no action '
               'rather than guessing one');
     });
@@ -226,14 +237,14 @@ void main() {
         'riders': <Map<String, dynamic>>[],
       });
       expect(find.text('This login is not an agency account.'), findsOneWidget);
-      expect(find.byType(ElevatedButton), findsNothing);
+      expect(find.byType(FilledButton), findsNothing);
     });
   });
 
   group('the pick sheet offers exactly who the backend allowed', () {
     testWidgets('a rider with can_take:false is not on the list', (t) async {
       await _pump(t, _board());
-      await t.tap(find.widgetWithText(ElevatedButton, 'Pick a rider').first);
+      await t.tap(find.widgetWithText(FilledButton, 'Pick a rider').first);
       await t.pumpAndSettle();
 
       expect(find.text('Give this stop to'), findsOneWidget);
@@ -251,10 +262,59 @@ void main() {
         (r as Map)['can_take'] = false;
       }
       await _pump(t, b);
-      await t.tap(find.widgetWithText(ElevatedButton, 'Pick a rider').first);
+      await t.tap(find.widgetWithText(FilledButton, 'Pick a rider').first);
       await t.pumpAndSettle();
       expect(find.text('No rider on your team has spare capacity right now.'),
           findsOneWidget);
+    });
+  });
+
+  group('the states with no payload behind them', () {
+    testWidgets('loading paints a skeleton, never a bare spinner', (t) async {
+      await t.pumpWidget(const MaterialApp(
+          home: Scaffold(body: AgencyDispatchSkeleton())));
+      await t.pump();
+      expect(find.byType(CircularProgressIndicator), findsNothing,
+          reason: 'a spinner says "wait"; the skeleton says what is coming');
+      expect(find.byType(FractionallySizedBox), findsWidgets);
+    });
+
+    testWidgets('a failed load prints ui_copy and offers Retry', (t) async {
+      UiCopy.debugSet(const {
+        'agency.load_error': 'Could not load your dispatch board. Check the '
+            'connection and try again.',
+        'agency.retry': 'Try again',
+      });
+      addTearDown(() => UiCopy.debugSet(const {}));
+
+      var retried = 0;
+      await t.pumpWidget(MaterialApp(
+        home: Scaffold(
+            body: AgencyDispatchFailure(onRetry: () async {
+          retried++;
+        })),
+      ));
+      await t.pumpAndSettle();
+
+      expect(
+          find.text('Could not load your dispatch board. Check the connection '
+              'and try again.'),
+          findsOneWidget);
+      await t.tap(find.widgetWithText(OutlinedButton, 'Try again'));
+      await t.pumpAndSettle();
+      expect(retried, 1, reason: 'the retry must re-ask the backend');
+    });
+
+    testWidgets('with no copy seeded the failure page invents no wording',
+        (t) async {
+      UiCopy.debugSet(const {});
+      await t.pumpWidget(MaterialApp(
+        home: Scaffold(body: AgencyDispatchFailure(onRetry: () async {})),
+      ));
+      await t.pumpAndSettle();
+      expect(find.text('Try again'), findsNothing,
+          reason: 'a missing key renders empty — a Dart fallback would be a '
+              'second copy of the answer, and one of them would go stale');
     });
   });
 }

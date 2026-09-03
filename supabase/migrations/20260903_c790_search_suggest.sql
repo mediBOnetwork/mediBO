@@ -103,9 +103,14 @@ do $$ begin
   end if;
 end $$;
 
-drop policy if exists "public read search_suggest_cache" on public.search_suggest_cache;
-create policy "public read search_suggest_cache"
-  on public.search_suggest_cache for select using (true);
+do $$ begin
+  if not exists (select 1 from pg_policies where schemaname = 'public'
+                   and tablename = 'search_suggest_cache'
+                   and policyname = 'public read search_suggest_cache') then
+    create policy "public read search_suggest_cache"
+      on public.search_suggest_cache for select using (true);
+  end if;
+end $$;
 
 comment on table public.search_suggest_cache is
   'CHANGE #790 — every typeahead suggestion. Written by catalogue_cache_tick(); NEVER queried live over MEDICINE.';
@@ -138,9 +143,14 @@ do $$ begin
     alter table public.search_synonym enable row level security;
   end if;
 end $$;
-drop policy if exists "public read search_synonym" on public.search_synonym;
-create policy "public read search_synonym"
-  on public.search_synonym for select using (true);
+do $$ begin
+  if not exists (select 1 from pg_policies where schemaname = 'public'
+                   and tablename = 'search_synonym'
+                   and policyname = 'public read search_synonym') then
+    create policy "public read search_synonym"
+      on public.search_synonym for select using (true);
+  end if;
+end $$;
 
 comment on table public.search_synonym is
   'CHANGE #790 — Hindi/Hinglish search terms mapped to a salt or a therapeutic class. Seeded from Gemini, admin-editable.';
@@ -200,15 +210,16 @@ begin
   v_ord := v_ord + 1;
   insert into public.catalogue_refresh_unit(ord, kind, zone_id, arg)
     values (v_ord, 'suggest_reset', 0::smallint, '');
-  -- 50k ids per unit, not 150k: the brand sweep needs four wide columns per
-  -- row, so it is heap I/O bound and a 150k range ran past the 55 s cap.
+  -- 25k ids per unit, not 150k: the brand sweep needs four wide columns per
+  -- row, so it is heap I/O bound (~50 s per range on a cold cache) and a 150k
+  -- range ran past the statement cap outright.
   v_lo := v_min;
   while v_lo <= v_max loop
     v_ord := v_ord + 1;
     insert into public.catalogue_refresh_unit(ord, kind, zone_id, arg, arg2)
       values (v_ord, 'suggest_brand', 0::smallint, v_lo::text,
-              least(v_lo + 49999, v_max)::text);
-    v_lo := v_lo + 50000;
+              least(v_lo + 24999, v_max)::text);
+    v_lo := v_lo + 25000;
   end loop;
   -- zone membership for the families, off the 83k-row zone list rather than
   -- dragged through the 5.6 lakh-row sweep above

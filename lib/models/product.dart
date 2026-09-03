@@ -620,6 +620,12 @@ class Product {
   /// CHANGE #573 — the backend's rendered price block for this row.
   final Pricing? pricing;
 
+  /// CMD #791 — this buyer's own history with this pack, decided and worded by
+  /// `purchase_overlay_map()`. Absent (`has:false`) for an anonymous visitor and
+  /// for anyone with no order of it, which is how the same card serves both:
+  /// the content is public, the history is not.
+  final PurchaseOverlay purchase;
+
   /// CHANGE #673 — the backend's own offer chip, e.g. "Scheme available".
   /// [hasOffer] is the backend's boolean; the card NEVER infers an offer from
   /// the presence of a string, and never invents a "5+1" of its own.
@@ -671,6 +677,7 @@ class Product {
     this.mrpText = '',
     this.hasOffer = false,
     this.offerChip = '',
+    this.purchase = const PurchaseOverlay.absent(),
   });
 
   /// Returns a copy carrying [availability] — used to graft a cart line's
@@ -769,6 +776,10 @@ class Product {
       hasOffer: map['has_offer'] == true,
       offerChip: (map['offer_chip'] ?? '').toString(),
       rx: (map['rx'] as Map?)?.cast<String, dynamic>(),
+      // CMD #791 — present on the catalogue grid's rows (storefront_page
+      // resolves the whole page's overlays in ONE scan of order_items) and
+      // absent everywhere else, which parses to PurchaseOverlay.absent().
+      purchase: PurchaseOverlay.fromMap(map['purchase']),
     );
   }
 
@@ -996,4 +1007,90 @@ class Product {
   /// #102: True only when buyable==true (at least one PS supplier).
   /// null (during backfill) is treated as false (unavailable) for safety.
   bool get isBuyable => buyable == true;
+}
+
+
+/// CMD #791 — "Last ordered 12 Aug · 3× last month · usual qty 9".
+///
+/// Every part of that sentence is `purchase_overlay_map()`'s: the date is
+/// formatted in Postgres, the "×" count is counted there, the plural is decided
+/// there and the whole line is joined there. This class parses; it formats
+/// nothing. [chips] is the same content pre-split so a wide surface can show
+/// three pills and a narrow one can show [label]; the app picks the layout, not
+/// the words.
+///
+/// [has] is the backend's answer to "does this viewer have history here", and
+/// it is false for an anonymous visitor by construction — the RPC returns an
+/// empty map the moment `my_customer_id()` is null. There is no client-side
+/// "am I logged in" branch anywhere near this.
+class PurchaseOverlay {
+  final bool has;
+  final String title;
+  final String label;
+  final List<String> chips;
+
+  /// The one-pill form for a catalogue card, where the full sentence does not
+  /// fit: "Ordered 12 Aug".
+  final String shortLabel;
+  final String lastLabel;
+
+  /// The quantity this pharmacy usually buys — the MODE of its past orders,
+  /// decided server-side. [canAdd] is the backend's flag, never `usualQty > 0`
+  /// re-derived here.
+  final int usualQty;
+  final bool canAdd;
+  final String addLabel;
+
+  /// `{bg, fg}` hex pair from the payload. The card resolves it through
+  /// `Ds.hex(...)` with a token fallback, so a missing tone degrades to the
+  /// theme rather than to a colour typed in Dart.
+  final Map<String, dynamic> tone;
+
+  const PurchaseOverlay({
+    required this.has,
+    required this.title,
+    required this.label,
+    required this.chips,
+    required this.shortLabel,
+    required this.lastLabel,
+    required this.usualQty,
+    required this.canAdd,
+    required this.addLabel,
+    required this.tone,
+  });
+
+  const PurchaseOverlay.absent()
+      : has = false,
+        title = '',
+        label = '',
+        chips = const [],
+        shortLabel = '',
+        lastLabel = '',
+        usualQty = 0,
+        canAdd = false,
+        addLabel = '',
+        tone = const {};
+
+  factory PurchaseOverlay.fromMap(Object? raw) {
+    if (raw is! Map) return const PurchaseOverlay.absent();
+    if (raw['has'] != true) return const PurchaseOverlay.absent();
+    final m = raw.cast<String, dynamic>();
+    return PurchaseOverlay(
+      has: true,
+      title: (m['title'] ?? '').toString(),
+      label: (m['label'] ?? '').toString(),
+      chips: ((m['chips'] as List?) ?? const [])
+          .map((e) => e.toString())
+          .where((e) => e.isNotEmpty)
+          .toList(growable: false),
+      shortLabel: (m['short_label'] ?? '').toString(),
+      lastLabel: (m['last_label'] ?? '').toString(),
+      usualQty: (m['usual_qty'] is num)
+          ? (m['usual_qty'] as num).toInt()
+          : int.tryParse((m['usual_qty'] ?? '').toString()) ?? 0,
+      canAdd: m['can_add'] == true,
+      addLabel: (m['add_label'] ?? '').toString(),
+      tone: (m['tone'] as Map?)?.cast<String, dynamic>() ?? const {},
+    );
+  }
 }

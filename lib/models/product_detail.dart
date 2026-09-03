@@ -1,4 +1,4 @@
-import 'product.dart' show Availability, Pricing;
+import 'product.dart' show Availability, Pricing, PurchaseOverlay;
 import 'product_reviews.dart' show RatingSummary;
 
 /// CHANGE #636 — the `product_detail(p_product_id)` payload, parsed and nothing
@@ -118,6 +118,28 @@ class ProductDetail {
   /// promise we never measured.
   final PdPromise deliveryPromise;
 
+  /// CMD #791 — the pack shots. `product_gallery()` sends up to five URLs in
+  /// slot order (image_url_1..5, which is what `r2_cutover()` rewrites in
+  /// place, so these become the R2 URLs the moment a product is migrated and
+  /// nothing here changes) plus a PRE-RENDERED "2 / 5" per image. The viewer
+  /// prints the counter at the index it is showing; it never builds "x / y".
+  final PdGallery gallery;
+
+  /// CMD #791 — salt & strength, form, pack, Rx/OTC, habit forming, cold
+  /// chain, storage. One list of {label, value}, both halves stored strings.
+  /// A blank column is an ABSENT row, never a dash.
+  final PdFacts facts;
+
+  /// CMD #791 — this buyer's own history with the pack. `has` is false for an
+  /// anonymous visitor because `purchase_overlay()` returns nothing without a
+  /// customer account, not because the page checked a login flag.
+  final PurchaseOverlay purchase;
+
+  /// CMD #791 — frequently bought together, from the nightly co-purchase job.
+  /// Pairs are formed only between products of the SAME prescription class, so
+  /// an OTC pack can never surface a Schedule-H companion.
+  final PdCompanions companions;
+
   final bool hasHistory;
   final String historyLabel;
 
@@ -168,6 +190,10 @@ class ProductDetail {
     required this.similar,
     required this.substitutes,
     required this.deliveryPromise,
+    this.gallery = const PdGallery.empty(),
+    this.facts = const PdFacts.empty(),
+    this.purchase = const PurchaseOverlay.absent(),
+    this.companions = const PdCompanions.empty(),
     required this.hasHistory,
     required this.historyLabel,
     required this.showWishlist,
@@ -273,6 +299,10 @@ class ProductDetail {
           .toList(growable: false),
       substitutes: PdSubstitutes.fromMap(m['substitutes']),
       deliveryPromise: PdPromise.fromMap(m['delivery_promise']),
+      gallery: PdGallery.fromMap(m['gallery'], header['images']),
+      facts: PdFacts.fromMap(m['facts']),
+      purchase: PurchaseOverlay.fromMap(m['purchase']),
+      companions: PdCompanions.fromMap(m['companions']),
       hasHistory: hist['has'] == true,
       historyLabel: _s(hist['label']),
       showWishlist: m['show_wishlist'] == true,
@@ -517,6 +547,195 @@ class PdTrust {
                 note: c['note']?.toString() ?? '',
                 tone: c['tone']?.toString() ?? '',
               ))
+          .toList(growable: false),
+    );
+  }
+}
+
+
+/// CMD #791 — one pack shot plus the counter string the backend rendered for
+/// its position ("2 / 5"). The viewer prints [counterLabel] verbatim.
+class PdGalleryImage {
+  final String url;
+  final String counterLabel;
+  const PdGalleryImage({required this.url, required this.counterLabel});
+}
+
+/// CMD #791 — the gallery block.
+///
+/// [has] and [count] are the backend's, so a product with one shot renders one
+/// shot and no dots rather than a page control the app decided to hide. The
+/// legacy `header.images` list is still parsed as the fallback when a cached
+/// payload predates this change: the gallery is then built from those URLs with
+/// EMPTY counter labels, because a counter this app assembled would be exactly
+/// the string the backend is supposed to own.
+class PdGallery {
+  final bool has;
+  final int count;
+  final String zoomHint;
+  final String closeLabel;
+  final List<PdGalleryImage> images;
+
+  const PdGallery({
+    required this.has,
+    required this.count,
+    required this.zoomHint,
+    required this.closeLabel,
+    required this.images,
+  });
+
+  const PdGallery.empty()
+      : has = false,
+        count = 0,
+        zoomHint = '',
+        closeLabel = '',
+        images = const [];
+
+  factory PdGallery.fromMap(Object? raw, Object? legacyImages) {
+    if (raw is Map) {
+      final m = raw.cast<String, dynamic>();
+      final imgs = ((m['images'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((e) => PdGalleryImage(
+                url: ProductDetail._s(e['url']),
+                counterLabel: ProductDetail._s(e['counter_label']),
+              ))
+          .where((e) => e.url.isNotEmpty)
+          .toList(growable: false);
+      if (imgs.isNotEmpty || m['has'] == true) {
+        return PdGallery(
+          has: m['has'] == true,
+          count: (m['count'] is num)
+              ? (m['count'] as num).toInt()
+              : int.tryParse(ProductDetail._s(m['count'])) ?? imgs.length,
+          zoomHint: ProductDetail._s(m['zoom_hint']),
+          closeLabel: ProductDetail._s(m['close_label']),
+          images: imgs,
+        );
+      }
+    }
+    final legacy = ((legacyImages as List?) ?? const [])
+        .map(ProductDetail._s)
+        .where((s) => s.isNotEmpty)
+        .map((u) => PdGalleryImage(url: u, counterLabel: ''))
+        .toList(growable: false);
+    if (legacy.isEmpty) return const PdGallery.empty();
+    return PdGallery(
+      has: true,
+      count: legacy.length,
+      zoomHint: '',
+      closeLabel: '',
+      images: legacy,
+    );
+  }
+}
+
+/// CMD #791 — one fact row. [key] is the backend's stable identifier for the
+/// row (salt / form / pack / rx / habit / cold_chain / storage); the app uses
+/// it for nothing but a widget key, because every word to show is already in
+/// [label] and [value].
+class PdFactRow {
+  final String key;
+  final String label;
+  final String value;
+  const PdFactRow({required this.key, required this.label, required this.value});
+}
+
+class PdFacts {
+  final bool has;
+  final String title;
+  final List<PdFactRow> rows;
+  const PdFacts({required this.has, required this.title, required this.rows});
+  const PdFacts.empty() : has = false, title = '', rows = const [];
+
+  factory PdFacts.fromMap(Object? raw) {
+    if (raw is! Map) return const PdFacts.empty();
+    final m = raw.cast<String, dynamic>();
+    return PdFacts(
+      has: m['has'] == true,
+      title: ProductDetail._s(m['title']),
+      rows: ((m['rows'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((r) => PdFactRow(
+                key: ProductDetail._s(r['key']),
+                label: ProductDetail._s(r['label']),
+                value: ProductDetail._s(r['value']),
+              ))
+          .toList(growable: false),
+    );
+  }
+}
+
+/// CMD #791 — one companion tile. [pricing] and [availability] are the SAME
+/// blocks the storefront card reads, so a companion's price and its own card's
+/// price cannot drift apart. [supportLabel] is the backend's evidence string
+/// ("6 orders"); the app never prints a support NUMBER of its own.
+class PdCompanion {
+  final String id;
+  final String name;
+  final String company;
+  final String packLabel;
+  final String formChip;
+  final String image;
+  final String supportLabel;
+  final Pricing? pricing;
+  final Availability? availability;
+
+  const PdCompanion({
+    required this.id,
+    required this.name,
+    required this.company,
+    required this.packLabel,
+    required this.formChip,
+    required this.image,
+    required this.supportLabel,
+    required this.pricing,
+    required this.availability,
+  });
+
+  factory PdCompanion.fromMap(Map<String, dynamic> m) => PdCompanion(
+        id: ProductDetail._s(m['id']),
+        name: ProductDetail._s(m['name']),
+        company: ProductDetail._s(m['company']),
+        packLabel: ProductDetail._s(m['pack_label']),
+        formChip: ProductDetail._s(m['form_chip']),
+        image: ProductDetail._s(m['image']),
+        supportLabel: ProductDetail._s(m['support_label']),
+        pricing: Pricing.fromMap(m['pricing']),
+        availability: Availability.fromMap(m['availability']),
+      );
+}
+
+/// CMD #791 — the co-purchase rail. [has] is the backend's verdict: a product
+/// nobody has bought alongside anything else yet shows NO rail, rather than a
+/// "you might also like" the platform invented.
+class PdCompanions {
+  final bool has;
+  final String title;
+  final String note;
+  final List<PdCompanion> items;
+  const PdCompanions({
+    required this.has,
+    required this.title,
+    required this.note,
+    required this.items,
+  });
+  const PdCompanions.empty()
+      : has = false,
+        title = '',
+        note = '',
+        items = const [];
+
+  factory PdCompanions.fromMap(Object? raw) {
+    if (raw is! Map) return const PdCompanions.empty();
+    final m = raw.cast<String, dynamic>();
+    return PdCompanions(
+      has: m['has'] == true,
+      title: ProductDetail._s(m['title']),
+      note: ProductDetail._s(m['note']),
+      items: ((m['items'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((r) => PdCompanion.fromMap(r.cast<String, dynamic>()))
           .toList(growable: false),
     );
   }

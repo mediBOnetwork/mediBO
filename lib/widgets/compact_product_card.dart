@@ -306,6 +306,27 @@ class _Plate extends StatelessWidget {
                 fg: pricing!.marginChip?.fg,
               ),
             ),
+          // CMD #791 — the repeat-purchase badge. It rides ON the plate, in
+          // the same place and for the same reason as the scheme badge: the
+          // grid's mainAxisExtent is a SUM of this card's constants, so a new
+          // row under the price would silently overflow every grid that
+          // reserves it. `has` is the backend's — an anonymous visitor's
+          // payload simply carries no `purchase` block, so nothing here asks
+          // whether anyone is signed in.
+          //
+          // Tapping it is the one-tap re-order: it SETS the usual quantity the
+          // backend decided, it does not increment. Not offered on a sold-out
+          // plate, because `canAdd` is false there and the write would be
+          // refused by the same verdict the pill already reads.
+          if (product.purchase.has)
+            Positioned(
+              left: CompactProductCard._gapM,
+              bottom: CompactProductCard._footerH + CompactProductCard._gapS,
+              child: _PurchaseBadge(
+                product: product,
+                enabled: !soldOut && product.purchase.canAdd,
+              ),
+            ),
           // CHANGE #274 — the scheme badge moved onto the plate. It used to own
           // an 18px row under the price on EVERY card, which is height spent on
           // the cards that have no scheme.
@@ -882,6 +903,48 @@ class _C461RxChip extends StatelessWidget {
       child: Text(
         label,
         style: Ds.t.caption.copyWith(color: Ds.hex(tone?['fg'], Ds.c.text)),
+      ),
+    );
+  }
+}
+
+
+/// CMD #791 — the catalogue card's repeat-purchase badge.
+///
+/// One pill, one word set, one tap. `short_label` ("Ordered 12 Aug") is the
+/// backend's compact form of the same sentence the product page prints in
+/// full — the card does not truncate the long one, because a truncation is a
+/// string decision and those belong upstream.
+///
+/// The tap SETS `usual_qty`. A pharmacy that always buys three strips gets
+/// three in one tap instead of three taps on the plus, and the number comes
+/// from its own order history rather than from anything this widget counts.
+class _PurchaseBadge extends StatelessWidget {
+  final Product product;
+  final bool enabled;
+  const _PurchaseBadge({required this.product, required this.enabled});
+
+  @override
+  Widget build(BuildContext context) {
+    final o = product.purchase;
+    if (o.shortLabel.isEmpty) return const SizedBox.shrink();
+    final bg = Ds.hex(o.tone['bg'], Ds.c.bg);
+    final fg = Ds.hex(o.tone['fg'], Ds.c.text);
+
+    return GestureDetector(
+      onTap: enabled
+          ? () => AppState.of(context).setQuantityId(product.id, o.usualQty)
+          : null,
+      child: Container(
+        padding: EdgeInsets.symmetric(
+            horizontal: Ds.space.x8, vertical: Ds.space.x4),
+        decoration: BoxDecoration(color: bg, borderRadius: Ds.r.rChip),
+        child: Text(
+          o.shortLabel,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Ds.t.caption.copyWith(color: fg),
+        ),
       ),
     );
   }

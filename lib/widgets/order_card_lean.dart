@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../design_tokens.dart';
+import '../screens/orders/order_hold_sheet.dart';
 import 'delivery_proof_card.dart';
 
 /// CHANGE #630 — the customer's Orders tab, in the pieces that hold a contract.
@@ -60,6 +61,17 @@ class CustomerOrderCard {
   /// it. There is no clock arithmetic on this side of the wire.
   final Map<String, dynamic> eta;
 
+  /// CHANGE #708 — the hold, exactly as `order_hold_state()` sent it. `held`
+  /// is the fact; `badge` is the sentence (it already carries the reason, or
+  /// the date it resumes). The card never decides which of those to print and
+  /// never words either of them. Absent block = no hold, no badge, no chip.
+  final Map<String, dynamic> hold;
+
+  /// `order_hold_sheet()`, carried on the row so the card knows whether Hold
+  /// is even offerable here — the stage gate is the BACKEND's, and a chip that
+  /// opens onto a refusal is worse than no chip.
+  final Map<String, dynamic> holdSheet;
+
   const CustomerOrderCard({
     required this.id,
     required this.orderCode,
@@ -78,6 +90,8 @@ class CustomerOrderCard {
     required this.placedByAdmin,
     required this.placedByAdminLabel,
     this.eta = const {},
+    this.hold = const {},
+    this.holdSheet = const {},
   });
 
   factory CustomerOrderCard.fromPayload(Map<String, dynamic> row) {
@@ -108,6 +122,12 @@ class CustomerOrderCard {
       placedByAdminLabel: (row['placed_by_admin_label'] ?? '').toString(),
       eta: row['eta'] is Map
           ? Map<String, dynamic>.from(row['eta'] as Map)
+          : const {},
+      hold: row['hold'] is Map
+          ? Map<String, dynamic>.from(row['hold'] as Map)
+          : const {},
+      holdSheet: row['hold_sheet'] is Map
+          ? Map<String, dynamic>.from(row['hold_sheet'] as Map)
           : const {},
     );
   }
@@ -163,11 +183,37 @@ class OrderCardLean extends StatelessWidget {
   /// The primary action was tapped; the caller routes the backend's key.
   final ValueChanged<String> onAction;
 
+  /// CHANGE #708 — the hold door was tapped. Defaults to opening the shared
+  /// sheet, so the affordance works on every surface this card is used on
+  /// without each of them wiring a router case.
+  final ValueChanged<String>? onHoldTap;
+
   const OrderCardLean(
       {super.key,
       required this.card,
       required this.onOpen,
-      required this.onAction});
+      required this.onAction,
+      this.onHoldTap});
+
+  void _openHold(BuildContext context, String orderId) {
+    final tap = onHoldTap;
+    if (tap != null) {
+      tap(orderId);
+      return;
+    }
+    showOrderHoldSheet(context, orderId);
+  }
+
+  /// The word on the hold door, always the backend's. Empty when there is no
+  /// door: not held, and not holdable at this stage.
+  static String _holdDoorLabel(CustomerOrderCard c) {
+    final sheet = c.holdSheet;
+    if (c.hold['held'] == true) {
+      return (sheet['resume_submit_label'] ?? '').toString();
+    }
+    if (sheet['can_hold'] == true) return (sheet['title'] ?? '').toString();
+    return '';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -220,6 +266,17 @@ class OrderCardLean extends StatelessWidget {
                   ),
                 ],
               ),
+              // CHANGE #708 — parked. The badge is the payload's own sentence
+              // and it sits ABOVE the stage word, because "on hold" is the
+              // more important truth: the stage is where it will carry on
+              // from, not where it is going next.
+              if (card.hold['held'] == true) ...[
+                SizedBox(height: Ds.space.x12),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: _HoldBadge(text: (card.hold['badge'] ?? '').toString()),
+                ),
+              ],
               SizedBox(height: Ds.space.x12),
               Text(card.stageLabel, style: Ds.t.body),
               // CHANGE #691 (register row 122) — the stage word said "Out for
@@ -240,6 +297,26 @@ class OrderCardLean extends StatelessWidget {
               if (card.progressShow && card.progressSteps.isNotEmpty) ...[
                 SizedBox(height: Ds.space.x12),
                 OrderProgressLine(steps: card.progressSteps),
+              ],
+              // CHANGE #708 — the hold door. It appears only when the BACKEND
+              // says this order may be held (the stage gate) or is already
+              // held; there is no disabled button here to tap and be refused
+              // by. Tapping opens the one sheet both roles share.
+              if (_holdDoorLabel(card).isNotEmpty) ...[
+                SizedBox(height: Ds.space.x8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton(
+                    onPressed: () => _openHold(context, card.id),
+                    style: TextButton.styleFrom(
+                      foregroundColor: card.hold['held'] == true
+                          ? Ds.c.brand
+                          : Ds.c.textSecondary,
+                      minimumSize: Size(Ds.touch.minTarget, Ds.touch.minTarget),
+                    ),
+                    child: Text(_holdDoorLabel(card)),
+                  ),
+                ),
               ],
               // ONE action. An order with no action sent renders no button at
               // all rather than falling back to a word written here.
@@ -384,6 +461,28 @@ class OrdersFilterChip extends StatelessWidget {
               Ds.t.bodyStrong.copyWith(color: selected ? Ds.c.surface : Ds.c.text),
         ),
       ),
+    );
+  }
+}
+
+/// CHANGE #708 — the parked badge. One sentence, the payload's own, in the
+/// warning tone every held surface uses. It computes nothing: no date
+/// arithmetic, no reason mapping, no plural.
+class _HoldBadge extends StatelessWidget {
+  final String text;
+  const _HoldBadge({required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    if (text.isEmpty) return const SizedBox.shrink();
+    return Container(
+      padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x12, vertical: Ds.space.x4),
+      decoration: BoxDecoration(
+        color: Ds.c.warningSoft,
+        borderRadius: Ds.r.rChip,
+      ),
+      child: Text(text, style: Ds.t.caption.copyWith(color: Ds.c.warning)),
     );
   }
 }

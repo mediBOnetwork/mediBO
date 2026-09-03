@@ -47,6 +47,11 @@ class ProfileAccountMenu extends StatelessWidget {
 
   const ProfileAccountMenu({super.key, this.interactive = true});
 
+  /// True while what is on screen came off the device rather than the network.
+  /// The WORDS are still the backend's — this only decides whether to say them.
+  static bool _isStale(Map<String, dynamic> payload) =>
+      payload.isNotEmpty && !CustomerSurfaces.isLive;
+
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<Map<String, dynamic>>(
@@ -92,9 +97,33 @@ class ProfileAccountMenu extends StatelessWidget {
           children.add(_LogoutButton(label: c('profile.btn_logout')));
         }
         if (children.isEmpty) return const SizedBox.shrink();
+        // Round 2 QA, NEW-2: the payload already carried the group's heading
+        // and the sentence that tells a customer they are looking at the last
+        // saved menu, and nothing rendered either — a backend string nobody
+        // draws is the same defect as a Dart string nobody can change.
+        final title = (payload['account_title'] ?? '').toString();
+        final stale = _isStale(payload)
+            ? (payload['offline_note'] ?? '').toString()
+            : '';
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: children,
+          children: [
+            if (title.isNotEmpty)
+              Padding(
+                padding: EdgeInsets.fromLTRB(
+                    Ds.space.x16, Ds.space.x24, Ds.space.x16, Ds.space.x4),
+                child: Text(title,
+                    style: Ds.t.subtitle.copyWith(fontWeight: FontWeight.w700)),
+              ),
+            if (stale.isNotEmpty)
+              Padding(
+                padding: EdgeInsets.fromLTRB(
+                    Ds.space.x16, 0, Ds.space.x16, Ds.space.x4),
+                child: Text(stale,
+                    style: Ds.t.caption.copyWith(color: Ds.c.textSecondary)),
+              ),
+            ...children,
+          ],
         );
       },
     );

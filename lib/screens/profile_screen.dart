@@ -60,7 +60,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     // backend answer. Asking here as well as at shell boot is deliberate: a
     // customer who signs in AFTER the shell booted must not open a profile
     // whose menu was resolved for a signed-out visitor.
-    CustomerSurfaces.load();
+    CustomerSurfaces.ensureLoaded();
     if (widget.viewAsUserId != null) {
       _fetchViewAsProfile();
     } else {

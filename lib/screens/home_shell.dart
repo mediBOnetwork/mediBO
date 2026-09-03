@@ -787,7 +787,8 @@ class _HomeShellState extends State<HomeShell> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       RenderLog.write('c325_deep_link_opened', route);
-      _handleAdminNav(route, seed);
+      // CHANGE #754 — the route->stage pairing is in access_boot()'s answer.
+      shellWhenAccessResolved(() => mounted ? _handleAdminNav(route, seed) : null);
     });
   }
 

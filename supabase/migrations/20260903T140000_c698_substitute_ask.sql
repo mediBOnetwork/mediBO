@@ -759,7 +759,11 @@ begin
                                   batch_date, inquiry_batch, inquiry_phase, zone_id,
                                   available, out_of_stock, we_dont_stock_this_product,
                                   is_synthetic, test_session_id)
-      select v_pid, coalesce(m.product_name,''), v_qty, m.mrp, m.gst_percent,
+      -- MEDICINE.mrp is TEXT in this catalogue ("₹123.50", "123.5/-"); the
+      -- inquiry column is numeric. Sanitised, never cast blind.
+      select v_pid, coalesce(m.product_name,''), v_qty,
+             nullif(regexp_replace(coalesce(m.mrp::text,''), '[^0-9.]', '', 'g'), '')::numeric,
+             m.gst_percent,
              v_date, v_batch, 'draft', oi.zone_id, false, false, false,
              coalesce(a.is_synthetic,false), a.test_session_id
         from public."MEDICINE" m where m.id = v_pid
@@ -870,7 +874,9 @@ begin
   insert into public.order_items
     (order_id, product_id, product_name, quantity, mrp, gst_percent,
      pharmacy_name, inquiry_id, substitute_for, is_synthetic, test_session_id)
-  values (a.order_id, m.id, coalesce(m.product_name, ''), v_qty, m.mrp, m.gst_percent,
+  values (a.order_id, m.id, coalesce(m.product_name, ''), v_qty,
+          nullif(regexp_replace(coalesce(m.mrp::text,''), '[^0-9.]', '', 'g'), '')::numeric,
+          m.gst_percent,
           oi.pharmacy_name, p.inquiry_id, oi.id,
           coalesce(oi.is_synthetic, false), oi.test_session_id)
   returning id into v_new;
@@ -1144,7 +1150,7 @@ language plpgsql security definer set search_path to 'public'
 as $$
 declare
   v_state jsonb; v_marked int := 0; v_unf int; v_removed numeric; v_new_total numeric;
-  o orders%rowtype; v_asked int := 0; r record; v_res jsonb;
+  o orders%rowtype; v_asked int := 0; v_sub_row record; v_res jsonb;
 begin
   select * into o from orders where id = p_order_id;
   if o.id is null then return jsonb_build_object('ok',false,'error','order_not_found'); end if;
@@ -1191,14 +1197,14 @@ begin
   -- CHANGE #698 — ASK BEFORE SHIPPING WITHOUT IT. One ask per unfulfilled
   -- line (a unique index enforces that), no candidates means no ask at all,
   -- and any failure here leaves the finalization it is riding on untouched.
-  for r in
+  for v_sub_row in
     select oi.id from order_items oi
      where oi.order_id = p_order_id and oi.unfulfillable
        and not exists (select 1 from public.order_substitute_ask a
                         where a.order_item_id = oi.id)
   loop
     begin
-      v_res := public.substitute_ask_open(r.id);
+      v_res := public.substitute_ask_open(v_sub_row.id);
       if coalesce((v_res->>'ok')::boolean,false)
          and not coalesce((v_res->>'skipped')::boolean,false) then
         v_asked := v_asked + 1;

@@ -25,6 +25,8 @@
 
 import 'package:flutter/material.dart';
 
+import 'dart:async';
+
 import '../../services/access.dart';
 import '../../utils/render_log.dart';
 import '../admin/admin_delivery_extras_screen.dart';
@@ -76,4 +78,38 @@ bool shellOpenFulfillStage(String routeKey, void Function(int index) goToPage) {
   WidgetsBinding.instance.addPostFrameCallback(
       (_) => AdminFulfillmentScreen.openStage(stage));
   return true;
+}
+
+/// CHANGE #754 — run [then] once the access matrix has answered.
+///
+/// A deep link is consumed in the shell's first frame, and `access_boot()` is
+/// still in flight then: `/admin/go/inquiry` fell straight through to the
+/// "not in your app yet" branch on a cold boot, because the route -> Fulfill
+/// stage pairing lives in that answer. #690 papered over the one route it
+/// cared about with a hand-written case; this waits for the answer instead.
+///
+/// [timeout] is the safety net, not the path: a matrix that never resolves
+/// (anonymous, or a failed boot call) must not swallow the link entirely — the
+/// route is then handled exactly as it was before this change.
+void shellWhenAccessResolved(void Function() then,
+    {Duration timeout = const Duration(seconds: 5)}) {
+  if (Access.instance.matrix.resolved) {
+    then();
+    return;
+  }
+  var fired = false;
+  late void Function() listener;
+  void run(String how) {
+    if (fired) return;
+    fired = true;
+    Access.instance.removeListener(listener);
+    RenderLog.write('c754_deep_link_wait', how);
+    then();
+  }
+
+  listener = () {
+    if (Access.instance.matrix.resolved) run('resolved');
+  };
+  Access.instance.addListener(listener);
+  Timer(timeout, () => run('timeout'));
 }

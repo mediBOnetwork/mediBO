@@ -227,6 +227,17 @@ void main() {
   group('#754 — an old deep link redirects to its Fulfill stage', () {
     final m = AccessMatrix.fromJson(_accessPayload());
 
+    test('an UNRESOLVED matrix knows no stage — the link must WAIT for it', () {
+      // The bug this pins: a deep link is consumed in the shell's first frame
+      // and access_boot() is still in flight, so /admin/go/inquiry fell through
+      // to the "not in your app yet" branch on a cold boot. The pairing simply
+      // does not exist yet — which is why shellWhenAccessResolved() defers the
+      // route instead of asking an empty matrix and giving up.
+      expect(AccessMatrix.unresolved.fulfillStageForRoute('inquiry'), isEmpty);
+      expect(AccessMatrix.unresolved.resolved, isFalse);
+      expect(m.resolved, isTrue);
+    });
+
     test('the stage is the BACKEND pairing, not a Dart table', () {
       expect(m.fulfillStageForRoute('customer_orders'), 'customer_order');
       expect(m.fulfillStageForRoute('inquiry'), 'supplier_inquiry');

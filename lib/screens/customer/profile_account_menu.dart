@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../design_tokens.dart';
 import '../../services/customer_surfaces.dart';
+import '../../services/ui_copy.dart';
 import '../../user_state.dart';
 import '../../widgets/delete_account_section.dart';
 import '../admin/loyalty_admin_screen.dart';
@@ -52,8 +53,8 @@ class ProfileAccountMenu extends StatelessWidget {
       valueListenable: CustomerSurfaces.value,
       builder: (context, payload, _) {
         final items = CustomerSurfaces.itemsFor(payload, 'profile_account');
-        if (items.isEmpty) return const SizedBox.shrink();
         final children = <Widget>[];
+        var hasLogout = false;
         for (final e in items) {
           final kind = (e['render_kind'] ?? 'row').toString();
           final route = (e['route_key'] ?? '').toString();
@@ -61,6 +62,7 @@ class ProfileAccountMenu extends StatelessWidget {
           if (label.isEmpty) continue;
           switch (kind) {
             case 'action':
+              hasLogout = true;
               if (interactive) children.add(_LogoutButton(label: label));
               break;
             case 'danger_zone':
@@ -77,6 +79,19 @@ class ProfileAccountMenu extends StatelessWidget {
               ));
           }
         }
+        // Hostile QA round 1, blocker 1: a signed-in account that the payload
+        // does not describe — no pharmacy row yet, a role the customer menu
+        // does not admit, or a first boot the RPC never answered — still has to
+        // be able to SIGN OUT. Signing out is not a pharmacy feature and it is
+        // the one affordance a wrong-account login needs; before #745 it was an
+        // unconditional button and it must not become conditional now. The word
+        // is still the backend's (ui_copy, cached at boot), never a Dart
+        // literal, and it is only added when the payload did not already carry
+        // its own Logout entry.
+        if (interactive && !hasLogout) {
+          children.add(_LogoutButton(label: c('profile.btn_logout')));
+        }
+        if (children.isEmpty) return const SizedBox.shrink();
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: children,

@@ -37,6 +37,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pharma_b2b/screens/customer/profile_account_menu.dart';
 import 'package:pharma_b2b/services/customer_surfaces.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
+import 'package:pharma_b2b/widgets/customer_surface_widgets.dart';
 import 'package:pharma_b2b/widgets/delete_account_section.dart';
 
 /// One `customer_surfaces()` answer. Deliberately NOT in label order and
@@ -92,15 +93,28 @@ Map<String, dynamic> _payload() => {
             'icon_key': 'favorite',
             'route_key': 'cust_wishlist',
             'render_kind': 'icon',
+            'badge': '4',
           },
         ],
-        'home_chip': [
+        // ONE list for the home strip, in the backend's order — the chip is
+        // NOT first because Dart concatenated two placements, it is first
+        // because sort_order said so.
+        'home_strip': [
           {
             'feature_key': 'cust.wishlist',
             'label': 'My Wishlist',
             'icon_key': 'favorite',
             'route_key': 'cust_wishlist',
             'render_kind': 'chip',
+            'badge': '4',
+          },
+          {
+            'feature_key': 'cust.rewards',
+            'label': 'Rewards',
+            'icon_key': 'stars',
+            'route_key': 'cust_rewards',
+            'render_kind': 'badge',
+            'badge': '250 points',
           },
         ],
         'orders_section': [
@@ -110,15 +124,8 @@ Map<String, dynamic> _payload() => {
             'icon_key': 'stars',
             'route_key': 'cust_rewards',
             'render_kind': 'section',
-          },
-        ],
-        'home_badge': [
-          {
-            'feature_key': 'cust.rewards',
-            'label': 'Rewards',
-            'icon_key': 'stars',
-            'route_key': 'cust_rewards',
-            'render_kind': 'badge',
+            'badge': '250 points',
+            'lines': ['250 points', 'Silver', 'Your code MB52ED6A'],
           },
         ],
       },
@@ -205,11 +212,15 @@ void main() {
       expect(find.text('A screen from next month'), findsNothing);
     });
 
-    testWidgets('an empty payload draws nothing at all', (tester) async {
+    testWidgets('an empty payload draws no MENU ROWS', (tester) async {
+      // The sign-out fallback below is deliberate and is tested there; what
+      // must never appear is a row this build invented for itself.
       CustomerSurfaces.value.value = const {};
       await tester.pumpWidget(_host(const ProfileAccountMenu()));
-      expect(find.byType(Card), findsNothing);
-      expect(find.text('Logout'), findsNothing);
+      expect(find.text('Edit my details'), findsNothing);
+      expect(find.text('Delivery addresses'), findsNothing);
+      expect(find.text('Staff logins'), findsNothing);
+      expect(find.byType(DeleteAccountSection), findsNothing);
     });
 
     testWidgets('View As renders the rows but never the logout or delete zone',
@@ -220,6 +231,58 @@ void main() {
       expect(find.text('Edit my details'), findsOneWidget);
       expect(find.text('Logout'), findsNothing);
       expect(find.byType(DeleteAccountSection), findsNothing);
+    });
+  });
+
+  group('a signed-in account can ALWAYS sign out', () {
+    // HOSTILE QA ROUND 1, BLOCKER 1 AND 2 — the class of bug this retires.
+    //
+    // #745 turned Logout from an unconditional button into a placement row.
+    // That made the one affordance a wrong-account login needs depend on two
+    // things it never depended on before: having a pharmacy_profiles row, and
+    // one RPC answering. A visitor who signed in with the wrong login landed on
+    // the registration form with no way back out on a phone, and a registered
+    // pharmacy on a flaky connection got an empty Account group with no error
+    // and no retry.
+    //
+    // Signing out is an identity action, not a pharmacy feature. The backend
+    // still owns its WORDS (ui_copy) and its ORDER when it sends one, but its
+    // PRESENCE for a signed-in account is not negotiable.
+
+    testWidgets('an empty payload still offers Logout', (tester) async {
+      CustomerSurfaces.value.value = const {};
+      await tester.pumpWidget(_host(const ProfileAccountMenu()));
+      expect(find.byType(OutlinedButton), findsOneWidget,
+          reason: 'a signed-in account with no payload cannot sign out');
+    });
+
+    testWidgets('a payload that describes no Logout still offers one',
+        (tester) async {
+      // Exactly the shape customer_surfaces() returns for a signed-in caller
+      // whose role the customer menu does not admit.
+      CustomerSurfaces.value.value = const {
+        'ok': true,
+        'has_account': false,
+        'placements': {'profile_account': []},
+      };
+      await tester.pumpWidget(_host(const ProfileAccountMenu()));
+      expect(find.byType(OutlinedButton), findsOneWidget);
+    });
+
+    testWidgets('the backend\'s own Logout is never duplicated',
+        (tester) async {
+      CustomerSurfaces.value.value = _payload();
+      await tester.pumpWidget(_host(const ProfileAccountMenu()));
+      expect(find.text('Logout'), findsOneWidget);
+      expect(find.byType(OutlinedButton), findsOneWidget);
+    });
+
+    testWidgets('View As still offers neither — it is not your session',
+        (tester) async {
+      CustomerSurfaces.value.value = const {};
+      await tester
+          .pumpWidget(_host(const ProfileAccountMenu(interactive: false)));
+      expect(find.byType(OutlinedButton), findsNothing);
     });
   });
 
@@ -247,6 +310,65 @@ void main() {
     });
   });
 
+  group('the surfaces render the entry\'s own strings', () {
+    // Round 1 QA, finding 4: the widgets switched on 'cust.wishlist' /
+    // 'cust.rewards' to pick what to print beside a label, so a placement
+    // UPDATE — the zero-deploy move this change promises — would have printed
+    // "My Wishlist" over the rewards lines. Every trailing number and every
+    // body line is the ENTRY's own now.
+
+    testWidgets('the rewards card prints the entry\'s lines, in order',
+        (tester) async {
+      CustomerSurfaces.value.value = _payload();
+      await tester.pumpWidget(_host(const CustomerRewardsSection()));
+      expect(find.text('Rewards'), findsOneWidget);
+      for (final line in const ['250 points', 'Silver', 'Your code MB52ED6A']) {
+        expect(find.text(line), findsOneWidget, reason: '$line is missing');
+      }
+      final first = tester.getTopLeft(find.text('250 points')).dy;
+      final last = tester.getTopLeft(find.text('Your code MB52ED6A')).dy;
+      expect(first, lessThan(last));
+    });
+
+    testWidgets('a moved feature carries its own badge with it',
+        (tester) async {
+      // The placement UPDATE the old code got wrong: put the rewards entry on
+      // the app bar and it must print the REWARDS badge, not the wishlist's.
+      final p = _payload();
+      (p['placements'] as Map)['catalogue_appbar'] = [
+        {
+          'feature_key': 'cust.rewards',
+          'label': 'Rewards',
+          'icon_key': 'stars',
+          'route_key': 'cust_rewards',
+          'render_kind': 'icon',
+          'badge': '250 points',
+        },
+      ];
+      CustomerSurfaces.value.value = p;
+      await tester.pumpWidget(_host(const CustomerAppBarActions()));
+      expect(find.text('250 points'), findsOneWidget);
+      expect(find.text('4'), findsNothing);
+    });
+
+    testWidgets('an entry with no badge shows none', (tester) async {
+      final p = _payload();
+      (p['placements'] as Map)['catalogue_appbar'] = [
+        {
+          'feature_key': 'cust.wishlist',
+          'label': 'My Wishlist',
+          'icon_key': 'favorite',
+          'route_key': 'cust_wishlist',
+          'render_kind': 'icon',
+          'badge': '',
+        },
+      ];
+      CustomerSurfaces.value.value = p;
+      await tester.pumpWidget(_host(const CustomerAppBarActions()));
+      expect(find.text('4'), findsNothing);
+    });
+  });
+
   group('placements are read, never guessed', () {
     test('itemsFor returns exactly what the payload placed there', () {
       final p = _payload();
@@ -258,9 +380,13 @@ void main() {
           CustomerSurfaces.itemsFor(p, 'orders_section')
               .map((e) => e['feature_key']),
           ['cust.rewards']);
+      // The strip is ONE ordered list. Two placements concatenated in Dart
+      // would make this order un-editable from the backend.
+      expect(CustomerSurfaces.itemsFor(p, 'home_strip').map((e) => e['label']),
+          ['My Wishlist', 'Rewards']);
       // A surface the payload never mentioned is empty, not an error.
       expect(CustomerSurfaces.itemsFor(p, 'a_surface_from_next_year'), isEmpty);
-      expect(CustomerSurfaces.itemsFor(const {}, 'home_chip'), isEmpty);
+      expect(CustomerSurfaces.itemsFor(const {}, 'home_strip'), isEmpty);
     });
 
     test('the widgets carry no feature list of their own', () {
@@ -277,9 +403,25 @@ void main() {
             .split('\n')
             .where((l) => !l.trimLeft().startsWith('//'))
             .join('\n');
-        expect(code.contains("'cust.profile_edit'"), isFalse,
-            reason: '$path names a feature key — the payload decides, not Dart');
-        expect(code.contains("'cust.staff_logins'"), isFalse, reason: path);
+        // Round 1 QA: this used to assert on two keys the files never held,
+        // while the widgets really did switch on 'cust.wishlist' and
+        // 'cust.rewards' to decide what to print beside a label. Scan for
+        // EVERY registered key, so the test cannot pass by naming the wrong
+        // ones — the failure it exists to catch is a placement UPDATE
+        // rendering "My Wishlist" over the rewards lines.
+        for (final key in const [
+          'cust.profile_edit',
+          'cust.address_book',
+          'cust.staff_logins',
+          'cust.logout',
+          'cust.delete_account',
+          'cust.wishlist',
+          'cust.rewards',
+          'cust.loyalty_admin',
+        ]) {
+          expect(code.contains("'$key'"), isFalse,
+              reason: '$path names $key — the payload decides, not Dart');
+        }
       }
     });
   });

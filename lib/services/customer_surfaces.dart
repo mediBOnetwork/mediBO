@@ -131,7 +131,7 @@ class CustomerSurfaces {
           'account:${p['has_account']} '
               'profile:${itemsFor(p, 'profile_account').length} '
               'appbar:${itemsFor(p, 'catalogue_appbar').length} '
-              'home:${itemsFor(p, 'home_chip').length} '
+              'home:${itemsFor(p, 'home_strip').length} '
               'orders:${itemsFor(p, 'orders_section').length}');
     } catch (_) {
       // A chrome that cannot ask keeps whatever it has. Boot resilience rule.

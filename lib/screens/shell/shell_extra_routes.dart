@@ -37,6 +37,7 @@ import '../admin/admin_feedback_screen.dart';
 import '../admin/returns_refunds_screen.dart';
 import '../admin/surface_map_screen.dart';
 import '../admin/damage_report_screen.dart';
+import '../admin/search_synonyms_screen.dart';
 import '../admin/support_threads_screen.dart';
 import '../partner/partner_tasks_screen.dart';
 import '../worker/worker_tasks_screen.dart';
@@ -48,6 +49,11 @@ import '../admin/kyc_review_screen.dart';
 /// costing the shell an import line of its own. WHETHER to ask is
 /// `order_feedback_pending()`'s answer — see order_feedback_sheet.dart.
 export '../customer/order_feedback_sheet.dart' show maybeAskOrderFeedback;
+// CHANGE #790 — the typeahead panel and its controller, re-exported so the
+// shell's PART files (shell_header_chrome.dart) can see them without adding a
+// line to home_shell.dart, which sits at 1,998 of a hard 2,000-line guard.
+export '../../widgets/search_typeahead.dart'
+    show SearchSuggestions, SearchSuggestController;
 
 /// The screen a route_key opens, or null when this table does not own it —
 /// null means "keep looking", never "broken", so the shell's own switch and
@@ -96,6 +102,10 @@ Widget? shellExtraRouteScreen(String routeKey) => switch (routeKey) {
       // answers not_authorized with its own sentence, so the door is opened
       // here and the authorisation stays in the RPC.
       'damage_report' => const DamageReportScreen(),
+      // CHANGE #790 — Admin → Search synonyms. search_synonyms_list() gates
+      // itself on get_my_role() and the screen renders its refusal, the same
+      // story as damage_report above.
+      'search_synonyms' => const SearchSynonymsScreen(),
       _ => null,
     };
 

@@ -95,7 +95,7 @@ $$;
 create or replace function public.thread_sla_tick(p_limit integer default 20)
 returns jsonb language plpgsql security definer set search_path to 'public' as $$
 declare
-  r record; v_n int := 0; v_notified int := 0; v_res jsonb;
+  r record; v_n int := 0; v_notified int := 0; v_res jsonb; v_admin uuid;
   v_sla public.thread_sla_config; v_lim int := greatest(least(coalesce(p_limit,20),100),1);
 begin
   for r in
@@ -130,7 +130,32 @@ begin
         jsonb_build_object('mins', v_sla.sla_minutes::text)),
       'system', null, null, public._c('thread.actor_system'), 'system');
 
-    -- The office.
+    -- The office, on the channel that lands TODAY. notify() resolves the
+    -- admin phone from app_settings and logs the attempt, but
+    -- 'order_alert_escalation' has no Meta template yet, so WhatsApp answers
+    -- route_disabled and queues it (the platform's own retry path, shared by
+    -- a dozen template-less routes). Push does not need a template, so the
+    -- escalation reaches an admin device now and the WhatsApp copy follows
+    -- when the template lands. The exceptions console below is the durable
+    -- record either way.
+    for v_admin in
+      select distinct u.id
+        from public.admins a
+        join auth.users u on lower(btrim(u.email)) = lower(btrim(a.email))
+       where exists (select 1 from public.push_tokens t
+                      where t.is_active and t.user_id = u.id)
+    loop
+      begin
+        perform public.notif_push_send('order_alert_escalation', null, v_admin,
+          r.order_id, jsonb_build_object(
+            'order_code', coalesce(r.order_code,''),
+            'customer',   coalesce(r.pharmacy_name,''),
+            'zone_id',    coalesce(r.zone_id,0)::text,
+            'age',        public._ist_age(r.awaiting_since)), 'admin');
+      exception when others then null;
+      end;
+    end loop;
+
     begin
       v_res := public.notify('order_alert_escalation', null, jsonb_build_object(
         'order_id',   coalesce(r.order_id::text,''),

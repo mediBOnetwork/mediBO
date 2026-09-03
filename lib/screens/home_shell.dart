@@ -63,7 +63,6 @@ import 'admin/admin_scope_audit_screen.dart'; // CHANGE #227
 import 'admin/admin_order_closure_screen.dart'; // CHANGE #229
 import 'admin/admin_gst_screen.dart'; // CHANGE #320
 import 'admin/admin_reviews_screen.dart'; // CMD #410: review & Q&A moderation
-import 'customer/order_feedback_sheet.dart'; // CHANGE #697: the feedback card
 import 'admin/admin_customer_360_screen.dart'; // CMD #421: the customer_360 link
 import 'admin/admin_stock_on_hand_screen.dart'; // CMD #421: the stock_on_hand link
 import '../features/whatsapp/ui/wa_home_screen.dart';
@@ -345,9 +344,7 @@ class _HomeShellState extends State<HomeShell> {
     // CMD #411 — after the first frame, same reason as push: a counter entry
     // that fails to resolve must never sit in front of the shell's own build.
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadPosEntry());
-    // CHANGE #697 — the whole-order feedback card, after the first frame.
-    // WHETHER to ask is order_feedback_pending()'s answer, never this file's.
-    WidgetsBinding.instance.addPostFrameCallback((_) => maybeAskOrderFeedback(context));
+    WidgetsBinding.instance.addPostFrameCallback((_) => maybeAskOrderFeedback(context)); // #697
     // CHANGE #440: type-anywhere-to-search, desktop web only.
     if (kIsWeb) HardwareKeyboard.instance.addHandler(_globalKeyHandler);
     RenderLog.write('c440_typeanywhere', 'web=$kIsWeb min3=on');

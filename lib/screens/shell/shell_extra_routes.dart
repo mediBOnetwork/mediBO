@@ -36,6 +36,13 @@ import '../admin/admin_feedback_screen.dart';
 import '../admin/returns_refunds_screen.dart';
 import '../admin/surface_map_screen.dart';
 
+/// CHANGE #697 — the whole-order feedback card's one hook into the shell.
+/// `home_shell.dart` sits under a 2,000-line guard (#340 / #327 layer 1) and
+/// already imports this file, so the hook is re-exported here rather than
+/// costing the shell an import line of its own. WHETHER to ask is
+/// `order_feedback_pending()`'s answer — see order_feedback_sheet.dart.
+export '../customer/order_feedback_sheet.dart' show maybeAskOrderFeedback;
+
 /// The screen a route_key opens, or null when this table does not own it —
 /// null means "keep looking", never "broken", so the shell's own switch and
 /// its backend-worded default branch stay in charge of an unknown route.

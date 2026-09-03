@@ -18,6 +18,7 @@ import '../../design_tokens.dart';
 import '../../services/partner_state.dart';
 import '../../services/ui_copy.dart';
 import '../../utils/render_log.dart';
+import '../partner/partner_documents_screen.dart';
 import 'partner_audit_log_screen.dart';
 import 'settlement_screen.dart';
 
@@ -275,6 +276,27 @@ class _AdminPartnerConsoleScreenState extends State<AdminPartnerConsoleScreen> {
     ));
   }
 
+  /// CHANGE #692 — the partner's agreement and KYC documents, on the same
+  /// screen the PARTNER sees. `partner_documents_screen()` answers an admin
+  /// with can_review:true on each row, so verifying happens there rather than
+  /// in a second console-only editor that could drift from it.
+  void _openDocuments() {
+    final id = (_payload?['partner_id'] as num?)?.toInt() ?? widget.partnerId;
+    Navigator.of(context)
+        .push(MaterialPageRoute<void>(
+          builder: (_) => Scaffold(
+            backgroundColor: Ds.c.bg,
+            appBar: AppBar(
+              title: Text(
+                  ((_payload?['documents_open'] as Map?)?['label'] ?? '')
+                      .toString()),
+            ),
+            body: PartnerDocumentsScreen(partnerId: id),
+          ),
+        ))
+        .then((_) => _load());
+  }
+
   @override
   Widget build(BuildContext context) {
     final p = _payload ?? const <String, dynamic>{};
@@ -312,6 +334,7 @@ class _AdminPartnerConsoleScreenState extends State<AdminPartnerConsoleScreen> {
               onResume: () => _lifecycle(false, ''),
               onLicence: _pickLicenceDate,
               onOpenAudit: _openAuditLog,
+              onOpenDocuments: _openDocuments,
             ),
     );
   }
@@ -355,6 +378,7 @@ class PartnerConsoleView extends StatelessWidget {
     this.onResume,
     this.onLicence,
     this.onOpenAudit,
+    this.onOpenDocuments,
   });
 
   final Map<String, dynamic> payload;
@@ -380,6 +404,17 @@ class PartnerConsoleView extends StatelessWidget {
   /// still drawn, because whether it EXISTS is the payload's decision.
   final VoidCallback? onOpenAudit;
 
+  /// CHANGE #692. Same rule: the card appears because the payload carried a
+  /// `documents` block, not because this build knows the feature exists.
+  final VoidCallback? onOpenDocuments;
+
+  /// The label, or '' when this build's payload carried no `documents_open`.
+  String get documentsOpenLabel {
+    final d = payload['documents_open'];
+    if (d is! Map) return '';
+    return (d['label'] ?? '').toString();
+  }
+
   /// The label, or '' when this build's payload carried no `audit_open` block.
   String get auditOpenLabel {
     final d = payload['audit_open'];
@@ -403,6 +438,9 @@ class PartnerConsoleView extends StatelessWidget {
     final licences = (payload['licences'] as Map?) == null
         ? const <String, dynamic>{}
         : Map<String, dynamic>.from(payload['licences'] as Map);
+    final documents = (payload['documents'] as Map?) == null
+        ? const <String, dynamic>{}
+        : Map<String, dynamic>.from(payload['documents'] as Map);
     // Written BEFORE the refusal branch on purpose: the render-log has to prove
     // the screen painted even when the backend said no, otherwise a headless
     // non-super session can never verify the route exists at all.
@@ -419,6 +457,13 @@ class PartnerConsoleView extends StatelessWidget {
       RenderLog.write('c466_partner_licences',
           'card=${licences['ok'] == true},rows=${(licences['rows'] as List?)?.length ?? 0},'
           'alert=${(licences['alert_tone'] ?? '').toString()}');
+      // CHANGE #692 — the documents card proves itself separately, so
+      // "the backend sent the block" and "the console drew it" stay distinct.
+      RenderLog.write('c692_partner_documents',
+          'card=${documents['ok'] == true},'
+          'ready=${((documents['golive'] as Map?)?['ready'] ?? '').toString()},'
+          'agreement=${((documents['agreement'] as Map?)?['status'] ?? '').toString()},'
+          'kyc=${(((documents['kyc'] as Map?)?['rows']) as List?)?.length ?? 0}');
       RenderLog.write('c352_partner_fence',
           'card=${fence.isNotEmpty},rows=${(fence['rows'] as List?)?.length ?? 0},'
           'status=${(fence['status_label'] ?? '').toString()}');
@@ -502,6 +547,18 @@ class PartnerConsoleView extends StatelessWidget {
             card: licences,
             busy: busy,
             onLicence: onLicence,
+          ),
+        ],
+        // CHANGE #692 — the agreement + KYC block. It appears because the
+        // payload carried it; the chips and the blocking sentence are the
+        // backend's own, and tapping opens the same screen the partner uses.
+        if (documents['ok'] == true) ...[
+          SizedBox(height: Ds.space.x24),
+          _DocumentsCard(
+            docs: documents,
+            openLabel: documentsOpenLabel,
+            busy: busy,
+            onOpen: onOpenDocuments,
           ),
         ],
         if (fence.isNotEmpty) ...[
@@ -1087,6 +1144,90 @@ class _LicenceRow extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// CHANGE #692 — the partner's agreement and KYC documents, as a status card on
+/// the console. Every word here is `partner_documents_screen()`'s: the go-live
+/// sentence, the agreement chip, the document progress line and the button
+/// label. The card knows only that tapping it opens the full screen.
+class _DocumentsCard extends StatelessWidget {
+  const _DocumentsCard({
+    required this.docs,
+    required this.openLabel,
+    required this.busy,
+    this.onOpen,
+  });
+
+  final Map<String, dynamic> docs;
+  final String openLabel;
+  final bool busy;
+  final VoidCallback? onOpen;
+
+  static Map<String, dynamic> _block(Object? v) =>
+      v is Map ? Map<String, dynamic>.from(v) : const <String, dynamic>{};
+
+  @override
+  Widget build(BuildContext context) {
+    final golive = _block(docs['golive']);
+    final agreement = _block(docs['agreement']);
+    final kyc = _block(docs['kyc']);
+    final blockers = (golive['blockers'] as List?) ?? const [];
+
+    return _Card(
+      title: (docs['title'] ?? '').toString(),
+      subtitle: (kyc['sub'] ?? '').toString(),
+      children: [
+        _TonePill(
+          label: (golive['status_label'] ?? '').toString(),
+          tone: (golive['status_tone'] ?? '').toString(),
+        ),
+        for (final b in blockers.cast<Map>().map(Map<String, dynamic>.from)) ...[
+          SizedBox(height: Ds.space.x8),
+          Text((b['text'] ?? '').toString(), style: Ds.t.caption),
+        ],
+        SizedBox(height: Ds.space.x16),
+        Row(
+          children: [
+            Expanded(
+              child: Text((agreement['heading'] ?? '').toString(),
+                  style: Ds.t.body),
+            ),
+            SizedBox(width: Ds.space.x12),
+            _TonePill(
+              label: (agreement['status_label'] ?? '').toString(),
+              tone: (agreement['status_tone'] ?? '').toString(),
+            ),
+          ],
+        ),
+        SizedBox(height: Ds.space.x12),
+        Row(
+          children: [
+            Expanded(
+              child: Text((kyc['progress_label'] ?? '').toString(),
+                  style: Ds.t.body),
+            ),
+            SizedBox(width: Ds.space.x12),
+            _TonePill(
+              label: (kyc['summary_label'] ?? '').toString(),
+              tone: (kyc['summary_tone'] ?? '').toString(),
+            ),
+          ],
+        ),
+        if (openLabel.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x16),
+          SizedBox(
+            width: double.infinity,
+            height: Ds.touch.minTarget,
+            child: OutlinedButton(
+              key: const ValueKey('partner_documents_open'),
+              onPressed: busy ? null : onOpen,
+              child: Text(openLabel),
+            ),
+          ),
+        ],
+      ],
     );
   }
 }

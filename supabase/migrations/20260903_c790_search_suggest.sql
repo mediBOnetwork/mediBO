@@ -66,9 +66,16 @@ create table if not exists public.search_suggest_cache (
   primary key (kind, key)
 );
 
-create table if not exists public.search_suggest_stage (
+-- Staging is keyed by (kind, key, SRC) — src being the unit that wrote the
+-- row. A family spans id ranges, so a range unit contributes a PARTIAL count;
+-- keeping the contributions apart is what makes re-running a unit a replace
+-- rather than a double count, which is the difference between a resumable
+-- bounded job and a cache that inflates every time the VM restarts.
+drop table if exists public.search_suggest_stage;
+create table public.search_suggest_stage (
   kind       text       not null,
   key        text       not null,
+  src        text       not null default '',
   label      text       not null,
   sub_label  text       not null default '',
   n          integer    not null default 0,
@@ -76,8 +83,10 @@ create table if not exists public.search_suggest_stage (
   norm       text       not null,
   zones      smallint[] not null default '{}',
   query      text       not null,
-  primary key (kind, key)
+  primary key (kind, key, src)
 );
+create index if not exists idx_sss_bucket
+  on public.search_suggest_stage ((abs(hashtext(key)) % 6));
 
 create index if not exists idx_ssc_norm_prefix
   on public.search_suggest_cache (norm text_pattern_ops);
@@ -270,8 +279,8 @@ begin
     -- One id range of "MEDICINE" folded into (brand root, company) families.
     -- The printed name is the SHORTEST real product name in the family — the
     -- catalogue's own text, never a name this function invents.
-    insert into public.search_suggest_stage(kind, key, label, sub_label, n, rank, norm, zones, query)
-    select 'brand', g.root || '|' || coalesce(g.mc, ''), g.label,
+    insert into public.search_suggest_stage(kind, key, src, label, sub_label, n, rank, norm, zones, query)
+    select 'brand', g.root || '|' || coalesce(g.mc, ''), p_arg, g.label,
            coalesce(mc.display, g.mc, ''), g.n, g.rank, g.root, '{}'::smallint[], g.label
       from (
         select b.root, b.mc,
@@ -290,15 +299,11 @@ begin
          group by b.root, b.mc
       ) g
       left join public.medicine_company mc on mc.canon = g.mc
-    on conflict (kind, key) do update
-      set n     = public.search_suggest_stage.n + excluded.n,
-          rank  = public.search_suggest_stage.rank + excluded.rank,
-          -- the shorter name wins, so the family keeps printing its plainest
-          -- variant no matter which id range that variant happened to be in
-          label = case when length(excluded.label) < length(public.search_suggest_stage.label)
-                       then excluded.label else public.search_suggest_stage.label end,
-          query = case when length(excluded.label) < length(public.search_suggest_stage.label)
-                       then excluded.label else public.search_suggest_stage.query end;
+    -- one row per (family, id range): re-running the range overwrites exactly
+    -- what that range contributed and nothing else
+    on conflict (kind, key, src) do update
+      set n = excluded.n, rank = excluded.rank, label = excluded.label,
+          sub_label = excluded.sub_label, query = excluded.query;
     get diagnostics v_rows = row_count;
 
   elsif p_kind = 'suggest_zone' then
@@ -322,8 +327,8 @@ begin
   elsif p_kind = 'suggest_facet' then
     -- Salts, companies and categories are already counted per zone by the
     -- facet units above (#747). Reading them costs one index scan each.
-    insert into public.search_suggest_stage(kind, key, label, sub_label, n, rank, norm, zones, query)
-    select p_arg, c.facet_key, c.label, '', c.n, c.n::bigint,
+    insert into public.search_suggest_stage(kind, key, src, label, sub_label, n, rank, norm, zones, query)
+    select p_arg, c.facet_key, '', c.label, '', c.n, c.n::bigint,
            public._norm_name(c.label),
            coalesce((select array_agg(distinct z.zone_id order by z.zone_id)
                        from public.catalogue_facet_count z
@@ -334,7 +339,9 @@ begin
      where c.zone_id = 0
        and c.facet = case p_arg when 'category' then 'therapeutic' else p_arg end
        and nullif(btrim(c.label), '') is not null
-    on conflict (kind, key) do nothing;
+    on conflict (kind, key, src) do update
+      set label = excluded.label, n = excluded.n, rank = excluded.rank,
+          norm = excluded.norm, zones = excluded.zones, query = excluded.query;
     get diagnostics v_rows = row_count;
 
   elsif p_kind = 'suggest_swap' then
@@ -344,9 +351,16 @@ begin
     delete from public.search_suggest_cache c
      where abs(hashtext(c.key)) % 6 = v_bucket;
     insert into public.search_suggest_cache(kind, key, label, sub_label, n, rank, norm, zones, query)
-    select s.kind, s.key, s.label, s.sub_label, s.n, s.rank, s.norm, s.zones, s.query
+    select s.kind, s.key,
+           (array_agg(s.label     order by length(s.label), s.src))[1],
+           (array_agg(s.sub_label order by length(s.label), s.src))[1],
+           sum(s.n)::int, sum(s.rank)::bigint,
+           (array_agg(s.norm      order by length(s.label), s.src))[1],
+           (array_agg(s.zones     order by cardinality(s.zones) desc, s.src))[1],
+           (array_agg(s.query     order by length(s.label), s.src))[1]
       from public.search_suggest_stage s
      where abs(hashtext(s.key)) % 6 = v_bucket
+     group by s.kind, s.key
     on conflict (kind, key) do update
       set label = excluded.label, sub_label = excluded.sub_label, n = excluded.n,
           rank = excluded.rank, norm = excluded.norm, zones = excluded.zones,

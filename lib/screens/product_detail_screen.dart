@@ -16,9 +16,11 @@ import '../utils/render_log.dart';
 import '../utils/toast.dart';
 import '../widgets/animations.dart';
 import '../widgets/compact_product_card.dart';
+import '../widgets/companion_rail.dart';
 import '../widgets/compare_tray.dart';
 import '../widgets/notify_control.dart';
 import '../widgets/product_image.dart';
+import '../widgets/purchase_overlay_card.dart';
 import '../widgets/product_reviews_block.dart';
 
 typedef WishlistToggle = Future<WishlistResult> Function(String productId);
@@ -130,6 +132,17 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
       _loading = false;
       _wishlisted = res.isWishlisted;
     });
+
+    // CMD #791 — REACHABILITY PROOF for the four depth blocks. Flutter renders
+    // to canvas, so no browser tool can read this page; the render log is how a
+    // live build proves the gallery, the fact table, the buyer's own overlay
+    // and the co-purchase rail actually reached a real device — and, for the
+    // overlay, that an ANONYMOUS visit reports has=false while the content
+    // blocks still report their counts.
+    RenderLog.write('c791_product_depth',
+        'gallery=${res.gallery.images.length};facts=${res.facts.rows.length};'
+        'purchase=${res.purchase.has};usual=${res.purchase.usualQty};'
+        'companions=${res.companions.items.length}');
 
     if (res.ok) unawaited(_loadReviews());
     // CMD #409 — one product open, recorded into the customer's recently-viewed
@@ -325,8 +338,8 @@ class _Body extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
       children: [
-        _Carousel(images: data.images, heroId: data.id),
-        const SizedBox(height: 14),
+        _Gallery(gallery: data.gallery, heroId: data.id),
+        SizedBox(height: Ds.space.x12),
         if (data.formChip.isNotEmpty) ...[
           _Chip(
             text: data.formChip,
@@ -374,8 +387,19 @@ class _Body extends StatelessWidget {
         ],
         const SizedBox(height: 14),
         _PriceRow(data: data),
-        if (data.hasHistory) ...[
-          const SizedBox(height: 8),
+        // CMD #791 — this pharmacy's own history with the pack, and the one
+        // tap that re-orders its usual quantity. `has` is false for an
+        // anonymous visitor because the RPC returned nothing, not because this
+        // page checked a login flag (spec item 4).
+        if (data.purchase.has) ...[
+          SizedBox(height: Ds.space.x12),
+          PurchaseOverlayCard(
+            overlay: data.purchase,
+            onAddUsual: () => AppState.of(context)
+                .setQuantityId(data.id, data.purchase.usualQty),
+          ),
+        ] else if (data.hasHistory) ...[
+          SizedBox(height: Ds.space.x8),
           _Chip(
             text: data.historyLabel,
             bg: const Color(0xFFEFF6FF),
@@ -413,6 +437,16 @@ class _Body extends StatelessWidget {
           _SectionTitle(text: data.label('pdp_overview_title')),
           const SizedBox(height: 10),
           _OverviewTable(rows: data.overview),
+        ],
+        // CMD #791 — composition & strength, form, pack, Rx/OTC, habit
+        // forming, cold chain, storage. `product_facts()` sends only the rows
+        // whose column actually holds something, so an absent value is an
+        // absent ROW here — never a label with a dash beside it.
+        if (data.facts.has) ...[
+          SizedBox(height: Ds.space.x24),
+          _SectionTitle(text: data.facts.title),
+          SizedBox(height: Ds.space.x8),
+          _FactsTable(rows: data.facts.rows),
         ],
         for (final s in data.sections) ...[
           const SizedBox(height: 24),
@@ -467,6 +501,22 @@ class _Body extends StatelessWidget {
               onClear: onClearCompare,
             ),
           ],
+        ],
+        // CMD #791 — frequently bought together, from the nightly co-purchase
+        // job. `has` is the backend's verdict, so a pack with no real
+        // co-purchase evidence shows no rail at all rather than a
+        // recommendation the platform made up. Pairs are same-Rx-class only,
+        // decided where the pair is FORMED, so nothing here has to filter.
+        if (data.companions.has) ...[
+          SizedBox(height: Ds.space.x24),
+          _SectionTitle(text: data.companions.title),
+          SizedBox(height: Ds.space.x4),
+          Text(
+            data.companions.note,
+            style: Ds.t.caption.copyWith(color: Ds.c.textSecondary),
+          ),
+          SizedBox(height: Ds.space.x12),
+          CompanionRail(items: data.companions.items),
         ],
         // The rail renders only when the backend actually sent tiles.
         if (data.similar.isNotEmpty) ...[
@@ -683,20 +733,32 @@ class _SubstituteTile extends StatelessWidget {
   }
 }
 
-class _Carousel extends StatefulWidget {
-  final List<String> images;
+/// CMD #791 — the pack-shot gallery: swipe, a backend-rendered counter, a
+/// thumbnail strip, and tap-to-zoom.
+///
+/// The counter is NOT built here. `product_gallery()` ships a `counter_label`
+/// per image ("2 / 5") and this widget prints the one belonging to the page it
+/// is showing — the same rule the rest of the payload follows, applied to a
+/// string that is very easy to assemble locally and therefore very easy to get
+/// wrong in one place and not the other.
+///
+/// The box is a fixed height whether there are 0, 1 or 5 shots, so nothing
+/// below it moves as the images load.
+class _Gallery extends StatefulWidget {
+  final PdGallery gallery;
   final String heroId;
-  const _Carousel({required this.images, required this.heroId});
+  const _Gallery({required this.gallery, required this.heroId});
 
   @override
-  State<_Carousel> createState() => _CarouselState();
+  State<_Gallery> createState() => _GalleryState();
 }
 
-class _CarouselState extends State<_Carousel> {
+class _GalleryState extends State<_Gallery> {
   final _ctrl = PageController();
   int _page = 0;
 
   static const double _h = 260;
+  static const double _thumb = 52;
 
   @override
   void dispose() {
@@ -704,12 +766,23 @@ class _CarouselState extends State<_Carousel> {
     super.dispose();
   }
 
+  void _open(int index) {
+    final imgs = widget.gallery.images;
+    if (imgs.isEmpty) return;
+    Navigator.of(context).push(PageRouteBuilder<void>(
+      opaque: false,
+      barrierColor: Ds.c.text,
+      pageBuilder: (_, __, ___) => _ZoomViewer(
+        gallery: widget.gallery,
+        initialIndex: index,
+      ),
+    ));
+  }
+
   @override
   Widget build(BuildContext context) {
-    final imgs = widget.images;
+    final imgs = widget.gallery.images;
 
-    // The box is the same height whether there are 0, 1 or 5 images, so the
-    // rest of the page never moves.
     if (imgs.isEmpty) {
       return SizedBox(
         height: _h,
@@ -718,11 +791,13 @@ class _CarouselState extends State<_Carousel> {
             url: '',
             width: _h,
             height: _h,
-            radius: BorderRadius.circular(14),
+            radius: Ds.r.rCard,
           ),
         ),
       );
     }
+
+    final page = _page.clamp(0, imgs.length - 1);
 
     return Column(
       children: [
@@ -734,49 +809,204 @@ class _CarouselState extends State<_Carousel> {
             onPageChanged: (i) => setState(() => _page = i),
             itemBuilder: (_, i) {
               final img = ProductImage(
-                url: imgs[i],
+                url: imgs[i].url,
                 width: _h,
                 height: _h,
-                radius: BorderRadius.circular(14),
+                radius: Ds.r.rCard,
               );
               // Only the first image participates in the Hero — it is the one
               // the card flew from.
               return Center(
-                child: i == 0
-                    ? Hero(
-                        tag: CompactProductCard.heroTag(widget.heroId),
-                        child: img,
-                      )
-                    : img,
+                child: GestureDetector(
+                  onTap: () => _open(i),
+                  child: i == 0
+                      ? Hero(
+                          tag: CompactProductCard.heroTag(widget.heroId),
+                          child: img,
+                        )
+                      : img,
+                ),
               );
             },
           ),
         ),
         if (imgs.length > 1) ...[
-          const SizedBox(height: 10),
+          SizedBox(height: Ds.space.x8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              // The backend's counter for the page on screen. Empty on a
+              // cached pre-#791 payload, and then nothing is drawn.
+              if (imgs[page].counterLabel.isNotEmpty)
+                Text(imgs[page].counterLabel, style: Ds.t.caption),
+              if (imgs[page].counterLabel.isNotEmpty &&
+                  widget.gallery.zoomHint.isNotEmpty)
+                Text(' · ', style: Ds.t.caption),
+              if (widget.gallery.zoomHint.isNotEmpty)
+                Text(widget.gallery.zoomHint, style: Ds.t.caption),
+            ],
+          ),
+          SizedBox(height: Ds.space.x8),
           SizedBox(
-            height: 6,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                for (var i = 0; i < imgs.length; i++)
-                  AnimatedContainer(
-                    duration: const Duration(milliseconds: 180),
-                    margin: const EdgeInsets.symmetric(horizontal: 3),
-                    width: i == _page ? 16 : 6,
-                    height: 6,
-                    decoration: BoxDecoration(
-                      color: i == _page
-                          ? const Color(0xFF1B7A43)
-                          : const Color(0xFFD9DDE3),
-                      borderRadius: BorderRadius.circular(3),
+            height: _thumb,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              shrinkWrap: true,
+              itemCount: imgs.length,
+              separatorBuilder: (_, __) => SizedBox(width: Ds.space.x8),
+              itemBuilder: (_, i) => GestureDetector(
+                onTap: () {
+                  setState(() => _page = i);
+                  _ctrl.animateToPage(i,
+                      duration: Ds.motion.standard, curve: Ds.motion.curve);
+                },
+                child: Container(
+                  width: _thumb,
+                  height: _thumb,
+                  decoration: BoxDecoration(
+                    borderRadius: Ds.r.rButton,
+                    border: Border.all(
+                      color: i == page ? Ds.c.brand : Ds.c.divider,
+                      width: i == page ? 2 : 1,
                     ),
                   ),
-              ],
+                  child: ClipRRect(
+                    borderRadius: Ds.r.rButton,
+                    child: ProductImage(
+                      url: imgs[i].url,
+                      width: _thumb,
+                      height: _thumb,
+                    ),
+                  ),
+                ),
+              ),
             ),
           ),
         ],
       ],
+    );
+  }
+}
+
+/// CMD #791 — the full-screen zoom. `InteractiveViewer` gives pinch and
+/// double-tap-free pan on every platform the app ships to, and the dismiss
+/// control's word is the backend's `close_label`.
+class _ZoomViewer extends StatefulWidget {
+  final PdGallery gallery;
+  final int initialIndex;
+  const _ZoomViewer({required this.gallery, required this.initialIndex});
+
+  @override
+  State<_ZoomViewer> createState() => _ZoomViewerState();
+}
+
+class _ZoomViewerState extends State<_ZoomViewer> {
+  late final PageController _ctrl =
+      PageController(initialPage: widget.initialIndex);
+  late int _page = widget.initialIndex;
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final imgs = widget.gallery.images;
+    final page = _page.clamp(0, imgs.isEmpty ? 0 : imgs.length - 1);
+    return Scaffold(
+      backgroundColor: Ds.c.text,
+      body: SafeArea(
+        child: Stack(
+          children: [
+            PageView.builder(
+              controller: _ctrl,
+              itemCount: imgs.length,
+              onPageChanged: (i) => setState(() => _page = i),
+              itemBuilder: (_, i) => InteractiveViewer(
+                minScale: 1,
+                maxScale: 4,
+                child: Center(
+                  child: ProductImage(
+                    url: imgs[i].url,
+                    width: MediaQuery.of(context).size.width,
+                    height: MediaQuery.of(context).size.height,
+                    fit: BoxFit.contain,
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: Ds.space.x24,
+              child: Center(
+                child: imgs.isEmpty || imgs[page].counterLabel.isEmpty
+                    ? const SizedBox.shrink()
+                    : Text(
+                        imgs[page].counterLabel,
+                        style: Ds.t.caption.copyWith(color: Ds.c.surface),
+                      ),
+              ),
+            ),
+            Positioned(
+              top: Ds.space.x8,
+              right: Ds.space.x8,
+              child: TextButton(
+                onPressed: () => Navigator.of(context).maybePop(),
+                child: Text(
+                  widget.gallery.closeLabel,
+                  style: Ds.t.body.copyWith(color: Ds.c.surface),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// CMD #791 — the fact table. Same two-column shape as the overview table it
+/// sits under; both halves of every row arrive rendered.
+class _FactsTable extends StatelessWidget {
+  final List<PdFactRow> rows;
+  const _FactsTable({required this.rows});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Ds.c.surface,
+        borderRadius: Ds.r.rCard,
+        border: Border.all(color: Ds.c.divider),
+      ),
+      padding: EdgeInsets.symmetric(
+          horizontal: Ds.space.x16, vertical: Ds.space.x8),
+      child: Column(
+        children: [
+          for (var i = 0; i < rows.length; i++) ...[
+            if (i > 0) Divider(height: Ds.space.x16, color: Ds.c.divider),
+            Padding(
+              padding: EdgeInsets.symmetric(vertical: Ds.space.x4),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 130,
+                    child: Text(rows[i].label, style: Ds.t.caption),
+                  ),
+                  SizedBox(width: Ds.space.x12),
+                  Expanded(
+                    child: Text(rows[i].value, style: Ds.t.body),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }

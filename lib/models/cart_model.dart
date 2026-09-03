@@ -940,6 +940,13 @@ class CartModel extends ChangeNotifier {
   Map<String, dynamic> get pill =>
       (render['pill'] as Map?)?.cast<String, dynamic>() ?? const {};
 
+  /// CMD #791 — "Frequently bought together" for the basket as a whole, from
+  /// `cart_render().companions`. `has` is the backend's verdict; the strip is
+  /// absent on an empty cart and on a basket with no co-purchase evidence,
+  /// because there is nothing honest to suggest.
+  Map<String, dynamic> get companions =>
+      (_cart['companions'] as Map?)?.cast<String, dynamic>() ?? const {};
+
   /// CHANGE #174 — the trade margin on this basket, computed by
   /// `cart_margin_block()` from the SAME engine the cards use. Empty map when
   /// the payload carried none.
@@ -1032,6 +1039,12 @@ class CartModel extends ChangeNotifier {
     final current = quantityOf(productId);
     _requestQty(productId, current > 0 ? current + 1 : 1);
   }
+
+  /// CMD #791 — set an exact quantity by id. The one-tap "Add usual qty (9)"
+  /// on the purchase overlay is a SET, not nine increments: the backend already
+  /// decided the number, so the app writes it once through the same debounced
+  /// path every stepper uses.
+  void setQuantityId(String productId, int qty) => _requestQty(productId, qty);
 
   void incrementId(String productId) =>
       _requestQty(productId, quantityOf(productId) + 1);

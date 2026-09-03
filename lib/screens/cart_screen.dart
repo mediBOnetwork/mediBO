@@ -12,6 +12,7 @@ import 'bulk_upload_screen.dart';
 import '../utils/render_log.dart';
 import '../models/cart_model.dart';
 import '../models/product.dart';
+import '../models/product_detail.dart' show PdCompanion;
 import '../design_tokens.dart';
 import '../theme.dart';
 import '../user_state.dart';
@@ -20,6 +21,7 @@ import '../services/ui_copy.dart';
 import '../view_as_state.dart';
 import '../widgets/animations.dart';
 import '../widgets/checkout_pay_sheet.dart';
+import '../widgets/companion_rail.dart';
 import 'auth/login_screen.dart';
 import 'profile_screen.dart';
 import 'customer/profile_edit_screen.dart'; // CHANGE #572 — the notice's action
@@ -1392,11 +1394,25 @@ class _ItemListState extends State<_ItemList> {
     final removed = widget.cart.adminRemovedLines;
     final hasRemoved = removed.isNotEmpty && !searchActive;
 
+    // CMD #791 — "Frequently bought together" for the whole basket, from
+    // cart_render().companions. `has` is the BACKEND's verdict, so an empty
+    // cart and a basket with no co-purchase evidence both draw nothing rather
+    // than an invented suggestion. Hidden while a search filter is active,
+    // because the list is then answering a different question.
+    final companions = widget.cart.companions;
+    final companionItems = ((companions['items'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((e) => PdCompanion.fromMap(e.cast<String, dynamic>()))
+        .toList(growable: false);
+    final showCompanions =
+        !searchActive && companions['has'] == true && companionItems.isNotEmpty;
+
     int afterCount = 0;
     if (hasRemoved) {
       afterCount += 1;
       if (_showRemoved) afterCount += removed.length;
     }
+    if (showCompanions) afterCount += 1;
 
     // CHANGE #639 — index of the first line the BACKEND flagged, so the
     // scroll-to target can be tagged as it is built.
@@ -1442,6 +1458,29 @@ class _ItemListState extends State<_ItemList> {
           if (_showRemoved && extra < removed.length) {
             return _RemovedItemCard(line: removed[extra], cart: widget.cart);
           }
+          extra -= _showRemoved ? removed.length : 0;
+        }
+
+        if (showCompanions && extra == 0) {
+          return Padding(
+            padding: EdgeInsets.only(top: Ds.space.x24, bottom: Ds.space.x8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  (companions['title'] ?? '').toString(),
+                  style: Ds.t.subtitle,
+                ),
+                SizedBox(height: Ds.space.x4),
+                Text(
+                  (companions['note'] ?? '').toString(),
+                  style: Ds.t.caption,
+                ),
+                SizedBox(height: Ds.space.x12),
+                CompanionRail(items: companionItems),
+              ],
+            ),
+          );
         }
 
         return const SizedBox();

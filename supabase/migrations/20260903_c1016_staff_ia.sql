@@ -80,7 +80,7 @@ select f.feature_key, f.label, f.surface, f.group_label, f.route_key, f.deep_lin
 on conflict (feature_key) do nothing;
 
 -- 1f. icons the tab bar needs that the catalogue did not hold.
-insert into public.ui_icon(icon_key, label) values ('apps', 'More (grid)') on conflict do nothing;
+insert into public.ui_icon(icon_key, label) values ('apps', 'More (grid)') on conflict (icon_key) do nothing;
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- PART 2 · homes (categories), the tab bar, and every row's new place

@@ -31,6 +31,30 @@ import 'admin_support_inbox_screen.dart'; // CMD #452 — feature_gaps #132
 class AdminDashboardScreen extends StatefulWidget {
   const AdminDashboardScreen({super.key});
 
+  /// CHANGE #325 (spec 5) / #1016 — the dead-feature report sheet. Offered at
+  /// the foot of the More grid under the v2 layout and under the feature list
+  /// under v1; the sheet and its RPC are the same either way.
+  static Future<void> openUnusedReport(BuildContext context) async {
+    Map<String, dynamic> report = const {};
+    try {
+      final raw = await Supabase.instance.client.rpc('nav_unused_report');
+      report = Map<String, dynamic>.from((raw is List ? raw.first : raw) as Map);
+    } catch (_) {
+      return;
+    }
+    if (!context.mounted) return;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(Ds.r.sheet)),
+      ),
+      builder: (_) => NavUnusedReportSheet(report: report),
+    );
+  }
+
+
   @override
   State<AdminDashboardScreen> createState() => _AdminDashboardScreenState();
 }
@@ -350,27 +374,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   /// list because that is the question it answers about the list above it.
   /// CHANGE #1016 — under the v2 layout it is offered at the foot of the More
   /// grid instead ([openUnusedReport]); the sheet and its RPC are unchanged.
-  Future<void> _openUnusedReport() => openUnusedReport(context);
-
-  static Future<void> openUnusedReport(BuildContext context) async {
-    Map<String, dynamic> report = const {};
-    try {
-      final raw = await Supabase.instance.client.rpc('nav_unused_report');
-      report = Map<String, dynamic>.from((raw is List ? raw.first : raw) as Map);
-    } catch (_) {
-      return;
-    }
-    if (!context.mounted) return;
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Ds.c.surface,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(Ds.r.sheet)),
-      ),
-      builder: (_) => NavUnusedReportSheet(report: report),
-    );
-  }
+  Future<void> _openUnusedReport() =>
+      AdminDashboardScreen.openUnusedReport(context);
 
   void _openPalette() {
     showCommandPalette(

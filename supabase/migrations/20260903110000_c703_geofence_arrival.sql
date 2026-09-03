@@ -1165,6 +1165,11 @@ begin
 end $function$;
 
 grant execute on function public.delivery_confirm_arrival(uuid) to authenticated;
+-- The 1-arg form below is REPLACED by a 2-arg one, and `create or replace`
+-- cannot do that: it would leave both live and rg_check flags a critical
+-- overload (two functions one call could resolve to). Drop it first.
+drop function if exists public._c703_arrival_block(uuid);
+
 -- CHANGE #703 — the doorbell must not hand the rider the customer's OTP.
 --
 -- CHANGE #354 CHECK-constrained deliveries.otp_code to stay NULL for exactly

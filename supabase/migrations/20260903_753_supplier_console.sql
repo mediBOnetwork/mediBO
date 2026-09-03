@@ -319,11 +319,17 @@ begin
        and (not ('dues'       = any(v_f)) or c.dues_amt > 0)
        and (not ('licence'    = any(v_f)) or c.licence_flag)
        and (not ('top_spn'    = any(v_f)) or c.spn_rank <= 5)
+       -- The search matches a company the supplier stocks too, which is what
+       -- admin_list_suppliers used to be a second round-trip for.
        and (v_q = '' or lower(coalesce(c.supplier_name,'')) like '%'||v_q||'%'
                      or lower(coalesce(c.contact_name,'')) like '%'||v_q||'%'
                      or lower(coalesce(c.supplier_code,'')) like '%'||v_q||'%'
                      or lower(coalesce(c.phone,'')) like '%'||v_q||'%'
-                     or lower(coalesce(c.city,'')) like '%'||v_q||'%')
+                     or lower(coalesce(c.city,'')) like '%'||v_q||'%'
+                     or exists (select 1 from supplier_company sc
+                                 where sc.supplier_id = c.id
+                                   and (lower(coalesce(sc.supplier_company,'')) like '%'||v_q||'%'
+                                     or lower(coalesce(sc.company_1,'')) like '%'||v_q||'%')))
   ),
   ordered as (
     select f.* from filtered f
@@ -699,7 +705,7 @@ begin
       jsonb_build_object('label', public._c('admin_sup2.c_unmapped'), 'value', (v_total - v_mapped)::text,
                          'tone', case when v_total - v_mapped > 0 then 'warning' else 'neutral' end),
       jsonb_build_object('label', public._c('admin_sup2.c_match'),    'value', to_char(v_pct,'FM990.0')||'%', 'tone','info'))),
-    jsonb_build_object('kind','chips','key','filter','chips', jsonb_build_array(
+    jsonb_build_object('kind','chips','key','filter','arg','p_filter','chips', jsonb_build_array(
       jsonb_build_object('key','all',     'label',public._c('admin_sup2.c_all'),     'count',v_total,           'active',v_f='all'),
       jsonb_build_object('key','mapped',  'label',public._c('admin_sup2.c_mapped'),  'count',v_mapped,          'active',v_f='mapped'),
       jsonb_build_object('key','unmapped','label',public._c('admin_sup2.c_unmapped'),'count',v_total - v_mapped,'active',v_f='unmapped'))),
@@ -769,6 +775,7 @@ begin
   -- that draws it, so a sixth zone tomorrow is a data row, not a deploy.
   select coalesce(jsonb_agg(jsonb_build_object(
            'key', z.id::text,
+           'value', z.id,
            'label', case z.id when 1 then '①' when 2 then '②' when 3 then '③'
                               when 4 then '④' when 5 then '⑤'
                               else '('||z.id::text||')' end || ' ' || z.name,
@@ -818,7 +825,8 @@ begin
                       where cz.product_id = m.product_id and cz.zone_id = v_zone));
 
   return jsonb_build_object('ok', true, 'zone_id', v_zone, 'blocks', jsonb_build_array(
-    jsonb_build_object('kind','chips','key','zone','title',public._c('admin_sup2.a_zone'),'chips',v_zones),
+    jsonb_build_object('kind','chips','key','zone','arg','p_zone_id','arg_type','int',
+                       'title',public._c('admin_sup2.a_zone'),'chips',v_zones),
     jsonb_build_object('kind','list','title',public._c('admin_sup2.a_title'),
       'empty', public._c('admin_sup2.a_empty'), 'items', v_items)));
 end $$;
@@ -914,7 +922,9 @@ begin
            'meta', public.ist_fmt(coalesce(p.created_at, p.order_date::timestamptz),'day_mon_year'),
            'trailing', public.inr_money(coalesce(p.total_amount,0)),
            'chip', public.status_chip('supplier_status', p.status),
-           'link', jsonb_build_object('route','supplier_order','arg', p.id::text))
+           'link', jsonb_build_object('tab','payments','copy', coalesce(p.order_code,''),
+                     'toast', case when coalesce(p.order_code,'') = '' then ''
+                                   else replace(public._c('admin_sup2.h_copied'),'{code}', p.order_code) end))
          order by p.created_at desc), '[]'::jsonb)
     into v_items from page p;
 
@@ -937,7 +947,7 @@ begin
     jsonb_build_object('kind','tiles','tiles', jsonb_build_array(
       jsonb_build_object('label',public._c('admin_sup2.o_orders'),'value',v_total::text,'tone','neutral'),
       jsonb_build_object('label',public._c('admin_sup2.o_value'), 'value',public.inr_money(v_amt),'tone','info'))),
-    jsonb_build_object('kind','chips','key','status','chips', jsonb_build_array(
+    jsonb_build_object('kind','chips','key','status','arg','p_status','chips', jsonb_build_array(
       jsonb_build_object('key','all',      'label',public._c('admin_sup2.o_all'),      'count',v_c_all,      'active',v_f='all'),
       jsonb_build_object('key','open',     'label',public._c('admin_sup2.o_open'),     'count',v_c_open,     'active',v_f='open'),
       jsonb_build_object('key','packed',   'label',public._c('admin_sup2.o_packed'),   'count',v_c_packed,   'active',v_f='packed'),
@@ -1447,47 +1457,47 @@ begin
   with ev as (
     select l.asked_at as at, public._c('admin_sup2.h_inq_asked') as title,
            coalesce(i.product_name,'') as subtitle, 'info' as tone, 'inquiry' as icon,
-           'inquiry' as route, l.inquiry_id::text as arg
+           ''::text as route, ''::text as arg
       from supplier_response_log l
       left join inquiry i on i.id = l.inquiry_id
      where lower(btrim(coalesce(l.supplier_name,''))) = lower(btrim(sp.supplier_name))
        and l.kind = 'inquiry_asked' and l.asked_at >= v_from and l.asked_at < v_to
     union all
     select l.responded_at, public._c('admin_sup2.h_inq_ans'),
-           coalesce(l.outcome,''), 'success', 'inquiry', 'inquiry', l.inquiry_id::text
+           coalesce(l.outcome,''), 'success', 'inquiry', '', ''
       from supplier_response_log l
      where lower(btrim(coalesce(l.supplier_name,''))) = lower(btrim(sp.supplier_name))
        and l.responded_at is not null and l.responded_at >= v_from and l.responded_at < v_to
     union all
     select l.asked_at, public._c('admin_sup2.h_inq_adv'),
-           coalesce(l.reason,''), 'warning', 'inquiry', 'inquiry', l.inquiry_id::text
+           coalesce(l.reason,''), 'warning', 'inquiry', '', ''
       from supplier_response_log l
      where lower(btrim(coalesce(l.supplier_name,''))) = lower(btrim(sp.supplier_name))
        and l.kind = 'po_timeout' and l.asked_at >= v_from and l.asked_at < v_to
     union all
     select so.created_at, public._c('admin_sup2.h_order'),
            coalesce(so.order_code,'')||'  ·  '||public.inr_money(coalesce(so.total_amount,0)),
-           'neutral', 'order', 'supplier_order', so.id::text
+           'neutral', 'order', 'orders', coalesce(so.order_code,'')
       from supplier_orders so
      where so.supplier_id = sp.id and so.created_at >= v_from and so.created_at < v_to
     union all
     select d.created_at,
            case when coalesce(d.adj_amount,0) > 0 then public._c('admin_sup2.h_debit')
                 else public._c('admin_sup2.h_dispute') end,
-           coalesce(d.product_name,''), 'danger', 'dispute', 'dispute', d.id::text
+           coalesce(d.product_name,''), 'danger', 'dispute', 'payments', coalesce(d.dispute_code,'')
       from supplier_disputes d
      where lower(btrim(coalesce(d.assigned_supplier,''))) = lower(btrim(sp.supplier_name))
        and d.created_at >= v_from and d.created_at < v_to
     union all
     select b.received_at, public._c('admin_sup2.h_bill'),
-           coalesce(b.file_name,''), 'neutral', 'bill', 'bill', b.id::text
+           coalesce(b.file_name,''), 'neutral', 'bill', 'payments', coalesce(b.file_name,'')
       from pending_bills b
      where lower(btrim(coalesce(b.supplier_name,''))) = lower(btrim(sp.supplier_name))
        and b.received_at >= v_from and b.received_at < v_to
     union all
     select pm.created_at, public._c('admin_sup2.h_payment'),
            public.inr_money(coalesce(pm.amount,0))||'  ·  '||coalesce(pm.mode,''),
-           'success', 'payment', 'supplier_order', so.id::text
+           'success', 'payment', 'payments', coalesce(so.order_code,'')
       from supplier_payments pm
       join supplier_orders so on so.id = pm.supplier_order_id
      where so.supplier_id = sp.id and pm.created_at >= v_from and pm.created_at < v_to
@@ -1515,15 +1525,20 @@ begin
            'when', public.ist_fmt(e.at,'day_mon_time12'),
            'title', e.title, 'subtitle', e.subtitle,
            'tone', e.tone, 'icon', e.icon,
-           'link', case when coalesce(e.route,'') = '' or coalesce(e.arg,'') = '' then null
-                        else jsonb_build_object('route', e.route, 'arg', e.arg) end)
+           'link', case when coalesce(e.route,'') = '' then null
+                        else jsonb_build_object(
+                               'tab', e.route,
+                               'copy', coalesce(e.arg,''),
+                               'toast', case when coalesce(e.arg,'') = '' then ''
+                                             else replace(public._c('admin_sup2.h_copied'),'{code}', e.arg) end) end)
          order by e.at desc), '[]'::jsonb)
     into v_items
     from (select * from ev where at is not null order by at desc limit v_lim) e;
 
   return jsonb_build_object('ok', true, 'month', to_char(v_m,'YYYY-MM'),
     'blocks', jsonb_build_array(
-    jsonb_build_object('kind','chips','key','month','title',public._c('admin_sup2.h_month'),'chips',v_months),
+    jsonb_build_object('kind','chips','key','month','arg','p_month',
+                       'title',public._c('admin_sup2.h_month'),'chips',v_months),
     jsonb_build_object('kind','timeline','title',public._c('admin_sup2.h_title'),
       'empty', public._c('admin_sup2.h_empty'), 'items', v_items)));
 end $$;
@@ -1586,3 +1601,62 @@ insert into public.partner_rpc_allow (proname, source, note) values
 on conflict (proname) do nothing;
 
 select public.partner_rpc_allow_refresh();
+
+-- ── 23. The frontend must construct NOTHING: the tab list carries its own
+--       rpc name, and every chip group carries the parameter it sets.
+insert into public.ui_copy (key, value) values
+  ('admin_sup2.h_copied', to_jsonb('{code} copied'::text))
+on conflict (key) do nothing;
+
+alter table public.admin_supplier_tab add column if not exists rpc text;
+update public.admin_supplier_tab set rpc = 'admin_supplier_tab_'||tab_key
+ where coalesce(rpc,'') = '';
+
+create or replace function public.admin_supplier_page(p_supplier_id uuid)
+returns jsonb
+language plpgsql stable security definer set search_path to 'public'
+as $$
+declare
+  v_role text := public._sup753_gate();
+  sp supplier_profiles%rowtype;
+  v_tabs jsonb; v_kyc jsonb;
+begin
+  if v_role = 'none' then return public._sup753_deny(false); end if;
+  sp := public._sup753_row(p_supplier_id);
+  if sp.id is null then return public._sup753_deny(false); end if;
+
+  v_kyc := public._sup753_kyc(coalesce(nullif(sp.drug_license,''), sp.dl_1),
+                              coalesce(nullif(sp.gstin,''), sp.gst),
+                              sp.dl_expiry, sp.gstin_expiry);
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'key', t.tab_key, 'label', t.label,
+           'icon', coalesce(t.icon_key,''),
+           'rpc', coalesce(nullif(t.rpc,''), 'admin_supplier_tab_'||t.tab_key))
+         order by t.sort_order), '[]'::jsonb)
+    into v_tabs
+    from admin_supplier_tab t
+   where t.is_active
+     and (t.feature_key is null
+          or public.my_partner_id() is null
+          or public.partner_can(t.feature_key,'read'));
+
+  return jsonb_build_object(
+    'ok', true,
+    'supplier_id', sp.id,
+    'title', coalesce(nullif(btrim(sp.supplier_name),''), sp.contact_name, '—'),
+    'subtitle', array_to_string(array_remove(array[
+        nullif(btrim(coalesce(sp.supplier_code,'')),''),
+        nullif(btrim(coalesce(sp.phone,'')),''),
+        nullif(btrim(coalesce(sp.city,'')),'')], null), '  ·  '),
+    'back_label', public._c('admin_sup2.back'),
+    'chips', jsonb_build_array(
+       public.status_chip('supplier_status', sp.status),
+       v_kyc->'chip'),
+    'spn_label', public._c('admin_sup2.spn_prefix')||' '||to_char(coalesce(sp."SPN",0),'FM999,999,999'),
+    'zone_label', coalesce((select z.name from zones z where z.id = sp.zone_id),
+                           public._c('admin_sup2.no_zone')),
+    'tabs', v_tabs,
+    'default_tab', coalesce(v_tabs->0->>'key','profile'),
+    'empty_label', public._c('admin_sup2.tab_empty'));
+end $$;

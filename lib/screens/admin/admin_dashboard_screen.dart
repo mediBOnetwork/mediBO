@@ -14,6 +14,7 @@ import 'package:pharma_b2b/widgets/notifications_card.dart';
 import '../../design_tokens.dart';
 import '../../models/c529_admin_gaps.dart';
 import '../../widgets/crashes_card.dart'; // CHANGE #473
+import '../../widgets/dashboard_v2_card.dart'; // CHANGE #812
 import '../../services/ui_copy.dart';
 import 'admin_ops_board_screen.dart';
 import 'command_palette.dart';   // CHANGE #325
@@ -36,7 +37,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   // zoned, so a zone-scoped admin never counted it. It is its own bucket now,
   // and its wording is the BACKEND's (never a Dart string).
   UnresolvedBillsTile _unresolved = const UnresolvedBillsTile(count: 0, label: '');
-  int _totalMedicines = 0;
   bool _loading = true;
 
   // CHANGE #325 — the whole nav, from nav_registry(). Sections, labels, icons,
@@ -49,12 +49,65 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   // does, so it sits FIRST on the admin home and carries its own wording.
   Map<String, dynamic> _ops = const {};
 
+  // CHANGE #812 — the whole dashboard head in ONE payload: today's strip with
+  // deltas and 7-day sparklines, the needs-you queue, the stage funnel, the
+  // promised ring, alerts, quick actions and (super admin) the zone cards.
+  // Every string, number and tone in it is the backend's.
+  Map<String, dynamic> _dash = const {};
+
   @override
   void initState() {
     super.initState();
     _loadStats();
     _loadNav();
     _loadOpsBoard();
+    _loadDashboard();
+  }
+
+  /// CHANGE #812 — dashboard_v2(). A failure leaves the rest of the home
+  /// intact: the card simply does not appear.
+  Future<void> _loadDashboard() async {
+    try {
+      final raw = await Supabase.instance.client.rpc('dashboard_v2');
+      final m = (raw is List ? raw.first : raw);
+      if (mounted && m is Map) {
+        setState(() => _dash = Map<String, dynamic>.from(m));
+      }
+    } catch (_) {
+      // No card rather than a broken one.
+    }
+  }
+
+  /// CHANGE #812 — one of needs_you's own {rpc, args} actions, run verbatim.
+  /// The wording of whatever comes back is the backend's too.
+  Future<void> _runDashboardAction(Map<String, dynamic> action) async {
+    final fn = (action['rpc'] ?? '').toString();
+    if (fn.isEmpty) return;
+    final args = (action['args'] is Map)
+        ? Map<String, dynamic>.from(action['args'] as Map)
+        : const <String, dynamic>{};
+    try {
+      final raw = await Supabase.instance.client.rpc(fn, params: args);
+      final m = (raw is List ? raw.first : raw);
+      final message =
+          (m is Map ? (m['message'] ?? m['toast'] ?? '') : '').toString();
+      if (mounted && message.isNotEmpty) {
+        ScaffoldMessenger.maybeOf(context)
+            ?.showSnackBar(SnackBar(content: Text(message)));
+      }
+    } catch (_) {
+      // The row stays as it was; the next refresh is the truth.
+    }
+    await _loadDashboard();
+  }
+
+  /// CHANGE #812 — universal_search(): order code, phone, pharmacy, supplier,
+  /// product. A superset of the palette's screen jumping, so the box on the
+  /// dashboard finds the THING you are holding.
+  Future<Map<String, dynamic>> _universalSearch(String query) async {
+    final raw = await Supabase.instance.client
+        .rpc('universal_search', params: {'p_q': query});
+    return Map<String, dynamic>.from((raw is List ? raw.first : raw) as Map);
   }
 
   Future<void> _loadStats() async {
@@ -65,7 +118,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       int n(String k) => (c[k] as num?)?.toInt() ?? 0;
       if (mounted) {
         setState(() {
-          _totalMedicines = n('medicines');
           _pendingBills   = n('pending_bills');
           _unresolved     = UnresolvedBillsTile.from(Map<String, dynamic>.from(c));
           _loading = false;
@@ -241,6 +293,19 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     return Map<String, dynamic>.from((raw is List ? raw.first : raw) as Map);
   }
 
+  /// CHANGE #812 — the entity search, its own sheet. The palette above stays
+  /// the SCREEN jumper (it leads with features and Dev Queue tools); this one
+  /// is the order code / phone / pharmacy / supplier / product box, and it is
+  /// the one a partner can open too.
+  void _openUniversalSearch() {
+    showUniversalSearch(
+      context,
+      search: _universalSearch,
+      onPick: _openTile,
+      placeholder: c('usearch.placeholder'),
+    );
+  }
+
   /// CHANGE #325 (spec 5) — the dead-feature report. Sits under the feature
   /// list because that is the question it answers about the list above it.
   Future<void> _openUnusedReport() async {
@@ -320,12 +385,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               icon: Icons.link_off_outlined,
               color: Ds.c.warning,
             ),
-          _StatCard(
-            label: c('admin_dashboard.stat_medicines'),
-            value: '$_totalMedicines',
-            icon: Icons.medication_outlined,
-            color: const Color(0xFF1B7A43),
-          ),
+          // CHANGE #812 — the static medicines tile is gone. A catalogue size
+          // that changes once a week was never a thing to DO, and it cost a
+          // count(*) over 563k rows on every admin home load.
         ]),
       ],
     );
@@ -400,7 +462,22 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   // supplier or medicine, so nothing needs to be hunted for.
                   _PaletteButton(
                       label: _label('search_button'), onTap: _openPalette),
+                  SizedBox(height: Ds.space.x8),
+                  // CHANGE #812 — the entity box. Its own door, right under the
+                  // screen jumper, and the wording is universal_search()'s own
+                  // placeholder rather than a Dart literal.
+                  _PaletteButton(
+                      key: const Key('c812_search_button'),
+                      label: c('usearch.placeholder'),
+                      onTap: _openUniversalSearch),
                   SizedBox(height: Ds.space.x16),
+                  // CHANGE #812 — the dashboard itself: one RPC, printed.
+                  DashboardV2Card(
+                    payload: _dash,
+                    onOpen: _openTile,
+                    onAction: _runDashboardAction,
+                  ),
+                  if (_dash.isNotEmpty) SizedBox(height: Ds.space.x24),
                   // #58 — "what is stuck right now", first thing on the
                   // admin home and one tap from the full board.
                   if (_ops.isNotEmpty) _OpsBoardCard(payload: _ops),
@@ -627,7 +704,8 @@ class _PaletteButton extends StatelessWidget {
   final String label;
   final VoidCallback onTap;
 
-  const _PaletteButton({required this.label, required this.onTap});
+  const _PaletteButton(
+      {super.key, required this.label, required this.onTap});
 
   @override
   Widget build(BuildContext context) {

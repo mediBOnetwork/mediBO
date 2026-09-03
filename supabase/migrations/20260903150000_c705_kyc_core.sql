@@ -245,8 +245,13 @@ begin
   -- account that is not approved at all has nothing to keep. approved_at is
   -- NULL on most of these rows (36/36 suppliers), so it is a filter, never the
   -- clock — reading the clock off it gave 36 suppliers no grace at all.
+  -- ...but grace never covers an EXPIRED document. Grace answers "we only
+  -- started asking for this today"; an account that uploaded a licence and let
+  -- it lapse has had its own 30/7/1-day warnings and its own deadline, and
+  -- letting the launch window excuse that would make kyc_expiry_sweep's block
+  -- do nothing for its first fortnight.
   v_grace_until := case when v_approved then v_from + v_grace else null end;
-  v_in_grace := v_state <> 'verified'
+  v_in_grace := v_state not in ('verified','expired')
                 and v_approved
                 and (v_approved_at is null or (v_approved_at at time zone 'Asia/Kolkata')::date <= v_from)
                 and v_today <= v_grace_until;

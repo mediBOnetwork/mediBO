@@ -112,9 +112,9 @@ alter table public.order_feedback_chip      enable row level security;
 -- ───────────────────────── 2. The data (dimensions, chips, copy) ─────────────
 
 insert into public.order_feedback_dimension (dim_key, col, copy_key, sort_order, feeds) values
-  ('ordering',  'score_ordering',  'feedback.dim_ordering',  10, 'support'),
+  ('ordering',  'score_ordering',  'feedback.dim_ordering',  10, ''),
   ('packaging', 'score_packaging', 'feedback.dim_packaging', 20, 'partner'),
-  ('delivery',  'score_delivery',  'feedback.dim_delivery',  30, 'rider'),
+  ('delivery',  'score_delivery',  'feedback.dim_delivery',  30, 'partner,rider'),
   ('products',  'score_products',  'feedback.dim_products',  40, 'supplier'),
   ('support',   'score_support',   'feedback.dim_support',   50, 'support')
 on conflict (dim_key) do update
@@ -486,10 +486,10 @@ begin
   -- read, so #693 and supplier_scorecard pick these up with no new plumbing.
   for d in select * from public.order_feedback_dimension where is_active and feeds <> '' loop
     v_val := (v_scores->>d.dim_key)::int;
-    if d.feeds = 'partner' or d.feeds = 'support' then
+    if d.feeds like '%partner%' or d.feeds like '%support%' then
       insert into public.exception_scorecard_input
         (subject_kind, subject_key, reason_code, outcome_code, weight, exception_id, zone_id, closed_at, closed_by)
-      select case when d.feeds='partner' then 'partner' else 'support' end,
+      select case when d.feeds like '%partner%' then 'partner' else 'support' end,
              coalesce((select rp.id::text from public.region_partners rp
                         where rp.zone_id = o.zone_id and rp.is_active limit 1), o.zone_id::text),
              'feedback_' || d.dim_key, 'score_' || v_val::text,
@@ -497,7 +497,8 @@ begin
              o.zone_id, now(), 'order_feedback'
       where not exists (select 1 from public.exception_scorecard_input e
                          where e.exception_id = 'ofb:' || p_order_id::text || ':' || d.dim_key);
-    elsif d.feeds = 'supplier' then
+    end if;
+    if d.feeds like '%supplier%' then
       insert into public.exception_scorecard_input
         (subject_kind, subject_key, reason_code, outcome_code, weight, exception_id, zone_id, closed_at, closed_by)
       select 'supplier', s.assigned_supplier,
@@ -678,7 +679,7 @@ begin
    order by created_at desc limit 1;
 
   if v_token is null then
-    v_token := encode(gen_random_bytes(16), 'hex');
+    v_token := replace(gen_random_uuid()::text, '-', '') || substr(replace(gen_random_uuid()::text,'-',''), 1, 8);
     insert into public.order_feedback_token (token, order_id) values (v_token, p_order_id);
   end if;
 
@@ -888,7 +889,7 @@ begin
 
   if not v_locked then
     select jsonb_agg(jsonb_build_object('id', z.id, 'label', z.name,
-                                        'selected', (v_zone = z.id))
+                                        'selected', coalesce(v_zone = z.id, false))
                      order by z.id)
       into v_zones from public.zones z where z.is_active;
     v_zones := jsonb_build_array(jsonb_build_object(
@@ -956,7 +957,11 @@ grant execute on function public.order_feedback_send_wa(uuid)             to aut
 grant execute on function public.order_feedback_form(text)                to anon, authenticated;
 grant execute on function public.order_feedback_submit_token(text, jsonb, int, text, text[]) to anon, authenticated;
 
-revoke execute on function public.order_feedback_sweep()   from anon;
-revoke execute on function public.order_feedback_rollup(int) from anon;
-revoke execute on function public._order_feedback_write(uuid, jsonb, int, text, text[], text, uuid, uuid) from anon, authenticated;
-revoke execute on function public._order_feedback_open_ticket(uuid, text, text, int, text, uuid, uuid, boolean) from anon, authenticated;
+-- The two internal writers are reachable ONLY as the definer of the four public
+-- entry points above. `from public` is the part that matters: a plain REVOKE
+-- from anon leaves the PUBLIC default grant in place, and anon inherits it.
+revoke execute on function public._order_feedback_write(uuid, jsonb, int, text, text[], text, uuid, uuid) from public, anon, authenticated;
+revoke execute on function public._order_feedback_open_ticket(uuid, text, text, int, text, uuid, uuid, boolean) from public, anon, authenticated;
+revoke execute on function public.order_feedback_sweep()     from public, anon;
+revoke execute on function public.order_feedback_rollup(int) from public, anon;
+revoke execute on function public.order_feedback_send_wa(uuid) from public, anon;

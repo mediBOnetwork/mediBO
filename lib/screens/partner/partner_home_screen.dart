@@ -22,7 +22,9 @@ import '../admin/order_alerts_screen.dart' show OrderAlertCard;
 import 'partner_statement_screen.dart';
 import 'partner_expense_screen.dart';
 import 'partner_staff_screen.dart';
+import 'partner_tasks_screen.dart';
 import 'partner_workers_screen.dart';
+import '../worker/worker_tasks_screen.dart';
 import 'partner_supplier_payment_screen.dart';
 
 /// Backend `icon_key` -> a glyph. The KEY is the backend's; only the glyph is
@@ -81,6 +83,11 @@ Widget? partnerDestination(String routeKey, {List<dynamic>? tabs}) {
     case 'partner_staff':    return const PartnerStaffScreen();
     case 'partner_expenses': return const PartnerExpenseScreen();
     case 'partner_workers':  return const PartnerWorkersScreen();
+    // CHANGE #707 — the fulfil stages get an owner. The board is the partner's
+    // (assign, reassign, auto-assign); 'my_tasks' is the same feature read from
+    // the other end, by the worker it was assigned to.
+    case 'fulfil_tasks':     return const PartnerTasksScreen();
+    case 'my_tasks':         return const WorkerTasksScreen();
     case 'collect':         return AdminFulfillmentScreen(initialTab: 0, allowedTabs: allowed);
     case 'count':           return AdminFulfillmentScreen(initialTab: 1, allowedTabs: allowed);
     case 'bag_mapping':     return AdminFulfillmentScreen(initialTab: 2, allowedTabs: allowed);

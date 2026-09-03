@@ -1251,3 +1251,845 @@ begin
     'toast', public._c710_fmt('sup_return.credit_applied','{amount} credit applied to this bill.',
                jsonb_build_object('amount', public.inr_money(v_use))));
 end $fn$;
+
+-- ── 10. The supplier's side ─────────────────────────────────────────────────
+
+-- The public acknowledge page. PUBLIC and anonymous exactly like
+-- /stock-update/<token>: the token in the URL is the authorisation, and it
+-- carries no phone number, no bill and no other supplier's data.
+create or replace function public.supplier_return_ack_form(p_token text)
+returns jsonb language plpgsql stable security definer set search_path to 'public' as $fn$
+declare r public.supplier_return%rowtype; v_rows jsonb;
+begin
+  select * into r from public.supplier_return
+   where ack_token = nullif(btrim(coalesce(p_token,'')),'');
+  if not found or r.status = 'cancelled' then
+    return jsonb_build_object('ok', false, 'error','invalid',
+      'error_title', public.uic('sup_return.page_invalid_title','This link is no longer valid'),
+      'error_note',  public.uic('sup_return.page_invalid_note','Please contact mediBO for assistance.'));
+  end if;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'product_name', i.product_name,
+           'batch_label', i.batch_no,
+           'qty_value', trim_scale(i.qty)::text,
+           'reason_label', coalesce((select o.label from public.order_reason_option o
+                                      where o.scope='supplier_return' and o.code = i.reason_code), i.reason_code),
+           'amount_value', public.inr_money(i.line_total)) order by i.created_at, i.id), '[]'::jsonb)
+    into v_rows from public.supplier_return_item i where i.return_id = r.id;
+
+  return jsonb_build_object(
+    'ok', true,
+    'kind', 'supplier_return_ack',
+    'supplier_name', r.supplier_name,
+    'status', r.status,
+    'already', (r.acknowledged_at is not null),
+    'eyebrow', public.uic('sup_return.page_eyebrow','mediBO · Return to supplier'),
+    'title', public._c710_fmt('sup_return.page_title','Debit note {no}',
+               jsonb_build_object('no', coalesce(r.debit_no,''))),
+    'intro', public.uic('sup_return.page_intro',
+               'These goods have been sent back. Please acknowledge the debit note.'),
+    'date_label', public.ist_fmt(coalesce(r.sent_at, r.created_at), 'day_mon_year'),
+    'columns', jsonb_build_array(
+      jsonb_build_object('key','product','label', public.uic('sup_return.col_product','Product'),'align','left'),
+      jsonb_build_object('key','qty','label', public.uic('sup_return.col_qty','Qty'),'align','right'),
+      jsonb_build_object('key','reason','label', public.uic('sup_return.col_reason','Reason'),'align','left'),
+      jsonb_build_object('key','amount','label', public.uic('sup_return.col_amount','Amount'),'align','right')),
+    'items', v_rows,
+    'empty_text', public.uic('sup_return.doc_empty','No lines on this debit note.'),
+    'count_label', public.uic('sup_return.count_label','Lines'),
+    'count_value', r.item_count::text,
+    'taxable_label', public.uic('sup_return.taxable_label','Taxable'),
+    'taxable_value', public.inr_money(r.taxable_total),
+    'gst_label', public.uic('sup_return.gst_total_label','GST'),
+    'gst_value', public.inr_money(r.gst_total),
+    'total_label', public.uic('sup_return.total_label','Debit note total'),
+    'total_value', public.inr_money(r.grand_total),
+    'effect_label', public._c710_fmt('sup_return.effect_label','Reduces your bill by {amount}',
+                      jsonb_build_object('amount', public.inr_money(r.grand_total))),
+    'note_hint', public.uic('sup_return.page_note_hint','Add a note (optional)'),
+    'submit_label', public.uic('sup_return.ack_label','Acknowledge'),
+    'submitting_label', public.uic('sup_return.page_submitting','Submitting…'),
+    'success_title', public.uic('sup_return.page_done_title','Thank you — acknowledgement received'),
+    'success_note', public.uic('sup_return.page_done_note','Your bill has been adjusted by this debit note.'),
+    'already_note', public.uic('sup_return.page_already','You have already acknowledged this debit note.'),
+    'submit_error', public.uic('sup_return.page_error','Submission failed. Please try again.'));
+end $fn$;
+
+create or replace function public.supplier_return_ack_submit(p_token text, p_note text default null)
+returns jsonb language plpgsql security definer set search_path to 'public' as $fn$
+declare r public.supplier_return%rowtype;
+begin
+  select * into r from public.supplier_return
+   where ack_token = nullif(btrim(coalesce(p_token,'')),'');
+  if not found or r.status = 'cancelled' then
+    return jsonb_build_object('ok', false, 'error','invalid',
+      'message', public.uic('sup_return.page_invalid_note','Please contact mediBO for assistance.'));
+  end if;
+  return public._c710_ack(r.id, p_note, 'supplier_link');
+end $fn$;
+
+-- The in-app acknowledge, from the supplier's own Records -> Returns tab.
+create or replace function public.supplier_return_ack(p_id uuid, p_note text default null)
+returns jsonb language plpgsql security definer set search_path to 'public' as $fn$
+declare sid uuid := public._c403_me(); r public.supplier_return%rowtype;
+begin
+  if sid is null then return public._c403_denied(); end if;
+  select * into r from public.supplier_return where id = p_id;
+  if not found or r.supplier_id is distinct from sid then
+    return public._c710_err('not_found','sup_return.err_not_found','That return no longer exists.');
+  end if;
+  if r.status = 'drafted' or r.status = 'cancelled' then
+    return public._c710_err('not_found','sup_return.err_not_found','That return no longer exists.');
+  end if;
+  return public._c710_ack(r.id, p_note, 'supplier_app');
+end $fn$;
+
+create or replace function public.supplier_returns_list(p_limit integer default 60)
+returns jsonb language plpgsql stable security definer set search_path to 'public' as $fn$
+declare sid uuid := public._c403_me(); v_rows jsonb; v_total numeric := 0; v_n int := 0;
+        v_open numeric := 0;
+begin
+  if sid is null then return public._c403_denied(); end if;
+
+  select coalesce(jsonb_agg(
+           public._c710_row(s.id)
+           || jsonb_build_object(
+                'items', coalesce((select jsonb_agg(jsonb_build_object(
+                    'product_name', i.product_name,
+                    'batch_label', i.batch_no,
+                    'qty_value', trim_scale(i.qty)::text,
+                    'reason_label', coalesce((select o.label from public.order_reason_option o
+                                               where o.scope='supplier_return' and o.code = i.reason_code), i.reason_code),
+                    'amount_value', public.inr_money(i.line_total))
+                    order by i.created_at, i.id)
+                  from public.supplier_return_item i where i.return_id = s.id), '[]'::jsonb),
+                'can_ack', (s.acknowledged_at is null and s.status in ('sent')),
+                'ack_label', public.uic('sup_return.ack_label','Acknowledge'))
+           order by s.created_at desc), '[]'::jsonb),
+         count(*), coalesce(sum(s.grand_total),0)
+    into v_rows, v_n, v_total
+    from (select r.id, r.created_at, r.acknowledged_at, r.status, r.grand_total
+            from public.supplier_return r
+           where r.supplier_id = sid and r.status <> 'drafted'
+           order by r.created_at desc
+           limit least(greatest(coalesce(p_limit,60),1),200)) s;
+
+  select coalesce(sum(r.grand_total),0) into v_open
+    from public.supplier_return r
+   where r.supplier_id = sid and r.status in ('sent','acknowledged');
+
+  return jsonb_build_object(
+    'ok', true,
+    'title', public.uic('sup_return.sup_title','Returns raised on you'),
+    'subtitle', public.uic('sup_return.sup_subtitle',
+                  'Stock sent back by mediBO, and the debit note against your bill'),
+    'empty_label', public.uic('sup_return.sup_empty','No returns raised on you.'),
+    'summary', jsonb_build_array(
+      jsonb_build_object('label', public.uic('sup_return.count_label','Lines'), 'value', v_n::text),
+      jsonb_build_object('label', public.uic('sup_return.total_label','Debit note total'),
+                         'value', public.inr_money(v_total), 'tone', 'danger'),
+      jsonb_build_object('label', public.uic('sup_return.credit_available','Credit available'),
+                         'value', public.inr_money(public.supplier_return_credit_open(sid)), 'tone', 'info')),
+    'payable_note', public._c710_fmt('sup_return.bill_debit_note',
+                      'Debit notes reduce this bill by {amount}.',
+                      jsonb_build_object('amount', public.inr_money(v_open))),
+    'doc_label', public.uic('sup_return.doc_label','Debit note PDF'),
+    'rows', v_rows);
+end $fn$;
+
+-- The SPN input: what this supplier had sent back, in one window. Shown next to
+-- the points it feeds, exactly like the response record (CHANGE #687).
+create or replace function public.supplier_returns_stats(p_supplier text default null, p_days integer default 30)
+returns jsonb language plpgsql stable security definer set search_path to 'public' as $fn$
+declare v_since timestamptz := now() - make_interval(days => greatest(1, coalesce(p_days,30)));
+        v_n int := 0; v_qty numeric := 0; v_amt numeric := 0; v_top text := '';
+begin
+  select count(*)::int, coalesce(sum(r.qty_total),0), coalesce(sum(r.grand_total),0)
+    into v_n, v_qty, v_amt
+    from public.supplier_return r
+   where r.status in ('sent','acknowledged','credited')
+     and coalesce(r.sent_at, r.created_at) >= v_since
+     and (p_supplier is null
+          or lower(btrim(r.supplier_name)) = lower(btrim(p_supplier)));
+
+  select coalesce((select o.label from public.order_reason_option o
+                    where o.scope='supplier_return' and o.code = t.reason_code), t.reason_code)
+    into v_top
+    from (select i.reason_code, count(*) n
+            from public.supplier_return_item i
+            join public.supplier_return r on r.id = i.return_id
+           where r.status in ('sent','acknowledged','credited')
+             and coalesce(r.sent_at, r.created_at) >= v_since
+             and (p_supplier is null
+                  or lower(btrim(r.supplier_name)) = lower(btrim(p_supplier)))
+           group by i.reason_code order by count(*) desc limit 1) t;
+
+  return jsonb_build_object(
+    'ok', true,
+    'has', (v_n > 0),
+    'supplier', coalesce(p_supplier,''),
+    'window_days', greatest(1, coalesce(p_days,30)),
+    'title', public.uic('sup_return.spn_title','Returns raised on you'),
+    'empty_label', public.uic('sup_return.spn_none','No returns in this window'),
+    'count_label', public.uic('sup_return.spn_count_label','Debit notes'),
+    'count_value', v_n::text,
+    'qty_value', trim_scale(v_qty)::text,
+    'value_label', public.uic('sup_return.spn_value_label','Debited'),
+    'value_value', public.inr_money(v_amt),
+    'value_tone', case when v_n = 0 then 'success' when v_n <= 2 then 'warning' else 'danger' end,
+    'reason_label', public.uic('sup_return.col_reason','Reason'),
+    'reason_value', coalesce(v_top,''));
+end $fn$;
+
+-- ── 11. The bill actually moves ─────────────────────────────────────────────
+
+create or replace function public._c710_order_debits(p_supplier_order_id uuid)
+returns jsonb language plpgsql stable security definer set search_path to 'public' as $fn$
+declare v_total numeric := 0; v_rows jsonb := '[]'::jsonb; v_carry numeric := 0;
+begin
+  select coalesce(sum(r.grand_total),0),
+         coalesce(jsonb_agg(jsonb_build_object(
+           'return_id', r.id, 'debit_no', coalesce(r.debit_no,''),
+           'status', r.status, 'status_label', public._c710_status_label(r.status),
+           'status_tone', public._c710_status_tone(r.status),
+           'items', r.item_count, 'amount', r.grand_total,
+           'amount_display', public.inr_money(r.grand_total),
+           'label', coalesce(r.debit_no,'') || ' · ' || r.item_count::text || ' × '
+                    || public.uic('sup_return.col_product','Product'),
+           'at', coalesce(r.sent_at, r.created_at)) order by coalesce(r.sent_at, r.created_at) desc), '[]'::jsonb)
+    into v_total, v_rows
+    from public.supplier_return r
+   where r.supplier_order_id = p_supplier_order_id
+     and r.status in ('sent','acknowledged','credited');
+
+  select coalesce(sum(l.amount),0) into v_carry
+    from public.supplier_return_credit_ledger l
+   where l.supplier_order_id = p_supplier_order_id and l.kind = 'carry_use';
+
+  return jsonb_build_object(
+    'total', round(coalesce(v_total,0),2),
+    'total_display', public.inr_money(coalesce(v_total,0)),
+    'carry_used', round(coalesce(v_carry,0),2),
+    'carry_used_display', public.inr_money(coalesce(v_carry,0)),
+    'label', public.uic('sup_return.bill_debit_label','Debit notes'),
+    'carry_label', public.uic('sup_return.bill_carry_label','Credit carried'),
+    'note', case when coalesce(v_total,0) + coalesce(v_carry,0) > 0
+                 then public._c710_fmt('sup_return.bill_debit_note',
+                        'Debit notes reduce this bill by {amount}.',
+                        jsonb_build_object('amount',
+                          public.inr_money(coalesce(v_total,0) + coalesce(v_carry,0))))
+                 else '' end,
+    'rows', v_rows);
+end $fn$;
+
+-- The payable moves. remaining_due was bills + excess-kept adjustments - paid;
+-- it is now also net of the debit notes raised against this collection and of
+-- any carried credit consumed by it. Merged into the LIVE body — the ownership
+-- gate (#25), the config-driven advance (#526 gap 30) and the strict bill date
+-- match are kept verbatim.
+create or replace function public.sup_order_bill_panel(p_supplier_order_id uuid)
+returns jsonb language plpgsql security definer set search_path to 'public' as $fn$
+declare so record; v_sid uuid; v_pa text; v_mrp numeric := 0; v_paid numeric := 0;
+        v_adv_pct numeric;
+        v_adv_paid numeric := 0; v_bill_total numeric := 0; v_any_imported boolean := false;
+        v_adj_total numeric := 0; v_adjustments jsonb := '[]'::jsonb; v jsonb;
+        v_order_date date; v_role text; v_me text; v_pay numeric := 0;
+        v_deb jsonb; v_deb_total numeric := 0; v_carry_used numeric := 0; v_credit_open numeric := 0;
+begin
+  select id, supplier_id, supplier_name, order_code, created_at, items,
+         coalesce(total_amount,0) total_amount
+    into so from supplier_orders where id = p_supplier_order_id;
+  if not found then return jsonb_build_object('found', false); end if;
+
+  -- OWNERSHIP GATE (#25). Platform staff, or the supplier this PO belongs to.
+  v_role := public.get_my_role();
+  if v_role not in ('super_admin','admin') then
+    select sp.supplier_name into v_me from public.current_supplier_profile() sp;
+    if v_me is null or lower(btrim(v_me)) is distinct from lower(btrim(so.supplier_name)) then
+      return jsonb_build_object(
+        'found', false,
+        'error', 'forbidden',
+        'message', public.uic('sup_order_bill_panel.forbidden','This bill panel belongs to another supplier.'));
+    end if;
+  end if;
+
+  -- cmd #526 gap 30: the advance share is CONFIG, not a literal.
+  select coalesce(po_advance_percent, 30) into v_adv_pct from payment_config where id = 1;
+  v_adv_pct := coalesce(v_adv_pct, 30);
+
+  v_order_date := (so.created_at AT TIME ZONE 'Asia/Kolkata')::date;
+
+  v_sid := coalesce(so.supplier_id,
+             (select id from supplier_profiles where lower(supplier_name)=lower(so.supplier_name) limit 1));
+  select payment_address into v_pa from supplier_profiles where id = v_sid;
+
+  select coalesce(sum(coalesce(
+           nullif(regexp_replace(coalesce(it->>'mrp',''),'[^0-9.]','','g'),'')::numeric,
+           (select nullif(regexp_replace(coalesce(m.mrp,''),'[^0-9.]','','g'),'')::numeric
+              from "MEDICINE" m where m.id = nullif(it->>'product_id','')::bigint)
+         ,0) * coalesce(nullif(it->>'quantity','')::numeric,1)),0)
+    into v_mrp
+  from jsonb_array_elements(coalesce(so.items,'[]'::jsonb)) it;
+
+  -- #29: the advance is a share of what is PAYABLE (trade rate where the
+  -- supplier has quoted one), not of the MRP ceiling.
+  v_pay := case when so.total_amount > 0 then so.total_amount else v_mrp end;
+
+  select coalesce(sum(amount),0), coalesce(sum(amount) filter (where kind='advance'),0)
+    into v_paid, v_adv_paid from supplier_payments where supplier_order_id = so.id;
+
+  select coalesce(sum(d.adj_amount),0),
+         coalesce(jsonb_agg(jsonb_build_object(
+             'dispute_id', d.id, 'dispute_code', d.dispute_code, 'product_name', d.product_name,
+             'qty', d.adj_qty, 'rate', d.adj_rate, 'amount', d.adj_amount,
+             'label', '+'||coalesce(d.adj_qty,0)||' units @ '||coalesce(d.adj_rate,0)||' (excess kept)',
+             'at', d.resolved_at) order by d.resolved_at desc), '[]'::jsonb)
+    into v_adj_total, v_adjustments
+  from supplier_disputes d
+  where d.adj_supplier_order_id = so.id and d.resolution_outcome = 'excess_kept'
+    and coalesce(d.adj_amount,0) > 0;
+
+  -- CHANGE #710 — returns sent back to this supplier against this collection.
+  v_deb        := public._c710_order_debits(so.id);
+  v_deb_total  := coalesce((v_deb->>'total')::numeric, 0);
+  v_carry_used := coalesce((v_deb->>'carry_used')::numeric, 0);
+  v_credit_open := coalesce(public.supplier_return_credit_open(v_sid), 0);
+
+  with bl as (
+    select id, file_path, file_name, coalesce(bucket, case when file_path like 'whatsapp/%' then 'whatsapp-media' else 'supplier-bills' end) bucket,
+           source, received_at, scan_status, scan_result,
+           (imported_at is not null or lower(coalesce(status,''))='imported') as imported
+    from pending_bills
+    where ((v_sid is not null and supplier_id = v_sid::text)
+       or (supplier_id is null and supplier_name is not null and lower(supplier_name)=lower(so.supplier_name)))
+      and lower(coalesce(verdict,'')) <> 'fake'
+      -- STRICT DATE MATCH (locked with Om 23 Jul).
+      and (received_at AT TIME ZONE 'Asia/Kolkata')::date = v_order_date
+  ),
+  nb as (select row_number() over (order by received_at asc) bill_no, * from bl)
+  select coalesce(sum(nullif(regexp_replace(coalesce(scan_result->>'total',''),'[^0-9.]','','g'),'')::numeric) filter (where imported),0),
+         coalesce(bool_or(imported), false),
+         jsonb_build_object(
+           'found', true,
+           'supplier_order_id', so.id,
+           'order_code', so.order_code,
+           'supplier_name', so.supplier_name,
+           'payment_address', v_pa,
+           'bills_total',    count(*),
+           'bills_imported', count(*) filter (where imported),
+           'bills_left',     count(*) filter (where not imported),
+           'bills', coalesce(jsonb_agg(jsonb_build_object(
+               'bill_no', bill_no, 'id', id, 'bucket', bucket, 'file_path', file_path, 'file_name', file_name,
+               'source', source, 'received_at', received_at, 'imported', imported, 'scan_status', scan_status,
+               'bill_amount', nullif(regexp_replace(coalesce(scan_result->>'total',''),'[^0-9.]','','g'),'')::numeric
+             ) order by bill_no) filter (where id is not null), '[]'::jsonb))
+    into v_bill_total, v_any_imported, v
+  from nb;
+
+  v := coalesce(v, jsonb_build_object('found', true, 'supplier_order_id', so.id, 'order_code', so.order_code,
+        'supplier_name', so.supplier_name, 'payment_address', v_pa,
+        'bills_total',0,'bills_imported',0,'bills_left',0,'bills','[]'::jsonb));
+
+  v := v || jsonb_build_object(
+    'mrp_total',        round(v_mrp,2),
+    'payable_total',    round(v_pay,2),
+    'pricing',          public.po_pricing_block(so.id),
+    'total_paid',       round(v_paid,2),
+    'advance_required', round(v_pay * v_adv_pct / 100.0, 0),
+    'advance_percent',  v_adv_pct,
+    'advance_paid',     round(v_adv_paid,2),
+    'any_bill_imported', v_any_imported,
+    'bills_amount_total', round(v_bill_total,2),
+    'adjustments',       v_adjustments,
+    'adjustments_total', round(v_adj_total,2),
+    'debits',            v_deb,
+    'debits_total',      round(v_deb_total,2),
+    'carry_used',        round(v_carry_used,2),
+    'credit_available',  round(v_credit_open,2),
+    'credit_available_display', public.inr_money(v_credit_open),
+    'credit_available_label',   public.uic('sup_return.credit_available','Credit available'),
+    'credit_apply_label',       public.uic('sup_return.credit_apply','Apply credit'),
+    'can_apply_credit',  (v_credit_open > 0),
+    'remaining_due', case when v_any_imported
+      then round(greatest(v_bill_total + v_adj_total - v_deb_total - v_carry_used - v_paid, 0),2)
+      else null end,
+    'payments', coalesce((select jsonb_agg(jsonb_build_object(
+        'id',id,'kind',kind,'amount',amount,'mode',mode,'note',note,'at',created_at,
+        'payee_name',payee_name,'payee_vpa',payee_vpa,'utr',utr,'txn_id',txn_id,'app',app,'paid_at',paid_at,
+        'screenshot_path',screenshot_path,'screenshot_bucket',screenshot_bucket
+      ) order by created_at desc) from supplier_payments where supplier_order_id = so.id), '[]'::jsonb));
+  return v;
+end $fn$;
+CREATE OR REPLACE FUNCTION public.partner_supplier_payment_console(p_limit integer DEFAULT 40)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare v_zone smallint := public.partner_zone_id(); v_acc text; v_rows jsonb;
+begin
+  if public.my_partner_id() is null then
+    return jsonb_build_object('ok',false,'error','not_partner',
+      'message', public._pss_c('err_not_authorized'));
+  end if;
+  v_acc := public.partner_access('partner.supplier_payment');
+  if v_acc = 'none' then
+    perform public.partner_audit('partner.supplier_payment','open_denied','{}'::jsonb);
+    return jsonb_build_object('ok',false,'error','no_access','access','none',
+      'message', public._pss_c('err_not_authorized'));
+  end if;
+
+  select jsonb_agg(r order by (r->>'sort') desc) into v_rows from (
+    select jsonb_build_object(
+      'supplier_order_id', so.id,
+      'sort', to_char(so.created_at,'YYYYMMDDHH24MISS'),
+      'supplier_name', coalesce(so.supplier_name,''),
+      'order_label', coalesce(nullif(so.order_code,''), nullif(so.order_no::text,''), ''),
+      'date_label', to_char(so.created_at at time zone 'Asia/Kolkata','dd Mon, HH24:MI'),
+      'total_text', public.inr_money(coalesce(so.trade_total, so.total_amount, 0)),
+      'paid_label', public._pss_c('pay_paid_label'),
+      'paid_text',  public.inr_money(coalesce(p.paid,0)),
+      'due_label',  public._pss_c('pay_due_label'),
+      -- CHANGE #710 — a debit note raised against this collection reduces what
+      -- is payable, and so does any carried credit consumed by it. Both are
+      -- read from the SAME helper the bill panel uses, so the two screens can
+      -- never disagree about the due.
+      'debit_label', public.uic('sup_return.bill_debit_label','Debit notes'),
+      'debit_text',  (public._c710_order_debits(so.id)->>'total_display'),
+      'debit_amount',(public._c710_order_debits(so.id)->>'total')::numeric,
+      'has_debit',   (coalesce((public._c710_order_debits(so.id)->>'total')::numeric,0)
+                      + coalesce((public._c710_order_debits(so.id)->>'carry_used')::numeric,0)) > 0,
+      'debit_note',  (public._c710_order_debits(so.id)->>'note'),
+      'credit_label', public.uic('sup_return.credit_available','Credit available'),
+      'credit_text',  public.inr_money(coalesce(public.supplier_return_credit_open(so.supplier_id),0)),
+      'can_apply_credit', (v_acc = 'write'
+                           and coalesce(public.supplier_return_credit_open(so.supplier_id),0) > 0),
+      'credit_apply_label', public.uic('sup_return.credit_apply','Apply credit'),
+      'due_text',   public.inr_money(greatest(coalesce(so.trade_total, so.total_amount, 0)
+                      - coalesce(p.paid,0)
+                      - coalesce((public._c710_order_debits(so.id)->>'total')::numeric,0)
+                      - coalesce((public._c710_order_debits(so.id)->>'carry_used')::numeric,0), 0)),
+      'due_tone',   case when coalesce(so.trade_total, so.total_amount, 0) - coalesce(p.paid,0)
+                              - coalesce((public._c710_order_debits(so.id)->>'total')::numeric,0)
+                              - coalesce((public._c710_order_debits(so.id)->>'carry_used')::numeric,0) > 0
+                         then 'warning' else 'success' end,
+      -- CHANGE #402 — the approved payout detail, verbatim.
+      'payout', case when so.supplier_id is null then null
+                     else public.supplier_payout_active(so.supplier_id) end,
+      'can_record', (v_acc = 'write')) as r
+      from supplier_orders so
+      left join lateral (select sum(sp.amount) paid from supplier_payments sp
+                          where sp.supplier_order_id = so.id) p on true
+     where so.zone_id is not null and so.zone_id::smallint = v_zone
+     order by so.created_at desc
+     limit greatest(coalesce(p_limit,40), 1)
+  ) s;
+
+  perform public.partner_audit('partner.supplier_payment','open',
+    jsonb_build_object('access', v_acc));
+
+  return jsonb_build_object(
+    'ok', true, 'access', v_acc, 'can_write', (v_acc='write'),
+    'zone_id', v_zone,
+    'title',        public._pss_c('pay_title'),
+    'subtitle',     public._pss_c('pay_subtitle'),
+    'order_label',  public._pss_c('pay_order_label'),
+    'amount_label', public._pss_c('pay_amount_label'),
+    'kind_label',   public._pss_c('pay_kind_label'),
+    'mode_label',   public._pss_c('pay_mode_label'),
+    'ref_label',    public._pss_c('pay_ref_label'),
+    'note_label',   public._pss_c('pay_note_label'),
+    'proof_label',  public._pss_c('pay_proof_label'),
+    'pick_label',   public._pss_c('pay_pick_label'),
+    'save_label',   public._pss_c('pay_save_label'),
+    'cancel_label', public._pss_c('cancel_label'),
+    'empty_text',   public._pss_c('pay_empty'),
+    'readonly_text',case when v_acc='write' then '' else public._pss_c('pay_readonly') end,
+    'proof_bucket', 'partner-receipts',
+    'kind_options', jsonb_build_array(
+      jsonb_build_object('value','advance','label','Advance','selected',true),
+      jsonb_build_object('value','balance','label','Balance','selected',false)),
+    'mode_options', jsonb_build_array(
+      jsonb_build_object('value','online','label','Online / UPI','selected',true),
+      jsonb_build_object('value','cash','label','Cash','selected',false)),
+    'rows', coalesce(v_rows,'[]'::jsonb));
+end $function$
+
+
+-- ── 12. The debit note served to whichever side asked ──────────────────────
+-- The debit note, served to a caller the caller's own RPC has already
+-- authorised: ready when the stamp still matches, queued otherwise.
+create or replace function public._c710_doc_serve(p_return_id uuid)
+returns jsonb language plpgsql security definer set search_path to 'public' as $fn$
+declare r public.supplier_return%rowtype; d public.supplier_document%rowtype;
+begin
+  select * into r from public.supplier_return where id = p_return_id;
+  if not found then
+    return public._c710_err('not_found','sup_return.err_not_found','That return no longer exists.');
+  end if;
+  select * into d from public.supplier_document
+   where supplier_id = r.supplier_id and kind = 'debit_note' and ref_key = r.id::text;
+  if found and d.status = 'ready' and coalesce(d.path,'') <> ''
+     and d.source_stamp is not distinct from (public._c710_doc_payload(r.id)->>'stamp') then
+    return jsonb_build_object('ok', true, 'status','ready', 'doc_id', d.id,
+      'bucket', d.bucket, 'path', d.path, 'file_name', d.file_name, 'expires_s', 300,
+      'message', public.uic('sup_return.doc_ready','Debit note ready.'));
+  end if;
+  return public._c710_doc_enqueue(r.id);
+end $fn$;
+
+create or replace function public.partner_return_doc(p_id uuid)
+returns jsonb language plpgsql security definer set search_path to 'public' as $fn$
+declare v_acc text := public._c710_access();
+begin
+  if v_acc = 'none' then return public._c710_denied(); end if;
+  return public._c710_doc_serve(p_id);
+end $fn$;
+
+-- The scorecard gains one more SPN input (merged into the live body).
+CREATE OR REPLACE FUNCTION public.supplier_scorecard()
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  sp     public.supplier_profiles%rowtype;
+  v_id   uuid := public.my_supplier_id();
+  v_rank int;
+  v_of   int;
+  v_act  boolean;
+begin
+  if v_id is null then
+    return jsonb_build_object('ok', false, 'error', 'not_supplier',
+      'message', public._c('spn.not_supplier'));
+  end if;
+  select * into sp from public.supplier_profiles where id = v_id;
+
+  v_act := (lower(btrim(coalesce(sp.status,''))) = 'active');
+
+  if sp.zone_id is not null then
+    select r.rnk, r.n into v_rank, v_of from (
+      select s.id,
+             rank() over (order by coalesce(s."SPN",0) desc)::int as rnk,
+             count(*) over ()::int                                as n
+        from public.supplier_profiles s
+       where s.zone_id = sp.zone_id
+         and s.approved = true
+         and coalesce(s.is_deleted,false) = false
+    ) r where r.id = sp.id;
+  end if;
+
+  return jsonb_build_object(
+    'ok',        true,
+    'title',     public._c('spn.title'),
+    'subtitle',  public._c('spn.subtitle'),
+    'spn', jsonb_build_object(
+      'value', coalesce(sp."SPN",0),
+      'label', public._c('spn.value_label'),
+      'value_label', to_char(coalesce(sp."SPN",0), 'FM999,999,999')),
+    'status', jsonb_build_object(
+      'is_active', v_act,
+      'label',     coalesce(nullif(btrim(coalesce(sp.status,'')),''), ''),
+      'note',      case when v_act then public._c('spn.active_note')
+                        else public._c('spn.inactive_note') end,
+      'tone',      case when v_act then 'success' else 'warning' end),
+    'rank', jsonb_build_object(
+      'has',       (v_rank is not null),
+      'label',     public._c('spn.rank_label'),
+      'value',     coalesce(v_rank,0),
+      'value_label', case when v_rank is null then ''
+                          else '#' || v_rank::text end,
+      'of_label',  case when v_of is null then public._c('spn.no_rank')
+                        else replace(public._c('spn.rank_of'), '{n}', v_of::text) end),
+    -- CHANGE #687: the response record is an SPN INPUT, shown to the supplier
+    -- next to the points it will feed.
+    'response',  public.supplier_response_stats(sp.supplier_name, 30),
+    -- CHANGE #710: returns raised on this supplier are an SPN INPUT too, shown
+    -- beside the response record and read from the returns ledger.
+    'returns',   public.supplier_returns_stats(sp.supplier_name, 30),
+    'components_label', public._c('spn.components_label'),
+    'components', jsonb_build_array(
+      jsonb_build_object('key','margin','label', public._c('spn.component_margin'),
+        'points', coalesce(sp.margin_points,0),
+        'points_label', to_char(coalesce(sp.margin_points,0),'FM999,999,999'),
+        'choice_label', coalesce(nullif(btrim(coalesce(sp.margin::text,'')),''),'')),
+      jsonb_build_object('key','behaviour','label', public._c('spn.component_behaviour'),
+        'points', coalesce(sp.behaviour_points,0),
+        'points_label', to_char(coalesce(sp.behaviour_points,0),'FM999,999,999'),
+        'choice_label', coalesce(nullif(btrim(coalesce(sp.behaviour::text,'')),''),'')),
+      jsonb_build_object('key','cd_condition','label', public._c('spn.component_cd_condition'),
+        'points', coalesce(sp.cd_points,0),
+        'points_label', to_char(coalesce(sp.cd_points,0),'FM999,999,999'),
+        'choice_label', coalesce(nullif(btrim(coalesce(sp.cd_condition::text,'')),''),'')),
+      jsonb_build_object('key','payment_term','label', public._c('spn.component_payment_term'),
+        'points', coalesce(sp.payment_term_points,0),
+        'points_label', to_char(coalesce(sp.payment_term_points,0),'FM999,999,999'),
+        'choice_label', coalesce(nullif(btrim(coalesce(sp.payment_term::text,'')),''),'')),
+      jsonb_build_object('key','ordered_medicine','label', public._c('spn.component_ordered_medicine'),
+        'points', coalesce(sp.ordered_medicine_points,0),
+        'points_label', to_char(coalesce(sp.ordered_medicine_points,0),'FM999,999,999'),
+        'choice_label', '')));
+end $function$
+
+
+-- supplier_doc_request learns the debit_note kind (merged into the live body).
+CREATE OR REPLACE FUNCTION public.supplier_doc_request(p_kind text, p_ref text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'net'
+AS $function$
+declare
+  sid uuid := public._c403_me();
+  pay jsonb; d public.supplier_document%rowtype; v_id uuid;
+begin
+  if sid is null then return public._c403_denied(); end if;
+  -- CHANGE #710 — the debit note is the supplier's own document too. Its
+  -- payload comes from _c710_doc_payload (never _c403_doc_payload, which does
+  -- not know the kind), and the return must belong to this supplier.
+  if coalesce(p_kind,'') = 'debit_note' then
+    if not exists (select 1 from public.supplier_return r
+                    where r.id::text = p_ref and r.supplier_id = sid
+                      and r.status <> 'drafted') then
+      return jsonb_build_object('ok', false, 'error', 'not_found',
+        'message', public.ui_text('supplier_docs.err_not_found'));
+    end if;
+    return public._c710_doc_serve(p_ref::uuid);
+  end if;
+  if coalesce(p_kind,'') not in ('purchase_order','bill_copy','monthly_statement') then
+    return jsonb_build_object('ok', false, 'error', 'unknown_kind',
+      'message', public.ui_text('supplier_docs.err_unknown_kind'));
+  end if;
+
+  pay := public._c403_doc_payload(sid, p_kind, p_ref);
+  if coalesce(pay->>'ok','false') <> 'true' then
+    return jsonb_build_object('ok', false, 'error', coalesce(pay->>'error','not_found'),
+      'message', public.ui_text('supplier_docs.err_not_found'));
+  end if;
+
+  select * into d from public.supplier_document
+   where supplier_id = sid and kind = p_kind and ref_key = p_ref;
+
+  -- Nothing changed since the last render: serve the file that already exists.
+  if found and d.status = 'ready' and coalesce(d.path,'') <> ''
+     and d.source_stamp is not distinct from (pay->>'stamp') then
+    return jsonb_build_object('ok', true, 'status', 'ready', 'doc_id', d.id,
+      'bucket', d.bucket, 'path', d.path, 'file_name', d.file_name,
+      'expires_s', 300, 'message', public.ui_text('supplier_docs.ready_message'));
+  end if;
+
+  insert into public.supplier_document(
+      supplier_id, kind, ref_key, title, file_name, status, attempts,
+      source_stamp, requested_by, requested_at, started_at, last_error)
+  values (sid, p_kind, p_ref, pay->'doc'->>'title', pay->>'file_name',
+          'queued', 0, pay->>'stamp', auth.uid(), now(), null, null)
+  on conflict (supplier_id, kind, ref_key) do update
+    set title = excluded.title, file_name = excluded.file_name,
+        status = 'queued', attempts = 0, source_stamp = excluded.source_stamp,
+        requested_by = excluded.requested_by, requested_at = now(),
+        started_at = null, last_error = null
+  returning id into v_id;
+
+  perform net.http_post(
+    url     := 'https://swojhmarmaijkshsbeih.supabase.co/functions/v1/bill-render',
+    headers := jsonb_build_object('Content-Type','application/json',
+                                  'x-notify-secret','medibo_order_notify_2027',
+                                  'Authorization','Bearer ' || public._service_key()),
+    body    := jsonb_build_object('supplier_doc_id', v_id),
+    timeout_milliseconds := 20000);
+
+  return jsonb_build_object('ok', true, 'status', 'building', 'doc_id', v_id,
+    'poll_ms', 1500, 'message', public.ui_text('supplier_docs.building_message'));
+end $function$
+
+
+-- ── 13. Grants — by PATTERN, never by a list of names ───────────────────────
+-- Every function here is SECURITY DEFINER, and a definer function created
+-- without a grant keeps the default PUBLIC EXECUTE — i.e. it is callable with
+-- the anon key printed in the web bundle. #25 / #353 / #394 were that same bug
+-- three times. The revoke is written as a pattern so a function added to this
+-- family tomorrow is covered without editing a list.
+do $grants$
+declare f record;
+begin
+  for f in
+    select p.oid::regprocedure::text sig, p.proname
+      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public'
+       and (p.proname like '\_c710\_%'
+            or p.proname like 'partner\_return\_%'
+            or p.proname in ('partner_returns_console','supplier_returns_list',
+                             'supplier_returns_stats','supplier_return_ack',
+                             'supplier_return_ack_form','supplier_return_ack_submit',
+                             'supplier_return_credit_open'))
+  loop
+    execute format('revoke all on function %s from public, anon', f.sig);
+    execute format('grant execute on function %s to authenticated, service_role', f.sig);
+  end loop;
+end $grants$;
+
+-- The two PUBLIC ones, and only these two: the supplier opens the acknowledge
+-- link from WhatsApp with no session, exactly like /stock-update/<token>.
+grant execute on function public.supplier_return_ack_form(text)        to anon;
+grant execute on function public.supplier_return_ack_submit(text,text) to anon;
+
+-- ── 14. The WhatsApp route ──────────────────────────────────────────────────
+
+insert into public.wa_event_routes
+  (event_key, label, description, language, variable_map, enabled, auto_manage,
+   auto_template_name, bypass_send_window, audience, wa_category, marketing_guard,
+   dedupe_minutes, push_enabled, email_enabled, email_mode,
+   push_title, push_body, email_subject, email_body)
+values
+  ('supplier_debit_note',
+   'Debit note raised on a supplier',
+   'CHANGE #710 — goods went back to the supplier; this asks them to acknowledge the debit note.',
+   'en',
+   '["{{supplier_name}}", "{{debit_no}}", "{{debit_amount}}", "{{debit_items}}", "{{debit_ack_link}}"]'::jsonb,
+   true, true, 'supplier_debit_note', true, 'supplier', 'utility', true, 0,
+   true, true, 'fallback',
+   'Debit note {{debit_no}}',
+   '{{debit_items}} item(s) returned. {{debit_amount}} debited.',
+   'Debit note {{debit_no}} — {{debit_amount}}',
+   'Dear {{supplier_name}},' || chr(10) || chr(10) ||
+   '{{debit_items}} item(s) have been returned to you. Debit note {{debit_no}} for {{debit_amount}} has been raised against your bill.' || chr(10) || chr(10) ||
+   'Please acknowledge here: {{debit_ack_link}}')
+on conflict (event_key) do update
+  set label = excluded.label, description = excluded.description,
+      variable_map = excluded.variable_map, audience = excluded.audience,
+      auto_manage = true, auto_template_name = excluded.auto_template_name,
+      push_enabled = true, email_enabled = true, email_mode = excluded.email_mode,
+      push_title = excluded.push_title, push_body = excluded.push_body,
+      email_subject = excluded.email_subject, email_body = excluded.email_body,
+      updated_at = now();
+
+-- ── 15. Stock release, corrected against the triggers that already own it ───
+--
+-- Two things this had to learn the hard way, both from live triggers:
+--
+--  (a) bag_item_counts is DERIVED. trg_bag_alloc_on_received re-runs
+--      _bag_realloc_group() on every received_qty change and
+--      trg_bag_clear_on_received_zero deletes the group when it empties. Writing
+--      that table by hand is the scalar-write-into-a-derived-table anti-pattern:
+--      the trigger recomputes it a moment later and the manual number is lost.
+--      So the return moves ONE number — received_qty — and the bag ledger
+--      follows by itself.
+--
+--  (b) _enforce_receive_requires_forward() blocked the write. Its job is "no
+--      RECEIVING before the Supplier Shop submit"; a return is the opposite of
+--      receiving, and a strict decrease that touches neither at_warehouse nor
+--      received_locked was never what it meant to stop. Widened below to admit
+--      exactly that, which closes a false positive without loosening the guard.
+
+create or replace function public._enforce_receive_requires_forward()
+returns trigger language plpgsql set search_path to 'public' as $fn$
+begin
+  if new.assigned_supplier is null or btrim(new.assigned_supplier) = '' then return new; end if;
+  -- CHANGE #710: a strict DECREASE of the received count, with the warehouse
+  -- flags untouched, is stock going BACK to the supplier — never receiving.
+  if tg_op = 'UPDATE'
+     and coalesce(new.received_qty,0) < coalesce(old.received_qty,0)
+     and new.at_warehouse    is not distinct from old.at_warehouse
+     and new.received_locked is not distinct from old.received_locked then
+    return new;
+  end if;
+  if (tg_op = 'INSERT'
+      or new.received_qty    is distinct from old.received_qty
+      or new.at_warehouse    is distinct from old.at_warehouse
+      or new.received_locked is distinct from old.received_locked)
+     and (coalesce(new.received_qty,0) > 0
+          or coalesce(new.at_warehouse,false)
+          or coalesce(new.received_locked,false))
+     and not public._supplier_forwarded(new.assigned_supplier) then
+    raise exception 'supplier "%" not forwarded — no receiving before Supplier Shop submit', new.assigned_supplier
+      using errcode = 'check_violation';
+  end if;
+  return new;
+end $fn$;
+
+create or replace function public._c710_release_stock(p_item_id uuid)
+returns void language plpgsql security definer set search_path to 'public' as $fn$
+declare it public.supplier_return_item%rowtype; r public.supplier_return%rowtype;
+        oi public.order_items%rowtype;
+begin
+  select * into it from public.supplier_return_item where id = p_item_id;
+  if not found or it.bag_released then return; end if;
+  select * into r from public.supplier_return where id = it.return_id;
+  select * into oi from public.order_items where id = it.order_item_id;
+  if not found then return; end if;
+
+  -- The one write. bag_item_counts follows through trg_bag_alloc_on_received /
+  -- trg_bag_clear_on_received_zero — never written here by hand.
+  update public.order_items
+     set received_qty = greatest(coalesce(received_qty,0) - it.qty, 0)
+   where id = it.order_item_id;
+
+  insert into public.receiving_log
+    (order_item_id, order_id, supplier_name, action, qty, note, actor)
+  values (it.order_item_id, it.order_id, r.supplier_name, 'supplier_return', it.qty,
+          'CHANGE #710 · debit note ' || coalesce(r.debit_no,'') || ' · ' || it.reason_code,
+          'partner');
+
+  update public.supplier_return_item set bag_released = true where id = it.id;
+end $fn$;
+
+insert into public.ui_copy (key, value) values
+  ('sup_return.err_need_count',
+   '"Returns move the received count, so Count access is needed to send this return."'::jsonb)
+on conflict (key) do nothing;
+
+-- Sending a return REDUCES the received count, which order_items guards behind
+-- partner.count. Refuse in words rather than letting the row trigger raise.
+create or replace function public.partner_return_send(p_id uuid)
+returns jsonb language plpgsql security definer set search_path to 'public' as $fn$
+declare v_acc text := public._c710_access(); r public.supplier_return%rowtype;
+        it record; v_no text;
+begin
+  if v_acc <> 'write' then return public._c710_denied(); end if;
+  if public.is_partner() and public.partner_access('partner.count') <> 'write' then
+    return public._c710_err('need_count','sup_return.err_need_count',
+      'Returns move the received count, so Count access is needed to send this return.');
+  end if;
+  select * into r from public.supplier_return where id = p_id for update;
+  if not found then
+    return public._c710_err('not_found','sup_return.err_not_found','That return no longer exists.');
+  end if;
+  if r.status <> 'drafted' then
+    return public._c710_err('already_sent','sup_return.err_already_sent','This return has already been sent.');
+  end if;
+  perform public._c710_retotal(r.id);
+  select * into r from public.supplier_return where id = p_id;
+  if coalesce(r.item_count,0) = 0 then
+    return public._c710_err('nothing','sup_return.err_nothing','Add at least one line before sending.');
+  end if;
+
+  v_no := public._c710_next_debit_no(coalesce(r.zone_id,0)::smallint, coalesce(r.is_synthetic,false));
+
+  update public.supplier_return
+     set status = 'sent', sent_at = now(), sent_by = auth.uid(),
+         debit_no = v_no, fy = public._fy_ist(),
+         ack_token = coalesce(nullif(ack_token,''), encode(gen_random_bytes(16),'hex'))
+   where id = r.id;
+
+  for it in select id from public.supplier_return_item where return_id = r.id loop
+    perform public._c710_release_stock(it.id);
+    perform public._c710_reinquire(it.id);
+  end loop;
+
+  perform public._c710_doc_enqueue(r.id);
+  perform public._c710_notify_supplier(r.id);
+  perform public.partner_audit('partner.supplier_returns','send',
+    jsonb_build_object('return_id', r.id, 'debit_no', v_no, 'total', r.grand_total));
+
+  return public.partner_return_get(r.id)
+    || jsonb_build_object('toast', public._c710_fmt('sup_return.sent_toast',
+         'Debit note {no} raised and sent to {supplier}.',
+         jsonb_build_object('no', v_no, 'supplier', r.supplier_name)));
+end $fn$;
+
+revoke all on function public.partner_return_send(uuid) from public, anon;
+grant execute on function public.partner_return_send(uuid) to authenticated, service_role;
+revoke all on function public._c710_release_stock(uuid) from public, anon;
+grant execute on function public._c710_release_stock(uuid) to authenticated, service_role;

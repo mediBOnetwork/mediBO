@@ -304,6 +304,7 @@ begin
     from (
       select coalesce(nullif(d.supplier_name,''), _c('damage.none_label')) as supplier,
              count(*)::int as n, sum(d.qty) as qty, sum(coalesce(d.amount,0)) as amount,
+             count(*) filter (where d.amount is null)::int as unvalued,
              coalesce((select sum(oi.quantity) from order_items oi
                         where oi.assigned_supplier = d.supplier_name
                           and oi.created_at >= v_from), 0) as handled,
@@ -438,3 +439,71 @@ begin
     'window_days', greatest(coalesce(p_days,30),1));
 end
 $function$;
+
+-- ── 1b. the runner counts what it actually STORED ─────────────────────────
+-- dev_journeys_run tallied the probe's own return value, so after the
+-- reclassification above it would have reported "failed: 1" while the row it
+-- had just written said 'skipped'. The insert now hands back the stored
+-- status and the tally follows it — one number, one meaning.
+create or replace function public.dev_journeys_run(p_command_id bigint, p_area text)
+returns jsonb
+language plpgsql
+security definer
+set search_path to 'public'
+as $function$
+declare c290_run_claims text; j record; v jsonb; st text; passed int := 0; failed int := 0; skipped int := 0;
+        promoted text[] := '{}'; runs jsonb := '[]'; v_ev jsonb;
+begin
+  if coalesce(auth.jwt()->>'role','') <> 'service_role' then
+    raise exception 'dev_journeys_run: runner only';
+  end if;
+  c290_run_claims := coalesce(current_setting('request.jwt.claims', true), '');
+  for j in
+    select * from dev_journeys
+    where enabled and (area is null or area = p_area)
+    order by id
+  loop
+    perform set_config('request.jwt.claims', c290_run_claims, true);
+    v := dev_journey_probe(j.name);
+    insert into dev_journey_runs(command_id, journey_id, status, evidence)
+    values (p_command_id, j.id, v->>'status', coalesce(v->'evidence','{}'))
+    returning status, evidence into st, v_ev;
+    if st = 'passed' then passed := passed + 1;
+    elsif st = 'failed' then failed := failed + 1;
+    else skipped := skipped + 1; end if;
+    -- promote to required once green twice
+    if st = 'passed' and not j.required then
+      if (select count(*) from dev_journey_runs r where r.journey_id = j.id and r.status='passed') >= 2 then
+        update dev_journeys set required = true where id = j.id;
+        promoted := promoted || j.name;
+      end if;
+    end if;
+    runs := runs || jsonb_build_object('journey', j.name, 'status', st, 'evidence', v_ev);
+  end loop;
+  update dev_commands set journey_pass_count = journey_pass_count + passed where id = p_command_id;
+  return jsonb_build_object('ok', true, 'area', p_area, 'passed', passed,
+    'failed', failed, 'skipped', skipped, 'promoted_to_required', promoted, 'runs', runs);
+end $function$;
+
+create or replace function public.journey_report(p_command_id bigint, p_results jsonb)
+returns jsonb
+language plpgsql
+security definer
+set search_path to 'public'
+as $function$
+DECLARE r jsonb; jid bigint; st text; passed int := 0; failed int := 0; skipped int := 0;
+BEGIN
+  IF coalesce(auth.jwt()->>'role','') <> 'service_role' THEN RAISE EXCEPTION 'journey_report: runner only'; END IF;
+  FOR r IN SELECT * FROM jsonb_array_elements(p_results) LOOP
+    SELECT id INTO jid FROM dev_journeys WHERE name = r->>'journey';
+    IF jid IS NULL THEN RAISE EXCEPTION 'journey_report: unknown journey %', r->>'journey'; END IF;
+    INSERT INTO dev_journey_runs(command_id, journey_id, status, evidence, duration_ms)
+    VALUES (p_command_id, jid, r->>'status', coalesce(r->'evidence','{}'), (r->>'duration_ms')::int)
+    RETURNING status INTO st;
+    IF st = 'passed' THEN passed := passed+1;
+    ELSIF st = 'failed' THEN failed := failed+1;
+    ELSE skipped := skipped+1; END IF;
+  END LOOP;
+  UPDATE dev_commands SET journey_pass_count = journey_pass_count + passed WHERE id=p_command_id;
+  RETURN jsonb_build_object('ok',true,'passed',passed,'failed',failed,'skipped',skipped);
+END $function$;

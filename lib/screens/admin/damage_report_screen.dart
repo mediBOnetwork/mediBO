@@ -162,6 +162,14 @@ class DamageReportView extends StatelessWidget {
         Text(_s(payload, 'summary'), style: Ds.t.body),
         SizedBox(height: Ds.space.x4),
         Text(_s(payload, 'total_amount_display'), style: Ds.t.caption),
+        // CHANGE #956 — damage the backend has not been able to price yet.
+        // The string is composed server-side and is empty when there is
+        // nothing unpriced, so this row simply is not there.
+        if (_s(payload, 'unvalued_label').isNotEmpty) ...[
+          SizedBox(height: Ds.space.x4),
+          Text(_s(payload, 'unvalued_label'),
+              style: Ds.t.caption.copyWith(color: Ds.c.warning)),
+        ],
         SizedBox(height: Ds.space.x16),
         Wrap(
           spacing: Ds.space.x8,
@@ -209,6 +217,12 @@ class DamageReportView extends StatelessWidget {
                                   .copyWith(color: _tone(_s(r, 'tone')))),
                           SizedBox(height: Ds.space.x4),
                           Text(_s(r, 'amount_display'), style: Ds.t.caption),
+                          if (_s(r, 'unvalued_label').isNotEmpty) ...[
+                            SizedBox(height: Ds.space.x4),
+                            Text(_s(r, 'unvalued_label'),
+                                style:
+                                    Ds.t.caption.copyWith(color: Ds.c.warning)),
+                          ],
                         ],
                       ),
                     ]),

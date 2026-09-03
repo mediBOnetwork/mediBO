@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../design_tokens.dart';
 import '../../utils/render_log.dart';
+import '../kyc/kyc_verify_block.dart';
 
 /// CHANGE #705 — the KYC review console: the documents a pharmacy or a supplier
 /// uploaded, and the verdict on each.
@@ -73,6 +74,8 @@ class _KycReviewScreenState extends State<KycReviewScreen> {
         _loading = false;
       });
       RenderLog.write('c705_kyc_review', _rows.length);
+      RenderLog.write('c706_kyc_review_checks',
+          _rows.where((e) => (KycVerifyBlock.of(e)?['has'] ?? false) == true).length);
     } catch (_) {
       if (mounted) setState(() => _loading = false);
     }
@@ -154,6 +157,124 @@ class _KycReviewScreenState extends State<KycReviewScreen> {
     }
   }
 
+  /// Re-run the automatic checks. The verdict, and whether it moves the
+  /// document at all, is the backend's — this only asks.
+  Future<void> _rerun(Map<String, dynamic> row) async {
+    setState(() => _busy = true);
+    try {
+      final res = _asMap(await KycReviewScreen.rpc(
+          'kyc_verify_rerun', {'p_doc_id': row['doc_id']}));
+      if (!mounted) return;
+      setState(() => _busy = false);
+      final msg = (res?['message'] ?? '').toString();
+      if (msg.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      }
+      await _load();
+    } catch (_) {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// Override the automatic decision. The note is mandatory — and that is the
+  /// backend's rule (`kyc_verify_override` answers `no_note` with its own
+  /// sentence); this only keeps the buttons closed until there is text, so a
+  /// reviewer is not sent to the server to be told what the form could say.
+  Future<void> _override(Map<String, dynamic> row) async {
+    final ctl = TextEditingController();
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.fromLTRB(Ds.space.x16, Ds.space.x16, Ds.space.x16,
+            MediaQuery.of(ctx).viewInsets.bottom + Ds.space.x16),
+        child: StatefulBuilder(
+          builder: (ctx2, setSheet) => Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(_s('override_label'), style: Ds.t.title),
+              SizedBox(height: Ds.space.x8),
+              Text(_s('override_note_hint'), style: Ds.t.caption),
+              SizedBox(height: Ds.space.x16),
+              TextField(
+                controller: ctl,
+                maxLines: 3,
+                autofocus: true,
+                decoration:
+                    InputDecoration(labelText: _s('override_note_label')),
+                onChanged: (_) => setSheet(() {}),
+              ),
+              SizedBox(height: Ds.space.x16),
+              Row(
+                children: [
+                  Expanded(
+                    child: SizedBox(
+                      height: Ds.touch.minTarget,
+                      child: OutlinedButton(
+                        onPressed: ctl.text.trim().isEmpty
+                            ? null
+                            : () => Navigator.of(ctx2).pop('rejected'),
+                        child: Text((row['reject_label'] ?? '').toString()),
+                      ),
+                    ),
+                  ),
+                  SizedBox(width: Ds.space.x8),
+                  Expanded(
+                    child: SizedBox(
+                      height: Ds.touch.minTarget,
+                      child: FilledButton(
+                        onPressed: ctl.text.trim().isEmpty
+                            ? null
+                            : () => Navigator.of(ctx2).pop('verified'),
+                        child: Text((row['verify_label'] ?? '').toString()),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    final note = ctl.text.trim();
+    ctl.dispose();
+    if (choice == null || note.isEmpty) return;
+    setState(() => _busy = true);
+    try {
+      final res = _asMap(await KycReviewScreen.rpc('kyc_verify_override', {
+        'p_doc_id': row['doc_id'],
+        'p_status': choice,
+        'p_note': note,
+      }));
+      if (!mounted) return;
+      setState(() => _busy = false);
+      final msg = (res?['message'] ?? '').toString();
+      if (msg.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      }
+      await _load();
+    } catch (_) {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// How many pending documents the checks flagged. The sentence is the
+  /// backend's; a count of zero sends no string at all, so nothing draws.
+  Widget _flaggedStrip() => Container(
+        margin: EdgeInsets.only(bottom: Ds.space.x16),
+        padding: EdgeInsets.all(Ds.space.x12),
+        decoration: BoxDecoration(
+          color: Ds.c.warningSoft,
+          borderRadius: Ds.r.rCard,
+        ),
+        child: Text(
+          '${_s('verify_title')} · ${_s('flagged_label')}',
+          style: Ds.t.caption.copyWith(color: Ds.c.warning),
+        ),
+      );
+
   Color _tone(String tone) {
     switch (tone) {
       case 'success':
@@ -198,6 +319,7 @@ class _KycReviewScreenState extends State<KycReviewScreen> {
                     padding: EdgeInsets.all(Ds.space.x16),
                     children: [
                       if (_drive['ok'] == true) _driveCard(),
+                      if (_s('flagged_label').isNotEmpty) _flaggedStrip(),
                       _tabs(),
                       SizedBox(height: Ds.space.x16),
                       if (_rows.isEmpty)
@@ -315,6 +437,36 @@ class _KycReviewScreenState extends State<KycReviewScreen> {
             SizedBox(height: Ds.space.x8),
             Text(v('reason'),
                 style: Ds.t.caption.copyWith(color: Ds.c.danger)),
+          ],
+          // CHANGE #706 — the automatic verdict and its mismatch list, so the
+          // reviewer starts from what the machine already found instead of
+          // reading the whole document again.
+          KycVerifyBlock(verify: KycVerifyBlock.of(r), dense: true),
+          if (_payload['can_write'] == true) ...[
+            SizedBox(height: Ds.space.x12),
+            Row(
+              children: [
+                Expanded(
+                  child: SizedBox(
+                    height: Ds.touch.minTarget,
+                    child: OutlinedButton(
+                      onPressed: _busy ? null : () => _rerun(r),
+                      child: Text(_s('rerun_label')),
+                    ),
+                  ),
+                ),
+                SizedBox(width: Ds.space.x8),
+                Expanded(
+                  child: SizedBox(
+                    height: Ds.touch.minTarget,
+                    child: OutlinedButton(
+                      onPressed: _busy ? null : () => _override(r),
+                      child: Text(_s('override_label')),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ],
           SizedBox(height: Ds.space.x16),
           Row(

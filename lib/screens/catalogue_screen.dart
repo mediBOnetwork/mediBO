@@ -28,6 +28,7 @@ import '../models/catalogue.dart';
 import '../url_sync.dart';
 import '../utils/render_log.dart';
 import '../widgets/compact_product_card.dart';
+import 'catalogue_extras.dart'; // CHANGE #748
 
 /// Test seam: production goes to Supabase, a test hands back a payload.
 typedef CatalogueRpc = Future<Map<String, dynamic>> Function(
@@ -152,6 +153,9 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
   CatHome? _home;
   CatBrowse? _browse;
   CatList? _list;
+  // CHANGE #748 — Recently added / Missing product / Export. The payload says
+  // whether each is offered at all, so an empty map simply draws none of them.
+  Map<String, dynamic> _extras = const {};
 
   bool _booted = false;
   bool _loading = false;
@@ -208,6 +212,12 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
       final home = CatHome.fromMap(await _call('catalogue_home', {'p_zone': _route.zoneOn}));
       if (!mounted) return;
       setState(() => _home = home);
+      // CHANGE #748 — best-effort: the three extras must never be able to stop
+      // the catalogue itself from booting.
+      try {
+        final ex = await _call('catalogue_extras', {'p_zone': _route.zoneOn});
+        if (mounted) setState(() => _extras = ex);
+      } catch (_) {}
       RenderLog.write('c747_catalogue_tabs',
           '${home.tabs.map((t) => t.key).join('>')};'
           'zone=${home.zone.has ? (home.zone.on ? 'on' : 'off') : 'none'}');
@@ -419,7 +429,9 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
           _CatHeader(
             home: home,
             route: _route,
+            extras: _extras,
             onTab: _tapTab,
+            onRequest: _openRequest,
             onZone: (on) => _go(_route.copy(zoneOn: on)),
           ),
           if (_route.showsList)
@@ -431,6 +443,26 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
                   _go(_route.copy(filters: _route.filters.toggle(g, k, single: single))),
               onClear: () => _go(_route.copy(filters: const CatFilterState())),
             ),
+          // CHANGE #748 — export what is ON SCREEN. The ids are the list this
+          // page is showing, so "my catalogue list" means the filtered list the
+          // buyer is looking at and not the whole 5.6 lakh catalogue.
+          if (_route.showsList &&
+              _extras['export'] is Map &&
+              (_extras['export'] as Map)['show'] == true &&
+              (_list?.items.isNotEmpty ?? false))
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: CatalogueExportAction(
+                  config: Map<String, dynamic>.from(_extras['export'] as Map),
+                  productIds: (_list?.items ?? const [])
+                      .map((p) => int.tryParse(p.id))
+                      .whereType<int>()
+                      .toList(),
+                ),
+              ),
+            ),
           Expanded(child: _body()),
         ],
       ),
@@ -438,9 +470,28 @@ class _CatalogueScreenState extends State<CatalogueScreen> {
   }
 
   Widget _body() {
+    // CHANGE #748 — the Recently-added tab is its own body, fetched by its own
+    // RPC. It is reached the same way every other tab is: the backend put a tab
+    // in the strip whose `kind` this build knows.
+    if (_route.tab == 'recent') return const CatalogueRecent();
     if (_loading) return const _CatSkeleton();
     if (_error.isNotEmpty) return _CatError(message: _error, onRetry: _fetch);
     return _route.showsList ? _productGrid() : _rowList();
+  }
+
+  /// CHANGE #748 — the request sheet. A sheet, not a dialog, per DESIGN.md, and
+  /// it is only ever offered when the payload said `show`.
+  void _openRequest() {
+    final cfg = _extras['request'];
+    if (cfg is! Map) return;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Ds.c.surface,
+      shape: RoundedRectangleBorder(borderRadius: Ds.r.rSheet),
+      builder: (_) =>
+          CatalogueRequestSheet(config: Map<String, dynamic>.from(cfg)),
+    );
   }
 
   Widget _rowList() {
@@ -596,9 +647,13 @@ class _CatHeader extends StatelessWidget {
   final CatHome home;
   final CatalogueRoute route;
   final ValueChanged<CatTab> onTab;
+  final Map<String, dynamic> extras;
+  final VoidCallback onRequest;
   final ValueChanged<bool> onZone;
 
   const _CatHeader({
+    required this.extras,
+    required this.onRequest,
     required this.home,
     required this.route,
     required this.onTab,
@@ -609,8 +664,17 @@ class _CatHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     // An unknown `kind` is skipped in silence — the backend may ship a tab this
     // build has never heard of, and forward compatibility beats an exception.
-    const known = {'tree', 'companies', 'salts', 'list'};
+    const known = {'tree', 'companies', 'salts', 'list', 'recent'};
     final tabs = home.tabs.where((t) => known.contains(t.kind)).toList();
+    // CHANGE #748 — "Recently added" is a tab like any other, appended only
+    // when the backend says there IS something new (`show`). An always-present
+    // empty tab teaches people to stop tapping it.
+    final recent = extras['recent'];
+    if (recent is Map && recent['show'] == true) {
+      tabs.add(CatTab.fromMap(Map<String, dynamic>.from(recent)));
+    }
+    final request = extras['request'];
+    final showRequest = request is Map && request['show'] == true;
     return Container(
       color: Ds.c.surface,
       padding: EdgeInsets.only(top: Ds.space.x12, bottom: Ds.space.x8),
@@ -619,7 +683,24 @@ class _CatHeader extends StatelessWidget {
         children: [
           Padding(
             padding: EdgeInsets.symmetric(horizontal: Ds.space.x16),
-            child: Text(home.title, style: Ds.t.display),
+            child: Row(
+              children: [
+                Expanded(child: Text(home.title, style: Ds.t.display)),
+                // CHANGE #748 — "Missing product?", beside the title where a
+                // buyer is already looking when the search came back empty.
+                if (showRequest)
+                  SizedBox(
+                    height: Ds.space.x48,
+                    child: TextButton(
+                      onPressed: onRequest,
+                      child: Text(
+                        (request['title'] ?? '').toString(),
+                        style: Ds.t.caption.copyWith(color: Ds.c.brand),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
           ),
           if (home.subtitle.isNotEmpty)
             Padding(

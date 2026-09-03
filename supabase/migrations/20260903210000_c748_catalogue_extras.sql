@@ -84,7 +84,9 @@ insert into public.ui_copy (key, value) values
   ('catalogue.export_col_pack',  '"Pack"'::jsonb),
   ('catalogue.export_col_rx',    '"Rx"'::jsonb),
   ('catalogue.export_note',      '"Prices are not shown on this list."'::jsonb),
-  ('catalogue.export_footer',    '"Generated from the mediBO catalogue."'::jsonb)
+  ('catalogue.export_footer',    '"Generated from the mediBO catalogue."'::jsonb),
+  ('catalogue.export_meta_count','"Products"'::jsonb),
+  ('catalogue.export_meta_date', '"Date"'::jsonb)
 on conflict (key) do nothing;
 
 -- ── 3. Recently added ──────────────────────────────────────────────────────
@@ -508,10 +510,14 @@ begin
                                    'gstin_label',null,'dl_label',null),
       'buyer',  jsonb_build_object('heading','','name','','address',null,'phone',null,
                                    'gstin_label',null,'dl_label',null),
+      -- Its own two labels. These were the COLUMN keys at first, so the header
+      -- read "Product 12" and "Pack 04 Sep 2026" - the right values under the
+      -- wrong words, which is the sort of thing only a look at the drawn page
+      -- catches.
       'meta', jsonb_build_array(
-        jsonb_build_object('label', public.uic('catalogue.export_col_name','Product'),
+        jsonb_build_object('label', public.uic('catalogue.export_meta_count','Products'),
                            'value', e.row_count::text),
-        jsonb_build_object('label', public.uic('catalogue.export_col_pack','Pack'),
+        jsonb_build_object('label', public.uic('catalogue.export_meta_date','Date'),
           'value', to_char(e.created_at at time zone 'Asia/Kolkata','DD Mon YYYY'))),
       'columns', jsonb_build_array(
         jsonb_build_object('key','desc',    'label', public.uic('catalogue.export_col_name','Product')),

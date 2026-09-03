@@ -127,10 +127,19 @@ async function render(inv: any): Promise<Uint8Array> {
     }
     return yy
   }
-  const ySeller = party(inv.seller, PM)
-  const yBuyer = party(inv.buyer, PM + colW)
-  y = Math.min(ySeller, yBuyer) - 4
-  hr(y); y -= 14
+  // CHANGE #748 — a document with no PARTIES draws none. The catalogue list is
+  // a list, not a supply between two establishments, so it sends empty party
+  // objects; drawing them anyway reserved a blank band at the top of the page
+  // where the GSTINs would have been.
+  const hasParty = (p: any) =>
+    Boolean(p && (String(p.name ?? '') || String(p.heading ?? '') ||
+                  p.address || p.phone || p.gstin_label || p.dl_label))
+  if (hasParty(inv.seller) || hasParty(inv.buyer)) {
+    const ySeller = hasParty(inv.seller) ? party(inv.seller, PM) : y
+    const yBuyer = hasParty(inv.buyer) ? party(inv.buyer, PM + colW) : y
+    y = Math.min(ySeller, yBuyer) - 4
+    hr(y); y -= 14
+  }
 
   let col = 0
   for (const m of (Array.isArray(inv.meta) ? inv.meta : [])) {
@@ -155,6 +164,11 @@ async function render(inv: any): Promise<Uint8Array> {
     product: 130, batch: 46, expiry: 40, qty: 30, rate: 52,
     taxable: 62, gst: 38, amount: 65,
     desc: 294, sac: 50,
+    // catalogue export: 294+120+75+34 = 523 <= 523 printable. 'desc' is SHARED
+    // with the settlement line, so the catalogue's own columns are sized around
+    // it rather than the other way round - a product name is the long one here
+    // too, and 294 is what stops the settlement description clipping.
+    company: 120, pack: 75, rxflag: 34,
   }
   const RIGHT = new Set(['qty', 'rate', 'taxable', 'gst', 'amount'])
   const cols = (Array.isArray(inv.columns) ? inv.columns : [])
@@ -250,6 +264,17 @@ const SOURCES: Record<string, Source> = {
     input: 'settlement_invoice_render_input',
     report: 'settlement_invoice_report',
     idArg: 'p_invoice_id',
+  },
+  // CHANGE #748 — the customer's own catalogue list, deliberately WITHOUT
+  // money. It is the same table-on-a-page this file already draws, so it is a
+  // third source rather than a third generator; the document has no price
+  // column because catalogue_export_render_input() never builds one, not
+  // because anything here filters it out.
+  catalogue_export: {
+    idKey: 'export_id',
+    input: 'catalogue_export_render_input',
+    report: 'catalogue_export_report',
+    idArg: 'p_export_id',
   },
 }
 

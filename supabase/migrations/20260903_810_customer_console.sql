@@ -1559,9 +1559,21 @@ begin
     end if;
   end if;
 
-  return v_res || jsonb_build_object('message',
-    case when v_act = 'delete' then public._c('admin_cus2.deleted_toast')
-         else public._c('admin_cus2.st_saved') end);
+  -- PARITY (old card): deleting a customer also revoked the LOGIN, through the
+  -- admin-user-actions edge function. Postgres cannot call it, so the backend
+  -- names the call and the screen makes it — the decision stays here, and a
+  -- customer with no auth user gets no post_action at all.
+  return v_res || jsonb_build_object(
+    'message', case when v_act = 'delete' then public._c('admin_cus2.deleted_toast')
+                    else public._c('admin_cus2.st_saved') end,
+    'post_action', case
+      when v_act = 'delete' and pp.user_id is not null then
+        jsonb_build_object('function','admin-user-actions',
+          'body', jsonb_build_object('action','delete_user','user_id', pp.user_id))
+      when v_act = 'restore' and coalesce(nullif(pp.email,''),'') <> '' then
+        jsonb_build_object('function','admin-user-actions',
+          'body', jsonb_build_object('action','send_magic_link','email', pp.email))
+      else null end);
 end $$;
 
 -- ── 23. Edit form / save — the form is DATA, the patch is allow-listed ────

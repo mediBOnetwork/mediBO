@@ -269,6 +269,16 @@ class _AdminCustomerPageState extends State<AdminCustomerPage> {
     }
   }
 
+  /// Runs the edge-function call a payload asked for. A failure is never fatal:
+  /// the database write it follows has already landed.
+  Future<void> _invokeEdge(Map<String, dynamic> post) async {
+    final name = _s(post['function']);
+    if (name.isEmpty || AdminCustomerPage.rpcOverride != null) return;
+    try {
+      await _sb.functions.invoke(name, body: _asMap(post['body']));
+    } catch (_) {}
+  }
+
   Future<void> _openUrl(String url) async {
     if (url.isEmpty) return;
     try {
@@ -900,7 +910,15 @@ class _AdminCustomerPageState extends State<AdminCustomerPage> {
       if (!mounted) return;
       final msg = _s(res['message']);
       if (msg.isNotEmpty) showToast(context, msg, isError: res['ok'] != true);
+      // PARITY: deleting a customer also revokes the login. The backend names
+      // the edge function and its body — this screen has never known that a
+      // customer HAS an auth user, only that the payload asked for a call.
+      final post = _asMap(res['post_action']);
+      if (res['ok'] == true && post.isNotEmpty) {
+        await _invokeEdge(post);
+      }
       if (res['ok'] == true && action == 'delete') {
+        if (!mounted) return;
         Navigator.pop(context, 'deleted');
         return;
       }

@@ -1340,3 +1340,51 @@ grant execute on function public.supplier_po_deadline_block(timestamptz, text)
                                                                             to anon, authenticated;
 grant execute on function public.get_supplier_inquiry_overview()
                                                                             to anon, authenticated;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 15. THE CASCADE MUST SKIP A SUPPLIER WHO DID NOT ANSWER
+--     Found by the #687 journey, not by reading: advance_to_next_supplier()
+--     only stepped past 'Out of Stock', "We don't stock this product" and the
+--     short-supply answer. 'No response' fell through, so the ladder walk
+--     re-picked the SAME silent supplier and simply reset his clock — an
+--     advance that advanced nothing, forever. This is why the old sweep did
+--     its own ladder walk instead of calling this function.
+-- ─────────────────────────────────────────────────────────────────────────
+create or replace function public.advance_to_next_supplier(p_id bigint)
+returns void
+language plpgsql
+as $function$
+DECLARE r inquiry%ROWTYPE; i int; ps_val text; as_val text;
+        cur text; nxt text; found int := 0;
+        v_short text := public.inquiry_short_supply_answer();
+        v_none  text := public.uic('inquiry.no_response_answer', 'No response');
+BEGIN
+  SELECT * INTO r FROM inquiry WHERE id = p_id;
+  FOR i IN 1..30 LOOP
+    EXECUTE format('SELECT ($1).%I, ($1).%I','PS'||i,'AS'||i) INTO ps_val, as_val USING r;
+    IF ps_val IS NULL OR btrim(ps_val)='' THEN EXIT; END IF;
+    -- cmd #464 gap 47: a short supply steps the cascade on exactly like an
+    -- 'Out of Stock', without claiming the supplier said it.
+    IF as_val='Out of Stock' OR as_val='We don''t stock this product'
+       OR as_val = v_short OR as_val = v_none THEN CONTINUE; END IF;
+    found := found + 1;
+    IF found = 1 THEN cur := ps_val;
+    ELSIF found = 2 THEN nxt := ps_val; EXIT; END IF;
+  END LOOP;
+  UPDATE inquiry SET current_supplier = cur, next_supplier = nxt, asked_at = now()
+  WHERE id = p_id;
+
+  -- dead-end surfacing, scoped to THIS inquiry's date and zone
+  IF cur IS NULL THEN
+    UPDATE order_items oi
+       SET fulfillment_state = 'unfillable'
+      FROM orders o
+     WHERE o.id = oi.order_id
+       AND oi.product_id = r.product_id
+       AND oi.assigned_supplier IS NULL
+       AND oi.fulfillment_state = 'pending'
+       AND (o.created_at AT TIME ZONE 'Asia/Kolkata')::date = r.batch_date
+       AND (r.zone_id IS NULL OR oi.zone_id = r.zone_id);
+  END IF;
+END;
+$function$;

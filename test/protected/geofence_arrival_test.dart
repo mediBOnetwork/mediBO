@@ -18,12 +18,16 @@
 //      #691's eta fixture does, so a widget that recomputes minutes from the
 //      timestamp fails here rather than in front of a customer.
 //
-//   3. THE RIDER NEVER GETS THE BUYER'S OTP. CHANGE #354 CHECK-constrained
-//      deliveries.otp_code to NULL because the assigned rider can read that
-//      row, and customer_track_order admits the rider too. The backend answers
-//      with `has_otp:false` for that caller; this widget must print no OTP and
-//      no empty OTP row — while still showing the QR, which the rider must
-//      scan and is theirs to see.
+//   3. THE RIDER NEVER GETS EITHER HANDOVER CREDENTIAL. CHANGE #354
+//      CHECK-constrained deliveries.otp_code to NULL because the assigned
+//      rider can read that row, and customer_track_order admits the rider too.
+//      CHANGE #703's QA round found the QR walking straight past that control:
+//      delivery_scan_qr(token, lat, lng) COMPLETES the handover, so a rider
+//      holding the token can close their own delivery without the buyer ever
+//      opening the app. The rider does not need it in a payload — they point a
+//      camera at the buyer's screen — so both credentials now travel on the
+//      same backend flag, and this widget reads has_qr/has_otp rather than
+//      inferring presence from an empty string.
 //
 //   4. COLD CHAIN AND THE NUDGE COMPUTE NOTHING. The strip's colour comes from
 //      the payload's own `tone`, never from comparing elapsed_min to
@@ -39,10 +43,16 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
 import 'package:pharma_b2b/widgets/delivery_arrival_card.dart';
 
-Map<String, dynamic> _handover({bool otp = true, String token = 'QR-TOKEN-1'}) => {
+Map<String, dynamic> _handover({
+  bool otp = true,
+  bool qr = true,
+  String token = 'QR-TOKEN-1',
+}) =>
+    {
       'has': true,
       'qr_label': 'Handover QR',
-      'qr_token': token,
+      'has_qr': qr,
+      'qr_token': qr ? token : null,
       'has_otp': otp,
       'otp_label': 'Handover OTP',
       'otp_hint': 'Read this out to the rider',
@@ -52,6 +62,7 @@ Map<String, dynamic> _handover({bool otp = true, String token = 'QR-TOKEN-1'}) =
 Map<String, dynamic> _arrival({
   String state = 'here',
   bool otp = true,
+  bool qr = true,
   String waiting = 'Waiting 4 minutes',
 }) =>
     {
@@ -68,7 +79,7 @@ Map<String, dynamic> _arrival({
       // Deliberately disagrees with waiting_label: a widget that subtracts
       // this from "now" would print something else entirely.
       'dwell_started_at': '2020-01-01T00:00:00Z',
-      'handover': _handover(otp: otp),
+      'handover': _handover(otp: otp, qr: qr),
       'tone': state == 'here' ? 'success' : 'info',
     };
 
@@ -168,16 +179,42 @@ void main() {
       expect(find.text('Rider is here'), findsNothing);
     });
 
-    testWidgets('has_otp:false prints no OTP and no empty OTP row, but keeps the QR',
+    testWidgets('the rider payload carries NEITHER credential, so the block collapses',
         (tester) async {
-      // CHANGE #354's line. This is the rider asking the same RPC.
-      await _pump(tester, DeliveryArrivalCard(arrival: _arrival(otp: false)));
+      // CHANGE #354's line, extended by #703's QA round. This is the RIDER
+      // asking customer_track_order — the same RPC, a different caller. The
+      // backend withholds both, and the card must invent neither.
+      await _pump(tester,
+          DeliveryArrivalCard(arrival: _arrival(otp: false, qr: false)));
 
       expect(find.text('4321'), findsNothing);
       expect(find.text('Handover OTP'), findsNothing);
       expect(find.text('Read this out to the rider'), findsNothing);
-      // The QR is still there: the rider has to scan it.
-      expect(find.text('Handover QR'), findsOneWidget);
+      expect(find.text('Handover QR'), findsNothing);
+      // The doorbell itself still rings — the rider is at the door.
+      expect(find.text('Rider is here'), findsOneWidget);
+    });
+
+    testWidgets('has_qr:false hides the QR without touching the OTP',
+        (tester) async {
+      await _pump(tester, DeliveryArrivalCard(arrival: _arrival(qr: false)));
+
+      expect(find.text('Handover QR'), findsNothing);
+      expect(find.text('Handover OTP'), findsOneWidget);
+      expect(find.text('4321'), findsOneWidget);
+    });
+
+    testWidgets('a token arriving beside has_qr:false is still not drawn',
+        (tester) async {
+      // Absence is the FLAG, not the string: a payload that contradicts itself
+      // must obey the flag, or the gate is one stray field away from reopening.
+      final a = _arrival();
+      (a['handover'] as Map<String, dynamic>)
+        ..['has_qr'] = false
+        ..['qr_token'] = 'QR-TOKEN-1';
+      await _pump(tester, DeliveryArrivalCard(arrival: a));
+
+      expect(find.text('Handover QR'), findsNothing);
     });
 
     testWidgets('the avatar and the call button are the host\'s, and are optional',

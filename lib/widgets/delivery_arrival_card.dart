@@ -172,16 +172,21 @@ class _Handover extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // CHANGE #703 (QA round 1) — absence is the BACKEND's flag, both times.
+    // The QR is a credential the same way the OTP is, so it now travels only
+    // to the buyer, and the card asks has_qr rather than inferring anything
+    // from an empty string.
+    final hasQr = handover['has_qr'] == true;
     final token = _s(handover, 'qr_token');
     final hasOtp = handover['has_otp'] == true;
     final otp = _s(handover, 'otp');
 
-    if (token.isEmpty && !hasOtp) return const SizedBox.shrink();
+    if (!hasQr && !hasOtp) return const SizedBox.shrink();
     RenderLog.write('c703_handover', 1);
 
     return Column(
       children: [
-        if (token.isNotEmpty) ...[
+        if (hasQr && token.isNotEmpty) ...[
           Text(_s(handover, 'qr_label'),
               textAlign: TextAlign.center, style: Ds.t.caption),
           SizedBox(height: Ds.space.x8),

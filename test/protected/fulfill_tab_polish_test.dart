@@ -29,6 +29,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:pharma_b2b/fulfill/fulfill_landing_stage.dart';
 import 'package:pharma_b2b/fulfill/supplier_map_panel_view.dart';
 import 'package:pharma_b2b/fulfill/supplier_toggle_chips.dart';
 import 'package:pharma_b2b/services/access.dart';
@@ -407,6 +408,95 @@ void main() {
       expect(SupplierMapPanelView.fromJson(null).loaded, isFalse);
       expect(SupplierMapPanelView.empty.headerLabel, isEmpty);
       expect(SupplierMapPanelView.empty.showsLegend, isFalse);
+    });
+  });
+
+  // ── 4. the stage a deep link actually lands on ───────────────────────────
+  group('#754 — a deep-linked stage survives the landing rule', () {
+    const stages = ['ops_board', 'customer_order', 'supplier_inquiry', 'pack'];
+
+    test('the caller\'s stage beats the backend\'s first tab', () {
+      // The regression, exactly: #690 parks the stage, applies it and clears
+      // the field; #688 then landed on stages.first because its guard read the
+      // field that had just been cleared. Proven live on #1035 —
+      // /admin/go/inquiry opened Fulfil on Ops board.
+      final r = resolveLandingStage(
+        stages: stages,
+        current: 'ops_board',
+        pending: 'supplier_inquiry',
+        landed: false,
+        picked: false,
+      );
+      expect(r.stage, 'supplier_inquiry');
+      expect(r.picked, isTrue,
+          reason: 'a deep link is a PICK — the next payload must not re-land it');
+    });
+
+    test('a first mount nobody steered lands on the backend first stage', () {
+      final r = resolveLandingStage(
+        stages: stages,
+        current: 'supplier_shop', // the legacy initialTab:0 seed
+        pending: '',
+        landed: false,
+        picked: false,
+      );
+      expect(r.stage, 'ops_board');
+      expect(r.picked, isFalse);
+    });
+
+    test('a later payload never moves the operator off their tab', () {
+      final r = resolveLandingStage(
+        stages: stages,
+        current: 'pack',
+        pending: '',
+        landed: true,
+        picked: true,
+      );
+      expect(r.stage, 'pack');
+    });
+
+    test('a stage that left the payload falls back, never renders nothing', () {
+      final r = resolveLandingStage(
+        stages: stages,
+        current: 'a_stage_this_login_lost',
+        pending: '',
+        landed: true,
+        picked: true,
+      );
+      expect(r.stage, 'ops_board');
+    });
+
+    test('a pending stage the payload does not carry is ignored in silence', () {
+      final r = resolveLandingStage(
+        stages: stages,
+        current: 'pack',
+        pending: 'a_stage_this_build_never_heard_of',
+        landed: true,
+        picked: true,
+      );
+      expect(r.stage, 'pack');
+    });
+
+    test('a bounded caller and an explicit initialStage both keep their tab', () {
+      expect(
+        resolveLandingStage(
+          stages: stages, current: 'pack', pending: '',
+          landed: false, picked: false, bounded: true).stage,
+        'pack',
+      );
+      expect(
+        resolveLandingStage(
+          stages: stages, current: 'pack', pending: '',
+          landed: false, picked: false, initialStage: 'pack').stage,
+        'pack',
+      );
+    });
+
+    test('an empty payload changes nothing', () {
+      final r = resolveLandingStage(
+        stages: const [], current: 'pack', pending: 'supplier_inquiry',
+        landed: false, picked: false);
+      expect(r.stage, 'pack');
     });
   });
 }

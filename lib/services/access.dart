@@ -49,10 +49,12 @@ class AccessMatrix {
     Map<String, FeatureAccess> features = const {},
     Map<String, String> routeFeature = const {},
     Map<String, String> routeStage = const {},
+    Map<String, String> routeLabel = const {},
     Map<String, List<AccessTab>> tabs = const {},
   })  : _features = features,
         _routeFeature = routeFeature,
         _routeStage = routeStage,
+        _routeLabel = routeLabel,
         _tabs = tabs;
 
   /// Nothing has been fetched yet.
@@ -88,6 +90,11 @@ class AccessMatrix {
   /// the screen behind it moved into the Fulfill pipeline. Empty for every
   /// route that is still its own destination.
   final Map<String, String> _routeStage;
+
+  /// CHANGE #1016 — routeKey -> the registry's own label for the feature
+  /// behind it (`access_boot().routes[].label`). The page title a pushed
+  /// partner screen prints, so renaming a feature is an UPDATE.
+  final Map<String, String> _routeLabel;
   final Map<String, List<AccessTab>> _tabs;
 
   factory AccessMatrix.fromJson(Map<String, dynamic>? json) {
@@ -103,6 +110,7 @@ class AccessMatrix {
 
     final routeFeature = <String, String>{};
     final routeStage = <String, String>{};
+    final routeLabel = <String, String>{};
     final rawRoutes = (json['routes'] as Map?) ?? const {};
     rawRoutes.forEach((k, v) {
       final m = (v as Map?)?.cast<String, dynamic>() ?? const {};
@@ -110,6 +118,8 @@ class AccessMatrix {
       if (feature.isNotEmpty) routeFeature[k.toString()] = feature;
       final stage = (m['stage'] ?? '').toString();
       if (stage.isNotEmpty) routeStage[k.toString()] = stage;
+      final label = (m['label'] ?? '').toString();
+      if (label.isNotEmpty) routeLabel[k.toString()] = label;
     });
 
     final tabs = <String, List<AccessTab>>{};
@@ -134,6 +144,7 @@ class AccessMatrix {
       features: features,
       routeFeature: routeFeature,
       routeStage: routeStage,
+      routeLabel: routeLabel,
       tabs: tabs,
     );
   }
@@ -182,6 +193,10 @@ class AccessMatrix {
   /// with the fulfill_tab feature that shares its canonical key, so the next
   /// screen that moves needs no Dart change at all.
   String fulfillStageForRoute(String routeKey) => _routeStage[routeKey] ?? '';
+
+  /// CHANGE #1016 — the registry label behind a route, or '' when the payload
+  /// never named it. Never a Dart fallback word.
+  String routeLabel(String routeKey) => _routeLabel[routeKey] ?? '';
 
   /// The tabs of one screen, in payload order, each already carrying its own
   /// two booleans. The screen renders these — it never sorts or filters by a
@@ -355,6 +370,7 @@ class Access extends ChangeNotifier {
       _matrix.fulfillStageForRoute(routeKey);
   String tabMovedTo(String screen, String tabKey) =>
       _matrix.tabMovedTo(screen, tabKey);
+  String routeLabel(String routeKey) => _matrix.routeLabel(routeKey);
   Set<int>? allowedTabIndexes(String screen) =>
       _matrix.allowedTabIndexes(screen);
   String get deniedViewMessage => _matrix.deniedViewMessage;

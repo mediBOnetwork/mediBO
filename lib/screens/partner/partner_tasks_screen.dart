@@ -154,9 +154,16 @@ class _PartnerTasksScreenState extends State<PartnerTasksScreen> {
   @override
   Widget build(BuildContext context) {
     final d = _d;
-    return ColoredBox(
-      color: Ds.c.bg,
-      child: _loading
+    // The shell pushes this screen directly (shellExtraRouteScreen, #707), so
+    // it owns its own Scaffold rather than borrowing PartnerFeaturePage's —
+    // and the AppBar title is the PAYLOAD's, which is why it is empty for the
+    // first frame instead of carrying a Dart word that would then be replaced.
+    return Scaffold(
+      backgroundColor: Ds.c.bg,
+      appBar: AppBar(
+          title: Text((d?['title'] as String?) ?? '', style: Ds.t.subtitle)),
+      body: SafeArea(
+        child: _loading
           ? const PartnerSkeleton()
           : (d == null || d['ok'] != true)
               ? PartnerNotice(
@@ -179,6 +186,7 @@ class _PartnerTasksScreenState extends State<PartnerTasksScreen> {
                         : null,
                   ),
                 ),
+      ),
     );
   }
 }

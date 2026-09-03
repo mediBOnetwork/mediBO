@@ -1660,3 +1660,33 @@ begin
     'default_tab', coalesce(v_tabs->0->>'key','profile'),
     'empty_label', public._c('admin_sup2.tab_empty'));
 end $$;
+
+-- ── 24. Lock the new RPCs to signed-in callers (#436's rule) ───────────────
+-- Every SECURITY DEFINER function inherits Postgres's default GRANT TO PUBLIC,
+-- and the anon key ships inside the web bundle and the APK. These read a whole
+-- supplier's trade history: revoke PUBLIC, re-grant the signed-in roles.
+do $c753grants$
+declare f record;
+begin
+  for f in
+    select p.oid::regprocedure::text as sig
+      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public'
+       and p.proname in (
+         'admin_suppliers_console','admin_supplier_page',
+         'admin_supplier_tab_profile','admin_supplier_tab_companies',
+         'admin_supplier_tab_availability','admin_supplier_tab_orders',
+         'admin_supplier_tab_payments','admin_supplier_tab_performance',
+         'admin_supplier_tab_history','admin_supplier_statement_csv',
+         'admin_supplier_performance_csv','admin_supplier_availability_set',
+         'admin_supplier_company_map','admin_supplier_delete_with_reason',
+         'supplier_perf_rollup','_sup753_gate','_sup753_kyc','_sup753_menu',
+         '_sup753_wa','_sup753_row','_sup753_deny','_sup753_kv','_sup753_pct',
+         '_sup753_metrics')
+  loop
+    execute format('revoke all on function %s from public', f.sig);
+    execute format('revoke all on function %s from anon', f.sig);
+    execute format('grant execute on function %s to authenticated', f.sig);
+    execute format('grant execute on function %s to service_role', f.sig);
+  end loop;
+end $c753grants$;

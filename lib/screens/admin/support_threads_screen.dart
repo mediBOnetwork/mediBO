@@ -170,6 +170,11 @@ class _InboxTab extends StatelessWidget {
     final rows = threadRows(d['rows']);
     final zone = threadStr(d, 'zone_label');
     return Column(
+      // stretch, so the two horizontal chip rows start on the same left edge
+      // as the zone line and the cards below them. Without it a Column centres
+      // a child that does not fill the width, and on a desktop viewport the
+      // chips floated to the middle of an otherwise left-aligned screen.
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
           padding: EdgeInsets.fromLTRB(
@@ -240,6 +245,7 @@ class _ChipRow extends StatelessWidget {
       padding: EdgeInsets.symmetric(
           horizontal: Ds.space.x16, vertical: Ds.space.x8),
       child: Row(
+        mainAxisAlignment: MainAxisAlignment.start,
         children: [
           for (final it in items) ...[
             ChoiceChip(

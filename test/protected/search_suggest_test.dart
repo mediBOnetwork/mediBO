@@ -11,6 +11,12 @@
 //     empty line;
 //   * the Hinglish line is `expanded.label` under `expanded_prefix` — absent
 //     when the backend sent no mapping;
+//   * the brand-family card GROUPS NOTHING. `storefront_search_page()` hands
+//     the grid a `blocks` list already folded by brand_family_key(); the card
+//     prints the block's title, "by <company>" line and "N variants" counter
+//     verbatim, draws one chip per variant in payload order, and a chip opens
+//     THAT variant's own product id. A block kind this build has never heard
+//     of renders nothing instead of throwing;
 //   * the synonym console prints the payload: rows in payload order with the
 //     backend's own "term → target" subtitle and source label, the two
 //     dropdowns offer exactly the options the payload carried, and a refusal
@@ -22,6 +28,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:pharma_b2b/screens/admin/search_synonyms_screen.dart';
 import 'package:pharma_b2b/utils/render_log.dart';
+import 'package:pharma_b2b/widgets/search_family_card.dart';
 import 'package:pharma_b2b/widgets/search_typeahead.dart';
 
 Map<String, dynamic> _suggest({bool hinglish = false}) => {
@@ -143,6 +150,22 @@ Map<String, dynamic> _synonyms({bool ok = true}) => ok
         'message': 'Only mediBO staff can edit search synonyms.',
       };
 
+Map<String, dynamic> _familyBlock() => {
+      'kind': 'family',
+      'family_key': 'monticope|mankind',
+      'title': 'Monticope',
+      'company_label': 'MANKIND PHARMA LTD',
+      'sub_label': 'by MANKIND PHARMA LTD',
+      'variant_count': 3,
+      'count_label': '3 variants',
+      // deliberately NOT alphabetical: the order is the backend's
+      'variants': const [
+        {'id': 501, 'product_name': 'Monticope Tablet', 'variant_label': 'Tablet'},
+        {'id': 502, 'product_name': 'Monticope-A Tablet', 'variant_label': '-A Tablet'},
+        {'id': 503, 'product_name': 'Monticope Syrup', 'variant_label': 'Syrup'},
+      ],
+    };
+
 void main() {
   setUpAll(() => RenderLog.flushEnabled = false);
   tearDown(() {
@@ -249,6 +272,92 @@ void main() {
     });
   });
 
+  group('the family card groups nothing', () {
+    testWidgets('title, company line and counter are backend strings',
+        (t) async {
+      await t.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            height: 320,
+            child: SearchFamilyCard(
+                block: _familyBlock(), onOpenProduct: (_) {}),
+          ),
+        ),
+      ));
+      await t.pumpAndSettle();
+
+      expect(find.text('Monticope'), findsOneWidget);
+      expect(find.text('by MANKIND PHARMA LTD'), findsOneWidget);
+      expect(find.text('3 variants'), findsOneWidget);
+      // the raw count is never printed on its own
+      expect(find.text('3'), findsNothing);
+    });
+
+    testWidgets('one chip per variant, in payload order, opening its own id',
+        (t) async {
+      String? opened;
+      await t.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            height: 320,
+            child: SearchFamilyCard(
+                block: _familyBlock(), onOpenProduct: (id) => opened = id),
+          ),
+        ),
+      ));
+      await t.pumpAndSettle();
+
+      expect(find.text('Tablet'), findsOneWidget);
+      expect(find.text('-A Tablet'), findsOneWidget);
+      expect(find.text('Syrup'), findsOneWidget);
+      // payload order, not alphabetical
+      expect(t.getTopLeft(find.text('Tablet')).dx,
+          lessThan(t.getTopLeft(find.text('-A Tablet')).dx));
+
+      // the SECOND chip opens the second variant's own product, not the card's
+      await t.tap(find.text('-A Tablet'));
+      await t.pumpAndSettle();
+      expect(opened, '502');
+    });
+
+    testWidgets('a block kind this build never heard of renders nothing',
+        (t) async {
+      await t.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: SearchResultBlock(
+            block: const {'kind': 'something_new_from_the_backend'},
+            onOpenProduct: (_) {},
+          ),
+        ),
+      ));
+      await t.pumpAndSettle();
+      expect(tester_findsNoText(t), isTrue);
+    });
+
+    testWidgets('a product block draws the product card the grid always used',
+        (t) async {
+      var built = 0;
+      await t.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: SearchResultBlock(
+            block: const {
+              'kind': 'product',
+              'item': {'id': 77, 'product_name': 'Solo product'},
+            },
+            onOpenProduct: (_) {},
+            productFor: (m) {
+              built++;
+              return Text('${m['product_name']}');
+            },
+          ),
+        ),
+      ));
+      await t.pumpAndSettle();
+      expect(built, 1);
+      expect(find.text('Solo product'), findsOneWidget);
+    });
+  });
+
   group('the synonym console prints the payload', () {
     testWidgets('rows render in payload order with the backend subtitles',
         (t) async {
@@ -302,3 +411,8 @@ void main() {
     });
   });
 }
+
+/// True when the pumped tree painted no text at all — the honest way to assert
+/// "this rendered nothing" without naming a string that was never there.
+bool tester_findsNoText(WidgetTester t) =>
+    find.byType(Text).evaluate().isEmpty;

@@ -113,6 +113,30 @@ class DeliveryTrackingData {
   /// from call_action, so no caller has to thread an id down to this view.
   final String callOrderId;
 
+  // CHANGE #701 (register #125) — the route to THIS door.
+  //
+  // `route.polyline` is the SEGMENT from where the rider is to this stop, cut
+  // in the database: the rest of the run passes other pharmacies' doors, so it
+  // is never sent. The distance sentence and the stops-ahead sentence arrive
+  // finished, and the stops ahead are named by postal area only — this view
+  // has no way to render another customer's address because it never receives
+  // one.
+  final String routePolyline;
+  final String routeKmLabel;
+  final String routeHeading;
+  final bool hasRoute;
+
+  /// Postal-area names of the stops in front of this one, in run order.
+  final List<String> stopsAheadAreas;
+
+  // CHANGE #701 — "share live link with staff". Offered only when the BACKEND
+  // says so: the public /track page has no identity to authorise a send, so it
+  // never receives this block and the button simply is not there.
+  final bool hasShare;
+  final String shareLabel;
+  final String shareRpc;
+  final String shareOrderId;
+
   const DeliveryTrackingData({
     required this.ok,
     required this.found,
@@ -147,7 +171,30 @@ class DeliveryTrackingData {
     this.hasPhoto = false,
     this.photoBucket = '',
     this.photoPath = '',
+    this.routePolyline = '',
+    this.routeKmLabel = '',
+    this.routeHeading = '',
+    this.hasRoute = false,
+    this.stopsAheadAreas = const [],
+    this.hasShare = false,
+    this.shareLabel = '',
+    this.shareRpc = '',
+    this.shareOrderId = '',
   });
+
+  /// The backend's `route` block, read the same way by both callers.
+  static Map<String, dynamic> _route(Map<String, dynamic> m) =>
+      m['route'] is Map ? Map<String, dynamic>.from(m['route'] as Map) : const {};
+
+  static List<String> _areas(Map<String, dynamic> route) {
+    final sa = route['stops_ahead'];
+    if (sa is! Map) return const [];
+    final raw = (sa['areas'] as List?) ?? const [];
+    return [
+      for (final a in raw)
+        if (a != null && a.toString().trim().isNotEmpty) a.toString()
+    ];
+  }
 
   static double _d(dynamic v) => (v as num?)?.toDouble() ?? 0;
   static String _s(dynamic v) => v?.toString() ?? '';
@@ -199,6 +246,15 @@ class DeliveryTrackingData {
       destLng: destLng?.toDouble() ?? 0,
       hasDestination: destLat != null && destLng != null,
       qrToken: _s(m['qr_token']),
+      routePolyline: _s(_route(m)['polyline']),
+      routeKmLabel: _s(_route(m)['km_label']),
+      routeHeading: _s(_route(m)['heading']),
+      hasRoute: _route(m)['has'] == true,
+      stopsAheadAreas: _areas(_route(m)),
+      hasShare: ((m['share'] as Map?) ?? const {})['has'] == true,
+      shareLabel: _s(((m['share'] as Map?) ?? const {})['label']),
+      shareRpc: _s(((m['share'] as Map?) ?? const {})['rpc']),
+      shareOrderId: _s(((m['share'] as Map?) ?? const {})['order_id']),
       title: '',
       message: '',
     );
@@ -234,6 +290,11 @@ class DeliveryTrackingData {
       destLng: _d(m['destination_lng']),
       hasDestination: m['has_destination'] == true,
       qrToken: _s(m['qr_token']),
+      routePolyline: _s(_route(m)['polyline']),
+      routeKmLabel: _s(_route(m)['km_label']),
+      routeHeading: _s(_route(m)['heading']),
+      hasRoute: _route(m)['has'] == true,
+      stopsAheadAreas: _areas(_route(m)),
       title: _s(m['title']),
       message: _s(m['message']),
     );
@@ -414,9 +475,32 @@ class _DeliveryTrackingViewState extends State<DeliveryTrackingView> {
             initialPoint: d.hasRiderLocation
                 ? RiderPoint(d.mapLat, d.mapLng, d.riderSnapped)
                 : null,
+            // CHANGE #701 — the road line the customer is allowed to see: the
+            // segment from the rider to THIS door, already cut server-side.
+            // The map draws whatever polyline it is handed; the decision about
+            // how much of the run that is was made in _c701_route_segment.
+            roadPolyline: d.routePolyline,
             height: 240,
             onFrame: (_) => _bump(),
           ),
+          // Distance and who is in front, both printed verbatim. The areas are
+          // postal areas, never addresses — the payload carries nothing finer.
+          if (d.routeKmLabel.isNotEmpty || d.stopsAheadAreas.isNotEmpty) ...[
+            SizedBox(height: Ds.space.x8),
+            _RouteSummary(
+              heading: d.routeHeading,
+              kmLabel: d.routeKmLabel,
+              areas: d.stopsAheadAreas,
+            ),
+          ],
+          if (d.hasShare) ...[
+            SizedBox(height: Ds.space.x8),
+            _ShareLinkButton(
+              label: d.shareLabel,
+              rpc: d.shareRpc,
+              orderId: d.shareOrderId,
+            ),
+          ],
         ],
 
         // Not tracking yet — the catalog's sentence, not one written here.
@@ -610,6 +694,130 @@ class _RiderAvatarState extends State<_RiderAvatar> {
         height: Ds.space.x32,
         fit: BoxFit.cover,
         errorBuilder: (_, _, _) => const SizedBox.shrink(),
+      ),
+    );
+  }
+}
+
+/// CHANGE #701 — the route summary under the map: how far by road, and the
+/// postal areas the rider still has to reach before this one.
+///
+/// Every string here arrived finished. This widget does not count the stops,
+/// pluralise the sentence or format the distance — doing any of that would put
+/// a second, staler answer next to the server's.
+class _RouteSummary extends StatelessWidget {
+  const _RouteSummary({
+    required this.heading,
+    required this.kmLabel,
+    required this.areas,
+  });
+
+  final String heading;
+  final String kmLabel;
+  final List<String> areas;
+
+  @override
+  Widget build(BuildContext context) {
+    RenderLog.write('c701_route_summary', areas.length.toString());
+    return Container(
+      padding: EdgeInsets.all(Ds.space.x12),
+      decoration: BoxDecoration(
+        color: Ds.c.bg,
+        borderRadius: Ds.r.rButton,
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (heading.isNotEmpty)
+          Text(heading, style: Ds.t.caption),
+        if (kmLabel.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x4),
+          Text(kmLabel, style: Ds.t.bodyStrong),
+        ],
+        if (areas.isNotEmpty) ...[
+          SizedBox(height: Ds.space.x8),
+          Wrap(
+            spacing: Ds.space.x8,
+            runSpacing: Ds.space.x8,
+            children: [
+              for (final a in areas)
+                Container(
+                  padding: EdgeInsets.symmetric(
+                      horizontal: Ds.space.x12, vertical: Ds.space.x4),
+                  decoration: BoxDecoration(
+                    color: Ds.c.surface,
+                    borderRadius: Ds.r.rChip,
+                    border: Border.all(color: Ds.c.divider),
+                  ),
+                  child: Text(a, style: Ds.t.caption),
+                ),
+            ],
+          ),
+        ],
+      ]),
+    );
+  }
+}
+
+/// CHANGE #701 — sends the pharmacy's own staff the SAME expiring link.
+///
+/// The button carries no phone number: `delivery_share_track_link` reads the
+/// numbers already saved against this pharmacy, so there is no shape of this
+/// call that texts a stranger somebody's tracking link. The RPC's name comes
+/// from the payload, and its reply is printed verbatim.
+class _ShareLinkButton extends StatefulWidget {
+  const _ShareLinkButton({
+    required this.label,
+    required this.rpc,
+    required this.orderId,
+  });
+
+  final String label;
+  final String rpc;
+  final String orderId;
+
+  @override
+  State<_ShareLinkButton> createState() => _ShareLinkButtonState();
+}
+
+class _ShareLinkButtonState extends State<_ShareLinkButton> {
+  bool _busy = false;
+
+  Future<void> _send() async {
+    if (_busy || widget.rpc.isEmpty || widget.orderId.isEmpty) return;
+    setState(() => _busy = true);
+    String msg = '';
+    try {
+      final res = await Supabase.instance.client
+          .rpc(widget.rpc, params: {'p_order_id': widget.orderId});
+      msg = ((res as Map?)?['message'] ?? '').toString();
+      RenderLog.write('c701_share_link', '1');
+    } catch (_) {
+      // A failed send says nothing rather than inventing an apology: the only
+      // sentences this screen may show are the ones the backend sent.
+    }
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (msg.isNotEmpty) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(msg)));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.label.isEmpty) return const SizedBox.shrink();
+    return SizedBox(
+      width: double.infinity,
+      height: Ds.touch.minTarget,
+      child: OutlinedButton.icon(
+        onPressed: _busy ? null : _send,
+        icon: _busy
+            ? SizedBox(
+                width: Ds.t.captionSize,
+                height: Ds.t.captionSize,
+                child: const CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Icon(Icons.share_outlined),
+        label: Text(widget.label),
       ),
     );
   }

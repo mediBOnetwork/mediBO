@@ -79,7 +79,7 @@ async function tmpl(key: string, fallback: string): Promise<string> {
 // one delivery -> { phone, pharmacy, order_code, qr_token, rider }
 async function loadDelivery(id: string) {
   const { data: d } = await supabase.from('deliveries')
-    .select('id, order_id, qr_token, delivered_at, proof_method, partner_id')
+    .select('id, order_id, qr_token, track_token, delivered_at, proof_method, partner_id')
     .eq('id', id).maybeSingle();
   if (!d) return null;
   const { data: o } = await supabase.from('orders')
@@ -117,7 +117,12 @@ async function loadOtp(deliveryId: string): Promise<string> {
 }
 
 async function sendOutForDelivery(ctx: any, body: string): Promise<boolean> {
-  const link = `${SITE}/track/${ctx.d.qr_token ?? ''}`;
+  // CHANGE #701 — the WhatsApp link carries `track_token`, NOT `qr_token`.
+  // qr_token is the code that PROVES delivery: putting it in a forwarded
+  // message handed the proof secret to anyone the message reached, and it
+  // never expired. track_token is rotated on every (re)assignment and dies two
+  // hours after the stop finishes.
+  const link = `${SITE}/track/${ctx.d.track_token ?? ''}`;
   // CHANGE #691 (register row 122): the arrival window, worded by
   // _delivery_eta_for_order() and rebased on every stop. A run that has no
   // window yet substitutes to nothing rather than to the word "null".

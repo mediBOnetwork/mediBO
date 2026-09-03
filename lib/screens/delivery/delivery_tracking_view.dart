@@ -32,6 +32,7 @@ import '../../services/live_feed.dart';
 
 import '../../fulfill/fulfill_lookups.dart';
 import '../../utils/render_log.dart';
+import '../../widgets/delivery_arrival_card.dart';
 import '../../widgets/delivery_proof_card.dart';
 import 'run_live_map.dart';
 
@@ -59,6 +60,14 @@ class DeliveryTrackingData {
   /// DeliveryEtaCard / DeliveryProofCard, which compute nothing either.
   final Map<String, dynamic> eta;
   final Map<String, dynamic> proof;
+
+  /// CHANGE #703. The doorbell and the cold box, each a finished block.
+  /// `arrival.has` is the backend saying the rider has crossed a ring — this
+  /// view never compares a rider position against a destination, which is
+  /// exactly the arithmetic that used to leave the buyer with nothing until
+  /// somebody knocked.
+  final Map<String, dynamic> arrival;
+  final Map<String, dynamic> coldChain;
 
   final double riderLat;
   final double riderLng;
@@ -148,6 +157,8 @@ class DeliveryTrackingData {
     required this.hasStopsAhead,
     this.eta = const {},
     this.proof = const {},
+    this.arrival = const {},
+    this.coldChain = const {},
     required this.riderLat,
     required this.riderLng,
     required this.hasRiderLocation,
@@ -232,6 +243,12 @@ class DeliveryTrackingData {
       hasStopsAhead: ahead.isNotEmpty,
       eta: m['eta'] is Map ? Map<String, dynamic>.from(m['eta'] as Map) : const {},
       proof: m['proof'] is Map ? Map<String, dynamic>.from(m['proof'] as Map) : const {},
+      arrival: m['arrival'] is Map
+          ? Map<String, dynamic>.from(m['arrival'] as Map)
+          : const {},
+      coldChain: m['cold_chain'] is Map
+          ? Map<String, dynamic>.from(m['cold_chain'] as Map)
+          : const {},
       riderLat: riderLat?.toDouble() ?? 0,
       riderLng: riderLng?.toDouble() ?? 0,
       hasRiderLocation: riderLat != null && riderLng != null,
@@ -273,6 +290,12 @@ class DeliveryTrackingData {
       hasStopsAhead: m['has_stops_ahead'] == true,
       eta: m['eta'] is Map ? Map<String, dynamic>.from(m['eta'] as Map) : const {},
       proof: m['proof'] is Map ? Map<String, dynamic>.from(m['proof'] as Map) : const {},
+      arrival: m['arrival'] is Map
+          ? Map<String, dynamic>.from(m['arrival'] as Map)
+          : const {},
+      coldChain: m['cold_chain'] is Map
+          ? Map<String, dynamic>.from(m['cold_chain'] as Map)
+          : const {},
       riderLat: _d(m['rider_lat']),
       riderLng: _d(m['rider_lng']),
       hasRiderLocation: m['has_rider_location'] == true,
@@ -453,6 +476,27 @@ class _DeliveryTrackingViewState extends State<DeliveryTrackingView> {
         // and never rebased. The card now leads with a time and keeps the stop
         // count under it; both strings are the payload's, and the stop-count
         // chip moved inside the card so the two can never disagree.
+        // CHANGE #703 — the doorbell. It outranks the arrival window because
+        // "the rider is at your door" answers the question the window was only
+        // estimating, and it carries the handover the backend opened at 500 m.
+        DeliveryArrivalCard(
+          arrival: d.arrival,
+          avatar: d.hasPhoto
+              ? _RiderAvatar(bucket: d.photoBucket, path: d.photoPath)
+              : null,
+          call: d.hasCall
+              ? _MaskedCallButton(
+                  orderId: d.callOrderId,
+                  label: d.callLabel,
+                  privacyNote: d.callPrivacyNote,
+                )
+              : null,
+        ),
+
+        // CHANGE #703 — the cold box: elapsed against the window the zone
+        // allows, in the backend's words, with the backend's own tone.
+        ColdChainStrip(cold: d.coldChain),
+
         DeliveryEtaCard(eta: d.eta),
 
         // CHANGE #691 (register row 126) — proof of delivery, on the stop it
@@ -510,7 +554,10 @@ class _DeliveryTrackingViewState extends State<DeliveryTrackingView> {
         ],
 
         // F3 — the customer's QR: show it to the rider, or scan the parcel's own.
-        if (d.qrToken.isNotEmpty) ...[
+        // CHANGE #703: once the doorbell is up it owns the handover, so this
+        // block is the pre-arrival QR only — printing both would show the same
+        // code twice on one screen.
+        if (d.qrToken.isNotEmpty && d.arrival['has'] != true) ...[
           const SizedBox(height: 16),
           Divider(height: 1, color: _kBorder),
           const SizedBox(height: 14),

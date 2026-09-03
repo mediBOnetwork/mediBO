@@ -41,6 +41,7 @@ import 'delivery_home_panel.dart'; // C630: PART B + C
 import 'delivery_proof_sheet.dart';
 import 'delivery_run_map_panel.dart';
 import '../../services/ui_copy.dart';
+import '../../widgets/delivery_arrival_card.dart';
 import '../../widgets/masked_call_button.dart';
 import 'rider_profile_sheet.dart'; // C463 gap 119
 
@@ -488,6 +489,23 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
     } catch (_) {}
   }
 
+  // ── CHANGE #703: the rider confirming the arrival the geofence stamped ────
+  //
+  // It is a CONFIRMATION, not a second arrival — the backend never moves
+  // arrived_at — and the button disappears because the reloaded payload says
+  // confirm_arrival.has is now false, not because this screen remembered a tap.
+  Future<void> _confirmArrival(String deliveryId) async {
+    if (deliveryId.isEmpty) return;
+    try {
+      final res = await Supabase.instance.client
+          .rpc('delivery_confirm_arrival', params: {'p_delivery_id': deliveryId});
+      if (!mounted) return;
+      if (res is Map) _toast(res['label']?.toString() ?? '');
+      RenderLog.write('c703_confirm_arrival', 1);
+      await _load();
+    } catch (_) {}
+  }
+
   // ── CHANGE #309 (1): warehouse -> rider handover ──────────────────────────
   //
   // The rider takes custody by scanning the parcel's QR, or by typing the code
@@ -663,6 +681,16 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
         child: ListView(
           padding: const EdgeInsets.fromLTRB(12, 12, 12, 28),
           children: [
+            // ── CHANGE #703: an open anomaly, in the rider's own words, above
+            // everything else — off route, stopped, speeding or GPS-silent. The
+            // run decides nothing here; `nudge.has` is the backend's verdict and
+            // a clean run renders no strip at all.
+            RiderNudgeStrip(
+              nudge: _run['nudge'] is Map
+                  ? Map<String, dynamic>.from(_run['nudge'] as Map)
+                  : const <String, dynamic>{},
+            ),
+
             // ── CHANGE #630 (PART B): the home strip sits ABOVE the map, as
             // the spec puts it — shift, today's tiles, earnings, History.
             DeliveryHomePanel(home: _home, onChanged: _load),
@@ -838,6 +866,13 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
         : const <String, dynamic>{};
     final needsHandover = s['needs_handover'] == true;
     final coldNote = cold['is_cold_chain'] == true ? (cold['note']?.toString() ?? '') : '';
+    // CHANGE #703 — both are backend verdicts, not states this screen keeps.
+    final confirmArrival = s['confirm_arrival'] is Map
+        ? Map<String, dynamic>.from(s['confirm_arrival'] as Map)
+        : const <String, dynamic>{};
+    final missedHandover = s['missed_handover'] is Map
+        ? Map<String, dynamic>.from(s['missed_handover'] as Map)
+        : const <String, dynamic>{};
 
     final chips = <(String, Map<String, dynamic>)>[
       if (statusLabel.isNotEmpty) (statusLabel, colors),
@@ -953,6 +988,38 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen>
         if (coldNote.isNotEmpty) ...[
           SizedBox(height: Ds.space.x4),
           Text(coldNote, style: Ds.t.caption),
+        ],
+
+        // CHANGE #703 — the same cold-chain block the buyer sees, so the rider
+        // and the customer are never looking at two different clocks. The badge
+        // above still comes from _cold_chain_block; this adds elapsed against
+        // the allowed window and turns red when the backend says breached.
+        ColdChainStrip(cold: cold),
+
+        // CHANGE #703 — the geofence stamped the arrival; the rider confirms
+        // it. `confirm_arrival.has` goes false the moment they do, so the
+        // button cannot be pressed twice and no local flag remembers it.
+        if (confirmArrival['has'] == true) ...[
+          SizedBox(height: Ds.space.x8),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: _kGreen,
+                side: BorderSide(color: _kGreen),
+              ),
+              onPressed: () async {
+                await _confirmArrival(s['delivery_id']?.toString() ?? '');
+              },
+              child: Text(confirmArrival['label']?.toString() ?? ''),
+            ),
+          ),
+        ],
+
+        if (missedHandover['has'] == true) ...[
+          SizedBox(height: Ds.space.x8),
+          Text(missedHandover['label']?.toString() ?? '',
+              style: Ds.t.caption.copyWith(color: Ds.c.danger)),
         ],
 
         // B5 — prominent, and also reachable from the row itself.

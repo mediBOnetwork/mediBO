@@ -198,7 +198,11 @@ begin
     end if;
   end if;
 
+  -- `status`, not `ok`: dev_journeys_run reads v->>'status' straight into
+  -- dev_journey_runs.status, which is NOT NULL. A helper that answers with a
+  -- boolean instead records nothing and the journey can never go green.
   return jsonb_build_object(
+    'status', case when cardinality(v_fail) = 0 then 'passed' else 'failed' end,
     'ok', cardinality(v_fail) = 0,
     'evidence', jsonb_build_object(
       'doorless_past_grace', v_doorless,

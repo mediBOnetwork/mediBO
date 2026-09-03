@@ -365,7 +365,10 @@ class _PartnerRankRow extends StatelessWidget {
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              Text(_s(row['score_label']),
+              Text(
+                  row['has_score'] == true
+                      ? _s(row['score_label'])
+                      : _s(row['no_score_label']),
                   style: Ds.t.subtitle
                       .copyWith(color: partnerToneColor(_s(row['score_tone'])))),
               if (row['has_bonus'] == true) ...[

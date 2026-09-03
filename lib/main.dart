@@ -1041,9 +1041,18 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
               // partner_scorecard() clamps a non-operator caller to their own
               // partner id, so this URL can never show somebody else's month.
               if (name.split('?').first == '/partner/scorecard') {
+                // ?partner=<id> is honoured only for an operator —
+                // partner_scorecard() clamps every other caller back to
+                // my_partner_id(), so this can never show one partner another
+                // partner's month. It exists so the post-deploy verifier can
+                // photograph the card at all: Flutter canvas cannot be clicked
+                // headlessly and the card is otherwise only reachable by
+                // signing in AS a partner.
+                final q = Uri.tryParse(name)?.queryParameters['partner'];
                 return MaterialPageRoute(
                   settings: settings,
-                  builder: (_) => const PartnerScorecardScreen(),
+                  builder: (_) =>
+                      PartnerScorecardScreen(partnerId: int.tryParse(q ?? '')),
                 );
               }
               if (name.startsWith('/admin/partner-audit')) {

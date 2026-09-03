@@ -528,6 +528,9 @@ begin
     'has_score',      v_overall is not null,
     'score',          v_overall,
     'score_label',    coalesce(public._partner_metric_label(v_overall, '', 0), ''),
+    -- A partner with nothing to score yet says so where its score would be;
+    -- a blank cell on a ranking reads as a zero, which is a different claim.
+    'no_score_label', public._c('pscore.no_data'),
     'score_caption',  public._c('pscore.score_caption'),
     'score_tone',     case when v_overall is null then 'muted'
                            when v_overall >= 95 then 'success'

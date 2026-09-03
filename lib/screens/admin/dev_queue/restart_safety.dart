@@ -16,7 +16,7 @@
 library;
 
 /// What kind of restart-safety chip a label is — the screen picks the glyph.
-enum SafetyChipKind { offline, stall, stepsStale, steps, resumed }
+enum SafetyChipKind { offline, agentSilent, stall, stepsStale, steps, resumed }
 
 class SafetyChip {
   final SafetyChipKind kind;
@@ -48,6 +48,19 @@ class RowLiveness {
   bool get showCountdown =>
       status == 'building' && row['has_eta'] == true && isLive;
 
+  /// The backend's verdict that the AGENT — not the runner reporting for it —
+  /// has gone quiet. Absent is false: a payload from an older build degrades to
+  /// "the session is fine", never to a warning Dart invented.
+  bool get agentSilent => (row['agent_chip'] ?? '').toString().isNotEmpty;
+
+  /// How many times this build has already lost its Claude session.
+  int get sessionLost => (row['session_lost_count'] as num?)?.toInt() ?? 0;
+
+  /// The exact flags the last launch used, as the backend recorded them
+  /// ("▶ started: claude-fable-5-1 / extra (remote-control)"). Empty = never
+  /// recorded; the detail screen prints it verbatim and never composes one.
+  String get startedFlags => (row['started_flags'] ?? '').toString();
+
   /// The backend's verdict that the checklist has stopped being reported.
   /// Absent is false: an older payload degrades to "trusted", never to a
   /// warning Dart invented.
@@ -71,6 +84,14 @@ class RowLiveness {
     }
 
     add(SafetyChipKind.offline, 'live_chip', 'error');
+    // CHANGE #1023 — sits between "the worker is gone" and "the build stalled",
+    // because it is neither. `live_chip` says the heartbeat stopped; this says
+    // the heartbeat is fine and the Claude session behind it is not. #1016 sat
+    // in exactly that state for 32 minutes with nothing on the card to show it:
+    // a bash subshell kept beating for a session that had already dropped. The
+    // tone is the backend's (`agent_tone`), so the amber is not a Dart guess.
+    add(SafetyChipKind.agentSilent, 'agent_chip',
+        _s(row['agent_tone']).isEmpty ? 'warning' : _s(row['agent_tone']));
     add(SafetyChipKind.stall, 'stall_chip', 'warning');
     // CHANGE #350 — sits IMMEDIATELY before the progress chip on purpose: it is
     // the warning that the very next chip cannot be trusted. The backend sets

@@ -804,3 +804,23 @@ $rg_outer$, true,
 'CHANGE #812 — dashboard_v2 is a cache read: < 200 ms and < 30 kB, never a live scan')
 on conflict (name) do update
   set body = excluded.body, enabled = excluded.enabled, note = excluded.note;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 9. LOCK THE NEW TABLES. A fresh table in `public` inherits Supabase's default
+--    grants — anon and authenticated arrived with FULL read/write on all five,
+--    which would put the dashboard's config and its cache one PostgREST call
+--    from anybody. Every reader goes through a SECURITY DEFINER function, and
+--    those bypass RLS, so the tables themselves are closed: RLS on, no policy.
+-- ─────────────────────────────────────────────────────────────────────────────
+alter table public.dashboard_daily         enable row level security;
+alter table public.dashboard_cache         enable row level security;
+alter table public.dashboard_metric        enable row level security;
+alter table public.dashboard_funnel_stage  enable row level security;
+alter table public.dashboard_quick_action  enable row level security;
+
+revoke all on public.dashboard_daily,
+              public.dashboard_cache,
+              public.dashboard_metric,
+              public.dashboard_funnel_stage,
+              public.dashboard_quick_action
+  from anon, authenticated;

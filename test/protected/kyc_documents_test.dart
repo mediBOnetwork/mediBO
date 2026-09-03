@@ -37,6 +37,9 @@ Map<String, dynamic> _panelPayload({
       'bucket': 'kyc-docs',
       'owner_kind': 'pharmacy',
       'owner_id': 'owner-1',
+      // Deliberately NOT owner_id: the folder the storage policy admits is the
+      // signed-in USER's, and the payload is the only place that knows it.
+      'upload_prefix': 'auth-user-9',
       'state': {'state': 'pending', 'grace_until': '2026-09-17'},
       // Deliberately NOT alphabetical: payload order is the render order.
       'items': [
@@ -235,11 +238,21 @@ void main() {
       // prove the contract this file owns.
       await t.pumpWidget(const MaterialApp(home: Scaffold(body: KycPanel())));
       await t.pumpAndSettle();
-      await KycPanel.upload('kyc-docs', 'owner-1/drug_licence_1.jpg',
-          Uint8List.fromList([1, 2, 3]), 'image/jpeg');
+      final target =
+          KycPanel.storagePath(_panelPayload(), 'drug_licence', 'jpg', 1);
+      await KycPanel.upload(
+          'kyc-docs', target!, Uint8List.fromList([1, 2, 3]), 'image/jpeg');
       expect(seenBucket, 'kyc-docs');
-      expect(seenPath, startsWith('owner-1/'));
+      // the PAYLOAD's prefix, never owner_id and never a client-built folder
+      expect(seenPath, 'auth-user-9/drug_licence_1.jpg');
       expect(seenArgs, isNull); // no write happened without a real pick
+    });
+
+    test('no upload_prefix means no upload, never a guessed folder', () {
+      final p = _panelPayload()..remove('upload_prefix');
+      expect(KycPanel.storagePath(p, 'drug_licence', 'jpg', 1), isNull);
+      expect(KycPanel.storagePath(_panelPayload(), 'gst_certificate', 'pdf', 7),
+          'auth-user-9/gst_certificate_7.pdf');
     });
   });
 

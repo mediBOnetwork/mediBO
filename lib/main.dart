@@ -37,6 +37,7 @@ import 'screens/admin/settlement_screen.dart'; // /admin/settlement
 import 'screens/home_shell.dart';
 import 'screens/public/inquiry_form_screen.dart';
 import 'screens/public/stock_update_form_screen.dart'; // C639: /stock-update/<token>
+import 'screens/public/order_feedback_form_screen.dart'; // C697: /feedback/<token>
 import 'screens/public/supplier_signup_screen.dart'; // C465 row 63: /supplier-signup
 import 'screens/public/storefront_screen.dart'; // CMD #417: /shop/<token>
 import 'screens/public/substitute_token_screen.dart'; // #366: /substitute/<token>
@@ -693,6 +694,23 @@ class _PharmaB2BAppState extends State<PharmaB2BApp>
                   return MaterialPageRoute(
                     settings: settings,
                     builder: (_) => NearPharmacyScreen(token: token),
+                  );
+                }
+              }
+              // CHANGE #697 — /feedback/<token>: the whole-order feedback
+              // card a pharmacy gets over WhatsApp when its order closes.
+              // PUBLIC and anonymous, exactly like /stock-update/<token>: the
+              // token in the URL is the authorisation, and order_feedback_form
+              // / order_feedback_submit_token are anon-granted for it.
+              // Declared above the trailing /:code guard so a bare token is
+              // never mistaken for a product code.
+              if (name.startsWith('/feedback/')) {
+                final token =
+                    name.substring('/feedback/'.length).split('?').first;
+                if (token.isNotEmpty) {
+                  return MaterialPageRoute(
+                    settings: settings,
+                    builder: (_) => OrderFeedbackFormScreen(token: token),
                   );
                 }
               }

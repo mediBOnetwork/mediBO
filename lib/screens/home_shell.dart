@@ -56,7 +56,6 @@ import 'admin/dev_queue/cron_health_screen.dart'; // CHANGE #325
 import 'admin/test_mode_screen.dart';            // CHANGE #573
 import '../services/discount_slabs_service.dart'; // CHANGE #325
 import 'admin/admin_pricing_screen.dart';
-import 'admin/admin_shell.dart';
 import 'admin/pricing_backfill_screen.dart';
 import 'admin/admin_bill_pipeline_screen.dart'; // CHANGE #226
 import 'admin/admin_bulk_screen.dart'; // C397: bulk actions, exports, undo
@@ -345,6 +344,7 @@ class _HomeShellState extends State<HomeShell> {
     // CMD #411 — after the first frame, same reason as push: a counter entry
     // that fails to resolve must never sit in front of the shell's own build.
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadPosEntry());
+    WidgetsBinding.instance.addPostFrameCallback((_) => maybeAskOrderFeedback(context)); // #697
     // CHANGE #440: type-anywhere-to-search, desktop web only.
     if (kIsWeb) HardwareKeyboard.instance.addHandler(_globalKeyHandler);
     RenderLog.write('c440_typeanywhere', 'web=$kIsWeb min3=on');

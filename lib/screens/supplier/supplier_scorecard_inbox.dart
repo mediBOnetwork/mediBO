@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../design_tokens.dart';
+import '../../widgets/response_deadline.dart';
 import '../../utils/render_log.dart';
 
 /// CHANGE #465 — supplier register rows 64 and 65, the two things a logged-in
@@ -139,6 +140,27 @@ class SupplierScorecardView extends StatelessWidget {
               child: Text((status['note'] ?? '').toString(), style: Ds.t.body),
             ),
           ],
+          // ── CHANGE #687 (#68) — the response record, the newest SPN input.
+          // How often this supplier answers inside the deadline and how fast,
+          // both as backend strings (supplier_scorecard().response). A supplier
+          // who has never been asked gets has:false and no row at all — never
+          // a 0% that reads like a punishment.
+          Builder(builder: (_) {
+            final resp = (p['response'] as Map?)?.cast<String, dynamic>() ??
+                const <String, dynamic>{};
+            if (resp['has'] != true) return const SizedBox.shrink();
+            return Padding(
+              padding: EdgeInsets.only(top: Ds.space.x16),
+              child: Row(children: [
+                Expanded(
+                  child: Text((resp['title'] ?? '').toString(),
+                      style: Ds.t.caption),
+                ),
+                SizedBox(width: Ds.space.x8),
+                ResponseStatsChip(stats: resp),
+              ]),
+            );
+          }),
           if (parts.isNotEmpty) ...[
             SizedBox(height: Ds.space.x16),
             Text((p['components_label'] ?? '').toString(),

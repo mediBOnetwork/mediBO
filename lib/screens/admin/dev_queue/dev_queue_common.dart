@@ -77,6 +77,8 @@ IconData safetyChipIcon(SafetyChipKind kind) {
   switch (kind) {
     case SafetyChipKind.offline:
       return Icons.cloud_off_outlined;
+    case SafetyChipKind.agentSilent:
+      return Icons.hourglass_disabled_outlined;
     case SafetyChipKind.stall:
       return Icons.report_problem_outlined;
     case SafetyChipKind.stepsStale:

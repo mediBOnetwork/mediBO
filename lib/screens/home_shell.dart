@@ -37,7 +37,6 @@ import 'admin/admin_dashboard_screen.dart';
 import 'admin/admin_deletion_request_screen.dart';
 import 'admin/admin_ops_queues_screen.dart';
 import 'admin/admin_delivery_partner_screen.dart';
-import 'partner/partner_documents_screen.dart' show PartnerDocumentsPage;
 import 'admin/admin_mr_screen.dart';
 import 'admin/admin_alert_overlay.dart';
 import '../services/access.dart'; // C653: the ONE View/Write matrix
@@ -1221,17 +1220,6 @@ class _HomeShellState extends State<HomeShell> {
       case 'feature_gaps':
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => buildFeatureGapsScreen()));
-        break;
-      // CHANGE #692 — the partner's own agreement + KYC documents. The door
-      // is open to anyone the access matrix let see the tile;
-      // partner_documents_screen() answers a caller who is neither the partner
-      // nor the office with its own refusal, so opening the route decides
-      // nothing about what the caller may read or write.
-      case 'partner_documents':
-        Navigator.push(
-            context,
-            MaterialPageRoute<void>(
-                builder: (_) => const PartnerDocumentsPage()));
         break;
       // CHANGE #570 — four doors the registry had already promised, in
       // shell/shell_extra_routes.dart. Null means "not mine", so an unknown

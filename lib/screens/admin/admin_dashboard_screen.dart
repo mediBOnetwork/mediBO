@@ -462,15 +462,27 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   // supplier or medicine, so nothing needs to be hunted for.
                   _PaletteButton(
                       label: _label('search_button'), onTap: _openPalette),
-                  SizedBox(height: Ds.space.x8),
-                  // CHANGE #812 — the entity box. Its own door, right under the
-                  // screen jumper, and the wording is universal_search()'s own
-                  // placeholder rather than a Dart literal.
-                  _PaletteButton(
-                      key: const Key('c812_search_button'),
-                      label: c('usearch.placeholder'),
-                      onTap: _openUniversalSearch),
-                  SizedBox(height: Ds.space.x16),
+                  SizedBox(height: Ds.space.x4),
+                  // CHANGE #812 — the entity door. Deliberately NOT a second
+                  // full-width box: two identical search bars stacked read as a
+                  // duplicate, not as two tools. The screen jumper above stays
+                  // the focal control; this is its quieter sibling, and its
+                  // wording is universal_search()'s own placeholder rather than
+                  // a Dart literal.
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(minHeight: 44),
+                      child: TextButton.icon(
+                        key: const Key('c812_search_button'),
+                        onPressed: _openUniversalSearch,
+                        icon: const Icon(Icons.travel_explore_outlined,
+                            size: 18),
+                        label: Text(c('usearch.placeholder')),
+                      ),
+                    ),
+                  ),
+                  SizedBox(height: Ds.space.x12),
                   // CHANGE #812 — the dashboard itself: one RPC, printed.
                   DashboardV2Card(
                     payload: _dash,
@@ -704,8 +716,7 @@ class _PaletteButton extends StatelessWidget {
   final String label;
   final VoidCallback onTap;
 
-  const _PaletteButton(
-      {super.key, required this.label, required this.onTap});
+  const _PaletteButton({required this.label, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
